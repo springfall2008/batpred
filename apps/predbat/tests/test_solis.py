@@ -106,6 +106,8 @@ class MockSolisAPI(SolisAPI):
         self.datalogger_offline_until = {}
         self.datalogger_cooldown_code = {}
         self.automatic_config_done = False
+        self.tou_v2_mode_read = set()
+        self.tou_v2_mode_saved = None
 
         # Timezone for now_utc_exact property (from ComponentBase)
         self.local_tz = datetime.now().astimezone().tzinfo
@@ -2315,6 +2317,9 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_settles_on_a_pv_only_fleet())
         failed |= asyncio.run(test_discovery_cache_lets_a_restart_configure_without_the_api())
         failed |= asyncio.run(test_successful_discovery_is_cached_and_session_reused())
+        failed |= asyncio.run(test_failed_tou_mode_read_is_retried_and_saved())
+        failed |= asyncio.run(test_failed_tou_mode_read_uses_the_saved_mode())
+        failed |= asyncio.run(test_successful_tou_mode_read_is_not_polled_again())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
@@ -6195,6 +6200,7 @@ async def test_slot_registers_are_re_read_while_a_window_is_live():
     sn = "INV001"
     api = _make_run_api(configured_sns=[sn])
     api.inverter_sn = [sn]
+    api.tou_v2_mode_read = {sn}  # Startup read the TOU mode, so it is not polled again
     api._test_v2_mode = True
     api._test_now_utc_exact = datetime(2026, 8, 26, 23, 35, tzinfo=api.local_tz)
     api.charge_discharge_time_windows[sn] = {1: {"charge_enable": 1, "charge_start_time": "23:30", "charge_end_time": "23:45"}}
@@ -9060,6 +9066,154 @@ async def test_discovery_cache_lets_a_restart_configure_without_the_api():
 
     if not failed:
         print("PASSED: a restart with no API access configures from the cached inverter list")
+    return failed
+
+
+def _tou_mode_api(storage, sn, tou_reads):
+    """Return a run() API with storage whose CID 6798 reads follow tou_reads, a list of values or None (a timed-out read) used in turn.
+
+    The real is_tou_v2_mode() is bound in place of MockSolisAPI's, so the mode comes from the cached register.
+    """
+    api = _storage_api(storage)
+    api.configured_inverter_sn = [sn]
+    api.is_tou_v2_mode = SolisAPI.is_tou_v2_mode.__get__(api)
+
+    async def mock_get_inverter_list():
+        """Discovery finds the one inverter."""
+        return [{"sn": sn}]
+
+    async def mock_poll_inverter_data(inverter_sn, cids, batch=True):
+        """Answer CID 6798 from tou_reads, failing the way a timeout does (cache left alone) for None."""
+        api.poll_inverter_data_calls.append((inverter_sn, cids))
+        if cids == [SOLIS_CID_TOU_V2_MODE]:
+            value = tou_reads.pop(0)
+            if value is None:
+                return False
+            api.cached_values.setdefault(inverter_sn, {})[SOLIS_CID_TOU_V2_MODE] = value
+        return True
+
+    api.get_inverter_list = mock_get_inverter_list
+    api.poll_inverter_data = mock_poll_inverter_data
+    return api
+
+
+async def test_failed_tou_mode_read_is_retried_and_saved():
+    """A TOU mode read that times out at startup is polled again, and a good read is saved.
+
+    The flag was read once at startup with the result unchecked, so a timeout left a V2 inverter driven with
+    V1 registers it ignores, and no charge or export ran until the next restart (two nights on one site).
+    """
+    failed = False
+    print("\n=== Test: a failed TOU mode read is retried and saved ===")
+    sn = "INV001"
+    storage = _FakeStorage()
+    api = _tou_mode_api(storage, sn, [None, None, "43605"])
+
+    def tou_polls():
+        """The CID 6798 reads made so far."""
+        return [call for call in api.poll_inverter_data_calls if call[1] == [SOLIS_CID_TOU_V2_MODE]]
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        if api.is_tou_v2_mode(sn):
+            print("ERROR: with no read and nothing saved the mode should default to standard")
+            failed = True
+        if not any("Could not read the time of use mode of inverter {}".format(sn) in m and "default (standard)" in m for m in api.log_messages):
+            print("ERROR: expected a warning that the default is in use, got {}".format(api.log_messages))
+            failed = True
+
+        await api.run(60, False)
+        if len(tou_polls()) != 1:
+            print("ERROR: off the 5 minute boundary the TOU mode should not be polled, got {}".format(tou_polls()))
+            failed = True
+
+        await api.run(300, False)  # Times out again
+        await api.run(600, False)  # Reads V2
+        if len(tou_polls()) != 3:
+            print("ERROR: expected the TOU mode polled at startup and on each 5 minute boundary until read, got {}".format(tou_polls()))
+            failed = True
+        if not api.is_tou_v2_mode(sn):
+            print("ERROR: once read, the inverter should be in V2 mode")
+            failed = True
+        if storage.contents.get(("solis", "tou_v2_mode")) != {sn: "43605"}:
+            print("ERROR: expected the read TOU mode to be saved, got {}".format(storage.contents.get(("solis", "tou_v2_mode"))))
+            failed = True
+        if api.decode_time_windows_v2_calls != [sn] or (sn, SOLIS_CID_LIST_TOU_V2) not in api.poll_inverter_data_calls:
+            print("ERROR: a change to V2 should re-read and decode the V2 slot registers, got decodes {}".format(api.decode_time_windows_v2_calls))
+            failed = True
+
+        await api.run(900, False)
+        if len(tou_polls()) != 3:
+            print("ERROR: once read, the TOU mode should not be polled again, got {}".format(tou_polls()))
+            failed = True
+
+    if not failed:
+        print("PASSED: a failed TOU mode read is retried until it succeeds, and the result saved")
+    return failed
+
+
+async def test_failed_tou_mode_read_uses_the_saved_mode():
+    """When the startup read fails, the mode saved by an earlier run is used until a read succeeds."""
+    failed = False
+    print("\n=== Test: a failed TOU mode read uses the saved mode ===")
+    sn = "INV001"
+    storage = _FakeStorage({("solis", "tou_v2_mode"): {sn: "43605"}})
+    api = _tou_mode_api(storage, sn, [None, "43605"])
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        if not api.is_tou_v2_mode(sn):
+            print("ERROR: the saved V2 mode should be used when the startup read fails")
+            failed = True
+        if not any("using the last value read (V2)" in m for m in api.log_messages):
+            print("ERROR: expected a warning that the saved mode is in use, got {}".format(api.log_messages))
+            failed = True
+        if not any("Inverter {} is in Time of Use V2 mode".format(sn) in m for m in api.log_messages):
+            print("ERROR: startup should report the saved V2 mode, got {}".format(api.log_messages))
+            failed = True
+        if api.decode_time_windows_v2_calls != [sn]:
+            print("ERROR: startup should decode the V2 slot registers from the saved mode, got {}".format(api.decode_time_windows_v2_calls))
+            failed = True
+
+        api.decode_time_windows_v2_calls = []
+        await api.run(300, False)  # The read succeeds with the same mode
+        if sn not in api.tou_v2_mode_read:
+            print("ERROR: the TOU mode should be marked read once a read succeeds")
+            failed = True
+        if api.decode_time_windows_v2_calls or api.decode_time_windows_calls:
+            print("ERROR: an unchanged mode needs no re-decode, got v2 {} v1 {}".format(api.decode_time_windows_v2_calls, api.decode_time_windows_calls))
+            failed = True
+
+    if not failed:
+        print("PASSED: a failed TOU mode read falls back to the saved mode")
+    return failed
+
+
+async def test_successful_tou_mode_read_is_not_polled_again():
+    """A TOU mode read that succeeds at startup is saved and not polled again on the 5 minute grid."""
+    failed = False
+    print("\n=== Test: a successful TOU mode read is not polled again ===")
+    sn = "INV001"
+    storage = _FakeStorage()
+    api = _tou_mode_api(storage, sn, ["43605"])
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        await api.run(300, False)
+
+    tou_polls = [call for call in api.poll_inverter_data_calls if call[1] == [SOLIS_CID_TOU_V2_MODE]]
+    if len(tou_polls) != 1:
+        print("ERROR: expected only the startup TOU mode read, got {}".format(tou_polls))
+        failed = True
+    if storage.contents.get(("solis", "tou_v2_mode")) != {sn: "43605"}:
+        print("ERROR: expected the TOU mode to be saved, got {}".format(storage.contents.get(("solis", "tou_v2_mode"))))
+        failed = True
+    if any("Could not read the time of use mode" in m for m in api.log_messages):
+        print("ERROR: a successful read should not warn, got {}".format(api.log_messages))
+        failed = True
+
+    if not failed:
+        print("PASSED: a successful TOU mode read is saved and not polled again")
     return failed
 
 
