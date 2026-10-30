@@ -98,11 +98,50 @@ def test_execution_state_saves_only_on_change(my_predbat):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def test_execution_state_expired_leaves_defaults(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    try:
+        state = {"is_charging": True, "is_charging_target": 90, "is_exporting": True, "is_exporting_target": 10, "saved_at": datetime.now(timezone.utc).isoformat()}
+        run_async(storage.save("predbat", "execution_state", state, format="json", expiry=datetime.now(timezone.utc) - timedelta(hours=1)))
+        _set_flags(my_predbat, False, 0, False, 0)
+        my_predbat.load_execution_state()
+        assert (my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target) == (False, 0, False, 0)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_execution_state_partial_restores_only_present_keys(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    try:
+        run_async(storage.save("predbat", "execution_state", {"is_exporting": True, "is_exporting_target": 35}, format="json"))
+        _set_flags(my_predbat, False, 7, False, 0)
+        my_predbat.load_execution_state()
+        assert (my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target) == (False, 7, True, 35)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_execution_state_wrong_types_leave_defaults(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    try:
+        bad = {"is_charging": "yes", "is_charging_target": "80", "is_exporting": 1, "is_exporting_target": True}
+        run_async(storage.save("predbat", "execution_state", bad, format="json"))
+        _set_flags(my_predbat, False, 0, False, 0)
+        my_predbat.load_execution_state()
+        assert (my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target) == (False, 0, False, 0)
+        assert my_predbat.execution_state_saved is None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 EXECUTION_STATE_TESTS = [
     test_execution_state_roundtrip,
     test_execution_state_absent,
     test_execution_state_does_not_bump_plan_version,
     test_execution_state_saves_only_on_change,
+    test_execution_state_expired_leaves_defaults,
+    test_execution_state_partial_restores_only_present_keys,
+    test_execution_state_wrong_types_leave_defaults,
 ]
 
 

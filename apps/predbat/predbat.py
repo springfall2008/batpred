@@ -1018,15 +1018,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
         if not isinstance(state, dict):
             return
-        numeric = (int, float)
-        if "is_charging" in state and isinstance(state["is_charging"], bool):
-            self.isCharging = state["is_charging"]
-        if "is_charging_target" in state and isinstance(state["is_charging_target"], numeric) and not isinstance(state["is_charging_target"], bool):
-            self.isCharging_Target = state["is_charging_target"]
-        if "is_exporting" in state and isinstance(state["is_exporting"], bool):
-            self.isExporting = state["is_exporting"]
-        if "is_exporting_target" in state and isinstance(state["is_exporting_target"], numeric) and not isinstance(state["is_exporting_target"], bool):
-            self.isExporting_Target = state["is_exporting_target"]
+        restored = False
+        for key, attr, kind in (("is_charging", "isCharging", bool), ("is_charging_target", "isCharging_Target", (int, float)), ("is_exporting", "isExporting", bool), ("is_exporting_target", "isExporting_Target", (int, float))):
+            value = state.get(key)
+            if isinstance(value, kind) and (kind is bool or not isinstance(value, bool)):
+                setattr(self, attr, value)
+                restored = True
+        if not restored:
+            return
         self.execution_state_saved = self.execution_state_values()
         self.log("Restored execution state: charging={} (target {}) exporting={} (target {})".format(self.isCharging, self.isCharging_Target, self.isExporting, self.isExporting_Target))
 
@@ -1456,10 +1455,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 self.log("Error: Failed to fetch inverter data, not able to execute the plan")
                 self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
                 return None
-        result = self.execute_plan()
-        # The flags have settled for this run. Saved apart from the plan, so a change here is never a new plan version
-        self.save_execution_state()
-        return result
+        try:
+            return self.execute_plan()
+        finally:
+            # The flags have settled for this run, even if it raised part way. Saved apart from the plan, so a change here is never a new plan version
+            try:
+                self.save_execution_state()
+            except Exception as e:
+                self.log("Warning: Failed to save execution state: {}".format(e))
 
     def update_pred(self, scheduled=True):
         """
