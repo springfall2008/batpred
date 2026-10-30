@@ -377,7 +377,7 @@ def test_wallbox_retained_ownership():
         storage = _Storage()
         storage.data[("wallbox", "control_state")] = {"control_enabled": False, "paused": [], "schedule": [], field: ["101"]}
         native = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=178, power=0)}, storage=storage, wallbox_control=False)
-        assert native.control_active is False and native.wallbox_control is False
+        assert native.charger_control_active is False and native.wallbox_control is False
         base = _fresh_base()
         with patch("car_charging_plan._observation_clock", side_effect=lambda: base.now_utc), patch("car_charging_execute._clock", side_effect=lambda: base.now_utc):
             _, actuator = _stage_local_candidate(base)
@@ -392,13 +392,13 @@ def test_wallbox_retained_ownership():
             if field == "paused":
                 assert ("resume", 101) in native.transport.calls
             assert not native_charger_control_conflict(base), (field, native.transport.calls)
-            native.control_state_loaded = False
+            native.charger_control_loaded = False
             assert native_charger_control_conflict(base), "Unread persistent ownership is not settled"
-            run_async(native.load_control_state())
+            run_async(native.charger_control_load_enabled())
             assert not native_charger_control_conflict(base)
-            native.control_state_dirty = True
+            native.charger_control_save_pending = True
             assert native_charger_control_conflict(base), "Unsaved ownership is not settled"
-            run_async(native.save_control_state())
+            run_async(native.charger_control_save())
             assert not native_charger_control_conflict(base)
         print("PASS:", "wallbox_retained_" + field)
 
@@ -440,6 +440,73 @@ def test_hypervolt_retained_ownership():
         print("PASS:", "hypervolt_retained_release", "failed_restore" if failed_restore else "absent_charger")
 
 
+class _OwnershipStorage:
+    """Fail actual shared-controller restore/save calls without network or filesystem access."""
+
+    def __init__(self):
+        """Start with a held stop that a failed restore cannot yet expose in memory."""
+        self.document = {"held": {"pending": False}}
+        self.fail_load = True
+        self.fail_save = False
+
+    async def load(self, *args, **kwargs):
+        """Return retained ownership or reproduce a recoverable Storage read failure."""
+        if self.fail_load:
+            raise OSError("Synthetic ownership restore failure")
+        return deepcopy(self.document)
+
+    async def save(self, module, key, value, **kwargs):
+        """Expose the shared pending-save flag through its actual refused-write path."""
+        if self.fail_save:
+            return False
+        self.document = deepcopy(value)
+        return True
+
+
+def test_shared_controller_persistence_ownership():
+    """Real component shared restore/save failures must block dispatch even with control off."""
+    from car_charging_execute import native_charger_control_conflict
+    from ha import run_async
+    from tests.test_ge_cloud import MockGECloudDirect
+    from tests.test_myenergi import _make_component
+    from tests.test_ohme import MockOhmeAPI
+
+    for name, native in (("gecloud", MockGECloudDirect()), ("myenergi", _make_component(zappi_control=False)), ("ohme", MockOhmeAPI())):
+        storage = _OwnershipStorage()
+        if name == "gecloud":
+            native._mock_storage = storage
+        else:
+            native.base.components = SimpleNamespace(get_component=lambda key: storage if key == "storage" else None)
+        native.charger_control_config = False
+        native.charger_control_active = False
+        native.evc_control = native.zappi_control = native.ohme_control = False
+        assert native.charger_control_storage is not None
+        assert run_async(native.charger_control_load_enabled()) is False
+        assert not native.charger_control_loaded and not native.charger_control_state
+        base = _fresh_base()
+        with patch("car_charging_plan._observation_clock", side_effect=lambda: base.now_utc), patch("car_charging_execute._clock", side_effect=lambda: base.now_utc):
+            _, actuator = _stage_local_candidate(base)
+            base.components = SimpleNamespace(get_component=lambda key: native if key == name else None)
+            assert execute_car_charging_plan(base) == ("EV blocked", "native_charger_control_unsupported"), name
+            assert not actuator["args"] and base.car_charging_execution is None
+            storage.fail_load = False
+            assert run_async(native.charger_control_load_enabled()) is True
+            assert native.charger_control_state == {"pending": False}
+            assert native_charger_control_conflict(base)
+            # Exercise the shared persistence transition only, not a claim that
+            # a physical device was released by this offline fixture.
+            run_async(native.charger_control_forget("pending"))
+            assert not native_charger_control_conflict(base)
+            storage.fail_save = True
+            run_async(native.charger_control_save())
+            assert native.charger_control_save_pending and native_charger_control_conflict(base)
+            assert not native.charger_control_state
+            storage.fail_save = False
+            run_async(native.charger_control_save())
+            assert not native.charger_control_save_pending and not native_charger_control_conflict(base)
+        print("PASS:", name, "shared_restore_and_save_ownership")
+
+
 def run_car_planning_authority_matrix_tests(base):
     """Run authority sequences on fresh, deterministic in-memory HA fixtures."""
     del base  # Each row gets a genuinely independent Predbat fixture.
@@ -450,6 +517,7 @@ def run_car_planning_authority_matrix_tests(base):
     test_target_complete_stop_waits_for_observed_relay_off()
     test_receipt_and_plan_renewal_exact_boundaries()
     test_native_charger_control_ownership()
+    test_shared_controller_persistence_ownership()
     test_wallbox_retained_ownership()
     test_hypervolt_retained_ownership()
     return False

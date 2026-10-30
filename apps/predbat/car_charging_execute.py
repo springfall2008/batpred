@@ -83,14 +83,11 @@ def native_charger_control_conflict(base):
             return True
         component = components.get_component(name) if components else None
         if component is not None:
-            if name in ("wallbox", "hypervolt") and (
-                getattr(component, "control_active", False)
-                or getattr(component, "paused_by_predbat", None)
-                or getattr(component, "schedule_pending", None)
-                or getattr(component, "released_by_predbat", None)
-                or getattr(component, "control_state_dirty", False)
-                or (getattr(component, "storage", None) is not None and not getattr(component, "control_state_loaded", False))
-            ):
+            if name == "hypervolt" and (getattr(component, "released_by_predbat", None) or getattr(component, "control_state_dirty", False) or (getattr(component, "storage", None) is not None and not getattr(component, "control_state_loaded", False))):
+                return True
+            if name == "wallbox" and (getattr(component, "paused_by_predbat", None) or getattr(component, "schedule_pending", None)):
+                return True
+            if getattr(component, "charger_control_save_pending", False) or (getattr(component, "charger_control_storage", None) is not None and getattr(component, "storage", None) is not None and not getattr(component, "charger_control_loaded", False)):
                 return True
             if getattr(component, runtime_setting, False) or getattr(component, "charger_control_active", False) or getattr(component, "charger_control_state", None):
                 return True

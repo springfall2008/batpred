@@ -41,9 +41,11 @@ with the external executor. A temporary native control switch being off is not
 sufficient: configure those control options off before requesting apply. Enabling
 them later invalidates the candidate or lease on its next validation. Automatic
 shared control and outstanding held-charger state also block apply until ownership
-has been released and settled outside this path. Wallbox's retained pause/schedule
-releases, Hypervolt's outstanding releases (including absent chargers), and their
-unread or unsaved ownership records must likewise settle first. This gate
+has been released and settled outside this path. Shared ownership records must be
+restored successfully and pending saves settled, even with control disabled. This
+includes Wallbox's retained pause/schedule releases. Hypervolt's own outstanding
+releases (including absent chargers) and unread or unsaved ownership records must
+likewise settle first. This gate
 does not disable, release or commission either controller, and cannot discover
 every unrelated external writer.
 
