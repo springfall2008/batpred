@@ -2709,8 +2709,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             if device in self.pending_writes:
                 self.pending_writes[device] = []
 
-        if not await self.publish_shared_meter_load():
-            return False
+        # Load quality belongs to its sensor, not the transport lifecycle. Holding
+        # startup here would back off every Cloud sensor/control poll for a data gap.
+        await self.publish_shared_meter_load()
         self.update_success_timestamp()
         return True
 

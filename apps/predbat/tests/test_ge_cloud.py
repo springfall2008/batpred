@@ -5818,7 +5818,7 @@ def _test_build_discovery_shared_meter(my_predbat):
 
     result = run_async(ge.run(seconds=0, first=True))
 
-    assert result is False, "Discovery without actual shared-meter samples must not report healthy metering"
+    assert result is True, "Unavailable shared load must not hold Cloud transport/discovery in startup retry"
     assert ge.dashboard_items["sensor.predbat_gecloud_shared_load_power"]["state"] == "unavailable"
     report = reports[0]
     inverters = report["inverters"]
