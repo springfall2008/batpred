@@ -135,6 +135,44 @@ def test_rate_min_forward_calc(my_predbat):
     for attr, value in saved.items():
         setattr(my_predbat, attr, value)
 
+    # --- Test 8: a debug replay with --redo rebuilds the stored-energy terms without the sessions ---
+    # The debug file keeps the pre-saving import rates for the session minutes only, so the replay puts
+    # those minutes back; a minute the session created from nothing (no tariff rate) is forward filled.
+    print("*** rate_min_forward_calc test 8: debug replay rebuilds battery value rates without sessions")
+    from tests.test_single_debug import rebuild_battery_value_rates
+
+    replay_attrs = ("rate_import", "rate_import_saving_minutes", "rate_import_pre_saving", "rate_export_base", "rate_min_forward", "rate_export_max_forward", "rate_export_min_base")
+    saved = {attr: getattr(my_predbat, attr, None) for attr in replay_attrs}
+    total = my_predbat.forecast_minutes + my_predbat.minutes_now + 48 * 60
+    session_start = my_predbat.minutes_now + 6 * 60
+    session = set(range(session_start, session_start + 60))
+    created_minute = session_start + 120
+    rate_import = {m: 10.0 for m in range(total)}
+    for minute in session | {created_minute}:
+        rate_import[minute] = 0.0
+    my_predbat.rate_import = rate_import
+    my_predbat.rate_import_saving_minutes = session | {created_minute}
+    my_predbat.rate_import_pre_saving = {minute: 10.0 for minute in session}
+    my_predbat.rate_export_base = {m: (5.0 if m == session_start else 15.0) for m in range(total)}
+    rebuild_battery_value_rates(my_predbat)
+    failed |= _check_range(my_predbat.rate_min_forward, output_start, output_end, 10.0, "test 8 replayed rate_min_forward ignores the session")
+    if my_predbat.rate_import[session_start] != 0.0:
+        print("ERROR: test 8: rebuilding changed the replayed import rates")
+        failed = 1
+    if my_predbat.rate_export_min_base != 5.0 or my_predbat.rate_export_max_forward.get(output_start) != 15.0:
+        print("ERROR: test 8: export terms should come from rate_export_base, got min {} max forward {}".format(my_predbat.rate_export_min_base, my_predbat.rate_export_max_forward.get(output_start)))
+        failed = 1
+
+    # A debug file with no base export rates leaves the export terms as they were
+    my_predbat.rate_export_base = {}
+    my_predbat.rate_export_min_base = None
+    rebuild_battery_value_rates(my_predbat)
+    if my_predbat.rate_export_min_base is not None:
+        print("ERROR: test 8: no rate_export_base should leave rate_export_min_base unset, got {}".format(my_predbat.rate_export_min_base))
+        failed = 1
+    for attr, value in saved.items():
+        setattr(my_predbat, attr, value)
+
     # Restore
     my_predbat.forecast_minutes = old_forecast_minutes
     my_predbat.minutes_now = old_minutes_now
