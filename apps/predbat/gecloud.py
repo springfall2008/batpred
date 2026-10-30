@@ -23,6 +23,7 @@ import asyncio
 import math
 import json
 import random
+import copy
 from bisect import bisect_left
 from component_base import ComponentBase
 from coordinator import inverter_record
@@ -697,6 +698,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.settings = {}
         self.status = {}
         self.live_display_samples = {}  # unmerged measured samples, never sensor defaults
+        self.raw_meter_samples = {}  # per-poll counter provenance, before null fallback
         self.meter = {}
         self.info = {}
         self.register_entity_map = {}
@@ -3348,6 +3350,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         if previous is None:
             previous = {}
         meter = await self.async_get_inverter_data_retry(GE_API_INVERTER_METER, serial)
+        if not hasattr(self, "raw_meter_samples"):
+            self.raw_meter_samples = {}
+        self.raw_meter_samples[serial.lower()] = copy.deepcopy(meter)
         if meter is None:
             return previous
         merged = merge_non_null(meter, previous)
@@ -3622,7 +3627,9 @@ class GECloudData(ComponentBase):
             expected = self.shared_meter_members()
         except ValueError:
             expected = None
-        retry = expected != self.shared_history_key or bool(getattr(self, "shared_history_error", None))
+        changed = expected != getattr(self, "shared_history_attempt_key", ())
+        due = self.now_utc_exact >= getattr(self, "shared_history_retry_at", self.now_utc_exact)
+        retry = changed or (due and (expected != self.shared_history_key or bool(getattr(self, "shared_history_error", None))))
         if seconds % (10 * 60) == 0 or (retry and seconds % 60 == 0):
             now_utc = self.now_utc_exact
             await self.download_ge_data(now_utc)
@@ -3737,6 +3744,7 @@ class GECloudData(ComponentBase):
             return False
         if members:
             return await self.download_shared_meter_data(members, now_utc)
+        self.shared_history_attempt_key = ()
         geserial = self.ge_cloud_serial
         gekey = self.ge_cloud_key
 
@@ -3840,11 +3848,18 @@ class GECloudData(ComponentBase):
 
     async def download_shared_meter_data(self, members, now_utc):
         """Download raw member counters and publish only an entire reconstructed cohort."""
+        self.shared_history_attempt_key = members
         try:
             if not self.ge_cloud_key:
                 raise ValueError("Shared history requires a GivEnergy API key")
-            cached = await self.storage.load("gecloud_data", "ge_url_cache") if self.storage else {}
-            self.ge_url_cache = cached if isinstance(cached, dict) else {}
+            try:
+                cached = await self.storage.load("gecloud_data", "ge_url_cache") if self.storage else {}
+            except OSError:
+                self.log("Warn: GECloud shared history cache read failed; retaining in-memory pages")
+                cached = {}
+            cached = cached if isinstance(cached, dict) else {}
+            cached.update(self.ge_url_cache)
+            self.ge_url_cache = cached
             self.clean_ge_url_cache(now_utc)
             headers = {"Authorization": "Bearer " + self.ge_cloud_key, "Accept": "application/json"}
             sources = {}
@@ -3867,19 +3882,29 @@ class GECloudData(ComponentBase):
                 raise ValueError("Shared-meter membership changed during download")
             gaps = [row["source_gap_seconds"] for row in data]
             self.log("GECloud: Reconstructed shared-meter history: {} sources, {} points, maximum estimated source gap {} seconds".format(len(members), len(data), max(gaps)))
-            if self.storage:
-                # Cache the original per-inverter counters, never the derived correction.
-                await self.storage.save("gecloud_data", "ge_url_cache", self.ge_url_cache, format="yaml", expiry=None)
             # The planner can read while this coroutine is downloading. Only replace
             # the complete source cohort, never invalidate it at the start of a refresh.
             self.shared_history_snapshot = {"members": members, "sources": sources, "downloaded_at": now_utc}
             self.shared_history_error = None
-            self.ge_url_cache = {}
+            self.shared_history_failures = 0
+            self.shared_history_retry_at = now_utc
             return True
         except ValueError as exc:
             self.shared_history_error = str(exc)
+            self.shared_history_failures = min(getattr(self, "shared_history_failures", 0) + 1, 5)
+            self.shared_history_retry_at = now_utc + timedelta(seconds=min(600, 60 * 2 ** (self.shared_history_failures - 1)))
             self.log("Warn: GECloud shared-meter history unavailable: {}".format(exc))
             return False
+        finally:
+            if self.storage:
+                # Retain successful raw pages even if a later page or reconstruction
+                # failed. Keep the in-memory cache too, including without Storage.
+                try:
+                    saved = await self.storage.save("gecloud_data", "ge_url_cache", self.ge_url_cache, format="yaml", expiry=None)
+                    if saved is False:
+                        self.log("Warn: GECloud shared history cache save failed; retaining raw pages in memory")
+                except OSError:
+                    self.log("Warn: GECloud shared history cache unavailable; retaining raw pages in memory")
 
     def filter_data(self, mdata, measurement):
         """
@@ -3915,20 +3940,35 @@ class GECloudData(ComponentBase):
                 raise ValueError("Shared-meter historical cohort has expired")
             direct = self.base.components.get_component("gecloud")
             sources = {serial: list(rows) for serial, rows in snapshot["sources"].items()}
+            previous = getattr(self, "shared_history_live_rows", {})
+            retained = dict(previous) if getattr(self, "shared_history_live_key", ()) == members else {}
             for serial in members:
-                meter = direct.meter.get(serial, {})
+                meter = getattr(direct, "raw_meter_samples", {}).get(serial.lower()) or {}
                 try:
                     stamp = datetime.fromisoformat(meter["time"].replace("Z", "+00:00"))
-                    if stamp.tzinfo is None or not -30 <= (now - stamp).total_seconds() <= 300:
-                        raise ValueError("Shared-meter latest counters are stale")
+                    if stamp.tzinfo is None or stamp > now:
+                        raise ValueError("Latest counter timestamp is not observable yet")
+                    if serial in retained and stamp < datetime.fromisoformat(retained[serial]["last_updated"]):
+                        raise ValueError("Latest counter timestamp moved backwards")
                     total = meter["total"]
                     row = {"last_updated": meter["time"], "consumption": total["consumption"], "import": total["grid"]["import"], "export": total["grid"]["export"], "pv": total["solar"]}
-                except (KeyError, TypeError, AttributeError) as exc:
-                    raise ValueError("Shared-meter latest counters are incomplete") from exc
-                sources[serial].append(row)
+                    if any(isinstance(row[k], bool) or not isinstance(row[k], (int, float)) or not math.isfinite(row[k]) for k in ("consumption", "import", "export", "pv")):
+                        raise ValueError("Latest counters are incomplete")
+                    retained[serial] = row
+                except (KeyError, TypeError, AttributeError, ValueError):
+                    pass  # Keep the prior COMPLETE row with its original source clock.
+                if serial in retained:
+                    sources[serial].append(retained[serial])
             data = SharedMeterHistory.combine(sources, now)
-            if (now - datetime.fromisoformat(data[-1]["last_updated"])).total_seconds() > 300:
+            self.shared_history_tail_age_seconds = (now - datetime.fromisoformat(data[-1]["last_updated"])).total_seconds()
+            if self.shared_history_tail_age_seconds > 30 * 60:
                 raise ValueError("Shared-meter common source watermark is stale")
+            delayed = self.shared_history_tail_age_seconds > 300
+            if delayed != getattr(self, "shared_history_tail_delayed", False):
+                self.log("GECloud: Shared-meter history tail {} (source age {} seconds)".format("is delayed; using observed counters" if delayed else "has recovered", int(self.shared_history_tail_age_seconds)))
+            self.shared_history_tail_delayed = delayed
+            self.shared_history_live_rows = retained
+            self.shared_history_live_key = members
             return data, datetime.fromisoformat(data[0]["last_updated"])
         return self.mdata, self.oldest_data_time
 

@@ -5,11 +5,12 @@ import copy
 import math
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from gecloud import SharedMeterHistory
 from tests.test_ge_cloud import MockGECloudData
 from tests.test_gecloud_shared_meter import configured
+from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
 START = datetime(2026, 10, 27, tzinfo=timezone.utc)
@@ -109,9 +110,11 @@ async def download_cases():
     data.max_days_previous = 0
     rows = history_sources()
     data._now_utc_exact = START + timedelta(hours=3)
+    direct.raw_meter_samples = {}
     for serial, records in rows.items():
         row = records[-1]
         direct.meter[serial] = {"time": row["last_updated"], "total": {"consumption": row["consumption"], "grid": {"import": row["import"], "export": row["export"]}, "solar": row["pv"]}}
+        direct.raw_meter_samples[serial] = copy.deepcopy(direct.meter[serial])
     data.get_ge_url = AsyncMock(side_effect=[(rows["inverter_a"][:2], "https://api.givenergy.cloud/next"), (rows["inverter_a"][2:], None), (rows["inverter_b"], None)])
     data._mock_storage = SimpleNamespace(load=AsyncMock(return_value=None), save=AsyncMock(return_value=True))
     assert data.shared_meter_members() == ("inverter_a", "inverter_b")
@@ -134,11 +137,8 @@ async def download_cases():
     assert not await data.download_ge_data(data.now_utc_exact)
     assert data.get_data()[0] == combined, "A failed refresh must retain a complete, fresh last-good cohort"
     data._now_utc_exact += timedelta(minutes=6)
-    try:
-        data.get_data()
-        raise AssertionError("Stale latest counters must not be treated as zero or current")
-    except ValueError:
-        pass
+    assert data.get_data()[0] == combined
+    assert data.shared_history_tail_age_seconds == 360, "Retained counters keep their real source age"
     data._now_utc_exact -= timedelta(minutes=6)
     data._now_utc_exact += timedelta(minutes=31)
     try:
@@ -172,6 +172,7 @@ def fetch_case():
     base.import_export_scaling = 1
     data = MockGECloudData()
     direct = configured(config={"ge_cloud_shared_meter_history": True})
+    direct.raw_meter_samples = {}
     data.config_args = direct.config_args
     data._now_utc_exact = base.now_utc
     sources = history_sources()
@@ -179,6 +180,7 @@ def fetch_case():
     for serial, records in sources.items():
         row = records[-1]
         direct.meter[serial] = {"time": row["last_updated"], "total": {"consumption": row["consumption"], "grid": {"import": row["import"], "export": row["export"]}, "solar": row["pv"]}}
+        direct.raw_meter_samples[serial] = copy.deepcopy(direct.meter[serial])
     base.components = SimpleNamespace(get_component=lambda name: data if name == "gecloud_data" else direct if name == "gecloud" else None)
     data.base = SimpleNamespace(components=base.components)
     base.args.update({key: ["sensor.native_must_not_override"] for key in ("load_today", "import_today", "export_today", "pv_today")})
@@ -195,6 +197,97 @@ def fetch_case():
     data._now_utc_exact = base.now_utc
     assert base.download_ge_data(base.now_utc)
     assert base.load_last_period > 0.9
+    # Distinct newer source packets add known grid-supplied energy to the idle house.
+    for serial in direct.raw_meter_samples:
+        meter = direct.raw_meter_samples[serial]
+        meter["time"] = (START + timedelta(minutes=181)).isoformat()
+        meter["total"]["consumption"] += 0.1
+        meter["total"]["grid"]["import"] += 0.1
+    updated, _ = data.get_data()
+    assert math.isclose(updated[-1]["consumption"], 4.1)
+
+
+async def raw_meter_case():
+    """A fresh null leaf must never re-stamp a cached counter as a new measurement."""
+    direct = configured(config={"ge_cloud_shared_meter_history": True})
+    data = MockGECloudData()
+    data.config_args = direct.config_args
+    data.base = SimpleNamespace(components=SimpleNamespace(get_component=lambda name: direct))
+    sources = history_sources()
+    data._now_utc_exact = START + timedelta(hours=3)
+    data.shared_history_snapshot = {"members": tuple(sorted(sources)), "sources": sources, "downloaded_at": data.now_utc_exact}
+    for serial, rows in sources.items():
+        row = rows[-1]
+        meter = {"time": row["last_updated"], "total": {"consumption": row["consumption"], "grid": {"import": row["import"], "export": row["export"]}, "solar": row["pv"]}}
+        direct.async_get_inverter_data_retry = AsyncMock(return_value=meter)
+        direct.meter[serial] = await direct.async_get_inverter_meter(serial)
+    expected, _ = data.get_data()
+    bad = copy.deepcopy(direct.meter["inverter_a"])
+    bad["time"] = (data.now_utc_exact + timedelta(minutes=1)).isoformat()
+    bad["total"]["consumption"] += 2
+    bad["total"]["grid"]["import"] = None
+    direct.async_get_inverter_data_retry = AsyncMock(return_value=bad)
+    merged = await direct.async_get_inverter_meter("inverter_a", direct.meter["inverter_a"])
+    assert merged["total"]["grid"]["import"] == 56
+    assert direct.raw_meter_samples["inverter_a"]["total"]["grid"]["import"] is None
+    data._now_utc_exact += timedelta(minutes=1)
+    retained, _ = data.get_data()
+    assert retained == expected
+    assert data.shared_history_tail_age_seconds == 60
+    for serial, rows in sources.items():
+        row = rows[-1]
+        valid = {"time": data.now_utc_exact.isoformat(), "total": {"consumption": row["consumption"] + 0.1, "grid": {"import": row["import"] + 0.1, "export": row["export"]}, "solar": row["pv"]}}
+        direct.async_get_inverter_data_retry = AsyncMock(return_value=valid)
+        await direct.async_get_inverter_meter(serial)
+    recovered, _ = data.get_data()
+    assert math.isclose(recovered[-1]["consumption"], 4.1)
+    assert data.shared_history_tail_age_seconds == 0
+    # Complete packets can advance normally while arriving more than five minutes late.
+    data._now_utc_exact = START + timedelta(minutes=200)
+    for serial, rows in sources.items():
+        row = rows[-1]
+        direct.raw_meter_samples[serial] = {"time": (START + timedelta(minutes=192)).isoformat(), "total": {"consumption": row["consumption"] + 0.2, "grid": {"import": row["import"] + 0.2, "export": row["export"]}, "solar": row["pv"]}}
+    delayed, _ = data.get_data()
+    assert math.isclose(delayed[-1]["consumption"], 4.2)
+    assert data.shared_history_tail_age_seconds == 480
+    assert data.shared_history_tail_delayed
+    # An older subsequent packet must not move the retained source backwards.
+    for meter in direct.raw_meter_samples.values():
+        meter["time"] = (START + timedelta(minutes=190)).isoformat()
+    assert data.get_data()[0] == delayed
+
+
+async def failed_page_cache_case():
+    """Exercise real HTTP parsing and prove successful pages survive a failed later member."""
+    direct = configured(config={"ge_cloud_shared_meter_history": True})
+    data = MockGECloudData()
+    data.config_args = direct.config_args
+    data.base = SimpleNamespace(components=SimpleNamespace(get_component=lambda name: direct))
+    data.max_days_previous = 0
+    data._now_utc_exact = START + timedelta(hours=3)
+    sources = history_sources()
+    responses = []
+    for serial in sources:
+        rows = [{"time": r["last_updated"], "total": {"consumption": r["consumption"], "grid": {"import": r["import"], "export": r["export"]}, "solar": r["pv"]}} for r in sources[serial]]
+        responses.append(create_aiohttp_mock_response(status=200, json_data={"data": rows}))
+    failure = create_aiohttp_mock_response(status=429)
+    sessions = [create_aiohttp_mock_session(r) for r in (responses[0], failure, failure, responses[1])]
+    data._mock_storage = SimpleNamespace(load=AsyncMock(return_value=None), save=AsyncMock(return_value=True))
+    with patch("aiohttp.ClientSession", side_effect=sessions) as session:
+        assert not await data.download_ge_data(data.now_utc_exact)
+        assert data._mock_storage.save.await_count == 1
+        assert len(data.ge_url_cache) == 1
+        assert data.shared_history_retry_at == data.now_utc_exact + timedelta(seconds=60)
+        assert not await data.download_ge_data(data.now_utc_exact)
+        assert data.shared_history_retry_at == data.now_utc_exact + timedelta(seconds=120)
+        assert session.call_count == 3, "The successful member page must come from cache on retry"
+        data._now_utc_exact += timedelta(seconds=60)
+        assert await data.run(60, False)
+        assert session.call_count == 3, "Backoff must prevent requests on the intermediate minute"
+        data._now_utc_exact += timedelta(seconds=60)
+        assert await data.run(120, False)
+        assert session.call_count == 4
+    assert data.shared_history_failures == 0
 
 
 async def startup_and_transition_case():
@@ -222,5 +315,7 @@ def run_shared_history_tests():
     counter_cases()
     asyncio.run(download_cases())
     asyncio.run(startup_and_transition_case())
+    asyncio.run(raw_meter_case())
+    asyncio.run(failed_page_cache_case())
     fetch_case()
     return 0
