@@ -17,6 +17,95 @@ from const import EXPORT_MODE_TARGET
 from tests.test_infra import run_async, MockStorageComponents, make_test_storage
 
 
+def _execution_state_env(my_predbat):
+    tmpdir = tempfile.mkdtemp()
+    storage = make_test_storage(my_predbat, tmpdir)
+    my_predbat.components = MockStorageComponents(storage)
+    my_predbat.execution_state_saved = None
+    return tmpdir, storage
+
+
+def _set_flags(my_predbat, charging, charge_target, exporting, export_target):
+    my_predbat.isCharging = charging
+    my_predbat.isCharging_Target = charge_target
+    my_predbat.isExporting = exporting
+    my_predbat.isExporting_Target = export_target
+
+
+def test_execution_state_roundtrip(my_predbat):
+    tmpdir, _ = _execution_state_env(my_predbat)
+    try:
+        _set_flags(my_predbat, True, 80, True, 25)
+        assert my_predbat.save_execution_state() is True
+        _set_flags(my_predbat, False, 0, False, 0)
+        my_predbat.execution_state_saved = None
+        my_predbat.load_execution_state()
+        assert (my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target) == (True, 80, True, 25)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_execution_state_absent(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    try:
+        _set_flags(my_predbat, False, 0, False, 0)
+        my_predbat.load_execution_state()
+        assert (my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target) == (False, 0, False, 0)
+        # A malformed item is ignored too
+        run_async(storage.save("predbat", "execution_state", ["nonsense"], format="json"))
+        my_predbat.load_execution_state()
+        assert (my_predbat.isCharging, my_predbat.isExporting) == (False, False)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_execution_state_does_not_bump_plan_version(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    try:
+        my_predbat.now_utc = datetime.now(timezone.utc)
+        my_predbat.charge_window_best = [{"start": 480, "end": 600, "average": 14.5}]
+        my_predbat.charge_limit_best = [8.5]
+        my_predbat.export_window_best = []
+        my_predbat.export_limits_best = []
+        my_predbat.plan_preclip = None
+        my_predbat.plan_last_updated = my_predbat.now_utc
+        my_predbat.plan_valid = True
+        my_predbat.plan_version = 0
+        my_predbat.plan_version_content = None
+        assert my_predbat.save_plan_if_changed() is True
+        version = my_predbat.plan_version
+        content = my_predbat.plan_version_content
+        saved_plan = run_async(storage.load("predbat", "plan"))
+        _set_flags(my_predbat, False, 0, True, 40)
+        assert my_predbat.save_execution_state() is True
+        assert my_predbat.plan_version == version
+        assert my_predbat.plan_version_content == content
+        assert run_async(storage.load("predbat", "plan")) == saved_plan
+        assert my_predbat.save_plan_if_changed() is False
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_execution_state_saves_only_on_change(my_predbat):
+    tmpdir, _ = _execution_state_env(my_predbat)
+    try:
+        _set_flags(my_predbat, True, 100, False, 0)
+        assert my_predbat.save_execution_state() is True
+        assert my_predbat.save_execution_state() is False
+        my_predbat.isCharging = False
+        assert my_predbat.save_execution_state() is True
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+EXECUTION_STATE_TESTS = [
+    test_execution_state_roundtrip,
+    test_execution_state_absent,
+    test_execution_state_does_not_bump_plan_version,
+    test_execution_state_saves_only_on_change,
+]
+
+
 def test_plan_persistence(my_predbat):
     """Test save_plan() and load_plan() round-trip and edge cases."""
     failed = 0
@@ -267,5 +356,16 @@ def test_plan_persistence(my_predbat):
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+    saved_flags = (my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target)
+    for execution_test in EXECUTION_STATE_TESTS:
+        try:
+            execution_test(my_predbat)
+            print("OK: {}".format(execution_test.__name__))
+        except Exception as e:
+            print("FAILED: {}: {!r}".format(execution_test.__name__, e))
+            failed += 1
+    my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target = saved_flags
+    my_predbat.execution_state_saved = None
 
     return failed

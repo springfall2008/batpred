@@ -652,6 +652,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.isCharging_Target = 0
         self.isExporting = False
         self.isExporting_Target = 0
+        self.execution_state_saved = None
         self.savings_today_predbat = 0.0
         self.savings_today_predbat_soc = 0.0
         self.savings_today_pvbat = 0.0
@@ -971,8 +972,68 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.save_plan()
         return True
 
+    def execution_state_values(self):
+        """The four execution flags as a comparable tuple."""
+        return (bool(self.isCharging), self.isCharging_Target, bool(self.isExporting), self.isExporting_Target)
+
+    def save_execution_state(self):
+        """
+        Save whether the inverter is currently charging or exporting, apart from the plan.
+
+        Kept in its own storage item so that a change of flags is never mistaken for a change of plan:
+        it does not touch plan_version, plan_version_content or the saved plan. Only written when the
+        values differ from the last ones saved or loaded. Returns True when something was written.
+        """
+        values = self.execution_state_values()
+        if values == self.execution_state_saved:
+            return False
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return False
+        state = {
+            "is_charging": values[0],
+            "is_charging_target": values[1],
+            "is_exporting": values[2],
+            "is_exporting_target": values[3],
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            # Real clock for the expiry, as the storage layer compares against it
+            run_async(storage.save("predbat", "execution_state", state, format="json", expiry=datetime.now(timezone.utc) + timedelta(hours=8)))
+        except Exception as e:
+            self.log("Warning: Failed to save execution state: {}".format(e))
+            return False
+        self.execution_state_saved = values
+        return True
+
+    def load_execution_state(self):
+        """Restore the saved execution flags. A missing, expired or malformed item leaves the defaults."""
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        try:
+            state = run_async(storage.load("predbat", "execution_state"))
+        except Exception as e:
+            self.log("Warning: Failed to load execution state: {}".format(e))
+            return
+        if not isinstance(state, dict):
+            return
+        numeric = (int, float)
+        if "is_charging" in state and isinstance(state["is_charging"], bool):
+            self.isCharging = state["is_charging"]
+        if "is_charging_target" in state and isinstance(state["is_charging_target"], numeric) and not isinstance(state["is_charging_target"], bool):
+            self.isCharging_Target = state["is_charging_target"]
+        if "is_exporting" in state and isinstance(state["is_exporting"], bool):
+            self.isExporting = state["is_exporting"]
+        if "is_exporting_target" in state and isinstance(state["is_exporting_target"], numeric) and not isinstance(state["is_exporting_target"], bool):
+            self.isExporting_Target = state["is_exporting_target"]
+        self.execution_state_saved = self.execution_state_values()
+        self.log("Restored execution state: charging={} (target {}) exporting={} (target {})".format(self.isCharging, self.isCharging_Target, self.isExporting, self.isExporting_Target))
+
     def load_plan(self):
         """Restore the previously saved plan from storage, however old it is."""
+        # The execution flags are stored apart from the plan, so they come back even when there is no plan to restore
+        self.load_execution_state()
         storage = self.components.get_component("storage") if self.components else None
         if not storage:
             self.log("Warning: Storage component unavailable, cannot load plan")
@@ -1395,7 +1456,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 self.log("Error: Failed to fetch inverter data, not able to execute the plan")
                 self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
                 return None
-        return self.execute_plan()
+        result = self.execute_plan()
+        # The flags have settled for this run. Saved apart from the plan, so a change here is never a new plan version
+        self.save_execution_state()
+        return result
 
     def update_pred(self, scheduled=True):
         """
