@@ -22,6 +22,7 @@ def _execution_state_env(my_predbat):
     storage = make_test_storage(my_predbat, tmpdir)
     my_predbat.components = MockStorageComponents(storage)
     my_predbat.execution_state_saved = None
+    my_predbat.execution_state_saved_at = None
     return tmpdir, storage
 
 
@@ -61,6 +62,8 @@ def test_execution_state_absent(my_predbat):
 
 def test_execution_state_does_not_bump_plan_version(my_predbat):
     tmpdir, storage = _execution_state_env(my_predbat)
+    plan_attrs = ["now_utc", "charge_window_best", "charge_limit_best", "export_window_best", "export_limits_best", "plan_preclip", "plan_last_updated", "plan_valid", "plan_version", "plan_version_content"]
+    saved_plan_state = {a: getattr(my_predbat, a) for a in plan_attrs}
     try:
         my_predbat.now_utc = datetime.now(timezone.utc)
         my_predbat.charge_window_best = [{"start": 480, "end": 600, "average": 14.5}]
@@ -83,6 +86,8 @@ def test_execution_state_does_not_bump_plan_version(my_predbat):
         assert run_async(storage.load("predbat", "plan")) == saved_plan
         assert my_predbat.save_plan_if_changed() is False
     finally:
+        for a, v in saved_plan_state.items():
+            setattr(my_predbat, a, v)
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -113,7 +118,7 @@ def test_execution_state_expired_leaves_defaults(my_predbat):
 def test_execution_state_partial_restores_only_present_keys(my_predbat):
     tmpdir, storage = _execution_state_env(my_predbat)
     try:
-        run_async(storage.save("predbat", "execution_state", {"is_exporting": True, "is_exporting_target": 35}, format="json"))
+        run_async(storage.save("predbat", "execution_state", {"is_exporting": True, "is_exporting_target": 35, "saved_at": datetime.now(timezone.utc).isoformat()}, format="json"))
         _set_flags(my_predbat, False, 7, False, 0)
         my_predbat.load_execution_state()
         assert (my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target) == (False, 7, True, 35)
@@ -124,12 +129,118 @@ def test_execution_state_partial_restores_only_present_keys(my_predbat):
 def test_execution_state_wrong_types_leave_defaults(my_predbat):
     tmpdir, storage = _execution_state_env(my_predbat)
     try:
-        bad = {"is_charging": "yes", "is_charging_target": "80", "is_exporting": 1, "is_exporting_target": True}
+        bad = {"is_charging": "yes", "is_charging_target": "80", "is_exporting": 1, "is_exporting_target": True, "saved_at": datetime.now(timezone.utc).isoformat()}
         run_async(storage.save("predbat", "execution_state", bad, format="json"))
         _set_flags(my_predbat, False, 0, False, 0)
         my_predbat.load_execution_state()
         assert (my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target) == (False, 0, False, 0)
         assert my_predbat.execution_state_saved is None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _store_state(storage, age_minutes=0, **overrides):
+    state = {"is_charging": True, "is_charging_target": 90, "is_exporting": False, "is_exporting_target": 0, "saved_at": (datetime.now(timezone.utc) - timedelta(minutes=age_minutes)).isoformat()}
+    state.update(overrides)
+    run_async(storage.save("predbat", "execution_state", state, format="json"))
+
+
+def _flags(my_predbat):
+    return (my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target)
+
+
+def test_execution_state_load_plan_restores_flags(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    try:
+        _store_state(storage)
+        _set_flags(my_predbat, False, 0, False, 0)
+        my_predbat.load_plan()
+        assert _flags(my_predbat) == (True, 90, False, 0), _flags(my_predbat)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_execution_state_execute_once_saves(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    try:
+        def fake_execute_plan():
+            _set_flags(my_predbat, True, 70, False, 0)
+            return ("Charging", "")
+
+        my_predbat.execute_plan = fake_execute_plan
+        assert my_predbat.execute_once(refetch_inverter=False) == ("Charging", "")
+        item = run_async(storage.load("predbat", "execution_state"))
+        assert item and item["is_charging"] is True and item["is_charging_target"] == 70, item
+
+        # A run that raises must leave the previously saved item alone
+        def raising_execute_plan():
+            _set_flags(my_predbat, False, 5, True, 10)
+            raise ValueError("boom")
+
+        my_predbat.execute_plan = raising_execute_plan
+        try:
+            my_predbat.execute_once(refetch_inverter=False)
+            raise AssertionError("execute_once should have raised")
+        except ValueError:
+            pass
+        assert run_async(storage.load("predbat", "execution_state")) == item
+    finally:
+        del my_predbat.execute_plan
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_execution_state_saved_with_expiry(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    calls = []
+    real_save = storage.save
+
+    async def spy_save(*args, **kwargs):
+        calls.append(kwargs)
+        return await real_save(*args, **kwargs)
+
+    try:
+        storage.save = spy_save
+        _set_flags(my_predbat, True, 100, False, 0)
+        assert my_predbat.save_execution_state() is True
+        assert len(calls) == 1 and calls[0].get("expiry") is not None, calls
+        remaining = calls[0]["expiry"] - datetime.now(timezone.utc)
+        assert timedelta(hours=7) < remaining <= timedelta(hours=8), remaining
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_execution_state_stale_item_ignored(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    try:
+        limit = max(my_predbat.calculate_plan_every, 30)
+        _store_state(storage, age_minutes=limit + 5)
+        _set_flags(my_predbat, False, 0, False, 0)
+        my_predbat.load_execution_state()
+        assert _flags(my_predbat) == (False, 0, False, 0)
+        _store_state(storage, age_minutes=limit - 5)
+        my_predbat.load_execution_state()
+        assert _flags(my_predbat) == (True, 90, False, 0)
+        # No usable timestamp at all is not trusted either
+        _store_state(storage, saved_at="not a time")
+        _set_flags(my_predbat, False, 0, False, 0)
+        my_predbat.load_execution_state()
+        assert _flags(my_predbat) == (False, 0, False, 0)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_execution_state_reconfirms_when_old(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    try:
+        _set_flags(my_predbat, True, 100, False, 0)
+        assert my_predbat.save_execution_state() is True
+        assert my_predbat.save_execution_state() is False
+        my_predbat.execution_state_saved_at = datetime.now(timezone.utc) - timedelta(minutes=11)
+        assert my_predbat.save_execution_state() is True
+        item = run_async(storage.load("predbat", "execution_state"))
+        assert datetime.now(timezone.utc) - datetime.fromisoformat(item["saved_at"]) < timedelta(minutes=1)
+        my_predbat.execution_state_saved_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        assert my_predbat.save_execution_state() is False
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -142,6 +253,11 @@ EXECUTION_STATE_TESTS = [
     test_execution_state_expired_leaves_defaults,
     test_execution_state_partial_restores_only_present_keys,
     test_execution_state_wrong_types_leave_defaults,
+    test_execution_state_load_plan_restores_flags,
+    test_execution_state_execute_once_saves,
+    test_execution_state_saved_with_expiry,
+    test_execution_state_stale_item_ignored,
+    test_execution_state_reconfirms_when_old,
 ]
 
 
@@ -406,5 +522,6 @@ def test_plan_persistence(my_predbat):
             failed += 1
     my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target = saved_flags
     my_predbat.execution_state_saved = None
+    my_predbat.execution_state_saved_at = None
 
     return failed
