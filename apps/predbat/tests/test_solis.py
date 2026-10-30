@@ -76,6 +76,9 @@ class MockSolisAPI(SolisAPI):
         # No wall-clock pause in tests; the settle re-read itself is asserted by the tests that
         # care about it, and every other test would just be waiting for nothing.
         self.verify_settle_seconds = 0
+        self.control_event_loop = None
+        self.read_only_reset_error = ""
+        self.read_only_reset_progress = 0.0
         self.detail_summary_logged = {}
         self.slot_limits_logged = {}
         self.response_observer = None

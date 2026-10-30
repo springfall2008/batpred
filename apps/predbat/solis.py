@@ -241,6 +241,13 @@ SOLIS_HOLD_HYSTERESIS = 1
 # Only a mismatched write pays this, so the cost is one pause per refused register per cycle.
 SOLIS_VERIFY_SETTLE_SECONDS = 5
 
+# The Demo (read-only) schedule handover is waited for by the executor thread. A fully-programmed
+# V2 schedule needs a verified write per enabled slot, each of which can pay the settle pause above,
+# so no fixed total fits every schedule: the wait is allowed this long without a completed step, and
+# never more than the ceiling per inverter so a stuck cleanup cannot hold the main loop indefinitely.
+SOLIS_READ_ONLY_RESET_STEP_SECONDS = 60
+SOLIS_READ_ONLY_RESET_MAX_SECONDS = 300
+
 # The slot-current cap's starting point when CID 7224/7226 has not been read
 SOLIS_SLOT_CURRENT_DEFAULT_AMPS = 60.0
 
@@ -570,6 +577,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.automatic_config_done = False  # Auto-config succeeded, so it does not need re-running
         self.capacity_voltage_warned = set()  # Inverters already warned about an estimated capacity voltage
         self.verify_settle_seconds = SOLIS_VERIFY_SETTLE_SECONDS  # Pause before a verify read is re-taken, 0 in tests
+        self.control_event_loop = None  # The component's own loop, recorded by run() so the executor thread can hand work to it
+        self.read_only_reset_error = ""  # Why the last Demo schedule handover was not confirmed, "" when it was or none was due
+        self.read_only_reset_progress = 0.0  # time.monotonic() when the Demo handover last completed a step
         self.detail_summary_logged = {}  # {inverter_sn: the inverter summary last logged}, so it is logged on change only
         self.slot_limits_logged = {}  # {inverter_sn: the slot current limits last logged}, so they are logged on change only
         self.response_observer = None  # Called with (endpoint, payload, reply) for every reply received; the CLI's --dump-raw sets it
@@ -4583,14 +4593,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self._schedule_control_lock = asyncio.Lock()
         return self._schedule_control_lock
 
-    def request_read_only_reset(self, timeout=60):
+    def request_read_only_reset(self, timeout=SOLIS_READ_ONLY_RESET_STEP_SECONDS, max_timeout=None):
         """Wait for verified schedule cleanup on the component loop during an explicit Demo reset.
 
         The executor runs on another thread. A local entity acknowledgement is not a
         hardware acknowledgement, so it must wait for this operation before releasing control.
+        timeout bounds the wait between completed steps rather than the whole cleanup, whose
+        length grows with the number of enabled slots; max_timeout caps the total.
         Nothing is queued for a later retry after a timeout or failure.
         """
-        loop = getattr(self, "control_event_loop", None)
+        loop = self.control_event_loop
         try:
             caller_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -4598,9 +4610,20 @@ class SolisAPI(ComponentBase, OAuthMixin):
         if loop is None or not loop.is_running() or caller_loop is loop or not self.control_enable:
             self.read_only_reset_error = "Solis schedule cleanup could not reach the control component"
             return False
+        if max_timeout is None:
+            max_timeout = SOLIS_READ_ONLY_RESET_MAX_SECONDS * max(1, len(self.inverter_sn))
+        started = time.monotonic()
+        self.read_only_reset_progress = started
         future = asyncio.run_coroutine_threadsafe(self.perform_read_only_reset(), loop)
         try:
-            return future.result(timeout=timeout)
+            while True:
+                remaining = min(self.read_only_reset_progress + timeout, started + max_timeout) - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("no confirmed progress")
+                try:
+                    return future.result(timeout=remaining)
+                except TimeoutError:
+                    continue  # Re-check: the cleanup may have completed a step meanwhile, extending the deadline
         except Exception as exc:
             future.cancel()
             self.read_only_reset_error = "Solis schedule cleanup was not confirmed: {}".format(type(exc).__name__)
@@ -4614,7 +4637,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
     async def perform_read_only_reset(self):
         """Stop and verify schedules once, leaving a visible error if cleanup fails."""
         try:
-            await asyncio.wait_for(self.clear_read_only_schedules(), timeout=45)
+            # Bounded by request_read_only_reset(), which cancels this when a step stalls
+            await self.clear_read_only_schedules()
             self.read_only_reset_error = ""
             self.log("Solis API: Read-only handover confirmed from inverter schedule readbacks")
             return True
@@ -4669,9 +4693,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
             await self.publish_entities()
 
     def require_read_only_reset(self):
-        """Abort further cleanup requests if the user has changed control mode."""
+        """Abort further cleanup requests if the user has changed control mode, else record progress."""
         if not self.read_only_reset_authorised():
             raise SolisAPIError("Read-only reset is no longer authorised")
+        # Each call follows a completed step (lock acquired, device read, verified write), which
+        # extends the executor's wait; see request_read_only_reset().
+        self.read_only_reset_progress = time.monotonic()
 
     async def write_read_only_reset_cid(self, sn, cid, value):
         """Send only a cleanup write and require its physical register readback."""

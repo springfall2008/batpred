@@ -482,7 +482,11 @@ class Execute:
         if self.set_read_only:
             self.clear_control_ledger("read-only mode is enabled, so Predbat is not setting anything")
             solis = self.solis_read_only_component()
-            if solis and getattr(solis, "read_only_reset_error", ""):
+            if solis and solis.read_only_reset_error:
+                # Publish Idle as a clean Demo cycle does at the end of this function, so only the warning differs
+                self.set_charge_export_status(False, False, True)
+                self.isCharging = False
+                self.isExporting = False
                 return "Warn: Solis handover unconfirmed", solis.read_only_reset_error
 
         isCharging = False
@@ -1280,10 +1284,15 @@ class Execute:
         return calc_percent_limit(charge_limit_kwh, self.soc_max) == self.reserve_percent
 
     def solis_read_only_component(self):
-        """Find the active native Solis controller only when it serves this executor's inverters."""
-        components = getattr(self, "components", None)
-        if components and any(getattr(inverter, "inverter_type", None) == "SolisCloud" for inverter in self.inverters):
-            return components.get_component("solis")
+        """Find the native Solis controller only when it serves this executor's inverters and has control enabled.
+
+        A monitor-only component (solis_control_enable: false) never wrote a schedule, so there is
+        nothing to hand over and the inverters take the ordinary local reset instead.
+        """
+        if self.components and any(inverter.inverter_type == "SolisCloud" for inverter in self.inverters):
+            solis = self.components.get_component("solis")
+            if solis and solis.control_enable:
+                return solis
         return None
 
     def reset_inverter(self):
@@ -1295,7 +1304,7 @@ class Execute:
             self.last_service_hash = {}
             # Don't reset in read only mode unless forced
             for inverter in self.inverters:
-                if solis and getattr(inverter, "inverter_type", None) == "SolisCloud":
+                if solis and inverter.inverter_type == "SolisCloud":
                     continue  # Local slot entities cannot confirm this asynchronous controller's cleanup.
                 self.log("Reset inverter settings to safe mode (set_charge_window={} set_export_window={} force={})".format(self.set_charge_window, self.set_export_window, self.inverter_needs_reset_force))
                 if self.set_charge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):

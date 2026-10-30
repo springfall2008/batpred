@@ -24,6 +24,8 @@ def make_handover_api(v2=True, fields=12):
     api.refuse_cid = None
     api.missing_cid = None
     api.block_writes = None
+    api.lag_readback = False
+    api.stale_reads = {}
     # Desired state already says off, reproducing the false local acknowledgement.
     api.charge_discharge_time_windows[sn] = {1: {"charge_enable": 0, "discharge_enable": 0}}
     api.cached_values[sn] = {cid: "0" for cid in range(5916, 5928)}
@@ -32,13 +34,16 @@ def make_handover_api(v2=True, fields=12):
         """Return device registers, including successful acknowledgements of refused writes."""
         cid = payload.get("cid")
         if endpoint == SOLIS_READ_ENDPOINT:
-            return {"msg": api.hardware[cid]}
+            # A lagging datalogger answers the first read after a write with the old value (#4774)
+            return {"msg": api.stale_reads.pop(cid, api.hardware[cid])}
         if endpoint == SOLIS_READ_BATCH_ENDPOINT:
             return [[{"cid": cid, "msg": api.hardware[cid]} for cid in map(int, payload["cids"].split(",")) if cid != api.missing_cid]]
         assert endpoint == SOLIS_CONTROL_ENDPOINT, endpoint
         if api.block_writes is not None:
             await api.block_writes.wait()
         api.hardware_writes.append((cid, payload["value"]))
+        if api.lag_readback:
+            api.stale_reads[cid] = api.hardware[cid]
         if cid != api.refuse_cid:
             api.hardware[cid] = payload["value"]
         return [{"code": "0"}]
@@ -120,6 +125,24 @@ async def test_cross_thread_ack_and_timeout():
     assert not api.hardware_writes, "A timed-out request must not dispatch writes later"
 
 
+async def test_budget_scales_with_slots():
+    """A full schedule whose every readback lags outlasts one step's budget but still confirms."""
+    api = make_handover_api()
+    api.control_event_loop = asyncio.get_running_loop()
+    api.lag_readback = True
+    api.verify_settle_seconds = 0.05
+    # 13 settled writes take ~0.65s, more than twice the 0.3s allowed between completed steps
+    assert await asyncio.to_thread(api.request_read_only_reset, 0.3, 5)
+    assert all(api.hardware[cid] == "0" for cid in range(5916, 5928)) and api.read_only_reset_error == ""
+    api = make_handover_api()
+    api.control_event_loop = asyncio.get_running_loop()
+    api.lag_readback = True
+    api.verify_settle_seconds = 0.05
+    assert not await asyncio.to_thread(api.request_read_only_reset, 0.3, 0.2), "The total ceiling still bounds the executor's wait"
+    await asyncio.sleep(0.01)  # Let the cancelled cleanup unwind; either side's message may be the one left
+    assert api.read_only_reset_error
+
+
 async def test_handover_waits_for_polling():
     """A stale poll or earlier writer must finish before cleanup can confirm release."""
     api = make_handover_api()
@@ -149,7 +172,7 @@ def test_executor_handover():
     """Force reset bypasses local acknowledgements and surfaces a failed physical cleanup."""
     for success in (True, False):
         calls = []
-        component = SimpleNamespace(read_only_reset_error="" if success else "device refused cleanup")
+        component = SimpleNamespace(read_only_reset_error="" if success else "device refused cleanup", control_enable=True)
 
         def request():
             """Observe the force marker while the executor waits for cleanup."""
@@ -164,7 +187,11 @@ def test_executor_handover():
             inverters=[SimpleNamespace(inverter_type="SolisCloud")],
             components=SimpleNamespace(get_component=lambda name: component if name == "solis" else None),
             record_status=lambda *args, **kwargs: calls.append((args, kwargs)),
+            isCharging=True,
+            isExporting=True,
         )
+        status_published = []
+        executor.set_charge_export_status = lambda *args: status_published.append(args)
         executor.solis_read_only_component = MethodType(Execute.solis_read_only_component, executor)
         Execute.reset_inverter(executor)
         assert calls[0] == "set_read_only"
@@ -177,14 +204,18 @@ def test_executor_handover():
             executor.holiday_days_left = 0
             executor.clear_control_ledger = lambda reason: None
             assert Execute.execute_plan(executor) == ("Warn: Solis handover unconfirmed", "device refused cleanup")
+            assert status_published == [(False, False, True)] and not executor.isCharging and not executor.isExporting, "A latched warning must still publish Idle"
         calls.clear()
         Execute.reset_inverter(executor)
         assert not calls, "An existing Demo session must not clear later manual schedules"
+    # Monitor-only (solis_control_enable: false) never wrote a schedule, so it has nothing to hand over
+    component.control_enable = False
+    assert executor.solis_read_only_component() is None
 
 
 def run_solis_handover_tests():
     """Run the bounded hardware-readback and executor integration regressions."""
-    for test in [test_verified_cleanup, test_refusal_and_missing_data, test_explicit_transition_only, test_cross_thread_ack_and_timeout, test_handover_waits_for_polling]:
+    for test in [test_verified_cleanup, test_refusal_and_missing_data, test_explicit_transition_only, test_cross_thread_ack_and_timeout, test_budget_scales_with_slots, test_handover_waits_for_polling]:
         asyncio.run(test())
     test_executor_handover()
     print("PASSED: Solis Demo handover readback, refusal, timeout and executor regressions")
