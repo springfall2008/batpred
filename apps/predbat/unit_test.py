@@ -157,6 +157,7 @@ from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
 from tests.test_web_entity_unit_resolution import run_web_entity_unit_resolution_tests
+from tests.test_web_attributes_history import run_web_attributes_history_tests
 from tests.test_web_annual import (
     test_web_annual,
     test_web_annual_error_isolation,
@@ -643,6 +644,7 @@ def main():
         ("web_charts", run_web_charts_tests, "Web chart rendering tests (percent/special-character units)", False),
         ("web_chart_grouping", run_web_chart_grouping_tests, "Web /entity chart numeric vs timeline grouping tests", False),
         ("web_entity_unit_resolution", run_web_entity_unit_resolution_tests, "Web /entity chart unit/name resolution tests", False),
+        ("web_attributes_history", run_web_attributes_history_tests, "Web entity attributes read from history without tracking", False),
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("futurerate_auto", test_futurerate_auto, "FutureRate auto Agile detection tests", False),
         ("futurerate_agilepredict", test_futurerate_agilepredict, "FutureRate AgilePredict forecast tests", False),
