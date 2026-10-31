@@ -1412,7 +1412,9 @@ export default function PlanTable({
   }
 
   function constrainActionMenu(menu: HTMLDivElement | null) {
-    constrainFloatingElement(menu, '--plan-action-menu-shift')
+    if (menu && getComputedStyle(menu).position !== 'fixed') {
+      constrainFloatingElement(menu, '--plan-action-menu-shift')
+    }
   }
 
   function constrainActionTooltip(tooltip: HTMLSpanElement | null) {

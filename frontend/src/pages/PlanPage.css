@@ -315,6 +315,7 @@
 
   .plan-table .plan-action {
     padding: 0.15rem;
+    justify-content: center;
   }
 
   .plan-table .plan-action > span:first-of-type,
