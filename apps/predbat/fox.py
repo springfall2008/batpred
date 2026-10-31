@@ -2441,6 +2441,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.set_arg("soc_max", [f"sensor.{self.prefix}_fox_{device}_battery_capacity" for device in batteries])
         self.set_arg("reserve", [f"number.{self.prefix}_fox_{device}_battery_schedule_reserve" for device in batteries])
         self.set_arg("battery_min_soc", [f"sensor.{self.prefix}_fox_{device}_battery_reserve_min" for device in batteries])
+        self.set_arg("battery_max_soc", [f"number.{self.prefix}_fox_{device}_setting_maxsoc" for device in batteries])
         self.set_arg("charge_start_time", [f"select.{self.prefix}_fox_{device}_battery_schedule_charge_start_time" for device in batteries])
         self.set_arg("charge_end_time", [f"select.{self.prefix}_fox_{device}_battery_schedule_charge_end_time" for device in batteries])
         self.set_arg("charge_limit", [f"number.{self.prefix}_fox_{device}_battery_schedule_charge_soc" for device in batteries])
@@ -2529,6 +2530,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             "soc_max": self._fox_entity(serial, "sensor", "battery_capacity"),
             "reserve": self._fox_entity(serial, "number", "battery_schedule_reserve", "rw"),
             "battery_min_soc": self._fox_entity(serial, "sensor", "battery_reserve_min"),
+            "battery_max_soc": self._fox_entity(serial, "number", "setting_maxsoc", "rw"),
             "charge_start_time": self._fox_entity(serial, "select", "battery_schedule_charge_start_time", "rw", **time_select),
             "charge_end_time": self._fox_entity(serial, "select", "battery_schedule_charge_end_time", "rw", **time_select),
             "charge_limit": self._fox_entity(serial, "number", "battery_schedule_charge_soc", "rw"),

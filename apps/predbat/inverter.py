@@ -520,6 +520,7 @@ class Inverter:
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
+        self.battery_max_soc = self.base.get_arg("battery_max_soc", default=100, index=self.id, required_unit="%")
         if not self.battery_scaling or self.battery_scaling <= 0:
             # A parsed value of exactly 0 (or negative) isn't safe to interpret either way - it could
             # be a flaky/unavailable API response (e.g. Solis Cloud API returning batteryHealthSoh: 0

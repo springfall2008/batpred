@@ -1531,6 +1531,9 @@ class Execute:
         if not battery_export_permitted:
             self.calculate_best_export = False
 
+        # The device Max SoC caps the planner ceiling; best_soc_max was read fresh in fetch_config_options()
+        self.apply_battery_max_soc_ceiling()
+
         # Additional PVs without inverters
         pv_power_sensors = self.get_arg("pv_power", [], indirect=False)
         if pv_power_sensors and isinstance(pv_power_sensors, list):

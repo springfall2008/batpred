@@ -1578,6 +1578,10 @@ Be careful of setting the rate at a value higher than your inverter can handle f
 If not set or set to 0, Predbat will attempt to automatically determine the battery size by analyzing historical charging data from `soc_percent` and `battery_power` sensors.
 This requires at least several days of historical data with charging periods of 15% or more SoC change. If automatic detection fails, you must manually set this value.
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
+- **battery_max_soc** - Optional per-inverter upper limit on the usable battery capacity, a percentage (default 100, so unset
+leaves the computed `soc_max` unchanged). When set below 100 the usable capacity Predbat models, plans charge towards and
+predicts against is capped to `soc_max` x `battery_max_soc`/100, mirroring how Fox's device Max SoC setting stops the battery
+filling all the way. The Fox Cloud component binds it to `number.<prefix>_fox_<sn>_setting_maxsoc` automatically.
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 Can also be set to a fixed percentage rather than an entity name for inverters that have no reserve register to point at -
 the supplied Huawei and Sofar templates do this. A fixed value tells Predbat what the inverter is set to so it can be modelled,
