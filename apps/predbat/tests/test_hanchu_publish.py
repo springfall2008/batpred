@@ -248,6 +248,44 @@ def test_hanchu_automatic_ignore_pv_skips_the_pv_args():
     assert not failed, "test_hanchu_automatic_ignore_pv_skips_the_pv_args"
 
 
+def test_hanchu_energy_args_keep_the_users_own_sensors():
+    """An apps.yaml entry for one of the day's energy totals wins over automatic_config, per key.
+
+    These four are the keys automatic_config claims whose recorder HISTORY Predbat reads. The case
+    that needs it: an EV charger wired outside the Hanchu grid meter, so Hanchu's import_today
+    misses the car and the user points the key at their smart meter. Everything else automatic_config
+    claims is read as a current value, so it keeps overwriting as before.
+    """
+    failed = False
+    client = populated()
+    own_import = ["sensor.octopus_energy_electricity_meter_current_accumulative_consumption"]
+    client.base.args_from_apps_yaml = {"import_today": own_import, "soc_percent": ["sensor.users_own_soc"]}
+    client.base.args["import_today"] = list(own_import)
+    client.base.args["soc_percent"] = ["sensor.users_own_soc"]
+    run_async_local(client.publish_data())
+    run_async_local(client.publish_schedule_settings_ha(SN))
+    run_async_local(client.automatic_config())
+    args = client.base.args
+    if args.get("import_today") != own_import:
+        print(f"ERROR: the user's own import_today was replaced by {args.get('import_today')}")
+        failed = True
+    # Per key: the three the user did not name are still auto-configured.
+    for arg in ("load_today", "export_today", "pv_today"):
+        value = args.get(arg)
+        if not value or value[0] not in client.published:
+            print(f"ERROR: {arg} should still be auto-configured, got {value}")
+            failed = True
+    # A key read as a current value still overwrites, as before.
+    if args.get("soc_percent") == ["sensor.users_own_soc"]:
+        print("ERROR: soc_percent is not a history key and should still be auto-configured")
+        failed = True
+    # The Hanchu sensor is still published; only the apps.yaml pointing is left alone.
+    if not any(entity.endswith("_import_today") for entity in client.published):
+        print("ERROR: the Hanchu import_today sensor should still be published")
+        failed = True
+    assert not failed, "test_hanchu_energy_args_keep_the_users_own_sensors"
+
+
 def test_hanchu_energy_args_need_every_device_to_report():
     """Binding an arg for only some inverters would silently under-report the whole site."""
     failed = False
@@ -381,6 +419,7 @@ def run_hanchu_publish_tests(my_predbat):
         ("automatic_config", test_hanchu_automatic_config_binds_the_expected_args),
         ("reserve_max", test_hanchu_automatic_config_caps_the_reserve_at_the_device_floor),
         ("ignore_pv", test_hanchu_automatic_ignore_pv_skips_the_pv_args),
+        ("energy_user_wins", test_hanchu_energy_args_keep_the_users_own_sensors),
         ("energy_all_or_nothing", test_hanchu_energy_args_need_every_device_to_report),
         ("capabilities", test_hanchu_capabilities_match_the_inverter_def_row),
         ("discovery_record", test_hanchu_discovery_record_is_complete_and_agrees_with_automatic_config),
