@@ -466,21 +466,36 @@ def load_apps_yaml(apps_file=None, log=None, secrets_file=None):
     log = log or (lambda message, **kwargs: print(message))
     secrets = load_secrets(log=log, secrets_file=secrets_file)
 
+    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+    log(f"Loading {apps_file}", quiet=False)
+    with open(apps_file, "r") as stream:
+        config = yaml.load(stream, Loader=secret_yaml_loader(secrets, log))  # nosec B506 - a SafeLoader subclass
+    return config["pred_bat"], secrets
+
+
+def secret_yaml_loader(secrets, log):
+    """
+    Return a yaml.SafeLoader subclass that resolves !secret against the given secrets dict
+
+    A new class per call, so the !secret constructor is never registered on the process-wide
+    yaml.SafeLoader that every other yaml.safe_load() uses. A missing secret logs a warning and
+    resolves to None. Use as yaml.load(stream, Loader=secret_yaml_loader(secrets, log)).
+    """
+    import yaml
+
     def secret_constructor(loader, node):
-        """YAML constructor for the !secret tag, resolving against the secrets just loaded."""
+        """YAML constructor for the !secret tag, resolving against the given secrets."""
         secret_key = loader.construct_scalar(node)
         if secret_key in secrets:
             return secrets[secret_key]
         log(f"Warn: Secret '{secret_key}' not found in secrets.yaml")
         return None
 
-    yaml.add_constructor("!secret", secret_constructor, Loader=yaml.SafeLoader)
+    class SecretYamlLoader(yaml.SafeLoader):
+        pass
 
-    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
-    log(f"Loading {apps_file}", quiet=False)
-    with open(apps_file, "r") as stream:
-        config = yaml.safe_load(stream)
-    return config["pred_bat"], secrets
+    SecretYamlLoader.add_constructor("!secret", secret_constructor)
+    return SecretYamlLoader
 
 
 def mask_secret_args(args):
