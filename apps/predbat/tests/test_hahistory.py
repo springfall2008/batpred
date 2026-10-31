@@ -8,12 +8,16 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import base64
+import json
 import pytz
+import struct
+import zlib
 from datetime import datetime, timedelta
+import ha as ha_module
 from ha import HAHistory, EntityHistory
 from utils import str2time
 from tests.test_infra import run_async
-
 
 FIVE_MINUTE_ENTRIES_PER_DAY = 1440 // 5
 
@@ -1082,6 +1086,654 @@ def test_entity_history_store(my_predbat=None):
     return failed
 
 
+def _snapshot_fixture(base_time=None):
+    """Build a HAHistory tracking three entities (one with no records yet) that exercise every part of the store"""
+    if base_time is None:
+        base_time = datetime(2025, 12, 25, 10, 0, 0, tzinfo=pytz.UTC)
+    ha_history = HAHistory(MockBase())
+    ha_history.initialize()
+
+    # Numeric entity whose attributes change part way through (an attribute exception), then pruned so it is anchored
+    numeric_id = "sensor.battery_soc"
+    numeric = []
+    for count in range(12):
+        attributes = {"unit": "kWh"} if count != 7 else {"unit": "kWh", "note": "changed"}
+        numeric.append({"state": str(count * 0.5), "last_updated": (base_time + timedelta(minutes=5 * count, microseconds=123457)).isoformat(), "attributes": attributes})
+    ha_history.add_entity(numeric_id, 7)
+    ha_history.update_entity(numeric_id, numeric)
+    ha_history.history_data[numeric_id].prune((base_time + timedelta(minutes=12)).timestamp())
+
+    # Entity with non-numeric states mixed in with numeric ones, at sub-second timestamps so the state exception keys carry fractions
+    text_id = "select.mode"
+    text = []
+    for count, state in enumerate(["Charging", "unavailable", "3.25", None, "Idle"]):
+        text.append({"state": state, "last_updated": (base_time + timedelta(minutes=10 * count, microseconds=250001 + count)).isoformat(), "attributes": {"options": ["Charging", "Idle"]}})
+    ha_history.add_entity(text_id, 30)
+    ha_history.update_entity(text_id, text)
+
+    # Entity that is tracked but has no records yet
+    ha_history.add_entity("sensor.no_records", 3)
+    return ha_history
+
+
+# A snapshot committed as bytes, so the wire format (little-endian arrays, str(epoch) keys) is pinned across machines.
+# It holds sensor.golden (days 2) with records 1.5 at 1735120800.5 and "off" at 1735121100.25, shared attributes {"unit": "kW"}
+GOLDEN_SNAPSHOT_B64 = "eJxdjksPgjAQhP8K6VVDKAZfCYcavcvBaLyQCgs0kpbQxaik/90Wn3Fus/NldnpyIUuPjj0CEgUK0Nb2RIPUqvVLVecgh0vOby4KHdmorHKGMMbK6fbAw92GsRW7L7A9JkkcE0tp5AhvatBoPWdf/VApXDNoUCj5/E5nk4iGlAaBH0auQRUFMY6ueAt5yhFbcerwNbaTAh113g/QJ/2rHTKZVcpWWF/wWoMx5gEBy0/K"  # cspell:disable-line
+GOLDEN_EPOCHS_B64 = "AAAg6PXa2UEAABAz9trZQQ=="  # cspell:disable-line
+GOLDEN_STATES_B64 = "AAAAAAAA+D8AAAAAAAAAAA=="  # cspell:disable-line
+
+
+def test_hahistory_snapshot_golden(my_predbat=None):
+    """Test a fixed snapshot decodes to known records and re-exports the same array bytes"""
+    print("\n=== Testing HAHistory snapshot golden vector ===")
+    failed = 0
+
+    ha_history = HAHistory(MockBase())
+    ha_history.initialize()
+    loaded = ha_history.import_snapshot(base64.b64decode(GOLDEN_SNAPSHOT_B64))
+    expected = [
+        {"state": 1.5, "last_updated": "2024-12-25T10:00:00.500000+00:00", "attributes": {"unit": "kW"}},
+        {"state": "off", "last_updated": "2024-12-25T10:05:00.250000+00:00", "attributes": {"unit": "kW"}},
+    ]
+    if loaded != 1 or ha_history.history_entities != {"sensor.golden": 2}:
+        print(f"ERROR: Golden snapshot should load sensor.golden with 2 days, got {loaded} {ha_history.history_entities}")
+        failed += 1
+    elif ha_history.history_data["sensor.golden"].to_records() != expected:
+        print(f"ERROR: Golden snapshot decoded to {ha_history.history_data['sensor.golden'].to_records()}")
+        failed += 1
+    else:
+        entity = json.loads(zlib.decompress(ha_history.export_snapshot()))["entities"]["sensor.golden"]
+        if entity["epochs"] != GOLDEN_EPOCHS_B64 or entity["states"] != GOLDEN_STATES_B64 or entity["state_exceptions"] != {"1735121100.25": "off"}:
+            print(f"ERROR: Golden snapshot re-exported differently: {entity}")
+            failed += 1
+
+    if failed == 0:
+        print("OK: test_hahistory_snapshot_golden")
+    return failed
+
+
+def test_hahistory_snapshot_replaces_store(my_predbat=None):
+    """Test import_snapshot() replaces the tracked entities and store rather than merging into them"""
+    print("\n=== Testing HAHistory snapshot import replaces the store ===")
+    failed = 0
+
+    data = _snapshot_fixture().export_snapshot()
+    target = HAHistory(MockBase())
+    target.initialize()
+    target.add_entity("sensor.other", 5)
+    target.update_entity("sensor.other", [{"state": "1", "last_updated": "2025-12-25T10:00:00+00:00", "attributes": {}}])
+    loaded = target.import_snapshot(data)
+    if loaded != 3 or "sensor.other" in target.history_entities or "sensor.other" in target.history_data:
+        print(f"ERROR: Import should replace the store, got {loaded} entities {sorted(target.history_entities)}")
+        failed += 1
+
+    if failed == 0:
+        print("OK: test_hahistory_snapshot_replaces_store")
+    return failed
+
+
+class MockDatabaseHistoryInterface:
+    """Stand-in for a history source that, like the database path, ignores from_time and returns now - days onwards"""
+
+    def __init__(self, records):
+        self.records = records
+        self.get_history_calls = []
+
+    def get_history(self, entity_id, now, days=30, from_time=None):
+        self.get_history_calls.append({"entity_id": entity_id, "now": now, "days": days, "from_time": from_time})
+        start = now - timedelta(days=days)
+        history = [dict(record) for record in self.records.get(entity_id, []) if str2time(record["last_updated"]) >= start]
+        return [history] if history else None
+
+
+def test_hahistory_snapshot_database_delta(my_predbat=None):
+    """Test the update after importing an older snapshot fills the gap when the history source only honours days"""
+    print("\n=== Testing HAHistory snapshot delta from a days-only history source ===")
+
+    async def run_test():
+        failed = 0
+        now = datetime.now(pytz.UTC)
+        entity_id = "sensor.load"
+        # Hourly records over the last 10 days; the snapshot holds those up to 3 days ago
+        records = []
+        for hours in range(10 * 24, 0, -1):
+            records.append({"state": str(hours), "last_updated": (now - timedelta(hours=hours)).isoformat(), "attributes": {}})
+        snapshot_cutoff = now - timedelta(days=3)
+        source = HAHistory(MockBase())
+        source.initialize()
+        source.add_entity(entity_id, 7)
+        source.update_entity(entity_id, [dict(record) for record in records if str2time(record["last_updated"]) <= snapshot_cutoff])
+
+        mock_base = MockBase()
+        ha_history = HAHistory(mock_base)
+        ha_history.initialize()
+        mock_db = MockDatabaseHistoryInterface({entity_id: records})
+        mock_base.components.register_component("ha", mock_db)
+        ha_history.import_snapshot(source.export_snapshot())
+        await ha_history.run(seconds=120, first=False)
+
+        epochs = list(ha_history.history_data[entity_id].epochs)
+        gap = [epoch for epoch in epochs if (now - timedelta(days=3)).timestamp() < epoch < (now - timedelta(days=1)).timestamp()]
+        expected_gap = [record for record in records if now - timedelta(days=3) < str2time(record["last_updated"]) < now - timedelta(days=1)]
+        if len(gap) != len(expected_gap):
+            print(f"ERROR: The gap between the snapshot and the last day should be filled, got {len(gap)} of {len(expected_gap)} records")
+            failed += 1
+        if len(epochs) != len(set(epochs)) or epochs != sorted(epochs):
+            print("ERROR: The store should stay ordered without duplicates")
+            failed += 1
+        return failed
+
+    failed = run_async(run_test())
+    if failed == 0:
+        print("OK: test_hahistory_snapshot_database_delta")
+    return failed
+
+
+class MockTimedHistoryInterface:
+    """Stand-in history source over timed records, like Home Assistant: honours from_time and starts with the state in force"""
+
+    def __init__(self, records):
+        self.records = records
+        self.get_history_calls = []
+
+    def get_history(self, entity_id, now, days=30, from_time=None):
+        self.get_history_calls.append({"entity_id": entity_id, "now": now, "days": days, "from_time": from_time})
+        start = from_time if from_time else now - timedelta(days=days)
+        records = self.records.get(entity_id, [])
+        before = [record for record in records if str2time(record["last_updated"]) <= start]
+        history = [dict(record) for record in records if str2time(record["last_updated"]) > start]
+        if before:
+            history.insert(0, dict(before[-1], last_updated=start.isoformat()))
+        return [history] if history else None
+
+
+def _history_summary(ha_history, entity_id):
+    """States and anchoring of an entity's store, with real (non re-stamped) records' times"""
+    store = ha_history.history_data.get(entity_id)
+    if store is None:
+        return None
+    records = store.to_records()
+    return {
+        "states": [record["state"] for record in records],
+        "anchored": store.anchored,
+        "times": [record["last_updated"] for record in (records[1:] if store.anchored else records)],
+    }
+
+
+def test_hahistory_stale_snapshot_matches_cold_start(my_predbat=None):
+    """Test restoring a snapshot that ends before the retention window gives the same store as a cold start"""
+    print("\n=== Testing HAHistory stale snapshot matches a cold start ===")
+
+    async def run_test():
+        failed = 0
+        now = datetime.now(pytz.UTC)
+        entity_id = "sensor.mode"
+
+        def record(state, age):
+            return {"state": state, "last_updated": (now - age).isoformat(), "attributes": {}}
+
+        # A at T-60d is all the snapshot holds; B at T-30d and C at T-2d happened after it was taken
+        records = [record("A", timedelta(days=60)), record("B", timedelta(days=30)), record("C", timedelta(days=2))]
+        source = HAHistory(MockBase())
+        source.initialize()
+        source.add_entity(entity_id, 7)
+        source.update_entity(entity_id, [dict(records[0])])
+        snapshot = source.export_snapshot()
+
+        for label, interface_class in [("database-style", MockDatabaseHistoryInterface), ("Home Assistant-style", MockTimedHistoryInterface)]:
+            results = {}
+            for path in ["snapshot", "cold start"]:
+                mock_base = MockBase()
+                ha_history = HAHistory(mock_base)
+                ha_history.initialize()
+                mock_base.components.register_component("ha", interface_class({entity_id: records}))
+                if path == "snapshot":
+                    ha_history.import_snapshot(snapshot)
+                else:
+                    ha_history.add_entity(entity_id, 7)
+                await ha_history.run(seconds=0, first=True)
+                results[path] = _history_summary(ha_history, entity_id)
+            if results["snapshot"] != results["cold start"]:
+                print(f"ERROR: {label} stale snapshot gave {results['snapshot']}, cold start gave {results['cold start']}")
+                failed += 1
+            elif "A" in (results["snapshot"] or {}).get("states", []):
+                print(f"ERROR: {label} stale snapshot kept the out of window state A")
+                failed += 1
+        return failed
+
+    failed = run_async(run_test())
+    if failed == 0:
+        print("OK: test_hahistory_stale_snapshot_matches_cold_start")
+    return failed
+
+
+def test_hahistory_static_store_keeps_delta(my_predbat=None):
+    """Test a store kept up to date in this run is not refetched just because its sensor has not changed within the window"""
+    print("\n=== Testing HAHistory static sensor store keeps the delta fetch ===")
+
+    async def run_test():
+        now = datetime.now(pytz.UTC)
+        entity_id = "sensor.static"
+        mock_base = MockBase()
+        ha_history = HAHistory(mock_base)
+        ha_history.initialize()
+        mock_ha = MockHAInterface()
+        mock_base.components.register_component("ha", mock_ha)
+        ha_history.add_entity(entity_id, 1)
+        ha_history.update_entity(entity_id, [{"state": "on", "last_updated": (now - timedelta(days=1, hours=1)).isoformat(), "attributes": {}}])
+        await ha_history.run(seconds=120, first=False)
+        call = mock_ha.get_history_calls[-1] if mock_ha.get_history_calls else None
+        if entity_id not in ha_history.history_data or call is None or call["from_time"] is None:
+            print(f"ERROR: A store kept up to date should be refreshed by a delta and kept, got call {call}")
+            return 1
+        return 0
+
+    failed = run_async(run_test())
+    if failed == 0:
+        print("OK: test_hahistory_static_store_keeps_delta")
+    return failed
+
+
+def test_hahistory_restored_flag_cleared_after_update(my_predbat=None):
+    """Test a restored entity is only treated as restored for its first update, so later cycles fetch a delta"""
+    print("\n=== Testing HAHistory restored flag is cleared after the first update ===")
+
+    async def run_test():
+        failed = 0
+        now = datetime.now(pytz.UTC)
+        # A sensor that changes often, and one that has not changed for longer than its 1 day window
+        records = {
+            "sensor.changing": [{"state": str(count), "last_updated": (now - timedelta(minutes=5 * count)).isoformat(), "attributes": {}} for count in range(48, 0, -1)],
+            "sensor.static": [{"state": "on", "last_updated": (now - timedelta(days=3)).isoformat(), "attributes": {}}],
+        }
+        source = HAHistory(MockBase())
+        source.initialize()
+        source_interface = MockTimedHistoryInterface(records)
+        source.base.components.register_component("ha", source_interface)
+        for entity_id in records:
+            source.add_entity(entity_id, 1)
+        await source.run(seconds=0, first=True)
+        snapshot = source.export_snapshot()
+
+        mock_base = MockBase()
+        ha_history = HAHistory(mock_base)
+        ha_history.initialize()
+        interface = MockTimedHistoryInterface(records)
+        mock_base.components.register_component("ha", interface)
+        if ha_history.import_snapshot(snapshot) != 2:
+            print("ERROR: Snapshot should track 2 entities")
+            return 1
+        await ha_history.run(seconds=120, first=False)
+        if ha_history.history_restored:
+            print(f"ERROR: The restored flag should be cleared after the first update, still set for {sorted(ha_history.history_restored)}")
+            failed += 1
+        first_cycle = len(interface.get_history_calls)
+        await ha_history.run(seconds=240, first=False)
+        second = {call["entity_id"]: call for call in interface.get_history_calls[first_cycle:]}
+        for entity_id in records:
+            call = second.get(entity_id)
+            if call is None or call["from_time"] is None:
+                print(f"ERROR: {entity_id} should fetch a delta on the second cycle, got {call}")
+                failed += 1
+        return failed
+
+    failed = run_async(run_test())
+    if failed == 0:
+        print("OK: test_hahistory_restored_flag_cleared_after_update")
+    return failed
+
+
+def test_hahistory_snapshot_decompression_bound(my_predbat=None):
+    """Test a small snapshot that expands past HISTORY_SNAPSHOT_MAX_BYTES is rejected without changing the store"""
+    print("\n=== Testing HAHistory snapshot decompression bound ===")
+    failed = 0
+
+    good = _snapshot_fixture().export_snapshot()
+    expanded = len(zlib.decompress(good))
+    # Valid JSON padded with whitespace, so only the size bound can reject it
+    bomb = zlib.compress(json.dumps({"v": 1, "entities": {}}).encode("utf-8") + b" " * 1000000)
+    saved = ha_module.HISTORY_SNAPSHOT_MAX_BYTES
+    try:
+        ha_module.HISTORY_SNAPSHOT_MAX_BYTES = max(expanded, 1024) * 2
+        target = _snapshot_fixture()
+        before = {entity_id: store.to_records() for entity_id, store in target.history_data.items()}
+        entities_before = dict(target.history_entities)
+        if len(bomb) >= ha_module.HISTORY_SNAPSHOT_MAX_BYTES:
+            print("ERROR: The test payload should be smaller than the limit before decompression")
+            failed += 1
+        loaded = target.import_snapshot(bomb)
+        after = {entity_id: store.to_records() for entity_id, store in target.history_data.items()}
+        if loaded != -1 or after != before or target.history_entities != entities_before:
+            print(f"ERROR: A snapshot expanding past the limit should return -1 and leave the store untouched, got {loaded}")
+            failed += 1
+        if not any("expands past" in message for message in target.base.log_messages):
+            print(f"ERROR: The rejection should be logged as exceeding the size limit, got {target.base.log_messages[-1:]}")
+            failed += 1
+        # A real snapshot within the limit still loads
+        fresh = HAHistory(MockBase())
+        fresh.initialize()
+        if fresh.import_snapshot(good) != 3:
+            print("ERROR: A snapshot within the limit should still load")
+            failed += 1
+    finally:
+        ha_module.HISTORY_SNAPSHOT_MAX_BYTES = saved
+
+    if failed == 0:
+        print("OK: test_hahistory_snapshot_decompression_bound")
+    return failed
+
+
+def test_hahistory_snapshot_empty_vs_invalid(my_predbat=None):
+    """Test a valid empty snapshot returns 0 and clears the store, while invalid input returns -1 and keeps it"""
+    print("\n=== Testing HAHistory empty snapshot versus invalid input ===")
+    failed = 0
+
+    empty = HAHistory(MockBase())
+    empty.initialize()
+    empty_snapshot = empty.export_snapshot()
+
+    target = _snapshot_fixture()
+    before = {entity_id: store.to_records() for entity_id, store in target.history_data.items()}
+    entities_before = dict(target.history_entities)
+    loaded = target.import_snapshot(b"not a snapshot")
+    after = {entity_id: store.to_records() for entity_id, store in target.history_data.items()}
+    if loaded != -1 or after != before or target.history_entities != entities_before:
+        print(f"ERROR: Invalid input should return -1 and leave the store untouched, got {loaded}")
+        failed += 1
+
+    loaded = target.import_snapshot(empty_snapshot)
+    if loaded != 0 or target.history_data or target.history_entities:
+        print(f"ERROR: A valid empty snapshot should return 0 and clear the store, got {loaded} {sorted(target.history_entities)}")
+        failed += 1
+
+    if failed == 0:
+        print("OK: test_hahistory_snapshot_empty_vs_invalid")
+    return failed
+
+
+def test_hahistory_run_tolerates_import_mid_loop(my_predbat=None):
+    """Test run() skips an entity that an import removed while the update loop was running"""
+    print("\n=== Testing HAHistory run() tolerates an import mid-loop ===")
+
+    async def run_test():
+        mock_base = MockBase()
+        ha_history = HAHistory(mock_base)
+        ha_history.initialize()
+        ha_history.add_entity("sensor.first", 2)
+        ha_history.add_entity("sensor.second", 2)
+        replacement = HAHistory(MockBase())
+        replacement.initialize()
+        replacement.add_entity("sensor.other", 2)
+        snapshot = replacement.export_snapshot()
+
+        class SwappingInterface(MockHAInterface):
+            def get_history(self, entity_id, now, days=30, from_time=None):
+                if not self.get_history_calls:
+                    ha_history.import_snapshot(snapshot)
+                return super().get_history(entity_id, now, days=days, from_time=from_time)
+
+        mock_base.components.register_component("ha", SwappingInterface())
+        try:
+            await ha_history.run(seconds=120, first=False)
+        except KeyError as exc:
+            print(f"ERROR: run() raised KeyError {exc} after an import mid-loop")
+            return 1
+        return 0
+
+    failed = run_async(run_test())
+    if failed == 0:
+        print("OK: test_hahistory_run_tolerates_import_mid_loop")
+    return failed
+
+
+def test_hahistory_export_tolerates_new_entity(my_predbat=None):
+    """Test export_snapshot() does not fail when an entity is added to tracking while it runs"""
+    print("\n=== Testing HAHistory export tolerates a newly tracked entity ===")
+    failed = 0
+
+    ha_history = _snapshot_fixture()
+    added = []
+
+    class AddingHistory(EntityHistory):
+        """A store whose epochs read tracks a new entity, standing in for another thread calling add_entity() mid-export"""
+
+        @property
+        def epochs(self):
+            added.append("sensor.new_{}".format(len(added)))
+            ha_history.add_entity(added[-1], 1)
+            return self.real_epochs
+
+        @epochs.setter
+        def epochs(self, value):
+            self.real_epochs = value
+
+    entity_id = "sensor.battery_soc"
+    original = ha_history.history_data[entity_id]
+    store = AddingHistory()
+    for name in ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions", "anchored"]:
+        setattr(store, name, getattr(original, name))
+    ha_history.history_data[entity_id] = store
+    added.clear()
+    try:
+        data = ha_history.export_snapshot()
+    except RuntimeError as exc:
+        print(f"ERROR: export_snapshot() raised {exc}")
+        return 1
+    if not added:
+        print("ERROR: The test hook should have added an entity during export")
+        failed += 1
+    target = HAHistory(MockBase())
+    target.initialize()
+    if target.import_snapshot(data) < 3:
+        print("ERROR: Export should still hold the tracked entities")
+        failed += 1
+
+    if failed == 0:
+        print("OK: test_hahistory_export_tolerates_new_entity")
+    return failed
+
+
+def test_hahistory_snapshot_roundtrip(my_predbat=None):
+    """Test export_snapshot() then import_snapshot() restores an identical history store"""
+    print("\n=== Testing HAHistory snapshot round trip ===")
+    failed = 0
+
+    source = _snapshot_fixture()
+    if not source.history_data["sensor.battery_soc"].anchored or not source.history_data["sensor.battery_soc"].attribute_exceptions:
+        print("ERROR: Fixture should hold an anchored store with an attribute exception")
+        failed += 1
+    if not source.history_data["select.mode"].state_exceptions:
+        print("ERROR: Fixture should hold state exceptions")
+        failed += 1
+
+    data = source.export_snapshot()
+    if not isinstance(data, bytes) or not data:
+        print("ERROR: export_snapshot() should return non-empty bytes")
+        return failed + 1
+
+    target = HAHistory(MockBase())
+    target.initialize()
+    loaded = target.import_snapshot(data)
+    if loaded != 3:
+        print(f"ERROR: import_snapshot() should report 3 tracked entities, got {loaded}")
+        failed += 1
+
+    if target.history_entities != source.history_entities:
+        print(f"ERROR: history_entities differ: {target.history_entities} vs {source.history_entities}")
+        failed += 1
+    if "sensor.no_records" not in target.history_entities or "sensor.no_records" in target.history_data:
+        print("ERROR: A tracked entity with no records should stay tracked without a store")
+        failed += 1
+    if not any(epoch != int(epoch) for epoch in target.history_data["select.mode"].state_exceptions):
+        print("ERROR: Sub-second state exception epochs should round-trip")
+        failed += 1
+
+    for entity_id, store in source.history_data.items():
+        restored = target.history_data.get(entity_id)
+        if restored is None:
+            print(f"ERROR: {entity_id} missing after import")
+            failed += 1
+            continue
+        if restored.to_records() != store.to_records():
+            print(f"ERROR: {entity_id} records differ after import")
+            failed += 1
+        if restored.anchored != store.anchored or list(restored.epochs) != list(store.epochs):
+            print(f"ERROR: {entity_id} anchoring or epochs differ after import")
+            failed += 1
+        if restored.state_exceptions != store.state_exceptions or restored.attribute_exceptions != store.attribute_exceptions or restored.shared_attributes != store.shared_attributes:
+            print(f"ERROR: {entity_id} exceptions or shared attributes differ after import")
+            failed += 1
+
+    # The restored store keeps working: a later append lands after the restored data
+    last_epoch = target.history_data["select.mode"].epochs[-1]
+    target.update_entity("select.mode", [{"state": "Exporting", "last_updated": datetime.fromtimestamp(last_epoch + 60, pytz.UTC).isoformat(), "attributes": {"options": ["Charging", "Idle"]}}])
+    if target.history_data["select.mode"].to_records()[-1]["state"] != "Exporting":
+        print("ERROR: Restored store should accept new records")
+        failed += 1
+
+    if failed == 0:
+        print("OK: test_hahistory_snapshot_roundtrip")
+    return failed
+
+
+def test_hahistory_snapshot_rejects_bad_input(my_predbat=None):
+    """Test import_snapshot() returns -1 and leaves the store untouched on any bad input"""
+    print("\n=== Testing HAHistory snapshot rejects bad input ===")
+    failed = 0
+
+    good = _snapshot_fixture().export_snapshot()
+    payload = json.loads(zlib.decompress(good))
+
+    def encode(value):
+        return zlib.compress(json.dumps(value).encode("utf-8"))
+
+    def variant():
+        return json.loads(json.dumps(payload))
+
+    wrong_version = dict(payload, v=2)
+    bool_version = dict(payload, v=True)
+    short_states = variant()
+    short_states["entities"]["select.mode"]["states"] = base64.b64encode(b"\x00" * 8).decode("ascii")
+    stray_exception = variant()
+    stray_exception["entities"]["select.mode"]["state_exceptions"]["12345.0"] = "x"
+    # One good entity followed by a broken one must not half-load the good one
+    half_bad = variant()
+    half_bad["entities"]["select.mode"]["anchored"] = "yes"
+    unsorted = variant()
+    epochs = base64.b64decode(unsorted["entities"]["select.mode"]["epochs"])
+    unsorted["entities"]["select.mode"]["epochs"] = base64.b64encode(epochs[8:16] + epochs[0:8] + epochs[16:]).decode("ascii")
+    bad_base64 = variant()
+    bad_base64["entities"]["select.mode"]["epochs"] = "!!not base64!!"
+    bad_attributes = variant()
+    bad_attributes["entities"]["sensor.battery_soc"]["shared_attributes"] = [1, 2]
+    nan_state = variant()
+    states = base64.b64decode(nan_state["entities"]["sensor.battery_soc"]["states"])
+    nan_state["entities"]["sensor.battery_soc"]["states"] = base64.b64encode(struct.pack("<d", float("nan")) + states[8:]).decode("ascii")
+    inf_epoch = variant()
+    # The numeric entity's last record has no exceptions, so only the epoch check can reject it
+    epochs = base64.b64decode(inf_epoch["entities"]["sensor.battery_soc"]["epochs"])
+    inf_epoch["entities"]["sensor.battery_soc"]["epochs"] = base64.b64encode(epochs[:-8] + struct.pack("<d", float("inf"))).decode("ascii")
+    days_string = variant()
+    days_string["entities"]["select.mode"]["days"] = "x"
+    days_negative = variant()
+    days_negative["entities"]["select.mode"]["days"] = -1
+    attribute_exception_list = variant()
+    attribute_key = next(iter(attribute_exception_list["entities"]["sensor.battery_soc"]["attribute_exceptions"]))
+    attribute_exception_list["entities"]["sensor.battery_soc"]["attribute_exceptions"][attribute_key] = ["not", "a", "map"]
+    anchored_empty = variant()
+    anchored_empty["entities"]["sensor.no_records"]["anchored"] = True
+
+    cases = [
+        ("empty bytes", b""),
+        ("not zlib", b"not zlib"),
+        ("truncated zlib", good[: len(good) // 2]),
+        ("trailing data after zlib", good + b"extra"),
+        ("not bytes", "a string"),
+        ("None", None),
+        ("not json", zlib.compress(b"{not json")),
+        ("json list", encode([1, 2])),
+        ("version 2", encode(wrong_version)),
+        ("version True", encode(bool_version)),
+        ("states shorter than epochs", encode(short_states)),
+        ("exception for an unknown epoch", encode(stray_exception)),
+        ("one bad entity", encode(half_bad)),
+        ("unsorted epochs", encode(unsorted)),
+        ("bad base64", encode(bad_base64)),
+        ("shared attributes not a dict", encode(bad_attributes)),
+        ("NaN numeric state", encode(nan_state)),
+        ("infinite epoch", encode(inf_epoch)),
+        ("days not a number", encode(days_string)),
+        ("negative days", encode(days_negative)),
+        ("attribute exception not a dict", encode(attribute_exception_list)),
+        ("anchored with no records", encode(anchored_empty)),
+    ]
+    for label, data in cases:
+        target = HAHistory(MockBase())
+        target.initialize()
+        try:
+            loaded = target.import_snapshot(data)
+        except Exception as exc:
+            print(f"ERROR: import_snapshot() raised on {label}: {exc}")
+            failed += 1
+            continue
+        if loaded != -1 or target.history_data or target.history_entities:
+            print(f"ERROR: {label} should return -1 and leave the store empty, got {loaded}, {list(target.history_data)}")
+            failed += 1
+
+    # A bad snapshot leaves an already populated store exactly as it was
+    target = _snapshot_fixture()
+    before = {entity_id: store.to_records() for entity_id, store in target.history_data.items()}
+    entities_before = dict(target.history_entities)
+    loaded = target.import_snapshot(encode(half_bad))
+    after = {entity_id: store.to_records() for entity_id, store in target.history_data.items()}
+    if loaded != -1 or after != before or target.history_entities != entities_before:
+        print("ERROR: A bad snapshot should leave a populated store untouched")
+        failed += 1
+
+    if failed == 0:
+        print("OK: test_hahistory_snapshot_rejects_bad_input")
+    return failed
+
+
+def test_hahistory_snapshot_then_delta(my_predbat=None):
+    """Test the 2-minute update after an import only requests data newer than the snapshot"""
+    print("\n=== Testing HAHistory snapshot then delta update ===")
+
+    async def run_test():
+        failed = 0
+        # A recent snapshot, well inside every entity's retention
+        source = _snapshot_fixture(datetime.now(pytz.UTC) - timedelta(hours=2))
+        data = source.export_snapshot()
+
+        mock_base = MockBase()
+        ha_history = HAHistory(mock_base)
+        ha_history.initialize()
+        mock_ha = MockHAInterface()
+        mock_base.components.register_component("ha", mock_ha)
+        if ha_history.import_snapshot(data) != 3:
+            print("ERROR: Snapshot should track 3 entities")
+            return 1
+
+        await ha_history.run(seconds=120, first=False)
+
+        calls = {call["entity_id"]: call for call in mock_ha.get_history_calls}
+        for entity_id, store in source.history_data.items():
+            call = calls.get(entity_id)
+            expected = datetime.fromtimestamp(store.epochs[-1], pytz.UTC)
+            if call is None:
+                print(f"ERROR: {entity_id} was not refreshed")
+                failed += 1
+            elif call["from_time"] != expected or call["days"] != 1:
+                print(f"ERROR: {entity_id} should request the delta from {expected}, got from_time {call['from_time']} days {call['days']}")
+                failed += 1
+        return failed
+
+    failed = run_async(run_test())
+    if failed == 0:
+        print("OK: test_hahistory_snapshot_then_delta")
+    return failed
+
+
 def run_hahistory_tests(my_predbat):
     """Run all HAHistory unit tests"""
     print("\n" + "=" * 80)
@@ -1114,6 +1766,21 @@ def run_hahistory_tests(my_predbat):
     failed += test_hahistory_run_periodic_update(my_predbat)
     failed += test_hahistory_run_hourly_prune(my_predbat)
     failed += test_hahistory_run_no_update_timing(my_predbat)
+
+    # Snapshot tests
+    failed += test_hahistory_snapshot_roundtrip(my_predbat)
+    failed += test_hahistory_snapshot_rejects_bad_input(my_predbat)
+    failed += test_hahistory_snapshot_then_delta(my_predbat)
+    failed += test_hahistory_snapshot_golden(my_predbat)
+    failed += test_hahistory_snapshot_replaces_store(my_predbat)
+    failed += test_hahistory_snapshot_database_delta(my_predbat)
+    failed += test_hahistory_stale_snapshot_matches_cold_start(my_predbat)
+    failed += test_hahistory_static_store_keeps_delta(my_predbat)
+    failed += test_hahistory_restored_flag_cleared_after_update(my_predbat)
+    failed += test_hahistory_snapshot_decompression_bound(my_predbat)
+    failed += test_hahistory_snapshot_empty_vs_invalid(my_predbat)
+    failed += test_hahistory_run_tolerates_import_mid_loop(my_predbat)
+    failed += test_hahistory_export_tolerates_new_entity(my_predbat)
 
     print("\n" + "=" * 80)
     if failed == 0:

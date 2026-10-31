@@ -22,12 +22,16 @@ from datetime import timedelta, datetime, timezone
 import asyncio
 from aiohttp import ClientSession, WSMsgType
 import array
+import base64
 import bisect
 import json
+import math
 import requests
+import sys
 import traceback
 import threading
 import time
+import zlib
 from utils import str2time, strptime_aware
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
@@ -35,6 +39,115 @@ from component_base import ComponentBase
 # Maximum days of history fetched per request. Long windows are split so only one chunk's
 # response body, decoded string and parsed objects are resident at a time.
 HISTORY_CHUNK_DAYS = 3
+
+# Version of the HAHistory snapshot format produced by export_snapshot()
+HISTORY_SNAPSHOT_VERSION = 1
+
+# Largest decompressed snapshot import_snapshot() accepts, so a small hostile payload cannot expand
+# without bound. A power sensor reporting every 10 seconds holds about 260k records over 30 days,
+# around 5.5 MB once its arrays are base64 encoded, so a large install with ~40 such series plus
+# hundreds of slower entities stays near 250 MB; 512 MB leaves about twice that as headroom.
+HISTORY_SNAPSHOT_MAX_BYTES = 512 * 1024 * 1024
+
+
+def _snapshot_decompress(data):
+    """
+    Decompress a snapshot, raising ValueError if it is truncated, has trailing data or expands past HISTORY_SNAPSHOT_MAX_BYTES
+    """
+    decompressor = zlib.decompressobj()
+    raw = decompressor.decompress(bytes(data), HISTORY_SNAPSHOT_MAX_BYTES)
+    if decompressor.unconsumed_tail:
+        raise ValueError("snapshot expands past {} bytes".format(HISTORY_SNAPSHOT_MAX_BYTES))
+    if not decompressor.eof or decompressor.unused_data:
+        raise ValueError("snapshot is truncated or has trailing data")
+    return raw
+
+
+def _snapshot_encode_array(values):
+    """
+    Encode a double array as base64 of its little-endian bytes
+    """
+    if sys.byteorder == "big":
+        values = array.array("d", values)
+        values.byteswap()
+    return base64.b64encode(values.tobytes()).decode("ascii")
+
+
+def _snapshot_decode_array(value):
+    """
+    Decode a base64 little-endian double array, raising ValueError if it is malformed
+    """
+    if not isinstance(value, str):
+        raise ValueError("array is not a string")
+    raw = base64.b64decode(value, validate=True)
+    values = array.array("d")
+    if len(raw) % values.itemsize:
+        raise ValueError("array length is not a whole number of doubles")
+    values.frombytes(raw)
+    if sys.byteorder == "big":
+        values.byteswap()
+    return values
+
+
+def _snapshot_decode_exceptions(value, epoch_set, dict_values):
+    """
+    Decode an exception map keyed by str(epoch), raising ValueError unless every key is a stored epoch
+    """
+    if not isinstance(value, dict):
+        raise ValueError("exceptions are not a map")
+    exceptions = {}
+    for key, item in value.items():
+        epoch = float(key)
+        if epoch not in epoch_set or epoch in exceptions:
+            raise ValueError("exception for an unknown or repeated epoch {}".format(key))
+        if dict_values and not isinstance(item, dict):
+            raise ValueError("attribute exception is not a map")
+        exceptions[epoch] = item
+    return exceptions
+
+
+def _snapshot_decode_entity(item):
+    """
+    Decode one entity of a snapshot into (days, EntityHistory or None), raising ValueError if anything is invalid
+    """
+    if not isinstance(item, dict):
+        raise ValueError("entity is not a map")
+    days = item.get("days")
+    if isinstance(days, bool) or not isinstance(days, (int, float)) or not math.isfinite(days) or days < 0:
+        raise ValueError("invalid days {}".format(days))
+    epochs = _snapshot_decode_array(item.get("epochs"))
+    states = _snapshot_decode_array(item.get("states"))
+    if len(epochs) != len(states):
+        raise ValueError("epochs and states differ in length")
+    previous = -math.inf
+    for epoch in epochs:
+        # Rejects NaN and infinite epochs as well as out of order ones
+        if not (previous <= epoch < math.inf):
+            raise ValueError("epochs are not finite and in order")
+        previous = epoch
+    for state in states:
+        if state != state:
+            raise ValueError("NaN in numeric states")
+    epoch_set = set(epochs)
+    state_exceptions = _snapshot_decode_exceptions(item.get("state_exceptions"), epoch_set, False)
+    attribute_exceptions = _snapshot_decode_exceptions(item.get("attribute_exceptions"), epoch_set, True)
+    shared_attributes = item.get("shared_attributes")
+    if shared_attributes is not None and not isinstance(shared_attributes, dict):
+        raise ValueError("shared attributes are not a map")
+    anchored = item.get("anchored")
+    if not isinstance(anchored, bool) or (anchored and not epochs):
+        raise ValueError("invalid anchored flag")
+    if not epochs:
+        # An entity tracked without any stored records yet
+        return days, None
+    store = EntityHistory()
+    store.epochs = epochs
+    store.states = states
+    store.state_exceptions = state_exceptions
+    store.shared_attributes = shared_attributes
+    store.attribute_exceptions = attribute_exceptions
+    store.anchored = anchored
+    return days, store
 
 
 class RunThread(threading.Thread):
@@ -234,6 +347,8 @@ class HAHistory(ComponentBase):
         self.history_entities = {}
         self.history_data = {}
         self.history_lock = threading.Lock()
+        # Entities restored by import_snapshot() that the update loop has not refreshed yet
+        self.history_restored = set()
 
     def add_entity(self, entity_id, days):
         """
@@ -354,6 +469,74 @@ class HAHistory(ComponentBase):
         # Update last success timestamp
         self.update_success_timestamp()
 
+    def export_snapshot(self):
+        """
+        Export the tracked entities and their history store as compressed bytes.
+
+        The snapshot is zlib compressed JSON of the form
+        {"v": 1, "entities": {entity_id: {"days", "epochs", "states", "state_exceptions",
+        "shared_attributes", "attribute_exceptions", "anchored"}}} where epochs and states are
+        base64 little-endian double arrays and exception maps are keyed by str(epoch). It lets a
+        host persist the store and restore it with import_snapshot() after a restart, so only the
+        data newer than the snapshot has to be fetched again.
+        """
+        entities = {}
+        with self.history_lock:
+            # add_entity() can add to history_entities without the lock, so iterate over a copy
+            # (every writer of history_data holds the lock)
+            for entity_id, days in list(self.history_entities.items()):
+                store = self.history_data.get(entity_id, None)
+                if store is None:
+                    store = EntityHistory()
+                entities[entity_id] = {
+                    "days": days,
+                    "epochs": _snapshot_encode_array(store.epochs),
+                    "states": _snapshot_encode_array(store.states),
+                    "state_exceptions": {str(epoch): state for epoch, state in store.state_exceptions.items()},
+                    "shared_attributes": dict(store.shared_attributes) if store.shared_attributes is not None else None,
+                    "attribute_exceptions": {str(epoch): dict(attributes) for epoch, attributes in store.attribute_exceptions.items()},
+                    "anchored": store.anchored,
+                }
+        return zlib.compress(json.dumps({"v": HISTORY_SNAPSHOT_VERSION, "entities": entities}).encode("utf-8"))
+
+    def import_snapshot(self, data):
+        """
+        Replace the tracked entities and history store with those from an export_snapshot() snapshot.
+
+        The whole snapshot is decoded and validated before anything is changed, so a bad snapshot
+        leaves the current store untouched. Returns the number of entities tracked after the import
+        (0 for a valid empty snapshot, which clears the store), or -1 on any bad input. Intended to be called before the component starts; the update loop
+        tolerates a swap while it runs but may then skip an entity for that cycle.
+        """
+        try:
+            if not isinstance(data, (bytes, bytearray, memoryview)):
+                raise ValueError("snapshot is not bytes")
+            payload = json.loads(_snapshot_decompress(data).decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("snapshot is not a map")
+            version = payload.get("v")
+            if type(version) is not int or version != HISTORY_SNAPSHOT_VERSION:
+                raise ValueError("unsupported snapshot version {}".format(version))
+            entities = payload.get("entities")
+            if not isinstance(entities, dict):
+                raise ValueError("snapshot entities are not a map")
+            history_entities = {}
+            history_data = {}
+            for entity_id, item in entities.items():
+                days, store = _snapshot_decode_entity(item)
+                history_entities[entity_id] = days
+                if store is not None:
+                    history_data[entity_id] = store
+        except Exception as e:
+            self.log("Warn: HAHistory: Ignoring invalid history snapshot: {}".format(e))
+            return -1
+
+        with self.history_lock:
+            self.history_entities = history_entities
+            self.history_data = history_data
+            self.history_restored = set(history_data.keys())
+        return len(history_entities)
+
     async def run(self, seconds, first):
         if first:
             self.log("Info: Starting HAHistory")
@@ -368,15 +551,33 @@ class HAHistory(ComponentBase):
             now = datetime.now(self.local_tz)
             for entity_id in list(self.history_entities.keys()):
                 # self.log("HAHistory: Updating history for {}".format(entity_id))
+                entity_days = self.history_entities.get(entity_id, None)
+                if entity_days is None:
+                    # The tracked entities were replaced (e.g. by import_snapshot) during this loop
+                    continue
                 store = self.history_data.get(entity_id, None)
                 last_updated_time = datetime.fromtimestamp(store.epochs[-1], timezone.utc) if store and len(store) > 0 else None
+                restored = entity_id in self.history_restored
+                self.history_restored.discard(entity_id)
+                if restored and last_updated_time and last_updated_time < now - timedelta(days=entity_days):
+                    # A restored snapshot that ends before the retention window holds nothing the window needs
+                    # and cannot say what changed since it was taken. Drop it and refetch the whole window,
+                    # exactly as a cold start would. Only restored stores: a store kept up to date here can
+                    # legitimately end before the window when the sensor has not changed for a long time
+                    with self.history_lock:
+                        if self.history_data.get(entity_id, None) is store:
+                            del self.history_data[entity_id]
+                    last_updated_time = None
                 if last_updated_time:
-                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=last_updated_time)
+                    # Fetch only what is newer than the store. days spans the same window as from_time so
+                    # a history source that only honours days (the database) still covers the whole gap
+                    days = max(1, (now - last_updated_time).total_seconds() / (24 * 60 * 60))
+                    history_data = ha_interface.get_history(entity_id, now, days=days, from_time=last_updated_time)
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
                         self.update_entity(entity_id, history_data)
                 else:
-                    history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id])
+                    history_data = ha_interface.get_history(entity_id, now, days=entity_days)
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
                         self.update_entity(entity_id, history_data)
