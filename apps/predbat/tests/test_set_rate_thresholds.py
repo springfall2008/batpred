@@ -1211,6 +1211,10 @@ def test_fetch_snapshots_are_taken_in_the_right_order(my_predbat):
       session cannot overwrite the "saving" tag before it is read).
     - The overrides go through apply_rate_overrides(), which also puts them on the pre-saving snapshot
       so a saving minute the user overrode is capped to the override, not the bare tariff.
+    - rate_min_forward (the replacement cost battery_value_rate gives a stored kWh) must be built at the
+      pre-saving snapshot, before the session loaders - a 0p free session must not set it.
+    - rate_export_min_base (battery_value_rate's export floor) likewise comes from the base export tariff,
+      before the export session loaders.
 
     Driving the whole of fetch_sensor_data() would need the entire sensor/Octopus/Axle surface stood
     up, so assert on the source order instead. That is weaker than a behavioural test, but it is the
@@ -1239,6 +1243,7 @@ def test_fetch_snapshots_are_taken_in_the_right_order(my_predbat):
 
     io_loop = find("import_rates = self.rate_add_io_slots(car_n", "the IOG slot loop")
     pre_saving = find("self.rate_import_pre_saving = import_rates.copy()", "the rate_import_pre_saving snapshot")
+    min_forward = find("self.rate_min_forward = self.rate_min_forward_calc(import_rates)", "the rate_min_forward build")
     saving_slot = find("self.load_saving_slot(self.octopus_saving_slots, import_rates", "load_saving_slot() for import")
     free_slot = find("self.load_free_slot(self.octopus_free_slots, import_rates", "load_free_slot() for import")
     axle_slot = find("load_axle_slot(self, self.axle_sessions, import_rates", "load_axle_slot() for import")
@@ -1246,20 +1251,29 @@ def test_fetch_snapshots_are_taken_in_the_right_order(my_predbat):
     basic = find("import_rates, self.rate_import_pre_saving = self.apply_rate_overrides(", "the import overrides")
 
     export_pre_saving = find("self.rate_export_pre_saving = self.rate_export_base.copy()", "the rate_export_pre_saving snapshot")
+    export_min_base = find("self.rate_export_min_base = self.rate_minmax(self.rate_export_base)[0]", "the rate_export_min_base build")
     export_saving_slot = find("self.load_saving_slot(self.octopus_saving_slots, export_rates", "load_saving_slot() for export")
     export_axle_slot = find("load_axle_slot(self, self.axle_sessions, export_rates", "load_axle_slot() for export")
     export_saving_minutes = find("self.rate_export_saving_minutes = {minute for minute, tag", "the rate_export_saving_minutes snapshot")
     export_basic = find("export_rates, self.rate_export_pre_saving = self.apply_rate_overrides(", "the export overrides")
 
-    if None in (io_loop, pre_saving, saving_slot, free_slot, axle_slot, saving_minutes, basic, export_pre_saving, export_saving_slot, export_axle_slot, export_saving_minutes, export_basic):
+    if None in (io_loop, pre_saving, min_forward, saving_slot, free_slot, axle_slot, saving_minutes, basic, export_min_base, export_pre_saving, export_saving_slot, export_axle_slot, export_saving_minutes, export_basic):
         return True
 
     if not io_loop < pre_saving < saving_slot:
         print("ERROR: rate_import_pre_saving must be snapshotted after the IOG loop and before load_saving_slot() - got IOG at {}, snapshot at {}, saving slot at {}".format(io_loop, pre_saving, saving_slot))
         failed = True
 
+    if not pre_saving < min_forward < saving_slot:
+        print("ERROR: rate_min_forward must be built from the pre-saving tariff, before load_saving_slot() - got snapshot at {}, rate_min_forward at {}, saving slot at {}".format(pre_saving, min_forward, saving_slot))
+        failed = True
+
     if not saving_slot < free_slot < axle_slot:
         print("ERROR: load_free_slot() must sit between load_saving_slot() and load_axle_slot(), before the saving-minutes snapshot - got saving {}, free {}, axle {}".format(saving_slot, free_slot, axle_slot))
+        failed = True
+
+    if not export_min_base < export_saving_slot:
+        print("ERROR: rate_export_min_base must be built from the base export tariff, before load_saving_slot() for export - got {} and {}".format(export_min_base, export_saving_slot))
         failed = True
 
     if not export_pre_saving < export_saving_slot < export_axle_slot < export_saving_minutes < export_basic:
@@ -1447,6 +1461,65 @@ def test_compare_reused_live_rates_keep_saving_minutes(my_predbat):
     return failed
 
 
+def test_compare_rate_min_forward_ignores_live_sessions(my_predbat):
+    """Compare must build rate_min_forward and the export base terms before any session, as fetch_sensor_data() does.
+
+    A tariff that reuses the live rates gets the live cycle's forward minimum, which was built before the
+    live 0p free session went on - rebuilding it from the live table would let the session set it. That
+    must hold even after an earlier tariff in the same run replaced it with its own rates.
+    """
+    print("**** test_compare_rate_min_forward_ignores_live_sessions ****")
+    failed = False
+
+    from compare import Compare
+
+    my_predbat.minutes_now = 0
+    my_predbat.forecast_minutes = 24 * 60
+    rate_import_pre_saving = {minute: (30.0 if 6 <= (minute // 60) % 24 < 22 else 7.0) for minute in range(0, 48 * 60)}
+    rate_import_live = rate_import_pre_saving.copy()
+    session = set(range(13 * 60, 15 * 60))
+    for minute in session:
+        rate_import_live[minute] = 0.0
+    rate_export_live = {minute: 15.0 for minute in range(0, 48 * 60)}
+
+    my_predbat.alert_active_keep = {}
+    my_predbat.manual_soc_keep = {}
+    my_predbat.num_cars = 0
+
+    live_min_forward = my_predbat.rate_min_forward_calc(rate_import_pre_saving)
+    live_export_max_forward = my_predbat.rate_export_max_forward_calc(rate_export_live)
+    compare = Compare(my_predbat)
+    compare.live_saving_state = {
+        "import_minutes": set(session),
+        "export_minutes": set(),
+        "import_pre_saving": {minute: rate_import_pre_saving[minute] for minute in session},
+        "export_pre_saving": dict(rate_export_live),
+        "import_min_forward": live_min_forward,
+        "export_max_forward": live_export_max_forward,
+        "export_min_base": 15.0,
+    }
+
+    compare.fetch_rates({"id": "flat", "name": "flat", "rates_import": [{"rate": 20.0}], "rates_export": [{"rate": 4.0}]}, rate_import_live, rate_export_live)
+    if my_predbat.rate_min_forward.get(0) != 20.0:
+        print("ERROR: a tariff with its own rates should get its own forward minimum 20.0, got {}".format(my_predbat.rate_min_forward.get(0)))
+        failed = True
+    if my_predbat.rate_export_max_forward.get(0) != 4.0 or my_predbat.rate_export_min_base != 4.0:
+        print("ERROR: a tariff with its own export rates should get its own export forward max and base min 4.0, got {} and {}".format(my_predbat.rate_export_max_forward.get(0), my_predbat.rate_export_min_base))
+        failed = True
+
+    compare.fetch_rates({"id": "live", "name": "live"}, rate_import_live, rate_export_live)
+    if my_predbat.rate_min_forward != live_min_forward:
+        print("ERROR: reused live rates should keep the live forward minimum (7.0 at minute 0), got {} at minute 0".format(my_predbat.rate_min_forward.get(0)))
+        failed = True
+    if my_predbat.rate_export_max_forward != live_export_max_forward or my_predbat.rate_export_min_base != 15.0:
+        print("ERROR: reused live export rates should keep the live export forward max and base min 15.0, got {} and {}".format(my_predbat.rate_export_max_forward.get(0), my_predbat.rate_export_min_base))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 def test_compare_override_reaches_kept_pre_saving_snapshot(my_predbat):
     """A compare tariff's own override on reused live rates must also go on the kept pre-saving snapshot.
 
@@ -1530,6 +1603,9 @@ _SNAPSHOT_FIELDS = (
     "low_rates_tariff",
     "high_export_rates",
     "rate_min_forward",
+    # Rebuilt by Compare.fetch_rates() for a tariff with its own export rates
+    "rate_export_max_forward",
+    "rate_export_min_base",
     "rate_low_threshold",
     "rate_high_threshold",
     "alert_active_keep",
@@ -1593,6 +1669,7 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_compare_and_annual_clear_stale_saving_minutes(my_predbat)
         failed |= test_compare_reused_live_rates_keep_saving_minutes(my_predbat)
         failed |= test_compare_override_reaches_kept_pre_saving_snapshot(my_predbat)
+        failed |= test_compare_rate_min_forward_ignores_live_sessions(my_predbat)
         return failed
     finally:
         for field, value in snapshot.items():

@@ -7,9 +7,12 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+import asyncio
 from datetime import datetime, timedelta, timezone
 
-from web import build_entity_history_table_data
+import pytz
+
+from web import build_entity_history_table_data, history_row_shown, render_entity_history_rows, WebInterface
 
 
 def make_history(records):
@@ -17,213 +20,140 @@ def make_history(records):
     return [records]
 
 
-def utc(hour, minute, day=23):
-    """Build a UTC timestamp on 2026-07-<day>."""
-    return datetime(2026, 7, day, hour, minute, 0, tzinfo=timezone.utc)
+def utc(hour, minute, day=23, month=7):
+    """Build a UTC timestamp on 2026-<month>-<day>."""
+    return datetime(2026, month, day, hour, minute, 0, tzinfo=timezone.utc)
+
+
+def record(when, state, attributes=None):
+    """Build one HA history record stamped at the given time."""
+    item = {"last_updated": when.strftime("%Y-%m-%dT%H:%M:%S%z"), "state": state}
+    if attributes is not None:
+        item["attributes"] = attributes
+    return item
+
+
+def find_row(rows, when):
+    """Return the 30-minute row that starts at the given instant, or None."""
+    for row in rows:
+        if row["time"] == when:
+            return row
+    return None
+
+
+def find_detail(row, when):
+    """Return the 5-minute detail slot of a row at the given instant, or None."""
+    for detail in row["details"]:
+        if detail["time"] == when:
+            return detail
+    return None
 
 
 def run_web_history_table_tests(my_predbat):
-    """Unit tests for build_entity_history_table_data() used by the /entity history table."""
+    """Unit tests for the /entity history table: build_entity_history_table_data() and its rendering."""
     failed = 0
     print("**** Running web history table tests ****")
+    status = [{"entity_id": "sensor.status", "attribute": None}]
 
     # -------------------------------------------------------------------------
     # A row used to report the last sample taken inside its window, so a single momentary reading
-    # stood for the whole half hour and then carried forward into every later slot without a sample
-    # of its own - the /entity table showed a GivEnergy Cloud inverter "Lost" for hours off one blip.
-    print("Test: a momentary sample inside a window does not become the whole row's value")
-    selections = [{"entity_id": "sensor.status", "attribute": None}]
+    # stood for the whole half hour - the /entity table showed a GivEnergy Cloud inverter "Lost" for
+    # hours off one blip. The value must be the state at the row's time, and the blip shows as blue.
+    print("Test: a momentary blip does not become a row's value, and the row it falls in is marked changed-and-reverted")
     records = []
-    stamp = utc(20, 0, day=24)
-    while stamp < utc(23, 0, day=24):
-        records.append({"last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S%z"), "state": "Normal"})
+    stamp = utc(20, 0)
+    while stamp < utc(23, 0):
+        records.append(record(stamp, "Normal"))
         stamp += timedelta(minutes=5)
-    records.append({"last_updated": utc(21, 57, day=24).strftime("%Y-%m-%dT%H:%M:%S%z"), "state": "Lost"})
-    records.sort(key=lambda record: record["last_updated"])
-
-    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, {"sensor.status": make_history(records)})
-    reported_lost = [ts for ts in sorted_ts_30 if filled_30[0][ts][0] == "Lost"]
+    records.append(record(utc(21, 57), "Lost"))
+    rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
+    reported_lost = [row["time"].strftime("%H:%M") for row in rows if row["cells"][0][0] == "Lost"]
     if reported_lost:
-        print(f"  ERROR: the sensor read Normal at every 30-min mark but these rows report 'Lost': {[ts.strftime('%H:%M') for ts in reported_lost]}")
+        print(f"  ERROR: the sensor read Normal at every 30-min mark but these rows report 'Lost': {reported_lost}")
+        failed += 1
+    # 21:57 is first visible at the 22:00 slot, which is the 22:00 row's own line
+    row = find_row(rows, utc(22, 0))
+    if not row or row["cells"][0] != ("Normal", "reverted"):
+        print(f"  ERROR: expected the 22:00 row to read Normal marked reverted, got {row['cells'] if row else None}")
+        failed += 1
+    for other in rows:
+        if other["time"] != utc(22, 0) and other["cells"][0][1]:
+            print(f"  ERROR: only the 22:00 row saw the blip, but {other['time'].strftime('%H:%M')} is marked {other['cells'][0][1]}")
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a change that sticks is pink in the row it happened in, and the expanded slot shows where")
+    records = [record(utc(10, 0), "A"), record(utc(10, 10), "A"), record(utc(10, 40), "B"), record(utc(11, 50), "B")]
+    rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
+    row_1030 = find_row(rows, utc(10, 30))
+    if not row_1030 or row_1030["cells"][0] != ("A", "changed"):
+        print(f"  ERROR: the 10:30 row should read A (its value at 10:30) and be marked changed, got {row_1030['cells'] if row_1030 else None}")
+        failed += 1
+    else:
+        details = {detail["time"].strftime("%H:%M"): detail["cells"][0] for detail in row_1030["details"]}
+        expected = {"10:55": ("B", None), "10:50": ("B", None), "10:45": ("B", None), "10:40": ("B", "changed"), "10:35": ("A", None)}
+        if details != expected:
+            print(f"  ERROR: expected the 10:30 row to expand to {expected}, got {details}")
+            failed += 1
+        detail_times = [detail["time"] for detail in row_1030["details"]]
+        if detail_times != sorted(detail_times, reverse=True):
+            print("  ERROR: detail slots should be newest first, matching the table's ordering")
+            failed += 1
+    row_1100 = find_row(rows, utc(11, 0))
+    if not row_1100 or row_1100["cells"][0] != ("B", None):
+        print(f"  ERROR: the change happened in the 10:30 row, so the 11:00 row should read B unmarked, got {row_1100['cells'] if row_1100 else None}")
         failed += 1
 
     # -------------------------------------------------------------------------
-    # Detail rows used to be the offsets -5..-25, i.e. the half hour BEFORE the row, so expanding a
-    # row described a different window and could contradict the row it sat under.
-    print("Test: detail slots belong to the row's own half hour, not the one before it")
-    row_2130 = utc(21, 30, day=24)
-    expected_slots = {ts + timedelta(minutes=offset) for ts in sorted_ts_30 for offset in range(0, 30, 5)}
-    if display_slots_5 != expected_slots:
-        print(f"  ERROR: detail slots should be each row's own half hour; {len(expected_slots - display_slots_5)} of them are missing and {len(display_slots_5 - expected_slots)} belong to another window")
+    print("Test: a change that reverts inside a row is blue, and its slots show both changes")
+    records = [record(utc(10, 0), "A"), record(utc(10, 37), "B"), record(utc(10, 48), "A"), record(utc(11, 20), "A")]
+    rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
+    row_1030 = find_row(rows, utc(10, 30))
+    if not row_1030 or row_1030["cells"][0] != ("A", "reverted"):
+        print(f"  ERROR: expected the 10:30 row to read A marked reverted, got {row_1030['cells'] if row_1030 else None}")
+        failed += 1
+    else:
+        changed_slots = {detail["time"].strftime("%H:%M"): detail["cells"][0] for detail in row_1030["details"] if detail["cells"][0][1]}
+        if changed_slots != {"10:40": ("B", "changed"), "10:50": ("A", "changed")}:
+            print(f"  ERROR: expected the 10:40 and 10:50 slots to show the change and the revert, got {changed_slots}")
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a change landing exactly on a row's time is reported by that row itself")
+    records = [record(utc(10, 0), "A"), record(utc(10, 30), "B"), record(utc(11, 10), "B")]
+    rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
+    if find_row(rows, utc(10, 30))["cells"][0] != ("B", "changed"):
+        print(f"  ERROR: expected the 10:30 row to read B marked changed, got {find_row(rows, utc(10, 30))['cells'][0]}")
+        failed += 1
+    if find_row(rows, utc(10, 0))["cells"][0] != ("A", None):
+        print(f"  ERROR: expected the 10:00 row to read A unmarked, got {find_row(rows, utc(10, 0))['cells'][0]}")
         failed += 1
 
     # -------------------------------------------------------------------------
-    print("Test: a genuine transition is reported by the row it happened in, and by that row's detail slots")
-    selections = [{"entity_id": "sensor.status", "attribute": None}]
-    records = []
-    stamp = utc(20, 0, day=24)
-    while stamp < utc(23, 0, day=24):
-        records.append({"last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S%z"), "state": "Normal" if stamp < row_2130 else "Lost"})
-        stamp += timedelta(minutes=5)
-    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, {"sensor.status": make_history(records)})
-
-    value, changed, prev_value = filled_30[0][row_2130]
-    if value != "Lost" or not changed or prev_value != "Normal":
-        print(f"  ERROR: expected the 21:30 row to flag the Normal->Lost change, got value={value} changed={changed} prev={prev_value}")
+    print("Test: rows and slots never reach past the newest record")
+    records = [record(utc(20, 0), "1"), record(utc(21, 12), "2")]
+    rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
+    if rows[0]["time"] != utc(21, 0):
+        print(f"  ERROR: the newest row should be 21:00, got {rows[0]['time']}")
         failed += 1
-    if filled_30[0][utc(21, 0, day=24)][0] != "Normal":
-        print(f"  ERROR: expected the 21:00 row to still read 'Normal', got '{filled_30[0][utc(21, 0, day=24)][0]}'")
+    future = [detail["time"].strftime("%H:%M") for row in rows for detail in row["details"] if detail["time"] > utc(21, 12)]
+    if future:
+        print(f"  ERROR: detail slots after the newest record (21:12) should not exist, got {future}")
         failed += 1
-    detail_values = {filled_5[0].get(row_2130 + timedelta(minutes=offset), ("-", False, None))[0] for offset in range(5, 30, 5)}
-    if detail_values != {"Lost"}:
-        print(f"  ERROR: expected the 21:30 row to expand to its own window (all 'Lost'), got {sorted(detail_values)}")
+    if [detail["time"] for detail in rows[0]["details"]] != [utc(21, 10), utc(21, 5)]:
+        print(f"  ERROR: expected the 21:00 row to expand to 21:10 and 21:05 only, got {[detail['time'].strftime('%H:%M') for detail in rows[0]['details']]}")
         failed += 1
 
     # -------------------------------------------------------------------------
-    print("Test: a slot reports the state as of its own timestamp, not a reading taken later")
-    selections = [{"entity_id": "sensor.x", "attribute": None}]
-    fetch = {
-        "sensor.x": make_history(
-            [
-                {"last_updated": "2026-07-23T10:01:00+00:00", "state": "5"},
-                {"last_updated": "2026-07-23T10:02:00+00:00", "state": "6"},
-                {"last_updated": "2026-07-23T10:03:00+00:00", "state": "7"},
-                {"last_updated": "2026-07-23T10:04:00+00:00", "state": "8"},
-            ]
-        )
-    }
-    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
-
-    value, changed, prev_value = filled_30[0][utc(10, 0)]
-    if value != "-":
-        print(f"  ERROR: nothing had been recorded by 10:00, so the row should read '-', got '{value}'")
-        failed += 1
-    if prev_value is not None:
-        print(f"  ERROR: expected no prior value before the first row, got '{prev_value}'")
-        failed += 1
-    value, changed, _ = filled_5[0].get(utc(10, 5), ("-", False, None))
-    if value != "8" or not changed:
-        print(f"  ERROR: expected the 10:05 slot to report the latest reading '8' as a change, got value={value} changed={changed}")
-        failed += 1
-
-    # -------------------------------------------------------------------------
-    print("Test: two columns for the same entity_id stay consistent with each other")
-    selections = [
-        {"entity_id": "sensor.x", "attribute": None},
-        {"entity_id": "sensor.x", "attribute": "other"},
-    ]
-    fetch = {
-        "sensor.x": make_history(
-            [
-                {"last_updated": "2026-07-23T10:01:00+00:00", "state": "5", "attributes": {"other": "o1"}},
-                {"last_updated": "2026-07-23T10:02:00+00:00", "state": "6", "attributes": {"other": "o2"}},
-                {"last_updated": "2026-07-23T10:03:00+00:00", "state": "7", "attributes": {"other": "o3"}},
-                {"last_updated": "2026-07-23T10:04:00+00:00", "state": "8", "attributes": {"other": "o4"}},
-            ]
-        )
-    }
-    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
-
-    state_value, _, _ = filled_5[0].get(utc(10, 5), ("-", False, None))
-    attr_value, _, _ = filled_5[1].get(utc(10, 5), ("-", False, None))
-    if state_value != "8":
-        print(f"  ERROR: state column should report the reading in effect at 10:05 ('8'), got '{state_value}'")
-        failed += 1
-    if attr_value != "o4":
-        print(f"  ERROR: attribute column should report the value in effect at 10:05 ('o4'), got '{attr_value}'")
-        failed += 1
-
-    # -------------------------------------------------------------------------
-    print("Test: 30-min row timestamps round down and never overflow the hour")
-    selections = [{"entity_id": "sensor.y", "attribute": None}]
-    fetch = {
-        "sensor.y": make_history(
-            [
-                {"last_updated": "2026-07-23T10:07:00+00:00", "state": "mid"},
-                {"last_updated": "2026-07-23T23:59:00+00:00", "state": "late"},
-            ]
-        )
-    }
-    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
-
-    # 10:30 is the row that first reports the 10:07 reading; 00:00 would be past the newest record
-    expected_30 = {utc(10, 0), utc(10, 30), utc(23, 30)}
-    if set(sorted_ts_30) != expected_30:
-        print(f"  ERROR: expected 30-min rows {expected_30}, got {set(sorted_ts_30)}")
-        failed += 1
-    if sorted_ts_30 != sorted(sorted_ts_30, reverse=True):
-        print("  ERROR: expected sorted_timestamps_30min in descending (newest-first) order")
-        failed += 1
-
-    # -------------------------------------------------------------------------
-    print("Test: a row with no sample of its own carries forward the previous known value")
-    selections = [
-        {"entity_id": "sensor.a", "attribute": None},
-        {"entity_id": "sensor.b", "attribute": None},
-    ]
-    fetch = {
-        "sensor.a": make_history([{"last_updated": "2026-07-23T10:00:00+00:00", "state": "A1"}]),
-        "sensor.b": make_history([{"last_updated": "2026-07-23T10:30:00+00:00", "state": "B1"}]),
-    }
-    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
-
-    value, changed, _ = filled_30[0][utc(10, 30)]
-    if value != "A1" or changed:
-        print(f"  ERROR: expected sensor.a to carry 'A1' forward unchanged at 10:30, got value={value} changed={changed}")
-        failed += 1
-
-    value, changed, prev_value = filled_30[1][utc(10, 0)]
-    if value != "-" or changed or prev_value is not None:
-        print(f"  ERROR: expected sensor.b to have no value before its first sample, got value={value} changed={changed} prev={prev_value}")
-        failed += 1
-
-    value, changed, _ = filled_30[1][utc(10, 30)]
-    if value != "B1" or not changed:
-        print(f"  ERROR: expected sensor.b to report its own sample 'B1' at 10:30 as a change, got value={value} changed={changed}")
-        failed += 1
-
-    # -------------------------------------------------------------------------
-    print("Test: records with a missing or unparseable last_updated are skipped and a missing state renders as 'None'")
-    selections = [{"entity_id": "sensor.z", "attribute": None}]
-    fetch = {
-        "sensor.z": make_history(
-            [
-                {"state": "no-timestamp"},
-                {"last_updated": "not-a-timestamp", "state": "unparseable"},
-                {"last_updated": "2026-07-23T12:00:00+00:00", "state": None},
-            ]
-        )
-    }
-    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
-    value, changed, _ = filled_30[0][utc(12, 0)]
-    if value != "None" or not changed:
-        print(f"  ERROR: expected a missing state to render as the string 'None', got value={value} changed={changed}")
-        failed += 1
-    if len(sorted_ts_30) != 1:
-        print(f"  ERROR: expected the unusable records to be skipped, got rows {sorted_ts_30}")
-        failed += 1
-
-    # -------------------------------------------------------------------------
-    # predbat.status only records on a change, so a window nothing was recorded in gets no row and
-    # the page folds it into "N unchanged slots hidden". A change part way through a window (23:10)
-    # is therefore never reported by a row: 23:00 still reads Exporting, 23:30 to 04:00 are hidden as
-    # "unchanged" beneath it, and the 04:30 row is the first to say Charging - flagged as a change
-    # five hours late, in the very window the charge ended. The timeline chart showed it correctly.
-    print("Test: a change part way through a window is reported by the next row, not hidden as unchanged")
+    print("Test: every 30-min row exists and reads the state at its own time")
     selections = [{"entity_id": "predbat.status", "attribute": None}]
-
-    def stamp(day, hour, minute):
-        """Build a UTC timestamp on 2026-10-<day>."""
-        return datetime(2026, 10, day, hour, minute, 0, tzinfo=timezone.utc)
-
     transitions = [
-        (stamp(1, 22, 0), "Exporting"),
-        (stamp(1, 23, 10), "Charging"),
-        (stamp(2, 4, 35), "Demand"),
-        (stamp(2, 13, 35), "Freeze exporting"),
+        (utc(22, 0, day=1, month=10), "Exporting"),
+        (utc(23, 10, day=1, month=10), "Charging"),
+        (utc(4, 35, day=2, month=10), "Demand"),
+        (utc(13, 35, day=2, month=10), "Freeze exporting"),
     ]
-    records = [{"last_updated": when.strftime("%Y-%m-%dT%H:%M:%S%z"), "state": state} for when, state in transitions]
-    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, {"predbat.status": make_history(records)})
+    rows = build_entity_history_table_data(selections, {"predbat.status": make_history([record(when, state) for when, state in transitions])})
 
     def actual_state(when):
         """Return the state the entity really held at the given time."""
@@ -233,32 +163,158 @@ def run_web_history_table_tests(my_predbat):
                 held = state
         return held
 
-    row_2330 = stamp(1, 23, 30)
-    if row_2330 not in sorted_ts_30:
-        print(f"  ERROR: the status became Charging at 23:10 so the 23:30 row must be shown, rows are {[ts.strftime('%d %H:%M') for ts in sorted_ts_30]}")
+    times = [row["time"] for row in rows]
+    expected_times = [utc(13, 30, day=2, month=10) - timedelta(minutes=30 * index) for index in range(len(times))]
+    if times != expected_times or times[-1] != utc(22, 0, day=1, month=10):
+        print(f"  ERROR: expected a continuous run of rows from 13:30 back to 22:00, got {[when.strftime('%d %H:%M') for when in times]}")
         failed += 1
-    else:
-        value, changed, prev_value = filled_30[0][row_2330]
-        if value != "Charging" or not changed or prev_value != "Exporting":
-            print(f"  ERROR: expected the 23:30 row to flag the Exporting->Charging change, got value={value} changed={changed} prev={prev_value}")
-            failed += 1
-
-    value, changed, prev_value = filled_30[0][stamp(2, 4, 30)]
-    if value != "Charging" or changed:
-        print(f"  ERROR: Charging began at 23:10, so the 04:30 row should read 'Charging' without flagging a change, got value={value} changed={changed} prev={prev_value}")
+    wrong = [f"{row['time'].strftime('%d %H:%M')} reads {row['cells'][0][0]} but was {actual_state(row['time'])}" for row in rows if row["cells"][0][0] != actual_state(row["time"])]
+    for row in rows:
+        for detail in row["details"]:
+            if detail["cells"][0][0] != actual_state(detail["time"]):
+                wrong.append(f"{detail['time'].strftime('%d %H:%M')} reads {detail['cells'][0][0]} but was {actual_state(detail['time'])}")
+    if wrong:
+        print(f"  ERROR: {len(wrong)} cells do not match the time on their left, e.g. {wrong[0]}")
+        failed += 1
+    marked = {row["time"].strftime("%d %H:%M"): row["cells"][0][1] for row in rows if row["cells"][0][1]}
+    if marked != {"01 23:00": "changed", "02 04:30": "changed", "02 13:30": "changed"}:
+        print(f"  ERROR: expected exactly the rows each change happened in to be marked, got {marked}")
         failed += 1
 
-    # The page presents every 30-min slot missing between two rows as unchanged from the older row
+    # -------------------------------------------------------------------------
+    print("Test: an entity's first value appearing is not a change")
+    selections = [{"entity_id": "sensor.a", "attribute": None}, {"entity_id": "sensor.b", "attribute": None}]
+    fetch = {
+        "sensor.a": make_history([record(utc(10, 0), "A1"), record(utc(11, 0), "A1")]),
+        "sensor.b": make_history([record(utc(10, 30), "B1")]),
+    }
+    rows = build_entity_history_table_data(selections, fetch)
+    cells = {row["time"].strftime("%H:%M"): row["cells"] for row in rows}
+    if cells.get("10:00") != [("A1", None), ("-", None)] or cells.get("10:30") != [("A1", None), ("B1", None)]:
+        print(f"  ERROR: expected 10:00 [A1, -] and 10:30 [A1, B1] with nothing marked, got {cells}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: two columns for the same entity_id stay consistent with each other")
+    selections = [{"entity_id": "sensor.x", "attribute": None}, {"entity_id": "sensor.x", "attribute": "other"}]
+    records = [record(utc(10, minute), str(minute + 4), {"other": "o{}".format(minute)}) for minute in range(1, 5)]
+    records.append(record(utc(10, 30), "8", {"other": "o4"}))
+    rows = build_entity_history_table_data(selections, {"sensor.x": make_history(records)})
+    detail = find_detail(find_row(rows, utc(10, 0)), utc(10, 5))
+    if detail["cells"] != [("8", "changed"), ("o4", "changed")]:
+        print(f"  ERROR: expected the 10:05 slot to read ['8', 'o4'] both changed, got {detail['cells']}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    # get_history_with_now() used to append the current state with no attributes, and a missing
+    # attribute was shown as "None", so every attribute column read "None" from now on.
+    print("Test: a record carrying no attributes at all says nothing about an attribute column")
+    selections = [{"entity_id": "sensor.x", "attribute": "soc"}]
+    records = [record(utc(10, 0), "on", {"soc": 50}), record(utc(10, 20), "on", {"soc": 60}), record(utc(10, 40), "on")]
+    rows = build_entity_history_table_data(selections, {"sensor.x": make_history(records)})
+    shown = [row["cells"][0][0] for row in rows] + [detail["cells"][0][0] for row in rows for detail in row["details"]]
+    if "None" in shown:
+        print(f"  ERROR: the attributes-less 10:40 record turned the soc column into 'None': {shown}")
+        failed += 1
+    row_1030 = find_row(rows, utc(10, 30))
+    if not row_1030 or row_1030["cells"][0] != (60, None):
+        print(f"  ERROR: expected the 10:30 row to hold soc 60 unmarked, got {row_1030['cells'] if row_1030 else None}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: records with a missing or unparseable last_updated are skipped and a missing state renders as 'None'")
+    fetch = {"sensor.status": make_history([{"state": "no-timestamp"}, {"last_updated": "not-a-timestamp", "state": "unparseable"}, record(utc(12, 0), None)])}
+    rows = build_entity_history_table_data(status, fetch)
+    if len(rows) != 1 or rows[0]["cells"][0][0] != "None":
+        print(f"  ERROR: expected one 12:00 row reading 'None', got {[(row['time'], row['cells']) for row in rows]}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    # HA/DB history is UTC; the table was shown in UTC too, an hour adrift of local time during BST.
+    print("Test: rows are laid out and shown in the local timezone")
+    london = pytz.timezone("Europe/London")
+    records = [record(utc(20, 10), "A"), record(utc(20, 50), "B"), record(utc(21, 20), "B")]
+    rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)}, local_tz=london)
+    labels = [row["time"].strftime("%H:%M%z") for row in rows]
+    if labels != ["22:00+0100", "21:30+0100", "21:00+0100"]:
+        print(f"  ERROR: expected rows 22:00, 21:30, 21:00 BST, got {labels}")
+        failed += 1
+    # Nepal is UTC+05:45, so its half hours do not fall on UTC half hours
+    kathmandu = pytz.timezone("Asia/Kathmandu")
+    rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)}, local_tz=kathmandu)
+    labels = [row["time"].strftime("%H:%M") for row in rows]
+    if not labels or any(not label.endswith((":00", ":30")) for label in labels):
+        print(f"  ERROR: rows should start on local half hours, got {labels}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: rendering colours changed cells pink, reverted cells blue, and hides pure duplicate rows")
+    records = [record(utc(8, 0), "A"), record(utc(10, 37), "B"), record(utc(10, 48), "A"), record(utc(12, 40), "C"), record(utc(14, 10), "C")]
+    rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
+    html = render_entity_history_rows(rows, 1)
+    if '<td class="reverted-cell">A</td>' not in html or '<td class="changed-cell">B</td>' not in html:
+        print("  ERROR: expected the 10:30 row blue and its 10:40 slot pink")
+        failed += 1
+    # 14:00 is the newest, 13:00 the first to read C, 12:30 and 10:30 changed, 08:00 the oldest
+    shown = [row["time"].strftime("%H:%M") for index, row in enumerate(rows) if history_row_shown(rows, index)]
+    if shown != ["14:00", "13:00", "12:30", "10:30", "08:00"]:
+        print(f"  ERROR: expected rows 14:00, 13:00, 12:30, 10:30 and 08:00 to be shown, got {shown}")
+        failed += 1
+    rendered_rows = html.count('class="history-row"')
+    if rendered_rows != len(shown):
+        print(f"  ERROR: the table should render exactly the {len(shown)} shown rows, got {rendered_rows}")
+        failed += 1
+    if "1 unchanged slot hidden" not in html.split("14:00", 1)[-1].split("13:00", 1)[0]:
+        print("  ERROR: expected the 13:30 duplicate to be folded into '1 unchanged slot hidden' between 14:00 and 13:00")
+        failed += 1
+    if "3 unchanged slots hidden" not in html.split("12:30", 1)[-1]:
+        print("  ERROR: expected the 11:00-12:00 rows to be folded into '3 unchanged slots hidden' beneath the 12:30 row")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    # A row whose value differs from the row before it is not a duplicate, even when nothing changed
+    # inside its own half hour - hiding it made "N unchanged slots" hold a value the row beneath them
+    # never showed, and the CSV, with no detail rows, lost the new value altogether.
+    print("Test: only pure duplicates are hidden, so every hidden row holds the values of the row beneath it")
+    selections = [{"entity_id": "predbat.status", "attribute": None}]
+    rows = build_entity_history_table_data(selections, {"predbat.status": make_history([record(when, state) for when, state in transitions])})
+    shown = [index for index in range(len(rows)) if history_row_shown(rows, index)]
+    if shown[0] != 0 or shown[-1] != len(rows) - 1:
+        print("  ERROR: the newest and the oldest rows must always be shown")
+        failed += 1
     misreported = []
-    for newer, older in zip(sorted_ts_30, sorted_ts_30[1:]):
-        shown = filled_30[0][older][0]
-        slot = older + timedelta(minutes=30)
-        while slot < newer:
-            if actual_state(slot) != shown:
-                misreported.append("{} was {} but is hidden as unchanged from {}".format(slot.strftime("%d %H:%M"), actual_state(slot), shown))
-            slot += timedelta(minutes=30)
+    for index, row in enumerate(rows):
+        if index in shown:
+            continue
+        beneath = next(rows[older] for older in shown if older > index)
+        if [value for value, _ in row["cells"]] != [value for value, _ in beneath["cells"]]:
+            misreported.append("{} reads {} but is hidden above {} reading {}".format(row["time"].strftime("%d %H:%M"), row["cells"][0][0], beneath["time"].strftime("%d %H:%M"), beneath["cells"][0][0]))
     if misreported:
-        print(f"  ERROR: {len(misreported)} hidden slots did not hold the value of the row beneath them, e.g. {misreported[0]}")
+        print(f"  ERROR: {len(misreported)} hidden rows differ from the row beneath them, e.g. {misreported[0]}")
+        failed += 1
+    shown_values = [(rows[index]["time"].strftime("%d %H:%M"), rows[index]["cells"][0][0]) for index in shown]
+    expected_values = [("02 13:30", "Demand"), ("02 05:00", "Demand"), ("02 04:30", "Charging"), ("01 23:30", "Charging"), ("01 23:00", "Exporting"), ("01 22:00", "Exporting")]
+    if shown_values != expected_values:
+        print(f"  ERROR: expected the shown rows {expected_values}, got {shown_values}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: get_history_with_now() stamps the current state at the real time and keeps its attributes")
+    web = WebInterface(my_predbat, web_port=5053)
+    web.get_history_wrapper = lambda entity_id, days, required=False, tracked=False: [[record(utc(10, 0), "on", {"soc": 50})]]
+    web.get_state_wrapper = lambda entity_id=None, attribute=None, raw=False: {"state": "off", "attributes": {"soc": 70}} if raw else ("off" if attribute is None else 70)
+    history = asyncio.run(web.get_history_with_now("sensor.x", 1))
+    latest = history[0][-1]
+    if latest.get("state") != "off" or latest.get("attributes", {}).get("soc") != 70:
+        print(f"  ERROR: expected the appended record to carry state 'off' and soc 70, got {latest}")
+        failed += 1
+    elif abs((datetime.strptime(latest["last_updated"], "%Y-%m-%dT%H:%M:%S%z") - web.now_utc_exact).total_seconds()) > 60:
+        print(f"  ERROR: expected the appended record stamped at the real time, got {latest['last_updated']}")
+        failed += 1
+    web.get_history_wrapper = lambda entity_id, days, required=False, tracked=False: []
+    history = asyncio.run(web.get_history_with_now("sensor.x", 1, attribute="soc"))
+    if not history or len(history[0]) != 2 or history[0][0].get("attributes", {}).get("soc") != 70:
+        print(f"  ERROR: with no history an attribute should be seeded at the start of the window, got {history}")
         failed += 1
 
     return failed

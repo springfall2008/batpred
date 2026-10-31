@@ -498,3 +498,54 @@ def test_fetch_config_options(my_predbat):
 
     print("\n**** All fetch_config_options tests passed! ****")
     return False
+
+
+def test_save_restore_options_are_per_engine(my_predbat):
+    """
+    update_save_restore_list must build its options per engine: two engines with different
+    config folders must not see each other's saved files, and the module global and the
+    shared default list in config must not be written.
+    """
+    import os
+    import tempfile
+    import userinterface
+    import config
+
+    class FakeEngine:
+        update_save_restore_list = userinterface.UserInterface.update_save_restore_list
+
+        def __init__(self, config_root):
+            self.config_root = config_root
+            self.config_index = {"saverestore": {"options": config.PREDBAT_SAVE_RESTORE}}
+            self.exposed = []
+
+        def expose_config(self, name, value):
+            self.exposed.append(name)
+
+    default_before = list(config.PREDBAT_SAVE_RESTORE)
+    missing = object()
+    global_before = getattr(userinterface, "PREDBAT_SAVE_RESTORE", missing)
+
+    with tempfile.TemporaryDirectory() as root_a, tempfile.TemporaryDirectory() as root_b:
+        for root, name in ((root_a, "a.yaml"), (root_b, "b.yaml")):
+            os.makedirs(os.path.join(root, "predbat_save"))
+            with open(os.path.join(root, "predbat_save", name), "w") as handle:
+                handle.write("{}\n")
+
+        engine_a = FakeEngine(root_a)
+        engine_b = FakeEngine(root_b)
+        engine_a.update_save_restore_list()
+        engine_b.update_save_restore_list()
+
+        options_a = engine_a.config_index["saverestore"]["options"]
+        options_b = engine_b.config_index["saverestore"]["options"]
+
+        assert options_a == ["save current", "restore default", "a.yaml"], "engine a options wrong: {}".format(options_a)
+        assert "b.yaml" in options_b and "a.yaml" not in options_b, "engine b options wrong: {}".format(options_b)
+        assert options_a is not options_b, "engines share one options list"
+        assert options_a is not config.PREDBAT_SAVE_RESTORE, "options is the shared default list"
+
+    assert getattr(userinterface, "PREDBAT_SAVE_RESTORE", missing) is global_before, "module global was written"
+    assert config.PREDBAT_SAVE_RESTORE == default_before, "shared default list was mutated: {}".format(config.PREDBAT_SAVE_RESTORE)
+    print("OK: test_save_restore_options_are_per_engine")
+    return False
