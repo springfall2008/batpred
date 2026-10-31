@@ -4558,15 +4558,263 @@ class TestGatewayUnitControlBinding:
         assert self._errors(gw) == []
         gw.non_fatal_error_occurred.assert_not_called()
 
-    def test_unlisted_pv_only_inverter_is_left_out_as_before(self):
-        """With no serial list a PV-only inverter is not configured at all, as before."""
+    # ------------------------------------------------------------------
+    # No serial list: a battery-less inverter with no coordinator is PV only.
+    # The topologies below are the ones seen on real hubs.
+    # ------------------------------------------------------------------
+
+    def _unit(self, status, serial, inv_type=pb.INVERTER_TYPE_GIVENERGY, primary=False, battery=False, pv_w=0, pv_today_wh=0, connected=True):
+        """Add one unit to *status* as current hub firmware reports it."""
+        inv = status.inverters.add()
+        inv.type = inv_type
+        inv.serial = serial
+        inv.primary = primary
+        inv.connected = connected
+        inv.active = connected
+        if battery:
+            inv.battery.soc_percent = 50
+            inv.battery.capacity_wh = 9500
+            inv.battery.rate_max_w = 3000
+        if pv_w:
+            inv.pv.power_w = pv_w
+        if pv_today_wh:
+            inv.energy.pv_today_wh = pv_today_wh
+        return inv
+
+    def _hybrid_and_pv_status(self, pv_connected=True, pv_w=900):
+        """A battery hybrid plus a battery-less PV inverter the hub does not elect primary."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_hybrid_pv"
+        status.firmware = "1.0.39"
+        status.schema_version = 1
+        self._unit(status, "FA0000A001", primary=True, battery=True, pv_w=1400, pv_today_wh=5000)
+        if pv_connected:
+            self._unit(status, "PD0000A002", pv_w=pv_w, pv_today_wh=2000)
+        else:
+            self._unit(status, "PD0000A002", connected=False)
+        return status
+
+    def test_unlisted_pv_only_inverter_counts_its_pv_power_only(self):
+        """No serial list, no coordinator: a battery-less inverter is PV only; its pv_power counts, its pv_today does not."""
         gw = self._listed_gateway([])
 
-        gw._process_telemetry(self._pv_and_battery_status().SerializeToString())
+        gw._process_telemetry(self._hybrid_and_pv_status().SerializeToString())
 
         assert gw._args["num_inverters"] == 1
+        assert gw._inverter_slot_serials == ["FA0000A001"]
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._args["pv_power"] == ["sensor.predbat_gateway_00a001_pv_power", "sensor.predbat_gateway_00a002_pv_power"]
+        # The hybrid's own counter can already include the PV inverter's generation
+        assert gw._args["pv_today"] == ["sensor.predbat_gateway_00a001_pv_today"]
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 900
+        assert "00a002" not in gw._suffix_to_serial
+        for arg in ("soc_percent", "charge_rate", "discharge_rate", "reserve", "charge_limit", "charge_start_time", "scheduled_charge_enable", "load_power", "grid_power", "pv_today"):
+            assert len(gw._args[arg]) == 1 and "00a002" not in str(gw._args[arg][0]), arg
+        assert self._errors(gw) == []
+
+    def test_unlisted_pv_only_inverter_dark_at_startup_is_added_when_it_wakes(self):
+        """A PV inverter that is off at night when Predbat starts is added, without a restart, once the hub reads it."""
+        gw = self._listed_gateway([])
+
+        gw._process_telemetry(self._hybrid_and_pv_status(pv_connected=False).SerializeToString())
         assert gw._pv_only_serials == ()
-        assert gw._args["pv_power"] == ["sensor.predbat_gateway_00b002_pv_power"]
+        assert gw._args["pv_power"] == ["sensor.predbat_gateway_00a001_pv_power"]
+
+        gw._process_telemetry(self._hybrid_and_pv_status(pv_connected=True).SerializeToString())
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._args["pv_power"][-1] == "sensor.predbat_gateway_00a002_pv_power"
+        assert gw._args["num_inverters"] == 1
+
+        # Sunset: it stops reporting, and stays configured rather than thrashing auto-config
+        reruns = gw._configured_inverter_serials
+        gw._process_telemetry(self._hybrid_and_pv_status(pv_connected=False).SerializeToString())
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._configured_inverter_serials == reruns
+
+    def test_disconnected_pv_only_inverter_reads_no_generation(self):
+        """The hub repeats a disconnected unit's last readings; a PV-only inverter's frozen generation is zeroed."""
+        gw = self._listed_gateway([])
+        gw._process_telemetry(self._hybrid_and_pv_status().SerializeToString())
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 900
+
+        frozen = self._hybrid_and_pv_status()
+        frozen.inverters[1].connected = False  # still carrying its 900 W from before
+        gw._process_telemetry(frozen.SerializeToString())
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 0
+        assert gw._pv_only_serials == ("PD0000A002",)
+
+    def test_pv_only_inverter_disconnected_at_startup_reads_no_generation(self):
+        """Started at night with the hub repeating the PV inverter's afternoon reading: its first publish is already zero."""
+        gw = self._listed_gateway([])
+        status = self._hybrid_and_pv_status()
+        status.inverters[1].connected = False  # frozen at 900 W
+        status.inverters[1].active = False
+
+        gw._process_telemetry(status.SerializeToString())
+
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 0
+
+        # Firmware that flags every unit primary: it is published before auto-config, then zeroed
+        gw = self._listed_gateway([])
+        status.inverters[1].primary = True
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 0
+
+    def test_unlisted_pv_only_inverter_is_not_counted_in_integrated_load(self):
+        """Its pv_today is not added to an integrated load: the hybrid's counter may already hold it."""
+        gw = self._listed_gateway([])
+        gw._process_telemetry(self._hybrid_and_pv_status().SerializeToString())
+        assert gw._pv_only_counters == ()
+
+    def test_unlisted_battery_less_aios_behind_a_gateway_stay_out(self):
+        """A Gateway with one battery AIO and battery-less AIOs behind it: auto-config runs, and nothing is PV only."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_gateway_four"
+        status.firmware = "1.1.0"
+        status.schema_version = 1
+        self._unit(status, "GW0000A010", inv_type=pb.INVERTER_TYPE_GIVENERGY_GATEWAY, primary=True, battery=True, pv_w=34, pv_today_wh=200)
+        self._unit(status, "CH0000A011", primary=True, battery=True, pv_w=500)
+        for serial in ("CH0000A012", "CH0000A013", "CH0000A014"):
+            self._unit(status, serial, pv_w=1)
+        gw = self._listed_gateway([])
+
+        gw._process_telemetry(status.SerializeToString())
+
+        assert gw._auto_configured
+        assert gw._pv_only_serials == ()
+        assert not any(s in e for e in gw._args["pv_power"] for s in ("00a012", "00a013", "00a014"))
+
+    def test_coordinator_missing_from_one_status_changes_nothing(self):
+        """A status that leaves the Gateway or Plant EMS out (a hub rescan) does not re-run auto-config or move control."""
+        for coordinator in (pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY):
+
+            def site(with_coordinator):
+                status = pb.GatewayStatus()
+                status.device_id = "pbgw_coord"
+                status.firmware = "1.0.39"
+                status.schema_version = 1
+                if with_coordinator:
+                    self._unit(status, "EM0000G001", inv_type=coordinator, primary=True, battery=True)
+                self._unit(status, "CH0000G002", battery=True, pv_w=500)
+                self._unit(status, "CH0000G003", battery=True, pv_w=500)
+                self._unit(status, "CH0000G004", pv_w=300)
+                return status.SerializeToString()
+
+            gw = self._listed_gateway([])
+            gw._process_telemetry(site(True))
+            assert gw._inverter_slot_serials == ["EM0000G001"], coordinator
+
+            runs = []
+            real_config = gw.automatic_config
+
+            def counted_config():
+                runs.append(1)
+                return real_config()
+
+            gw.automatic_config = counted_config
+            gw._process_telemetry(site(False))
+            gw._process_telemetry(site(True))
+            assert runs == [], coordinator
+            assert gw._inverter_slot_serials == ["EM0000G001"], coordinator
+            assert gw._pv_only_serials == (), coordinator
+
+            # After a restart the stored discovery record still marks the site as coordinated
+            fresh = self._listed_gateway([])
+            fresh._discovery = dict(gw._discovery)
+            fresh._process_telemetry(site(False))
+            assert fresh._pv_only_serials == (), coordinator
+
+    def test_unlisted_ems_and_gateway_sites_are_unchanged(self):
+        """Real topologies with a coordinator keep exactly the configuration they had."""
+        for coordinator in (pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY):
+            status = pb.GatewayStatus()
+            status.device_id = "pbgw_coord"
+            status.firmware = "1.0.39"
+            status.schema_version = 1
+            self._unit(status, "EM0000G001", inv_type=coordinator, primary=True, battery=True)
+            self._unit(status, "CH0000G002", battery=True, pv_w=500)
+            self._unit(status, "CH0000G003", battery=True, pv_w=500)
+            self._unit(status, "CH0000G004", pv_w=300)  # battery-less unit behind the coordinator
+            gw = self._listed_gateway([])
+
+            gw._process_telemetry(status.SerializeToString())
+
+            assert gw._pv_only_serials == (), coordinator
+            assert gw._inverter_slot_serials == ["EM0000G001"], coordinator
+
+    def test_unlisted_single_and_twin_battery_sites_are_unchanged(self):
+        """The common real topologies (one battery inverter; two) gain no PV-only inverter."""
+        for count in (1, 2):
+            status = pb.GatewayStatus()
+            status.device_id = "pbgw_plain"
+            status.firmware = "1.0.39"
+            status.schema_version = 1
+            serials = ["CE0000G800", "CE0000G400"][:count]
+            for serial in serials:
+                self._unit(status, serial, primary=True, battery=True, pv_w=1000)
+            gw = self._listed_gateway([])
+
+            gw._process_telemetry(status.SerializeToString())
+
+            assert gw._pv_only_serials == (), count
+            assert gw._inverter_slot_serials == sorted(serials), count
+            assert len(gw._args["pv_power"]) == count and len(gw._args["pv_today"]) == count
+
+    def test_unlisted_inverter_whose_battery_is_late_is_not_taken_for_pv_only(self):
+        """An inverter with no readings yet has no record, so it is not PV only; once it reports a battery it gets a slot."""
+        gw = self._listed_gateway([])
+        status = self._hybrid_and_pv_status(pv_connected=False)
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._pv_only_serials == ()
+
+        status = self._hybrid_and_pv_status()
+        status.inverters[1].primary = True
+        status.inverters[1].battery.soc_percent = 40
+        status.inverters[1].battery.capacity_wh = 5000
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._pv_only_serials == ()
+        assert gw._args["num_inverters"] == 2
+
+    def test_unlisted_pv_only_inverter_that_gains_a_battery_gets_a_slot(self):
+        """Once PV only, an inverter that later reports a battery is moved to a slot."""
+        gw = self._listed_gateway([])
+        gw._process_telemetry(self._hybrid_and_pv_status().SerializeToString())
+        assert gw._pv_only_serials == ("PD0000A002",)
+
+        status = self._hybrid_and_pv_status()
+        status.inverters[1].primary = True
+        status.inverters[1].battery.soc_percent = 40
+        status.inverters[1].battery.capacity_wh = 5000
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._pv_only_serials == ()
+        assert gw._args["num_inverters"] == 2
+
+    def test_listed_pv_only_inverter_still_counts_its_pv_today(self):
+        """The listed path (#5471) is unchanged: a listed PV-only inverter's counter is still counted."""
+        gw = self._listed_gateway(["FD0000P001", "CH0000B002"])
+        gw._process_telemetry(self._pv_and_battery_status().SerializeToString())
+        assert gw._pv_only_counters == ("FD0000P001",)
+
+    def test_listed_pv_only_inverter_disconnected_reads_no_generation(self):
+        """Listed path: a disconnected PV-only inverter's frozen power is zeroed, while its counter stays in pv_today."""
+        gw = self._listed_gateway(["FD0000P001", "CH0000B002"])
+        live = self._pv_and_battery_status()
+        live.inverters[0].energy.pv_today_wh = 3000
+        gw._process_telemetry(live.SerializeToString())
+        assert gw._states["sensor.predbat_gateway_00p001_pv_power"] == 1200
+        counted = gw._states["sensor.predbat_gateway_00p001_pv_today"]
+
+        frozen = self._pv_and_battery_status()
+        frozen.inverters[0].energy.pv_today_wh = 3000
+        frozen.inverters[0].connected = False  # the hub repeats its last 1200 W
+        gw._process_telemetry(frozen.SerializeToString())
+
+        assert gw._states["sensor.predbat_gateway_00p001_pv_power"] == 0
+        assert gw._states["sensor.predbat_gateway_00p001_pv_today"] == counted
+        assert gw._pv_only_counters == ("FD0000P001",)
+        assert gw._args["pv_today"] == ["sensor.predbat_gateway_00b002_pv_today", "sensor.predbat_gateway_00p001_pv_today"]
 
     def test_pv_only_inverter_that_reports_a_battery_later_gets_a_slot(self):
         """Having a battery is learned when the hub reports it, and re-runs auto-config; it is never unlearned."""
