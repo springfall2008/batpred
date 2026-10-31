@@ -1065,8 +1065,11 @@ class CarChargerControl:
             await self.charger_control_drop_force_hold(key)
 
     async def charger_control_drop_force_hold(self, key):
-        """Forget a force hold, tell the planner, and save that."""
-        hold = self.charger_control_force_holds.pop(key)
+        """Forget a force hold, tell the planner, and save that. Nothing to do for a hold already gone."""
+        # A user ending a hold from a control event can meet a hand-back that has just confirmed it
+        hold = self.charger_control_force_holds.pop(key, None)
+        if hold is None:
+            return
         self.charger_control_set_force_hold_until(hold["car"], None)
         if key in self.charger_control_state:
             # The hold moved the charger behind Predbat-led control's back, so its next cycle sends the plan's

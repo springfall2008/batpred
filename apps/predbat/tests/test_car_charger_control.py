@@ -1452,6 +1452,21 @@ def test_end_force_hold_drops_without_a_resume():
     assert component.commands == [("a", "force_pause")], component.commands
 
 
+def test_drop_force_hold_tolerates_a_hold_already_gone():
+    """Dropping a hold that has already gone - a user's end racing a hand-back - does nothing, rather than failing."""
+    storage = FakeStorage()
+    component = _held_component(storage=storage)
+    run_async(component.charger_control_tick(_at(2, 0)))
+    run_async(component.charger_control_drop_force_hold("a"))
+    saves = storage.saves
+    component.base.car_force_hold_until[1] = _at(3, 0)
+    run_async(component.charger_control_drop_force_hold("a"))
+    run_async(component.charger_control_end_force_hold("a", "the user turned it back on"))
+    assert component.charger_control_force_holds == {}
+    assert storage.saves == saves, "Nothing changed, so nothing is saved"
+    assert component.base.car_force_hold_until == {1: _at(3, 0)}, component.base.car_force_hold_until
+
+
 def test_cancelled_windows_are_merged():
     """Touching or overlapping cancelled windows read as one, in time order."""
     component = FakeComponent([FakeCharger("a")])
@@ -1578,6 +1593,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_force_hold_sets_and_clears_base_hold_until()
     test_force_hold_busy()
     test_end_force_hold_drops_without_a_resume()
+    test_drop_force_hold_tolerates_a_hold_already_gone()
     test_cancelled_windows_are_merged()
     test_force_hold_pauses_again_when_wanted_mid_hand_back()
     test_force_hold_until_kept_while_hand_back_unconfirmed()

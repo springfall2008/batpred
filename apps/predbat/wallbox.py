@@ -539,6 +539,8 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         self.paused_by_predbat = set()
         # Chargers Predbat has resumed on release but not yet handed back to their own schedule
         self.schedule_pending = set()
+        # Chargers whose force pause has been refused for their state during the current hold, so it is said once
+        self.force_pause_refused = set()
         self.transport = None
 
         if not username or not password:
@@ -620,7 +622,8 @@ class WallboxAPI(ComponentBase, CarChargerControl):
             return True
         try:
             refresh = await self.process_events()
-            if first or refresh or (seconds % self.poll_seconds) == 0:
+            # Every cycle while a force hold is under way or about to start, as each of its steps waits on a fresh read
+            if first or refresh or (seconds % self.poll_seconds) == 0 or self.charger_control_force_hold_busy(self.now_utc_exact):
                 return await self.poll(seconds, first)
             return True
         except WallboxRateLimitError:
@@ -839,6 +842,9 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         elif entity_id.endswith("_ocpp"):
             self.log("Info: wallbox: switching the OCPP connection of {} {}".format(charger.name, "on" if turn_on else "off"))
             await self.transport.set_ocpp_mode(self.api_id(charger), turn_on)
+            if turn_on:
+                # The user has handed the charger back to its backend, so a hold for an export must not take it off again
+                await self.charger_control_end_force_hold(charger.charger_id, "the OCPP switch was turned on")
 
     async def number_event_handler(self, entity_id, value):
         """Set the maximum charging current, clamped to what the charger allows."""
@@ -1014,6 +1020,84 @@ class WallboxAPI(ComponentBase, CarChargerControl):
             await self.transport.resume_schedule(self.api_id(charger))
             self.schedule_pending.discard(charger_id)
             await self.charger_control_save()
+
+    def charger_control_can_force_hold(self, charger):
+        """Every Wallbox can be force-held off for a slot cancelled for an export: paused, after leaving OCPP mode if a backend runs it."""
+        return True
+
+    async def force_switch_ocpp(self, charger, ocpp):
+        """Switch a force-held charger's OCPP connection on or off, unless its OCPP configuration already says it is.
+
+        The status can go on reporting the old mode for a while after the switch is made, so a read that still
+        shows it does not send the switch again - one sent again mid reconnect might start the reconnect over.
+        """
+        configuration = await self.transport.get_ocpp_configuration(self.api_id(charger))
+        if isinstance(configuration, dict) and (configuration.get("type") == OPERATION_MODE_OCPP) == ocpp:
+            return
+        self.log("Info: wallbox: switching the OCPP connection of {} {} for a hold for an export".format(charger.name, "on" if ocpp else "off"))
+        await self.transport.set_ocpp_mode(self.api_id(charger), ocpp)
+
+    async def charger_control_force_pause(self, charger, saved):
+        """Take one step towards stopping a force-held charger: out of OCPP mode first if a backend runs it, then a pause.
+
+        The first call records whether an OCPP backend ran the charger, so the hand-back reconnects only one the
+        hold disconnected. A pause sent before the charger has really left OCPP mode is accepted and ignored (seen
+        live), so while a read still shows it in OCPP mode only the switch is made. Wallbox can go on reporting
+        Charging for minutes after a pause lands, and a pause sent again then answers 409: that is said once per hold
+        and the pause tried again next cycle. A charger that could not be read is left for the next cycle.
+        """
+        charger_id = charger.charger_id
+        if charger_id in self.stale_ids:
+            raise ChargerControlDeferred()
+        if not isinstance(saved, dict) or "ocpp" not in saved:
+            saved = {"ocpp": charger.ocpp}
+            self.force_pause_refused.discard(charger_id)
+        if saved["ocpp"] and charger.ocpp:
+            await self.force_switch_ocpp(charger, False)
+        elif charger.charging:
+            try:
+                await self.transport.pause(self.api_id(charger))
+            except WallboxStateError as exc:
+                if charger_id not in self.force_pause_refused:
+                    self.force_pause_refused.add(charger_id)
+                    self.log("Info: wallbox: {} refused the pause for a hold for an export, it may already be paused and still reporting Charging ({}) - trying again each cycle".format(charger.name, exc))
+        return saved
+
+    def charger_control_force_stopped(self, charger, saved):
+        """Is a force-held charger confirmed stopped: freshly read, its status known and not charging, and out of OCPP mode if the hold took it out.
+
+        Disconnected, Error, Updating and Unknown say nothing: a Pulsar dropping off Wallbox's cloud mid-charge reads
+        as Disconnected, so it is not taken as stopped, or the pause it still needs would never be sent.
+        """
+        if charger.charger_id in self.stale_ids or charger.charging:
+            return False
+        if not charger.connected and charger.status_id not in EMPTY_STATUS_IDS:
+            return False
+        return not ((saved or {}).get("ocpp") and charger.ocpp)
+
+    async def charger_control_force_resume(self, charger, saved):
+        """Take one step towards handing back a force-held charger: reconnect the OCPP backend the hold disconnected, or resume the pause.
+
+        No resume is sent to a reconnected OCPP charger: its backend restarts the charge (seen live with Octopus). saved
+        is {} when no pause had returned, and the backend is then reconnected only if it is known the hold took it off.
+        A failure - the OCPP switch answered 502 once live - is raised, and the step tried again next cycle.
+        """
+        if saved.get("ocpp"):
+            if not charger.ocpp:
+                await self.force_switch_ocpp(charger, True)
+            return
+        if charger.charger_id in self.stale_ids:
+            raise ChargerControlDeferred()
+        if charger.paused:
+            self.log("Info: wallbox: resuming {} after its hold for an export".format(charger.name))
+            await self.transport.resume(self.api_id(charger))
+
+    async def charger_control_force_handed_back(self, charger, saved):
+        """Is the hand-back confirmed: the OCPP backend connected again - a reconnect took about 2.5 minutes live - or the charger no longer paused."""
+        if saved.get("ocpp"):
+            configuration = await self.transport.get_ocpp_configuration(self.api_id(charger))
+            return isinstance(configuration, dict) and configuration.get("type") == OPERATION_MODE_OCPP and _to_int(configuration.get("connectionStatus"), 0) == WALLBOX_OCPP_CONNECTED
+        return not charger.paused
 
 
 def print_charger_table(chargers):  # pragma: no cover

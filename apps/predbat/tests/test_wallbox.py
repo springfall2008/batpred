@@ -1917,6 +1917,218 @@ def test_schedule_restoration_is_retried_after_a_failure():
     print("  ✓ Schedule restoration is retried after a failure")
 
 
+# A slot cancelled for an export starting FORCE_HOLD_LEAD_MINUTES after CONTROL_NOW, so a hold starts at CONTROL_NOW
+FORCE_WINDOW = [_plan_window(datetime.datetime(2026, 10, 5, 23, 35), datetime.datetime(2026, 10, 6, 0, 30))]
+FORCE_END = CONTROL_TZ.localize(datetime.datetime(2026, 10, 6, 0, 30))
+# Minutes from CONTROL_NOW to the end of FORCE_WINDOW
+FORCE_END_MINUTES = 60
+
+
+def _force_component(statuses=None, storage=None, cancelled=None, enabled=True):
+    """A component with Predbat-led control off, car 0's slot cancelled for an export, and the switch on unless enabled is False."""
+    component = _control_component({}, statuses, storage=storage, wallbox_control=False)
+    if enabled:
+        component.base.args["car_charging_cancel_for_export"] = True
+    component.base.set_state_wrapper("binary_sensor.predbat_car_charging_slot", "off", {"planned": [], "cancelled_for_export": FORCE_WINDOW if cancelled is None else cancelled})
+    return component
+
+
+def _force_tick(component, minutes, status=None):
+    """Load a fresh read of charger 101 - this status if given - run one control cycle minutes after CONTROL_NOW, and return its calls."""
+    if status is not None:
+        component.transport.statuses[101] = status
+    _load_chargers(component)
+    run_async(component.control_tick(CONTROL_NOW + datetime.timedelta(minutes=minutes)))
+    return list(component.transport.calls)
+
+
+def _writes(calls):
+    """The calls that change something - every one but the reads."""
+    return [call for call in calls if call[0] not in ("get_status", "get_ocpp_configuration", "list_chargers")]
+
+
+def test_wallbox_force_hold_turns_ocpp_off_then_pauses():
+    """An OCPP charger is taken out of OCPP mode first, paused once a read shows it out, and the hold confirmed once it stops."""
+    component = _force_component({101: _status(status_id=193, mode="ocpp")})
+    calls = _force_tick(component, 0)
+    assert _writes(calls) == [("set_ocpp_mode", 101, False)], calls
+    hold = component.charger_control_force_holds["101"]
+    assert hold["saved"] == {"ocpp": True} and hold["stopped"] is False, hold
+    assert "pw" not in str(hold), hold
+
+    # The status still reads OCPP for a cycle: the switch has been made, so it is not made again, and no pause goes out yet
+    calls = _force_tick(component, 1)
+    assert _writes(calls) == [], calls
+
+    calls = _force_tick(component, 2, _status(status_id=193, mode="wallbox"))
+    assert calls == [("pause", 101)], calls
+    calls = _force_tick(component, 3, _status(status_id=182, power=0, mode="wallbox"))
+    assert calls == [], calls
+    assert component.charger_control_force_holds["101"]["stopped"] is True
+    assert component.base.car_force_hold_until == {0: FORCE_END.astimezone(datetime.timezone.utc)}, component.base.car_force_hold_until
+    print("  ✓ A force hold switches OCPP off, then pauses, then confirms the stop")
+
+
+def test_wallbox_force_hold_refused_pause_is_retried():
+    """A pause refused for the charger's state - a stale Charging on one already paused - is logged once and tried again."""
+    component = _force_component({101: _status(status_id=193, mode="wallbox")})
+    component.transport.errors[("pause", 101)] = WallboxStateError("Wallbox answered 409")
+    calls = _force_tick(component, 0)
+    assert calls == [("pause", 101)], calls
+    component.transport.errors[("pause", 101)] = WallboxStateError("Wallbox answered 409")
+    calls = _force_tick(component, 1)
+    assert calls == [("pause", 101)], calls
+    refusals = [message for message in component.log_messages if "refused the pause" in message]
+    assert len(refusals) == 1 and refusals[0].startswith("Info:"), component.log_messages
+    assert not any(message.startswith("Warn:") for message in component.log_messages), component.log_messages
+    calls = _force_tick(component, 2)
+    assert calls == [("pause", 101)], calls
+    assert "101" in component.charger_control_force_holds
+    print("  ✓ A refused force pause is logged once and retried")
+
+
+def test_wallbox_force_hold_hands_back_by_ocpp_only():
+    """At the end the OCPP connection is switched back on, retried after a 502, and the hold kept until it reconnects - no resume is sent."""
+    component = _force_component({101: _status(status_id=193, mode="ocpp")})
+    seen = _force_tick(component, 0)
+    seen += _force_tick(component, 1, _status(status_id=182, power=0, mode="wallbox"))
+    assert component.charger_control_force_holds["101"]["stopped"] is True
+
+    component.transport.ocpp[101]["connectionStatus"] = 2
+    component.transport.errors[("set_ocpp_mode", 101, True)] = WallboxApiError("Wallbox API error HTTP 502")
+    calls = _force_tick(component, FORCE_END_MINUTES)
+    seen += calls
+    assert ("set_ocpp_mode", 101, True) in calls and "101" in component.charger_control_force_holds, calls
+    assert component.base.car_force_hold_until.get(0) is not None
+
+    calls = _force_tick(component, FORCE_END_MINUTES + 1)
+    seen += calls
+    assert _writes(calls) == [("set_ocpp_mode", 101, True)], calls
+    assert "101" in component.charger_control_force_holds
+
+    # Reconnecting: the switch is made, so it is not made again
+    calls = _force_tick(component, FORCE_END_MINUTES + 2, _status(status_id=182, power=0, mode="ocpp"))
+    seen += calls
+    assert _writes(calls) == [] and "101" in component.charger_control_force_holds, calls
+
+    component.transport.ocpp[101]["connectionStatus"] = WALLBOX_OCPP_CONNECTED
+    seen += _force_tick(component, FORCE_END_MINUTES + 3)
+    assert component.charger_control_force_holds == {}, component.charger_control_force_holds
+    assert component.base.car_force_hold_until == {}, component.base.car_force_hold_until
+    assert ("resume", 101) not in seen and ("resume_schedule", 101) not in seen, seen
+    print("  ✓ An OCPP charger is handed back by reconnecting it, and the hold kept until it has")
+
+
+def test_wallbox_force_hold_leaves_a_user_ocpp_off_alone():
+    """A charger not in OCPP mode when the hold starts is paused and resumed, and its OCPP connection never touched."""
+    component = _force_component({101: _status(status_id=193, mode="wallbox")})
+    seen = _force_tick(component, 0)
+    assert seen == [("pause", 101)], seen
+    seen += _force_tick(component, 1, _status(status_id=182, power=0, mode="wallbox"))
+    assert component.charger_control_force_holds["101"]["saved"] == {"ocpp": False}
+    calls = _force_tick(component, FORCE_END_MINUTES)
+    seen += calls
+    assert calls == [("resume", 101)] and "101" in component.charger_control_force_holds, calls
+    seen += _force_tick(component, FORCE_END_MINUTES + 1, _status(status_id=193, mode="wallbox"))
+    assert component.charger_control_force_holds == {}, component.charger_control_force_holds
+    assert not any(call[0] in ("set_ocpp_mode", "get_ocpp_configuration") for call in seen), seen
+    print("  ✓ A charger already out of OCPP mode is paused and resumed only")
+
+
+def test_wallbox_force_hold_restores_ocpp_after_unplug():
+    """A car unplugged mid-hold does not lose the OCPP connection: it is still switched back on at the end."""
+    component = _force_component({101: _status(status_id=193, mode="ocpp")})
+    _force_tick(component, 0)
+    _force_tick(component, 1, _status(status_id=182, power=0, mode="wallbox"))
+    calls = _force_tick(component, 10, _status(status_id=161, power=0, mode="wallbox"))
+    assert calls == [] and "101" in component.charger_control_force_holds, calls
+    calls = _force_tick(component, FORCE_END_MINUTES)
+    assert ("set_ocpp_mode", 101, True) in calls, calls
+    print("  ✓ OCPP is switched back on at the end of a hold even after an unplug")
+
+
+def test_wallbox_force_hold_restart_with_ocpp_off():
+    """A hold an earlier session left behind, its end passed, switches the OCPP connection back on in the first cycle."""
+    storage = _Storage()
+    end = (CONTROL_NOW - datetime.timedelta(minutes=10)).astimezone(datetime.timezone.utc).isoformat()
+    storage.data[("wallbox", "control_state")] = {"control_enabled": True, "held": {}, "paused": [], "schedule": [], "force_holds": {"101": {"car": 0, "end": end, "saved": {"ocpp": True}, "stopped": True, "warned": False}}}
+    component = _force_component({101: _status(status_id=182, power=0, mode="wallbox")}, storage=storage, cancelled=[])
+    component.transport.ocpp[101] = {"type": "wallbox", "address": "wss://ocpp.example", "chargePointIdentity": "id-1", "password": "pw", "connectionStatus": 1}
+    calls = _force_tick(component, 0)
+    assert _writes(calls) == [("set_ocpp_mode", 101, True)], calls
+    assert "101" in component.charger_control_force_holds
+    assert "pw" not in str(storage.data[("wallbox", "control_state")]), storage.data
+    print("  ✓ A restart with a charger left out of OCPP mode switches it back on")
+
+
+def test_wallbox_ocpp_switch_on_ends_the_hold():
+    """The user turning the OCPP switch back on mid-hold sends the switch and ends the hold, with no further pause."""
+    component = _force_component({101: _status(status_id=193, mode="ocpp")})
+    _force_tick(component, 0)
+    assert "101" in component.charger_control_force_holds
+    component.transport.calls = []
+    run_async(component.switch_event_handler("switch.predbat_wallbox_101_ocpp", "turn_on"))
+    assert _writes(component.transport.calls) == [("set_ocpp_mode", 101, True)], component.transport.calls
+    assert component.charger_control_force_holds == {}, component.charger_control_force_holds
+    assert _logged(component, "the OCPP switch was turned on")
+    calls = _force_tick(component, 2, _status(status_id=193, mode="ocpp"))
+    assert _writes(calls) == [], calls
+
+    # Turning it off leaves the hold alone
+    other = _force_component({101: _status(status_id=193, mode="ocpp")})
+    _force_tick(other, 0)
+    run_async(other.switch_event_handler("switch.predbat_wallbox_101_ocpp", "turn_off"))
+    assert "101" in other.charger_control_force_holds
+    print("  ✓ Turning the OCPP switch on ends a force hold")
+
+
+def test_wallbox_force_hold_waits_for_a_fresh_read():
+    """A charger that could not be read, or reads Disconnected, is neither sent anything nor taken as stopped."""
+    component = _force_component({101: _status(status_id=193, mode="ocpp")})
+    _load_chargers(component)
+    component.stale_ids = {"101"}
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [], component.transport.calls
+    assert component.charger_control_force_holds["101"]["saved"] is None, component.charger_control_force_holds
+    assert not any(message.startswith("Warn:") for message in component.log_messages), component.log_messages
+
+    calls = _force_tick(component, 1)
+    assert _writes(calls) == [("set_ocpp_mode", 101, False)], calls
+    # Dropped off Wallbox's cloud mid-charge: not a stop
+    calls = _force_tick(component, 2, _status(status_id=0, power=0, mode="wallbox"))
+    assert calls == [] and component.charger_control_force_holds["101"]["stopped"] is False, calls
+    calls = _force_tick(component, 3, _status(status_id=193, mode="wallbox"))
+    assert calls == [("pause", 101)], calls
+    print("  ✓ A force hold waits for a fresh, definite read")
+
+
+def test_wallbox_force_hold_polls_every_cycle():
+    """While a force hold is under way the chargers are read every cycle, not every poll_seconds."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    component.transport.calls = []
+    run_async(component.run(60, False))
+    assert component.transport.count("get_status") == 0, component.transport.calls
+    component.base.args["car_charging_cancel_for_export"] = True
+    end = (component.now_utc_exact + datetime.timedelta(hours=1)).astimezone(datetime.timezone.utc).isoformat()
+    component.charger_control_force_holds["101"] = {"car": 0, "end": end, "saved": {"ocpp": False}, "stopped": True, "warned": False}
+    run_async(component.run(180, False))
+    assert component.transport.count("get_status") == 1, component.transport.calls
+    print("  ✓ A force hold polls every cycle")
+
+
+def test_wallbox_force_hold_off_by_default():
+    """With car_charging_cancel_for_export off, a cancelled slot sends nothing and does not speed up polling."""
+    component = _force_component({101: _status(status_id=193, mode="ocpp")}, enabled=False)
+    assert _force_tick(component, 0) == []
+    assert _force_tick(component, 10) == []
+    assert component.charger_control_force_holds == {}
+    assert component.charger_control_force_hold_busy(CONTROL_NOW) is False
+    component.base.args["car_charging_cancel_for_export"] = True
+    assert component.charger_control_force_hold_busy(CONTROL_NOW) is True
+    print("  ✓ No force hold, and no extra calls, with the switch off")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -2024,5 +2236,15 @@ def test_wallbox(my_predbat=None):
     test_control_state_with_nothing_saved_is_read_once()
     test_schedule_restoration_is_retried_after_a_failure()
     test_plugged_state()
+    test_wallbox_force_hold_turns_ocpp_off_then_pauses()
+    test_wallbox_force_hold_refused_pause_is_retried()
+    test_wallbox_force_hold_hands_back_by_ocpp_only()
+    test_wallbox_force_hold_leaves_a_user_ocpp_off_alone()
+    test_wallbox_force_hold_restores_ocpp_after_unplug()
+    test_wallbox_force_hold_restart_with_ocpp_off()
+    test_wallbox_ocpp_switch_on_ends_the_hold()
+    test_wallbox_force_hold_waits_for_a_fresh_read()
+    test_wallbox_force_hold_polls_every_cycle()
+    test_wallbox_force_hold_off_by_default()
     print("=" * 70)
     return False
