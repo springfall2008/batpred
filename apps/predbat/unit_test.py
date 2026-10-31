@@ -313,7 +313,7 @@ from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
 from tests.test_plan_persistence import test_plan_persistence
-from tests.test_github import test_github
+from tests.test_github import test_github, test_update_options_are_per_engine
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_givtcp_component import test_givtcp_component
@@ -795,6 +795,7 @@ def main():
         ("storage", test_storage, "Storage component tests (yaml/json/text round-trip, expiry, cleanup)", False),
         ("plan_persistence", test_plan_persistence, "Plan persistence tests (save/load round-trip, expiry, missing storage)", False),
         ("github", test_github, "GitHub mixin tests (cache hit/miss/stale, HTTP errors, release parsing, auto-update)", False),
+        ("update_options_per_engine", test_update_options_are_per_engine, "Update dropdown options are built per engine, not in a module global", False),
         # Ohme EV charger API unit tests
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),
