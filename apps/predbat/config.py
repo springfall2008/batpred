@@ -945,6 +945,13 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
+        "name": "octopus_intelligent_pv10_dispatch_gone",
+        "friendly_name": "Assume Intelligent dispatches can vanish in the PV10 scenario",
+        "type": "switch",
+        "default": True,
+        "enable": "expert_mode",
+    },
+    {
         "name": "car_charging_plan_smart",
         "friendly_name": "Car Charging Plan Smart",
         "type": "switch",

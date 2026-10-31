@@ -321,6 +321,7 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) - used with Octopus Intelligent to prevent Predbat from assuming the car will be charging when the car is unplugged
 - **switch.predbat_octopus_intelligent_dynamic** (_expert mode_) - On by default: cancels Octopus Intelligent slots, and their cheap rate, while the car is in a dispatch but not charging (from **car_charging_now**, or the house load when the car is inside the CT clamp), see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car)
 - **switch.predbat_octopus_intelligent_trust_slots** (_expert mode_) - when Off, Octopus Intelligent slots are assumed not to happen until the car is seen charging in one, see [Car charging](car-charging.md)
+- **switch.predbat_octopus_intelligent_pv10_dispatch_gone** (_expert mode_) - On by default: in the pessimistic PV10% scenario, Intelligent dispatches more than 30 minutes ahead are assumed to go away. Turn Off to trust dispatch rates while keeping the PV10% solar weighting, see [Car charging](car-charging.md)
 - **binary_sensor.predbat_car_charging_slot** - set to On by Predbat when the car should be charged (Predbat-led charging)
 - **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots in time order (default On)

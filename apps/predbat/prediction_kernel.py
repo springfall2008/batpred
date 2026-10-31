@@ -690,6 +690,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
     # temperature instead of repeated for every step. On the benchmark that is 17,856 calls per plan
     # for a handful of answers.
     temp_cap_memo = {}
+    dispatch_gone_enable = getattr(pred, "octopus_intelligent_pv10_dispatch_gone", True)
     for k in range(n_steps):
         minute = k * PREDICT_STEP
         minute_absolute = minute + minutes_now
@@ -698,8 +699,9 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
         alert_keep.append(pred.all_active_keep.get(minute_absolute, 0))
         # Negative means no ceiling at this step - 0 is a real request to empty the battery
         alert_keep_max.append(pred.all_active_keep_max.get(minute_absolute, -1))
-        io_flag.append(1 if pred.io_adjusted.get(minute_absolute, 0) else 0)
         io_credit.append(pred.io_confirmed_credit.get(minute_absolute, 0.0))
+        # Mirrors prediction.py: with octopus_intelligent_pv10_dispatch_gone Off no minute is assumed gone in PV10
+        io_flag.append(1 if (dispatch_gone_enable and pred.io_adjusted.get(minute_absolute, 0)) else 0)
         pv.append(pred.pv_forecast_minute_step[minute])
         pv10.append(pred.pv_forecast_minute10_step[minute])
         pv90.append(pred.pv_forecast_minute90_step[minute])

@@ -741,6 +741,49 @@ def test_pv10_dispatch_gone_never_cheaper_than_the_slot(my_predbat):
     return failed
 
 
+def test_pv10_dispatch_gone_switch(my_predbat):
+    """switch.predbat_octopus_intelligent_pv10_dispatch_gone Off trusts Intelligent dispatch rates in PV10 (GH#5540).
+
+    With the switch On (the default) an io_adjusted minute beyond the first 30 is priced at the tariff max in
+    PV10, so on identical series PV10 costs more than nominal. With it Off PV10 must cost the same as nominal,
+    and io_adjusted itself must be left alone because the rate replication, the IOG charge skew and the dynamic
+    dispatch check still read it.
+    """
+    from prediction import Prediction
+
+    failed = False
+    saved = my_predbat.octopus_intelligent_pv10_dispatch_gone
+    reset_inverter(my_predbat)
+    reset_rates(my_predbat, 10.0, 5.0)
+    n = my_predbat.forecast_minutes + my_predbat.minutes_now
+    flat_pv = {minute: 0.0 for minute in range(0, n, 5)}
+    flat_load = {minute: 0.01 for minute in range(0, n, 5)}
+
+    try:
+        for switch in (True, False):
+            my_predbat.octopus_intelligent_pv10_dispatch_gone = switch
+            pred = Prediction(my_predbat, flat_pv, flat_pv, flat_load, flat_load, flat_pv, flat_load, soc_kw=0, soc_max=0)
+            _force_python_engine(pred)
+            io_adjusted = {minute: 1 for minute in range(0, n)}
+            pred.io_adjusted = io_adjusted
+            pred.rate_max = 50.0
+            nominal = pred.run_prediction([], [], [], [], PV_SCENARIO_NOMINAL, my_predbat.forecast_minutes)
+            pv10 = pred.run_prediction([], [], [], [], PV_SCENARIO_PV10, my_predbat.forecast_minutes)
+            if switch and pv10[0] - nominal[0] < 1e-3:
+                print("ERROR: with the switch On PV10 cost {} should be above nominal {} - the dispatch is not assumed gone".format(pv10[0], nominal[0]))
+                failed = True
+            if not switch and abs(pv10[0] - nominal[0]) > 1e-6:
+                print("ERROR: with the switch Off PV10 cost {} should equal nominal {} - the dispatch was still assumed gone".format(pv10[0], nominal[0]))
+                failed = True
+            if len(pred.io_adjusted) != len(io_adjusted):
+                print("ERROR: the switch must not change io_adjusted itself")
+                failed = True
+    finally:
+        my_predbat.octopus_intelligent_pv10_dispatch_gone = saved
+        reset_rates(my_predbat, 10.0, 5.0)
+    return failed
+
+
 def test_pv90_no_charge_derate(my_predbat):
     """pv90 must charge at the full rate; the pv10-only charge_scaling10 de-rate must not apply to it.
 
@@ -1471,6 +1514,7 @@ def run_pv90_tests(my_predbat):
     failed |= test_pv90_scenario_selects_arrays(my_predbat)
     failed |= test_pv90_no_io_penalty_on_identical_series(my_predbat)
     failed |= test_pv10_dispatch_gone_never_cheaper_than_the_slot(my_predbat)
+    failed |= test_pv10_dispatch_gone_switch(my_predbat)
     failed |= test_pv90_no_charge_derate(my_predbat)
 
     metric_state = save_metric_state(my_predbat)

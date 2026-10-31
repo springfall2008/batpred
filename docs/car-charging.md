@@ -774,6 +774,8 @@ In that scenario, any part of a dispatch more than 30 minutes ahead that is chea
 The rest of the house then pays the peak rate for those minutes, and the battery is not held for the car, although the car's own charging is still costed at the dispatch rate so the two scenarios stay comparable.
 The effect is that with a low battery Predbat may top it up in the first half hour of a dispatch, which is treated as certain, so that it can carry the house through to the fixed off-peak window if the rest of the dispatch disappears.
 This applies whether the dispatches come from the Octopus Energy integration or from Predbat's own Octopus connection.
+Because it shares that weight with the solar forecast, a high **input_number.predbat_pv_metric10_weight** can stop Predbat cycling the battery in a cheap dispatch window that it would cycle if the same rate came from your tariff.
+Turn **switch.predbat_octopus_intelligent_pv10_dispatch_gone** (*expert mode*, On by default) Off to trust dispatch rates in the PV10% scenario as well, so dispatch windows plan like any other cheap rate while the PV10% solar weighting stays in place.
 
 - Let the Octopus app control when your car charges.
 
