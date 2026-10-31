@@ -28,13 +28,16 @@ import json
 import math
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Optional
 
 import aiohttp
+import pytz
 
 from component_base import ComponentBase
 from mock_base import MockBase
 from predbat_metrics import record_api_call
+from utils import CAR_PLAN_TIME_FORMAT
 from car_charger_control import CarChargerControl, ChargerControlDeferred, parse_control_setting
 
 WALLBOX_AUTH_URL = "https://user-api.wall-box.com/"
@@ -1121,9 +1124,83 @@ def print_charger_table(chargers):  # pragma: no cover
         )
 
 
+FORCE_HOLD_CLI_POLL_SECONDS = 30
+FORCE_HOLD_CLI_GRACE_MINUTES = 30
+
+
+def print_force_hold_state(component, key):  # pragma: no cover
+    """Print the charger table and the hold record for a charger. The saved record is reduced to its OCPP flag, so nothing secret is shown."""
+    print("\n[{}]".format(datetime.now().strftime("%H:%M:%S")))
+    print_charger_table(component.ordered_chargers())
+    hold = component.charger_control_force_holds.get(key)
+    if hold is None:
+        print("Hold: none")
+    else:
+        shown = {name: value for name, value in hold.items() if name != "saved"}
+        shown["saved_ocpp"] = (hold.get("saved") or {}).get("ocpp")
+        print("Hold: {}".format(json.dumps(shown, sort_keys=True)))
+
+
+def publish_cancelled_window(mock_base, car_n, window):  # pragma: no cover
+    """Publish a (start, end) window as car car_n's cancelled_for_export, in the planned attribute's shape, or no window for None."""
+    entity = "binary_sensor.{}_car_charging_slot{}".format(mock_base.prefix, "" if car_n == 0 else "_{}".format(car_n))
+    cancelled = [] if window is None else [{"start": window[0].strftime(CAR_PLAN_TIME_FORMAT), "end": window[1].strftime(CAR_PLAN_TIME_FORMAT)}]
+    mock_base.entities[entity] = {"state": "off", "attributes": {"cancelled_for_export": cancelled}}
+
+
+async def run_force_hold_cli(component, mock_base, charger, minutes):  # pragma: no cover
+    """Hold a charger off for a number of minutes the way a slot cancelled for an export would, then hand it back.
+
+    Polls every 30 seconds, printing the charger and the hold, until the hold has gone or 30 minutes after its end.
+    Ctrl-C ends the window now and keeps polling until the hand-back is confirmed, so OCPP is not left off. A second
+    Ctrl-C gives up, and the OCPP connection can then be restored with --ocpp on. A killed process cannot
+    hand back, and nothing is saved between runs, so --ocpp on is the way back from that too.
+    """
+    key = charger.charger_id
+    car_n = component.car_order.index(key)
+    mock_base.args["car_charging_cancel_for_export"] = True
+    start = datetime.now(pytz.utc).replace(microsecond=0)
+    end = start + timedelta(minutes=minutes)
+    publish_cancelled_window(mock_base, car_n, (start, end))
+    print("\nHolding {} off until {} UTC. Ctrl-C hands it back early; a second Ctrl-C gives up (then run --ocpp on)".format(charger.name, end.strftime("%H:%M:%S")))
+    deadline = end + timedelta(minutes=FORCE_HOLD_CLI_GRACE_MINUTES)
+    handing_back = False
+    started = False
+    while True:
+        try:
+            try:
+                await component.poll(0, False)
+            except Exception as exc:  # a failed poll is tried again next time round
+                print("Poll failed: {}".format(exc))
+            print_force_hold_state(component, key)
+            if key in component.charger_control_force_holds:
+                started = True
+            elif started:
+                print("\nThe hold is over and the charger is handed back")
+                return
+            else:
+                print("\nNo hold was started - the car is probably unplugged, or the charger could not be read")
+                return
+            if datetime.now(pytz.utc) > deadline:
+                print("\nThe hand-back was not confirmed within {} minutes of the end. Check the charger, and run --ocpp on if it is still off OCPP".format(FORCE_HOLD_CLI_GRACE_MINUTES))
+                return
+            await asyncio.sleep(FORCE_HOLD_CLI_POLL_SECONDS)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            # Anywhere in the cycle, including mid-poll: OCPP must not be left off
+            if handing_back:
+                print("\nGave up. If OCPP is still off, run --ocpp on")
+                return
+            handing_back = True
+            print("\nInterrupted: ending the window now and handing the charger back. Ctrl-C again to give up")
+            # The switch off is what makes the component hand back at its next poll; the empty window stops a restart
+            mock_base.args["car_charging_cancel_for_export"] = False
+            publish_cancelled_window(mock_base, car_n, None)
+
+
 async def run_wallbox_cli(args):  # pragma: no cover
     """Run one Wallbox component cycle, and optionally one control, against the live API."""
-    mock_base = MockBase()
+    # A force hold writes plan windows, which are read back in a pytz zone
+    mock_base = MockBase(local_tz=pytz.utc) if args.force_hold is not None else MockBase()
     arg_dict = {
         "username": args.username,
         "password": args.password,
@@ -1172,6 +1249,10 @@ async def run_wallbox_cli(args):  # pragma: no cover
         print("\nGET {}:".format(args.get))
         print(json.dumps(await transport.get(args.get), indent=2, sort_keys=True, default=str))
 
+    if args.force_hold is not None:
+        await run_force_hold_cli(component, mock_base, charger, args.force_hold)
+        return
+
     # The same calls the component issues, so they can be tried by hand against a live charger
     if (args.pause or args.resume or args.resume_schedule) and component.held_by_lock(charger):
         print("\nNot sent: {} is locked. Run --unlock first".format(charger.name))
@@ -1187,6 +1268,8 @@ async def run_wallbox_cli(args):  # pragma: no cover
         action = ("lock", transport.set_locked(target, True))
     elif args.unlock:
         action = ("unlock", transport.set_locked(target, False))
+    elif args.ocpp:
+        action = ("set OCPP {}".format(args.ocpp), transport.set_ocpp_mode(target, args.ocpp == "on"))
     elif args.max_current is not None:
         action = ("set max current {}A".format(args.max_current), transport.set_max_charging_current(target, args.max_current))
     elif args.eco_smart:
@@ -1198,6 +1281,11 @@ async def run_wallbox_cli(args):  # pragma: no cover
     print("Waiting {}s for the charger to report the change...".format(COMMAND_SETTLE_SECONDS))
     await asyncio.sleep(COMMAND_SETTLE_SECONDS)
     print_charger_table([normalise_charger(target, await transport.get_status(target))])
+    if args.ocpp:
+        # The type and connection state only: the configuration also carries the backend password
+        configuration = await transport.get_ocpp_configuration(target)
+        if isinstance(configuration, dict):
+            print("OCPP configuration: type {}, connectionStatus {} (4 is connected). The charger status can lag by minutes, so trust last_sync".format(configuration.get("type"), configuration.get("connectionStatus")))
 
 
 def main():  # pragma: no cover
@@ -1215,6 +1303,8 @@ def main():  # pragma: no cover
     group.add_argument("--resume-schedule", action="store_true", help="Hand the charger back to its own schedule")
     group.add_argument("--lock", action="store_true", help="Lock the charger")
     group.add_argument("--unlock", action="store_true", help="Unlock the charger")
+    group.add_argument("--ocpp", choices=["on", "off"], default=None, help="Connect the charger to its OCPP backend (on) or hand it to the Wallbox cloud (off), then read it back")
+    group.add_argument("--force-hold", type=int, default=None, metavar="MINUTES", help="Hold the charger off for this many minutes as a slot cancelled for an export would (OCPP off, then paused), then hand it back. Ctrl-C hands back early")
     group.add_argument("--max-current", type=int, default=None, help="Set the maximum charging current in amps")
     group.add_argument("--eco-smart", choices=ECO_SMART_OPTIONS, default=None, help="Set the Eco-Smart mode")
     args = parser.parse_args()
@@ -1225,6 +1315,9 @@ def main():  # pragma: no cover
     except WallboxError as exc:
         # A refused control or a failed read is an answer, not a crash
         print("\nWallbox call failed: {}".format(exc))
+    except KeyboardInterrupt:
+        # asyncio.run re-raises an interrupt it has already handled once the run has finished
+        pass
 
 
 if __name__ == "__main__":
