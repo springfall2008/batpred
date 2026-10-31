@@ -93,6 +93,7 @@ from tests.test_plan_version_replace import run_plan_version_replace_tests
 from tests.test_pv_calibration_clipping import run_pv_calibration_clipping_tests
 from tests.test_pv_calibration_day_scaling import run_pv_calibration_day_scaling_tests
 from tests.test_export_commitment import run_export_commitment_tests
+from tests.test_export_threshold_per_step import run_export_threshold_per_step_tests
 from tests.test_optimise_export_copy import run_optimise_export_copy_tests
 from tests.test_energydataservice import run_energydataservice_tests
 from tests.test_iboost import run_iboost_smart_tests
@@ -854,6 +855,7 @@ def main():
         ("pv_calibration_clipping", run_pv_calibration_clipping_tests, "PV calibration does not learn inverter clipping as forecast error", False),
         ("pv_calibration_day_scaling", run_pv_calibration_day_scaling_tests, "PV calibration per-day scaling keeps dull days at raw x adjustment", False),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
+        ("export_threshold_per_step", run_export_threshold_per_step_tests, "metric_min_improvement_export charged per 5 minutes of export", False),
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),

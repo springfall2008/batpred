@@ -371,10 +371,13 @@ This alternative plan is only kept if it does not increase the overall plan metr
 
 ## Battery margins and metrics options
 
-**input_number.predbat_best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep the battery above for the Predbat plan.
-This is a soft constraint only that's used for longer-term planning and is ignored for the forthcoming first 4 hours of the plan.
-As this is not used for short-term planning your SoC can drop below this - use **input_number.predbat_best_soc_min** if you want to force all charges to be above a set level.
+**input_number.predbat_best_soc_keep** is the battery level in kWh that Predbat will try to keep the battery above in the plan.
+This is a soft constraint: for each hour the planned SoC spends below it, the plan is charged the shortfall in kWh times the import rate at that time, scaled by **input_number.predbat_best_soc_keep_weight**. The plan only goes below it when doing so saves more than that.
+It is an absolute level, not an amount above your reserve, so a value at or below your battery's reserve level (in kWh) has no effect.
+The charge fades in over the first 4 hours of the plan, so the next few hours are planned mostly on cost. The exception is once a planned forced export has started - from then on it applies in full, which stops an evening export from taking the battery below this level.
+As it is a soft constraint your SoC can still drop below it - use **input_number.predbat_best_soc_min** if you want to force all charges to be above a set level.
 It's usually good to have best_soc_keep set to 0kWh to use your entire battery, values above zero will end up costing more money but will ensure you have some spare battery kept back for emergency use.
+A value a little above your reserve (for example the reserve plus 0.3-0.5kWh) is usually enough to stop an evening export emptying the battery and leaving the house importing at the peak rate.
 
 **input_number.predbat_best_soc_keep_weight** (_expert_mode_) Is used to tune how strongly you want the keep metric to apply.
 A value of 0 would essentially ignore keep while higher values will make it more important to always stay above your keep threshold even if it costs
@@ -406,10 +409,12 @@ If you use **input_number.predbat_pv_metric10_weight** then you probably don't n
 Do not use it if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
 
-**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced export for.
-A value of 0.1p is the default which prevents any marginal exports as they must be worth at least 0.1 pence for a slot (less for shorter slots).
-If you increase this value (e.g. you only want to force export if very profitable), then exports will become less common.
-The value is in pence per slot of export time.
+**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets how much a forced export has to earn, in pence per slot (30 minutes) of export time, scaled down for exports at lower power.
+Every 5 minutes of a planned export has to earn its share of this, so an export is shortened, or dropped, where its later minutes would earn less than that.
+For example at 0.5p each extra 5 minutes of export must earn about 0.08p, and at 3p about 0.5p.
+A value of 0.1p is the default, which only removes export that earns almost nothing.
+If you increase this value (e.g. you only want to force export if it is clearly profitable), then exports will become shorter and less common.
+An export that is already running is not shortened by this setting.
 
 **input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum pence cost improvement it's worth doing an export freeze for.
 A value of 0.1p is the default which prevents any marginal freezes as they must be worth at least 0.1 pence for a slot duration (less for shorter slots).
