@@ -847,8 +847,21 @@ class Inverter:
             self.base.args["scheduled_discharge_enable"][self.id] = self.create_entity("scheduled_discharge_enable", "on")
 
         if not self.inv_has_reserve_soc:
-            self.create_missing_arg("reserve", self.reserve)
-            self.base.args["reserve"][self.id] = self.create_entity("reserve", self.reserve, device_class=None, uom="%", icon="mdi:battery-lock")
+            # The dummy is a percentage, read back above as reserve_percent_current, so it is seeded with
+            # reserve_percent - seeding it with the kWh self.reserve fed kWh to the balancer as a percent (#5850)
+            self.create_missing_arg("reserve", self.reserve_percent)
+            reserve_entity = self.create_entity("reserve", self.reserve_percent, device_class=None, uom="%", icon="mdi:battery-lock")
+            self.base.args["reserve"][self.id] = reserve_entity
+            # create_entity() keeps a state that already exists, so a dummy an earlier version seeded in kWh
+            # would never be corrected. There is no device-side reserve to preserve: Predbat owns this value,
+            # and the only writes it makes here (adjust_reserve(0), clamped up to reserve_percent) are this number
+            if self.base.get_arg("reserve", default=None, index=self.id, required_unit="%") != self.reserve_percent:
+                self.base.set_state_wrapper(reserve_entity, state=self.reserve_percent, attributes=self.created_attributes[reserve_entity])
+                # The read near the top of this pass took the stale value, so take it again rather than report it
+                # for a whole cycle. Only on a write: with a literal reserve (GH#5003) the new dummy already reads back
+                # equal, so the literal still stands as the current reserve
+                self.reserve_percent_current = max(self.base.get_arg("reserve", default=battery_min_soc, index=self.id, required_unit="%"), battery_min_soc)
+                self.reserve_current = dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         if not self.inv_has_target_soc:
             self.create_missing_arg("charge_limit", 100)
