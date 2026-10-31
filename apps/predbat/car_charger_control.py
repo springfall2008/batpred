@@ -1032,14 +1032,25 @@ class CarChargerControl:
 
         Repeated each cycle until it confirms. One still owed FORCE_HOLD_SAFETY_MINUTES after the hold's end
         is warned about once, and goes on being retried.
+
+        Until it confirms, the planner goes on hearing the car is held, a few minutes ahead at a time: a hand-back
+        can take minutes to land (a Wallbox reconnecting to Octopus over OCPP took about 7), and meanwhile the car
+        sits idle inside a live dispatch, which the "in a dispatch but not charging" check would take as the
+        dispatch failing and cancel its slots - and their cheap rate.
         """
         hold = self.charger_control_force_holds[key]
         handed_back = False
+        if hold["stopped"]:
+            # No longer confirmed stopped once a resume may have gone out, applied or not, so if the hold is
+            # wanted again before the hand-back confirms - the switch back on, read only over - it pauses afresh
+            hold["stopped"] = False
+            await self.charger_control_save()
         try:
             await self.charger_control_force_resume(handle, hold["saved"] or {})
             handed_back = await self.charger_control_force_handed_back(handle, hold["saved"] or {})
         finally:
             if not handed_back:
+                self.charger_control_set_force_hold_until(hold["car"], now + timedelta(minutes=FORCE_HOLD_LEAD_MINUTES))
                 end = self.charger_control_force_hold_end(hold)
                 if not hold["warned"] and now >= end + timedelta(minutes=FORCE_HOLD_SAFETY_MINUTES):
                     hold["warned"] = True

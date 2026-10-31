@@ -1460,6 +1460,43 @@ def test_cancelled_windows_are_merged():
     assert windows == [(_at(2, 0), _at(2, 45)), (_at(3, 0), _at(3, 30)), (_at(4, 0), _at(4, 30))], windows
 
 
+def test_force_hold_pauses_again_when_wanted_mid_hand_back():
+    """Switched off then on again before the hand-back confirms: the charger is paused and verified again."""
+    charger = FakeCharger("a")
+    charger.handed_back = False
+    component = _held_component([charger])
+    run_async(component.charger_control_tick(_at(2, 0)))
+    component.args["car_charging_cancel_for_export"] = False
+    run_async(component.charger_control_tick(_at(2, 5)))
+    assert _force_commands(component) == [("a", "force_pause"), ("a", "force_resume")], component.commands
+    assert component.charger_control_force_holds["a"]["stopped"] is False, component.charger_control_force_holds
+    component.args["car_charging_cancel_for_export"] = True
+    charger.stop_after = 3
+    run_async(component.charger_control_tick(_at(2, 6)))
+    assert _force_commands(component)[-1] == ("a", "force_pause"), component.commands
+    assert component.charger_control_force_holds["a"]["stopped"] is False
+    run_async(component.charger_control_tick(_at(2, 7)))
+    assert component.charger_control_force_holds["a"]["stopped"] is True, component.charger_control_force_holds
+    assert component.base.car_force_hold_until == {0: _at(2, 30)}, component.base.car_force_hold_until
+
+
+def test_force_hold_until_kept_while_hand_back_unconfirmed():
+    """The planner goes on hearing the car is held while a hand-back is still to confirm, and stops once it has."""
+    charger = FakeCharger("a")
+    charger.handed_back = False
+    component = _held_component([charger])
+    run_async(component.charger_control_tick(_at(2, 0)))
+    for minute in (30, 35, 50):
+        now = _at(2, minute)
+        run_async(component.charger_control_tick(now))
+        until = component.base.car_force_hold_until.get(0)
+        assert until is not None and until > now, (minute, until)
+        assert until.utcoffset() == datetime.timedelta(0), until
+    charger.handed_back = True
+    run_async(component.charger_control_tick(_at(2, 51)))
+    assert component.base.car_force_hold_until == {}, component.base.car_force_hold_until
+
+
 def run_car_charger_control_tests(my_predbat=None):
     """Run the shared charger control tests. Returns True on failure."""
     print("**** Running car charger control tests ****")
@@ -1542,4 +1579,6 @@ def run_car_charger_control_tests(my_predbat=None):
     test_force_hold_busy()
     test_end_force_hold_drops_without_a_resume()
     test_cancelled_windows_are_merged()
+    test_force_hold_pauses_again_when_wanted_mid_hand_back()
+    test_force_hold_until_kept_while_hand_back_unconfirmed()
     return False
