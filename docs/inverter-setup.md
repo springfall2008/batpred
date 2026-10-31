@@ -637,6 +637,8 @@ Hanchu publish no API specification, so this integration was built by reading op
 
 Copy the template [hanchu.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu.yaml) over your `apps.yaml` and set `hanchu_account` and `hanchu_password` (keep them in `secrets.yaml` - see [Storing secrets](apps-yaml.md#storing-secrets)). With `hanchu_automatic: True` Predbat finds your inverter and wires up its sensors and controls for you. Set `hanchu_control_enable: False` to monitor only.
 
+If you set `load_today`, `import_today`, `export_today` or `pv_today` in `apps.yaml` yourself, your entry is kept and the automatic setup fills in only the ones you leave out. This is useful when the Hanchu meter does not see all of your import - for example an EV charger wired outside it - so you can point `import_today` at your smart meter's daily consumption sensor instead. The sensor must be a cumulative kWh total for the day that Home Assistant records history for.
+
 ### Hanchu ESS Cloud inverter control
 
 - **Timed slots in User-defined mode.** Predbat drives the inverter through its three charge and three discharge time slots, and sets the User-defined work mode (3) whenever it writes a window. If your inverter accepts the windows but ignores them, set `hanchu_work_mode_control: False`, choose the mode that does honour them yourself, and please report it.
