@@ -1604,6 +1604,20 @@ def test_transport_ocpp_error_hides_the_password():
     print("  ✓ A failed OCPP switch does not leak the password")
 
 
+def test_transport_ocpp_incomplete_configuration_sends_nothing():
+    """A configuration missing a field is never written back, which would blank the stored backend settings."""
+    for broken, missing in (({"address": "wss://x", "chargePointIdentity": "id-1"}, "password"), ({"address": "wss://x", "chargePointIdentity": "", "password": "pw"}, "chargePointIdentity"), ({}, "address")):
+        session, calls = _session([_response(dict(broken)), _response({})])
+        with patch("aiohttp.ClientSession", return_value=session), patch("wallbox.record_api_call"):
+            try:
+                run_async(_signed_in_transport().set_ocpp_mode(101, False))
+                raise AssertionError("Expected WallboxApiError")
+            except WallboxApiError as exc:
+                assert missing in str(exc) and "pw" not in str(exc), str(exc)
+        assert [call["method"] for call in calls] == ["GET"], calls
+    print("  ✓ An incomplete OCPP configuration is not written back")
+
+
 def test_ocpp_switch_published_and_controls():
     """The OCPP switch is on for an OCPP charger, off otherwise, and its controls are queued."""
     component = _started_component({101: _status(mode="ocpp"), 202: _status()})
@@ -1618,7 +1632,7 @@ def test_ocpp_switch_published_and_controls():
     run_async(component.run(60, False))
     assert component.transport.calls[0] == ("set_ocpp_mode", 101, False), component.transport.calls
     run_async(component.switch_event_handler("switch.predbat_wallbox_101_ocpp", "turn_on"))
-    assert ("set_ocpp_mode", 101, True) in component.transport.calls
+    assert component.transport.calls[-1] == ("set_ocpp_mode", 101, True) and component.transport.count("set_ocpp_mode") == 2, component.transport.calls
     print("  ✓ The OCPP switch is published and controls the connection")
 
 
@@ -1983,6 +1997,7 @@ def test_wallbox(my_predbat=None):
     test_transport_get_reads_any_path()
     test_transport_ocpp_requests()
     test_transport_ocpp_error_hides_the_password()
+    test_transport_ocpp_incomplete_configuration_sends_nothing()
     test_ocpp_switch_published_and_controls()
     test_friendly_names_carry_the_charger_name()
     test_friendly_names_without_a_usable_charger_name()

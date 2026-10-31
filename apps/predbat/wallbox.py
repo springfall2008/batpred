@@ -454,6 +454,10 @@ class WallboxTransport:
         """
         configuration = await self.get_ocpp_configuration(charger_id)
         body = {key: configuration.get(key) for key in ("address", "chargePointIdentity", "password")}
+        missing = [key for key, value in body.items() if not value]
+        if missing:
+            # Writing back a blank would wipe the stored backend settings, so send nothing. Names only, never values
+            raise WallboxApiError("the OCPP configuration of charger {} has no {}, so the connection was not changed".format(charger_id, ", ".join(missing)))
         body["type"] = "ocpp" if ocpp else "wallbox"
         return await self._api("POST", "v3/chargers/{}/ocpp-configuration".format(charger_id), body=body, write=True)
 
