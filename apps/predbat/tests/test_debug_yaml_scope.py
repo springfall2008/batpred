@@ -14,6 +14,7 @@ import os
 import re
 import tracemalloc
 
+import numpy as np
 import yaml
 
 from coordinator import Coordinator
@@ -512,6 +513,113 @@ def test_old_dump_with_a_log_gate_loads(my_predbat=None):
     return 1 if failed else 0
 
 
+def test_numpy_values_dump_as_plain_values(my_predbat=None):
+    """
+    A numpy value in the debug dict must be written as the plain number or list it holds.
+
+    PyYAML writes a numpy scalar as a pickled object, and its dtype's state is a tuple, which DebugYamlDumper
+    writes as a list. A fresh dtype refuses that list, so every dump carrying one failed to load anywhere
+    ("SystemError: bad argument to internal function"). The Load ML forecast published numpy scalars.
+
+    Mutation check: dropping the numpy representer from DebugYamlDumper fails this.
+    """
+    failed = False
+    print("**** Testing numpy values dump as plain values ****")
+
+    debug = {
+        "results": {"2026-10-31T18:05:00+0000": np.float64(10.01), "2026-10-31T18:10:00+0000": np.float32(2.5)},
+        "count": np.int64(3),
+        "flag": np.bool_(True),
+        "array": np.array([1.5, 2.5]),
+    }
+    stream = io.StringIO()
+    dump_debug_yaml(debug, stream)
+    text = stream.getvalue()
+
+    if "numpy" in text:
+        print("ERROR: the debug yaml still names numpy:\n{}".format(text))
+        failed = True
+    try:
+        loaded = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        print("ERROR: a debug yaml with numpy values does not load with safe_load: {}".format(e))
+        return 1
+
+    expected = {"results": {"2026-10-31T18:05:00+0000": 10.01, "2026-10-31T18:10:00+0000": 2.5}, "count": 3, "flag": True, "array": [1.5, 2.5]}
+    if loaded != expected:
+        print("ERROR: expected {}, got {}".format(expected, loaded))
+        failed = True
+
+    if not failed:
+        print("PASS: numpy values dump as plain values")
+    return 1 if failed else 0
+
+
+# Two Load ML forecast values exactly as Predbat wrote them into a debug yaml before numpy values were
+# written as plain numbers, with the dtype anchored on the first and aliased by the second.
+# cspell:disable
+OLD_DUMP_WITH_NUMPY = """results:
+  2026-10-31T18:05:00+0000: !!python/object/apply:numpy._core.multiarray.scalar
+  - &id004 !!python/object/apply:numpy.dtype
+    args:
+    - f8
+    - false
+    - true
+    state:
+    - 3
+    - <
+    - null
+    - null
+    - null
+    - -1
+    - -1
+    - 0
+  - !!binary |
+    L26jAbwFJEA=
+  2026-10-31T18:10:00+0000: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id004
+  - !!binary |
+    bef7qfESJEA=
+"""
+# cspell:enable
+
+
+def test_old_dump_with_numpy_values_loads(my_predbat=None):
+    """
+    A debug yaml that already carries numpy scalars must still replay.
+
+    Those dumps hold each dtype's state as a list, which a fresh dtype refuses. Users keep attaching them
+    to bug reports after the fix ships, so DEBUG_YAML_LOADER hands the state over as the tuple it was.
+
+    Mutation check: dropping the numpy.dtype constructor from DebugYamlLoader fails this.
+    """
+    failed = False
+    print("**** Testing an old debug yaml carrying numpy values loads with the replay loader ****")
+
+    # First confirm the hazard is real, so a pass below means the loader did something
+    try:
+        yaml.load(OLD_DUMP_WITH_NUMPY, Loader=getattr(yaml, "CLoader", yaml.UnsafeLoader))
+        print("ERROR: the old numpy block loaded with PyYAML's own unsafe loader, so the hazard this guards is gone")
+        failed = True
+    except SystemError:
+        pass
+
+    try:
+        debug = yaml.load(OLD_DUMP_WITH_NUMPY, Loader=DEBUG_YAML_LOADER)
+    except (yaml.YAMLError, SystemError) as e:
+        print("ERROR: the replay loader cannot load an old dump carrying numpy values: {}".format(e))
+        return 1
+
+    values = list(debug.get("results", {}).values())
+    if len(values) != 2 or abs(values[0] - 10.0112) > 0.001 or abs(values[1] - 10.0370) > 0.001:
+        print("ERROR: expected the two forecast values 10.0112 and 10.0370, got {}".format(values))
+        failed = True
+
+    if not failed:
+        print("PASS: an old dump's numpy values load")
+    return 1 if failed else 0
+
+
 def run_debug_yaml_scope_tests(my_predbat):
     """Run every create_debug_yaml() scope test, returning a non-zero count on failure."""
     failed = 0
@@ -524,4 +632,6 @@ def run_debug_yaml_scope_tests(my_predbat):
     failed += test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat)
     failed += test_debug_yaml_with_a_populated_log_gate_loads(my_predbat)
     failed += test_old_dump_with_a_log_gate_loads(my_predbat)
+    failed += test_numpy_values_dump_as_plain_values(my_predbat)
+    failed += test_old_dump_with_numpy_values_loads(my_predbat)
     return failed
