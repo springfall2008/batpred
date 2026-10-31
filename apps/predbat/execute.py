@@ -146,6 +146,52 @@ def export_target_percent_or_zero(export_limit):
     return 0 if target is None else target
 
 
+def split_change_by_rate(change_kwh, members):
+    """Split a fleet-wide change in stored energy across the inverters by their rate share, within each one's room.
+
+    Each inverter is given its share of the change in proportion to its rate (its charge rate when charging, its
+    export or discharge rate when exporting), so that they all finish together. An inverter that would go past its own limit (its capacity when
+    charging, its reserve when exporting) is held at that limit and the energy it could not take is shared out
+    among the others in the same proportion, repeating until nothing is left or every inverter is at its limit.
+    When no inverter reaches a limit this is exactly the plain rate split.
+
+    This is deliberately not a split by capacity that tries to end the inverters level: an inverter that is
+    ahead of the fleet's SoC % but still has room keeps its share, which is what stops the premature charge
+    pause described in #1484 (fixed by #1492).
+
+    Parameters:
+    - change_kwh (float): the fleet change in stored energy, positive to charge and negative to export
+    - members (list): one (soc_kw, soc_max, reserve, rate) tuple per inverter, where rate is the rate that
+      inverter delivers at: its charge rate when charging, its export or discharge rate when exporting
+
+    Returns:
+    - list: the target kWh for each inverter, in the same order. If the change is more than the inverters
+      have room for, each is taken to its limit.
+    """
+    direction = 1 if change_kwh >= 0 else -1
+    room = [max(soc_max - soc_kw, 0.0) if direction > 0 else max(soc_kw - reserve, 0.0) for soc_kw, soc_max, reserve, _rate in members]
+    moved = [0.0] * len(members)
+    open_members = list(range(len(members)))
+    remaining = abs(change_kwh)
+    while open_members and remaining > 1e-9:
+        total_rate = sum(members[index][3] for index in open_members)
+        if total_rate <= 0:
+            break
+        shares = {index: remaining * members[index][3] / total_rate for index in open_members}
+        full = [index for index in open_members if shares[index] > room[index]]
+        if not full:
+            # Nothing else reaches a limit, so every inverter still open takes its share and that is the end of it
+            for index in open_members:
+                moved[index] = shares[index]
+            break
+        # Inverters that cannot take their share are filled to their limit and the rest is shared among the others
+        for index in full:
+            remaining -= room[index]
+            moved[index] = room[index]
+            open_members.remove(index)
+    return [member[0] + direction * amount for member, amount in zip(members, moved)]
+
+
 class Execute:
     """Execution mixin for applying optimised plans to physical inverters.
 
@@ -319,6 +365,18 @@ class Execute:
         # the windows. With both off - Monitor, Control SoC only - an unclaimed rate is left
         # exactly as it is. A rate something DID claim, executor or balancer, is always written.
         reset_rates = intent.get("reset_rates", True)
+
+        # Rates are written with int(), which truncates: a calculated 1819.9999999999998 W is written as 1819 W, not 1820 W. This is at
+        # most 1 W and makes no practical difference to an inverter. It is however inconsistent with the rest of the execute() code and with the inverter,
+        # which uses round (int(round(...)) for the curve limits, and int(rate + 0.5) in Inverter.adjust_charge_rate() and adjust_discharge_rate()),
+        # but the value reaching those is already a whole number, so the truncation here is what takes effect.
+        #
+        # This inconsistency has been left as-is because writing a rounded rate would change the written value by 1 W wherever a calculated rate falls
+        # just under a whole number, and the expected rates in existing test scenarios would need re-checking.
+        #
+        # When writing a test that expects a calculated rate, work it out the way the code does, floating point included: 5200 * 0.7 is
+        # 3639.9999999999995, so half of it is written as 1819, not 1820. Either expect the truncated value or choose inputs that give
+        # exact values, such as a power fraction of 0.5. Otherwise the test will expect a rate 1 W above the one written and fill fail.
         if charge_rate is None:
             if reset_rates:
                 inverter.adjust_charge_rate(int(inverter.battery_rate_max_charge * MINUTE_WATT), notify=notify_charge)
@@ -1223,7 +1281,8 @@ class Execute:
     def adjust_battery_target_multi(self, inverter, soc, is_charging, is_exporting, isFreezeCharge=False, check=False):
         """
         Adjust target SoC based on the current SoC of all the inverters accounting for their
-        charge rates and battery capacities
+        charge rates (export or discharge rates when exporting) and battery capacities. What an inverter
+        has no room for is given to the others, see split_change_by_rate()
         """
         target_kwh = dp2(self.soc_max * (soc / 100.0))
         soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
@@ -1242,8 +1301,27 @@ class Execute:
                 self.log("Inverter {} adjust target SoC for export to {}% based on requested all inverter SoC {}%".format(inverter.id, dp0(new_soc_percent), soc))
         else:
             add_kwh = target_kwh - self.soc_kw
-            add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
-            new_soc_kwh = max(min(inverter.soc_kw + add_this, inverter.soc_max), inverter.reserve)
+            # Split the change by rate share so the inverters finish together, giving what one has no room for to the others.
+            # The rate is the one each inverter will actually deliver at: the charge rate when charging, the export rate for a forced
+            # export (inverter_limit_export, which is what the plan models and allocate_fleet_export_rates() allocates by) and the
+            # discharge rate for any other discharge. This used the charge rate for all three, which misjudged any inverter whose
+            # discharge or export rate differs from its charge rate, and gave an inverter limited to a rate of 0 a share of a
+            # change it could not deliver.
+            if inverter not in self.inverters:
+                raise ValueError(
+                    "adjust_battery_target_multi: inverter {} is not one of the {} inverters in self.inverters, so the fleet target cannot be shared out between them. "
+                    "The split needs every inverter in the fleet, each with its SoC, capacity, reserve and charge/discharge rates.".format(inverter.id, len(self.inverters))
+                )
+            if add_kwh >= 0:
+                rates = [inv.battery_rate_max_charge for inv in self.inverters]
+            elif is_exporting:
+                rates = [inv.battery_rate_max_export for inv in self.inverters]
+            else:
+                rates = [inv.battery_rate_max_discharge for inv in self.inverters]
+            members = [(inv.soc_kw, inv.soc_max, inv.reserve, rate) for inv, rate in zip(self.inverters, rates)]
+            new_soc_kwh = split_change_by_rate(add_kwh, members)[self.inverters.index(inverter)]
+            new_soc_kwh = max(min(new_soc_kwh, inverter.soc_max), inverter.reserve)
+            add_this = new_soc_kwh - inverter.soc_kw
             new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
             if not check:
                 self.log(

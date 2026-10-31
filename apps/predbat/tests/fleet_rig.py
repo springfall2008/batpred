@@ -12,7 +12,7 @@
 Heterogeneous multi-inverter fleet test rig (#4856 workstream 0).
 
 Every multi-inverter test up to now has used two identical inverters, which is exactly the
-case in which the fleet seams behave correctly, so none of the reported multi-inverter faults
+case in which the fleet seems to behave correctly, so none of the reported multi-inverter faults
 are reachable from the test suite. This builds a fleet of arbitrary count, capacity, rate and
 starting SoC out of the TestHAInterface mock, using the real Inverter class and the real
 fetch_inverter_data() aggregation rather than hand-set fleet totals.
@@ -84,6 +84,13 @@ FLEET_FIXTURES = {
     "issue_4842": [FleetInverter(12.4), FleetInverter(9.52), FleetInverter(8.19, rate_max=3000)],
     # #3172 - an AC3 carrying two 9.5 kWh batteries alongside a HY5.0 carrying one.
     "issue_3172": [FleetInverter(19.0, rate_max=3000), FleetInverter(9.5, rate_max=3000)],
+    # #830 as the reporter actually runs it - the 5.2 kWh battery is only 80% usable, so battery_scaling 0.8
+    # makes it 4.16 kWh. issue_830 above leaves it at 5.2 kWh, which is what the issue's tables were worked on.
+    "issue_830_scaled": [FleetInverter(9.5), FleetInverter(5.2, battery_scaling=0.8)],
+    # A GivEnergy AIO (13.5 kWh, 6 kW) kept as the backup battery plus a Gen3 hybrid (19.0 kWh, about 4 kW),
+    # reported on #4856. Their reserves differ on purpose (25% and 4%), which is a scenario setting not a
+    # hardware one, so a test applies them to Inverter.reserve itself.
+    "aio_hybrid": [FleetInverter(13.5, rate_max=6000, inverter_limit=6000), FleetInverter(19.0, rate_max=4000)],
 }
 
 
