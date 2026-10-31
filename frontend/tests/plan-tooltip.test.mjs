@@ -54,3 +54,21 @@ test('repeated measurement resets old shifts and respects a zoomed visual viewpo
   assert.equal(result.left, 108)
   assert.equal(result.right, 492)
 })
+
+test('fixed mobile action sheets are not constrained to the table', () => {
+  const menuSource = source.match(/function constrainActionMenu\(menu: HTMLDivElement \| null\) \{[\s\S]*?\n  \}/)?.[0]
+  assert.ok(menuSource)
+  let calls = 0
+  const context = {
+    getComputedStyle: (element) => ({ position: element.position }),
+    constrainFloatingElement: () => { calls += 1 }
+  }
+  vm.createContext(context)
+  vm.runInContext(ts.transpileModule(menuSource, {}).outputText, context)
+  context.constrainActionMenu({ position: 'fixed' })
+  assert.equal(calls, 0)
+  context.constrainActionMenu({ position: 'absolute' })
+  assert.equal(calls, 1)
+  context.constrainActionMenu(null)
+  assert.equal(calls, 1)
+})
