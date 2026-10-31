@@ -45,7 +45,7 @@ from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_s
 from tests.test_multi_car_iog import run_multi_car_iog_tests
 from tests.test_car_manual_soc import run_car_manual_soc_tests
 from tests.test_car_max_rate import run_car_max_rate_tests
-from tests.test_fetch_config_options import test_fetch_config_options
+from tests.test_fetch_config_options import test_fetch_config_options, test_save_restore_options_are_per_engine
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_heterogeneous_fleet import test_heterogeneous_fleet
 from tests.test_window2minutes import test_window2minutes
@@ -573,6 +573,7 @@ def main():
         ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
         ("fetch_url_cached", test_fetch_url_cached, "Fetch URL cached tests", False),
         ("fetch_config_options", test_fetch_config_options, "Fetch config options tests", False),
+        ("save_restore_options_per_engine", test_save_restore_options_are_per_engine, "Save/restore options are per engine tests", False),
         ("load_free_slot", test_load_free_slot, "Load free slot tests", False),
         ("octopus_slots_change", test_octopus_slots_change, "Octopus slots change-detection signature tests (in-progress re-clock vs genuine change)", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
