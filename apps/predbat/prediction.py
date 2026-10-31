@@ -681,14 +681,17 @@ class Prediction(PredictionBatch):
         inverter_hybrid = self.inverter_hybrid
         inverter_loss_recp = 1 / inverter_loss
 
-        enable_standing_charge = save and (save in ["best", "base", "base10", "best10", "test", "yesterday", "yesterday10"])
+        enable_standing_charge = save and (save in ["best", "base", "base10", "best10", "best90", "test", "yesterday", "yesterday10"])
         enable_save_stats = save and (save in ["best", "test", "compare", "yesterday"])
+        # The final plan's PV10 and PV90 runs keep only their per-minute SoC and metric, for the plan table's
+        # scenario tooltips (#5871) - car holds and the other per-minute stats stay the expected run's alone
+        enable_save_scenario = save and (save in ["best10", "best90"])
         car_enable = self.num_cars > 0
         car_energy_reported_load = self.car_energy_reported_load
         inverter_limit = self.inverter_limit * step
         export_limit = self.export_limit * step
         pv_ac_limit = self.pv_ac_limit * step
-        set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
+        set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "best90", "test"])
         carbon_enable = self.carbon_enable
         reserve = self.reserve
         soc_max = self.soc_max
@@ -851,9 +854,10 @@ class Prediction(PredictionBatch):
                     predict_car_soc_time[car_n][stamp] = round(car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0, 2)
                 predict_iboost[stamp] = iboost_today_kwh
                 record_time[stamp] = 0 if record else soc_max
-                if enable_save_stats:
+                if enable_save_stats or enable_save_scenario:
                     self.predict_soc_best[minute] = round(soc, 3)
                     self.predict_metric_best[minute] = round(metric, 3)
+                if enable_save_stats:
                     self.predict_iboost_best[minute] = round(iboost_today_kwh, 2)
                     self.predict_carbon_best[minute] = round(carbon_g, 0)
                     self.predict_clipped_best[minute] = round(clipped_today, 2)

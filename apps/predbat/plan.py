@@ -2498,6 +2498,21 @@ class Plan:
                 save="best10" if publish else None,
                 end_record=self.end_record,
             )
+            # PV90 on the final plan too, so the plan table can show all three scenarios (#5871). Run before
+            # the nominal run, which must stay last as it leaves the expected-case state behind
+            if publish and self.pv_metric90_weight > 0:
+                self.run_prediction(
+                    self.charge_limit_best,
+                    self.charge_window_best,
+                    self.export_window_best,
+                    self.export_limits_best,
+                    PV_SCENARIO_PV90,
+                    save="best90",
+                    end_record=self.end_record,
+                )
+            elif publish:
+                self.predict_soc_best90 = {}
+                self.predict_metric_best90 = {}
             (
                 best_metric,
                 import_kwh_battery,
@@ -2541,7 +2556,7 @@ class Plan:
                 text_lines = text.split("\n")
                 for line in text_lines:
                     self.log(line)
-                self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
+                self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record, show_scenarios=True)
 
         # Record planning duration for SLO metrics
         self.plan_last_duration_seconds = time.time() - plan_start_time
@@ -5495,6 +5510,12 @@ class Plan:
                 self.predict_carbon_best = pred.predict_carbon_best
                 self.predict_clipped_best = pred.predict_clipped_best
                 self.predict_car_hold_best = pred.predict_car_hold_best
+            elif save == "best10":
+                self.predict_soc_best10 = pred.predict_soc_best
+                self.predict_metric_best10 = pred.predict_metric_best
+            elif save == "best90":
+                self.predict_soc_best90 = pred.predict_soc_best
+                self.predict_metric_best90 = pred.predict_metric_best
 
             if save:
                 self.log(

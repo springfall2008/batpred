@@ -417,6 +417,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predict_iboost_best = {}
         self.predict_car_hold_best = {}
         self.predict_metric_best = {}
+        # The final plan's SoC and metric under PV10 and PV90, shown beside the expected ones in the plan table (#5871)
+        self.predict_soc_best10 = {}
+        self.predict_metric_best10 = {}
+        self.predict_soc_best90 = {}
+        self.predict_metric_best90 = {}
         self.metric_min_improvement = 0.0
         self.metric_min_improvement_export = 0.1
         self.metric_min_improvement_export_freeze = 0.1

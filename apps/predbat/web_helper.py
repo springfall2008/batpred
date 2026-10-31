@@ -7210,17 +7210,17 @@ def get_plan_renderer_js():
                 if (row.pv_forecast >= 0.1) {
                     pvText += '&#9728;';
                 }
-                html += `<td id=pv bgcolor=${row.pv_color || '#FFFFFF'}>${pvText}</td>`;
+                html += `<td id=pv bgcolor=${row.pv_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'pv_forecast', row.pv_forecast)}>${pvText}</td>`;
 
                 // Load forecast (with 10% value in brackets if debug mode)
                 if (editable) {
-                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5, row.slot_minute);
+                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5, row.slot_minute, scenarioTitle(jsonData, row, 'load_forecast', row.load_forecast));
                 } else {
                     let loadText = row.load_forecast !== undefined ? row.load_forecast : '';
                     if (showDebug && row.load_forecast10 > 0) {
                         loadText += ` (${row.load_forecast10})`;
                     }
-                    html += `<td id=load bgcolor=${row.load_color || '#FFFFFF'}>${loadText}</td>`;
+                    html += `<td id=load bgcolor=${row.load_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'load_forecast', row.load_forecast)}>${loadText}</td>`;
                 }
 
                 // Clipped (only if debug)
@@ -7252,9 +7252,9 @@ def get_plan_renderer_js():
                 // SOC
                 const socSym = row.soc_sym || (row.soc_change > 0 ? '&nearr;' : (row.soc_change < 0 ? '&searr;' : '&rarr;'));
                 if (editable) {
-                    html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides, row.slot_minute);
+                    html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides, row.slot_minute, scenarioTitle(jsonData, row, 'soc_percent', row.soc_percent));
                 } else {
-                    html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}>${row.soc_percent}${socSym}</td>`;
+                    html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'soc_percent', row.soc_percent)}>${row.soc_percent}${socSym}</td>`;
                 }
 
                 // Cost change
@@ -7267,11 +7267,11 @@ def get_plan_renderer_js():
                 } else {
                     costStr = '&rarr;';
                 }
-                html += `<td id=cost bgcolor=${row.cost_color || '#FFFFFF'}>${costStr}</td>`;
+                html += `<td id=cost bgcolor=${row.cost_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'cost_change', costChange)}>${costStr}</td>`;
 
                 // Total cost
                 const totalCost = row.total_cost ? `${jsonData.currency_symbols[0]}${row.total_cost.toFixed(2)}` : '';
-                html += `<td id=total_cost bgcolor=#FFFFFF>${totalCost}</td>`;
+                html += `<td id=total_cost bgcolor=#FFFFFF${scenarioTitle(jsonData, row, 'total_cost', row.total_cost || 0)}>${totalCost}</td>`;
 
                 // Carbon (conditional)
                 if (jsonData.carbon_enable) {
@@ -7570,7 +7570,49 @@ def get_plan_renderer_js():
     }
 
     // Render load cell with dropdown for load adjustments
-    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue, slotMinute) {
+    // Tooltip listing one plan cell's value in every scenario the plan was scored against (#5871). name is the
+    // field's name in jsonData.scenario_fields and expected the cell's own value; empty when the row has no
+    // scenarios or every scenario has the same value for this cell.
+    function scenarioTitle(jsonData, row, name, expected) {
+        if (!row.scenarios || !jsonData.scenario_fields) {
+            return '';
+        }
+        // Positions come from the published field order, so the row lists can change shape without breaking this
+        const field = jsonData.scenario_fields.indexOf(name);
+        if (field < 0) {
+            return '';
+        }
+        const keys = Object.keys(row.scenarios).sort();
+        if (keys.every(key => row.scenarios[key][field] === expected)) {
+            return '';
+        }
+        const format = (value) => {
+            if (name === 'soc_percent') {
+                return `${value}%`;
+            }
+            if (name === 'pv_forecast' || name === 'load_forecast') {
+                return `${Number(value).toFixed(2)} kWh`;
+            }
+            if (name === 'cost_change') {
+                // Written as the Cost column is ("+5 p"); + 0 turns a rounded -0 into 0
+                const pence = Math.round(value * 100) + 0;
+                return `${pence >= 0 ? '+' : ''}${pence} ${jsonData.currency_symbols[1]}`;
+            }
+            // Written as this view's Total column is
+            return `${jsonData.currency_symbols[0]}${Number(value).toFixed(2)}`;
+        };
+        // The text goes inside a double-quoted attribute, so escape it (a currency symbol could carry a quote)
+        const escape = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const parts = [escape(`Expected ${format(expected)}`)];
+        for (const key of keys) {
+            const label = (jsonData.scenario_names && jsonData.scenario_names[key]) || `PV${key}`;
+            parts.push(escape(`${label} ${format(row.scenarios[key][field])}`));
+        }
+        // One scenario per line - &#10; is a line break inside a title attribute
+        return ` title="${parts.join('&#10;')}"`;
+    }
+
+    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue, slotMinute, titleAttr = '') {
         const dropdownId = `dropdown_${dropdownCounter++}`;
         const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_load_adjust.some(r => r.minutes === minutesFromMidnight);
@@ -7583,7 +7625,8 @@ def get_plan_renderer_js():
 
         const defaultLoadValue = manualLoadValue !== undefined ? manualLoadValue : 0.5;
         let html = `<td id=load data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
-        html += `${displayValue}${isOverride ? ' &#8526;' : ''}`;
+        // The scenario tooltip sits on the value, not the cell, so it doesn't cover the override menu
+        html += `<span${titleAttr}>${displayValue}</span>${isOverride ? ' &#8526;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += '<label>Adjust load (kWh):</label>';
@@ -7597,14 +7640,15 @@ def get_plan_renderer_js():
     }
 
     // Render SOC cell with dropdown for manual SOC targets (minimum floor and maximum ceiling)
-    function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides, slotMinute) {
+    function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides, slotMinute, titleAttr = '') {
         const dropdownId = `dropdown_${dropdownCounter++}`;
         const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_soc.some(r => r.minutes === minutesFromMidnight);
         const isOverrideMax = overrides.manual_soc_max.some(r => r.minutes === minutesFromMidnight);
 
         let html = `<td id=soc data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
-        html += `${socValue}${socSym}${isOverride ? ' &#8526;' : ''}${isOverrideMax ? ' &#11015;' : ''}`;
+        // The scenario tooltip sits on the value, not the cell, so it doesn't cover the override menu
+        html += `<span${titleAttr}>${socValue}${socSym}</span>${isOverride ? ' &#8526;' : ''}${isOverrideMax ? ' &#11015;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += '<label>Minimum SOC (%):</label>';
