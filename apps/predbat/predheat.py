@@ -27,6 +27,8 @@ from const import TIME_FORMAT
 
 MAX_INCREMENT = 100
 PREDICT_STEP = 5
+# Target setpoint used when no target-temperature history is available.
+DEFAULT_TARGET_TEMPERATURE = 21.5
 
 
 """
@@ -268,9 +270,9 @@ class PredHeat:
         total_weight = 0
         this_point = 0
 
-        # No data?
+        # No data? Use the caller's fallback when history is missing.
         if not data:
-            return 0
+            return default
 
         for days in self.days_previous:
             use_days = min(days, self.minute_data_age)
@@ -317,10 +319,10 @@ class PredHeat:
         if last_predict_minute:
             forecast_minutes = self.forecast_days * 24 * 60
             max_minutes = self.smart_thermostat_max_minutes
-            last_target_temp = self.get_historical(self.target_temperature, 0, default=20.0)
+            last_target_temp = self.get_historical(self.target_temperature, 0, default=DEFAULT_TARGET_TEMPERATURE)
             last_adjust_end = 0
             for minute in range(0, forecast_minutes, PREDICT_STEP):
-                target_temp = self.get_historical(self.target_temperature, minute, default=20.0)
+                target_temp = self.get_historical(self.target_temperature, minute, default=DEFAULT_TARGET_TEMPERATURE)
                 if target_temp > last_target_temp:
                     adjust = {}
                     adjust["from"] = last_target_temp
@@ -331,7 +333,7 @@ class PredHeat:
                     # The heating period lasts until the setpoint drops below the new target
                     period_end = forecast_minutes
                     for next_minute in range(minute + PREDICT_STEP, forecast_minutes, PREDICT_STEP):
-                        if self.get_historical(self.target_temperature, next_minute, default=20.0) < target_temp:
+                        if self.get_historical(self.target_temperature, next_minute, default=DEFAULT_TARGET_TEMPERATURE) < target_temp:
                             period_end = next_minute
                             break
 
@@ -361,7 +363,7 @@ class PredHeat:
             minute_absolute = minute + self.minutes_now
             external_temp = self.temperatures.get(minute, external_temp)
 
-            target_temp = self.get_historical(self.target_temperature, minute, default=20.0)
+            target_temp = self.get_historical(self.target_temperature, minute, default=DEFAULT_TARGET_TEMPERATURE)
 
             # Find the next temperature adjustment
             next_adjust = None
@@ -387,9 +389,9 @@ class PredHeat:
             # Thermostat model, override with current state also
             if minute == 0:
                 heating_on = heating_active
-            elif heating_on and temp_diff_inside <= -self.hysteresis_on:
+            elif heating_on and temp_diff_inside <= -self.hysteresis_off:
                 heating_on = False
-            elif not heating_on and temp_diff_inside >= self.hysteresis_off:
+            elif not heating_on and temp_diff_inside >= self.hysteresis_on:
                 heating_on = True
 
             heat_loss_current = self.heat_loss_watts * temp_diff_outside * PREDICT_STEP / 60.0
@@ -555,6 +557,13 @@ class PredHeat:
             self.record_status("Warn: Predheat: smart_thermostat_max_minutes {} is not a finite number".format(max_minutes), had_errors=True)
             return None
 
+    def get_heating_cop(self):
+        """Return the configured COP, preferring the documented key and retaining the legacy key."""
+        heating_cop = self.get_arg("heating_cop", None, domain="predheat")
+        if heating_cop is None:
+            heating_cop = self.get_arg("heat_cop", 0.9, domain="predheat")
+        return heating_cop
+
     def update_pred(self, scheduled):
         """
         Update the heat prediction
@@ -580,11 +589,11 @@ class PredHeat:
         self.max_days_previous = max(self.days_previous) + 1
         self.heating_energy_scaling = self.get_arg("heating_energy_scaling", 1.0, domain="predheat")
 
-        self.external_temperature, age_external = self.minute_data_entity(now_utc, "external_temperature", smoothing=True)
-        self.internal_temperature, age_internal = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True)
-        self.target_temperature, age_target = self.minute_data_entity(now_utc, "target_temperature")
-        self.heating_energy, age_energy = self.minute_data_entity(now_utc, "heating_energy", incrementing=True, smoothing=True, scaling=self.heating_energy_scaling)
-        self.minute_data_age = min(age_external, age_internal, age_target, age_energy)
+        self.external_temperature, _ = self.minute_data_entity(now_utc, "external_temperature", smoothing=True)
+        self.internal_temperature, _ = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True)
+        # Historical lookups use the target schedule, so its history alone sets the lookback.
+        self.target_temperature, self.minute_data_age = self.minute_data_entity(now_utc, "target_temperature")
+        self.heating_energy, _ = self.minute_data_entity(now_utc, "heating_energy", incrementing=True, smoothing=True, scaling=self.heating_energy_scaling)
 
         self.heat_energy_today = self.heating_energy.get(0, 0) - self.heating_energy.get(self.minutes_now, 0)
 
@@ -603,7 +612,7 @@ class PredHeat:
         self.heat_volume = self.get_arg("heat_volume", 200, domain="predheat")
         self.heat_max_power = self.get_arg("heat_max_power", 30000, domain="predheat")
         self.heat_min_power = self.get_arg("heat_min_power", 7000, domain="predheat")
-        self.heat_cop = self.get_arg("heat_cop", 0.9, domain="predheat")
+        self.heat_cop = self.get_heating_cop()
         self.smart_thermostat = self.get_arg("smart_thermostat", False, domain="predheat")
         self.smart_thermostat_max_minutes = self.get_smart_thermostat_max_minutes()
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")

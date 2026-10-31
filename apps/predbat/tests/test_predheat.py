@@ -335,3 +335,64 @@ def test_predheat_smart_thermostat(my_predbat):
             my_predbat.args["predheat"] = original_predheat_args
 
     return failed
+
+
+def test_predheat_pr5767_regressions(my_predbat):
+    """Pin the history fallback, hysteresis thresholds, and documented COP compatibility."""
+    failed = False
+    original_args = my_predbat.args.get("predheat")
+    try:
+        predheat = PredHeat(my_predbat)
+        predheat.days_previous = [2]
+        predheat.days_previous_weight = [1]
+        predheat.minute_data_age = 2
+        if predheat.get_historical({}, 0, default=21.5) != 21.5:
+            print("  ERROR: missing target history did not return its supplied fallback")
+            failed = True
+
+        # A 0.3 °C deficit must not start heating with the documented 0.5 °C
+        # on threshold. Equal indoor/outdoor temperatures and no available flow
+        # heat keep the model at that boundary for the full simulation.
+        stopped = _make_simulation(my_predbat, [])
+        stopped.target_temperature = {index: 20.0 for index in range(SIM_MINUTES + 1)}
+        stopped.internal_temperature = {0: 19.7}
+        stopped.external_temperature = {0: 19.7}
+        stopped.flow_temp = 40
+        stopped.heat_loss_watts = 0
+        stopped.heat_max_power = 0
+        stopped.heat_min_power = 0
+        stopped.run_simulation(40, False)
+        heat_to = list(stopped.published["predheat.heat_to_temp"]["results"].values())
+        if any(value != 0 for value in heat_to):
+            print("  ERROR: heating engaged before the hysteresis_on threshold")
+            failed = True
+
+        # An already-running thermostat must turn off at +0.1 °C, while the
+        # indoor temperature is held constant so the threshold is observable.
+        running = _make_simulation(my_predbat, [])
+        running.target_temperature = {index: 20.0 for index in range(SIM_MINUTES + 1)}
+        running.internal_temperature = {0: 20.15}
+        running.external_temperature = {0: 20.15}
+        running.flow_temp = 40
+        running.heat_loss_watts = 0
+        running.heat_max_power = 0
+        running.heat_min_power = 0
+        running.run_simulation(40, True)
+        heat_to = list(running.published["predheat.heat_to_temp"]["results"].values())
+        if len(heat_to) < 2 or heat_to[0] != 20.0 or heat_to[1] != 0:
+            print("  ERROR: heating did not turn off at the hysteresis_off threshold: {}".format(heat_to[:3]))
+            failed = True
+
+        for args, expected in [({"heating_cop": 3.7, "heat_cop": 2.0}, 3.7), ({"heat_cop": 2.0}, 2.0), ({}, 0.9)]:
+            my_predbat.args["predheat"] = args
+            got = PredHeat(my_predbat).get_heating_cop()
+            if got != expected:
+                print("  ERROR: COP args {} resolved to {}, expected {}".format(args, got, expected))
+                failed = True
+    finally:
+        if original_args is None:
+            my_predbat.args.pop("predheat", None)
+        else:
+            my_predbat.args["predheat"] = original_args
+
+    return failed

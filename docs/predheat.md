@@ -80,7 +80,7 @@ Set **internal_temperature** to point to one or more internal temperature sensor
 
 The **weather** configuration points to the Open Weather Map sensor by default so should work as-is.
 
-Set the **target_temperature** to point to a sensor that indicates what your boiler thermostat is set to, or manually enter the temperature setting here.
+Set the **target_temperature** to point to a sensor that indicates what your boiler thermostat is set to, or manually enter the temperature setting here. If no target-temperature history is available, Predheat uses 21.5 °C as the fallback setpoint.
 
 Set **smart_thermostat** to True if your thermostat starts the boiler ahead of time for the new target temperature or False for regular options.
 When enabled, Predheat models each rise in the scheduled target temperature over the forecast as a pre-heat: it works out how long the heating takes to reach the new target, using only the heating period the rise belongs to (until the target next falls below the new value), and raises the target that much earlier.
@@ -117,7 +117,7 @@ and not the maximum input energy. E.g. a heat pump with a COP of 4 might output 
 Set **hysteresis** To the amount of hysteresis in degrees applied by your thermostat when turning it on, the default is 0.5
 Set **hysteresis_off** To the amount of hysteresis in degrees applied by your thermostat when turning it off, the default is 0.1
 
-Set **heating_cop** to the nominal COP of your system. For a gas boiler use 1.0 (as the efficiency will be based on flow temperature) or for a heat pump set it to the best value which is likely around 4.0 (it will be scaled down for cold weather).
+Set **heating_cop** to the nominal COP of your system. For a gas boiler use 1.0 (as the efficiency will be based on flow temperature) or for a heat pump set it to the best value which is likely around 4.0 (it will be scaled down for cold weather). Existing configurations using **heat_cop** are still supported.
 
 Set **flow_temp** To the target flow temperature of your system, either via a sensor or as a fixed value. E.g. gas boilers are often set to say 60 or 70 degrees while heat pumps are much lower e.g. 30 or 40.
 
