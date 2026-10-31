@@ -6958,6 +6958,46 @@ async def test_helper_methods_main():
     else:
         print(f"✓ Null battery charge/discharge power treated as 0 (1500W)")
 
+    # Test 17: get_current_soc_battery_kwh - null SOC/remainings behave like missing fields
+    print("Test 17: get_current_soc_battery_kwh - null SOC/remainings behave like missing fields")
+    api17 = MockSolaxAPI()
+    api17.initialize(client_id="test", client_secret="test", region="eu")
+
+    api17.plant_batteries["plant17"] = ["BAT001", "BAT002"]
+    api17.realtime_device_data["BAT001"] = {"batterySOC": 80, "batteryRemainings": 8.0}
+    api17.realtime_device_data["BAT002"] = {}
+    expected17 = api17.get_current_soc_battery_kwh("plant17")
+    api17.realtime_device_data["BAT002"] = {"batterySOC": None, "batteryRemainings": None}
+
+    try:
+        result17 = api17.get_current_soc_battery_kwh("plant17")
+    except TypeError as e:
+        result17 = f"TypeError: {e}"
+    if result17 != expected17:
+        print(f"**** ERROR: Expected {expected17} with null SOC/remainings, got {result17} ****")
+        failed = True
+    else:
+        print(f"✓ Null SOC/remainings match the missing-field result {expected17}")
+
+    # Test 18: get_battery_temperature - null temperature behaves like a missing field
+    print("Test 18: get_battery_temperature - null temperature behaves like a missing field")
+    api18 = MockSolaxAPI()
+    api18.initialize(client_id="test", client_secret="test", region="eu")
+
+    api18.plant_batteries["plant18"] = ["BAT001", "BAT002"]
+    api18.realtime_device_data["BAT001"] = {"batteryTemperature": 20.0}
+    api18.realtime_device_data["BAT002"] = {"batteryTemperature": None}
+
+    try:
+        result18 = api18.get_battery_temperature("plant18")
+    except TypeError as e:
+        result18 = f"TypeError: {e}"
+    if result18 != 20.0:
+        print(f"**** ERROR: Expected 20.0°C with a null battery temperature, got {result18} ****")
+        failed = True
+    else:
+        print(f"✓ Null battery temperature skipped (20.0°C)")
+
     if not failed:
         print("✓ helper methods tests passed")
 
