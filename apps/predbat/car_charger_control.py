@@ -897,8 +897,11 @@ class CarChargerControl:
         return True
 
     def charger_control_force_hold_wanted(self):
-        """Should cancelled slots be force-held: the switch is on and Predbat is not in read only mode."""
-        return bool(self.get_arg("car_charging_cancel_for_export", False)) and not self.charger_control_read_only_now()
+        """Should cancelled slots be force-held: the switch is on, Predbat is not in read only mode, and guest charging is off.
+
+        A guest's car is not one Predbat plans for, so a hold must never stop it: one under way is handed back.
+        """
+        return bool(self.get_arg("car_charging_cancel_for_export", False)) and not self.charger_control_read_only_now() and not self.charger_control_guest
 
     def charger_control_cancelled_windows(self, car_n, now):
         """Car car_n's slots the plan has cancelled for an export, as time-ordered (start, end) pairs.
@@ -965,7 +968,7 @@ class CarChargerControl:
         A hold starts FORCE_HOLD_LEAD_MINUTES before a cancelled slot, or at once for one already under
         way, and is then committed: it runs to its end even if a later plan stops cancelling the slot, as
         the pause has gone out. It extends into a cancelled slot that starts by the time it ends. At its end,
-        or as soon as the switch goes off or Predbat goes read only, the charger is handed back, and the
+        or as soon as the switch goes off, Predbat goes read only or guest charging goes on, the charger is handed back, and the
         hand-back is repeated until the charger confirms it. A hold beyond the cars - num_cars dropped - is
         handed back too.
         """
@@ -1002,7 +1005,8 @@ class CarChargerControl:
             # and must then be handed back like any other
             await self.charger_control_save()
         end = self.charger_control_force_hold_end(hold)
-        if wanted and now < end:
+        # A charger that can no longer be held - a hold restored after the component's car mapping changed - is handed back
+        if wanted and now < end and self.charger_control_can_force_hold(handle):
             await self.charger_control_force_hold_keep(car_n, key, handle, hold, end, now)
         else:
             await self.charger_control_force_hand_back(key, handle, now)
@@ -1037,7 +1041,8 @@ class CarChargerControl:
         is warned about once, and goes on being retried.
 
         Until it confirms, the planner goes on hearing the car is held, a few minutes ahead at a time: a hand-back
-        can take minutes to land (a Wallbox reconnecting to Octopus over OCPP took about 7), and meanwhile the car
+        can take minutes to land (live, a Wallbox's OCPP-on write was answered 502 once, the retry went through, and
+        the reconnect to Octopus then took about 2.5 minutes - about 7 from the first attempt), and meanwhile the car
         sits idle inside a live dispatch, which the "in a dispatch but not charging" check would take as the
         dispatch failing and cancel its slots - and their cheap rate.
         """

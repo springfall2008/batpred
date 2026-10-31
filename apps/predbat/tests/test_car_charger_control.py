@@ -1404,6 +1404,35 @@ def test_force_hold_switch_off_hands_back_at_once():
     assert component.charger_control_force_holds == {}
 
 
+def test_force_hold_not_while_guest_charging():
+    """Guest charging rules a hold out, so it never stops a guest's car, and hands back one under way, as the switch going off does."""
+    component = _held_component()
+    component.charger_control_guest = True
+    run_async(component.charger_control_tick(_at(2, 0)))
+    assert _force_commands(component) == [], component.commands
+    assert component.charger_control_force_holds == {}
+
+    component = _held_component()
+    run_async(component.charger_control_tick(_at(2, 0)))
+    assert "a" in component.charger_control_force_holds
+    component.charger_control_guest = True
+    run_async(component.charger_control_tick(_at(2, 10)))
+    assert _force_commands(component) == [("a", "force_pause"), ("a", "force_resume")], component.commands
+    assert component.charger_control_force_holds == {}
+
+
+def test_force_hold_handed_back_once_the_charger_cannot_be_held():
+    """A hold on a charger that can no longer be force-held - say a restored hold with the mapping to its car gone - is handed back."""
+    charger = FakeCharger("a")
+    component = _held_component([charger])
+    run_async(component.charger_control_tick(_at(2, 0)))
+    assert "a" in component.charger_control_force_holds
+    charger.can_force = False
+    run_async(component.charger_control_tick(_at(2, 10)))
+    assert _force_commands(component) == [("a", "force_pause"), ("a", "force_resume")], component.commands
+    assert component.charger_control_force_holds == {}
+
+
 def test_force_hold_warns_once_after_the_safety_margin():
     """A hand-back still owed FORCE_HOLD_SAFETY_MINUTES after the hold's end is warned about once."""
     charger = FakeCharger("a")
@@ -1430,6 +1459,7 @@ def test_force_held_charger_is_not_driven_by_the_plan():
     assert ("a", "on", 0) not in component.commands, component.commands
     assert ("b", "on", 1) in component.commands, component.commands
     assert ("a", "force_pause") in component.commands, component.commands
+    assert not any(command[0] == "b" for command in _force_commands(component)), component.commands
     # Releases leave the held charger to the hold too
     component.charger_control_state["a"] = False
     run_async(component.charger_control_release())
@@ -1621,6 +1651,8 @@ def run_car_charger_control_tests(my_predbat=None):
     test_force_hold_restored_before_its_end_carries_on()
     test_force_hold_bad_saved_record_is_dropped()
     test_force_hold_switch_off_hands_back_at_once()
+    test_force_hold_not_while_guest_charging()
+    test_force_hold_handed_back_once_the_charger_cannot_be_held()
     test_force_hold_warns_once_after_the_safety_margin()
     test_force_held_charger_is_not_driven_by_the_plan()
     test_force_hold_runs_with_control_off()
