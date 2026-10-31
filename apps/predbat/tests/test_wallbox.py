@@ -25,6 +25,7 @@ from wallbox import (
     MIN_POLL_SECONDS,
     WALLBOX_API_URL,
     WALLBOX_AUTH_URL,
+    WALLBOX_OCPP_CONNECTED,
     WALLBOX_STATUS,
     WallboxAPI,
     WallboxApiError,
@@ -517,6 +518,7 @@ class _StubTransport:
         self.statuses = statuses if statuses is not None else {101: _status()}
         self.calls = []
         self.errors = {}
+        self.ocpp = {}
 
     def _record(self, *call):
         """Record a call, raising the queued error for it if there is one."""
@@ -559,6 +561,18 @@ class _StubTransport:
     async def set_eco_smart(self, charger_id, mode):
         """Record an Eco-Smart change."""
         return self._record("set_eco_smart", charger_id, mode)
+
+    async def get_ocpp_configuration(self, charger_id):
+        """Return the OCPP configuration held for a charger."""
+        self._record("get_ocpp_configuration", charger_id)
+        return self.ocpp.setdefault(charger_id, {"type": "ocpp", "address": "wss://ocpp.example", "chargePointIdentity": "id-1", "password": "pw", "connectionStatus": 4})
+
+    async def set_ocpp_mode(self, charger_id, ocpp):
+        """Record an OCPP switch and move the stub's configuration to match."""
+        reply = self._record("set_ocpp_mode", charger_id, ocpp)
+        configuration = self.ocpp.setdefault(charger_id, {"type": "ocpp", "address": "wss://ocpp.example", "chargePointIdentity": "id-1", "password": "pw", "connectionStatus": 4})
+        configuration["type"] = "ocpp" if ocpp else "wallbox"
+        return reply or configuration
 
     def count(self, name):
         """How many times a call of this name was made."""
@@ -631,7 +645,7 @@ def test_component_publishes_one_charger():
     assert wallbox_entities == {
         "sensor.{}_status".format(prefix), "sensor.{}_power".format(prefix), "sensor.{}_session_energy".format(prefix),
         "binary_sensor.{}_connected".format(prefix), "binary_sensor.{}_plugged".format(prefix), "binary_sensor.{}_charging".format(prefix),
-        "switch.{}_charging".format(prefix), "switch.{}_locked".format(prefix), "number.{}_max_charging_current".format(prefix),
+        "switch.{}_charging".format(prefix), "switch.{}_locked".format(prefix), "switch.{}_ocpp".format(prefix), "number.{}_max_charging_current".format(prefix),
     }, wallbox_entities
     assert entities["sensor.{}_status".format(prefix)]["state"] == "Charging"
     status_attributes = entities["sensor.{}_status".format(prefix)]["attributes"]
@@ -1554,6 +1568,60 @@ def test_transport_get_reads_any_path():
     print("  ✓ The read-only probe sends an authenticated GET")
 
 
+def test_transport_ocpp_requests():
+    """The OCPP configuration is read, then written back with only its type changed."""
+    configuration = {"address": "wss://ocpp.octopus.energy", "chargePointIdentity": "id-1", "password": "pw", "type": "ocpp", "connectionStatus": 4, "hasSslCertificate": False}
+    url = WALLBOX_API_URL + "v3/chargers/101/ocpp-configuration"
+    for ocpp, expected_type in ((False, "wallbox"), (True, "ocpp")):
+        session, calls = _session([_response(dict(configuration)), _response(dict(configuration, type=expected_type))])
+        with patch("aiohttp.ClientSession", return_value=session), patch("wallbox.record_api_call"):
+            run_async(_signed_in_transport().set_ocpp_mode(101, ocpp))
+        assert len(calls) == 2, calls
+        assert (calls[0]["method"], calls[0]["url"], calls[0]["json"]) == ("GET", url, None)
+        body = {"address": "wss://ocpp.octopus.energy", "chargePointIdentity": "id-1", "password": "pw", "type": expected_type}
+        assert (calls[1]["method"], calls[1]["url"], calls[1]["json"]) == ("POST", url, body), calls[1]
+    session, calls = _session([_response(dict(configuration))])
+    with patch("aiohttp.ClientSession", return_value=session), patch("wallbox.record_api_call"):
+        assert run_async(_signed_in_transport().get_ocpp_configuration(101))["connectionStatus"] == WALLBOX_OCPP_CONNECTED
+    assert [(call["method"], call["url"]) for call in calls] == [("GET", url)]
+    print("  ✓ The OCPP configuration is read and written back with only its type changed")
+
+
+def test_transport_ocpp_error_hides_the_password():
+    """A failed OCPP switch raises without the password in the message or in anything logged."""
+    configuration = {"address": "wss://ocpp.octopus.energy", "chargePointIdentity": "id-1", "password": "pw", "type": "ocpp"}
+    session, _ = _session([_response(dict(configuration)), _response({"password": "pw"}, status=502)])
+    logged = []
+    transport = _signed_in_transport()
+    transport.log = logged.append
+    with patch("aiohttp.ClientSession", return_value=session), patch("wallbox.record_api_call"):
+        try:
+            run_async(transport.set_ocpp_mode(101, False))
+            raise AssertionError("Expected WallboxApiError")
+        except WallboxApiError as exc:
+            assert "502" in str(exc) and "pw" not in str(exc), str(exc)
+    assert not [line for line in logged if "pw" in str(line)], logged
+    print("  ✓ A failed OCPP switch does not leak the password")
+
+
+def test_ocpp_switch_published_and_controls():
+    """The OCPP switch is on for an OCPP charger, off otherwise, and its controls are queued."""
+    component = _started_component({101: _status(mode="ocpp"), 202: _status()})
+    entities = component.base.entities
+    assert entities["switch.predbat_wallbox_101_ocpp"]["state"] == "on"
+    assert entities["switch.predbat_wallbox_202_ocpp"]["state"] == "off"
+    attributes = entities["switch.predbat_wallbox_101_ocpp"]["attributes"]
+    assert attributes["friendly_name"] == "Wallbox Garage OCPP Connection" and attributes["icon"] == "mdi:lan-connect"
+
+    run_async(component.switch_event("switch.predbat_wallbox_101_ocpp", "turn_off"))
+    assert component.transport.calls == [] and len(component.queued_events) == 1
+    run_async(component.run(60, False))
+    assert component.transport.calls[0] == ("set_ocpp_mode", 101, False), component.transport.calls
+    run_async(component.switch_event_handler("switch.predbat_wallbox_101_ocpp", "turn_on"))
+    assert ("set_ocpp_mode", 101, True) in component.transport.calls
+    print("  ✓ The OCPP switch is published and controls the connection")
+
+
 def test_friendly_names_carry_the_charger_name():
     """Every charger entity is named after its charger, so two chargers can be told apart."""
     component = _make_component({101: _status(name="Garage"), 202: _status(name="Drive", eco={"enabled": False, "mode": 0})}, wallbox_control=True)
@@ -1913,6 +1981,9 @@ def test_wallbox(my_predbat=None):
     test_control_leaves_a_locked_charger_alone_and_warns_once()
     test_release_waits_for_a_locked_charger()
     test_transport_get_reads_any_path()
+    test_transport_ocpp_requests()
+    test_transport_ocpp_error_hides_the_password()
+    test_ocpp_switch_published_and_controls()
     test_friendly_names_carry_the_charger_name()
     test_friendly_names_without_a_usable_charger_name()
     test_operation_mode_is_read_and_published()

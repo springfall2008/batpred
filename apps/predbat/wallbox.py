@@ -40,6 +40,9 @@ from car_charger_control import CarChargerControl, ChargerControlDeferred, parse
 WALLBOX_AUTH_URL = "https://user-api.wall-box.com/"
 WALLBOX_API_URL = "https://api.wall-box.com/"
 
+# connectionStatus the OCPP configuration reports once the charger is connected to its backend
+WALLBOX_OCPP_CONNECTED = 4
+
 API_TIMEOUT = 30
 USER_AGENT = "Predbat"
 
@@ -439,6 +442,21 @@ class WallboxTransport:
         """Hand the charger back to its own schedule and Eco-Smart mode after a manual stop."""
         return await self._remote_action(charger_id, REMOTE_ACTION_RESUME_SCHEDULE)
 
+    async def get_ocpp_configuration(self, charger_id):
+        """Return the charger's OCPP configuration. It includes the backend password, so it is never logged."""
+        return await self._api("GET", "v3/chargers/{}/ocpp-configuration".format(charger_id))
+
+    async def set_ocpp_mode(self, charger_id, ocpp):
+        """Connect the charger to its OCPP backend (True) or hand it back to the Wallbox cloud (False).
+
+        Wallbox keeps the backend settings across the switch, so they are read and written back with
+        only the type changed. The error messages carry no body, so the password stays out of them.
+        """
+        configuration = await self.get_ocpp_configuration(charger_id)
+        body = {key: configuration.get(key) for key in ("address", "chargePointIdentity", "password")}
+        body["type"] = "ocpp" if ocpp else "wallbox"
+        return await self._api("POST", "v3/chargers/{}/ocpp-configuration".format(charger_id), body=body, write=True)
+
     async def set_locked(self, charger_id, locked):
         """Lock or unlock the charger."""
         return await self._api("PUT", "v2/charger/{}".format(charger_id), body={"locked": 1 if locked else 0}, write=True)
@@ -476,6 +494,7 @@ wallbox_attribute_table = {
     "charging": {"friendly_name": "Wallbox Charging", "icon": "mdi:battery-charging"},
     "charging_switch": {"friendly_name": "Wallbox Charge", "icon": "mdi:ev-station"},
     "locked": {"friendly_name": "Wallbox Locked", "icon": "mdi:lock"},
+    "ocpp": {"friendly_name": "Wallbox OCPP Connection", "icon": "mdi:lan-connect"},
     "max_charging_current": {"friendly_name": "Wallbox Maximum Charging Current", "icon": "mdi:current-ac", "unit_of_measurement": "A", "min": MIN_CHARGING_CURRENT, "step": 1},
     "eco_smart": {"friendly_name": "Wallbox Eco-Smart", "icon": "mdi:solar-power", "options": ECO_SMART_OPTIONS},
     "control": {"friendly_name": "Wallbox Charge Control", "icon": "mdi:ev-station"},
@@ -719,6 +738,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
             self.dashboard_item("binary_sensor.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=self.charger_attributes(charger, "charging"), app="wallbox")
             self.dashboard_item("switch.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=self.charger_attributes(charger, "charging_switch"), app="wallbox")
             self.dashboard_item("switch.{}_locked".format(prefix), state="on" if charger.locked else "off", attributes=self.charger_attributes(charger, "locked"), app="wallbox")
+            self.dashboard_item("switch.{}_ocpp".format(prefix), state="on" if charger.ocpp else "off", attributes=self.charger_attributes(charger, "ocpp"), app="wallbox")
             self.dashboard_item("number.{}_max_charging_current".format(prefix), state=charger.max_charging_current, attributes=current_attributes, app="wallbox")
             if charger.eco_smart is not None:
                 self.dashboard_item("select.{}_eco_smart".format(prefix), state=charger.eco_smart, attributes=self.charger_attributes(charger, "eco_smart"), app="wallbox")
@@ -812,6 +832,9 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         elif entity_id.endswith("_locked"):
             self.log("Info: wallbox: {} {}".format("locking" if turn_on else "unlocking", charger.name))
             await self.transport.set_locked(self.api_id(charger), turn_on)
+        elif entity_id.endswith("_ocpp"):
+            self.log("Info: wallbox: switching the OCPP connection of {} {}".format(charger.name, "on" if turn_on else "off"))
+            await self.transport.set_ocpp_mode(self.api_id(charger), turn_on)
 
     async def number_event_handler(self, entity_id, value):
         """Set the maximum charging current, clamped to what the charger allows."""

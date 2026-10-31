@@ -1159,6 +1159,7 @@ For each charger, with `<id>` being the Wallbox charger id:
 | `binary_sensor.predbat_wallbox_<id>_charging` | On while the car is charging |
 | `switch.predbat_wallbox_<id>_charging` | Turn off to pause charging, on to resume a paused session |
 | `switch.predbat_wallbox_<id>_locked` | Lock or unlock the charger |
+| `switch.predbat_wallbox_<id>_ocpp` | Connect the charger to its OCPP backend (on) or hand it back to the Wallbox cloud (off) |
 | `number.predbat_wallbox_<id>_max_charging_current` | Maximum charging current in A |
 | `select.predbat_wallbox_<id>_eco_smart` | Eco-Smart mode: `off`, `eco_mode` or `full_solar`. Only on chargers with Eco-Smart |
 
