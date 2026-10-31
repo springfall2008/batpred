@@ -271,8 +271,15 @@ class GivTCPRest:
         The inverter detail block, normalised across GivTCP versions.
 
         v2 puts it under "Invertor_Details"; v3 renames it to the inverter's own serial number, so
-        an empty "Invertor_Details" on v3 is expected rather than a fault. Returns {} when neither
-        is present.
+        an empty "Invertor_Details" on v3 is expected rather than a fault. A gateway can still
+        send that block while raw.invertor.serial_number is null, missing, or not a key of the
+        snapshot (#5334). One top-level dict with a non-empty Invertor_Serial_Number is used
+        then, or, when no dict names a serial, the only top-level dict that contains
+        Invertor_Time. Two or more candidates is ambiguous and returns {} rather than guessing.
+        Returns {} when nothing identifiable is present.
+
+        No logging here. publish_data() and the capacity/rate/clock readers all call this, so a
+        warning in the reader would fire once per reader on every publish pass.
         """
         rest_data = self.inverter.rest_data
         if not rest_data:
@@ -280,9 +287,40 @@ class GivTCPRest:
         details = rest_data.get("Invertor_Details", {})
         if details:
             return details
-        serial = rest_data.get("raw", {}).get("invertor", {}).get("serial_number", None)
+        raw = rest_data.get("raw")
+        invertor = raw.get("invertor") if isinstance(raw, dict) else None
+        serial = invertor.get("serial_number") if isinstance(invertor, dict) else None
         if serial and serial in rest_data:
             return rest_data[serial]
+        return self._fallback_inverter_details(rest_data)
+
+    def _fallback_inverter_details(self, rest_data):
+        """
+        A top-level details dict when the raw serial cannot name one, or {} if that is ambiguous.
+
+        Only dictionary values are considered, so a scalar or a list cannot be selected even
+        when a nested dict inside it looks like details. One dict with a non-empty
+        Invertor_Serial_Number wins, including when other dicts merely contain Invertor_Time.
+        With no dict naming a serial, the only dict containing Invertor_Time is accepted.
+        More than one serial, or more than one time and no serial, returns {} - an ambiguous
+        set of serials does not fall through to a time block.
+        """
+        serial_blocks = []
+        time_blocks = []
+        for value in rest_data.values():
+            if not isinstance(value, dict):
+                continue
+            if value.get("Invertor_Serial_Number"):
+                serial_blocks.append(value)
+                continue
+            if "Invertor_Time" in value:
+                time_blocks.append(value)
+        if len(serial_blocks) == 1:
+            return serial_blocks[0]
+        if serial_blocks:
+            return {}
+        if len(time_blocks) == 1:
+            return time_blocks[0]
         return {}
 
     def battery_capacity_kwh(self):
