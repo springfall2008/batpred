@@ -584,7 +584,12 @@ class PredHeat:
         self.internal_temperature, age_internal = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True)
         self.target_temperature, age_target = self.minute_data_entity(now_utc, "target_temperature")
         self.heating_energy, age_energy = self.minute_data_entity(now_utc, "heating_energy", incrementing=True, smoothing=True, scaling=self.heating_energy_scaling)
-        self.minute_data_age = min(age_external, age_internal, age_target, age_energy)
+        # Heating energy history is optional; without it, valid temperature and
+        # thermostat histories should still drive the forecast schedule.
+        history_ages = [age_external, age_internal, age_target]
+        if self.heating_energy:
+            history_ages.append(age_energy)
+        self.minute_data_age = min(history_ages)
 
         self.heat_energy_today = self.heating_energy.get(0, 0) - self.heating_energy.get(self.minutes_now, 0)
 
