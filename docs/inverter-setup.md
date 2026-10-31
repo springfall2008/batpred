@@ -40,6 +40,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Givenergy with GE Cloud EMS](#givenergy-with-ge-cloud-ems) | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | [Givenergy/Octopus No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
    | [AlphaESS Cloud](#alphaess-cloud) | Predbat | [alphaess_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/alphaess_cloud.yaml) |
+   | [Anker SOLIX X1](#anker-solix-x1) | [anker-x1-ha](https://github.com/afewyards/anker-x1-ha) | [anker_x1.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1.yaml) |
    | [Canadian Solar EP Cube](#canadian-solar-ep-cube) | [ha-ep-cube](https://github.com/SkiLtY/ha-ep-cube) | [ep_cube_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ep_cube_cloud.yaml) |
    | [DEYE Cloud](#deye-cloud) | Predbat | See [apps.yaml](apps-yaml.md#deye-cloud-api) |
    | [Enphase Cloud](#enphase-cloud) | Predbat | [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) |
@@ -260,6 +261,74 @@ python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --unbind -
 **`--unbind` is one-way from Home Assistant/the CLI.** Once unbound, Predbat can no longer read or control that system, and there is no `--bind`-from-nothing shortcut back - re-binding needs a fresh verification code emailed to the owner, via `--verify` then `--bind` as above, or via the AlphaESS portal.
 
 See [AlphaESS Cloud API](apps-yaml.md#alphaess-cloud-api) in `apps.yaml` for the full list of `alphaess_*` settings, defaults and important behaviour to be aware of - including the export-control limitation above, and the write-timing, freeze-signalling, `export_limit` and `battery_rate_max` notes that apply to every AlphaESS install.
+
+## Anker SOLIX X1
+
+The Anker SOLIX X1 hybrid inverter has no native Predbat integration. It is read and controlled locally over Modbus TCP by the [anker-x1-ha](https://github.com/afewyards/anker-x1-ha) integration, and Predbat drives it through its generic [Service API](#has_service_api).
+
+Over Modbus the X1 has no charge schedule, target SoC or reserve controls. What it does have is a signed battery power setpoint (negative to charge, positive to discharge) that it follows in VPP work mode. All of Predbat's service hooks call one Home Assistant script, `script.predbat_anker_x1_control`, which puts the X1 into VPP mode and writes that setpoint, and hands the battery back to the X1's own Self-consumption mode when Predbat isn't charging or exporting. Predbat watches the battery SoC and stops a charge or export itself when the target is reached.
+
+Copy the template [anker_x1.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1.yaml) over your `apps.yaml`, install the Home Assistant package [anker_x1_package.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1_package.yaml), and follow the steps below.
+
+### Anker SOLIX X1 Prerequisites
+
+- Install the [anker-x1-ha](https://github.com/afewyards/anker-x1-ha) integration via HACS and configure it with your X1's IP address. **Version 0.7.0 or later is required**: earlier versions took the setpoint's range from the X1's live limits, which collapse to almost nothing in VPP mode after a hold and can cap a charge to a few watts.
+- Confirm the integration's "Anker X1" device shows battery SoC, battery power, PV power and the external meter's power (`sensor.anker_x1_meter_total_power`), and that `number.anker_x1_battery_setpoint_charge_discharge` and `switch.anker_x1_modbus_control_hand_battery_to_ha_vpp` exist.
+- Make sure Home Assistant packages are enabled. `configuration.yaml` needs:
+
+```yaml
+homeassistant:
+  packages: !include_dir_named packages
+```
+
+### Anker Step 1 — Install the Home Assistant package
+
+Save [anker_x1_package.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1_package.yaml) as `<config>/packages/anker_x1_package.yaml` and restart Home Assistant. It creates:
+
+| Entity | Used for |
+| ------ | -------- |
+| `script.predbat_anker_x1_control` | Every `*_service` entry in `apps.yaml` |
+| `input_number.predbat_anker_x1_charge_rate` | `charge_rate` |
+| `input_number.predbat_anker_x1_discharge_rate` | `discharge_rate` |
+| `sensor.anker_x1_house_load_today` | `load_today` |
+| `sensor.anker_x1_house_load_power` | `load_power` |
+| `sensor.anker_x1_battery_soc_for_predbat` | `soc_percent` |
+| `automation.predbat_anker_x1_follow_the_charge_limit_near_full` | Lowers a charge near 100% (see the notes) |
+| `input_text.predbat_anker_x1_last_command`, `input_number.predbat_anker_x1_setpoint_written`, `sensor.anker_x1_house_load_today_raw` | Internal to the package |
+
+The package uses the entity IDs the integration creates for its "Anker X1" device. If yours differ, replace them throughout the package and `apps.yaml`. If your inverter is not 5 kW, change `battery_limit` in the script and the `max` of the two rate helpers.
+
+### Anker Step 2 — Configure apps.yaml
+
+- Set `soc_max` to your battery size in kWh: 5 per battery module
+- Check `inverter_limit` and `battery_rate_max` against your inverter model (`sensor.anker_x1_model`). The template's 5000 is for the X1-H5K-S. Don't take the limit from `sensor.anker_x1_dischargeable_power`: that is the battery pack's DC capability (3300 W per module), not the inverter's AC output
+- Set `reserve` and `battery_min_soc` to the minimum SoC set in the Anker app. The X1 has no reserve setting over Modbus, so Predbat's reserve is only used for planning and the X1 stops discharging at the app's minimum
+- Delete the `template: True` line to allow Predbat to start
+- Configure your energy rates - see [Energy Rates](energy-rates.md)
+
+### Anker Step 3 — Test control before handing it to Predbat
+
+With Predbat in read-only mode, run the script from Developer Tools → Actions:
+
+```yaml
+action: script.predbat_anker_x1_control
+data:
+  command: discharge
+  power: 1000
+```
+
+The battery should ramp to about 1000 W of discharge within around ten seconds, and the X1's Work Mode should show VPP. Then run it with `command: auto` to hand control back: the Modbus Control switch turns off and the Work Mode returns to Self-consumption. Once that works, turn off read-only mode and let Predbat take control.
+
+### Anker SOLIX X1 Notes
+
+- **Skipping repeated writes:** the start and hold services use `repeat: True`, so Predbat re-sends them on every run and takes control back if the X1 drops out of VPP mode. Every setpoint write also rewrites the X1's work-mode register, so the script skips a write when the X1 is already doing what was asked.
+- **Stopping:** turning Modbus Control off clears the setpoint but leaves the X1 in App-managed mode rather than Self-consumption, so the script sets the work mode explicitly afterwards.
+- **Holds at the reserve:** Predbat sends `charge_freeze_service` whenever a charge window's target is the reserve, even with `support_charge_freeze: False`. Holding at 0 W at the bottom of the battery achieves nothing that Self-consumption doesn't, so the script treats a hold at or within 1% of the reserve as `auto`. A hold higher up still holds the battery at 0 W, which also stops it charging from solar during the hold.
+- **Charging near full:** asked to charge harder than the battery will take, which happens above about 95%, the X1 overshoots into discharge for a few seconds at a time, at up to several kW. Predbat only updates every five minutes, so the package's automation keeps a running charge at 90% of the X1's live charge limit (`sensor.anker_x1_rechargeable_power`) from 95% up, never more than Predbat asked for.
+- **Grid energy sensors:** anker-x1-ha 0.7.0 renamed "Grid Bought Today" / "Grid Fed-in Today" to "Grid Bought" / "Grid Fed-in". Older installs keep the `_today` entity IDs, and both the template and the package accept either name. These counters are lifetime totals on X1 firmware 1.0.19.16 and reset at midnight on 1.0.16.1. Predbat only uses how much they rise each day, so both work.
+- **House load:** the X1 reports no house load energy, so the package works it out as PV + grid import + battery discharge - grid export - battery charge, from how far each counter moved every minute. Inverter conversion losses end up counted as house load.
+- **Battery SoC filter:** the X1 occasionally reports an unavailable SoC or a momentary 0%. `sensor.anker_x1_battery_soc_for_predbat` holds the last good reading for up to 15 minutes so a single bad read doesn't make Predbat plan from an empty battery.
+- **Measured behaviour:** on a 3-module (15 kWh) pack, a forced charge holds 5 kW from the reserve to 95% and a forced export holds about 4.8 kW from the battery. Usable capacity measured 5.2-5.3 kWh per module, and grid-to-battery efficiency about 93%, which matches Predbat's default `inverter_loss` and `battery_loss`.
 
 ## Canadian Solar EP Cube
 
