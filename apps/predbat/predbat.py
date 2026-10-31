@@ -1008,9 +1008,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         }
         try:
             # Real clock for the expiry, as the storage layer compares against it
-            run_async(storage.save("predbat", "execution_state", state, format="json", expiry=now + timedelta(hours=8)))
+            saved = run_async(storage.save("predbat", "execution_state", state, format="json", expiry=now + timedelta(hours=8)))
         except Exception as e:
             self.log("Warning: Failed to save execution state: {}".format(e))
+            return False
+        if saved is False:
+            # Storage reports failure by returning False rather than raising; nothing is marked saved, so the next run retries
+            self.log("Warning: Failed to save execution state: storage reported failure")
             return False
         self.execution_state_saved = values
         self.execution_state_saved_at = now

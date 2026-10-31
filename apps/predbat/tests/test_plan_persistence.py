@@ -281,6 +281,26 @@ def test_execution_state_future_or_naive_timestamp_ignored(my_predbat):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def test_execution_state_failed_save_is_retried(my_predbat):
+    tmpdir, storage = _execution_state_env(my_predbat)
+    real_save = storage.save
+
+    async def failing_save(*args, **kwargs):
+        return False
+
+    try:
+        _set_flags(my_predbat, True, 100, False, 0)
+        storage.save = failing_save
+        assert my_predbat.save_execution_state() is False
+        assert my_predbat.execution_state_saved is None
+        assert my_predbat.execution_state_saved_at is None
+        storage.save = real_save
+        assert my_predbat.save_execution_state() is True
+        assert run_async(storage.load("predbat", "execution_state"))["is_charging"] is True
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 EXECUTION_STATE_TESTS = [
     test_execution_state_roundtrip,
     test_execution_state_absent,
@@ -296,6 +316,7 @@ EXECUTION_STATE_TESTS = [
     test_execution_state_reconfirms_when_old,
     test_execution_state_restored_age_drives_reconfirm,
     test_execution_state_future_or_naive_timestamp_ignored,
+    test_execution_state_failed_save_is_retried,
 ]
 
 
@@ -551,6 +572,8 @@ def test_plan_persistence(my_predbat):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     saved_flags = (my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target)
+    saved_components = my_predbat.components
+    saved_state_tracking = (my_predbat.execution_state_saved, my_predbat.execution_state_saved_at)
     for execution_test in EXECUTION_STATE_TESTS:
         try:
             execution_test(my_predbat)
@@ -559,7 +582,7 @@ def test_plan_persistence(my_predbat):
             print("FAILED: {}: {!r}".format(execution_test.__name__, e))
             failed += 1
     my_predbat.isCharging, my_predbat.isCharging_Target, my_predbat.isExporting, my_predbat.isExporting_Target = saved_flags
-    my_predbat.execution_state_saved = None
-    my_predbat.execution_state_saved_at = None
+    my_predbat.components = saved_components
+    my_predbat.execution_state_saved, my_predbat.execution_state_saved_at = saved_state_tracking
 
     return failed
