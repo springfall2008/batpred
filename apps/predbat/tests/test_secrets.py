@@ -129,6 +129,11 @@ def test_secrets_loading():
         # returns, not inside load_secrets() itself - so a log() call here is the real assertion.
         h.log("Info: Predbat started despite the malformed secrets.yaml")
     finally:
+        if "h" in locals() and hasattr(h, "logfile") and h.logfile:
+            try:
+                h.logfile.close()
+            except Exception:
+                pass
         if saved_apps_file is None:
             os.environ.pop("PREDBAT_APPS_FILE", None)
         else:
@@ -136,7 +141,10 @@ def test_secrets_loading():
         os.remove("test_apps.yaml")
         os.remove("secrets.yaml")
         if os.path.exists("predbat.log"):
-            os.remove("predbat.log")
+            try:
+                os.remove("predbat.log")
+            except OSError:
+                pass
     print("    PASS - Malformed secrets.yaml degrades to {} instead of crashing startup")
 
     print("**** test_secrets_loading PASSED ****")
@@ -579,7 +587,10 @@ def test_log_redacts_at_write_time():
             del os.environ["PREDBAT_APPS_FILE"]
         for name in ("test_apps.yaml", "secrets.yaml", "predbat.log"):
             if os.path.exists(name):
-                os.remove(name)
+                try:
+                    os.remove(name)
+                except OSError:
+                    pass
 
     if not failed:
         print("**** test_log_redacts_at_write_time PASSED ****")

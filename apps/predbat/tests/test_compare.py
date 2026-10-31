@@ -89,6 +89,7 @@ CALCULATE_PLAN_REBUILT = (
     "metric_cloud_coverage",
     "metric_load_divergence",
     "plan_last_duration_seconds",
+    "pv_forecast_peak_step",
 )
 
 
@@ -262,6 +263,62 @@ def test_run_all_restores_when_config_restore_raises(my_predbat):
             my_predbat.args["compare_list"] = saved_compare_list
 
 
+def test_run_all_restores_clipping_state(my_predbat):
+    """run_all() saves and restores clipping state and cumulative peak buffer so tariff runs cannot pollute the live plan."""
+    saved_compare_list = my_predbat.args.get("compare_list")
+    saved_plan_valid, saved_pending = my_predbat.plan_valid, my_predbat.update_pending
+    my_predbat.args["compare_list"] = [{"id": "tariff_a", "name": "Tariff A"}]
+    my_predbat.plan_valid, my_predbat.update_pending = True, False
+
+    # Snapshot current live clipping state
+    orig_kwh = my_predbat.clipping_buffer_kwh = 4.5
+    orig_rem = my_predbat.clipping_remaining_today = 3.2
+    orig_alloc = my_predbat.clipping_allocated_today = 5.0
+    orig_mode = my_predbat.clipping_mode = "Dynamic ClearSky"
+
+    comparison = Compare.__new__(Compare)
+    comparison.pb = my_predbat
+    comparison.log = my_predbat.log
+    comparison.comparisons = {}
+
+    def run_single(*args, **kwargs):
+        """Stand in for a tariff's run, which mutates clipping state."""
+        my_predbat.clipping_buffer_kwh = 9.9
+        my_predbat.clipping_remaining_today = 9.9
+        my_predbat.clipping_allocated_today = 12.0
+        my_predbat.clipping_mode = "Base Forecast"
+        return None
+
+    comparison.run_single = run_single
+    comparison.select_best = lambda *args, **kwargs: None
+    comparison.save_yaml = lambda *args, **kwargs: None
+    comparison.publish_data = lambda *args, **kwargs: None
+    try:
+        comparison.run_all(fetch_sensor=False)
+        failed = 0
+        if my_predbat.clipping_buffer_kwh != orig_kwh:
+            print("ERROR: run_all() should restore clipping_buffer_kwh, got {}".format(my_predbat.clipping_buffer_kwh))
+            failed = 1
+        if my_predbat.clipping_remaining_today != orig_rem:
+            print("ERROR: run_all() should restore clipping_remaining_today, got {}".format(my_predbat.clipping_remaining_today))
+            failed = 1
+        if my_predbat.clipping_allocated_today != orig_alloc:
+            print("ERROR: run_all() should restore clipping_allocated_today, got {}".format(my_predbat.clipping_allocated_today))
+            failed = 1
+        if my_predbat.clipping_mode != orig_mode:
+            print("ERROR: run_all() should restore clipping_mode, got {}".format(my_predbat.clipping_mode))
+            failed = 1
+        if not failed:
+            print("PASS: run_all() isolates and restores clipping plan state and allocated buffer")
+        return failed
+    finally:
+        my_predbat.plan_valid, my_predbat.update_pending = saved_plan_valid, saved_pending
+        if saved_compare_list is None:
+            my_predbat.args.pop("compare_list", None)
+        else:
+            my_predbat.args["compare_list"] = saved_compare_list
+
+
 def test_compare(my_predbat):
     """Run all compare unit tests."""
     failed = 0
@@ -270,6 +327,7 @@ def test_compare(my_predbat):
     failed += test_plan_state_covered(my_predbat)
     failed += test_run_all_keeps_pending_replan(my_predbat)
     failed += test_run_all_restores_when_config_restore_raises(my_predbat)
+    failed += test_run_all_restores_clipping_state(my_predbat)
 
     # ------------------------------------------------------------------
     # T1: apply_hardware_overrides – soc_max override
