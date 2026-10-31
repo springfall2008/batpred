@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import asyncio
 import os
 import io
 import sys
@@ -35,6 +36,10 @@ from download import (
     match_archive_member,
     predbat_update_move,
     resolve_predbat_repository,
+    is_valid_predbat_branch,
+    staged_suffix,
+    predbat_branch_option,
+    parse_predbat_branch_option,
     verify_staged_files,
     DEFAULT_PREDBAT_REPOSITORY,
     DOWNLOAD_MAX_ATTEMPTS,
@@ -114,7 +119,13 @@ def test_download(my_predbat):
         ("check_install_empty_manifest", _test_check_install_empty_manifest, "Check install returns a pair when the manifest is empty"),
         ("predbat_main_repo_override", _test_predbat_download_main_uses_configured_repository, "Predbat main update uses configured repository override"),
         ("predbat_tag_repo_upstream", _test_predbat_download_tag_uses_default_repository, "Predbat tagged update always uses upstream repository"),
+        ("branch_option_helpers", _test_branch_option_helpers, "Branch drop-down entries are built, parsed and validated"),
+        ("predbat_branch_repo_override", _test_predbat_download_branch_uses_configured_repository, "Predbat branch update uses the configured repository and installs the branch"),
+        ("predbat_branch_slash", _test_predbat_download_branch_with_slash, "Predbat branch update with a / in the name uses the real name as the git ref"),
+        ("predbat_branch_repo_default", _test_predbat_download_branch_default_repository, "Predbat branch update uses upstream when no repository is configured"),
+        ("predbat_branch_invalid", _test_predbat_download_branch_invalid_rejected, "Predbat branch update refuses an invalid branch name"),
         ("predbat_startup_pins_upstream", _test_predbat_startup_self_check_uses_default_repository, "Predbat startup self-check pins repository to upstream"),
+        ("update_event_install", _test_update_event_install_entity_forms, "update.install installs the latest version for a string or list entity_id"),
     ]
 
     print("\n" + "=" * 70)
@@ -1790,6 +1801,105 @@ def _test_predbat_download_tag_uses_default_repository(my_predbat):
     return 0
 
 
+def _test_branch_option_helpers(my_predbat):
+    """Test the 'branch: <name>' update entry round-trips and branch names are validated."""
+    assert predbat_branch_option("my-feature") == "branch: my-feature"
+    assert parse_predbat_branch_option("branch: my-feature") == "my-feature"
+    assert parse_predbat_branch_option(predbat_branch_option("fix_1.2")) == "fix_1.2"
+    # Anything that is not a branch entry is not a branch
+    for not_branch in ["main", "v8.30.8 Release name", "", None]:
+        assert parse_predbat_branch_option(not_branch) is None, not_branch
+    # Names such as fix/xxx and feat/xxx are the common case
+    for valid in ["my-feature", "fix_1.2", "Feature123", "a", "fix/my-feature", "feat/a/b", "test/issue-2155"]:
+        assert is_valid_predbat_branch(valid), valid
+    # Spaces would break the version parsing, other characters are unsafe in a URL or the install command
+    for invalid in ["has space", "", "a;b", "a&b", "a#b", "a?b", "/x", "x/", "a//b", None, 5]:
+        assert not is_valid_predbat_branch(invalid), invalid
+    # A slash is not safe in a file name, so the staged files use a different suffix, which must stay the same for the one version
+    assert staged_suffix("fix/my-feature") == "fix_my-feature"
+    assert staged_suffix("v8.30.8") == "v8.30.8"
+    assert staged_suffix("main") == "main"
+    return 0
+
+
+def _make_branch_dummy(repository):
+    """Minimal stand-in for PredBat, reporting the given repository."""
+
+    class DummyPredBat:
+        def __init__(self):
+            self.stop_thread = False
+
+        def log(self, *_args, **_kwargs):
+            return None
+
+        def expose_config(self, *_args, **_kwargs):
+            return None
+
+        def get_arg(self, *_args, **_kwargs):
+            return False
+
+        def get_predbat_repository(self):
+            return repository
+
+        def call_notify(self, *_args, **_kwargs):
+            return None
+
+    return DummyPredBat()
+
+
+def _run_branch_download(repository):
+    """Select 'branch: my-feature' and return the download and move arguments."""
+    predbat_module = _import_predbat_module_for_tests()
+    dummy = _make_branch_dummy(repository)
+    with patch("predbat.predbat_update_download", return_value=["predbat.py"]) as mock_download:
+        with patch("predbat.predbat_update_move", return_value=True) as mock_move:
+            predbat_module.PredBat.download_predbat_version(dummy, "branch: my-feature")
+    return mock_download, mock_move
+
+
+def _test_predbat_download_branch_uses_configured_repository(my_predbat):
+    """Test 'branch: <name>' installs that branch from the configured repository."""
+    mock_download, mock_move = _run_branch_download("example/forked-batpred")
+    assert mock_download.called
+    assert mock_download.call_args.args[0] == "my-feature"
+    assert mock_download.call_args.kwargs.get("repository") == "example/forked-batpred"
+    # The staged files are suffixed with the branch name, so the move must use it too
+    assert mock_move.call_args.args[0] == "my-feature"
+    return 0
+
+
+def _test_predbat_download_branch_with_slash(my_predbat):
+    """Test a branch such as fix/my-feature is downloaded using its real name as the git ref."""
+    predbat_module = _import_predbat_module_for_tests()
+    dummy = _make_branch_dummy("example/forked-batpred")
+    with patch("predbat.predbat_update_download", return_value=["predbat.py"]) as mock_download:
+        with patch("predbat.predbat_update_move", return_value=True) as mock_move:
+            predbat_module.PredBat.download_predbat_version(dummy, "branch: fix/my-feature")
+    assert mock_download.call_args.args[0] == "fix/my-feature"
+    assert mock_move.call_args.args[0] == "fix/my-feature"
+    return 0
+
+
+def _test_predbat_download_branch_default_repository(my_predbat):
+    """Test 'branch: <name>' takes the branch from upstream when no repository override is configured."""
+    mock_download, _mock_move = _run_branch_download(DEFAULT_PREDBAT_REPOSITORY)
+    assert mock_download.call_args.args[0] == "my-feature"
+    assert mock_download.call_args.kwargs.get("repository") == DEFAULT_PREDBAT_REPOSITORY
+    return 0
+
+
+def _test_predbat_download_branch_invalid_rejected(my_predbat):
+    """Test an invalid branch name downloads nothing and reports failure."""
+    predbat_module = _import_predbat_module_for_tests()
+    dummy = _make_branch_dummy("example/forked-batpred")
+    for bad in ["branch: a//b", "branch: has space", "branch:", "branch: /x"]:
+        with patch("predbat.predbat_update_download", return_value=["predbat.py"]) as mock_download:
+            result = predbat_module.PredBat.download_predbat_version(dummy, bad)
+        assert result is False, bad
+        assert not mock_download.called, bad
+    return 0
+
+
 def _test_predbat_startup_self_check_uses_default_repository(my_predbat):
     """Test startup self-check/update pins repository to DEFAULT_PREDBAT_REPOSITORY at runtime."""
     with patch("download.check_install", return_value=(False, False)) as mock_check_install:
@@ -1810,4 +1920,33 @@ def _test_predbat_startup_self_check_uses_default_repository(my_predbat):
 
     assert mock_update_download.called
     assert mock_update_download.call_args.kwargs.get("repository") == DEFAULT_PREDBAT_REPOSITORY
+    return 0
+
+
+def _test_update_event_install_entity_forms(my_predbat):
+    """Test update_event installs the latest release whether entity_id is a string or a list (as the HA update card sends it)."""
+    from userinterface import UserInterface
+
+    class DummyPredBat:
+        def __init__(self):
+            self.releases = {"latest": "v9.9.9"}
+            self.installed = []
+
+        def log(self, *_args, **_kwargs):
+            return None
+
+        async def async_download_predbat_version(self, version):
+            self.installed.append(version)
+            return True
+
+    cases = [
+        ("update.predbat_version", ["v9.9.9"]),
+        (["update.predbat_version"], ["v9.9.9"]),
+        (["update.other_update"], []),
+    ]
+    for entity_id, expected in cases:
+        dummy = DummyPredBat()
+        data = {"domain": "update", "service": "install", "service_data": {"entity_id": entity_id}}
+        asyncio.run(UserInterface.update_event(dummy, "install", data, None))
+        assert dummy.installed == expected, "entity_id {} installed {} expected {}".format(entity_id, dummy.installed, expected)
     return 0

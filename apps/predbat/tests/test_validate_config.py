@@ -90,6 +90,16 @@ def test_validate_config(my_predbat):
     print("  [string empty:True] empty string fails")
     _run(my_predbat, {"predbat_repository": ""}, expect_errors=["predbat_repository"])
 
+    # predbat_branch is a string or a list of strings, and blank is allowed as it just means no extra branch entry
+    print("  [string|string_list] predbat_branch single branch name passes")
+    _run(my_predbat, {"predbat_branch": "fix/my-feature"}, expect_clean=["predbat_branch"])
+
+    print("  [string|string_list] predbat_branch list of branch names passes")
+    _run(my_predbat, {"predbat_branch": ["fix/one", "feat/two"]}, expect_clean=["predbat_branch"])
+
+    print("  [string|string_list] predbat_branch blank passes")
+    _run(my_predbat, {"predbat_branch": ""}, expect_clean=["predbat_branch"])
+
     # ==========================================================================
     # STRING_LIST type  (notify_devices: {"type": "string_list"})
     # ==========================================================================
@@ -149,6 +159,12 @@ def test_validate_config(my_predbat):
     print("  [integer min/max] exactly at the boundary passes")
     _run(my_predbat, {"log_count": 2}, expect_clean=["log_count"])
     _run(my_predbat, {"log_count": 100}, expect_clean=["log_count"])
+
+    print("  [ML retrain interval] whole hours within 1-48 pass; invalid values fail")
+    for hours in (1, 2, 24, 48):
+        _run(my_predbat, {"load_ml_retrain_interval_hours": hours}, expect_clean=["load_ml_retrain_interval_hours"])
+    for hours in (-1, 0, 49, 2.5, "daily"):
+        _run(my_predbat, {"load_ml_retrain_interval_hours": hours}, expect_errors=["load_ml_retrain_interval_hours"])
 
     # ==========================================================================
     # INTEGER_LIST type  (days_previous: {"type": "integer_list"})

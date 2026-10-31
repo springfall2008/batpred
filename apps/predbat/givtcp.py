@@ -55,12 +55,14 @@ GIVTCP_PAUSE_MODES = ["Disabled", "PauseCharge", "PauseDischarge", "PauseBoth"]
 # GivTCP raw.invertor.model values confirmed not to support the Discharge_Target_SOC_1 register
 # (#4517). "Ac" (AC Coupled) and "Hybrid_gen1" are confirmed live - the latter on two separate
 # reporter inverters, still repeating the write every cycle post-fix until added here.
-# "Hybrid_gen2" is inferred from the same GivEnergy firmware-archive generational split
-# (github.com/DJBenson/giv-firmware), not independently confirmed on real Gen2 hardware yet.
+# "Hybrid_gen2" was first inferred from the same GivEnergy firmware-archive generational split
+# (github.com/DJBenson/giv-firmware), and has since been confirmed on real Gen2 hardware (#5679).
 #
 # These inverters accept the write and report success, but it never persists, so the caller sees a
 # permanent mismatch and rewrites every cycle. Not publishing the entity at all is what stops that:
-# Inverter.adjust_force_export already leaves a target it cannot read alone.
+# Inverter.adjust_force_export already leaves a target it cannot read alone. automatic_config() also
+# leaves discharge_target_soc unclaimed for these models, so nothing is bound to an entity that is
+# never published.
 DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
 
 # The same inverters identified from Invertor_Type, which is what GivTCP v3 actually reports in
@@ -70,14 +72,31 @@ DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
 # Matched on the set of alphanumeric tokens because the two vocabularies disagree on word order and
 # spacing: "Gen 1 Hybrid" against "Hybrid_gen1". Both reduce to {gen, 1, hybrid}.
 #
-# Gen2 Hybrid is deliberately absent. "Hybrid_gen2" above was inferred from a firmware archive
-# rather than observed, and is still honoured where a build reports that exact raw model - but
-# extending it to Invertor_Type would remove export target control from every Gen2 Hybrid on v3 on
-# the strength of that inference. Add it here once an affected Gen2 is actually confirmed.
+# Gen2 Hybrid was originally left out because "Hybrid_gen2" above was only inferred. It is now
+# confirmed (#5679, giv_tcp#664): GivTCP 3.6 refuses the per-slot write as unsupported on a Gen2
+# Hybrid, so the read-back stays 0 and Predbat retried and warned on every export cycle.
 DISCHARGE_TARGET_UNSUPPORTED_TYPES = (
     frozenset({"ac"}),
     frozenset({"gen", "1", "hybrid"}),
+    frozenset({"gen", "2", "hybrid"}),
 )
+
+
+def discharge_target_unsupported(rest):
+    """
+    Whether this inverter has no working Discharge_Target_SOC_1 register (#4517, #5679).
+
+    Matches both the raw GivTCP model code and the readable Invertor_Type, using the two tables
+    above. publish_data() uses it to withhold the entity, and automatic_config() to leave
+    discharge_target_soc unclaimed, so the two cannot disagree about which inverters have it.
+    """
+    rest_data = rest.inverter.rest_data
+    if not rest_data:
+        return False
+    inverter_model = rest_data.get("raw", {}).get("invertor", {}).get("model", "")
+    inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
+    return inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
+
 
 # Control.Mode values. Predbat only ever writes Eco or Timed Export, but the inverter reports the
 # others, and an option list that omitted them could not represent the mode the inverter is in.
@@ -91,6 +110,10 @@ GIVTCP_POLL_SECONDS = 60
 # startup (GivTCP still booting, a network blip) or one added since is picked up without a Predbat
 # restart. Only endpoints not already being managed are probed, and only ever to add them.
 GIVTCP_REDISCOVER_SECONDS = 3600
+
+# GivEnergy holds the charge and discharge rates as a whole percent of nominal battery capacity,
+# rounded down - 1300W on a 13.41kWh battery reads back 1206W (#5324)
+GIVTCP_RATE_STEP_PERCENT_OF_CAPACITY = 1
 
 # control name -> (domain, GivTCPRest write method name, HA entity attributes)
 GIVTCP_CONTROLS = {
@@ -677,8 +700,7 @@ class GivTCPComponent(ComponentBase):
                 # Publishing one would restart the every-cycle rewrite loop of #4517, because the write
                 # reports success and then silently fails to persist.
                 inverter_model = rest.inverter.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
-                inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
-                model_unsupported = inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
+                model_unsupported = discharge_target_unsupported(rest)
                 if not rest.rest_v3:
                     # v2 has no /setDischargeTarget - see GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
                     pass
@@ -971,10 +993,10 @@ class GivTCPComponent(ComponentBase):
         else:
             self.log("Info: GivTCP: Enable_Charge_Target is not reported by every inverter - leaving charge_limit_enable to your apps.yaml config")
 
-        if all(self.rest[n].rest_v3 for n in discovered):
+        if all(self.rest[n].rest_v3 and not discharge_target_unsupported(self.rest[n]) for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
         else:
-            self.log("Info: GivTCP: the export target register needs GivTCP v3 on every inverter - leaving discharge_target_soc to your apps.yaml config")
+            self.log("Info: GivTCP: the export target register needs GivTCP v3 and a model that supports it on every inverter - leaving discharge_target_soc to your apps.yaml config")
 
         if not all(self.rest[n].rest_v3 for n in discovered):
             self.log("Info: GivTCP: pause control needs GivTCP v3 on every inverter - leaving pause_mode/pause_start_time/pause_end_time to your apps.yaml config")
@@ -1055,6 +1077,7 @@ class GivTCPComponent(ComponentBase):
         elif options:
             descriptor["options"] = options
         if name in ("charge_rate", "discharge_rate"):
+            descriptor["step_percent_of_capacity"] = GIVTCP_RATE_STEP_PERCENT_OF_CAPACITY
             if max_battery_rate:
                 descriptor["max"] = max_battery_rate
             else:

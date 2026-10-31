@@ -1,0 +1,40 @@
+name: queue bot review
+# Add BOT_REVIEW to a PR the first time it is ready for review - opened as a non-draft,
+# or moved out of draft - so the triage daemon picks it up for /pr-review.
+#
+# Once per PR: the daemon removes BOT_REVIEW after reviewing, so "does it carry the label
+# now" can't tell a reviewed PR from a new one. Instead skip any PR whose event history
+# shows BOT_REVIEW was ever added (by this workflow, the daemon, or by hand). Flipping a
+# PR back to draft and ready again therefore does nothing; adding the label by hand still
+# re-queues it as before.
+#
+# pull_request_target so fork PRs get a token that can write labels. This workflow never
+# checks out or runs the PR's code, which is what keeps pull_request_target safe here.
+on:
+  pull_request_target:
+    types:
+      - opened
+      - ready_for_review
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  label:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add BOT_REVIEW unless it has been applied before
+        run: |
+          applied=$(gh api --paginate "repos/$GH_REPO/issues/$PR_NUMBER/events" \
+            --jq '.[] | select(.event == "labeled" and .label.name == "BOT_REVIEW") | .id')
+          if [ -n "$applied" ]; then
+            echo "BOT_REVIEW has been applied to #$PR_NUMBER before; not adding it again"
+            exit 0
+          fi
+          gh pr edit "$PR_NUMBER" --add-label BOT_REVIEW
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}

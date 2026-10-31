@@ -363,8 +363,8 @@ def test_edge_block_does_not_latch_oauth_failed():
 
     assert result is False
     assert mixin.oauth_failed is False, "an edge block must not latch oauth_failed"
-    assert mixin.token_mint_blocked_until is not None
-    assert mixin.token_mint_block_count == 1
+    assert mixin.token_mint_backoff.until is not None
+    assert mixin.token_mint_backoff.count == 1
     # One attempt only - no immediate retry with primary credentials into the same block
     assert mixin._kraken_token_request.call_count == 1
 
@@ -380,7 +380,7 @@ def test_edge_block_suppresses_the_next_mint():
 
     assert result is False
     mixin._kraken_token_request.assert_not_called()
-    assert mixin.token_mint_block_count == 1, "a suppressed attempt must not grow the backoff"
+    assert mixin.token_mint_backoff.count == 1, "a suppressed attempt must not grow the backoff"
 
 
 def test_edge_block_keeps_a_still_valid_token():
@@ -392,7 +392,7 @@ def test_edge_block_keeps_a_still_valid_token():
 
     # The mint is refused, but the token itself is still good for ~3 minutes
     assert asyncio.run(mixin.check_and_refresh_oauth_token()) is True
-    assert mixin.token_mint_blocked_until is not None
+    assert mixin.token_mint_backoff.until is not None
 
     # Next caller, still inside the window, token still has ~3 minutes of life
     mixin._kraken_token_request = AsyncMock()
@@ -412,9 +412,9 @@ def test_elapsed_backoff_reopens_the_mint():
     mixin = make_mixin(auth_method="api_key", key="sk_live_test123")
     mixin._kraken_token_request = edge_blocked_request(mixin)
     asyncio.run(mixin.check_and_refresh_oauth_token())
-    assert mixin.token_mint_blocked_until is not None
+    assert mixin.token_mint_backoff.until is not None
 
-    mixin.token_mint_blocked_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    mixin.token_mint_backoff.until = datetime.now(timezone.utc) - timedelta(seconds=1)
     mixin._kraken_token_request = AsyncMock(
         return_value={"token": "recovered", "refreshToken": "r", "exp": int(time.time()) + 3600}
     )
@@ -423,8 +423,8 @@ def test_elapsed_backoff_reopens_the_mint():
 
     assert result is True
     assert mixin.access_token == "recovered"
-    assert mixin.token_mint_blocked_until is None
-    assert mixin.token_mint_block_count == 0
+    assert mixin.token_mint_backoff.until is None
+    assert mixin.token_mint_backoff.count == 0
     assert mixin.oauth_failed is False
 
 
@@ -437,7 +437,7 @@ def test_genuine_auth_failure_still_latches_oauth_failed():
 
     assert result is False
     assert mixin.oauth_failed is True
-    assert mixin.token_mint_blocked_until is None
+    assert mixin.token_mint_backoff.until is None
 
 
 def test_edge_block_with_a_refresh_token_held():
@@ -453,5 +453,158 @@ def test_edge_block_with_a_refresh_token_held():
     assert mixin.oauth_failed is False
     assert mixin.refresh_token == "still-good-refresh", "the refresh token is not what the CDN objected to"
     assert mixin._kraken_token_request.call_count == 1, "must not recurse into the same block"
-    assert mixin.token_mint_blocked_until is not None
+    assert mixin.token_mint_backoff.until is not None
     assert mixin._refresh_in_progress is False
+
+
+def test_redact_braced_spans():
+    """Every {...} span is removed, including nested and unterminated ones, so echoed input never survives."""
+    from kraken_auth_mixin import redact_braced_spans
+
+    assert redact_braced_spans("got invalid value {'email': 'a@b.c', 'password': 'hunter2'}; Field") == "got invalid value {...}; Field"
+    assert redact_braced_spans("a {b {c} d} e") == "a {...} e"
+    assert redact_braced_spans("value {'password': 'hunter2'") == "value {...}"
+    assert redact_braced_spans("no braces") == "no braces"
+    # A brace, quote or backslash inside a quoted credential must not end the span early (#5583 review)
+    assert redact_braced_spans("value {'password': 'prefix}example-secret'} tail") == "value {...} tail"
+    assert redact_braced_spans('value {"password": "a\\"}b"} tail') == "value {...} tail"
+    assert redact_braced_spans("value {'password': \"it's}\"} tail") == "value {...} tail"
+    assert redact_braced_spans("value {'password': 'ab\\\\'} tail") == "value {...} tail"
+    assert redact_braced_spans("value {'password': 'never closed} tail") == "value {...}"
+
+
+def test_summarise_token_errors_scrubs_submitted_secrets():
+    """A submitted credential is removed verbatim even when Kraken echoes it in a shape the brace matching misreads."""
+    from kraken_auth_mixin import summarise_token_errors
+
+    errors = [{"message": "got invalid value {password: ab}cd} for input", "extensions": {"errorCode": "KT-CT-0000"}}]
+    # Unquoted, the brace matching alone closes at the first "}" and would leak the rest of the credential
+    assert "cd" in summarise_token_errors(errors)
+    summary = summarise_token_errors(errors, ["ab}cd"])
+    assert summary == "KT-CT-0000: got invalid value {...} for input", summary
+    assert "cd" not in summary
+
+
+def test_token_request_http_400_logs_redacted_reason():
+    """A non-200 token response logs the Kraken reason, with the echoed password stripped (#5582)."""
+    body = (
+        '{"errors": [{"message": "Variable \'$input\' got invalid value {\'email\': \'me@example.com\', \'password\': \'hunter2\'}; '
+        "Field 'email' is not defined by type 'ObtainJSONWebTokenInput'.\", \"extensions\": {\"errorCode\": \"KT-CT-0000\"}}]}"
+    )
+    mixin, mock_session = make_http_mixin(400, body)
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(mixin._kraken_token_request({"email": "me@example.com", "password": "hunter2"}))
+
+    assert result is None
+    logged = " ".join(str(c.args[0]) for c in mixin.log.call_args_list)
+    assert "HTTP 400" in logged
+    assert "Field 'email' is not defined by type 'ObtainJSONWebTokenInput'" in logged, logged
+    assert "KT-CT-0000" in logged, logged
+    assert "hunter2" not in logged and "me@example.com" not in logged, logged
+
+
+def test_token_request_graphql_rejection_logs_redacted_reason():
+    """A 200 response carrying GraphQL errors (a rejected credential) is logged rather than dropped silently (#5582)."""
+    # Echoed unquoted, with a brace inside the password: only the submitted-secret scrub stops "ter2" leaking
+    error_body = {"errors": [{"message": "Invalid data {password: hun}ter2}.", "extensions": {"errorCode": "KT-CT-1138"}}]}
+    mixin, mock_session = make_http_mixin(200, "", json_data=error_body)
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(mixin._kraken_token_request({"email": "me@example.com", "password": "hun}ter2"}))
+
+    assert result is None
+    logged = " ".join(str(c.args[0]) for c in mixin.log.call_args_list)
+    assert "KT-CT-1138: Invalid data {...}." in logged, logged
+    assert "ter2" not in logged and "hun" not in logged, logged
+
+
+def rate_limited_request(mixin, retry_after=None):
+    """Stand-in for _kraken_token_request that reports a rate limit (KT-CT-1199 or HTTP 429)."""
+
+    async def _limited(_input_vars):
+        mixin.token_mint_rate_limited = True
+        mixin.token_mint_retry_after = retry_after
+        return None
+
+    return AsyncMock(side_effect=_limited)
+
+
+def http_response_of(mock_session):
+    """The response a make_http_mixin session hands out, so a test can set its headers."""
+    return mock_session.post.return_value.__aenter__.return_value
+
+
+def test_token_request_flags_http_429():
+    """An HTTP 429 is reported as a rate limit, carrying the Retry-After, not as a plain failure."""
+    mixin, mock_session = make_http_mixin(429, "Too Many Requests")
+    http_response_of(mock_session).headers = {"Retry-After": "900"}
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(mixin._kraken_token_request({"APIKey": "sk_live_test123"}))
+
+    assert result is None
+    assert mixin.token_mint_rate_limited is True
+    assert mixin.token_mint_retry_after == 900
+    assert mixin.token_mint_edge_blocked is False
+
+
+def test_token_request_flags_kt_ct_1199():
+    """A KT-CT-1199 GraphQL error on the mint is reported as a rate limit."""
+    mixin, mock_session = make_http_mixin(200, "", json_data=make_error_response("Too many requests.", "KT-CT-1199"))
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(mixin._kraken_token_request({"APIKey": "sk_live_test123"}))
+
+    assert result is None
+    assert mixin.token_mint_rate_limited is True
+
+
+def test_token_request_does_not_flag_other_errors():
+    """A genuine rejection is not mistaken for a rate limit, so it can still latch oauth_failed."""
+    mixin, mock_session = make_http_mixin(200, "", json_data=make_error_response("Invalid API key", "KT-CT-1138"))
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        asyncio.run(mixin._kraken_token_request({"APIKey": "sk_live_test123"}))
+
+    assert mixin.token_mint_rate_limited is False
+
+
+def test_rate_limited_mint_does_not_latch_oauth_failed():
+    """A rate-limited mint backs off rather than burning the refresh token and latching oauth_failed."""
+    mixin = make_mixin(auth_method="api_key", key="sk_live_test123")
+    mixin.refresh_token = "still-good-refresh"
+    mixin.token_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    mixin._kraken_token_request = rate_limited_request(mixin)
+
+    result = asyncio.run(mixin.check_and_refresh_oauth_token())
+
+    assert result is False
+    assert mixin.oauth_failed is False, "a rate limit must not latch oauth_failed"
+    assert mixin.refresh_token == "still-good-refresh"
+    assert mixin._kraken_token_request.call_count == 1, "must not retry into the same rate limit"
+    assert mixin.token_mint_backoff.until is not None
+    logged = " ".join(str(c.args[0]) for c in mixin.log.call_args_list)
+    assert "Token mint rate limited" in logged, logged
+
+    # The next caller inside the backoff does not mint
+    mixin._kraken_token_request = AsyncMock()
+    asyncio.run(mixin.check_and_refresh_oauth_token())
+    mixin._kraken_token_request.assert_not_called()
+
+
+def test_rate_limited_mint_honours_retry_after():
+    """A Retry-After longer than the backoff schedule lengthens the wait."""
+    mixin = make_mixin(auth_method="api_key", key="sk_live_test123")
+    mixin._kraken_token_request = rate_limited_request(mixin, retry_after=2000)
+    before = datetime.now(timezone.utc)
+
+    asyncio.run(mixin.check_and_refresh_oauth_token())
+
+    assert mixin.token_mint_backoff.until >= before + timedelta(seconds=1999)
+
+
+def test_rate_limited_mint_keeps_a_still_valid_token():
+    """A token inside the proactive-refresh window is still usable while the mint is rate limited."""
+    mixin = make_mixin(auth_method="api_key", key="sk_live_test123")
+    mixin.access_token = "still-good"
+    mixin.token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=3)
+    mixin._kraken_token_request = rate_limited_request(mixin)
+
+    assert asyncio.run(mixin.check_and_refresh_oauth_token()) is True
+    assert mixin.access_token == "still-good"

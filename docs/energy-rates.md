@@ -161,6 +161,14 @@ Like the electricity rates, this is set in the `apps.yaml` template to a regular
   octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))'
 ```
 
+The Octopus Integration Power Down event:
+
+```yaml
+  event.octopus_energy_xxxxxxxx_octoplus_power_down_events
+```
+
+is disabled by default and will need [to be enabled as described above](#octopus-energy-integration-setup).
+
 Octopus Energy integration v19.0.0 renamed this sensor from `..._octoplus_saving_session_events` to `..._octoplus_power_down_events`. The above pattern matches either name, so existing configurations keep working unchanged.
 The old sensor is retained by the integration until **January 2027**, after which only the Power Down naming will exist. The new sensor ships disabled by default in Home Assistant
 (`entity_registry_enabled_default: False`) - if Predbat's Octopus entity list does not show a Power Down sensor, [enable it in the entity registry first](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/faq/#there-are-entities-that-are-disabled-why-are-they-disabled-and-how-do-i-enable-them), otherwise Predbat will keep silently using the old sensor with no visible warning.
@@ -186,6 +194,8 @@ reduction in this period. E.g. setting to a value of 0.8 would indicate you will
 
 As the saving session import and export rates are very high compared to normal Predbat will plan additional export during the saving session period.
 If necessary, a pre-charge may happen at some point during the day to maintain the battery right level for the session.
+This needs the automatic import threshold (**input_number.predbat_rate_low_threshold** set to 0): a manual threshold is a cap
+Predbat will not charge above, even ahead of a session - see [rate thresholds](customisation.md#battery-margins-and-metrics-options).
 
 Note that Predbat's operational mode **select.predbat_mode** must be set to either 'Control charge'
 or 'Control charge & discharge' for Predbat to be able to manage the battery for the saving session.
@@ -211,6 +221,14 @@ all the free events.
 ```yaml
   octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_(free_electricity_session_events|power_up_events))'
 ```
+
+The Octopus Integration Power Up event:
+
+```yaml
+  event.octopus_energy_xxxxxxxx_octoplus_power_up_events
+```
+
+is disabled by default and will need [to be enabled as described above](#octopus-energy-integration-setup).
 
 Octopus Energy integration v19.0.0 renamed this sensor from `..._octoplus_free_electricity_session_events` to `..._octoplus_power_up_events`. The above pattern matches either name, so existing
 configurations keep working unchanged. The old sensor is retained by the integration until **January 2027**, after which only the Power Up naming will exist.
@@ -283,6 +301,13 @@ The following entries are required for the Kraken component in `apps.yaml`:
 ```
 
 Full details of what to configure are given in the [component documentation](components.md#kraken-energy-kraken)
+
+If you have an EV on a smart-charging tariff with Eon.Next (such as Next Drive Smart), Eon bills every half hour of a planned charging dispatch at the cheap rate whether or not the car charged in it, unlike Octopus Intelligent.
+With `kraken_provider: eon` Predbat prices dispatches that way automatically; see **intelligent_dispatch_billing** in the [car charging documentation](car-charging.md) to change it.
+
+With `kraken_provider: edf`, free hours you have booked through EDF Flextras are read from EDF every 30 minutes and priced at 0p in the plan, in the same way as [Octopus free electricity sessions](#octopus-free-power-up-events).
+They are published on `sensor.predbat_kraken_<account>_free_electricity`.
+EDF Power Perks sessions are announced by text message only and are not available from EDF's API, so they are not picked up automatically - use the [manual rate overrides](#manually-over-riding-energy-rates) to add one.
 
 ## Energidataservice Integration
 
@@ -627,6 +652,28 @@ Or, if you prefer to set import/export calibration manually rather than auto-det
   futurerate_peak_start: "16:00:00"
   futurerate_peak_end: "19:00:00"
 ```
+
+### AgilePredict forecast
+
+Nord Pool day-ahead prices only reach the end of tomorrow, and only once the day-ahead auction has run (late morning UK time).
+[AgilePredict](https://agilepredict.com) publishes a forecast of Octopus Agile prices for each region up to 14 days ahead, so it can also fill the
+hours that neither Octopus nor Nord Pool has published yet - for example the second day of the plan before 4pm.
+
+- **futurerate_agilepredict** - When `true`, Predbat fetches the AgilePredict forecast and uses it for any future minute that has no published Agile
+  rate and no Nord Pool price. Published rates always take priority, then Nord Pool prices (if `futurerate_url` is set), then the forecast.
+  It uses the same `futurerate_adjust_import`, `futurerate_adjust_export` and `futurerate_adjust_auto` settings to decide whether to apply the
+  forecast to import, export or both. The forecast is already in Agile prices so it is not calibrated.
+- **futurerate_agilepredict_region** - Optional Octopus region letter (A-P). By default the region is taken from the end of the Octopus tariff
+  code of `metric_octopus_import` (or `metric_octopus_export`).
+- **futurerate_agilepredict_url** - Optional, overrides the AgilePredict API address (default `https://prices.fly.dev/api/`).
+
+```yaml
+  futurerate_agilepredict: true
+  futurerate_adjust_auto: true
+```
+
+Predbat fetches the next five days of the forecast and caches it for three hours. AgilePredict is a free community service, so please do not poll it more often.
+The forecast is only applied to your Agile import/export rates, not to gas or to tariffs being compared.
 
 ## Axle VPP
 

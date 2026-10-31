@@ -15,7 +15,7 @@
 
 ComponentBase wrapper that manages the LoadPredictor lifecycle including
 data fetching, periodic training/fine-tuning, prediction generation, and
-status sensor publishing. Retrains every 2 hours and updates predictions
+status sensor publishing. Retrains every 2 hours by default and updates predictions
 every 30 minutes.
 """
 
@@ -31,7 +31,6 @@ import traceback
 import numpy as np
 
 # Training intervals
-RETRAIN_INTERVAL_SECONDS = 2 * 60 * 60  # 2 hours between training cycles
 PREDICTION_INTERVAL_SECONDS = 30 * 60  # 30 minutes between predictions
 
 # Database schema version - increment when the saved format changes to force a clean rebuild
@@ -51,7 +50,7 @@ class LoadMLComponent(ComponentBase):
     - Falls back to empty predictions when validation fails or model is stale
     """
 
-    def initialize(self, load_ml_enable, load_ml_source=True, load_ml_max_days_history=28, load_ml_database_days=90):
+    def initialize(self, load_ml_enable, load_ml_source=True, load_ml_max_days_history=28, load_ml_database_days=90, load_ml_retrain_interval_hours=2):
         """
         Initialise the ML load forecaster component.
 
@@ -60,6 +59,7 @@ class LoadMLComponent(ComponentBase):
             load_ml_source: Whether using ML as the data source is enabled or not
             load_ml_max_days_history: Maximum number of days of load history to fetch
             load_ml_database_days: Number of days of historical data to store in the database, maximum length for training
+            load_ml_retrain_interval_hours: Hours between training cycles, clamped to 1-48
         """
 
         self.ml_enable = load_ml_enable
@@ -74,7 +74,6 @@ class LoadMLComponent(ComponentBase):
             self.car_charging_hold = False
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold", 6.0)) / 60.0
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale", 1.0)
-        self.car_charging_rate = float(self.get_arg("car_charging_rate", 7.5)) / 60.0
 
         self.ml_learning_rate = 0.001
         self.ml_epochs_initial = 100
@@ -86,6 +85,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_time_decay_days = 30
         self.ml_max_load_kw = 50.0
         self.ml_max_model_age_hours = 48
+        self.ml_retrain_interval_seconds = max(1, min(self.ml_max_model_age_hours, load_ml_retrain_interval_hours)) * 60 * 60
         self.ml_weight_decay = 0.01
         self.ml_dropout_rate = 0.1
         self.ml_max_days_history = load_ml_max_days_history
@@ -293,6 +293,29 @@ class LoadMLComponent(ComponentBase):
             result[minute] = total_energy
         return result
 
+    def iboost_subtraction(self, load_cumulative, iboost_cumulative, step=PREDICT_STEP):
+        """
+        Subtract iBoost/diverter energy from cumulative load, step by step, flooring each step at zero.
+
+        Both inputs and the result are {minute: cumulative_kwh} in backwards format (minute 0 = now, highest value).
+        """
+        result = {}
+        if not load_cumulative:
+            return result
+        max_minute = max(load_cumulative.keys())
+        max_minute = (max_minute // step) * step
+        total_energy = 0.0
+        for minute in range(max_minute, -step, -step):
+            load_delta = self.get_from_incrementing(load_cumulative, minute, step, backwards=True)
+            iboost_delta = self.get_from_incrementing(iboost_cumulative, minute, step, backwards=True)
+            total_energy += max(0.0, load_delta - iboost_delta)
+            result[minute] = dp4(total_energy)
+        return result
+
+    def iboost_subtract_active(self):
+        """True when iBoost/diverter energy is to be subtracted from load history, re-read so a switch change is picked up without a restart."""
+        return bool(self.get_arg("iboost_energy_subtract", True) and self.get_arg("iboost_energy_today", default=None, indirect=False))
+
     async def _fetch_load_data(self):
         """
         Fetch and process load data from configured sensors.
@@ -326,6 +349,15 @@ class LoadMLComponent(ComponentBase):
                 load_power_data, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True, pad=False, clean_increment=False)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
 
+            # Subtract iBoost/diverter energy as the standard load forecast does (get_filtered_load_window),
+            # whether or not Predbat controls the diverter. Done before the car step so the car threshold test
+            # judges diverter-free load, the same order as the standard path.
+            if self.iboost_subtract_active():
+                iboost_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "iboost_energy_today", required_unit="kWh", pad=False)
+                if iboost_energy:
+                    self.log("ML Component: Applying iBoost energy subtraction")
+                    load_minutes = self.iboost_subtraction(load_minutes, iboost_energy, step=PREDICT_STEP)
+
             # Re-read car charging settings dynamically so switch changes are picked up without a restart.
             # Note: car_charging_from_battery does not affect EV subtraction from load history; it only controls
             # whether the battery is allowed to discharge for car charging in the prediction model.
@@ -353,12 +385,17 @@ class LoadMLComponent(ComponentBase):
             else:
                 # Filter car charging based on threshold if enabled
                 total_load_energy = 0
+                car_rate_per_minute = 0.0
+                if car_charging_hold:
+                    # The estimated car load is the car's charging rate capped at its own maximum (car_charging_max_rate)
+                    # as Fetch does; both are read now, as either can change at runtime
+                    car_rate_per_minute = self.car_rate_capped(0, float(self.get_arg("car_charging_rate", 7.5))) / 60.0
                 for minute in range(max_minute, -PREDICT_STEP, -PREDICT_STEP):
                     car_delta = 0.0
                     if car_charging_hold:
                         load_now = self.get_from_incrementing(load_minutes, minute, PREDICT_STEP, backwards=True)
                         if load_now >= self.car_charging_threshold * PREDICT_STEP:
-                            car_delta = self.car_charging_rate * PREDICT_STEP
+                            car_delta = car_rate_per_minute * PREDICT_STEP
 
                     # Work out load delta and subtract car delta
                     load_delta = self.get_from_incrementing(load_minutes, minute, PREDICT_STEP, backwards=True)
@@ -368,7 +405,7 @@ class LoadMLComponent(ComponentBase):
                     load_minutes_new[minute] = dp4(total_load_energy + load_delta)
                     total_load_energy += load_delta
 
-            # Get current cumulative load value (excludes car) before converting to per-step
+            # Get current cumulative load value (excludes car and iBoost) before converting to per-step
             load_minutes_now = get_now_from_cumulative(load_minutes_new, self.minutes_now, backwards=True)
 
             # Convert cumulative load data to per-5-min energy for the predictor
@@ -721,8 +758,8 @@ class LoadMLComponent(ComponentBase):
         is_initial = not self.initial_training_done
 
         # Retrain if the model is older than the retrain interval (rather than on a fixed tick)
-        retrain_age_seconds = (self.now_utc - self.last_train_time).total_seconds() if self.last_train_time else RETRAIN_INTERVAL_SECONDS
-        should_train = not first and (retrain_age_seconds >= RETRAIN_INTERVAL_SECONDS)
+        retrain_age_seconds = (self.now_utc - self.last_train_time).total_seconds() if self.last_train_time else self.ml_retrain_interval_seconds
+        should_train = not first and (retrain_age_seconds >= self.ml_retrain_interval_seconds)
 
         # Fetch fresh load data periodically (every N minutes)
         should_fetch = first or should_train or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
@@ -756,7 +793,7 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Component: Initial training is required, delaying until component has started")
                 return True
         elif should_train:
-            self.log("ML Component: Starting fine-tune training (2h interval), model age is {} hours".format(retrain_age_seconds / 3600.0))
+            self.log("ML Component: Starting fine-tune training ({:g}h interval), model age is {} hours".format(self.ml_retrain_interval_seconds / 3600.0, retrain_age_seconds / 3600.0))
         elif should_fetch:
             # If not training either then no need to print anything
             self.log("ML Component: No training needed, model age is {} hours".format(dp2(retrain_age_seconds / 3600.0)))
@@ -858,6 +895,7 @@ class LoadMLComponent(ComponentBase):
                 "n_steps": total_steps,
                 "age_days": float(self.load_data_age_days),
                 "nan_sentinel": True,
+                "iboost_subtracted": self.iboost_subtract_active(),
             }
         )
 
@@ -899,6 +937,15 @@ class LoadMLComponent(ComponentBase):
                 step_minutes = metadata.get("step_minutes", PREDICT_STEP)
                 if step_minutes != PREDICT_STEP:
                     self.log("Warn: ML Component: Database step size mismatch (saved={}min, current={}min), discarding".format(step_minutes, PREDICT_STEP))
+                    return
+
+                # The saved load channel is already prepped; if it was saved with a different iBoost subtraction
+                # (including any database from before LoadML subtracted iBoost at all) old rows would keep or lose the
+                # diverter's energy unlike every fresh fetch, so discard it rather than train on a mixed series
+                saved_iboost_subtracted = metadata.get("iboost_subtracted", False)
+                iboost_subtracted = self.iboost_subtract_active()
+                if saved_iboost_subtracted != iboost_subtracted:
+                    self.log("Warn: ML Component: Database iBoost subtraction mismatch (saved={}, current={}), discarding".format(saved_iboost_subtracted, iboost_subtracted))
                     return
 
                 saved_utc = datetime.fromisoformat(metadata["saved_utc"])

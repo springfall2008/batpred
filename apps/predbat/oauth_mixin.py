@@ -21,8 +21,10 @@ import asyncio
 from datetime import datetime
 
 
-# 2 hours in seconds — refresh when less than this remaining
-TOKEN_REFRESH_THRESHOLD = 2 * 60 * 60
+# Refresh when less than this remains (seconds). Kept well under the shortest token lifetime in
+# use: EDF's Kraken OAuth token lives one hour, so the old 2-hour threshold made every single
+# request refresh first - one oauth-refresh edge-function call per Kraken query.
+TOKEN_REFRESH_THRESHOLD = 30 * 60
 
 # The oauth-refresh edge function (and the provider behind it) can fail transiently —
 # an HTTP 502 has been seen in the wild — so a refresh is retried before being given up on.
@@ -113,9 +115,18 @@ class OAuthMixin:
         """Call the oauth-refresh edge function to get a new access token."""
         self._refresh_in_progress = True
         try:
+            instance_id = getattr(self.base, "args", {}).get("user_id", "") if hasattr(self, "base") else ""
+
+            refresh_provider = getattr(getattr(self, "base", None), "oauth_refresh_provider", None)
+            if refresh_provider is not None:
+                data = await refresh_provider(instance_id, self.provider_name, self.token_hash)
+                if data is None:
+                    self.log(f"Warn: OAuth refresh provider returned no answer for {self.provider_name}")
+                    return False
+                return self._apply_refresh_data(data)
+
             supabase_url = os.environ.get("SUPABASE_URL", "")
             supabase_key = os.environ.get("SUPABASE_KEY", "")
-            instance_id = getattr(self.base, "args", {}).get("user_id", "") if hasattr(self, "base") else ""
 
             if not supabase_url or not supabase_key:
                 self.log("Warn: OAuth refresh skipped — SUPABASE_URL or SUPABASE_KEY not set")
@@ -163,21 +174,7 @@ class OAuthMixin:
                 self.log(f"Warn: OAuth refresh {last_error} for {self.provider_name}")
                 return False
 
-            if data.get("success"):
-                self.access_token = data["access_token"]
-                self.token_expires_at = self._parse_expiry(data.get("expires_at"))
-                self.token_hash = data.get("token_hash", self.token_hash)
-                self.log(f"Info: OAuth token refreshed for {self.provider_name}, expires at {data.get('expires_at')}")
-                return True
-            else:
-                error = data.get("error", "unknown")
-                if error == "needs_reauth":
-                    self.log(f"Warn: OAuth token for {self.provider_name} needs re-authorization. User must reconnect.")
-                    self.oauth_failed = True
-                    return False
-                else:
-                    self.log(f"Warn: OAuth refresh failed for {self.provider_name}: {error}")
-                    return False
+            return self._apply_refresh_data(data)
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: OAuth refresh network error for {self.provider_name}: {e}")
@@ -187,6 +184,24 @@ class OAuthMixin:
             return False
         finally:
             self._refresh_in_progress = False
+
+    def _apply_refresh_data(self, data):
+        """Apply an oauth-refresh JSON reply to the held token. Returns success."""
+        if data.get("success"):
+            self.access_token = data["access_token"]
+            self.token_expires_at = self._parse_expiry(data.get("expires_at"))
+            self.token_hash = data.get("token_hash", self.token_hash)
+            self.log(f"Info: OAuth token refreshed for {self.provider_name}, expires at {data.get('expires_at')}")
+            return True
+        else:
+            error = data.get("error", "unknown")
+            if error == "needs_reauth":
+                self.log(f"Warn: OAuth token for {self.provider_name} needs re-authorization. User must reconnect.")
+                self.oauth_failed = True
+                return False
+            else:
+                self.log(f"Warn: OAuth refresh failed for {self.provider_name}: {error}")
+                return False
 
     async def handle_oauth_401(self):
         """Handle a 401 response when using OAuth. Attempts one refresh and retry.

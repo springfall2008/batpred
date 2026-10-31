@@ -1877,6 +1877,21 @@ def test_descriptor_invert_must_be_bool():
     return 0
 
 
+def test_descriptor_step_percent_of_capacity_must_be_a_percentage():
+    """step_percent_of_capacity is kept when it is a percentage above 0 and up to 100, dropped otherwise (#5324)."""
+    record, _ = _one_inverter(entities={
+        "charge_rate": {"entity_id": "number.c", "access": "rw", "step_percent_of_capacity": 1},
+        "discharge_rate": {"entity_id": "number.d", "access": "rw", "step_percent_of_capacity": True},
+        "charge_limit": {"entity_id": "number.l", "access": "rw", "step_percent_of_capacity": 0},
+        "reserve": {"entity_id": "number.r", "access": "rw", "step_percent_of_capacity": 150},
+    })
+    assert record["entities"]["charge_rate"]["step_percent_of_capacity"] == 1, record
+    for setting in ("discharge_rate", "charge_limit", "reserve"):
+        assert "step_percent_of_capacity" not in record["entities"][setting], record
+    print("PASS: step_percent_of_capacity must be a percentage")
+    return 0
+
+
 def test_new_containers_survive_redaction_unchanged():
     """Bool capabilities, a strftime format and a string value stand-in pass the redactor untouched."""
     base, coordinator = _coordinator()
@@ -1944,6 +1959,23 @@ def test_inverter_definition_presence_needs_a_real_rw_entity():
     assert definition["has_reserve_soc"] is False and definition["has_target_soc"] is False
     assert definition["has_timed_pause"] is True
     print("PASS: presence needs rw entity")
+    return 0
+
+
+def test_inverter_definition_rate_step_from_charge_rate():
+    """rate_step_percent_of_capacity comes from charge_rate's step_percent_of_capacity; absent, base's value stands, else 0 (#5324)."""
+    record = _full_record()
+    definition, gaps, _ = inverter_definition(record, 2)
+    assert definition["rate_step_percent_of_capacity"] == 0 and "rate_step_percent_of_capacity" not in gaps, definition
+    definition, _, _ = inverter_definition(record, 2, base={"rate_step_percent_of_capacity": 1})
+    assert definition["rate_step_percent_of_capacity"] == 1, definition
+    record["entities"]["charge_rate"]["step_percent_of_capacity"] = 1
+    definition, _, _ = inverter_definition(record, 2)
+    assert definition["rate_step_percent_of_capacity"] == 1, definition
+    del record["entities"]["charge_rate"]
+    definition, _, _ = inverter_definition(record, 2)
+    assert definition["rate_step_percent_of_capacity"] == 0, definition
+    print("PASS: rate step from charge_rate")
     return 0
 
 
@@ -2119,10 +2151,12 @@ def test_coordinator_all(my_predbat=None):
     failures += test_descriptor_needs_exactly_one_of_entity_id_and_value()
     failures += test_descriptor_value_rejects_free_text()
     failures += test_descriptor_invert_must_be_bool()
+    failures += test_descriptor_step_percent_of_capacity_must_be_a_percentage()
     failures += test_new_containers_survive_redaction_unchanged()
     failures += test_inverter_definition_builds_every_field_without_a_base()
     failures += test_inverter_definition_presence_needs_a_real_rw_entity()
     failures += test_inverter_definition_ge_mode_flags_follow_inverter_mode_domain()
+    failures += test_inverter_definition_rate_step_from_charge_rate()
     failures += test_inverter_definition_charge_rate_units()
     failures += test_inverter_definition_gaps_and_not_applicable()
     failures += test_inverter_definition_counts_load_entities()

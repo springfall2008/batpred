@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate
 import functools
 import io
 import itertools
@@ -34,16 +34,37 @@ from const import (
     DEBUG_SCHEMA_VERSION,
     MANUAL_RATE_MAX_MINUTES,
     MANUAL_TIME_MAX_MINUTES,
+    REPEAT_FULL_LOG_SECONDS,
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
+
 # A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
 # most of a replay's wall-clock on it - about 6s for a 5MB dump. CLoader pairs libyaml's C parser
 # with the very same (unsafe) Constructor that yaml.unsafe_load uses, so the Python-object tags
-# these dumps carry still load and the result is identical, roughly 6x faster. PyYAML is not
-# always built with libyaml, so fall back to the pure-Python loader when the C one is absent.
-DEBUG_YAML_LOADER = getattr(yaml, "CLoader", yaml.UnsafeLoader)
+# these dumps carry still load, roughly 6x faster. PyYAML is not always built with libyaml, so
+# fall back to the pure-Python loader when the C one is absent. The one difference from
+# yaml.unsafe_load is the RepeatLogGate constructor added below.
+class DebugYamlLoader(getattr(yaml, "CLoader", yaml.UnsafeLoader)):
+    """The loader read_debug_yaml() replays a debug dump with; see construct_empty_log_gate()."""
+
+
+def construct_empty_log_gate(loader, node):
+    """
+    Load any RepeatLogGate in a debug dump as a new, empty gate, without constructing what was dumped.
+
+    From v9.3.8 until #5569, io_slot_log_gate went into every dump that had logged an Intelligent slot
+    list. Its history is keyed by tuples, which the dump wrote as YAML sequences, and a
+    sequence cannot be a dict key on the way back in ("found unhashable key"), so those dumps would
+    not load at all. A replay has no use for which log lines were already written, and that gate
+    always used REPEAT_FULL_LOG_SECONDS, so nothing under the node is read.
+    """
+    return RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
+
+
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object:utils.RepeatLogGate", construct_empty_log_gate)
+DEBUG_YAML_LOADER = DebugYamlLoader
 
 
 class DebugYamlDumper(yaml.Dumper):
@@ -70,8 +91,10 @@ class DebugYamlDumper(yaml.Dumper):
 
 # An export limit is a (mode, target, power) tuple, and PyYAML tags a tuple as !!python/tuple,
 # which yaml.safe_load refuses - the debug dump is an artefact people attach to bug reports and has
-# to load with plain YAML tooling. Written as an ordinary sequence instead. Nothing else in a dump
-# is a tuple today, and a sequence is what a reader wants from one anyway.
+# to load with plain YAML tooling. Written as an ordinary sequence instead, which is what a reader
+# wants from one anyway. That includes a tuple used as a dict key, and a sequence cannot be a dict
+# key on the way back in ("found unhashable key"), so a tuple-keyed dict must be kept out of the
+# dump - io_slot_log_gate was one (#5569) and is in DEBUG_EXCLUDE_LIST for that reason.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
 
 
@@ -98,6 +121,14 @@ class UserInterface:
     PredBat and Home Assistant. Creates entities for switches, input_numbers,
     and selects. Routes HA events to appropriate handlers.
     """
+
+    # Optional host hook consulted by load_previous_value_from_ha before Home Assistant:
+    # callable(entity, attribute) returning the value, or None to fall back to the HA read.
+    previous_value_provider = None
+
+    # Optional host hook consulted by OAuth token refresh instead of the oauth-refresh edge function:
+    # async callable(instance_id, provider, token_hash) returning the edge function's JSON reply, or None for a failed refresh.
+    oauth_refresh_provider = None
 
     def call_notify(self, message):
         """
@@ -142,7 +173,8 @@ class UserInterface:
             if combine:
                 final = 0
                 for item in value:
-                    got = self.resolve_arg(arg, item, default=default, indirect=True)
+                    # Convert each entry before summing: one sensor in kW among values in W would otherwise be added as W
+                    got = self.resolve_arg(arg, item, default=default, indirect=True, required_unit=required_unit)
                     try:
                         final += float(got)
                     except (ValueError, TypeError):
@@ -755,8 +787,10 @@ class UserInterface:
             if item.get("save", True):
                 if item.get("value", None) is not None:
                     save_array[item["name"]] = item["value"]
+        # One setting per line, so the file can be read and diffed (e.g. kept in git)
         with open(filepath, "w") as file:
-            json.dump(save_array, file)
+            json.dump(save_array, file, indent=2)
+            file.write("\n")
         self.log("Saved current settings to {}".format(filepath_p))
 
     async def async_save_settings_yaml(self, filename=None):
@@ -966,7 +1000,14 @@ class UserInterface:
     def load_previous_value_from_ha(self, entity, attribute=None):
         """
         Load HA value either from state or from history if there is any
+
+        If previous_value_provider is set it is asked first; a None result falls back to HA.
         """
+        if self.previous_value_provider is not None:
+            provided = self.previous_value_provider(entity, attribute)
+            if provided is not None:
+                return provided
+
         if attribute:
             ha_value = self.get_state_wrapper(entity, attribute=attribute)
             if ha_value is not None and ha_value not in ("unavailable", "unknown"):
@@ -1069,6 +1110,52 @@ class UserInterface:
         self.log("New install detected")
         return True
 
+    def car_list_families(self):
+        """
+        Return the base names of the per-car config item families (name, name_1, ...)
+        """
+        names = set(item["name"] for item in self.CONFIG_ITEMS)
+        return set(name for name in names if name.startswith("car_") and name + "_1" in names)
+
+    def car_list_arg(self, item, car_families):
+        """
+        For a car config item given in apps.yaml as a list, return (True, this car's entry or None), otherwise (False, None)
+        """
+        name = item["name"]
+        base_name, car_n = name, 0
+        match = re.match(r"^(.+)_(\d+)$", name)
+        if match and match.group(1) in car_families:
+            base_name, car_n = match.group(1), int(match.group(2))
+
+        is_family = base_name in car_families
+        if not base_name.startswith("car_") or not (is_family or item.get("enable") == "num_cars"):
+            return False, None
+
+        own_list = False
+        if car_n and name in self.args:
+            if not isinstance(self.args[name], list):
+                # The car's own key in apps.yaml wins over the list
+                return False, None
+            # A list on a car's own key has no meaning, don't let it become the item default
+            self.log("Warn: Config item {} in apps.yaml is a list but sets a single car - ignoring it, use one value here or a list on {}".format(name, base_name))
+            own_list = True
+
+        values = self.args.get(base_name)
+        if not isinstance(values, list):
+            return own_list, None
+
+        if not is_family and len(values) > 1:
+            self.log("Warn: Config item {} in apps.yaml is a list but is one setting for all cars - using the first entry {}".format(base_name, values[0]))
+
+        value = values[car_n] if car_n < len(values) else None
+        if value is not None and item["type"] == "input_number":
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                self.log("Warn: Config item {} entry {} for car {} in apps.yaml is not a number - ignoring it".format(base_name, value, car_n))
+                value = None
+        return True, value
+
     def load_user_config(self, quiet=True, register=False, load_config=False):
         """
         Load config from HA
@@ -1081,6 +1168,7 @@ class UserInterface:
         new_install = self.is_new_install()
 
         # Build config index
+        car_families = self.car_list_families()
         for item in self.CONFIG_ITEMS:
             name = item["name"]
             self.config_index[name] = item
@@ -1088,7 +1176,12 @@ class UserInterface:
             if name == "mode" and new_install:
                 item["default"] = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
 
-            if name in self.args:
+            car_list, car_default = self.car_list_arg(item, car_families)
+            if car_list:
+                # A car item given as an apps.yaml list, each car takes its own entry
+                if car_default is not None:
+                    item["default"] = car_default
+            elif name in self.args:
                 # If the item is in args, use it as the default
                 item["default"] = self.args[name]
 
@@ -1761,7 +1854,13 @@ class UserInterface:
         self.log("Update event {} {} {}".format(event, data, kwargs))
         if data and data.get("service", "") == "install":
             service_data = data.get("service_data", {})
-            if service_data.get("entity_id", "") == "update.predbat_version":
+            entities = service_data.get("entity_id", [])
+
+            # Can be a string or an array, the HA update card sends an array
+            if isinstance(entities, str):
+                entities = [entities]
+
+            if "update.predbat_version" in entities:
                 latest = self.releases.get("latest", None)
                 if latest:
                     self.log("Requested install of latest Predbat version {}".format(latest))

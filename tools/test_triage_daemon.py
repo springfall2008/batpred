@@ -18,6 +18,9 @@ from unittest.mock import MagicMock, patch
 
 import triage_daemon
 
+# Captured before any test patches it, for the one test of the real function.
+REAL_DAEMON_VERSION = triage_daemon.daemon_version
+
 
 # What `gh pr list --json number` prints once the flush has opened its PR. The flush reads
 # this to decide whether the queue may be consumed, so the tests need both shapes.
@@ -349,7 +352,7 @@ class LabelSwapTests(unittest.TestCase):
     def test_mark_pr_opened_with_cleanup_flags_review_and_cleanup_together(self, mock_run):
         """A PR this run just opened gets BOT_REVIEW and BOT_CLEANUP in one edit, so the
         review's findings are acted on without anyone relabelling it by hand."""
-        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742}]))
+        mock_run.side_effect = self._bot_pr_gh()
         triage_daemon.mark_pr_opened(4720, cleanup=True)
         calls = [call.args[0] for call in mock_run.call_args_list]
         self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW", "--add-label", "BOT_CLEANUP"], calls)
@@ -372,6 +375,92 @@ class LabelSwapTests(unittest.TestCase):
         triage_daemon.mark_pr_opened(4720)  # must not raise
         calls = [call.args[0] for call in mock_run.call_args_list]
         self.assertFalse(any(call[:3] == ["gh", "pr", "edit"] for call in calls))
+
+    @staticmethod
+    def _bot_pr_gh(requester_stdout="latest-requester\n", requester_rc=0):
+        """A subprocess.run stand-in: the PR search finds #4742, the events lookup prints
+        requester_stdout, and every other gh call succeeds."""
+
+        def fake_run(cmd, *args, **kwargs):
+            """Answer one gh call by its leading words."""
+            if cmd[:3] == ["gh", "pr", "list"]:
+                return MagicMock(stdout=json.dumps([{"number": 4742}]), returncode=0)
+            if cmd[:2] == ["gh", "api"]:
+                return MagicMock(stdout=requester_stdout, returncode=requester_rc, stderr="")
+            return MagicMock(stdout="", returncode=0, stderr="")
+
+        return fake_run
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_by_bot_labels_and_assigns_the_requester(self, mock_run):
+        """A PR the bot just opened gets BOT_PR_OPENED in the same edit as its review labels, and
+        is assigned to whoever added BOT_PR, since its author is always the bot's credential."""
+        mock_run.side_effect = self._bot_pr_gh()
+        triage_daemon.mark_pr_opened(4720, cleanup=True, opened_by_bot=True)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW", "--add-label", "BOT_CLEANUP", "--add-label", "BOT_PR_OPENED"], calls)
+        self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-assignee", "latest-requester"], calls)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_not_by_bot_does_not_claim_the_pr(self, mock_run):
+        """A PR found already open may be a person's own - it is neither labelled as the bot's
+        nor reassigned."""
+        mock_run.side_effect = self._bot_pr_gh()
+        triage_daemon.mark_pr_opened(4720)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any(call[:3] == ["gh", "pr", "edit"] and ("BOT_PR_OPENED" in call or "--add-assignee" in call) for call in calls))
+        self.assertFalse(any(call[:2] == ["gh", "api"] for call in calls))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_assign_bot_pr_requester_skips_when_lookup_fails(self, mock_run):
+        """A failed events lookup skips the assignee and does not raise."""
+        mock_run.side_effect = self._bot_pr_gh(requester_stdout="", requester_rc=1)
+        triage_daemon.assign_bot_pr_requester(4742, 4720)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any("--add-assignee" in call for call in calls))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_assign_bot_pr_requester_swallows_a_hung_gh(self, mock_run):
+        """The PR is already open and labelled, so a gh call that times out is logged, not raised."""
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="gh", timeout=120)
+        triage_daemon.assign_bot_pr_requester(4742, 4720)  # must not raise
+
+    @patch("triage_daemon.subprocess.run")
+    def test_assign_bot_pr_requester_failed_edit_does_not_raise(self, mock_run):
+        """An unassignable login makes the edit fail; that is logged and the flow carries on."""
+        fake = self._bot_pr_gh()
+
+        def failing_edit(cmd, *args, **kwargs):
+            """Fail the assignee edit, answer everything else as normal."""
+            if "--add-assignee" in cmd:
+                return MagicMock(stdout="", returncode=1, stderr="not a collaborator")
+            return fake(cmd, *args, **kwargs)
+
+        mock_run.side_effect = failing_edit
+        triage_daemon.assign_bot_pr_requester(4742, 4720)  # must not raise
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertTrue(any("--add-assignee" in call for call in calls))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_find_bot_pr_requester_reports_why_a_lookup_failed(self, mock_run):
+        """A lookup that errors says why, rather than reading like an issue with no requester."""
+        mock_run.return_value = MagicMock(stdout="", returncode=1, stderr="HTTP 401: Bad credentials")
+        with patch("builtins.print") as mock_print:
+            self.assertIsNone(triage_daemon.find_bot_pr_requester(4720))
+        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("lookup failed", printed)
+        self.assertIn("Bad credentials", printed)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_find_bot_pr_requester_takes_the_latest_label_event(self, mock_run):
+        """BOT_PR re-added after a failure has several labeled events, one line each across
+        pages; the most recent one is the person who asked this time. Null actors are
+        filtered in the query, so 'null' is never taken for a login."""
+        mock_run.side_effect = self._bot_pr_gh(requester_stdout="earlier-requester\n\nlatest-requester\n")
+        self.assertEqual(triage_daemon.find_bot_pr_requester(4720), "latest-requester")
+        cmd = mock_run.call_args_list[0].args[0]
+        self.assertEqual(cmd[:4], ["gh", "api", "--paginate", "repos/springfall2008/batpred/issues/4720/events"])
+        self.assertIn(".actor != null", cmd[-1])
 
     @patch("triage_daemon.subprocess.run")
     def test_mark_pr_failed_swaps_labels(self, mock_run):
@@ -1060,7 +1149,7 @@ class ProcessNewIssueTests(unittest.TestCase):
         state = {"last_processed": 5003, "triage_attempts": {"5004": triage_daemon.TRIAGE_MAX_ATTEMPTS - 1}}
         self.assertTrue(triage_daemon.process_new_issue(self.issue, state))
         self.assertEqual(state["last_processed"], 5004)
-        self.patches["mark_triage_failed"].assert_called_once_with(5004, triage_daemon.TRIAGE_MAX_ATTEMPTS)
+        self.patches["mark_triage_failed"].assert_called_once_with(5004, triage_daemon.TRIAGE_MAX_ATTEMPTS, self.patches["triage"].side_effect)
         self.assertNotIn("5004", state["triage_attempts"])
 
     def test_a_failing_mark_does_not_abort_the_cycle(self):
@@ -1844,11 +1933,12 @@ class ProcessBotPrIssueTests(unittest.TestCase):
 
     def test_marks_opened_when_a_pr_exists_afterwards(self):
         """If a PR references the issue after create_pr() runs, swap to BOT_PR_OPENED - and
-        since this run opened it, queue the cleanup that acts on its review as well."""
+        since this run opened it, queue the cleanup that acts on its review as well, and claim
+        the PR as the bot's for its requester."""
         self.patches["has_existing_pr"].side_effect = [False, True]
         self.patches["ensure_triaged"].return_value = True
         triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
-        self.patches["mark_pr_opened"].assert_called_once_with(4720, cleanup=True)
+        self.patches["mark_pr_opened"].assert_called_once_with(4720, cleanup=True, opened_by_bot=True)
         self.patches["mark_pr_failed"].assert_not_called()
 
     def test_marks_failed_when_no_pr_exists_afterwards(self):
@@ -2296,7 +2386,7 @@ class ProcessBotReviewIssueTests(unittest.TestCase):
         self.patches["is_already_triaged"].return_value = True
         self.patches["triage_followup"].side_effect = subprocess.CalledProcessError(1, ["claude"])
         triage_daemon.process_bot_review_issue({"number": 3100, "labels": [{"name": "BOT_TRIAGED"}], "title": "Old ticket needing review"})
-        self.patches["mark_review_failed"].assert_called_once_with(3100)
+        self.patches["mark_review_failed"].assert_called_once_with(3100, exc=self.patches["triage_followup"].side_effect)
         self.patches["remove_review_label"].assert_not_called()
 
     def test_failed_first_pass_triage_marks_failed_instead_of_removing_the_label(self):
@@ -2305,7 +2395,7 @@ class ProcessBotReviewIssueTests(unittest.TestCase):
         self.patches["find_triage_comment"].return_value = False
         self.patches["triage"].side_effect = subprocess.CalledProcessError(1, ["claude"])
         triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
-        self.patches["mark_review_failed"].assert_called_once_with(3100)
+        self.patches["mark_review_failed"].assert_called_once_with(3100, exc=self.patches["triage"].side_effect)
         self.patches["remove_review_label"].assert_not_called()
 
     @patch("builtins.print")
@@ -2387,24 +2477,35 @@ class MarkPrReviewFailedTests(unittest.TestCase):
 
 
 class ReviewPrTests(DaemonPathsTestCase):
-    """Tests for review_pr(), new - runs /code-review under the comment-only permission set."""
+    """Tests for review_pr(), new - runs /pr-review under the comment-only permission set."""
 
     @patch("triage_daemon.subprocess.run")
     def test_invokes_claude_with_the_review_permission_set(self, mock_run):
-        """Runs /code-review at the high effort level with --comment, under the
-        review-only allow/deny lists - no write/push/commit access."""
+        """Runs the /pr-review skill with the scratch dir, under the review-only
+        allow/deny lists - no write/push/commit access."""
         mock_run.return_value = MagicMock(returncode=0)
         triage_daemon.review_pr(4742)
         cmd = mock_run.call_args[0][0]
-        self.assertIn("/code-review 4742 high --comment", cmd[2])
+        self.assertEqual(cmd[2], f"/pr-review 4742 scratch={triage_daemon.SCRATCH_DIR}")
         self.assertIn(triage_daemon.ALLOWED_TOOLS_REVIEW, cmd)
         self.assertIn(triage_daemon.DISALLOWED_TOOLS_REVIEW, cmd)
 
     @patch("triage_daemon.subprocess.run")
+    def test_does_not_let_the_forked_review_post(self, mock_run):
+        """/code-review runs its review in a forked subagent, and a fork sees neither our skill
+        nor the appended system prompt. Given --comment it posts on its own with whatever gh api
+        spelling it picks - PR #5304's run passed `-f body="$(cat ...)"` and every call was denied.
+        The daemon must invoke /pr-review, never /code-review."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.review_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("/code-review", cmd[2])
+        self.assertNotIn("--comment", cmd[2])
+
+    @patch("triage_daemon.subprocess.run")
     def test_appends_the_gh_api_form_system_prompt(self, mock_run):
-        """/code-review is built in, so the only place to pin its gh api command form is an
-        appended system prompt - without it the posting step picks `--method POST` first and
-        is denied, which is exactly how PR #4758's review came back empty."""
+        """/pr-review reviews and posts from the main session, which does see an appended system
+        prompt, so the gh api command-form rules and the journal request both reach it."""
         mock_run.return_value = MagicMock(returncode=0)
         triage_daemon.review_pr(4742)
         cmd = mock_run.call_args[0][0]
@@ -2448,6 +2549,81 @@ class ReviewPrTests(DaemonPathsTestCase):
         self.assertEqual(cmd[cmd.index("--model") + 1], "glm-5.3-flash:cloud")
         env = mock_run.call_args.kwargs["env"]
         self.assertEqual(env["ANTHROPIC_BASE_URL"], triage_daemon.OLLAMA_BASE_URL)
+
+
+class PrReviewSkillTests(unittest.TestCase):
+    """Tests for .claude/skills/pr-review/SKILL.md - the skill review_pr() invokes. It does the
+    whole review in the main session and posts it itself, because a forked review cannot see
+    any instruction about how to post."""
+
+    SKILL = Path(__file__).resolve().parent.parent / ".claude" / "skills" / "pr-review" / "SKILL.md"
+
+    def skill_commands(self):
+        """Return every command line from the skill's ```bash blocks, with placeholders filled in."""
+        commands, in_block = [], False
+        for line in self.SKILL.read_text().splitlines():
+            if line.startswith("```"):
+                in_block = line == "```bash"
+                continue
+            if in_block and line.strip():
+                commands.append(line.replace("<pr-number>", "4742").replace("<scratch>", str(triage_daemon.SCRATCH_DIR)))
+        return commands
+
+    def test_reviews_in_this_session(self):
+        """The built-in /code-review reviews in a forked subagent that sees neither this skill nor
+        the appended system prompt - PR #5304's and #5574's reviews both posted nothing that way.
+        The skill must do the review itself: no /code-review, no subagents, no --comment."""
+        text = self.SKILL.read_text()
+        self.assertIn("Do not invoke `/code-review`", text)
+        self.assertIn("do not start subagents", text)
+        self.assertNotIn("Invoke the Skill tool", text)
+        self.assertNotIn("--comment", text)
+
+    def test_reviews_the_prs_own_code(self):
+        """The clone sits on main. PR #5574's review read main for context because its fetch was
+        spelled `git -C <path> fetch` and denied; the skill checks out the PR's head instead."""
+        commands = self.skill_commands()
+        self.assertIn("git fetch origin pull/4742/head", commands)
+        self.assertIn("git checkout --detach FETCH_HEAD", commands)
+
+    def test_every_prescribed_command_is_allowed_and_not_denied(self):
+        """Every command the skill prescribes must match a rule in ALLOWED_TOOLS_REVIEW and none in
+        DISALLOWED_TOOLS_REVIEW exactly as written, or every run is denied the way #5304's was."""
+        allowed = triage_daemon.ALLOWED_TOOLS_REVIEW.split(",")
+        denied = triage_daemon.DISALLOWED_TOOLS_REVIEW.split(",")
+        commands = self.skill_commands()
+        self.assertTrue(commands)
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertTrue(any(bash_rule_matches(rule, command) for rule in allowed))
+                self.assertFalse(any(bash_rule_matches(rule, command) for rule in denied))
+
+    def test_posts_one_review_with_the_body_in_a_file(self):
+        """The one POST reads its body from a file - an inline body holding backticks is command
+        substitution to the shell, which is how #5574's comment was denied."""
+        command = next(line for line in self.skill_commands() if line.startswith("gh api ") and "/reviews" in line)
+        self.assertIn("--input", command)
+        self.assertNotIn("body=", command)
+
+    def test_review_is_comment_only_and_disclosed(self):
+        """A bot must never approve or request changes, and every body it posts discloses that it is automated."""
+        text = self.SKILL.read_text()
+        self.assertIn('"event": "COMMENT"', text)
+        self.assertIn("_Automated comment from the triage bot._", text)
+
+    def test_carries_the_maintainer_rules(self):
+        """The maintainer's standing review rules: tests for every change, docs for user-facing
+        changes, no unjustified getattr(), components through ComponentBase rather than self.base,
+        no extra complexity, SOLID design."""
+        text = self.SKILL.read_text()
+        for rule in ("**Tests cover the change.**", "**User-facing changes are documented.**", "**No `getattr()` without a very good reason.**", "**Components go through `ComponentBase`.**", "**No extra complexity.**", "**SOLID design.**"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, text)
+
+    def test_never_runs_the_prs_code(self):
+        """A BOT_REVIEW label can land on a fork's PR, and this session holds a credential that can
+        post to the repo, so the review must stay a reading exercise."""
+        self.assertIn("Never run the PR's code", self.SKILL.read_text())
 
 
 class ProcessBotReviewPrTests(unittest.TestCase):
@@ -2806,7 +2982,7 @@ class ProcessBotCleanupPrTests(unittest.TestCase):
         """A cleanup_pr() failure swaps to BOT_FAILED rather than retrying next poll."""
         self.patches["cleanup_pr"].side_effect = subprocess.CalledProcessError(1, ["claude"])
         triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings"})
-        self.patches["mark_pr_cleanup_failed"].assert_called_once_with(4742)
+        self.patches["mark_pr_cleanup_failed"].assert_called_once_with(4742, exc=self.patches["cleanup_pr"].side_effect)
         self.patches["remove_pr_cleanup_label"].assert_not_called()
 
     def test_a_run_that_exits_cleanly_but_leaves_work_behind_is_a_failure(self):
@@ -3302,6 +3478,192 @@ class JournalCandidateCapTests(DaemonPathsTestCase):
             triage_daemon.flush_journal("2026-09-14")
         archived = sorted(path.name for path in (triage_daemon.QUEUE_DIR / "processed").glob("*.md"))
         self.assertEqual(archived, ["1-a.md", "2-b.md"])
+
+
+class FailureDetailTests(DaemonPathsTestCase):
+    """What a BOT_FAILED comment says about why, where and which log - and what it must not say."""
+
+    def setUp(self):
+        """Keep the daemon's git lookup out of the mocked subprocess calls the tests inspect."""
+        super().setUp()
+        patcher = patch.object(triage_daemon, "daemon_version", return_value="")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _flow_failure(self, text="", status=1):
+        """Run triage() against a mocked claude that exits non-zero, then leave `text` in its log.
+
+        Going through the real function means the exception carries the real traceback and log
+        path, so the origin and the log name are what production would report.
+        """
+        with patch("triage_daemon.subprocess.run", return_value=MagicMock(returncode=status)):
+            try:
+                triage_daemon.triage(4960)
+            except triage_daemon.FlowFailed as exc:
+                # Not assertRaises: it strips the traceback from the exception it hands back,
+                # and the origin is read from exactly that.
+                with exc.log_path.open("a") as handle:
+                    handle.write(text)
+                return exc
+        self.fail("triage() did not raise FlowFailed")
+
+    def test_each_log_signature_is_named(self):
+        """Every classified cause reaches the comment, so a maintainer need not open the log."""
+        cases = {
+            "Error: Reached max turns (100)": "ran out of turns",
+            "Exceeded USD budget (10)": "spend limit",
+            "Credit balance is too low": "out of credit",
+            "API Error: 401 invalid": "could not authenticate",
+            "API Error: 429 rate_limit_error": "rate limited",
+            "overloaded_error": "overloaded",
+            "Error: read ECONNRESET": "network connection",
+        }
+        for line, expected in cases.items():
+            with self.subTest(line=line):
+                exc = self._flow_failure(f"working\n{line}\n")
+                self.assertIn(expected, triage_daemon.failure_cause(exc))
+
+    def test_an_unrecognised_failure_falls_back_to_the_exit_status(self):
+        """A log that says nothing useful still yields an honest, specific sentence."""
+        exc = self._flow_failure("something odd\n", status=7)
+        self.assertEqual(triage_daemon.failure_cause(exc), "The Claude run exited with status 7 and its log shows no recognised cause")
+
+    def test_only_the_last_attempt_in_an_appended_log_counts(self):
+        """The log is appended to across retries; an earlier attempt's cause must not be blamed."""
+        self._flow_failure("Error: Reached max turns (100)\n")
+        exc = self._flow_failure("API Error: 429 rate_limit_error\n")
+        self.assertIn("rate limited", triage_daemon.failure_cause(exc))
+
+    def test_the_agent_quoting_a_signature_mid_run_is_not_a_cause(self):
+        """An issue about max turns makes the agent write those words; only the end of the run is read."""
+        exc = self._flow_failure("The reporter saw Reached max turns\n" + "ordinary output\n" * 600)
+        self.assertNotIn("turns", triage_daemon.failure_cause(exc))
+
+    def test_a_missing_log_does_not_raise(self):
+        """The log may have been pruned; the comment still gets the exit status."""
+        exc = triage_daemon.FlowFailed(1, ["claude"], Path("/nonexistent/issue-1.log"))
+        self.assertIn("exited with status 1", triage_daemon.failure_cause(exc))
+
+    def test_a_killed_run_names_the_signal(self):
+        """A negative status is a signal, typically the OOM killer."""
+        exc = triage_daemon.FlowFailed(-9, ["claude"], Path("/nonexistent/x.log"))
+        self.assertIn("SIGKILL", triage_daemon.failure_cause(exc))
+
+    def test_a_gh_failure_names_the_subcommand_but_not_the_arguments(self):
+        """A comment body can be an argument of a gh call and must never be echoed back."""
+        exc = subprocess.CalledProcessError(1, ["gh", "issue", "comment", "4960", "--repo", "r", "--body", "SECRET-TOKEN"])
+        cause = triage_daemon.failure_cause(exc)
+        self.assertEqual(cause, "`gh issue comment` exited with status 1")
+        self.assertNotIn("SECRET-TOKEN", cause)
+
+    def test_the_origin_is_the_raise_site_of_the_run(self):
+        """The line in triage() that raised, not the test, subprocess or unittest frames."""
+        exc = self._flow_failure()
+        self.assertRegex(triage_daemon.failure_origin(exc), r"^triage_daemon\.py:\d+ in triage\(\)")
+
+    def test_a_check_true_failure_reports_the_daemon_line_not_subprocess_py(self):
+        """check=True raises inside the subprocess module; the useful frame is the call to it."""
+        with patch("triage_daemon.subprocess.run", side_effect=subprocess.CalledProcessError(1, ["gh", "pr", "view"])):
+            try:
+                triage_daemon.pr_review_activity_count(4742)
+            except subprocess.CalledProcessError as exc:
+                self.assertRegex(triage_daemon.failure_origin(exc), r"^triage_daemon\.py:\d+ in pr_review_activity_count\(\)")
+                return
+        self.fail("pr_review_activity_count() did not raise")
+
+    def test_the_origin_is_stamped_with_the_daemon_version_when_known(self):
+        """A line number only means something against the right file."""
+        exc = self._flow_failure()
+        with patch.object(triage_daemon, "daemon_version", return_value="abc1234"):
+            self.assertIn("(daemon abc1234)", triage_daemon.failure_origin(exc))
+        with patch.object(triage_daemon, "daemon_version", return_value=""):
+            self.assertNotIn("(daemon", triage_daemon.failure_origin(exc))
+
+    def test_a_clean_exit_failure_names_the_function_that_spotted_it(self):
+        """A run that exited 0 and posted nothing has no traceback, so the comment names the
+        process_bot_review_pr() check that noticed instead."""
+        for name in ("sync_repo", "reset_scratch", "review_pr"):
+            patcher = patch.object(triage_daemon, name)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch.object(triage_daemon, "pr_review_activity_count", return_value=3)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            triage_daemon.process_bot_review_pr({"number": 4742, "title": "Add confirmed findings"})
+            cmd = mock_run.call_args_list[0].args[0]
+            body = cmd[cmd.index("--body") + 1]
+        self.assertIn("**Reason:** The run exited cleanly but posted nothing", body)
+        self.assertRegex(body, r"\*\*Failed at:\*\* `triage_daemon\.py:\d+ in process_bot_review_pr\(\)")
+
+    def test_the_detail_names_the_log_file_but_never_quotes_it(self):
+        """A log can hold a reporter's attachment or a token, so only its name is given."""
+        exc = self._flow_failure("SECRET-TOKEN\nError: Reached max turns (100)\n")
+        detail = triage_daemon.failure_detail(exc=exc)
+        self.assertIn("`issue-4960.log`", detail)
+        self.assertNotIn("SECRET-TOKEN", detail)
+        self.assertNotIn(self.tmp_dir.name, detail)
+
+    def test_daemon_version_is_the_short_commit_or_empty(self):
+        """Outside a git checkout, or with no git binary, the version is simply left off."""
+        self.addCleanup(REAL_DAEMON_VERSION.cache_clear)
+        for run_result, expected in (
+            (dict(return_value=MagicMock(returncode=0, stdout="abc1234\n")), "abc1234"),
+            (dict(return_value=MagicMock(returncode=128, stdout="")), ""),
+            (dict(side_effect=FileNotFoundError), ""),
+        ):
+            REAL_DAEMON_VERSION.cache_clear()
+            with patch("triage_daemon.subprocess.run", **run_result):
+                self.assertEqual(REAL_DAEMON_VERSION(), expected)
+
+    def test_reason_and_cause_are_both_given(self):
+        """A caller's own explanation is kept alongside what the exception shows."""
+        exc = subprocess.CalledProcessError(1, ["gh", "pr", "view", "4742"])
+        detail = triage_daemon.failure_detail("Unable to sample PR review activity.", exc)
+        self.assertIn("Unable to sample PR review activity; `gh pr view` exited with status 1.", detail)
+
+    def test_no_detail_when_nothing_is_known(self):
+        """Nothing to say adds nothing, rather than an empty Reason."""
+        with patch.object(triage_daemon, "failure_origin", return_value=""):
+            self.assertEqual(triage_daemon.failure_detail(), "")
+
+    def test_the_four_comments_carry_the_detail(self):
+        """Issue triage, issue follow-up, PR review and PR cleanup comments all say why, where and which log."""
+        exc = self._flow_failure("Error: Reached max turns (100)\n")
+        calls = {
+            "mark_triage_failed": lambda: triage_daemon.mark_triage_failed(4960, 3, exc),
+            "mark_review_failed": lambda: triage_daemon.mark_review_failed(4960, exc=exc),
+            "mark_pr_review_failed": lambda: triage_daemon.mark_pr_review_failed(4742, exc=exc),
+            "mark_pr_cleanup_failed": lambda: triage_daemon.mark_pr_cleanup_failed(4742, exc=exc),
+        }
+        for name, call in calls.items():
+            with self.subTest(name), patch("triage_daemon.subprocess.run") as mock_run:
+                call()
+                cmd = mock_run.call_args_list[0].args[0]
+                body = cmd[cmd.index("--body") + 1]
+                self.assertIn("ran out of turns", body)
+                self.assertIn("**Failed at:** `triage_daemon.py:", body)
+                self.assertIn("`issue-4960.log`", body)
+                self.assertNotIn("see the triage bot's logs", body)
+
+
+class FlowFailedRaisedTests(DaemonPathsTestCase):
+    """The claude-run functions raise FlowFailed so the comment can classify the run's log."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_each_flow_raises_with_its_log(self, mock_run):
+        """triage, follow-up, PR review and cleanup all carry the path they wrote to."""
+        mock_run.return_value = MagicMock(returncode=2)
+        for run, name in (
+            (triage_daemon.triage, "issue-4960.log"),
+            (triage_daemon.triage_followup, "issue-4960-followup.log"),
+            (triage_daemon.review_pr, "pr-4960-review.log"),
+            (triage_daemon.cleanup_pr, "pr-4960-cleanup.log"),
+        ):
+            with self.subTest(name=name), self.assertRaises(triage_daemon.FlowFailed) as raised:
+                run(4960)
+            self.assertEqual(raised.exception.log_path.name, name)
+            self.assertEqual(raised.exception.returncode, 2)
 
 
 if __name__ == "__main__":

@@ -16,11 +16,20 @@ Covers:
   - hardware isolation between tariffs: overrides applied for tariff N must not
     bleed into tariff N+1 in run_all() (regression for the bug where agile_fixed
     reported a final SOC larger than the normal battery size)
+  - run_all() restores every attribute it saves, the plan state calculate_plan() keeps across runs
+    included (regression for plan_preclip left as the last tariff's plan), and plans each tariff from scratch
+  - every attribute calculate_plan() and its optimise passes assign is either restored by run_all() or rebuilt
+    on every run
+  - a re-plan requested during the comparison survives it, and the state is restored even if the config restore raises
 """
 
+import copy
 import inspect
+import os
+import tempfile
+from unittest.mock import MagicMock, patch
 
-from compare import Compare
+from compare import Compare, check_compare_list, valid_compare_list, COMPARE_HARDWARE_STATE, COMPARE_PLAN_STATE, COMPARE_RESTORED_STATE, COMPARE_RESTORED_COPIES
 from const import MINUTE_WATT
 
 
@@ -64,13 +73,203 @@ def _make_compare():
     cmp.currency_symbols = pb.currency_symbols
     cmp.prefix = pb.prefix
     cmp.comparisons = {}
+    cmp.live_saving_state = None
     return cmp, pb
+
+
+# Assigned by calculate_plan() but rebuilt on every run before use, so the comparison need not restore them
+CALCULATE_PLAN_REBUILT = (
+    "load_minutes_step",
+    "load_minutes_step10",
+    "load_minutes_step90",
+    "pv_forecast_minute_step",
+    "pv_forecast_minute10_step",
+    "pv_forecast_minute90_step",
+    "prediction",
+    "metric_cloud_coverage",
+    "metric_load_divergence",
+    "plan_last_duration_seconds",
+)
+
+
+def test_run_all_restores_state(my_predbat):
+    """run_all() puts back everything it saves however a tariff's run changed it, resets the hardware values between
+    tariffs, and plans each tariff from scratch.
+
+    Each tariff fetches, plans and predicts on the live instance. Leaving plan_preclip as the last tariff's 48-hour
+    plan made the first re-plan after the midnight comparison score that plan as the plan in force, so it always
+    switched plans whatever metric_min_improvement_plan said (seen live on 9 Oct 2026: 300.97p against 30.71p).
+    """
+    names = COMPARE_RESTORED_STATE + COMPARE_RESTORED_COPIES
+    saved_plan_valid, saved_pending = my_predbat.plan_valid, my_predbat.update_pending
+    # A valid plan with no re-plan pending, so plan_valid must come back True whatever earlier tests left behind
+    my_predbat.plan_valid, my_predbat.update_pending = True, False
+    original = {name: getattr(my_predbat, name) for name in names}
+    saved_compare_list = my_predbat.args.get("compare_list")
+    my_predbat.args["compare_list"] = [{"id": "tariff_a", "name": "Tariff A"}, {"id": "tariff_b", "name": "Tariff B"}]
+    comparison = Compare.__new__(Compare)
+    comparison.pb = my_predbat
+    comparison.log = my_predbat.log
+    comparison.comparisons = {}
+    seen_at_start = []
+
+    def run_single(*args, **kwargs):
+        """Stand in for a tariff's run, changing every saved attribute as fetching and planning a tariff can."""
+        seen_at_start.append((my_predbat.plan_valid, all(getattr(my_predbat, name) == original[name] for name in COMPARE_HARDWARE_STATE)))
+        for name in names:
+            setattr(my_predbat, name, ("changed by", name))
+        my_predbat.plan_valid = True
+        return None
+
+    comparison.run_single = run_single
+    comparison.select_best = lambda *args, **kwargs: None
+    comparison.save_yaml = lambda *args, **kwargs: None
+    comparison.publish_data = lambda *args, **kwargs: None
+    try:
+        comparison.run_all(fetch_sensor=False)
+        failed = 0
+        not_restored = [name for name in names if getattr(my_predbat, name) != original[name]]
+        if not_restored:
+            print("ERROR: run_all() did not restore {}".format(not_restored))
+            failed = 1
+        if seen_at_start != [(False, True), (False, True)]:
+            print("ERROR: each tariff should start with plan_valid False and the real hardware values, got {}".format(seen_at_start))
+            failed = 1
+        if not failed:
+            print("PASS: run_all() restores all {} saved attributes, resets hardware between tariffs and plans each from scratch".format(len(names)))
+        return failed
+    finally:
+        for name, value in original.items():
+            setattr(my_predbat, name, value)
+        my_predbat.plan_valid, my_predbat.update_pending = saved_plan_valid, saved_pending
+        if saved_compare_list is None:
+            my_predbat.args.pop("compare_list", None)
+        else:
+            my_predbat.args["compare_list"] = saved_compare_list
+
+
+def test_plan_state_covered(my_predbat):
+    """Every attribute calculate_plan() and the optimise passes it runs assign is restored by the comparison or
+    rebuilt on every run.
+
+    A new piece of plan state that outlives a run (as plan_preclip did) must be added to COMPARE_PLAN_STATE, or the
+    comparison will leave the last tariff's value behind. Read from the source with ast, so plain, augmented,
+    annotated and tuple assignments to self.<name> are all found.
+    """
+    import ast
+    import textwrap
+
+    plan_class = type(my_predbat)
+    methods = ["calculate_plan"] + sorted(name for name in dir(plan_class) if name.startswith("optimise"))
+    assigned = set()
+    for name in methods:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(getattr(plan_class, name))))
+        for node in ast.walk(tree):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, (ast.AugAssign, ast.AnnAssign)) else []
+            for target in targets:
+                for part in ast.walk(target):
+                    if isinstance(part, ast.Attribute) and isinstance(part.value, ast.Name) and part.value.id == "self":
+                        assigned.add(part.attr)
+    uncovered = sorted(assigned - set(COMPARE_PLAN_STATE) - set(CALCULATE_PLAN_REBUILT))
+    if uncovered:
+        print("ERROR: calculate_plan() or an optimise pass assigns {} - add each to COMPARE_PLAN_STATE (compare.py) if it outlives the run, or to CALCULATE_PLAN_REBUILT here if it is rebuilt before use".format(uncovered))
+        return 1
+    print("PASS: every attribute calculate_plan() and its {} optimise passes assign is restored or rebuilt".format(len(methods) - 1))
+    return 0
+
+
+def test_run_all_keeps_pending_replan(my_predbat):
+    """A re-plan requested while the comparison runs (a setting or override changed) still invalidates the plan."""
+    saved_compare_list = my_predbat.args.get("compare_list")
+    saved_plan_valid, saved_pending = my_predbat.plan_valid, my_predbat.update_pending
+    my_predbat.args["compare_list"] = [{"id": "tariff_a", "name": "Tariff A"}]
+    my_predbat.plan_valid, my_predbat.update_pending = True, False
+    comparison = Compare.__new__(Compare)
+    comparison.pb = my_predbat
+    comparison.log = my_predbat.log
+    comparison.comparisons = {}
+
+    def run_single(*args, **kwargs):
+        """Stand in for a tariff's run during which the user changes a setting."""
+        my_predbat.update_pending = True
+        return None
+
+    comparison.run_single = run_single
+    comparison.select_best = lambda *args, **kwargs: None
+    comparison.save_yaml = lambda *args, **kwargs: None
+    comparison.publish_data = lambda *args, **kwargs: None
+    try:
+        comparison.run_all(fetch_sensor=False)
+        if my_predbat.plan_valid:
+            print("ERROR: a re-plan requested during the comparison should leave the plan invalid")
+            return 1
+        print("PASS: run_all() keeps a re-plan requested during the comparison")
+        return 0
+    finally:
+        my_predbat.plan_valid, my_predbat.update_pending = saved_plan_valid, saved_pending
+        if saved_compare_list is None:
+            my_predbat.args.pop("compare_list", None)
+        else:
+            my_predbat.args["compare_list"] = saved_compare_list
+
+
+def test_run_all_restores_when_config_restore_raises(my_predbat):
+    """The saved state is put back even when restoring a tariff's config raises."""
+    item = my_predbat.config_index.get("metric_battery_cycle")
+    saved_compare_list = my_predbat.args.get("compare_list")
+    saved_preclip, saved_value = my_predbat.plan_preclip, item["value"]
+    saved_plan_valid, saved_pending = my_predbat.plan_valid, my_predbat.update_pending
+    plan_in_force = ([18.08], [{"start": 0, "end": 90, "average": 7.62}], [], [])
+    my_predbat.plan_preclip = plan_in_force
+    my_predbat.args["compare_list"] = [{"id": "tariff_a", "name": "Tariff A", "config": {"metric_battery_cycle": 9.0}}]
+    comparison = Compare.__new__(Compare)
+    comparison.pb = my_predbat
+    comparison.log = my_predbat.log
+    comparison.comparisons = {}
+
+    def run_single(*args, **kwargs):
+        """Stand in for a tariff's run, which replaces the plan."""
+        my_predbat.plan_preclip = ("tariff plan",)
+        return None
+
+    def fetch_config_options():
+        """Fail as a broken config refresh would."""
+        raise ValueError("config refresh failed")
+
+    comparison.run_single = run_single
+    comparison.select_best = lambda *args, **kwargs: None
+    comparison.save_yaml = lambda *args, **kwargs: None
+    comparison.publish_data = lambda *args, **kwargs: None
+    my_predbat.fetch_config_options = fetch_config_options
+    try:
+        try:
+            comparison.run_all(fetch_sensor=False)
+        except ValueError:
+            pass
+        if my_predbat.plan_preclip is not plan_in_force:
+            print("ERROR: run_all() should restore the plan even when the config restore raises, got {}".format(my_predbat.plan_preclip))
+            return 1
+        print("PASS: run_all() restores the saved state when the config restore raises")
+        return 0
+    finally:
+        del my_predbat.fetch_config_options
+        my_predbat.plan_preclip = saved_preclip
+        my_predbat.plan_valid, my_predbat.update_pending = saved_plan_valid, saved_pending
+        item["value"] = saved_value
+        if saved_compare_list is None:
+            my_predbat.args.pop("compare_list", None)
+        else:
+            my_predbat.args["compare_list"] = saved_compare_list
 
 
 def test_compare(my_predbat):
     """Run all compare unit tests."""
     failed = 0
     print("**** Running compare tests ****\n")
+    failed += test_run_all_restores_state(my_predbat)
+    failed += test_plan_state_covered(my_predbat)
+    failed += test_run_all_keeps_pending_replan(my_predbat)
+    failed += test_run_all_restores_when_config_restore_raises(my_predbat)
 
     # ------------------------------------------------------------------
     # T1: apply_hardware_overrides – soc_max override
@@ -420,7 +619,7 @@ def test_compare(my_predbat):
 
     cmp.fetch_config = lambda tariff: None
     cmp.apply_hardware_overrides = lambda tariff, pb: None
-    cmp.fetch_rates = lambda tariff, base_import, base_export, io_adjusted_base=None: "existing"
+    cmp.fetch_rates = lambda tariff, base_import, base_export, *args: "existing"
     cmp.recompute_car_charging = lambda slots: None
     cmp.run_scenario = lambda end_record: {"cost": 0, "metric": 0}
 
@@ -462,7 +661,7 @@ def test_compare(my_predbat):
 
     cmp.fetch_config = lambda tariff: None
     cmp.apply_hardware_overrides = lambda tariff, pb: None
-    cmp.fetch_rates = lambda tariff, base_import, base_export, io_adjusted_base=None: "existing"
+    cmp.fetch_rates = lambda tariff, base_import, base_export, *args: "existing"
     cmp.recompute_car_charging = lambda slots: None
     cmp.run_scenario = lambda end_record: {"cost": 0, "metric": 0}
 
@@ -543,23 +742,13 @@ def test_compare(my_predbat):
         print("PASS T18: bad export override value falls back to the discharge override")
 
     # ------------------------------------------------------------------
-    # T19: run_all() actually saves and restores battery_rate_max_export,
-    #      both mid-loop and at the end, so an export override can't bleed
-    #      into the next tariff (T7 only proves the pattern in isolation).
-    #      Positional checks (T12-style) so the snapshot must sit before the
-    #      tariff loop, not just anywhere in the source.
+    # T19: run_all() saves and restores battery_rate_max_export, after each
+    #      tariff and at the end, so an export override can't bleed into the
+    #      next tariff (T7 only proves the pattern in isolation; the restore
+    #      itself is exercised by test_run_all_restores_state)
     # ------------------------------------------------------------------
-    run_all_source = inspect.getsource(Compare.run_all)
-    loop_idx = run_all_source.find("for tariff in compare_list:")
-    snapshot_idx = run_all_source.find("save_battery_rate_max_export = my_predbat.battery_rate_max_export")
-    if loop_idx < 0 or snapshot_idx < 0:
-        print("ERROR T19: could not locate the tariff loop or the battery_rate_max_export snapshot in run_all() source - test may need updating")
-        failed += 1
-    elif not (snapshot_idx < loop_idx):
-        print("ERROR T19: battery_rate_max_export snapshot must appear before the tariff loop in run_all()")
-        failed += 1
-    elif run_all_source.count("my_predbat.battery_rate_max_export = save_battery_rate_max_export") < 2:
-        print("ERROR T19: run_all() must restore battery_rate_max_export both inside the tariff loop and at the end")
+    if "battery_rate_max_export" not in COMPARE_HARDWARE_STATE or "battery_rate_max_export" not in COMPARE_RESTORED_STATE:
+        print("ERROR T19: battery_rate_max_export must be reset after each tariff (COMPARE_HARDWARE_STATE) and at the end")
         failed += 1
     else:
         print("PASS T19: run_all() snapshots and restores battery_rate_max_export")
@@ -663,12 +852,8 @@ def test_compare(my_predbat):
     #      restores it after it, as it does car_charging_slots, so the live plan
     #      gets its modelled slots back after a comparison (#5245 review)
     # ------------------------------------------------------------------
-    snapshot_idx = run_all_source.find("save_car_charging_now_slots = copy.deepcopy(my_predbat.car_charging_now_slots)")
-    if snapshot_idx < 0 or not (snapshot_idx < loop_idx):
-        print("ERROR T25: car_charging_now_slots must be snapshotted before the tariff loop in run_all()")
-        failed += 1
-    elif run_all_source.find("my_predbat.car_charging_now_slots = save_car_charging_now_slots") < loop_idx:
-        print("ERROR T25: run_all() must restore car_charging_now_slots after the tariff loop")
+    if "car_charging_now_slots" not in COMPARE_RESTORED_COPIES:
+        print("ERROR T25: run_all() must snapshot (deep copy) and restore car_charging_now_slots")
         failed += 1
     else:
         print("PASS T25: run_all() snapshots and restores car_charging_now_slots")
@@ -715,6 +900,344 @@ def test_compare(my_predbat):
         failed += 1
     else:
         print("PASS T26: only a tariff reusing the live import rates keeps the live dispatch markers")
+
+    # ------------------------------------------------------------------
+    # T27: valid_compare_list() keeps only the entries run_all() can compare -
+    #      skipping, with a warning naming the entry's position, one that isn't a
+    #      dict, has no id, repeats an earlier id, has no name or has a config:
+    #      that is neither a mapping nor empty (None, "", [] and {} mean no
+    #      overrides) - and turns a numeric id into a string (#5472 - run_all()
+    #      used to index tariff["id"] directly, raising KeyError every cycle, and a
+    #      numeric id still crashed publish_data() building the sensor name)
+    # ------------------------------------------------------------------
+    logged = []
+    entries = [
+        "not_a_dict",
+        {"name": "No Id Tariff"},
+        {"id": "  ", "name": "Blank Id Tariff"},
+        {"id": "agile", "name": "Agile"},
+        {"id": "agile", "name": "Agile Again"},
+        {"id": "no_name"},
+        {"id": 2024, "name": "Numeric Id Tariff"},
+        {"id": " agile ", "name": "Padded Agile"},
+        {"id": "numeric_name", "name": 1234},
+        {"id": "blank_name", "name": "   "},
+        {"id": "bad_config", "name": "Bad Config", "config": ["metric_battery_cycle"]},
+        {"id": "empty_config", "name": "Empty Config", "config": None},
+        {"id": "empty_list_config", "name": "  Empty List Config  ", "config": []},
+        {"id": "empty_string_config", "name": "Empty String Config", "config": ""},
+        {"id": "empty_dict_config", "name": "Empty Dict Config", "config": {}},
+        {"id": "false_config", "name": "False Config", "config": False},
+        {"id": "string_config", "name": "String Config", "config": "best_soc_min: 2.0"},
+        {"id": "mapping_config", "name": "Mapping Config", "config": {"best_soc_min": 2.0}},
+    ]
+    kept = valid_compare_list(entries, log=logged.append)
+    kept_ids = [entry["id"] for entry in kept]
+    skipped_positions = sorted(int(msg.split("compare_list entry ")[1].split(" ")[0]) for msg in logged)
+
+    if kept_ids != ["agile", "2024", "numeric_name", "empty_config", "empty_list_config", "empty_string_config", "empty_dict_config", "mapping_config"]:
+        print("ERROR T27: valid_compare_list() should keep only 'agile', '2024', 'numeric_name', the four empty-config entries and 'mapping_config' (ids as strings), got {}".format(kept_ids))
+        failed += 1
+    elif skipped_positions != [1, 2, 3, 5, 6, 8, 10, 11, 16, 17]:
+        print("ERROR T27: valid_compare_list() should warn for entries 1, 2, 3, 5, 6, 8 (padded duplicate id), 10 (blank name), 11, 16 and 17 (unusable config), got {}".format(logged))
+        failed += 1
+    elif not all("'config'" in msg for msg in logged if msg.split("compare_list entry ")[1].split(" ")[0] in ("11", "16", "17")):
+        print("ERROR T27: entries 11, 16 and 17 should be skipped for their config, got {}".format(logged))
+        failed += 1
+    elif kept[7].get("config") != {"best_soc_min": 2.0}:
+        print("ERROR T27: a mapping config: should be kept as the tariff's overrides, got {}".format(kept[7]))
+        failed += 1
+    elif any("config" in entry for entry in kept[3:7]):
+        print("ERROR T27: an empty 'config:' (None, [], \"\" or {{}}) should be dropped as no overrides, got {}".format(kept[3:7]))
+        failed += 1
+    elif kept[4]["name"] != "Empty List Config":
+        print("ERROR T27: a kept entry's name should be stripped, got {!r}".format(kept[4]["name"]))
+        failed += 1
+    elif kept[2]["name"] != "1234":
+        print("ERROR T27: a numeric name should become a string, or publish_data() can't build the friendly name, got {!r}".format(kept[2]["name"]))
+        failed += 1
+    elif kept[0] is entries[3] or entries[6]["id"] != 2024:
+        print("ERROR T27: valid_compare_list() must return copies, not rewrite the user's compare_list in place")
+        failed += 1
+    elif valid_compare_list(None) != [] or valid_compare_list([{"id": 0, "name": "Zero"}]) != [{"id": "0", "name": "Zero"}]:
+        print("ERROR T27: valid_compare_list() should accept a missing list and an id of 0")
+        failed += 1
+    elif check_compare_list("agile") != ([], ["compare_list must be a list of tariffs, each with an id and a name"]) or check_compare_list(5)[0] != []:
+        print("ERROR T27: a compare_list that isn't a list should give no entries and one problem, got {} / {}".format(check_compare_list("agile"), check_compare_list(5)))
+        failed += 1
+    else:
+        print("PASS T27: valid_compare_list() skips malformed entries with a positioned warning and normalises ids to strings")
+
+    # ------------------------------------------------------------------
+    # T28: run_all() skips an id-less compare_list entry and still compares the
+    #      valid one after it - run against the real fixture with the expensive
+    #      collaborators stubbed, so only the loop's own handling is exercised (#5472)
+    # ------------------------------------------------------------------
+    cmp = Compare.__new__(Compare)
+    cmp.pb = my_predbat
+    run_all_logged = []
+    cmp.log = run_all_logged.append
+    cmp.comparisons = {}
+    cmp.live_saving_state = None
+    run_single_ids = []
+    saved_comparisons = []
+    cmp.run_single = lambda tariff, *args, **kwargs: run_single_ids.append(tariff.get("id")) or {"date": "2026-10-11", "soc": 1.0, "soc_start": 1.0}
+    cmp.select_best = lambda compare_list, results: None
+    cmp.save_yaml = lambda: saved_comparisons.append(dict(cmp.comparisons))
+    cmp.publish_data = lambda: None
+    # The config: entries go through run_all()'s own override snapshot, which runs before any try
+    compare_list = [{"name": "No Id Tariff"}, "not_a_dict", {"id": "valid", "name": "Valid Tariff", "config": None}, {"id": "valid", "name": "Duplicate Tariff"}, {"id": 2024, "name": "Numeric Id Tariff"}, {"id": "list_config", "name": "List Config", "config": [{"metric_battery_cycle": 1}]}]
+    real_get_arg = my_predbat.get_arg
+
+    def fake_get_arg(key, default=None, *args, **kwargs):
+        """Return the test compare_list, deferring every other key to the real get_arg."""
+        if key == "compare_list":
+            return compare_list
+        return real_get_arg(key, default, *args, **kwargs)
+
+    try:
+        with patch.object(my_predbat, "get_arg", side_effect=fake_get_arg):
+            cmp.run_all(fetch_sensor=False)
+        run_all_error = None
+    except Exception as exc:
+        run_all_error = exc
+
+    if run_all_error is not None:
+        print("ERROR T28: run_all() raised {!r} on a compare_list with malformed entries".format(run_all_error))
+        failed += 1
+    elif run_single_ids != ["valid", "2024"]:
+        print("ERROR T28: only the valid tariffs should reach run_single(), ids as strings, got {}".format(run_single_ids))
+        failed += 1
+    elif not saved_comparisons or set(saved_comparisons[-1].keys()) != {"valid", "2024"}:
+        print("ERROR T28: only the valid tariffs' results should be persisted, keyed by string id, got {}".format(saved_comparisons))
+        failed += 1
+    elif sorted(int(msg.split("compare_list entry ")[1].split(" ")[0]) for msg in run_all_logged if "skipping it" in msg) != [1, 2, 4, 6]:
+        print("ERROR T28: run_all() should log a warning for each skipped entry (1, 2, 4 and 6), got {}".format(run_all_logged))
+        failed += 1
+    else:
+        print("PASS T28: run_all() skips malformed entries and compares and persists the valid ones by string id")
+
+    # ------------------------------------------------------------------
+    # T29: run_comparison() clears compare_active even when run_all() raises -
+    #      otherwise the flag stays on and the crashed comparison re-triggers
+    #      itself every 5-minute cycle (#5472)
+    # ------------------------------------------------------------------
+    exposed = []
+    real_expose_config = my_predbat.expose_config
+
+    def record_expose_config(name, value, *args, **kwargs):
+        """Record compare_active writes, then apply them for real."""
+        if name == "compare_active":
+            exposed.append(value)
+        return real_expose_config(name, value, *args, **kwargs)
+
+    prior_compare_active = my_predbat.get_arg("compare_active", False)
+    raising_comparison = MagicMock()
+    raising_comparison.run_all.side_effect = KeyError("id")
+    raised = False
+    with patch.object(my_predbat, "comparison", raising_comparison), patch.object(my_predbat, "expose_config", side_effect=record_expose_config):
+        try:
+            my_predbat.run_comparison()
+        except KeyError:
+            raised = True
+    compare_active_after = my_predbat.get_arg("compare_active", False)
+    # Shared fixture: put the flag back as the suite had it, so test order can't matter (#5079)
+    my_predbat.expose_config("compare_active", prior_compare_active)
+
+    if not raised:
+        print("ERROR T29: run_comparison() should let run_all()'s exception propagate")
+        failed += 1
+    elif exposed != [True, False]:
+        print("ERROR T29: compare_active should be set then cleared despite the exception, got {}".format(exposed))
+        failed += 1
+    elif compare_active_after:
+        print("ERROR T29: compare_active is still on after run_all() raised")
+        failed += 1
+    else:
+        print("PASS T29: run_comparison() clears compare_active even when run_all() raises")
+
+    # ------------------------------------------------------------------
+    # T30: load_yaml() turns a numeric result key saved before ids were
+    #      normalised back into a string, so publish_data() can build the
+    #      sensor name and the result still matches its compare_list entry (#5472)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    published = []
+    pb.get_arg = lambda key, default=None: [{"id": 2024, "name": "Numeric Id Tariff"}] if key == "compare_list" else default
+    cmp.dashboard_item = lambda entity_id, **kwargs: published.append(entity_id)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        with open(os.path.join(temp_dir, "comparisons.yaml"), "w") as f:
+            f.write("comparisons:\n  2024:\n    name: Numeric Id Tariff\n    cost: 1.0\n    metric: 1.0\n")
+        cmp.config_root = temp_dir
+        try:
+            cmp.load_yaml()
+            load_error = None
+        except Exception as exc:
+            load_error = exc
+
+    if load_error is not None:
+        print("ERROR T30: load_yaml() raised {!r} on a numeric result key".format(load_error))
+        failed += 1
+    elif list(cmp.comparisons.keys()) != ["2024"] or not cmp.comparisons["2024"].get("best"):
+        print("ERROR T30: the numeric key should load as '2024' and be matched as the best tariff, got {}".format(cmp.comparisons))
+        failed += 1
+    elif published != ["predbat.compare_tariff_2024"]:
+        print("ERROR T30: expected sensor predbat.compare_tariff_2024 to be published, got {}".format(published))
+        failed += 1
+    else:
+        print("PASS T30: load_yaml() normalises a numeric result key to a string and publishes it")
+
+    # ------------------------------------------------------------------
+    # T31: publish_data() copes with a numeric name saved to comparisons.yaml
+    #      before names were normalised - otherwise "Compare " + name raised
+    #      TypeError inside Compare.__init__ and Predbat failed to start (#5472)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    published = {}
+    cmp.dashboard_item = lambda entity_id, **kwargs: published.update({entity_id: kwargs.get("attributes", {})})
+    cmp.comparisons = {"numeric_name": {"name": 2024, "cost": 1.0}}
+    try:
+        cmp.publish_data()
+        publish_error = None
+    except Exception as exc:
+        publish_error = exc
+
+    if publish_error is not None:
+        print("ERROR T31: publish_data() raised {!r} on a saved numeric name".format(publish_error))
+        failed += 1
+    elif published.get("predbat.compare_tariff_numeric_name", {}).get("friendly_name") != "Compare 2024":
+        print("ERROR T31: expected friendly name 'Compare 2024', got {}".format(published))
+        failed += 1
+    else:
+        print("PASS T31: publish_data() publishes a saved numeric name as text")
+
+    # ------------------------------------------------------------------
+    # T32: fetch_rates() recognises the user's own tariff as existing while a
+    #      saving session or Intelligent dispatch is stamped on the live rates -
+    #      a refetched rate card never carries those, so a side the tariff
+    #      supplies is matched against the live tariff without them, while a
+    #      side left on the live rates is still matched against those (#5180)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.minutes_now = 0
+    pb.forecast_minutes = 60
+    pb.rate_export_cost_threshold = 99
+    pb.rate_export_max = 15.0
+    pb.rate_scan = lambda rates, print=True: None
+    pb.rate_scan_export = lambda rates, print=True: None
+    pb.rate_min_forward_calc = lambda rates: {}
+    pb.rate_min_forward = {}
+    pb.rate_export_max_forward_calc = lambda rates: {}
+    pb.rate_export_max_forward = {}
+    pb.rate_minmax = lambda rates: (0, 0, 0, 0, 0)
+    pb.rate_export_min_base = None
+    pb.rate_replicate = lambda rates, io_adjusted=None, is_import=True, **kwargs: (dict(rates), {})
+    pb.set_rate_thresholds = lambda: None
+    pb.rate_scan_window = lambda rates, *args: ([], 0, 0)
+    pb.find_low_rate_windows = lambda: None
+    pb.basic_rates = lambda info, *args, **kwargs: {minute: info[0]["rate"] for minute in range(60)}
+
+    # Live: 20p import / 5p export, with a dispatch at 7p and a saving session at 300p export in the second half hour
+    import_clean = {minute: 20.0 for minute in range(60)}
+    export_clean = {minute: 5.0 for minute in range(60)}
+    import_live = {minute: (7.0 if minute >= 30 else 20.0) for minute in range(60)}
+    export_live = {minute: (300.0 if minute >= 30 else 5.0) for minute in range(60)}
+    same_tariff = {"id": "mine", "name": "Mine", "rates_import": [{"rate": 20.0}], "rates_export": [{"rate": 5.0}]}
+    cases = [
+        ("the same tariff during an event", same_tariff, True),
+        ("a dearer import tariff", {"id": "dear", "name": "Dear", "rates_import": [{"rate": 25.0}], "rates_export": [{"rate": 5.0}]}, False),
+        ("a tariff reusing the live rates", {"id": "live", "name": "Live"}, True),
+        ("the same import tariff reusing the live export", {"id": "import_only", "name": "Import Only", "rates_import": [{"rate": 20.0}]}, True),
+    ]
+    t32_errors = []
+    for label, tariff, expected in cases:
+        try:
+            got = cmp.fetch_rates(tariff, dict(import_live), dict(export_live), {}, rate_import_match=dict(import_clean), rate_export_match=dict(export_clean))
+        except TypeError as exc:
+            got = "raised {!r}".format(exc)
+        if got is not expected:
+            t32_errors.append("{} should give existing {}, got {}".format(label, expected, got))
+
+    # run_all() hands run_single() the clean baselines, snapshotted before any tariff refetches them
+    cmp = Compare.__new__(Compare)
+    cmp.pb = my_predbat
+    cmp.log = lambda msg: None
+    cmp.comparisons = {}
+    cmp.live_saving_state = None
+    match_kwargs = []
+    cmp.run_single = lambda tariff, *args, **kwargs: match_kwargs.append((kwargs.get("rate_import_match"), kwargs.get("rate_export_match"))) or {"date": "2026-10-19", "soc": 1.0, "soc_start": 1.0}
+    cmp.select_best = lambda compare_list, results: None
+    cmp.save_yaml = lambda: None
+    cmp.publish_data = lambda: None
+    real_get_arg = my_predbat.get_arg
+
+    def t32_get_arg(key, default=None, *args, **kwargs):
+        """Return a one-tariff compare_list, deferring every other key to the real get_arg."""
+        if key == "compare_list":
+            return [{"id": "mine", "name": "Mine"}]
+        return real_get_arg(key, default, *args, **kwargs)
+
+    with patch.object(my_predbat, "get_arg", side_effect=t32_get_arg), patch.object(my_predbat, "rate_import_no_io", dict(import_clean)), patch.object(my_predbat, "rate_export_base", dict(export_clean)), patch.object(my_predbat, "rate_export", dict(export_live)):
+        cmp.run_all(fetch_sensor=False)
+    if match_kwargs != [(import_clean, export_clean)]:
+        t32_errors.append("run_all() should pass run_single() the live rates without events, got {}".format(match_kwargs))
+
+    # A cycle with no export rates leaves rate_export_base on the previous cycle's table - it must not be used as the match
+    match_kwargs.clear()
+    with patch.object(my_predbat, "get_arg", side_effect=t32_get_arg), patch.object(my_predbat, "rate_import_no_io", dict(import_clean)), patch.object(my_predbat, "rate_export_base", dict(export_clean)), patch.object(my_predbat, "rate_export", {}):
+        cmp.run_all(fetch_sensor=False)
+    if match_kwargs != [(import_clean, {})]:
+        t32_errors.append("run_all() should not match against a stale rate_export_base when this cycle has no export rates, got {}".format(match_kwargs))
+
+    if t32_errors:
+        for error in t32_errors:
+            print("ERROR T32: {}".format(error))
+        failed += 1
+    else:
+        print("PASS T32: the existing tariff is recognised during a saving session or dispatch, against the live rates without them")
+
+    # ------------------------------------------------------------------
+    # T33: predicted future rates (futurerate) fill only the user's own tariff. A compared tariff
+    #      whose published rates are the live tariff's gets them - so it is still recognised as
+    #      the existing tariff - and any other tariff keeps its own copied prices
+    # ------------------------------------------------------------------
+    t33_errors = []
+    cmp = Compare.__new__(Compare)
+    cmp.pb = my_predbat
+    cmp.log = lambda msg: None
+    cmp.live_saving_state = None
+    # fetch_rates() and the real rate_replicate()/rate_scan() rebuild rate tables and scan state on the shared
+    # fixture, so snapshot all of its attributes and put them back even if something in here raises
+    saved = {key: (copy.copy(value) if isinstance(value, (dict, list, set)) else value) for key, value in vars(my_predbat).items()}
+    try:
+        published = {minute: 15.0 for minute in range(-1440, 1380)}
+        future = {minute: 20.0 for minute in range(1380, 3 * 1440)}
+        other = {minute: 10.0 for minute in range(-1440, 1380)}
+        with patch.object(my_predbat, "get_arg", side_effect=lambda key, default=None, *a, **k: True if key == "futurerate_adjust_import" else (False if key == "futurerate_adjust_export" else default)):
+            my_predbat.minutes_now = 600
+            my_predbat.forecast_minutes = 2880
+            my_predbat.future_energy_rates_import = future
+            my_predbat.future_energy_rates_export = {}
+            my_predbat.metric_future_rate_offset_import = 0
+            my_predbat.metric_future_rate_offset_export = 0
+            my_predbat.io_adjusted = {}
+            live, _ = my_predbat.rate_replicate(dict(published), {}, is_import=True, use_future=True)
+            for label, rates, expected_existing, expected_2000 in [("the live tariff refetched", published, True, 20.0), ("another tariff", other, False, 10.0)]:
+                with patch.object(my_predbat, "basic_rates", side_effect=lambda *a, rates=rates, **k: dict(rates)), patch.object(my_predbat, "find_low_rate_windows", lambda: None), patch.object(my_predbat, "set_rate_thresholds", lambda: None):
+                    got = cmp.fetch_rates({"id": "t33", "rates_import": [{"rate": 0}]}, dict(live), {}, {}, rate_import_match=dict(live), rate_export_match={})
+                    if got is not expected_existing:
+                        t33_errors.append("{}: existing should be {}, got {}".format(label, expected_existing, got))
+                    if my_predbat.rate_import.get(2000) != expected_2000:
+                        t33_errors.append("{}: minute 2000 should be {}, got {}".format(label, expected_2000, my_predbat.rate_import.get(2000)))
+    finally:
+        vars(my_predbat).clear()
+        vars(my_predbat).update(saved)
+    if t33_errors:
+        for error in t33_errors:
+            print("ERROR T33: {}".format(error))
+        failed += 1
+    else:
+        print("PASS T33: future rates fill only a compared tariff that is the live one")
 
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))

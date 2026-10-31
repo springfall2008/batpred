@@ -990,6 +990,45 @@ class FoxAPI(ComponentBase, OAuthMixin):
             capacity += 500.0
         return capacity
 
+    @staticmethod
+    def battery_capacity_wh(detail):
+        """
+        Return the device's battery capacity in Wh from its device/detail batteryList.
+
+        Normally the sum of every entry's capacity. Some devices (GH#4919, an AIO ESS with one
+        10.24 kWh pack) report the same pack as several bmu entries that all carry the same
+        batterySN and each claim the whole pack, so the plain sum is a multiple of the truth.
+        When a batterySN repeats among the entries carrying a capacity, Fox's own
+        batteryDesignCapacity (kWh) is used if it is a positive number, otherwise each serial
+        is counted once. Lists without a repeated serial are summed exactly as before.
+        """
+        battery_list = detail.get("batteryList", []) or []
+        total = 0
+        deduplicated = 0
+        seen_serials = set()
+        repeated = False
+        for battery in battery_list:
+            capacity = battery.get("capacity", 0)
+            total += capacity
+            serial = battery.get("batterySN")
+            if serial and "capacity" in battery:
+                if serial in seen_serials:
+                    repeated = True
+                    continue
+                seen_serials.add(serial)
+            deduplicated += capacity
+        if not repeated:
+            return total
+        design_capacity = detail.get("batteryDesignCapacity")
+        if not isinstance(design_capacity, bool):
+            try:
+                design_capacity = float(design_capacity)
+            except (TypeError, ValueError):
+                design_capacity = 0
+            if design_capacity > 0:
+                return design_capacity * 1000.0
+        return deduplicated
+
     async def get_device_settings(self, deviceSN, checkBattery=True):
         """
         Get device settings
@@ -1027,7 +1066,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         unavailable = self.device_settings_unavailable.setdefault(deviceSN, [])
         if key_lower not in unavailable:
             unavailable.append(key_lower)
-        self.log(f"Fox: Warn: Setting {key} is not supported by device {deviceSN}, will not read or write it again")
+        self.log(f"Info: Fox: Setting {key} is not supported by device {deviceSN}, will not read or write it again")
         if key_lower in FOX_SETTINGS_DEFAULTS:
             self.device_settings.setdefault(deviceSN, {})[key] = dict(FOX_SETTINGS_DEFAULTS[key_lower])
 
@@ -1057,7 +1096,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         Set device setting
         """
         if self.is_setting_unavailable(deviceSN, key):
-            self.log(f"Fox: Warn: Ignoring write to unsupported setting {key} for device {deviceSN}")
+            self.log(f"Info: Fox: Ignoring write to unsupported setting {key} for device {deviceSN}")
             return True
 
         SET_DEVICE_SETTING = "/op/v0/device/setting/set"
@@ -1724,10 +1763,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
         Retry wrapper
         """
         retries = 0
+        attempts = 0
         self.last_unsupported = False
         self.log("Fox: API Requesting {} {} - data {}".format("POST" if post else "GET", path, datain))
 
         while retries < FOX_RETRIES:
+            attempts += 1
             result, allow_retry = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
                 return result
@@ -1741,7 +1782,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
             retries += 1
             await asyncio.sleep(retries * random.random())
-        self.log("Fox: API Response failed after {} retries for {}".format(FOX_RETRIES, path))
+        self.log("Fox: API Response failed after {} attempts for {}".format(attempts, path))
         return result
 
     async def request_get_func(self, path, post=False, datain=None, _retry_after_refresh=False):
@@ -1824,9 +1865,11 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     await asyncio.sleep(5 * 60)
                     return None, False
                 elif errno in FOX_SETTINGS_UNSUPPORTED_ERRNO:
-                    # Unsupported function code
+                    # Unsupported function code - expected for a setting a model lacks, where the caller
+                    # caches it via mark_setting_unavailable() and never asks again (#3880)
                     self.last_unsupported = True
-                    self.log(f"Warn: Fox: Unsupported function code {msg}:{errno} from {url}")
+                    level = "Info" if "/device/setting/" in url else "Warn"
+                    self.log(f"{level}: Fox: Unsupported function code {msg}:{errno} from {url}")
                     return None, False
                 elif errno in [40257]:
                     # Invalid parameter
@@ -1873,10 +1916,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             hasScheduler = detail.get("function", {}).get("scheduler", False)
             deviceType = detail.get("deviceType", "Unknown")
             stationName = detail.get("stationName", "Unknown")
-            batteryList = detail.get("batteryList", [])
-            battery_capacity = 0
-            for battery in batteryList:
-                battery_capacity += battery.get("capacity", 0)
+            battery_capacity = self.battery_capacity_wh(detail)
 
             self.dashboard_item(
                 entity_name_sensor + "_" + sn.lower() + "_info",
@@ -2288,6 +2328,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 end_hour, end_minute = self.time_string_to_hour_minute(end_time, 0, 0)
 
                 if direction == "charge":
+                    # Fox Cloud treats fdSoc as the force charge target even on the Scheduler v1 call,
+                    # charging on past maxSoc towards it, so it must carry the target too (#3398)
                     new_schedule.append(
                         {
                             "enable": 1,
@@ -2296,7 +2338,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                             "endHour": end_hour,
                             "endMinute": end_minute,
                             "workMode": "ForceCharge",
-                            "fdSoc": 100,
+                            "fdSoc": max(soc, reserve),
                             "maxSoc": max(soc, reserve),
                             "fdPwr": power,
                             "minSocOnGrid": max(soc, reserve),
@@ -2304,7 +2346,18 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     )
                 elif direction == "discharge":
                     new_schedule.append(
-                        {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": max(soc, reserve), "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve}
+                        {
+                            "enable": 1,
+                            "startHour": start_hour,
+                            "startMinute": start_minute,
+                            "endHour": end_hour,
+                            "endMinute": end_minute,
+                            "workMode": "ForceDischarge",
+                            "fdSoc": max(soc, reserve),
+                            "maxSoc": reserve,
+                            "fdPwr": power,
+                            "minSocOnGrid": reserve,
+                        }
                     )
         new_schedule = validate_schedule(new_schedule, reserve, fdPwr_max, self.device_scheduler_count.get(serial, 0), baseline_work_mode=baseline_work_mode)
         self.log("Fox: New schedule for {} (baseline {}): {}".format(serial, baseline_work_mode, new_schedule))
@@ -2546,13 +2599,13 @@ class FoxAPI(ComponentBase, OAuthMixin):
         pseudonymised.
 
         No battery capacity is reported. A real batteryList mixes control units that carry no
-        capacity (bcu, ivu) with bmu entries carrying one in Wh, and publish_data() sums every
-        entry that carries one - a known live bug (GH#4919): an AIO ESS reports its one pack as
-        four bmu entries, each claiming the whole pack and all carrying the inverter's own
-        serial, so the sum is 4x the truth. Publishing it would put a knowingly-wrong soc_max
-        in every affected dump. Two ratings are reported instead, named for what the API returned
-        rather than as the spec's "modules", since the vendor figure is known to be wrong:
-        battery_capacity_entries, how many entries publish_data() sums, and
+        capacity (bcu, ivu) with bmu entries carrying one in Wh, and the per-entry figures cannot
+        be trusted on their own (GH#4919): an AIO ESS reports its one pack as four bmu entries,
+        each claiming the whole pack and all carrying the inverter's own serial, so their sum is
+        4x the truth. battery_capacity_wh() corrects for that signature when publishing soc_max.
+        Two ratings are reported instead, named for what the API returned rather than as the
+        spec's "modules", since the vendor figures are known to be wrong:
+        battery_capacity_entries, how many entries carry a capacity, and
         battery_capacity_serials, how many distinct batterySN those entries carry. A healthy
         four-module stack reports four and four; four entries against one serial is the GH#4919
         signature. Neither len(batteryList) nor the entry count alone can tell them apart - each

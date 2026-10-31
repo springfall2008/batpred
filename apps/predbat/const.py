@@ -33,6 +33,28 @@ PREDICT_STEP = 5
 DYNAMIC_LOAD_CAR_SENSOR_MINUTES = 2
 DYNAMIC_LOAD_CAR_START_MINUTES = 3
 DYNAMIC_LOAD_CAR_LOAD_MINUTES = 5
+# The load test reads "low" - no car can be charging - under this fraction of car_charging_threshold. The
+# margin below the threshold allows for a load sensor that under-reads while the battery is charging (GH#5461)
+DYNAMIC_LOAD_CAR_LOW_FACTOR = 0.85
+# A car_charging_now reading only confirms the half hour it is in (keeping that half hour cheap once the car
+# stops, GH#5316) from this many minutes into it: the sensor can lag a car that stopped just before the boundary
+DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
+# How long a half hour an Octopus Intelligent planned dispatch ran in keeps the dispatch rate after it ends,
+# while waiting for Octopus to list it as a completed dispatch - seen to take 15 to 60 minutes (GH#5520)
+OCTOPUS_DISPATCH_HOLD_MINUTES = 90
+# The same hold under the window billing rule (E.ON Next Drive Smart, GH#5521): the supplier bills every half hour a
+# planned dispatch was in force off-peak and never lists the ones the car did not charge in, so the hold is the
+# record - kept for a day, so today's cost and the hours either side of midnight are priced from it
+OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES = 24 * 60
+# Octopus Intelligent device currentState while it is running a smart charge, and the states in which it dispatches
+# nothing - the car unplugged or out of reach, or smart control turned off - whatever planned dispatches it still lists
+OCTOPUS_STATE_SMART_CONTROL_IN_PROGRESS = "SMART_CONTROL_IN_PROGRESS"
+OCTOPUS_STATES_NOT_DISPATCHING = ("SMART_CONTROL_NOT_AVAILABLE", "SMART_CONTROL_OFF")
+# How long the last known planned dispatches are kept through empty answers while a smart charge is in progress:
+# Octopus answers an empty planned list for a few minutes while it re-plans a running session (seen 2 to 8 minutes)
+OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES = 10
+# The settings of intelligent_dispatch_billing in apps.yaml
+DISPATCH_BILLING_CHOICES = ("auto", "octopus", "window")
 
 # Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
 # downside case diverges harder than the central one
@@ -56,10 +78,17 @@ PV_SCENARIO_NOMINAL = 0
 PV_SCENARIO_PV10 = 1
 PV_SCENARIO_PV90 = 2
 LOAD_FORECAST_HISTORY_MAX_DAYS = 30  # Max days of history used by the weighted-bucket load forecast (days_previous_auto)
+LOAD_FORECAST_RECORDED_MIN_MINUTES = 60  # Recorded load needed before its average fills slots no history covers (new installs, batpred#5548)
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_DAILY = "%Y-%m-%d"
+# Dispatch source for a charger's own schedule on a tariff with no dispatch rate (e.g. Ohme off Octopus
+# Intelligent): the slots are when the car will charge, but they are billed at the normal tariff rate
+DISPATCH_SOURCE_CHARGER_SCHEDULE = "charger-schedule"
+# Source for a half hour held because the car was charging in a smart charge Octopus had not listed a dispatch for:
+# Octopus starts charging when the car is plugged in, and lists that half hour only once it has completed
+DISPATCH_SOURCE_CHARGING_UNLISTED = "charging-unlisted"
 TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
 INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
@@ -93,6 +122,15 @@ PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car
 # A car_charging_now sensor that reports a charging power (in W, after unit conversion) rather than
 # on/off counts as charging from this power: above a charger's standby draw, below the smallest charge
 CAR_CHARGING_NOW_POWER_W = 200
+# A manually tracked car with no charge recorded keeps counting from up to this long ago, for energy its charger's history records late
+CAR_MANUAL_SOC_LATE_MINUTES = 60
+# A manually tracked car is only reset once its plugged-in sensor has read unplugged for this long - a charger reconnecting can read unplugged for a few minutes
+CAR_MANUAL_SOC_UNPLUG_MINUTES = 10
+# A manually tracked car with no car_charging_plugged sensor is reset once it has been idle - nothing charged, entered or written by the plan - for this long
+CAR_MANUAL_SOC_IDLE_MINUTES = 12 * 60
+# Charger energy counted for a manually tracked car is limited to car_charging_rate times the time elapsed, with this margin, plus a little slack for a coarse counter
+CAR_MANUAL_SOC_RATE_MARGIN = 1.1
+CAR_MANUAL_SOC_ENERGY_SLACK = 0.1
 CAR_CHARGING_LIMIT_UNCAPPED = 9999.0  # Model-facing car charge limit (kWh) that makes predict()'s fill clamp inert - larger than any real car battery (#4967)
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
 # How far ahead a manual override may be placed. The two horizons differ on purpose: a manual
@@ -156,9 +194,43 @@ PREDBAT_MODE_CONTROL_SOC = 1
 PREDBAT_MODE_CONTROL_CHARGE = 2
 PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 
+# The states a run can end in, as execute.py writes them to predbat.status. Each can be followed by its
+# qualifiers - ", Hold for car", " (Holiday)", " [Freeze exporting]", " [Alert]". A run that raised a
+# warning records its state after it in square brackets ("Warn: ... [Exporting]"), and the History view
+# only reads a trailing bracket as the run's state when it starts with one of RUN_STATE_NAMES, as warning
+# text can end in brackets of its own. execute.py uses these names rather than literals so the two can't
+# drift apart: a state missing from RUN_STATE_NAMES would read as no state in History during a warning.
+RUN_STATE_DEMAND = "Demand"
+RUN_STATE_CHARGING = "Charging"
+RUN_STATE_FREEZE_CHARGING = "Freeze charging"
+RUN_STATE_HOLD_CHARGING = "Hold charging"
+RUN_STATE_EXPORTING = "Exporting"
+RUN_STATE_FREEZE_EXPORTING = "Freeze exporting"
+RUN_STATE_HOLD_EXPORTING = "Hold exporting"
+RUN_STATE_CROSS_CHARGING = "Cross-charging"
+RUN_STATE_HOLD_FOR_CAR = "Hold for car"
+RUN_STATE_HOLD_FOR_IBOOST = "Hold for iBoost"
+RUN_STATE_READ_ONLY = "Read-Only"
+RUN_STATE_CALIBRATION = "Calibration"
+
 # Predbat's core charge/export status strings, ordered most-active-first. Used two ways: execute.py
 # resolves one headline status across a multi-inverter fleet (#4446), and output.py breaks a tie when
 # a history slot's dominant state is ambiguous - e.g. an even split between two states (#4843). Both
 # need the same answer to "which of these two states is the more significant one to show".
-CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
-EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
+CHARGE_STATE_PRECEDENCE = [RUN_STATE_CHARGING, RUN_STATE_FREEZE_CHARGING, RUN_STATE_HOLD_CHARGING]
+EXPORT_STATE_PRECEDENCE = [RUN_STATE_EXPORTING, RUN_STATE_FREEZE_EXPORTING, RUN_STATE_HOLD_EXPORTING]
+
+RUN_STATE_NAMES = [RUN_STATE_DEMAND] + CHARGE_STATE_PRECEDENCE + EXPORT_STATE_PRECEDENCE + [RUN_STATE_CROSS_CHARGING, RUN_STATE_HOLD_FOR_CAR, RUN_STATE_HOLD_FOR_IBOOST, RUN_STATE_READ_ONLY, RUN_STATE_CALIBRATION]
+
+# The status a run records when it completed but a component failed. predbat.py writes it and the
+# History view (output.split_status_warning) unwraps the run's own status back out of it, so both
+# read the wording from here.
+COMPONENT_ERROR_STATUS_PREFIX = "Error: Complete run status "
+COMPONENT_ERROR_STATUS_SUFFIX = " with component errors: "
+
+# Home Assistant rejects entity states over 255 characters
+STATUS_STATE_MAX_LENGTH = 255
+
+# A log text that repeats (an API response, an Intelligent slot list) is logged in full again after this long, so
+# the full text is never only in a rotated-out log file; in between it is logged as one short line
+REPEAT_FULL_LOG_SECONDS = 3600

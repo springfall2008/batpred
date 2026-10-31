@@ -245,6 +245,55 @@ SUNSYNK_IMPORT_LIMIT_FIELD = "importPower"  # settings, watts
 # export cap Predbat's export_limit wants (see automatic_config for why that is left unset).
 SUNSYNK_MAX_SOLAR_FIELD = "solarMaxSellPower"  # settings, watts
 
+# Parallel groups (GH#5594). Two or more units sharing one battery bank, one master and its
+# slaves, are modelled as ONE Predbat inverter driven through the master. CONFIRMED live on a
+# 2 x 3.6 kW single-phase pair (2026-10-18):
+#
+# - The inverter list's equipMode is "M1" for the master and "S2" for a slave (letter = role,
+#   digit = position), and every member shares plant.id. The settings read agrees: master
+#   equipMode "1" / slave "0", both parallel "1". gsn cannot pair them - each unit has its own
+#   dongle - and alias is user text.
+# - The slave has no BMS link: its battery block reads bmsSoc/bmsVolt/bmsCurrent 0, and its
+#   power is garbage (+6007 W "discharging" while the bank charged at 1.2 kW). Its soc and
+#   capacity mirror the master's, so the bank is counted once, from the master.
+# - The master's battery power is its own share only. bmsCurrent on the master is the whole
+#   bank, POSITIVE WHILE CHARGING - the opposite of power/current - so battery power is
+#   -bmsCurrent x voltage. 411 of 411 samples with a clear direction agreed (246 charging,
+#   165 discharging), and integrated it tracks the SoC change where the counters do not.
+# - Grid, PV and load are each the unit's own share and are summed. Master import alone was
+#   1.85-1.96x below the supplier's meter over four days; master + slave matched it. Load
+#   reads near-identical on both units because they split it evenly, not because it is mirrored.
+# - Daily battery counters follow each unit's own power, not the bank, and the slave's are
+#   garbage, so a group's battery_charge/discharge_today are integrated from the BMS power.
+SUNSYNK_EQUIP_MODE_FIELD = "equipMode"  # inverter list ("M1"/"S2") and settings ("1"/"0")
+SUNSYNK_PARALLEL_FIELD = "parallel"  # settings, "1" on every member of a parallel group
+SUNSYNK_BMS_CURRENT_FIELD = "bmsCurrent"  # battery realtime, amps, positive while charging
+SUNSYNK_BMS_LINK_FIELDS = ("bmsVolt", "bmsSoc")  # battery realtime, 0 on a unit with no BMS link
+SUNSYNK_PARALLEL_SUMMED_POWER = ("grid_power", "load_power", "pv_power")
+SUNSYNK_PARALLEL_SUMMED_ENERGY = ("pv_today", "import_today", "export_today", "load_today")
+# Leaf -> integrator total for a group's battery energy.
+SUNSYNK_PARALLEL_BATTERY_ENERGY = {"battery_charge_today": "charge", "battery_discharge_today": "discharge"}
+# A polling gap longer than this is not integrated: filling an outage with one stale reading
+# would invent energy. Three live-tier intervals tolerates one or two missed polls.
+SUNSYNK_BATTERY_INTEGRATE_MAX_GAP = 15
+# First-cycle attempts startup waits for a parallel slave's battery reading, which decides
+# whether it is grouped (no BMS link) or its own inverter. After these the master starts
+# alone rather than staying uncontrolled because one slave is offline.
+SUNSYNK_SLAVE_STARTUP_RETRIES = 3
+
+# Per-unit battery current cap, amps. CONFIRMED live on the parallel pair above: 65 on each
+# unit against the BMS's whole-bank chargeCurrentLimit of 200, with each unit charging at
+# ~62 A and the bank at 105-137 A - so this, summed across a group, is what binds, and on a
+# single inverter it caps the BMS limit the same way.
+SUNSYNK_UNIT_CHARGE_CURRENT_FIELD = "batteryMaxCurrentCharge"  # settings, amps
+
+# The BMS charge limit is LIVE, not a rating: it tapers as the bank fills. CONFIRMED live over a
+# day on one bank - 200 A at mid SoC, 175 A at 83%, 108 A at 93%, 0 when full - while the bank
+# still charged at 120 A. maxChargeCurrentLimit reads 0 and the settings read's chargeCurrent
+# mirrors the live value, so nothing reports the fixed maximum. The highest value seen is kept
+# instead, and forgotten if not seen again for this many days (a smaller battery fitted, say).
+SUNSYNK_BMS_LIMIT_MAX_AGE_DAYS = 7
+
 # Charge-current limit candidates, in priority order: the FIRST field with a positive value
 # wins. CONFIRMED live that a real system reports maxChargeCurrentLimit 0.0 while
 # chargeCurrentLimit 216.0 carries the actual limit - reading only the max field derived
@@ -282,6 +331,7 @@ SUNSYNK_TTL_LIVE = 5  # telemetry; four endpoint calls per inverter, so slower t
 # next write is wrongly SKIPPED and the battery silently diverges from the plan. A
 # redundant write is cheap; a skipped one is not.
 SUNSYNK_RESTORE_MAX_CONTROL = 15
+SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE = 8 * 60
 
 # Cycles a written payload may remain absent from the read-back before warning. Sunsynk
 # acknowledges a write at the cloud, but the dongle only collects it on its next poll —
@@ -292,7 +342,9 @@ SUNSYNK_STORAGE_MODULE = "sunsynk"
 SUNSYNK_CACHE_STATIC = "static"  # inverter serials, detail
 SUNSYNK_CACHE_CONFIG = "config"  # last-read settings object
 SUNSYNK_CACHE_RATINGS = "ratings"  # derived capacity, pack voltage, rated power
-SUNSYNK_CACHE_CONTROL = "control"  # last-applied payload for change detection
+SUNSYNK_CACHE_CONTROL = "control"  # control_active ownership cache for reconciliation
+SUNSYNK_CACHE_APPLIED_PAYLOAD = "applied_payload"  # last-applied payload cache for change detection
+SUNSYNK_CACHE_BATTERY_ENERGY = "battery_energy"  # parallel groups' integrated battery energy for today
 
 # Sunsynk answers an expired token with HTTP 200 carrying a body-level failure, so
 # status-code-only handling never triggers a refresh and the component stays broken

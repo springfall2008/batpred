@@ -76,6 +76,9 @@ class MockSolisAPI(SolisAPI):
         # No wall-clock pause in tests; the settle re-read itself is asserted by the tests that
         # care about it, and every other test would just be waiting for nothing.
         self.verify_settle_seconds = 0
+        self.control_event_loop = None
+        self.read_only_reset_error = ""
+        self.read_only_reset_progress = 0.0
         self.detail_summary_logged = {}
         self.slot_limits_logged = {}
         self.response_observer = None
@@ -106,6 +109,8 @@ class MockSolisAPI(SolisAPI):
         self.datalogger_offline_until = {}
         self.datalogger_cooldown_code = {}
         self.automatic_config_done = False
+        self.tou_v2_mode_saved = None
+        self.time_windows_reload_pending = set()
 
         # Timezone for now_utc_exact property (from ComponentBase)
         self.local_tz = datetime.now().astimezone().tzinfo
@@ -1262,6 +1267,24 @@ _DETAIL_STRING_INVERTER = {
     "dataTimestamp": "1790579858000",
 }
 
+# A grid-tied string inverter (S6-GR1P: GR = grid-tied, no battery port) beside an S5-EH1P hybrid on one
+# account. The summary fields are as its inverterDetail logged them on a live system; the battery
+# readings are as its published sensors read. batteryType alternates between '0' and '0.0' from one
+# poll to the next, and it was still enrolled as a battery inverter when it reported '0'.
+_DETAIL_GRID_TIED_STRING_INVERTER = {
+    "machine": "S6-GR1P6K",
+    "productModel": "0206",
+    "model": "0206",
+    "power": 6.0,
+    "powerStr": "kW",
+    "batteryModel": None,
+    "batteryType": "0.0",
+    "parallelBattery": 0,
+    "batteryHealthSoh": 0.0,
+    "batteryCapacitySoc": 0.0,
+    "batteryVoltage": 0.0,
+}
+
 
 async def _run_automatic_config(details):
     """Run automatic_config() over `details` ({sn: detail}) and return the recorded set_arg_auto args."""
@@ -1573,7 +1596,7 @@ def test_solis_catalogue_export_limit_is_the_configured_register():
     """export_limit is register 499 in watts, converted as publish_entities() presents it; 0 or unread gives no rating.
 
     publish_entities() shows an unset or 0 register as 99999 W ("no limit") - a placeholder, not a
-    configured figure, so no rating is reported for it. A value under 200 is in 100 W units there.
+    configured figure, so no rating is reported for it. Every other value is in 100 W units (GH#5385).
     """
     api = _solis_fleet()
 
@@ -1586,8 +1609,8 @@ def test_solis_catalogue_export_limit_is_the_configured_register():
     assert "export_limit" not in ratings(), "0 means no limit"
     api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "37"
     assert ratings()["export_limit"] == 3700.0, ratings()
-    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "3680"
-    assert ratings()["export_limit"] == 3680.0, ratings()
+    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "480"
+    assert ratings()["export_limit"] == 48000.0, ratings()
     return False
 
 
@@ -1876,6 +1899,9 @@ def test_reports_no_battery_for_a_silent_string_inverter():
         ("batteryType null, all zero", dict(zeros, batteryType=None), True),
         ("batteryType code '0', all zero", dict(zeros, batteryType="0"), True),
         ("batteryType code 0 as a number, all zero", dict(zeros, batteryType=0), True),
+        ("batteryType code '0.0', all zero", dict(zeros, batteryType="0.0"), True),
+        ("batteryType code 0.0 as a number, all zero", dict(zeros, batteryType=0.0), True),
+        ("batteryType code '0.0' but a live battery", dict(zeros, batteryType="0.0", batteryVoltage=49.3, batteryCapacitySoc=66.0), False),
         ("empty batteryList, all zero", dict(zeros, batteryList=[]), True),
         ("all zero as strings", {"batteryVoltage": "0", "batteryCapacitySoc": "0.0", "batteryNum": "0", "batteryJump": {"batteryCount": "0"}}, True),
         # A transient all-zero reading on a battery inverter that names no type - the pack counts must corroborate it
@@ -1910,6 +1936,59 @@ def test_reports_no_battery_for_a_silent_string_inverter():
     assert MockSolisAPI._reports_no_battery(_DETAIL_REAL_BATTERY_ZERO_SOH) is False
     assert MockSolisAPI._reports_no_battery(_DETAIL_NO_BATTERY) is True
     print("PASSED: a silent string inverter is PV-only, nothing else is")
+    return False
+
+
+def test_reports_no_battery_for_a_grid_tied_model():
+    """A machine Solis names grid-tied (S6-GR1P...) is PV-only when its battery readings are zero, whatever its pack fields say.
+
+    The model has no battery port, so a batteryList entry or a missing pack count cannot mean a battery
+    there. The readings must still be present and zero, and a named pack still decides on its own, so
+    a misreported model never drops a battery that is actually reading.
+    """
+    print("\n=== Test: _reports_no_battery on a grid-tied model ===")
+    gr = dict(_DETAIL_GRID_TIED_STRING_INVERTER)
+    cases = [
+        ("grid-tied model as captured", dict(gr), True),
+        ("grid-tied model, batteryType '0'", dict(gr, batteryType="0"), True),
+        ("grid-tied model, batteryType absent", {k: v for k, v in gr.items() if k != "batteryType"}, True),
+        ("grid-tied model, batteryList entry that names no pack", dict(gr, batteryType="0", batteryList=[{"batteryType": 0}]), True),
+        ("three-phase grid-tied model", dict(gr, machine="S5-GR3P10K"), True),
+        ("grid-tied model in lower case", dict(gr, machine="s6-gr1p6k"), True),
+        ("grid-tied model but a live voltage", dict(gr, batteryVoltage=51.2), False),
+        ("grid-tied model but a live SOC", dict(gr, batteryCapacitySoc=40.0), False),
+        ("grid-tied model, voltage absent", dict(gr, batteryVoltage=None), False),
+        ("grid-tied model, SOC absent", dict(gr, batteryCapacitySoc=None), False),
+        ("grid-tied model naming a pack", dict(gr, batteryType="PYLON_LV"), False),
+        # The same zeros on a hybrid are a transient placeholder (issue #4494) without the pack counts
+        ("hybrid model, same zeros", dict(gr, machine="S5-EH1P6K-L"), False),
+        ("AC-coupled storage model, same zeros", dict(gr, machine="S6-EA1P5K-L"), False),
+        ("RHI hybrid, same zeros", dict(gr, machine="RHI-6K-48ES-5G"), False),
+        ("machine absent, same zeros", {k: v for k, v in gr.items() if k != "machine"}, False),
+        ("GR only later in the name", dict(gr, machine="S6-EH1P-GR1P"), False),
+    ]
+    for label, detail, expected in cases:
+        got = MockSolisAPI._reports_no_battery(detail)
+        assert got is expected, "{}: expected _reports_no_battery {} for {}, got {}".format(label, expected, detail, got)
+    print("PASSED: a grid-tied model reading zero is PV-only, a hybrid is not")
+    return False
+
+
+async def test_automatic_config_treats_grid_tied_model_as_pv_only():
+    """A grid-tied string inverter beside a hybrid is left out of the battery args but kept in the PV totals."""
+    print("\n=== Test: automatic_config treats a grid-tied model as PV-only ===")
+    with_batt = "6031050241180AA"
+    string_inv = "1802060232170BB"
+    for battery_type in ("0", "0.0"):
+        recorded, api = await _run_automatic_config({with_batt: _DETAIL_WITH_BATTERY, string_inv: dict(_DETAIL_GRID_TIED_STRING_INVERTER, batteryType=battery_type)})
+        assert recorded.get("num_inverters") == 1, "batteryType {!r}: expected only the hybrid to be enrolled, got num_inverters={}".format(battery_type, recorded.get("num_inverters"))
+        for arg in ("soc_percent", "discharge_start_time", "charge_start_time", "reserve"):
+            entities = recorded.get(arg) or []
+            assert len(entities) == 1 and string_inv.lower() not in " ".join(entities), "batteryType {!r}: {} must stay on the hybrid alone, got {}".format(battery_type, arg, entities)
+        expect_pv_today = [f"sensor.predbat_solis_{with_batt.lower()}_pv_energy_total", f"sensor.predbat_solis_{string_inv.lower()}_pv_energy_total"]
+        assert recorded.get("pv_today") == expect_pv_today, "batteryType {!r}: expected pv_today to cover both inverters, got {}".format(battery_type, recorded.get("pv_today"))
+        assert api.is_battery_inverter(string_inv) is False and api.is_battery_inverter(with_batt) is True
+    print("PASSED: the grid-tied model is PV-only and stays in the PV totals")
     return False
 
 
@@ -2211,7 +2290,10 @@ def run_solis_tests(my_predbat):
     """
     failed = False
 
+    from tests.test_solis_handover import run_solis_handover_tests
+
     try:
+        failed |= run_solis_handover_tests()
         # Run tests
         failed |= test_oauth_bearer_headers()
         failed |= test_solis_not_activated_without_credentials()
@@ -2241,6 +2323,11 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_settles_on_a_pv_only_fleet())
         failed |= asyncio.run(test_discovery_cache_lets_a_restart_configure_without_the_api())
         failed |= asyncio.run(test_successful_discovery_is_cached_and_session_reused())
+        failed |= asyncio.run(test_failed_tou_mode_read_is_retried_and_saved())
+        failed |= asyncio.run(test_saved_tou_mode_is_used_without_reading())
+        failed |= asyncio.run(test_successful_tou_mode_read_is_not_polled_again())
+        failed |= asyncio.run(test_tou_mode_older_than_a_day_is_read_again())
+        failed |= asyncio.run(test_tou_mode_change_retries_a_failed_slot_register_read())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
@@ -2249,6 +2336,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_keeps_no_battery_inverter_in_pv_totals())
         failed |= test_reports_no_battery_for_a_silent_string_inverter()
         failed |= asyncio.run(test_automatic_config_treats_silent_string_inverter_as_pv_only())
+        failed |= test_reports_no_battery_for_a_grid_tied_model()
+        failed |= asyncio.run(test_automatic_config_treats_grid_tied_model_as_pv_only())
         failed |= asyncio.run(test_automatic_config_pv_totals_unchanged_when_all_have_batteries())
         failed |= test_solis_catalogue_describes_battery_and_pv_only()
         failed |= test_solis_catalogue_battery_ratings_carry_only_stated_facts()
@@ -2296,6 +2385,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_compute_solis_mode_value_hold_and_reserve())
         failed |= asyncio.run(test_storage_mode_always_sets_battery_reserve())
         failed |= asyncio.run(test_number_event_soc_limit_shows_at_once())
+        failed |= asyncio.run(test_reads_recover_after_soc_limit_shown_before_first_poll())
         failed |= asyncio.run(test_warns_when_reserve_is_the_over_discharge_soc())
         failed |= asyncio.run(test_write_time_windows_v1_slot_detection())
         failed |= asyncio.run(test_write_time_windows_v1_discharge_slot_detection())
@@ -4120,6 +4210,53 @@ async def test_number_event_soc_limit_shows_at_once():
     assert writes == ["55"], writes
 
     print("PASSED: SOC limit change shown at once, written from the queue")
+    return False
+
+
+async def test_reads_recover_after_soc_limit_shown_before_first_poll():
+    """A SOC limit shown before the first successful poll must not break every later read.
+
+    When the datalogger refuses the startup poll (B0600), Predbat still writes reserve_soc, and
+    show_soc_limit_now() creates cached_values[sn] with no cached_infos[sn]. The read paths only
+    created both caches when cached_values had no entry, so every later poll and single-CID read
+    raised KeyError(sn) and the inverter stayed unread until the pod restarted.
+    """
+    print("\n=== Test: reads recover after a SOC limit was shown before the first poll ===")
+    api = MockSolisAPI()
+    inverter_sn = "123456"
+    api.inverter_sn = [inverter_sn]
+
+    await api.number_event(f"number.predbat_solis_{inverter_sn}_reserve_soc", 12)
+    assert inverter_sn in api.cached_values and inverter_sn not in api.cached_infos, (api.cached_values, api.cached_infos)
+
+    async def read_batch(sn, cids):
+        """Return one CID as SolisCloud's batch read would"""
+        return {SOLIS_CID_STORAGE_MODE: "35"}, {SOLIS_CID_STORAGE_MODE: {"cid": str(SOLIS_CID_STORAGE_MODE), "msg": "35"}}
+
+    api.read_batch = read_batch
+    assert await api.poll_inverter_data(inverter_sn, [SOLIS_CID_STORAGE_MODE]) is True, "poll should succeed"
+    assert api.cached_values[inverter_sn][SOLIS_CID_STORAGE_MODE] == "35", api.cached_values
+    assert api.cached_values[inverter_sn][SOLIS_CID_BATTERY_RESERVE_SOC] == "12", "the shown SOC limit should survive the poll"
+    assert api.cached_infos[inverter_sn][SOLIS_CID_STORAGE_MODE]["msg"] == "35", api.cached_infos
+
+    # The single-CID read path had the same guard
+    del api.cached_infos[inverter_sn]
+
+    async def execute_request(endpoint, payload):
+        """Return a single CID read"""
+        return {"msg": "20"}
+
+    async def no_retry(operation, *args, **kwargs):
+        """Run the operation once"""
+        return await operation()
+
+    api._execute_request = execute_request
+    api._with_retry = no_retry
+    value, _ = await api.read_cid(inverter_sn, SOLIS_CID_BATTERY_RESERVE_SOC)
+    assert value == "20", value
+    assert api.cached_infos[inverter_sn][SOLIS_CID_BATTERY_RESERVE_SOC]["msg"] == "20", api.cached_infos
+
+    print("PASSED: reads recover after a SOC limit was shown before the first poll")
     return False
 
 
@@ -6071,6 +6208,7 @@ async def test_slot_registers_are_re_read_while_a_window_is_live():
     sn = "INV001"
     api = _make_run_api(configured_sns=[sn])
     api.inverter_sn = [sn]
+    api.tou_v2_mode_saved = {sn: {"value": "43605", "read_at": datetime(2026, 8, 26, 23, 0, tzinfo=api.local_tz).isoformat()}}  # Startup read the TOU mode, so it is not read again
     api._test_v2_mode = True
     api._test_now_utc_exact = datetime(2026, 8, 26, 23, 35, tzinfo=api.local_tz)
     api.charge_discharge_time_windows[sn] = {1: {"charge_enable": 1, "charge_start_time": "23:30", "charge_end_time": "23:45"}}
@@ -7522,8 +7660,9 @@ async def test_rate_setpoints_do_not_drift_with_battery_voltage():
 async def test_publish_entities_export_power_unit_conversion():
     """Test publish_entities converts max export power CID value to watts correctly.
 
-    The Solis API returns CID 499 (max export power) in either 100W units (when value < 200)
-    or watts (when value >= 200).  A value of 0 is treated as 'no limit' and mapped to 99999.
+    The Solis API returns CID 499 (max export power) in 100W units at every value - the same units
+    number_event_handler() writes - so a read of 480 is 48000W (GH#5385).  A value of 0 is treated
+    as 'no limit' and mapped to 99999.
     """
     print("\n=== Test: publish_entities export power unit conversion ===")
 
@@ -7532,7 +7671,7 @@ async def test_publish_entities_export_power_unit_conversion():
     def _make_api(export_power_cid_value):
         """Helper: create a minimal MockSolisAPI with a single inverter."""
         api = MockSolisAPI()
-        sn = "EXPORT_TEST"
+        sn = "SN0EXPORT1"  # No underscore, so number_event_handler() can parse it back out of the entity id
         api.inverter_sn = [sn]
         api.inverter_details[sn] = {"inverterName": "Test"}
         api.cached_values[sn] = {
@@ -7544,14 +7683,14 @@ async def test_publish_entities_export_power_unit_conversion():
         api.max_discharge_current[sn] = 50
         return api, sn
 
-    # Case 1: value >= 200 — already in watts, no conversion applied
-    api, sn = _make_api("5000")
+    # Case 1: GH#5385 - a register reading of 480 is 48000W, not 480W
+    api, sn = _make_api("480")
     await api.publish_entities()
     entity_id = f"number.predbat_solis_{sn.lower()}_max_export_power"
     item = api.dashboard_items[entity_id]
-    assert item["state"] == 5000.0, f"Expected 5000W unchanged, got {item['state']}"
+    assert item["state"] == 48000.0, f"Expected 480 * 100 = 48000W, got {item['state']}"
 
-    # Case 2: value < 200 — treated as 100W units, multiplied by 100
+    # Case 2: small value — 100W units, multiplied by 100
     api, sn = _make_api("50")
     await api.publish_entities()
     item = api.dashboard_items[entity_id]
@@ -7577,17 +7716,31 @@ async def test_publish_entities_export_power_unit_conversion():
     item = api.dashboard_items[entity_id]
     assert item["state"] == 99999, f"Expected 99999 for invalid value, got {item['state']}"
 
-    # Case 6: boundary — value exactly 200 is NOT multiplied (only < 200 triggers conversion)
-    api, sn = _make_api("200")
-    await api.publish_entities()
-    item = api.dashboard_items[entity_id]
-    assert item["state"] == 200.0, f"Expected 200W unchanged at boundary, got {item['state']}"
-
-    # Case 7: value is 199 — last value that triggers 100W-unit conversion
+    # Case 6: no threshold — 199 and 200 either side of the old < 200 cut-off both convert
     api, sn = _make_api("199")
     await api.publish_entities()
     item = api.dashboard_items[entity_id]
     assert item["state"] == 19900.0, f"Expected 199 * 100 = 19900W, got {item['state']}"
+    api, sn = _make_api("200")
+    await api.publish_entities()
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 20000.0, f"Expected 200 * 100 = 20000W, got {item['state']}"
+
+    # Case 7: round trip — a watt value written through number_event_handler() reads back unchanged
+    api, sn = _make_api("0")
+    written = {}
+
+    async def mock_read_and_write_cid(inverter_sn, cid, value, field_description=None):
+        """Record the written register value in the cache as the inverter would hold it."""
+        written["value"] = value
+        api.cached_values[inverter_sn][cid] = value
+        return True
+
+    api.read_and_write_cid = mock_read_and_write_cid
+    await api.number_event_handler(entity_id, 30000)
+    assert written["value"] == "300", f"Expected 30000W written as '300', got {written}"
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 30000.0, f"Expected 30000W to read back as 30000W, got {item['state']}"
 
     # Verify unit of measurement on the published entity
     assert item["attributes"]["unit_of_measurement"] == "W", "unit_of_measurement should be W"
@@ -8343,7 +8496,10 @@ async def test_with_retry_does_not_retry_settled_codes():
             raise solis_module.SolisAPIError("transient", status_code=500)
         return "ok"
 
-    if await api._with_retry(flaky_operation, max_retry_time=5) != "ok" or transient_attempts["n"] != 2:
+    # The retry delay is shortened so the test asserts that a retry happens without sitting out the real 1s back-off
+    with patch.object(solis_module, "SOLIS_INITIAL_RETRY_DELAY", 0.01):
+        result = await api._with_retry(flaky_operation, max_retry_time=5)
+    if result != "ok" or transient_attempts["n"] != 2:
         print("ERROR: a transient error should still be retried, got {} attempts".format(transient_attempts["n"]))
         failed = True
 
@@ -8918,6 +9074,255 @@ async def test_discovery_cache_lets_a_restart_configure_without_the_api():
 
     if not failed:
         print("PASSED: a restart with no API access configures from the cached inverter list")
+    return failed
+
+
+def _tou_mode_api(storage, sn, tou_reads, slot_read_failures=0):
+    """Return a run() API with storage whose CID 6798 reads follow tou_reads, a list of values or None (a timed-out read) used in turn.
+
+    The first slot_read_failures reads of the V2 slot registers fail, as a timeout does.
+
+    The real is_tou_v2_mode() is bound in place of MockSolisAPI's, so the mode comes from the cached register.
+    """
+    api = _storage_api(storage)
+    api.configured_inverter_sn = [sn]
+    api.is_tou_v2_mode = SolisAPI.is_tou_v2_mode.__get__(api)
+
+    async def mock_get_inverter_list():
+        """Discovery finds the one inverter."""
+        return [{"sn": sn}]
+
+    async def mock_poll_inverter_data(inverter_sn, cids, batch=True):
+        """Answer CID 6798 from tou_reads, failing the way a timeout does (cache left alone) for None."""
+        api.poll_inverter_data_calls.append((inverter_sn, cids))
+        if cids == [SOLIS_CID_TOU_V2_MODE]:
+            value = tou_reads.pop(0)
+            if value is None:
+                return False
+            api.cached_values.setdefault(inverter_sn, {})[SOLIS_CID_TOU_V2_MODE] = value
+        if cids == SOLIS_CID_LIST_TOU_V2 and failures_left[0] > 0:
+            failures_left[0] -= 1
+            return False
+        return True
+
+    failures_left = [slot_read_failures]
+    api.get_inverter_list = mock_get_inverter_list
+    api.poll_inverter_data = mock_poll_inverter_data
+    return api
+
+
+async def test_failed_tou_mode_read_is_retried_and_saved():
+    """A TOU mode read that times out at startup is polled again, and a good read is saved.
+
+    The flag was read once at startup with the result unchecked, so a timeout left a V2 inverter driven with
+    V1 registers it ignores, and no charge or export ran until the next restart (two nights on one site).
+    """
+    failed = False
+    print("\n=== Test: a failed TOU mode read is retried and saved ===")
+    sn = "INV001"
+    storage = _FakeStorage()
+    api = _tou_mode_api(storage, sn, [None, None, "43605"])
+
+    def tou_polls():
+        """The CID 6798 reads made so far."""
+        return [call for call in api.poll_inverter_data_calls if call[1] == [SOLIS_CID_TOU_V2_MODE]]
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        if api.is_tou_v2_mode(sn):
+            print("ERROR: with no read and nothing saved the mode should default to standard")
+            failed = True
+        if not any("Could not read the time of use mode of inverter {}, treating it as standard mode".format(sn) in m for m in api.log_messages):
+            print("ERROR: expected a warning that the default is in use, got {}".format(api.log_messages))
+            failed = True
+
+        await api.run(60, False)
+        if len(tou_polls()) != 1:
+            print("ERROR: off the 5 minute boundary the TOU mode should not be polled, got {}".format(tou_polls()))
+            failed = True
+
+        await api.run(300, False)  # Times out again
+        await api.run(600, False)  # Reads V2
+        if len(tou_polls()) != 3:
+            print("ERROR: expected the TOU mode polled at startup and on each 5 minute boundary until read, got {}".format(tou_polls()))
+            failed = True
+        if not api.is_tou_v2_mode(sn):
+            print("ERROR: once read, the inverter should be in V2 mode")
+            failed = True
+        if storage.contents.get(("solis", "tou_v2_mode"), {}).get(sn, {}).get("value") != "43605":
+            print("ERROR: expected the read TOU mode to be saved, got {}".format(storage.contents.get(("solis", "tou_v2_mode"))))
+            failed = True
+        if api.decode_time_windows_v2_calls != [sn] or (sn, SOLIS_CID_LIST_TOU_V2) not in api.poll_inverter_data_calls:
+            print("ERROR: a change to V2 should re-read and decode the V2 slot registers, got decodes {}".format(api.decode_time_windows_v2_calls))
+            failed = True
+
+        await api.run(900, False)
+        if len(tou_polls()) != 3:
+            print("ERROR: once read, the TOU mode should not be polled again, got {}".format(tou_polls()))
+            failed = True
+
+    if not failed:
+        print("PASSED: a failed TOU mode read is retried until it succeeds, and the result saved")
+    return failed
+
+
+async def test_saved_tou_mode_is_used_without_reading():
+    """A TOU mode read under a day ago by an earlier run is used by a restart without reading CID 6798 again."""
+    failed = False
+    print("\n=== Test: a saved TOU mode is used without reading ===")
+    sn = "INV001"
+    storage = _FakeStorage({("solis", "tou_v2_mode"): {sn: {"value": "43605", "read_at": (datetime.now(UTC) - timedelta(hours=2)).isoformat()}}})
+    api = _tou_mode_api(storage, sn, [])  # Any CID 6798 read would pop from an empty list and raise
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        await api.run(300, False)
+
+    tou_polls = [call for call in api.poll_inverter_data_calls if call[1] == [SOLIS_CID_TOU_V2_MODE]]
+    if tou_polls:
+        print("ERROR: a saved TOU mode should not be read again, got {}".format(tou_polls))
+        failed = True
+    if not api.is_tou_v2_mode(sn):
+        print("ERROR: the saved V2 mode should be in use")
+        failed = True
+    if not any("Inverter {} is in Time of Use V2 mode".format(sn) in m for m in api.log_messages):
+        print("ERROR: startup should report the saved V2 mode, got {}".format(api.log_messages))
+        failed = True
+    if api.decode_time_windows_v2_calls != [sn] or api.decode_time_windows_calls:
+        print("ERROR: startup should decode the V2 slot registers once, got v2 {} v1 {}".format(api.decode_time_windows_v2_calls, api.decode_time_windows_calls))
+        failed = True
+
+    if not failed:
+        print("PASSED: a saved TOU mode is used without reading it again")
+    return failed
+
+
+async def test_tou_mode_older_than_a_day_is_read_again():
+    """A TOU mode read over a day ago is read again, keeping the old value in use until a read succeeds.
+
+    This is what clears a wrong saved value, or picks up a firmware upgrade, without anyone touching storage.
+    """
+    failed = False
+    print("\n=== Test: a TOU mode older than a day is read again ===")
+    sn = "INV001"
+    now = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+    storage = _FakeStorage({("solis", "tou_v2_mode"): {sn: {"value": "43605", "read_at": (now - timedelta(hours=25)).isoformat()}}})
+    api = _tou_mode_api(storage, sn, [None, "0", "0"])
+    api._test_now_utc_exact = now
+
+    def tou_polls():
+        """The CID 6798 reads made so far."""
+        return [call for call in api.poll_inverter_data_calls if call[1] == [SOLIS_CID_TOU_V2_MODE]]
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)  # The re-read times out
+        if len(tou_polls()) != 1:
+            print("ERROR: a TOU mode read over a day ago should be read again at startup, got {}".format(tou_polls()))
+            failed = True
+        if not api.is_tou_v2_mode(sn):
+            print("ERROR: a failed re-read must keep the last value read in use")
+            failed = True
+        if not any("Could not re-read the time of use mode of inverter {}, keeping Time of Use V2 mode".format(sn) in m for m in api.log_messages):
+            print("ERROR: expected a warning that the last value read is kept, got {}".format(api.log_messages))
+            failed = True
+
+        api.decode_time_windows_calls = []
+        await api.run(300, False)  # The inverter now reports standard mode
+        if api.is_tou_v2_mode(sn):
+            print("ERROR: the newly read standard mode should replace the old V2 value")
+            failed = True
+        if api.decode_time_windows_calls != [sn]:
+            print("ERROR: a change to standard mode should re-read and decode the V1 window register, got {}".format(api.decode_time_windows_calls))
+            failed = True
+        saved = storage.contents[("solis", "tou_v2_mode")][sn]
+        if saved != {"value": "0", "read_at": now.isoformat()}:
+            print("ERROR: expected the new value saved with its read time, got {}".format(saved))
+            failed = True
+
+        # A pod that stays up is read again once the value is a day old, and not before
+        api._test_now_utc_exact = now + timedelta(hours=23)
+        await api.run(600, False)
+        if len(tou_polls()) != 2:
+            print("ERROR: a TOU mode read under a day ago should not be read again, got {}".format(tou_polls()))
+            failed = True
+        api._test_now_utc_exact = now + timedelta(hours=24)
+        await api.run(900, False)
+        if len(tou_polls()) != 3:
+            print("ERROR: a running pod should read the TOU mode again once it is a day old, got {}".format(tou_polls()))
+            failed = True
+
+    if not failed:
+        print("PASSED: a TOU mode older than a day is read again, keeping the old value until a read succeeds")
+    return failed
+
+
+async def test_tou_mode_change_retries_a_failed_slot_register_read():
+    """A TOU mode change whose slot register re-read fails is retried on the next 5 minute boundary until it decodes.
+
+    The flag read marks the mode current, so without its own retry a failed re-read straight after it left the slots
+    decoded in the old layout for the rest of the run, as the hourly poll only decodes on the first cycle.
+    """
+    failed = False
+    print("\n=== Test: a TOU mode change retries a failed slot register read ===")
+    sn = "INV001"
+    storage = _FakeStorage()
+    api = _tou_mode_api(storage, sn, [None, "43605"], slot_read_failures=1)
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)  # Flag read times out, standard mode assumed
+        await api.run(300, False)  # Flag reads V2, the V2 slot register read fails
+        if api.decode_time_windows_v2_calls:
+            print("ERROR: a failed slot register read should not decode, got {}".format(api.decode_time_windows_v2_calls))
+            failed = True
+        if sn not in api.time_windows_reload_pending:
+            print("ERROR: a failed slot register read after a mode change should stay pending")
+            failed = True
+
+        await api.run(600, False)  # The retry reads and decodes them
+        if api.decode_time_windows_v2_calls != [sn]:
+            print("ERROR: the retry should decode the V2 slot registers once, got {}".format(api.decode_time_windows_v2_calls))
+            failed = True
+        if sn in api.time_windows_reload_pending:
+            print("ERROR: a decoded reload should no longer be pending")
+            failed = True
+
+        slot_polls = len([call for call in api.poll_inverter_data_calls if call[1] == SOLIS_CID_LIST_TOU_V2])
+        await api.run(900, False)
+        if len([call for call in api.poll_inverter_data_calls if call[1] == SOLIS_CID_LIST_TOU_V2]) != slot_polls:
+            print("ERROR: once decoded, the slot registers should not be re-read for the mode change again")
+            failed = True
+
+    if not failed:
+        print("PASSED: a TOU mode change retries a failed slot register read until it decodes")
+    return failed
+
+
+async def test_successful_tou_mode_read_is_not_polled_again():
+    """A TOU mode read that succeeds at startup is saved and not polled again on the 5 minute grid."""
+    failed = False
+    print("\n=== Test: a successful TOU mode read is not polled again ===")
+    sn = "INV001"
+    storage = _FakeStorage()
+    api = _tou_mode_api(storage, sn, ["43605"])
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        await api.run(300, False)
+
+    tou_polls = [call for call in api.poll_inverter_data_calls if call[1] == [SOLIS_CID_TOU_V2_MODE]]
+    if len(tou_polls) != 1:
+        print("ERROR: expected only the startup TOU mode read, got {}".format(tou_polls))
+        failed = True
+    saved = storage.contents.get(("solis", "tou_v2_mode"), {}).get(sn, {})
+    if saved.get("value") != "43605" or not saved.get("read_at"):
+        print("ERROR: expected the TOU mode to be saved with its read time, got {}".format(storage.contents.get(("solis", "tou_v2_mode"))))
+        failed = True
+    if any("Could not read the time of use mode" in m for m in api.log_messages):
+        print("ERROR: a successful read should not warn, got {}".format(api.log_messages))
+        failed = True
+
+    if not failed:
+        print("PASSED: a successful TOU mode read is saved and not polled again")
     return failed
 
 

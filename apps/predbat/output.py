@@ -19,9 +19,25 @@ schedules, rate window sensors, and financial metric summaries.
 import math
 import copy
 from html import escape as escape_html
-from datetime import timedelta
+from datetime import timedelta, timezone
 from predbat import THIS_VERSION_DISPLAY
-from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from const import (
+    TIME_FORMAT,
+    PREDICT_STEP,
+    RUN_EVERY,
+    EXPORT_LIMIT_IDLE,
+    MINUTE_WATT,
+    FULL_EXPORT_POWER,
+    EXPORT_MODE_TARGET,
+    EXPORT_MODE_FREEZE,
+    EXPORT_MODE_IDLE,
+    CHARGE_STATE_PRECEDENCE,
+    EXPORT_STATE_PRECEDENCE,
+    COMPONENT_ERROR_STATUS_PREFIX,
+    COMPONENT_ERROR_STATUS_SUFFIX,
+    RUN_STATE_NAMES,
+    STATUS_STATE_MAX_LENGTH,
+)
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
 from prediction import Prediction
 
@@ -54,6 +70,7 @@ REASON_TEMPLATES = {
     "manual_override_freeze_export": "You manually set this slot to freeze exporting.",
     "manual_override_demand": "You manually set this slot to demand mode.",
     "mixed_slot_states": "This slot did not hold one state throughout - Predbat was in: {states}. The cell shows the most significant of them.",
+    "status_warning": "Predbat reported a problem during this slot: {warnings}",
 }
 
 
@@ -66,6 +83,78 @@ def yesterday_slot_is_exporting(slot_status):
     "exporting" alone would silently drop the export half of a real cross-charging slot.
     """
     return "exporting" in slot_status or "cross-charging" in slot_status
+
+
+def split_status_warning(status):
+    """Split a historical ``predbat.status`` string into the charge/export state it records and the
+    warning or error it carries, for the "yesterday" plan reconstruction in ``calculate_yesterday()``.
+
+    Returns ``(state, warning)``, either of which may be empty.
+
+    A run that raises a warning records its state after it in square brackets -
+    ``"Warn: ... [Exporting]"`` - so the status still starts with the warning for anything that
+    checks for one. A bare warning or error, with no state after it, is from a run that executed
+    nothing, or from history recorded before the state was kept, and says nothing about the
+    charge/export state: it maps to an empty state that matches neither side. The reconstruction
+    classifies states by substring, so reading one as a state rebuilt a day of force exports as
+    charge holds, from a warning about "car_charging_soc". The component-error summary is the one
+    bare error that carries the run's state inside it, and is unwrapped to that.
+    """
+    lowered = status.lower()
+    component_prefix = COMPONENT_ERROR_STATUS_PREFIX.lower()
+    component_suffix = COMPONENT_ERROR_STATUS_SUFFIX.lower()
+    if lowered.startswith(component_prefix) and component_suffix in lowered:
+        return status[len(component_prefix) : lowered.index(component_suffix)].strip(), status
+    # Predheat words its warnings "Warn - ..." rather than "Warn: ...", so both forms are recognised
+    if lowered.startswith("warn:") or lowered.startswith("warn -") or lowered.startswith("error:"):
+        open_index = run_state_suffix_index(status)
+        if open_index is None:
+            return "", status
+        return status[open_index + 1 : -1], status[:open_index].rstrip()
+    return status, ""
+
+
+def run_state_suffix_index(status):
+    """Find the run's state recorded after a warning - the ``[Exporting]`` of ``"Warn: ... [Exporting]"``.
+
+    Returns the index of the suffix's opening bracket, or None when the status does not end in one.
+
+    The bracket is matched by balance from the end, as a state carries brackets of its own
+    (``"Demand [Freeze exporting]"``, ``"Charging [Alert]"``), and is only taken as a state when its
+    contents start with one of RUN_STATE_NAMES followed by nothing or a qualifier: a warning that
+    interpolates a list or an entity can end in brackets that are not a state at all.
+    """
+    if not status.endswith("]"):
+        return None
+    depth = 0
+    open_index = None
+    for index in range(len(status) - 1, -1, -1):
+        if status[index] == "]":
+            depth += 1
+        elif status[index] == "[":
+            depth -= 1
+            if depth == 0:
+                open_index = index
+                break
+    if not open_index or status[open_index - 1] != " ":
+        return None
+    run_state = status[open_index + 1 : -1]
+    for name in RUN_STATE_NAMES:
+        if run_state == name or run_state.startswith((name + ",", name + " [", name + " (")):
+            return open_index
+    return None
+
+
+def status_with_run_state(warning, run_state):
+    """The status sensor state for a run that raised ``warning``: the warning, then the run's state in
+    square brackets, within the length Home Assistant accepts.
+
+    The state is at the end, so clamping the whole string would cut it off first - on exactly the long
+    warnings, such as the window warnings that list every inverter component (#4990). The warning is
+    shortened instead, so the History view can always read the state back.
+    """
+    suffix = " [{}]".format(run_state)
+    return warning[: max(0, STATUS_STATE_MAX_LENGTH - len(suffix))] + suffix
 
 
 def more_active_slot_status(current, candidate, precedence):
@@ -132,9 +221,11 @@ class Output:
         """
         Publish the car charging plan
         """
-        plan = []
         postfix = ""
         for car_n in range(self.num_cars):
+            # A list of its own per car - shared, every car after the first also carried the windows of
+            # the cars before it, and a charger driven from its car's plan would charge in them
+            plan = []
             if car_n > 0:
                 postfix = "_" + str(car_n)
             if not self.car_charging_slots[car_n]:
@@ -163,10 +254,16 @@ class Output:
                 else:
                     slot = False
 
+                # Show when the window really began, not the planner's clamped start, so the
+                # displayed start time stops walking forward once charging is underway (#269).
+                # Octopus slots carry no start_orig and show their own start - which the Octopus
+                # component trims to now once a dispatch is underway, so those still move.
+                window_start = window.get("start_orig", window["start"])
+
                 time_format_time = "%H:%M:%S"
-                car_startt = self.midnight_utc + timedelta(minutes=window["start"])
+                car_startt = self.midnight_utc + timedelta(minutes=window_start)
                 car_start_time_str = car_startt.strftime(time_format_time)
-                minutes_to = max(window["start"] - self.minutes_now, 0)
+                minutes_to = max(window_start - self.minutes_now, 0)
                 self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
                     state=car_start_time_str,
@@ -184,7 +281,7 @@ class Output:
                 total_kwh = 0
                 total_cost = 0
                 for window in self.car_charging_slots[car_n]:
-                    start = self.time_abs_str(window["start"])
+                    start = self.time_abs_str(window.get("start_orig", window["start"]))
                     end = self.time_abs_str(window["end"])
                     kwh = dp2(window["kwh"])
                     average = dp2(window["average"])
@@ -410,12 +507,15 @@ class Output:
     def publish_rates_import(self):
         """
         Publish the import rates
+
+        The low rate sensors come from low_rates_tariff, the tariff's own cheap windows, rather than the
+        plan's charge windows, which a saving session or Axle event can widen to every slot (GH#5050)
         """
         window_str = ""
         # Output rate info
-        if self.low_rates:
+        if self.low_rates_tariff:
             window_n = 0
-            for window in self.low_rates:
+            for window in self.low_rates_tariff:
                 rate_low_start = window["start"]
                 rate_low_end = window["end"]
                 rate_low_average = window["average"]
@@ -521,7 +621,7 @@ class Output:
         self.log("Low import rate windows [{}]".format(window_str))
 
         # Clear rates that aren't available
-        if not self.low_rates:
+        if not self.low_rates_tariff:
             self.log("No low rate period found")
             self.dashboard_item(
                 self.prefix + ".low_rate_start",
@@ -560,7 +660,7 @@ class Output:
                 attributes={"friendly_name": "Next low rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
             )
             self.dashboard_item("binary_sensor." + self.prefix + "_low_rate_slot", state="off", attributes={"friendly_name": "Predbat low rate slot", "icon": "mdi:home-lightning-bolt-outline"})
-        if len(self.low_rates) < 2:
+        if len(self.low_rates_tariff) < 2:
             self.dashboard_item(
                 self.prefix + ".low_rate_start_2",
                 state="undefined",
@@ -1075,7 +1175,8 @@ class Output:
         Work out the actual planned charge rate (kW) for a charge_window_best slot. Unlike export,
         which stores a fixed reduced rate in the fractional part of export_limits_best, low power
         charging (set_charge_low_power) throttles the rate dynamically minute-by-minute, so it has
-        to be recomputed the same way the prediction engine works it out (find_charge_rate()).
+        to be recomputed the same way the prediction engine works it out (find_charge_rate()), and
+        then capped at the inverter limit as the prediction does (GH#5394).
         """
         window = self.charge_window_best[charge_window_n]
         soc = self.predict_soc_best.get(minute_relative_start, self.soc_kw)
@@ -1103,15 +1204,24 @@ class Output:
             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
             solar_full_rate=self.set_charge_low_power_solar_full_rate,
         )
+        # The prediction then clamps the grid side of the charge at the inverter limit (less inverter
+        # losses); a hybrid can add DC-coupled PV on top of that, an AC-coupled inverter cannot.
+        charge_rate_limit = self.inverter_limit * self.inverter_loss
+        if self.inverter_hybrid:
+            charge_rate_limit += pv_forecast_minute_step.get(minute_relative_start, 0.0) / PREDICT_STEP
+        charge_rate_now_curve = min(charge_rate_now_curve, charge_rate_limit)
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None):
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None):
         """
         Publish the current plan in HTML format
 
         car_hold_minutes, when given, is the set of plan minutes whose recorded status was "Hold for car":
         the Yesterday actual-history table shows measured SoC, so its car icon comes from what happened
         rather than from predict_car_hold_best (see plan_row_holding_for_car()).
+
+        status_warnings maps plan minutes to the warning or error Predbat reported then. Only the
+        History view passes it, to flag the slots whose recorded state ran alongside a problem.
         """
         html = ""
         plan_debug = self.plan_debug
@@ -1568,6 +1678,19 @@ class Output:
                 raw_state_mixed = [entry.capitalize() for entry in mixed_states]
                 reason_parts.append({"code": "mixed_slot_states", "params": {"states": ", ".join(raw_state_mixed)}})
 
+            # Flag a History slot that ran alongside a warning or error. The state shown is still the
+            # one Predbat executed; the flag says something else needed attention at the time.
+            warning_reasons = []
+            if status_warnings:
+                slot_warnings = []
+                for try_minute in range(minute_start, minute_end):
+                    warning_text = status_warnings.get(try_minute)
+                    if warning_text and warning_text not in slot_warnings:
+                        slot_warnings.append(warning_text)
+                if slot_warnings:
+                    state += " &#128681;"
+                    warning_reasons.append({"code": "status_warning", "params": {"warnings": "; ".join(slot_warnings)}})
+
             # Alert
             if in_alert:
                 soc_sym = "&#9888; " + soc_sym
@@ -1793,7 +1916,7 @@ class Output:
             json_row["state_mixed"] = raw_state_mixed
             json_row["state_html"] = state
 
-            json_row["reasons"] = reason_parts if reason_parts else demand_reason
+            json_row["reasons"] = (reason_parts if reason_parts else demand_reason) + warning_reasons
 
             # Parse state_html to extract structured data for client-side rendering
             if split and "</td><td" in state:
@@ -1930,6 +2053,8 @@ class Output:
         raw_plan["timestamp"] = self.now_utc_real.isoformat()
 
         if publish:
+            # The live plan is republished on every re-plan; the web page's stale check reads this
+            raw_plan["refresh_minutes"] = self.calculate_plan_every
             self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text": self.text_plan, "html": html, "raw": raw_plan, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
 
         return html, raw_plan
@@ -2700,55 +2825,147 @@ class Output:
         """
         Records status to HA sensor
         """
-        if not extra:
-            extra = ""
+        # Component threads (GE Cloud, Solis, ...) record status too, so the read-modify-write of
+        # error_count and the current_status/status_warning pair must not interleave with the main loop.
+        # The sensor write under the lock is a REST call with a timeout, so a slow Home Assistant does
+        # hold up other status writes. The notification is sent after the lock is released: over the
+        # websocket it waits on another thread for up to two minutes, which would stall them far longer.
+        notify_message = None
+        with self.status_lock:
+            if not extra:
+                extra = ""
 
-        self.current_status = message + extra
-        if notify and self.previous_status != message and self.set_status_notify:
-            if self.had_errors and had_errors:
-                # Already in error state, do not notify second error in a single run (spam)
-                pass
+            # A warning that repeats the one already shown with the previous run's state keeps that
+            # state after it, rather than flipping the sensor back to the bare warning for the few
+            # seconds until this run's own state is added - two state changes every cycle for as long
+            # as the warning recurs. Any different warning or error, including the ones a run records
+            # when it bails out without executing, is shown bare. The state's detail is kept with it.
+            state_message = message
+            sensor_state = message[:STATUS_STATE_MAX_LENGTH]
+            detail = extra
+            if had_errors and self.status_state and self.status_state != message:
+                shown_run_state, shown_warning = split_status_warning(self.status_state)
+                if shown_run_state and shown_warning == message:
+                    state_message = self.status_state
+                    sensor_state = status_with_run_state(message, shown_run_state)
+                    detail = self.status_detail
+
+            self.status_state = state_message
+            self.status_detail = detail
+            self.current_status = state_message + detail
+            if notify and self.previous_status != message and self.set_status_notify:
+                if self.had_errors and had_errors:
+                    # Already in error state, do not notify second error in a single run (spam)
+                    pass
+                else:
+                    notify_message = f"{self.prefix.capitalize()} status change to: {message}{extra}"
+                    self.previous_status = message
+
+            error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
+            try:
+                error_count = int(error_count)
+            except (ValueError, TypeError):
+                error_count = 0
+
+            if had_errors:
+                error_count += 1
+
+            # Home Assistant rejects entity states over 255 characters, and this message is the state
+            # of the status sensor. Clamp what is written as the state - the full text survives in
+            # current_status, the log line and the notification, and attributes have no such cap.
+            # Motivated by the window warnings listing every configured inverter component (#4990):
+            # three or more of those push past 255, so the dashboard would keep a stale status on
+            # exactly the cycles the warning matters.
+            self.dashboard_item(
+                self.prefix + ".status",
+                state=sensor_state,
+                attributes={
+                    "friendly_name": "Status",
+                    "detail": detail,
+                    "icon": "mdi:information",
+                    "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
+                    "debug": debug,
+                    "version": THIS_VERSION_DISPLAY,
+                    "error": (had_errors or self.had_errors),
+                    "error_count": error_count,
+                    "run_state": self.status_run_state or "",
+                },
+            )
+
+            if had_errors:
+                self.log("Warn: record_status {}".format(message + extra))
             else:
-                self.call_notify(f"{self.prefix.capitalize()} status change to: {message}{extra}")
-                self.previous_status = message
+                self.log("Info: record_status {}".format(message + extra))
 
-        error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
-        try:
-            error_count = int(error_count)
-        except (ValueError, TypeError):
-            error_count = 0
+            if had_errors:
+                self.had_errors = True
+                # Kept so the end of the run can add the state it executed after it
+                self.status_warning = message
+                self.status_warning_debug = debug
 
-        if had_errors:
-            error_count += 1
+        if notify_message:
+            self.call_notify(notify_message)
 
-        # Home Assistant rejects entity states over 255 characters, and this message is the state
-        # of the status sensor. Clamp what is written as the state - the full text survives in
-        # current_status, the log line and the notification, and attributes have no such cap.
-        # Motivated by the window warnings listing every configured inverter component (#4990):
-        # three or more of those push past 255, so the dashboard would keep a stale status on
-        # exactly the cycles the warning matters.
-        self.dashboard_item(
-            self.prefix + ".status",
-            state=message[:255],
-            attributes={
-                "friendly_name": "Status",
-                "detail": extra,
-                "icon": "mdi:information",
-                "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
-                "debug": debug,
-                "version": THIS_VERSION_DISPLAY,
-                "error": (had_errors or self.had_errors),
-                "error_count": error_count,
-            },
-        )
+    def reset_run_status(self):
+        """
+        Clear the run's error flag and the warning it recorded, at the start of a plan update.
 
-        if had_errors:
-            self.log("Warn: record_status {}".format(message + extra))
-        else:
-            self.log("Info: record_status {}".format(message + extra))
+        Taken under the status lock, as record_status() is: a component thread recording a warning
+        between these resets would otherwise leave had_errors set with its warning text cleared, so
+        the end of the run could not add its state after that warning.
+        """
+        with self.status_lock:
+            self.had_errors = False
+            self.status_warning = None
+            self.status_warning_debug = ""
 
-        if had_errors:
-            self.had_errors = True
+    def record_status_under_warning(self, run_status, extra=""):
+        """
+        Put the state a run executed back on the status sensor, after the warning it raised.
+
+        A warning or error recorded during a run takes over the status sensor, and the run's own
+        state used to be only logged, so a warning that recurs every cycle erased the executed state
+        from the sensor for as long as it lasted - the History view rebuilds past slots from this
+        sensor's history and had nothing to show. The warning leads and the state follows in square
+        brackets ("Warn: ... [Exporting]"), so the status still starts with the warning for the web
+        dashboard, the gateway and user templates that check for one, and the History view reads the
+        state back with split_status_warning(). The warning's own debug is kept, error_count is not
+        counted again and no notification is sent - this is the same warning, not a new one. extra
+        is the run's detail (e.g. its target SoC), written as the sensor's detail as a clean run would.
+
+        Does nothing when no warning was recorded this run (e.g. a component thread set had_errors
+        on its own), leaving the sensor as it was.
+        """
+        # Same lock as record_status() - see there.
+        with self.status_lock:
+            if not self.status_warning:
+                return
+            error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
+            try:
+                error_count = int(error_count)
+            except (ValueError, TypeError):
+                error_count = 0
+            if not extra:
+                extra = ""
+            message = "{} [{}]".format(self.status_warning, run_status)
+            self.status_state = message
+            self.status_detail = extra
+            self.current_status = message + extra
+            self.dashboard_item(
+                self.prefix + ".status",
+                state=status_with_run_state(self.status_warning, run_status),
+                attributes={
+                    "friendly_name": "Status",
+                    "detail": extra,
+                    "icon": "mdi:information",
+                    "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
+                    "debug": self.status_warning_debug,
+                    "version": THIS_VERSION_DISPLAY,
+                    "error": True,
+                    "error_count": error_count,
+                    "run_state": self.status_run_state or "",
+                },
+            )
 
     def publish_last_started(self):
         """
@@ -3184,18 +3401,38 @@ class Output:
             held = sum(PREDICT_STEP for minute in range(minute_start, minute_end, PREDICT_STEP) if (minute - self.minutes_now) in self.predict_car_hold_best)
         return held * 2 >= minute_end - minute_start
 
+    def history_slot(self, when):
+        """Which plan slot the plan history rebuild at when counts towards, as (date, slot number from midnight, UTC offset).
+
+        Slots are plan_interval_minutes long, shifted one run (RUN_EVERY) later: the run at a slot boundary
+        writes predbat.cost_today seconds before calculate_yesterday() reads its history back from Home
+        Assistant, so the slot just finished is rebuilt on the next run, once that value is recorded. This only
+        helps when that next run re-plans; with calculate_plan_every at or above the slot length, re-plans can
+        fall on boundaries and the rebuild then happens there.
+
+        The UTC offset keeps the hour repeated when the clocks go back as separate slots, and the run is
+        stepped back in UTC so the step itself lands on the right side of the change.
+        """
+        when = (when.astimezone(timezone.utc) - timedelta(minutes=RUN_EVERY)).astimezone(when.tzinfo)
+        return when.date(), (when.hour * 60 + when.minute) // self.plan_interval_minutes, when.utcoffset()
+
+    def history_refresh_minutes(self):
+        """The longest the plan history should go between rebuilds: a slot, the run it waits, and up to one re-plan interval."""
+        return self.plan_interval_minutes + RUN_EVERY + self.calculate_plan_every
+
     def calculate_yesterday(self):
         """
         Calculate the base plan for yesterday
         """
 
-        # Check  savings_last_updated timestamp, we don't need to re-compute this one every iteration, once an hour or when the day rolls over is enough
-        if self.savings_last_updated:
-            # savings_last_update is a timestamp object, compare age and date
-            age = self.now_utc - self.savings_last_updated
-            if age < timedelta(minutes=59) and self.savings_last_updated.date() == self.now_utc.date():
-                # Less than an hour old and already updated today
-                return
+        # Recompute once per completed plan slot rather than every iteration: the plan history (the web page's
+        # History view) shows each slot from what actually happened, so rebuilding as soon as a slot ends keeps the
+        # last finished slot on show - the live Plan view starts at the current slot, so an hourly rebuild left the
+        # slots since it in neither view. Each rebuild takes under a second, and it waits one run past the boundary
+        # (see history_slot) so the boundary run's own writes are recorded. A day rolling over rebuilds straight away,
+        # on the midnight re-plan, so the *_yesterday sensors move on to the day just ended without waiting a re-plan.
+        if self.savings_last_updated and self.savings_last_updated.date() == self.now_utc.date() and self.history_slot(self.savings_last_updated) == self.history_slot(self.now_utc):
+            return
 
         # Everything below is anchored on yesterday's recorded cost, so fetch that before doing any of
         # the expensive work - when Home Assistant isn't recording predbat.cost_today there is nothing
@@ -3203,7 +3440,7 @@ class Output:
         cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2, required=False)
         if not cost_today_data:
             self.log("Warn: Calculate yesterday: No history for {}.cost_today, so the savings and plan history can not be computed - check that Home Assistant is recording this entity (see the recorder notes in the FAQ)".format(self.prefix))
-            # Record the attempt so this is retried on the normal hourly cadence rather than every cycle
+            # Record the attempt so this is retried in the next slot rather than every cycle
             self.savings_last_updated = self.now_utc
             return
 
@@ -3247,7 +3484,7 @@ class Output:
         # Assume user might charge at the lowest rate only, for fixed tariff
         # Only use yesterday's rate range (k < end_record) for the threshold to prevent today's rates
         # (which are added progressively as minutes_now increases) from changing the baseline charge
-        # windows on each hourly recalculation and causing savings_yesterday to fluctuate.
+        # windows on each recalculation and causing savings_yesterday to fluctuate.
         charge_window_best = []
         rate_low = self.compute_rate_low_for_yesterday(past_rates, end_record)
         combine_charge = self.combine_charge_slots
@@ -3438,6 +3675,7 @@ class Output:
         self.export_limits_best = []
         self.export_window_best = []
         plan_html_baseline, plan_json_baseline = self.plan_write_debug(True, None, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record, prediction=self.prediction)
+        plan_json_baseline["refresh_minutes"] = self.history_refresh_minutes()
 
         # Now try to show what really happened yesterday
         self.charge_limit_best = []
@@ -3450,13 +3688,21 @@ class Output:
 
         # Fake charge/export windows based on previous predbat status
         car_hold_minutes = set()
+        status_warnings = {}
         if predbat_status_data:
             predbat_status = minute_data_state(predbat_status_data[0], 2, self.now_utc, "state", "last_updated")
             for minute in predbat_status:
-                status = predbat_status[minute]
+                status, warning = split_status_warning(predbat_status[minute])
                 if "," in status:
                     # If there are multiple statuses take the first one
-                    predbat_status[minute] = status.split(",")[0].strip()
+                    status = status.split(",")[0].strip()
+                predbat_status[minute] = status
+                if warning:
+                    # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago.
+                    # minute_data_state() holds each recorded status until the next one, so across a gap in
+                    # the recorder the warning is held along with the state it arrived with - the flag
+                    # stays with the state the slot shows, which is rebuilt from the same held value.
+                    status_warnings[minutes_now + end_record - minute] = warning
             # The car icon on this table follows the recorded "Hold for car" status, as its SoC is measured.
             # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago.
             car_hold_minutes = {minutes_now + end_record - minutes_ago for minutes_ago, status in predbat_status.items() if status.lower() == "hold for car"}
@@ -3475,6 +3721,12 @@ class Output:
                 slot_statuses = [predbat_status.get(minute_offset - slot_offset, "").lower() for slot_offset in range(self.plan_interval_minutes)]
                 tally_start = 0 if len(set(slot_statuses[:edge_minutes])) == 1 else edge_minutes
                 tally_end = self.plan_interval_minutes if len(set(slot_statuses[-edge_minutes:])) == 1 else self.plan_interval_minutes - edge_minutes
+
+                # A warning in an edge window the tally does not trust came in with the previous (or
+                # next) slot's leftover status, so it must not flag this slot either - the flag names
+                # a problem that ran alongside the minutes this slot's state was rebuilt from.
+                for slot_offset in list(range(0, tally_start)) + list(range(tally_end, self.plan_interval_minutes)):
+                    status_warnings.pop(minute + slot_offset, None)
 
                 charge_start_minute = None
                 charge_end_minute = None
@@ -3566,8 +3818,17 @@ class Output:
         # Simulate yesterday with actual charge/export windows
         self.forecast_minutes = end_record + minutes_now
         plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(
-            yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction, car_hold_minutes=car_hold_minutes
+            yesterday_pv_step,
+            yesterday_pv_step,
+            yesterday_load_step,
+            yesterday_load_step,
+            end_record + minutes_now,
+            publish=False,
+            prediction=self.prediction,
+            car_hold_minutes=car_hold_minutes,
+            status_warnings=status_warnings,
         )
+        plan_json_yesterday["refresh_minutes"] = self.history_refresh_minutes()
         self.forecast_minutes = end_record
 
         # Restore state
