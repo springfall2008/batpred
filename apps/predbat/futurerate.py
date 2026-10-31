@@ -71,12 +71,24 @@ class FutureRate:
             best_diff_add_peak = 12.0
             best_diff_add_all = 0
             mult_range = [x / 100 for x in range(180, 240, 2)]
+
+            # Take into account the flat-rate 3.34p/kWh discount applied to energy prices after discounting green levies and policy costs
+            #
+            # NB if VAT is ever re-instated on import prices, this will need to be increased accordingly
+            discount = 3.34
+
         else:
             best_diff_multiply = 0.95
             best_diff_add_peak = 1.0
             best_diff_add_all = 5.0
             mult_range = [x / 100 for x in range(90, 120, 2)]
-        vat = 1.05
+
+            # Assume no flat-rate discount for export rates
+            discount = 0
+
+        # VAT multiplier for electricity prices.
+        # Used to be 1.05 (5% VAT), now 1.0 (0% VAT)
+        vat = 1.0
 
         best_diff_diff = 9999999
         if real_mdata:
@@ -84,7 +96,9 @@ class FutureRate:
                 diff = 0
                 for minute in real_mdata:
                     minute_mod = minute % (24 * 60)
-                    rate_real = real_mdata[minute]
+
+                    # Add the discount back on, to synthesise the Agile prices from the original Agile formula
+                    rate_real = real_mdata[minute] + discount
                     rate_nord = mdata.get(minute, None)
                     if minute_mod >= peak_start_minutes and minute_mod < peak_end_minutes:
                         continue
@@ -112,7 +126,8 @@ class FutureRate:
                 diff = 0
                 for minute in real_mdata:
                     minute_mod = minute % (24 * 60)
-                    rate_real = real_mdata[minute]
+                    # Add the discount back on, to synthesise the Agile prices from the original Agile formula
+                    rate_real = real_mdata[minute] + discount
                     rate_nord = mdata.get(minute, None)
 
                     if rate_nord is not None:
@@ -138,7 +153,8 @@ class FutureRate:
                 diff = 0
                 for minute in real_mdata:
                     minute_mod = minute % (24 * 60)
-                    rate_real = real_mdata[minute]
+                    # Add the discount back on, to synthesise the Agile prices from the original Agile formula
+                    rate_real = real_mdata[minute] + discount
                     rate_nord = mdata.get(minute, None)
                     if rate_nord is not None:
                         rate_nord *= best_diff_multiply
@@ -169,6 +185,10 @@ class FutureRate:
             if minute_mod >= peak_start_minutes and minute_mod < peak_end_minutes:
                 rate_nord += best_diff_add_peak
             rate_nord += best_diff_add_all
+
+            # Apply the discount before capping the price
+            rate_nord -= discount
+
             if is_import:
                 rate_nord = min(rate_nord, 95)  # Cap
             else:
