@@ -4071,7 +4071,10 @@ class Plan:
 
         This is the pass that runs after the levels and detailed passes have chosen the plan's shape.
         Each window is re-optimised against the whole plan and the change is kept only when it improves
-        on the plan we were handed, so the pass is monotonic.
+        on the plan we were handed. A charge window is judged on the plan metric; an export window on the
+        metric plus each setting's share of the export threshold (export_threshold_penalty), so the pass is
+        monotonic in that score rather than in the raw metric - a shorter export can be kept while worse on
+        the raw metric, by no more than the share it saves.
 
         budget caps how many windows are visited; 0 visits every window in the record. The cheap default
         exists because the near-term windows are the ones about to be executed, but the cap is what makes
@@ -4775,8 +4778,10 @@ class Plan:
         # makes no change, capped at a few iterations. The one-shot "freeze" and "low" sub-passes are
         # structural and do not need repeating, but a normal/trim change can open up a further
         # improvement in an earlier window that a single sweep never revisits - repeating the pair
-        # lets those cascade. Acceptance only ever keeps equal-or-better limits so the metric stays
-        # monotonic non-increasing and the extra iterations cannot make the plan worse.
+        # lets those cascade. Acceptance only ever keeps a better score - the plan metric for a charge
+        # window, the metric plus the export threshold share for an export window - so the score stays
+        # monotonic non-increasing and the extra iterations cannot make the plan worse on it. The raw metric
+        # can rise when a shorter export is adopted, by no more than the threshold share that saves.
         base_sequence = ["trim_export", "trim_import", "freeze", "normal", "trim_export", "trim_import", "low"]
         refine_sequence = ["trim_export", "trim_import", "normal"]
         max_refine_iterations = 3
