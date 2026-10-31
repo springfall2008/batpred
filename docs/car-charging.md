@@ -690,7 +690,7 @@ Predbat can start and stop a GivEnergy EV charger, an Ohme charger or a myenergi
 Each has a control setting, off unless you set it to `true` in `apps.yaml`. Control also needs the automatic setup that maps the charger to its car:
 
 | Charger | Setting | Also needs |
-|---------|---------|------------|
+| --------- | --------- | ------------ |
 | GivEnergy EV charger | `ge_cloud_evc_control` | `ge_cloud_automatic_evc` set to `true` |
 | Ohme | `ohme_control` | `ohme_automatic` set to `true` |
 | myenergi Zappi | `myenergi_zappi_control` | `myenergi_automatic`, `myenergi_automatic_zappi` and `myenergi_enable_controls` (all on by default) |
@@ -827,7 +827,7 @@ With neither, nothing is checked.
 Octopus schedules dispatches to the minute, and Predbat checks them against their real start and end times. Back-to-back dispatch slots count as one dispatch.
 
 | Evidence | A "not charging" reading counts... | Slots cancelled, at the earliest |
-|---|---|---|
+| --- | --- | --- |
 | **car_charging_now** | from 3 minutes into the dispatch, while the car and charger wake up, and it must last 2 minutes | 5 minutes after the dispatch starts |
 | House load | only for a 5-minute load reading taken entirely inside the dispatch, and two in a row must be too low for a car to be charging | 10 minutes after the dispatch starts |
 
@@ -862,7 +862,7 @@ This only covers the dispatches Predbat prices itself. If your import rates come
 For example, Octopus dispatches the car from 15:55 to 16:01 but the charger reports 0W throughout:
 
 | Time | What Predbat does |
-|---|---|
+| --- | --- |
 | 15:55 | The dispatch starts. Too early to judge - the car may still be waking up. |
 | 15:58 | Still 0W, 3 minutes in: Predbat starts timing. |
 | 16:00 | Still 0W after 2 more minutes: the slots are cancelled, the battery hold is released, and the dispatch's cheap rate is dropped. |
@@ -912,7 +912,7 @@ Each character covers 30 minutes, running from 4 hours in the past to 24 hours a
 marks now - so everything left of it has already happened. The characters are:
 
 | Symbol | Meaning |
-|--------|---------|
+| -------- | --------- |
 | `.` | Nothing scheduled, at a normal (expensive) import rate |
 | `-` | Nothing scheduled, but this is a cheap slot - normally the overnight off-peak session |
 | `?` | The import rate for that block is not known yet (rates are still being fetched) |
@@ -992,7 +992,7 @@ When disabled (turned Off) all low-rate slots will be used in time order, so the
 Low-rate slots are time periods where the import rate is below the threshold determined by **input_number.predbat_rate_low_threshold** (*expert mode*).
 By default this threshold is calculated automatically based upon future import rates - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options) for details of configuring this threshold.
 
-- You can set **input_number.predbat_car_charging_plan_max_price** if you want to set a maximum price in pence per kWh to charge your car (e.g. 10p).
+- You can set **input_number.predbat_car_charging_plan_max_price** if you want to set a maximum price in currency minor unit (pence, cents, etc) per kWh to charge your car (e.g. 10p).
 If you set this to zero, this feature is disabled, and all low-rate slots will be used.
 This may mean you need to use expert mode and change your low-rate threshold (**input_number.predbat_rate_low_threshold**) to configure which slots should be considered if you have a tariff with more than 2 import rates (e.g. Flux)
 
@@ -1220,7 +1220,7 @@ Max = 10000
 Step = 0.01
 ```
 
-  Predbat accumulates cost in pence/cents, etc so the Max value should be big enough to hold the maximum car charging cost per day (e.g. £10/$10/€10).
+  Predbat accumulates cost in currency minor unit (pence/cents, etc) so the Max value should be big enough to hold the maximum car charging cost per day (e.g. £10/$10/€10).
 
 - Create an automation that triggers when **predbat.cost_today_car** changes value. Then, based upon which car is connected (sensor.car1_connected or sensor.car2_connected in this case), delta of predbat_cost to the appropriate car cost today sensor:
 

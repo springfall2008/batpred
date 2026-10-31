@@ -366,7 +366,7 @@ class Output:
                             "friendly_name": "Next high export rate cost",
                             "state_class": "measurement",
                             "unit_of_measurement": self.currency_symbols[1],
-                            "icon": "mdi:currency-usd",
+                            "icon": self.currency_icon,
                         },
                     )
                     in_high_rate = self.minutes_now >= rate_high_start and self.minutes_now <= rate_high_end
@@ -413,7 +413,7 @@ class Output:
                             "friendly_name": "Next+1 high export rate cost",
                             "state_class": "measurement",
                             "unit_of_measurement": self.currency_symbols[1],
-                            "icon": "mdi:currency-usd",
+                            "icon": self.currency_icon,
                         },
                     )
                 window_n += 1
@@ -455,7 +455,7 @@ class Output:
                     "friendly_name": "Next high export rate cost",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                 },
             )
             self.dashboard_item(
@@ -500,7 +500,7 @@ class Output:
                     "friendly_name": "Next+1 high export rate cost",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                 },
             )
 
@@ -564,7 +564,7 @@ class Output:
                             "friendly_name": "Next low rate cost",
                             "state_class": "measurement",
                             "unit_of_measurement": self.currency_symbols[1],
-                            "icon": "mdi:currency-usd",
+                            "icon": self.currency_icon,
                         },
                     )
                     in_low_rate = self.minutes_now >= rate_low_start and self.minutes_now <= rate_low_end
@@ -613,7 +613,7 @@ class Output:
                             "friendly_name": "Next+1 low rate cost",
                             "state_class": "measurement",
                             "unit_of_measurement": self.currency_symbols[1],
-                            "icon": "mdi:currency-usd",
+                            "icon": self.currency_icon,
                         },
                     )
                 window_n += 1
@@ -652,7 +652,7 @@ class Output:
             self.dashboard_item(
                 self.prefix + ".low_rate_cost",
                 state=self.rate_average,
-                attributes={"friendly_name": "Next low rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
+                attributes={"friendly_name": "Next low rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": self.currency_icon},
             )
             self.dashboard_item(
                 self.prefix + ".low_rate_duration",
@@ -690,7 +690,7 @@ class Output:
             self.dashboard_item(
                 self.prefix + ".low_rate_cost_2",
                 state=self.rate_average,
-                attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
+                attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": self.currency_icon},
             )
 
     def rate_range_text(self, rate_dict, start_minute, end_minute, fallback_value):
@@ -2090,7 +2090,7 @@ class Output:
                     "friendly_name": "Export rates",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                 },
             )
         elif gas:
@@ -2105,7 +2105,7 @@ class Output:
                     "friendly_name": "Gas rates",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                 },
             )
         else:
@@ -2121,7 +2121,7 @@ class Output:
                     "friendly_name": "Import rates",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                 },
             )
         return rates
@@ -2345,7 +2345,7 @@ class Output:
                     "friendly_name": "Cost so far today (since midnight)",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                     "energy": dp2(day_energy_total),
                     "energy_import": dp2(day_import),
                     "energy_export": dp2(day_export),
@@ -2366,7 +2366,7 @@ class Output:
                     "friendly_name": "Cost today in p/kWh",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                     "p/kWh": dp2(day_pkwh),
                     "p/kWh_car": dp2(day_car_pkwh),
                     "p/kWh_import": dp2(day_import_pkwh),
@@ -2385,7 +2385,7 @@ class Output:
                     "friendly_name": "Cost in last hour",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                     "energy": dp2(hour_energy),
                     "energy_import": dp2(hour_energy_import),
                     "energy_export": dp2(hour_energy_export),
@@ -2406,7 +2406,7 @@ class Output:
                     "friendly_name": "Cost in p/kWh",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                     "p/kWh": dp2(hour_pkwh),
                     "p/kWh_car": dp2(hour_pkwh_car),
                     "p/kWh_import": dp2(hour_pkwh_import),
@@ -2427,7 +2427,7 @@ class Output:
                         "friendly_name": "Car cost so far today (approx)",
                         "state_class": "measurement",
                         "unit_of_measurement": self.currency_symbols[1],
-                        "icon": "mdi:currency-usd",
+                        "icon": self.currency_icon,
                         "energy": dp2(day_car),
                         "p/kWh": dp2(day_car_pkwh),
                     },
@@ -2452,7 +2452,7 @@ class Output:
                     "friendly_name": "Cost so far today import",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                     "energy": dp2(day_import),
                     "p/kWh": dp2(day_import_pkwh),
                 },
@@ -2465,7 +2465,7 @@ class Output:
                     "friendly_name": "Cost so far today export",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                     "energy": dp2(day_export),
                     "p/kWh": dp2(day_export_pkwh),
                 },
@@ -3880,7 +3880,7 @@ class Output:
                 "friendly_name": "Cost yesterday",
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
-                "icon": "mdi:currency-usd",
+                "icon": self.currency_icon,
                 "p/kWh": dp2(cost_yesterday_per_kwh),
                 "final_soc": dp2(battery_soc_yesterday),
                 "battery_value": dp2(battery_value_yesterday),
@@ -3909,7 +3909,7 @@ class Output:
                     "friendly_name": "Cost yesterday car",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "icon": self.currency_icon,
                     "p/kWh": dp2(cost_car_per_kwh),
                 },
             )
@@ -3934,7 +3934,7 @@ class Output:
                 "friendly_name": "Predbat savings yesterday",
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
-                "icon": "mdi:currency-usd",
+                "icon": self.currency_icon,
                 "html": plan_html_baseline,
                 "json": plan_json_baseline,
             },
@@ -4004,7 +4004,7 @@ class Output:
                 "friendly_name": "PV/Battery system savings yesterday",
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
-                "icon": "mdi:currency-usd",
+                "icon": self.currency_icon,
             },
         )
 

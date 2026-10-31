@@ -296,6 +296,13 @@ from tests.test_integer_config import (
     test_float_declared_keys_never_read_with_int_default,
     test_component_arg_specs_resolve_float_declared_keys_as_float,
 )
+from tests.test_currency_icon import (
+    test_currency_icon_lookup,
+    test_apply_currency_icon,
+    test_apply_currency_icon_real_config,
+    test_currency_icon_reaches_ha,
+    test_predbat_currency_icon_attribute,
+)
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
 from tests.test_metrics_dashboard_control_conflicts import test_control_conflicts_metrics_round_trip, test_control_conflicts_dashboard_renders_section
 from tests.test_metrics_dashboard_control_failures import test_control_failures_metrics_round_trip, test_control_failures_dashboard_renders_section
@@ -748,6 +755,12 @@ def main():
         ("ge_cloud", test_ge_cloud, "GE Cloud comprehensive tests (API, devices, EVC, inverter ops, events, publishing, config, downloads, cache)", False),
         ("teslemetry", test_teslemetry, "Teslemetry Tesla Powerwall component tests (data path, control, tariff)", False),
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
+        # currency symbol tests
+        ("currency_icon_lookup", test_currency_icon_lookup, "Currency icon lookup tests", False),
+        ("currency_icon_apply", test_apply_currency_icon, "Currency icon apply/unit guard tests", False),
+        ("currency_icon_config", test_apply_currency_icon_real_config, "Currency icon real CONFIG_ITEMS tests", False),
+        ("currency_icon_ha", test_currency_icon_reaches_ha, "Currency icon reaches HA entity tests", False),
+        ("currency_icon_attr", test_predbat_currency_icon_attribute, "Currency icon attribute tests", False),
         ("validate_config", test_validate_config, "APPS_SCHEMA validator tests (string types, sensor boolean states)", False),
         ("get_arg_missing_index", test_get_arg_missing_index_uses_default_quietly, "get_arg missing (out-of-range index) vs malformed numeric coercion tests", False),
         ("get_arg_combine_units", test_get_arg_combine_units, "get_arg combine=True converts each entry to required_unit", False),

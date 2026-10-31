@@ -1393,6 +1393,10 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         refreshed. No-ops for any datum that is not present yet. The rates attributes carry only
         the window Predbat reads back (see _published_rates()), and the state is the number of
         periods published.
+
+        Icons remain hard-coded as currency-gbp and have not been auto-generated as per #5683 as the Kraken
+        integration is only used by UK customers so the extra complexity of passing the icon through to this
+        component was not justified nor needed.
         """
         if self.import_rates:
             import_rates = self._published_rates(self.import_rates)

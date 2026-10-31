@@ -50,6 +50,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Hanchu ESS Cloud](#hanchu-ess-cloud) | Predbat | [hanchu.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu.yaml) |
    | [Hanchu iESS](#hanchu-iess) | [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) | [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) |
    | [Huawei](#huawei) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
+   | [Indevolt Battery](#indevolt-battery) | [Indevolt](https://www.home-assistant.io/integrations/indevolt/) | [indevolt.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/indevolt.yaml) |
    | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
    | [LuxPower](#luxpower) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Local-Modbus) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) |
@@ -984,6 +985,73 @@ Start in Monitor or Read Only mode and test all Huawei service calls manually be
 A more complete working example, including Home Assistant package sensors, EV charging and Manual API automations, is available here:
 
 <https://github.com/JohanAlvedal/Predbat-setup>
+
+## Indevolt Battery
+
+Thanks to the work of @woutervg1994, Predbat can control the Indevolt plug-in battery using the HA Indevolt integration.  This has been tested with an Indevolt Powerflex 2000 ECO (CMS-SF2000).
+
+The integration does not provide start/stop times or target SoC, only two service calls:
+
+```text
+  indevolt.charge     (device_id, target_soc, power)
+  indevolt.discharge  (device_id, target_soc, power)
+```
+
+First, create four template sensors to convert Indevolt sensors into the formats that Predbat requires. Either add the following to your `configuration.yaml` or configure helper template entities via Devices & Services/Helpers.  Replace placeholders with the appropriate sensor names:
+
+```yaml
+template:
+  - sensor:
+      # SoC in kWh - the integration reports a percentage
+      - name: "Indevolt SoC kWh"
+        unique_id: indevolt_soc_kwh
+        unit_of_measurement: "kWh"
+        state_class: measurement
+        device_class: energy
+        state: >
+          {{ (states('SOC_PERCENT')|float(0) / 100) * states('NOMINAL_CAPACITY')|float(0) }}
+
+      # Inverted grid power - Predbat wants negative on import, INDEVOLT is opposite
+      - name: "Indevolt Grid Power (inverted)"
+        unique_id: indevolt_grid_power_inverted
+        unit_of_measurement: "W"
+        state_class: measurement
+        device_class: power
+        state: >
+          {{ states('METER_POWER')|float(0) * -1 }}
+
+      # House load power (optional, for the flow diagram)
+      - name: "House Load Power"
+        unique_id: house_load_power
+        unit_of_measurement: "W"
+        state_class: measurement
+        device_class: power
+        state: >
+          {{ states('PV_POWER')|float(0) + states('METER_POWER')|float(0)
+          + states('BATTERY_POWER')|float(0) }}
+
+      # House load today, daily incrementing kWh
+      - name: "House Load Today"
+        unique_id: house_load_today
+        unit_of_measurement: "kWh"
+        state_class: total_increasing
+        device_class: energy
+        state: >
+          {{ [ IMPORT_TODAY - EXPORT_TODAY + PV_TODAY
+          + BATTERY_DISCHARGE_TODAY - BATTERY_CHARGE_TODAY, 0 ]|max }}
+```
+
+The custom house_load_today sensor is required and you cannot use grid import as solar generation that is used directly by the house never passes through the meter, so load would be under-stated.
+
+Second, create three input_number helpers, indevolt_charge_rate and indevolt_discharge_rate with a range of 0 to your battery max values in W, and indevolt_charge_limit from 0 to 100 %.
+These helpers are write targets only, the real values go as parameters to service calls but Predbat needs writeable entities.  Set the charge and discharge rate helpers initially to the battery's max power (e.g. 1200W).
+
+Third, copy the supplied Indevolt `apps.yaml` over the top of the supplied one and edit for your system.  There are a number of placeholder entries that will need configuring for your system.
+
+Fourth, you will need to set inverter and battery loss figures appropriately as the Indevolt round trip efficiency is below Predbat's default values.  Suggest setting input_number.predbat_battery_loss and input_number.predbat_battery_loss_discharge to 0.08 each, and input_number.predbat_inverter_loss to 0.04.<BR>
+When Predbat has been running for a while suggest measuring your own values from the daily charge and discharge counters.
+
+Fifth, turn the 'allow grid charging' switch to 'on' on the Indevolt battery, otherwise the battery won't charge from the grid and there'll be no indication as to why this is happening!
 
 ## Kostal Plenticore
 
@@ -3243,7 +3311,7 @@ Now create an automation to populate the access token:
       data:
         value: "{{ token_response.stdout[1000:] }}"
   mode: single
-  ```
+```
 
 ### Option 2: Another integration
 

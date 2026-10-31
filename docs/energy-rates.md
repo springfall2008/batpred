@@ -447,22 +447,22 @@ Add the following entries to `apps.yaml` to define the pattern of rates over 24 
   rates_import:
     - start: "HH:MM:SS"
       end: "HH:MM:SS"
-      rate: pence
+      rate: currency minor unit (pence, cents, etc)
   rates_export:
     - start: "HH:MM:SS"
       end: "HH:MM:SS"
-      rate: pence
+      rate: currency minor unit (pence, cents, etc)
   rates_gas:
     - start: "HH:MM:SS"
       end: "HH:MM:SS"
-      rate: pence
+      rate: currency minor unit (pence, cents, etc)
 ```
 
 **start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally, i.e. end with ":30:00" or ":00:00".
 If you have set a different [plan interval duration](#plan-interval) for your energy provider, e.g. 15 minute intervals, then make sure the start and end times align with the interval periods.
 
 The start and end times for the different rates **must** cover the whole 24 hour period with no gaps!
-**rate** is in pence e.g. 4.2
+**rate** is in currency minor unit (pence, cents, etc) e.g. 4.2
 
 **day_of_week** Can also be used to control rates on specific days. You can specify one day or multiple days split by a comma.
 Note: Day 1 = Monday, 2 = Tuesday .... 7 = Sunday
@@ -551,12 +551,12 @@ or edit `apps.yaml` manually to set the appropriate rate over-ride dates and tim
     - date: "YYYY-MM-DD"
       start: "HH:MM:SS"
       end: "HH:MM:SS"
-      rate: pence
+      rate: currency minor unit (pence, cents, etc)
   rates_export_override:
     - date: "YYYY-MM-DD"
       start: "HH:MM:SS"
       end: "HH:MM:SS"
-      rate: pence
+      rate: currency minor unit (pence, cents, etc)
 ```
 
 Optionally you can add a predicted load scaling factor for these periods using **load_scaling**, for example:
@@ -606,8 +606,8 @@ If a date is specified then the rate override applies to that specific date, oth
 - **start** and **end** must be specified in "HH:MM:SS" time format e.g. "12:30:00"
 - **load_scaling** is an optional percentage change factor in house load for the period - 1.0 would be no change, 0.8 is 80% of nominal house load,
 2.0 would be a 100% increase (i.e. 2x) on normal historic house load
-- **rate** is an optional figure in pence to override the rate for the specific period
-- **rate_increment** is optional and is the number of pence to add (or subtract) to the reported energy rates during this period
+- **rate** is an optional figure in currency minor unit (pence, cents, etc) to override the rate for the specific period
+- **rate_increment** is optional and is the number of currency minor unit (pence, cents, etc) to add (or subtract) to the reported energy rates during this period
 
 ## Rate offsets
 

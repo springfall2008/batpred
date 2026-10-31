@@ -138,7 +138,7 @@ You should set it to Off if you have an AC-coupled battery and inverter losses w
 NB: This switch only applies when Predbat is modelling solar charging.
 All grid charging (regardless of inverter type) has to undergo an AC to DC conversion so the inverter_loss % will be included in Predbat's model when charging from the grid.
 
-**input_number.predbat_metric_battery_cycle** (_expert mode_) This sets a 'virtual cost' in pence per kWh on using your battery for charging and discharging.
+**input_number.predbat_metric_battery_cycle** (_expert mode_) This sets a 'virtual cost' in currency minor unit (pence, cents, etc) per kWh on using your battery for charging and discharging.
 Higher numbers will reduce battery cycles at the expense of using higher energy costs.<BR>
 In theory, if you have a 9.5kWh battery and think it will last say 6000 complete cycles and it cost you £4000, then each full charge and discharge cycle is 19kWh
 and so the cost per complete cycle is £4000 / 19 / 6000 = 3.5p.
@@ -179,7 +179,7 @@ The export rate used here is your tariff's own rate looking forward from the end
 A saving session paying well above your tariff does not count towards it - a one-off event says nothing about whether your surplus can be sold in general,
 and letting it count would switch the discount off for a whole plan on a system that in fact cannot export at all.
 
-**input_number.metric_self_sufficiency** (_expert mode_) A price in pence per kWh used to skew the calculations towards self-sufficiency. Defaults to 0.0p/kWh.
+**input_number.metric_self_sufficiency** (_expert mode_) A price in currency minor unit (pence, cents, etc) per kWh used to skew the calculations towards self-sufficiency. Defaults to 0.0p/kWh.
 Effectively saying to Predbat to account for imports at a higher price than reality in the calculation and thus selecting plans with less import.
 If you want to be as self-sufficient as possible then set this to the difference between your lowest import rate and the highest export rate to take exports that require additional import appear unprofitable.
 This setting will not impact the real calculated costs and is only used for plan selection. Values of 5-10p may be worth trying if you prefer to avoid importing even if it saves you money.
@@ -371,6 +371,10 @@ This alternative plan is only kept if it does not increase the overall plan metr
 
 ## Battery margins and metrics options
 
+_Warning_: All the **input_number.predbat_metric_xxx** configuration options are expressed in currency minor unit (pence, cents, etc), and have default values scaled to be roughly suitable to a UK/European/American market.  If your currency minor unit has a significantly larger or smaller exchange rate to GBP/EUR/USD then these defaults will not be suitable and you will need to adjust them accordingly.
+
+For example, there are roughly 9 Danish Crowns to the pound, so the metric_min_improvement's will need to be increased by a factor of 9 to give equivalent results for a Danish Predbat user.
+
 **input_number.predbat_best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep the battery above for the Predbat plan.
 This is a soft constraint only that's used for longer-term planning and is ignored for the forthcoming first 4 hours of the plan.
 As this is not used for short-term planning your SoC can drop below this - use **input_number.predbat_best_soc_min** if you want to force all charges to be above a set level.
@@ -389,7 +393,7 @@ If you set this to a non-zero value you will need to use the low rate threshold 
 **input_number.predbat_best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
 A value of 0kWh (the default) disables this feature. Be careful setting this feature on as it will constrain charging in the Predbat plan and may result in charging or grid usage in expensive rate periods.
 
-**input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or export slots into a single larger average rate slot.
+**input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in currency minor unit - pence, cents, etc) to combine charge or export slots into a single larger average rate slot.
 The default is 0p which disables this feature and all rate changes result in a new slot.
 
 **switch.predbat_combine_charge_slots** Controls if charge slots of > the slot duration (default 30 minutes) can be combined. When turned Off (the default) they will be split up, increasing run times but potentially more accurate for planning.<BR>
@@ -400,21 +404,26 @@ a saving session).
 
 **switch.predbat_combine_export_slots** (_expert mode_) Controls if export slots of > the slot duration (default 30 minute) can be combined. When turned Off (the default) they will be split up, increasing run times but potentially more accurate for planning.
 
-**input_number.predbat_metric_min_improvement** (_expert mode_) sets the minimum cost improvement in pence that it's worth lowering the battery SoC % for.
+**input_number.predbat_metric_min_improvement** (_expert mode_) sets the minimum cost improvement in currency minor unit (pence, cents, etc) that it's worth lowering the battery SoC % for.
 The default value is 0.0p which means this feature is disabled and the battery will be charged less if it's cost neutral.
 If you use **input_number.predbat_pv_metric10_weight** then you probably don't need to use this as the 10% forecast does the same thing better
 Do not use it if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
 
-**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced export for.
+**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets the minimum currency minor unit (pence, cents, etc) cost improvement it's worth doing a forced export for.
 A value of 0.1p is the default which prevents any marginal exports as they must be worth at least 0.1 pence for a slot (less for shorter slots).
 If you increase this value (e.g. you only want to force export if very profitable), then exports will become less common.
-The value is in pence per slot of export time.
+The value is in currency minor unit (pence, cents, etc) per slot of export time.
 
-**input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum pence cost improvement it's worth doing an export freeze for.
+**input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum currency minor unit (pence, cents, etc) cost improvement it's worth doing an export freeze for.
 A value of 0.1p is the default which prevents any marginal freezes as they must be worth at least 0.1 pence for a slot duration (less for shorter slots).
 If you increase this value (e.g. you only want to freeze export if very profitable), then freeze exports will become less common.
-The value is in pence per slot of export time.
+The value is in currency minor unit (pence, cents, etc) per slot of export time.
+
+**input_number.predbat_metric_min_improvement_plan** (_expert mode_) sets the minimum cost improvement in currency minor unit (pence, cents, etc) that a newly computed Predbat plan has to have over the current plan for that new plan to be adopted.
+Every 10 minutes (by default) Predbat will re-calculate and optimise the full plan and calculate the cost of that new plan. The new plan cost will be compared to the current plan cost (`predbat.metric`) and the new plan adopted only if it is better by the metric_min_improvement_plan amount.
+The default value is 2.0p which means that a new plan has to be worth 2p more than the current Predbat plan for Predbat to adopt it.
+Set to 0p to disable this feature (so Predbat automatically adopts the newly evaluated plan), or increase the value if you want Predbat to have more stability in the adopted plan. However, be careful of setting this to too high a value as Predbat can retain an older plan that is no longer optimal for your battery SoC, house load prediction, etc.
 
 **input_number.predbat_metric_min_improvement_swap** (_expert mode_) Sets the minimum improvement in cost to swap an export slot to a later time in the day.
 The default for this setting is -0.25p, meaning that export will be moved later even if it costs up to an extra 0.25p on the plan.
@@ -450,7 +459,7 @@ Predbat does not widen a rate_low_threshold you set for an event. With a manual 
 above that threshold ahead of an event, even when doing so would make money. Set rate_low_threshold to 0 (automatic) if
 you want those pre-event charges.
 
-**input_number.predbat_metric_future_rate_offset_import** (_expert mode_) Default 0p/kWh. Sets a pence per kWh offset to apply to future import energy rates that are
+**input_number.predbat_metric_future_rate_offset_import** (_expert mode_) Default 0p/kWh. Sets a currency minor unit (pence, cents, etc) per kWh offset to apply to future import energy rates that are
 not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm.
 If you set this to a positive value then Predbat will assume unpublished import rates are higher by the given amount.
 
@@ -686,8 +695,8 @@ which could cause additional imports due to passing clouds.
 
 ### iBoost energy rate filtering
 
-- **input_number.predbat_iboost_rate_threshold** Sets the maximum import rate (in pence) that the diverter will trigger on, defaults to 100.
-- **input_number.predbat_iboost_rate_threshold_export** Sets the maximum export rate (in pence) that the diverter will trigger on, defaults to 100.
+- **input_number.predbat_iboost_rate_threshold** Sets the maximum import rate (in currency minor unit  - pence, cents, etc) that the diverter will trigger on, defaults to 100.
+- **input_number.predbat_iboost_rate_threshold_export** Sets the maximum export rate (in currency minor unit - pence, cents, etc) that the diverter will trigger on, defaults to 100.
 
 - **switch.predbat_iboost_gas** When turned On will control the diverter to only operate when import electric rates are lower than gas rates.
 - **switch.predbat_iboost_gas_export** When turned On will control the diverter to only operate when export electric rates are lower than gas rates.

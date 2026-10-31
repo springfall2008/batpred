@@ -306,13 +306,18 @@ timezone: Europe/London
 
 ### currency_symbols
 
-Sets your symbol to use for your main currency e.g. £, € or $ and for 1/100th unit e.g. p or c. You must define both currency_symbol entries.
+Sets your symbols to use in the Predbat plan, logs, dashboards and entities.
+
+You must define two currency_symbol entries, your main currency e.g. £, € or $, and your minor currency (1/100th unit) e.g. p or c.
 
 ```yaml
   currency_symbols:
     - '£'
     - 'p'
 ```
+
+Note that the currency icon on 'money' input_number controls and output entities that Predbat creates (e.g. 'input_number.predbat_metric_min_improvement_plan' and 'predbat.cost_today') are automatically set to the correct icon using the main currency symbol.
+Unfortunately MDI icons don't exist for every currency, including Danish, Norwegian and Swedish Crown.  For unmatched currencies Predbat will use a cash icon instead.
 
 ### template
 

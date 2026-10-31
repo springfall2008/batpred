@@ -515,7 +515,6 @@ class PredHeat:
         Work out energy costs today (approx)
         """
         day_cost = 0
-        day_cost_import = 0
         day_energy = 0
         day_cost_time = {}
 
@@ -537,8 +536,10 @@ class PredHeat:
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 day_cost_time[stamp] = dp2(day_cost)
 
-        self.set_state(self.prefix + ".cost_today", state=dp2(day_cost), attributes={"results": day_cost_time, "friendly_name": "Cost so far today", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"})
-        self.log("Predheat: Todays energy import {} kwh cost {} p".format(dp2(day_energy), dp2(day_cost), dp2(day_cost_import)))
+        self.set_state(
+            self.prefix + ".cost_today", state=dp2(day_cost), attributes={"results": day_cost_time, "friendly_name": "Cost so far today", "state_class": "measurement", "unit_of_measurement": self.base.currency_symbols[1], "icon": self.base.currency_icon}
+        )
+        self.log("Predheat: Todays energy {} kWh, cost {} {}".format(dp2(day_energy), dp2(day_cost), self.base.currency_symbols[1]))
         return day_cost
 
     def get_smart_thermostat_max_minutes(self):

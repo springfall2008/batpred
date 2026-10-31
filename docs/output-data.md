@@ -384,7 +384,7 @@ with attributes of the average instantaneous house load power in kW in 5-minute 
 
 Predbat outputs the following best results under the PV 10% scenario for the forecast_hours duration, these are known as the 'best10' prediction:
 
-- predbat.best10_metric - Predicted best cost in pence using the PV 10% solar forecast
+- predbat.best10_metric - Predicted best cost in currency minor unit (pence, cents, etc) using the PV 10% solar forecast
 - predbat.best10_export_energy- Predicted best export energy in kWh for PV 10%
 - predbat.best10_import_energy- Predicted best import energy in kWH for PV 10%
 - predbat.best10_load_energy - Predicted best load energy in kWh for PV 10%
@@ -447,7 +447,7 @@ These are useful for automations if for example, you want to turn off car chargi
 
 ### Low-rate import entities
 
-- predbat.low_rate_cost - The lowest import rate cost in Pence
+- predbat.low_rate_cost - The lowest import rate cost in currency minor unit (pence, cents, etc)
 - predbat.low_rate_duration - The time duration in minutes of the next low rate slot
 - predbat.low_rate_end - End time of the next low import rate slot
 - predbat.low_rate_start - Start time of the next low import rate slot
@@ -456,7 +456,7 @@ These are useful for automations if for example, you want to turn off car chargi
 
 ### High-rate export entities
 
-- predbat.high_rate_export_cost - The highest export rate cost in Pence
+- predbat.high_rate_export_cost - The highest export rate cost in currency minor unit (pence, cents, etc)
 - predbat.high_rate_export_duration - The time duration in minutes of the next high rate slot
 - predbat.high_rate_export_end - End time of the next high export rate slot
 - predbat.high_rate_export_start - Start time of the next high export rate slot
@@ -465,17 +465,17 @@ These are useful for automations if for example, you want to turn off car chargi
 
 ### Other rate entities
 
-- predbat.rates - The current energy import rate in Pence with attributes of yesterday's, today and tomorrow's rates which can be charted
-- predbat.rates_export - The current energy export rates in Pence (also can be charted)
-- predbat.rates_gas - The current gas rates in Pence (also can be charted)
+- predbat.rates - The current energy import rate in currency minor unit (pence, cents, etc) with attributes of yesterday's, today and tomorrow's rates which can be charted
+- predbat.rates_export - The current energy export rates in currency minor unit (pence, cents, etc) (also can be charted)
+- predbat.rates_gas - The current gas rates in currency minor unit (pence, cents, etc) (also can be charted)
 - predbat.cost_today - The total cost of energy so far today (since midnight) with attributes of the total cost every 5 minutes since midnight today
 - predbat.cost_today_export - Same as predbat.cost_today, but for all export income since midnight today
 - predbat.cost_today_import - Same as predbat.cost_today, but for all import costs since midnight today
 - predbat.cost_hour - The total cost of energy averaged over the last hour
 - predbat.cost_today_export - Same as predbat.cost_hour, but for export
 - predbat.cost_today_import - Same as predbat.cost_hour, but for import
-- predbat.ppkwh_today - The cost in pence/kWh of the house load today accounting for the change in battery level
-- predbat.ppkwh_hour - The cost in pence/kWh of the house load averaged over the last hour, accounting for the change in battery level
+- predbat.ppkwh_today - The cost in currency minor unit (pence, cents, etc)/kWh of the house load today accounting for the change in battery level
+- predbat.ppkwh_hour - The cost in currency minor unit (pence, cents, etc)/kWh of the house load averaged over the last hour, accounting for the change in battery level
 
 ## Inverter data
 
@@ -552,9 +552,9 @@ The *planned* attribute of the binary_sensor contains details of all planned car
 Note that the start and ends are expressed in 'MM-DD HH:MM:SS" format, use the template sensor below if you want to convert these to full date format, e.g. to display on an Apex chart
 - predbat.car_charging_start - The time that car charging is planned to start at, in HH:MM:SS format
 - predbat.car_soc_best - Predicted charge level of your car in the best plan at the end of the plan using the proposed car charging SoC% and charge window. Can also be charted
-- predbat.cost_today_car - Current cost in pence so far today of charging all cars, with attribute of the projected future car charging costs and slots. Predbat calculates car charging cost based upon your energy rates and the [car_charging_energy](car-charging.md#filtering-car-charging-energy-from-house-load) sensors set in `apps.yaml`
-- predbat.cost_total_car - A running total in pence of the below cost_yesterday_car sensor, with attribute of the total in pounds
-- predbat.cost_yesterday_car - A sensor that gives the total energy costs in pence of charging all cars for yesterday (00:00-23:59 on the previous day). The sensor is calculated from import rates and [car_charging_energy](car-charging.md#filtering-car-charging-energy-from-house-load) as per predbat.cost_today_car
+- predbat.cost_today_car - Current cost in currency minor unit (pence, cents, etc) so far today of charging all cars, with attribute of the projected future car charging costs and slots. Predbat calculates car charging cost based upon your energy rates and the [car_charging_energy](car-charging.md#filtering-car-charging-energy-from-house-load) sensors set in `apps.yaml`
+- predbat.cost_total_car - A running total in currency minor unit (pence, cents, etc) of the below cost_yesterday_car sensor, with attribute of the total in pounds
+- predbat.cost_yesterday_car - A sensor that gives the total energy costs in currency minor unit (pence, cents, etc) of charging all cars for yesterday (00:00-23:59 on the previous day). The sensor is calculated from import rates and [car_charging_energy](car-charging.md#filtering-car-charging-energy-from-house-load) as per predbat.cost_today_car
 
 See [Example Automation to separate car charging costs](car-charging.md#example-separating-car-charging-costs-for-multiple-cars) if you have multiple EV's and want to separate predbat.cost_today_car into costs per car.
 
@@ -627,9 +627,9 @@ They are used in the carbon chart - see [creating the Predbat charts](creating-c
 The following sensors output by Predbat give cost-saving data that Predbat achieved, i.e. the financial benefits of using Predbat.
 They are used in the daily cost-saving and total cost-savings charts - see [creating the Predbat charts](creating-charts.md):
 
-- predbat.cost_yesterday - A sensor that gives the total energy costs in pence for yesterday (00:00-23:59 on the previous day)
-- predbat.savings_total_actual - A running total in pence of the above cost_yesterday sensor, with attribute of the total in pounds
-- predbat.savings_total_predbat - A running total in pence of the *real* (unadjusted) saving each day, deliberately not the same figure as the below savings_yesterday_predbat sensor's own state - see the note below
+- predbat.cost_yesterday - A sensor that gives the total energy costs in currency minor unit (pence, cents, etc) for yesterday (00:00-23:59 on the previous day)
+- predbat.savings_total_actual - A running total in currency minor unit (pence, cents, etc) of the above cost_yesterday sensor, with attribute of the total in pounds
+- predbat.savings_total_predbat - A running total in currency minor unit (pence, cents, etc) of the *real* (unadjusted) saving each day, deliberately not the same figure as the below savings_yesterday_predbat sensor's own state - see the note below
 - predbat.savings_total_pvbat - A running total of the below savings_yesterday_pvbat sensor, with attribute of the total in pounds
 - predbat.savings_total_soc - The simulated final SoC in kWh at the end of the most recent 'without Predbat' day simulation. This is used as the starting SoC for the next day's simulation,
   so that the simulated 'without Predbat' universe is self-consistent across days. It will differ from the actual midnight SoC tracked in the 'History' view.
@@ -651,7 +651,7 @@ because without Predbat the baseline assumes charging to 100% in the cheapest wi
 
 ## Marginal energy cost data
 
-After each plan calculation Predbat runs a set of what-if simulations to determine the marginal cost (in pence per kWh) of consuming extra electricity at different
+After each plan calculation Predbat runs a set of what-if simulations to determine the marginal cost (in currency minor unit (pence, cents, etc) per kWh) of consuming extra electricity at different
 levels and at different times in the upcoming forecast window. The results are published as a matrix sensor and a set of binary sensors.
 
 ### Main matrix sensor

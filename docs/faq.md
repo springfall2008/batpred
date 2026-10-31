@@ -235,7 +235,7 @@ Predbat makes cost optimisation decisions so unless the current import rate is m
 If you turn [debug mode on for the Predbat plan](predbat-plan-card.md#debug-mode-for-predbat-plan) then you can see the
 effective import and export rates after losses that Predbat calculates in the Predbat plan.
 
-Predbat also uses **input_number.predbat_metric_battery_cycle** (*expert mode* setting) to apply a 'virtual cost' in pence per kWh for charging and discharging the battery.
+Predbat also uses **input_number.predbat_metric_battery_cycle** (*expert mode* setting) to apply a 'virtual cost' in currency minor unit (pence, cents, etc) per kWh for charging and discharging the battery.
 The default value is 1p but this this can be changed to a different value to recognise the 'cost of using the battery', or set to zero to disable this feature.
 
 So if the metric battery cycle is set to 1p, and continuing the example above, each kWh of battery charge will be costed at 22.7p (21.7p + 1p battery metric to charge),
@@ -254,8 +254,9 @@ or to encourage discharging just before import rates fall overnight.
 You may see warning messages in the Home Assistant Core log about the size of a number of Predbat entities, the message will be "State attributes for predbat.*XXXX* exceed maximum size of 16384 bytes".
 
 This is just a warning from the Home Assistant recorder, but note that Predbat entity attributes are stored in the recorder database and can take up a significant amount of space.
-The history of most of Predbat's entities isn't needed so to limit the size of the recorder database the following filters can be added to `configuration.yaml`,
-but pay attention to the [order in which inclusion and exclusion rules are applied](https://www.home-assistant.io/integrations/recorder/#configure-filter) if you have existing filters:
+The history of most of Predbat's entities isn't needed so to limit the size of the recorder database the following filters can be added to `configuration.yaml`, and note that you will need to add the entity id's for the compare tariff ids configured in `apps.yaml`.
+
+Pay attention to the [order in which inclusion and exclusion rules are applied](https://www.home-assistant.io/integrations/recorder/#configure-filter) if you have existing filters:
 
 ```yaml
 recorder:
@@ -263,17 +264,24 @@ recorder:
     domains:
       - predbat
       - predheat
+    entity_globs:
+      # Exclude Octopus Integration Octoplus, Octopus Cost and Predbat Kraken sensors, Predbat only needs the current record
+      - sensor.octopus_energy_*_octoplus_points
+      - sensor.octopus_energy_*_next_rate
+      - sensor.octopus_energy_*_previous_rate
+      - sensor.predbat_octopus_*
+      - sensor.predbat_kraken_*
+      - binary_sensor.predbat_kraken_*
     entities:
       - sensor.predbat_load_ml_forecast
-      - sensor.predbat_pv_tomorrow
-      - sensor.predbat_pv_forecast_raw
       - sensor.predbat_pv_d2
       - sensor.predbat_pv_d3
+      - sensor.predbat_pv_forecast_raw
+      - sensor.predbat_pv_tomorrow
       - sensor.predbat_temperature
   include:
-    entity_globs: #The history of these entities is used by Predbat's Compare tab
-      - predbat.compare_tariff_*
-    entities: #The history of these entities is used by Predbat
+    entities:
+      #The history of these entities are used by Predbat & Predheat
       - predbat.car_charging_power
       - predbat.carbon_today
       - predbat.cost_today
@@ -303,20 +311,24 @@ recorder:
       - predheat.heating_energy
       - predheat.internal_temperature
       - predheat.target_temperature
-
+      # The history of these entities are used by Predbat's Compare tab (list the actual entity IDs from Developer Tools > States, filter "predbat.compare_tariff")
+      - predbat.compare_tariff_current
+      - predbat.compare_tariff_<name1>
+      - predbat.compare_tariff_<name2>
 ```
 
-Two things to be careful of if you adapt the example above:
+Things to be careful of if you adapt the example above:
 
 - Don't drop entries from the `include` list without checking what reads them. Predbat needs the recorded history of
 every entity listed there and quietly loses a feature for each one it can no longer read - `predbat.cost_today`, for
-instance, is what the Plan tab's *History* and *Yesterday Without Predbat* views are built from. Likewise the `predbat.compare_tariff_*`
+instance, is what the Plan tab's *History* and *Yesterday Without Predbat* views are built from. Likewise the `predbat.compare_tariff_xxx`
 sensors are what the [Compare tab](compare.md) builds its day-by-day history from; without them it only ever shows the latest run.
 - Don't add further Predbat sensors to the `exclude` list for the same reason. `sensor.predbat_pv_forecast_h0`,
 `sensor.predbat_pv_forecast_h0_uncalibrated` and `sensor.predbat_pv_today` are deliberately left out of it because PV
 calibration, the PV chart and the PV accuracy chart compare against their history. Adding a `sensor.*` entity to
 `exclude` and to `include` does not rescue it either - an entry under `include` only overrides the exclusion of its
-whole *domain*, which here is `predbat`, not `sensor`.
+whole *domain*, which here is `predbat`, not `sensor`
+- Do not be tempted to use a `domain` or an `entity_globs` configuration on the `include` list as this will flip the whole config into allowlist mode and all sensors that are not explicitly listed in the recorder configuration (e.g. inverter data) won't match any include rule, so they’re excluded, along with nearly everything else.
 
 When the serialized attributes payload for a Predbat entity state exceeds 16384 bytes, the recorder will not store any attributes for that state (only the state value itself is stored). States whose serialized attributes payload is below this limit are stored normally.
 You can suppress these warnings by adding the following to your `configuration.yaml` file:
