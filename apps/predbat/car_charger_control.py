@@ -137,7 +137,8 @@ class CarChargerControl:
     - charger_control_can_force_hold(handle): True for a charger that can be force-held.
     - charger_control_force_pause(handle, saved): one step towards stopping the charger,
       returning the pre-hold state to keep (saved is None on the first call).
-    - charger_control_force_stopped(handle, saved): is the charger confirmed stopped?
+    - charger_control_force_stopped(handle, saved): is the charger confirmed stopped? Asked every
+      cycle of the hold, and the pause sent again whenever it is not.
     - charger_control_force_resume(handle, saved): one step towards handing back exactly what
       force_pause changed.
     - charger_control_force_handed_back(handle, saved): is the hand-back confirmed?
@@ -1007,7 +1008,7 @@ class CarChargerControl:
             await self.charger_control_force_hand_back(key, handle, now)
 
     async def charger_control_force_hold_keep(self, car_n, key, handle, hold, end, now):
-        """Keep a force hold: extend it into a cancelled slot that starts by its end, and pause until stopped."""
+        """Keep a force hold: extend it into a cancelled slot that starts by its end, and pause whenever it is not stopped."""
         extended = end
         for start, window_end in self.charger_control_cancelled_windows(car_n, now):
             if start <= extended < window_end:
@@ -1017,12 +1018,14 @@ class CarChargerControl:
             self.log("Info: {}: extending the hold on car {}'s {} {} to {}, into the next slot cancelled for an export".format(self.charger_control_log_name, car_n, self.charger_control_noun, key, extended.astimezone(self.local_tz).strftime("%H:%M")))
             await self.charger_control_save()
         self.charger_control_set_force_hold_until(hold["car"], extended)
-        if hold["stopped"]:
+        # Checked every cycle, not only until the first stop: a charger confirmed stopped can start a charge
+        # again mid-hold - the car asking for one, a re-plug, the charger's own schedule
+        if hold["stopped"] and self.charger_control_force_stopped(handle, hold["saved"]):
             return
         # Repeated each cycle until the charger reads back as stopped - a pause can be accepted and not land
         saved = await self.charger_control_force_pause(handle, hold["saved"])
         stopped = bool(self.charger_control_force_stopped(handle, saved))
-        if saved != hold["saved"] or stopped:
+        if saved != hold["saved"] or stopped != hold["stopped"]:
             hold["saved"] = saved
             hold["stopped"] = stopped
             await self.charger_control_save()

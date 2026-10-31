@@ -1041,7 +1041,9 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         """Take one step towards stopping a force-held charger: out of OCPP mode first if a backend runs it, then a pause.
 
         The first call records whether an OCPP backend ran the charger, so the hand-back reconnects only one the
-        hold disconnected. A pause sent before the charger has really left OCPP mode is accepted and ignored (seen
+        hold disconnected. For one in OCPP mode it records that and nothing more, so the record is saved before the
+        switch goes out: a switch applied but whose reply was lost - or a restart mid-call - would otherwise leave the
+        next call reading the charger out of OCPP mode, and the backend never reconnected. A pause sent before the charger has really left OCPP mode is accepted and ignored (seen
         live), so while a read still shows it in OCPP mode only the switch is made. Wallbox can go on reporting
         Charging for minutes after a pause lands, and a pause sent again then answers 409: that is said once per hold
         and the pause tried again next cycle. A charger that could not be read is left for the next cycle.
@@ -1052,6 +1054,8 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         if not isinstance(saved, dict) or "ocpp" not in saved:
             saved = {"ocpp": charger.ocpp}
             self.force_pause_refused.discard(charger_id)
+            if charger.ocpp:
+                return saved
         if saved["ocpp"] and charger.ocpp:
             await self.force_switch_ocpp(charger, False)
         elif charger.charging:
@@ -1069,11 +1073,13 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         Disconnected, Error, Updating and Unknown say nothing: a Pulsar dropping off Wallbox's cloud mid-charge reads
         as Disconnected, so it is not taken as stopped, or the pause it still needs would never be sent.
         """
-        if charger.charger_id in self.stale_ids or charger.charging:
-            return False
-        if not charger.connected and charger.status_id not in EMPTY_STATUS_IDS:
+        if not self.force_read_definite(charger) or charger.charging:
             return False
         return not ((saved or {}).get("ocpp") and charger.ocpp)
+
+    def force_read_definite(self, charger):
+        """Does the charger's last read say something definite: read this cycle, and a car connected or positively none."""
+        return charger.charger_id not in self.stale_ids and (charger.connected or charger.status_id in EMPTY_STATUS_IDS)
 
     async def charger_control_force_resume(self, charger, saved):
         """Take one step towards handing back a force-held charger: reconnect the OCPP backend the hold disconnected, or resume the pause.
@@ -1093,11 +1099,15 @@ class WallboxAPI(ComponentBase, CarChargerControl):
             await self.transport.resume(self.api_id(charger))
 
     async def charger_control_force_handed_back(self, charger, saved):
-        """Is the hand-back confirmed: the OCPP backend connected again - a reconnect took about 2.5 minutes live - or the charger no longer paused."""
+        """Is the hand-back confirmed: the OCPP backend connected again - a reconnect took about 2.5 minutes live - or the charger no longer paused.
+
+        Not paused counts only on a definite read: a Pulsar dropped off Wallbox's cloud reads as Disconnected, and taking
+        that as handed back would drop the hold with the charger still paused and no resume sent.
+        """
         if saved.get("ocpp"):
             configuration = await self.transport.get_ocpp_configuration(self.api_id(charger))
             return isinstance(configuration, dict) and configuration.get("type") == OPERATION_MODE_OCPP and _to_int(configuration.get("connectionStatus"), 0) == WALLBOX_OCPP_CONNECTED
-        return not charger.paused
+        return self.force_read_definite(charger) and not charger.paused
 
 
 def print_charger_table(chargers):  # pragma: no cover

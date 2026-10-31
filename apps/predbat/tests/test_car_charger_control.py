@@ -1246,6 +1246,30 @@ def test_force_hold_repeats_pause_until_stopped():
     assert component.commands == [("a", "force_pause")] * 3, component.commands
 
 
+def test_force_hold_pauses_again_when_no_longer_stopped():
+    """A hold confirmed stopped is checked every tick, and paused again whenever the charger no longer reads as stopped."""
+    storage = FakeStorage()
+    charger = FakeCharger("a")
+    component = _held_component([charger], storage=storage)
+    run_async(component.charger_control_tick(_at(1, 55)))
+    assert component.commands == [("a", "force_pause")] and component.charger_control_force_holds["a"]["stopped"] is True, component.commands
+    saves = storage.saves
+    run_async(component.charger_control_tick(_at(1, 56)))
+    assert component.commands == [("a", "force_pause")] and storage.saves == saves, "Still stopped: nothing sent or saved"
+
+    # Something starts a charge mid-hold - the car, a re-plug, the charger's own schedule - and takes two pauses to stop
+    charger.stop_after = charger.pauses + 2
+    run_async(component.charger_control_tick(_at(2, 5)))
+    assert component.commands == [("a", "force_pause")] * 2, component.commands
+    assert component.charger_control_force_holds["a"]["stopped"] is False
+    assert storage.saved[("fake", "control_state")]["force_holds"]["a"]["stopped"] is False, storage.saved
+    run_async(component.charger_control_tick(_at(2, 6)))
+    assert component.commands == [("a", "force_pause")] * 3, component.commands
+    assert component.charger_control_force_holds["a"]["stopped"] is True
+    run_async(component.charger_control_tick(_at(2, 7)))
+    assert component.commands == [("a", "force_pause")] * 3, component.commands
+
+
 def test_force_hold_is_committed():
     """Once started, a hold runs to its end even if the plan stops cancelling the slot."""
     component = _held_component()
@@ -1343,13 +1367,22 @@ def test_force_hold_survives_a_restart():
 
 
 def test_force_hold_restored_before_its_end_carries_on():
-    """A hold restored before its end is kept: the pause it already confirmed is not sent again."""
+    """A hold restored before its end is kept: the pause it already confirmed is not sent again while the charger still reads stopped."""
     end = _at(2, 30).astimezone(datetime.timezone.utc).isoformat()
     storage = FakeStorage({("fake", "control_state"): {"enabled": True, "force_holds": {"a": {"car": 0, "end": end, "saved": {"was": "on"}, "stopped": True, "warned": False}}}})
-    component = FakeComponent([FakeCharger("a")], storage=storage)
+    charger = FakeCharger("a")
+    # Still stopped, as the earlier session left it
+    charger.stop_after = 0
+    component = FakeComponent([charger], storage=storage)
     run_async(component.charger_control_tick(_at(2, 10)))
     assert component.commands == [], component.commands
     assert component.base.car_force_hold_until == {0: _at(2, 30)}, component.base.car_force_hold_until
+
+    # One that started charging while Predbat was down is paused again
+    charger = FakeCharger("a")
+    component = FakeComponent([charger], storage=FakeStorage({("fake", "control_state"): {"enabled": True, "force_holds": {"a": {"car": 0, "end": end, "saved": {"was": "on"}, "stopped": True, "warned": False}}}}))
+    run_async(component.charger_control_tick(_at(2, 10)))
+    assert component.commands == [("a", "force_pause")], component.commands
 
 
 def test_force_hold_bad_saved_record_is_dropped():
@@ -1578,6 +1611,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_force_hold_needs_the_switch_and_no_read_only()
     test_force_hold_skips_unplugged_and_incapable()
     test_force_hold_repeats_pause_until_stopped()
+    test_force_hold_pauses_again_when_no_longer_stopped()
     test_force_hold_is_committed()
     test_force_hold_extends_into_a_touching_window()
     test_force_hold_resume_retried_until_handed_back()
