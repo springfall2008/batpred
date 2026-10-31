@@ -148,6 +148,7 @@ daysymbol
 deadband
 deadbanding
 deadbeefdeadbeef
+decompressobj
 dedup
 dedupe
 dend

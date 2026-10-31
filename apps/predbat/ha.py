@@ -43,6 +43,25 @@ HISTORY_CHUNK_DAYS = 3
 # Version of the HAHistory snapshot format produced by export_snapshot()
 HISTORY_SNAPSHOT_VERSION = 1
 
+# Largest decompressed snapshot import_snapshot() accepts, so a small hostile payload cannot expand
+# without bound. A power sensor reporting every 10 seconds holds about 260k records over 30 days,
+# around 5.5 MB once its arrays are base64 encoded, so a large install with ~40 such series plus
+# hundreds of slower entities stays near 250 MB; 512 MB leaves about twice that as headroom.
+HISTORY_SNAPSHOT_MAX_BYTES = 512 * 1024 * 1024
+
+
+def _snapshot_decompress(data):
+    """
+    Decompress a snapshot, raising ValueError if it is truncated, has trailing data or expands past HISTORY_SNAPSHOT_MAX_BYTES
+    """
+    decompressor = zlib.decompressobj()
+    raw = decompressor.decompress(bytes(data), HISTORY_SNAPSHOT_MAX_BYTES)
+    if decompressor.unconsumed_tail:
+        raise ValueError("snapshot expands past {} bytes".format(HISTORY_SNAPSHOT_MAX_BYTES))
+    if not decompressor.eof or decompressor.unused_data:
+        raise ValueError("snapshot is truncated or has trailing data")
+    return raw
+
 
 def _snapshot_encode_array(values):
     """
@@ -485,14 +504,14 @@ class HAHistory(ComponentBase):
         Replace the tracked entities and history store with those from an export_snapshot() snapshot.
 
         The whole snapshot is decoded and validated before anything is changed, so a bad snapshot
-        leaves the current store untouched. Returns the number of entities tracked after the import,
-        0 on any bad input. Intended to be called before the component starts; the update loop
+        leaves the current store untouched. Returns the number of entities tracked after the import
+        (0 for a valid empty snapshot, which clears the store), or -1 on any bad input. Intended to be called before the component starts; the update loop
         tolerates a swap while it runs but may then skip an entity for that cycle.
         """
         try:
             if not isinstance(data, (bytes, bytearray, memoryview)):
                 raise ValueError("snapshot is not bytes")
-            payload = json.loads(zlib.decompress(bytes(data)).decode("utf-8"))
+            payload = json.loads(_snapshot_decompress(data).decode("utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("snapshot is not a map")
             version = payload.get("v")
@@ -510,7 +529,7 @@ class HAHistory(ComponentBase):
                     history_data[entity_id] = store
         except Exception as e:
             self.log("Warn: HAHistory: Ignoring invalid history snapshot: {}".format(e))
-            return 0
+            return -1
 
         with self.history_lock:
             self.history_entities = history_entities

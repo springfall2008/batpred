@@ -14,6 +14,7 @@ import pytz
 import struct
 import zlib
 from datetime import datetime, timedelta
+import ha as ha_module
 from ha import HAHistory, EntityHistory
 from utils import str2time
 from tests.test_infra import run_async
@@ -1382,6 +1383,74 @@ def test_hahistory_restored_flag_cleared_after_update(my_predbat=None):
     return failed
 
 
+def test_hahistory_snapshot_decompression_bound(my_predbat=None):
+    """Test a small snapshot that expands past HISTORY_SNAPSHOT_MAX_BYTES is rejected without changing the store"""
+    print("\n=== Testing HAHistory snapshot decompression bound ===")
+    failed = 0
+
+    good = _snapshot_fixture().export_snapshot()
+    expanded = len(zlib.decompress(good))
+    # Valid JSON padded with whitespace, so only the size bound can reject it
+    bomb = zlib.compress(json.dumps({"v": 1, "entities": {}}).encode("utf-8") + b" " * 1000000)
+    saved = ha_module.HISTORY_SNAPSHOT_MAX_BYTES
+    try:
+        ha_module.HISTORY_SNAPSHOT_MAX_BYTES = max(expanded, 1024) * 2
+        target = _snapshot_fixture()
+        before = {entity_id: store.to_records() for entity_id, store in target.history_data.items()}
+        entities_before = dict(target.history_entities)
+        if len(bomb) >= ha_module.HISTORY_SNAPSHOT_MAX_BYTES:
+            print("ERROR: The test payload should be smaller than the limit before decompression")
+            failed += 1
+        loaded = target.import_snapshot(bomb)
+        after = {entity_id: store.to_records() for entity_id, store in target.history_data.items()}
+        if loaded != -1 or after != before or target.history_entities != entities_before:
+            print(f"ERROR: A snapshot expanding past the limit should return -1 and leave the store untouched, got {loaded}")
+            failed += 1
+        if not any("expands past" in message for message in target.base.log_messages):
+            print(f"ERROR: The rejection should be logged as exceeding the size limit, got {target.base.log_messages[-1:]}")
+            failed += 1
+        # A real snapshot within the limit still loads
+        fresh = HAHistory(MockBase())
+        fresh.initialize()
+        if fresh.import_snapshot(good) != 3:
+            print("ERROR: A snapshot within the limit should still load")
+            failed += 1
+    finally:
+        ha_module.HISTORY_SNAPSHOT_MAX_BYTES = saved
+
+    if failed == 0:
+        print("OK: test_hahistory_snapshot_decompression_bound")
+    return failed
+
+
+def test_hahistory_snapshot_empty_vs_invalid(my_predbat=None):
+    """Test a valid empty snapshot returns 0 and clears the store, while invalid input returns -1 and keeps it"""
+    print("\n=== Testing HAHistory empty snapshot versus invalid input ===")
+    failed = 0
+
+    empty = HAHistory(MockBase())
+    empty.initialize()
+    empty_snapshot = empty.export_snapshot()
+
+    target = _snapshot_fixture()
+    before = {entity_id: store.to_records() for entity_id, store in target.history_data.items()}
+    entities_before = dict(target.history_entities)
+    loaded = target.import_snapshot(b"not a snapshot")
+    after = {entity_id: store.to_records() for entity_id, store in target.history_data.items()}
+    if loaded != -1 or after != before or target.history_entities != entities_before:
+        print(f"ERROR: Invalid input should return -1 and leave the store untouched, got {loaded}")
+        failed += 1
+
+    loaded = target.import_snapshot(empty_snapshot)
+    if loaded != 0 or target.history_data or target.history_entities:
+        print(f"ERROR: A valid empty snapshot should return 0 and clear the store, got {loaded} {sorted(target.history_entities)}")
+        failed += 1
+
+    if failed == 0:
+        print("OK: test_hahistory_snapshot_empty_vs_invalid")
+    return failed
+
+
 def test_hahistory_run_tolerates_import_mid_loop(my_predbat=None):
     """Test run() skips an entity that an import removed while the update loop was running"""
     print("\n=== Testing HAHistory run() tolerates an import mid-loop ===")
@@ -1528,7 +1597,7 @@ def test_hahistory_snapshot_roundtrip(my_predbat=None):
 
 
 def test_hahistory_snapshot_rejects_bad_input(my_predbat=None):
-    """Test import_snapshot() returns 0 and leaves the store untouched on any bad input"""
+    """Test import_snapshot() returns -1 and leaves the store untouched on any bad input"""
     print("\n=== Testing HAHistory snapshot rejects bad input ===")
     failed = 0
 
@@ -1577,6 +1646,8 @@ def test_hahistory_snapshot_rejects_bad_input(my_predbat=None):
     cases = [
         ("empty bytes", b""),
         ("not zlib", b"not zlib"),
+        ("truncated zlib", good[: len(good) // 2]),
+        ("trailing data after zlib", good + b"extra"),
         ("not bytes", "a string"),
         ("None", None),
         ("not json", zlib.compress(b"{not json")),
@@ -1605,8 +1676,8 @@ def test_hahistory_snapshot_rejects_bad_input(my_predbat=None):
             print(f"ERROR: import_snapshot() raised on {label}: {exc}")
             failed += 1
             continue
-        if loaded != 0 or target.history_data or target.history_entities:
-            print(f"ERROR: {label} should return 0 and leave the store empty, got {loaded}, {list(target.history_data)}")
+        if loaded != -1 or target.history_data or target.history_entities:
+            print(f"ERROR: {label} should return -1 and leave the store empty, got {loaded}, {list(target.history_data)}")
             failed += 1
 
     # A bad snapshot leaves an already populated store exactly as it was
@@ -1615,7 +1686,7 @@ def test_hahistory_snapshot_rejects_bad_input(my_predbat=None):
     entities_before = dict(target.history_entities)
     loaded = target.import_snapshot(encode(half_bad))
     after = {entity_id: store.to_records() for entity_id, store in target.history_data.items()}
-    if loaded != 0 or after != before or target.history_entities != entities_before:
+    if loaded != -1 or after != before or target.history_entities != entities_before:
         print("ERROR: A bad snapshot should leave a populated store untouched")
         failed += 1
 
@@ -1706,6 +1777,8 @@ def run_hahistory_tests(my_predbat):
     failed += test_hahistory_stale_snapshot_matches_cold_start(my_predbat)
     failed += test_hahistory_static_store_keeps_delta(my_predbat)
     failed += test_hahistory_restored_flag_cleared_after_update(my_predbat)
+    failed += test_hahistory_snapshot_decompression_bound(my_predbat)
+    failed += test_hahistory_snapshot_empty_vs_invalid(my_predbat)
     failed += test_hahistory_run_tolerates_import_mid_loop(my_predbat)
     failed += test_hahistory_export_tolerates_new_entity(my_predbat)
 
