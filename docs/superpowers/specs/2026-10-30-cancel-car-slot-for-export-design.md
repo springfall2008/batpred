@@ -29,14 +29,16 @@ becomes real:
 - Cars on a supplier's smart charging are physically held off during a cancelled slot and released
   afterwards, robustly (restarts, failed calls).
 - A general "force hold" capability on the charger components, so each charger can join by implementing it.
-  Wallbox first, then Zappi and Ohme, others as their mechanisms are found.
+  Wallbox first, then Zappi, Ohme and Hypervolt, others as their mechanisms are found.
 
 ## Non-goals
 
 - The levels pass and freeze export are unchanged — they keep today's hard block.
 - No attempt to re-plan the car around a cancellation (move the energy to a later window). The
   pessimistic valuation stands in for that; the car plan is rebuilt every cycle anyway.
-- Suspending Octopus smart control. It was live-tested and doesn't hold the car (see "Live test").
+- Suspending Octopus smart control, in the first version. On its own it doesn't hold the car (see "Live
+  test"). Whether some chargers need it alongside their pause is left to testers' feedback (see
+  "Supplier suspend").
 - Changing the Octopus target SoC/time as a cancel mechanism (rejected).
 - Chargers without a force-hold implementation: their cars keep the hard block until one is written.
 
@@ -249,10 +251,45 @@ Zappi, the hold is kept short and the safety resume matters most. Open questions
 
 This also covers cars whose slots the Ohme component owns (`car_slot_owner` `"ohme"`).
 
+### Hypervolt force hold
+
+The Hypervolt component already stops and starts a charger: `sync.apply {"release": false}` over the
+charger's websocket stops it, and `{"release": true}` lets it charge again (`release_command()`).
+- **Force pause:** release false.
+- **Force resume:** release true.
+
+There is no OCPP-style link to switch off: Octopus reaches a Hypervolt through Hypervolt's cloud. The
+existing code says it isn't known whether Octopus can undo a Hypervolt stop (`charger_control_hand_to_octopus()`
+in `hypervolt.py`). The verify step will show it: if Octopus overrides the pause, the charger reports
+charging again during the hold. Testers' feedback decides whether a Hypervolt needs the supplier suspend
+step below.
+
 ### Other chargers
 
-Hypervolt and GivEnergy's charger follow when their force-pause mechanism is found and live-tested. Until
-then their cars keep the hard block.
+GivEnergy's charger follows when its force-pause mechanism is found and live-tested. Until then its cars
+keep the hard block.
+
+### Supplier suspend: not in the first version (decided with the user)
+
+The first version never suspends the supplier's smart charging; the charger hold does the work alone.
+Holding at the charger and suspending the supplier was considered. The evidence so far:
+- For Wallbox it doesn't help. The 409 in the live test came while Octopus was suspended; switching OCPP off
+  is what unlocked the charger, and Octopus stayed tidy without a suspend.
+- It might help chargers that Octopus drives cloud-to-cloud (Hypervolt, Ohme), if Octopus overrides their
+  pause. It might also quiet the "failed session" alerts Ohme and myenergi warn about when a car ignores
+  instructions.
+
+Users with those chargers will test the first version and report back. If a charger turns out to need it,
+the suspend becomes a per-charger step in the hold, off by default, with this ordering:
+- **Hold:** pause the charger first, then suspend. A charger left without Octopus's control charges at
+  full power, as the Pulsar did.
+- **Release:** unsuspend first, then release the charger, so it never charges at peak in the gap.
+
+It would also bring back the rule that a temporary suspension is not a suspension. Predbat's Octopus
+component drops a suspended device from `num_cars` and rewires its slots within a minute, as seen in the
+live test, so a held device would have to stay active with its slots kept.
+
+The `updateDeviceSmartControl` mutation (`SUSPEND` / `UNSUSPEND`) is confirmed from the live schema.
 
 ## Live test, 2026-10-31 (user's Wallbox Pulsar on Octopus Intelligent, OCPP)
 
@@ -286,7 +323,8 @@ then their cars keep the hard block.
 2. **The force-hold interface and shared hold rules** in `CarChargerControl`.
 3. **The planner work:** switch, valuation, rates, kernel and publishing. The Predbat-led half depends on
    none of the above and can be built alongside.
-4. **Zappi force hold**, then **Ohme force hold**, each with its own live test.
+4. **Zappi, Ohme and Hypervolt force holds.** The user can't test these, so they ship marked as needing
+   testers' feedback, which also decides whether any of them needs the supplier suspend step.
 
 ## Constraints
 
