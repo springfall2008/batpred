@@ -1302,6 +1302,7 @@ class Execute:
         solis = self.solis_read_only_component() if self.set_read_only and self.inverter_needs_reset_force == "set_read_only" else None
         if not self.set_read_only or (self.inverter_needs_reset_force in ["set_read_only"]):
             self.last_service_hash = {}
+            self.last_service_time = {}
             # Don't reset in read only mode unless forced
             for inverter in self.inverters:
                 if solis and inverter.inverter_type == "SolisCloud":
