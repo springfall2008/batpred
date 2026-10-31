@@ -975,6 +975,14 @@ CONFIG_ITEMS = [
         "enable_condition": "num_cars > 0",
     },
     {
+        "name": "car_charging_cancel_for_export",
+        "friendly_name": "Allow export to cancel a car charging slot",
+        "type": "switch",
+        "default": False,
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 0",
+    },
+    {
         "name": "calculate_export_oncharge",
         "oldname": "calculate_discharge_oncharge",
         "friendly_name": "Calculate Export within charge slots",

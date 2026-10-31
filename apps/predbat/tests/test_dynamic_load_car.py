@@ -67,6 +67,7 @@ STATE_FIELDS = (
     "dynamic_load_car_stripped",
     "load_minutes",
     "octopus_intelligent_trust_slots",
+    "car_force_hold_until",
 )
 
 
@@ -1531,6 +1532,24 @@ def _run_live_load(my_predbat):
     return failed
 
 
+def _run_force_hold(my_predbat):
+    """A car a charger is force-holding is never cancelled for not charging, and the grace clock restarts after."""
+    failed = False
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    my_predbat.car_force_hold_until = {0: _at(my_predbat, 840) + timedelta(minutes=30)}
+    for minute, seconds in ((840, 10), (842, 10), (845, 0)):
+        changed = _cycle(my_predbat, minute, seconds)
+        failed |= _check("force hold {}".format(minute), not changed and _kwh(my_predbat) == [3.5, 3.5], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+    failed |= _check("force hold clock", 0 not in my_predbat.dynamic_load_car_since, str(my_predbat.dynamic_load_car_since))
+    my_predbat.car_force_hold_until = {}
+    changed = _cycle(my_predbat, 846, 0)
+    failed |= _check("after hold first sighting", not changed and _kwh(my_predbat) == [3.5, 3.5])
+    changed = _cycle(my_predbat, 848, 10)
+    failed |= _check("after hold grace passed", changed and _kwh(my_predbat) == [0, 0])
+    return failed
+
+
 def test_dynamic_load_car_not_charging(my_predbat):
     """
     Dynamic load cancels the car slots, and their cheap rate, while a car in its slot is not charging.
@@ -1543,6 +1562,7 @@ def test_dynamic_load_car_not_charging(my_predbat):
     saved_load_power = my_predbat.args.pop("load_power", None)
     try:
         failed = _run(my_predbat)
+        failed |= _run_force_hold(my_predbat)
         failed |= _run_live_load(my_predbat)
     finally:
         if had_load_power:

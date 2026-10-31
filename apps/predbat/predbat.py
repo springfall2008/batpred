@@ -582,6 +582,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # does not cover octopus_intelligent_slot: Octopus goes on wiring its dispatch sensor there
         # as the record of completed dispatches, and Ohme adds octopus_intelligent_planned_slot (#5413).
         self.car_slot_owner = None
+        # Cars a charger component is force-holding off: car_n -> end of the hold (UTC, aware). Empty when none
+        self.car_force_hold_until = {}
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
