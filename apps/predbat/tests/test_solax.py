@@ -6939,6 +6939,25 @@ async def test_helper_methods_main():
     else:
         print(f"✓ Multiple battery charge/discharge power sum correct (-500W)")
 
+    # Test 16: get_charge_discharge_power_battery - one battery reports null power
+    print("Test 16: get_charge_discharge_power_battery - one battery reports null power")
+    api16 = MockSolaxAPI()
+    api16.initialize(client_id="test", client_secret="test", region="eu")
+
+    api16.plant_batteries["plant16"] = ["BAT001", "BAT002"]
+    api16.realtime_device_data["BAT001"] = {"chargeDischargePower": 1500}
+    api16.realtime_device_data["BAT002"] = {"chargeDischargePower": None}  # SolaX returns an explicit null
+
+    try:
+        result16 = api16.get_charge_discharge_power_battery("plant16")
+    except TypeError as e:
+        result16 = f"TypeError: {e}"
+    if result16 != 1500:
+        print(f"**** ERROR: Expected 1500W with a null battery treated as 0, got {result16} ****")
+        failed = True
+    else:
+        print(f"✓ Null battery charge/discharge power treated as 0 (1500W)")
+
     if not failed:
         print("✓ helper methods tests passed")
 

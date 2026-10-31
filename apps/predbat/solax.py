@@ -821,7 +821,7 @@ class SolaxAPI(ComponentBase):
     def get_charge_discharge_power_battery(self, plant_id):
         total_power = 0
         for device_id in self.plant_batteries.get(plant_id, []):
-            total_power += self.realtime_device_data.get(device_id, {}).get("chargeDischargePower", 0)
+            total_power += self.realtime_device_data.get(device_id, {}).get("chargeDischargePower") or 0
         return total_power  # in Watts
 
     def get_current_soc_battery_kwh(self, plant_id):
