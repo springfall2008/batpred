@@ -320,6 +320,7 @@ Predbat has a built-in Enphase Cloud integration that logs in to the Enphase Enl
 - Copy the [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) template over the top of the supplied `apps.yaml` and set `enphase_username` and `enphase_password` to your Enlighten account credentials.
 - Set `enphase_automatic: True` to have Predbat wire up all the sensor and control entities automatically - no manual `apps.yaml` sensor configuration is required.
 - Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules, export windows become discharge-to-grid (DTG) schedules, and freeze-export windows use restrict-battery-discharge (RBD) schedules, with the reserve set through the battery profile. `automatic_config` requires the site to support both CFG and DTG and fails configuration otherwise. Writes are cached optimistically and corrected by the next periodic re-read if they didn't land.
+- When the plan holds the battery (Freeze charging, Hold charging, Hold for car, Hold for iBoost) Predbat sets the reserve to the battery's current charge level rounded down, not 1% above it, so the battery is never asked to charge up to a reserve above its charge level - see [How Predbat holds a Powerwall](#how-predbat-holds-a-powerwall), which works the same way.
 
 See the components documentation for details [Components - Enphase API](components.md#enphase-api-enphase)
 
@@ -2276,7 +2277,6 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 
 - All the Sigenergy entities referenced in `apps.yaml` need to be enabled for Predbat to use them. The following are disabled by default and will need enabling:
 
-    - sensor.sigen_plant_available_max_discharging_capacity
     - sensor.sigen_plant_daily_load_consumption
     - number.sigen_plant_ess_backup_state_of_charge
     - number.sigen_plant_ess_charge_cut_off_state_of_charge
@@ -3453,6 +3453,14 @@ Keep the token in `secrets.yaml` rather than in `apps.yaml` - see [Storing secre
 Copy the template [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) over the top of your `apps.yaml` and edit for your system. See [Tesla Powerwall Teslemetry API](components.md#tesla-powerwall-teslemetry-api-teslemetry) for details.
 
 `teslemetry_tbc_control` is off by default, so nothing changes unless you switch it on. When it is on, Predbat pushes a control-signal tariff (0p over the charge window, 100p over the export window, 50p import elsewhere) and switches the Powerwall to Time-Based Control, so Tesla's own Opticaster runs the charge at full rate rather than the slower reserve-driven charge. It is a trial setting, and while it is on Predbat's charge and export target percentages are advisory, because Tesla decides how much energy actually moves. Grid charging under this mode is enabled only inside a charge window that is below target and whose reserve resolves below 100% - it is off outside a charge window entirely (including the demand and export states). One known limitation: the reserve resolves to 100% not only when Predbat is deliberately holding the battery there, but also whenever it asks for anything in the 81-99% band, which Powerwall firmware since 25.18.4 will not hold below 100% - so a `set_reserve_min` anywhere from 81 to 99 (a plausible value in its own right) leaves grid charging disabled in every state, permanently, with only a one-off log line to explain why. This is deliberate: on a Powerwall, grid-charging up to a 100% reserve triggers the slow throttled charge this mode exists to avoid.
+
+### How Predbat holds a Powerwall
+
+This applies to both the Teslemetry component and the manual configuration below (`inverter_type: TESLA`).
+
+A Powerwall has no way to pause its discharge, so when the plan holds the battery (Freeze charging, Hold charging, Hold for car, Hold for iBoost) Predbat sets the backup reserve to the battery's current charge level, **rounded down** to a whole percent. On most other inverters the reserve is set 1% above the charge level, but a Powerwall charges from the grid to reach a backup reserve above its charge level - even with grid charging turned off - so that would turn every hold into a grid import at whatever the current rate is.
+
+The trade-off is that the battery may drift down by just under 1% before the reserve stops it. If the reserve minimum (`set_reserve_min` / `battery_min_soc`) is above the current charge level, the reserve is still set to that minimum and the Powerwall will charge up to it.
 
 ### Manual configuration via Home Assistant integrations
 

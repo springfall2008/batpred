@@ -122,6 +122,14 @@ class UserInterface:
     and selects. Routes HA events to appropriate handlers.
     """
 
+    # Optional host hook consulted by load_previous_value_from_ha before Home Assistant:
+    # callable(entity, attribute) returning the value, or None to fall back to the HA read.
+    previous_value_provider = None
+
+    # Optional host hook consulted by OAuth token refresh instead of the oauth-refresh edge function:
+    # async callable(instance_id, provider, token_hash) returning the edge function's JSON reply, or None for a failed refresh.
+    oauth_refresh_provider = None
+
     def call_notify(self, message):
         """
         Sync wrapper for call_notify
@@ -992,7 +1000,14 @@ class UserInterface:
     def load_previous_value_from_ha(self, entity, attribute=None):
         """
         Load HA value either from state or from history if there is any
+
+        If previous_value_provider is set it is asked first; a None result falls back to HA.
         """
+        if self.previous_value_provider is not None:
+            provided = self.previous_value_provider(entity, attribute)
+            if provided is not None:
+                return provided
+
         if attribute:
             ha_value = self.get_state_wrapper(entity, attribute=attribute)
             if ha_value is not None and ha_value not in ("unavailable", "unknown"):

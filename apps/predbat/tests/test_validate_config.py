@@ -90,6 +90,16 @@ def test_validate_config(my_predbat):
     print("  [string empty:True] empty string fails")
     _run(my_predbat, {"predbat_repository": ""}, expect_errors=["predbat_repository"])
 
+    # predbat_branch is a string or a list of strings, and blank is allowed as it just means no extra branch entry
+    print("  [string|string_list] predbat_branch single branch name passes")
+    _run(my_predbat, {"predbat_branch": "fix/my-feature"}, expect_clean=["predbat_branch"])
+
+    print("  [string|string_list] predbat_branch list of branch names passes")
+    _run(my_predbat, {"predbat_branch": ["fix/one", "feat/two"]}, expect_clean=["predbat_branch"])
+
+    print("  [string|string_list] predbat_branch blank passes")
+    _run(my_predbat, {"predbat_branch": ""}, expect_clean=["predbat_branch"])
+
     # ==========================================================================
     # STRING_LIST type  (notify_devices: {"type": "string_list"})
     # ==========================================================================

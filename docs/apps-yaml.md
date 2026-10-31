@@ -596,6 +596,48 @@ The default is 0.
   plan_random_delay: 30
 ```
 
+### predbat_repository
+
+**Advanced** - for testing against a fork of Predbat. The **select.predbat_update** drop-down lists the released versions of Predbat, which always come from the official repository (`springfall2008/batpred`),
+and **main**, which by default is the main branch of the official repository.
+You can set `predbat_repository` (format `owner/repo`) to get **main** from your own fork instead:
+
+```yaml
+  predbat_repository: your-github-user/batpred
+```
+
+- Only **main** (and the [predbat_branch](#predbat_branch) entry) use this setting, the released versions are always read from the official repository.
+- If `switch.predbat_auto_update` is on, Predbat may re-install the latest release a few minutes after `main` is installed. Turn auto update off while testing.
+- You can also set the environment variable `PREDBAT_REPOSITORY` (same `owner/repo` format), `predbat_repository` in `apps.yaml` takes priority.
+
+### predbat_branch
+
+**Advanced** - for testing branches of Predbat, for example a pull request you are working on. Setting `predbat_branch` adds extra entries to the **select.predbat_update** drop-down, `branch: <your branch name>`,
+which install that branch. It can be a single branch or a list, so you can switch between several:
+
+```yaml
+  predbat_repository: your-github-user/batpred
+  predbat_branch:
+    - fix/my-feature
+    - feat/another-feature
+```
+
+or for just one branch:
+
+```yaml
+  predbat_branch: fix/my-feature
+```
+
+- Each branch is installed from `predbat_repository`, or from the official repository if `predbat_repository` is not set.
+- `predbat_branch` only adds entries to the drop-down. It does not change what **main** is, which is the main branch of `predbat_repository` (or of the official repository if that is not set), and the released versions always come from the official repository.
+- Branch names can contain letters, numbers, `.`, `_`, `-` and `/`. A branch with any other character in its name is not offered, and a warning is written to the Predbat log.
+- The drop-down holds a maximum of 25 entries in total. This includes **main**, your branches and then as many of the most recent Predbat releases as will fit.
+At most 10 branches are shown, any more are ignored (with a warning in the log), and the more branches you add the fewer older releases appear in the drop-down.
+- The branch is downloaded when you select it, so if you push more changes to the branch, select the entry again to pick them up.
+- The drop-down is built when Predbat starts, so restart Predbat after changing `predbat_branch`.
+- If `switch.predbat_auto_update` is on, Predbat may re-install the latest release a few minutes after a branch is installed. Turn auto update off while testing a branch.
+- To go back to normal operation remove `predbat_branch` and `predbat_repository` from `apps.yaml`, restart Predbat and select a released version.
+
 ## Inverter information
 
 The template `apps.yaml` for each inverter type comes pre-configured with regular expressions that should auto-discover the Home Assistant entity names for that inverter type.
@@ -1387,6 +1429,16 @@ This is used by Predbat in calculating the plan to emulate your inverter's softw
 approval was lower than your maximum inverter power (check your install information for details).
 
 If you do not set an export limit then it is assumed to be unlimited (and thus limited by your inverter or PV system).
+
+### **battery_export_permitted**
+
+One per inverter (optional), an entity whose state is `on` or `off`.
+
+Set it to an entity that reads `off` when your site may export spare solar but not battery energy, for example a Tesla Powerwall whose
+installer left its export permission at Solar Only. While any inverter reads `off`, Predbat stops planning export windows. The battery
+still covers the house load and spare solar is still exported, so unlike setting `export_limit` to 0 the rest of the plan stays accurate.
+
+A missing or unavailable entity is treated as `on`. The Teslemetry component sets this for you with `teslemetry_automatic` on.
 
 ### **inverter_limit_charge** and **inverter_limit_discharge**
 
@@ -2181,6 +2233,7 @@ whether you are within an Octopus Energy "smart charge" slot
 - **car_charging_battery_size** - Car battery size in kWh
 - **car_charging_limit** - Percentage limit the car is set to charge to
 - **car_charging_soc** - Car's current charge level expressed as a percentage
+- **car_charging_max_rate** - Optional, one entry per car: the car's own maximum charge rate in kW (a number or a sensor). The car is planned at whichever is lower, this or its charging rate, for every charger integration. A blank entry, 0, or a list shorter than the number of cars means no cap for those cars; a sensor that is briefly unknown/unavailable/none keeps the last cap. A single sensor rather than a list applies to every car
 - **ohme_login** - Ohme EV charger account login
 - **ohme_password** - Password for above Ohme account
 - **ohme_automatic_octopus_intelligent** - Controls whether Predbat talks directly to the above Ohme account

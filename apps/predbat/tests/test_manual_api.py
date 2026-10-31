@@ -147,6 +147,21 @@ def run_test_manual_api(my_predbat):
     my_predbat.manual_api = my_predbat.api_select_update("manual_api")
     del my_predbat.args["inverter_limit_charge"]
 
+    # inverter_limit_export can be overridden too (#4116)
+    my_predbat.args["inverter_limit_export"] = [5000, 5000]
+    my_predbat.api_select("manual_api", "inverter_limit_export(1)=2500")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    limits = my_predbat.get_arg("inverter_limit_export", [])
+    if limits != [5000, 2500]:
+        print("ERROR: T16b Expecting inverter export limit to be {} got {}".format([5000, 2500], limits))
+        failed = 1
+    # Read the way Inverter does: per inverter, with a scalar default
+    limit1 = my_predbat.get_arg("inverter_limit_export", 4000, index=1, required_unit="W")
+    if limit1 != 2500:
+        print("ERROR: T16c Expecting inverter 1 export limit to be {} got {}".format(2500, limit1))
+        failed = 1
+    del my_predbat.args["inverter_limit_export"]
+
     my_predbat.api_select("manual_api", "off")
     my_predbat.manual_api = my_predbat.api_select_update("manual_api")
 

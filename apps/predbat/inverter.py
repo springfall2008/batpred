@@ -411,6 +411,9 @@ class Inverter:
         # used to be reseeded every cycle because the object itself was rebuilt every cycle).
         self.count_register_writes = 0
         self.created_attributes = {}
+        # Set once an invalid battery_scaling read has been warned about, so a source that keeps
+        # reading invalid warns once rather than every cycle (#5368); cleared by a valid read.
+        self.battery_scaling_invalid_warned = False
         # Commit-once state, keyed by scope - see commit_needed(). Each entry is the last state that
         # scope actually committed to this inverter; a scope absent from the dict has committed
         # nothing yet in this run, so its next call commits once. commit_pending marks a scope whose
@@ -525,9 +528,12 @@ class Inverter:
             # read as valid, rather than inventing one; only fall back to 1.0 if nothing valid has
             # ever been read for this inverter.
             last_known = self.base.get_arg("battery_scaling_last_known", default=1.0, index=self.id)
-            self.log("Warn: Inverter {} battery_scaling read as {} which is not a valid scaling factor, retaining last known value {} for this cycle".format(self.id, self.battery_scaling, last_known))
+            level = "Info" if self.battery_scaling_invalid_warned else "Warn"
+            self.battery_scaling_invalid_warned = True
+            self.log("{}: Inverter {} battery_scaling read as {} which is not a valid scaling factor, retaining last known value {} for this cycle".format(level, self.id, self.battery_scaling, last_known))
             self.battery_scaling = last_known
         else:
+            self.battery_scaling_invalid_warned = False
             self.base.set_arg("battery_scaling_last_known", self.battery_scaling, index=self.id)
         self.battery_scaling_config = self.battery_scaling
 
@@ -577,6 +583,9 @@ class Inverter:
         self.inv_has_target_soc = INVERTER_DEF[self.inverter_type]["has_target_soc"]
         self.inv_has_reserve_soc = INVERTER_DEF[self.inverter_type]["has_reserve_soc"]
         self.inv_has_timed_pause = INVERTER_DEF[self.inverter_type]["has_timed_pause"]
+        # True when a reserve above the SoC makes the battery charge from the grid to reach it, so a
+        # hold on reserve must not lead the SoC. Defaults False so an inverter type has to opt in.
+        self.inv_reserve_above_soc_charges_from_grid = INVERTER_DEF[self.inverter_type].get("reserve_above_soc_charges_from_grid", False)
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
         self.inv_charge_time_entity_is_option = INVERTER_DEF[self.inverter_type]["charge_time_entity_is_option"]
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]
@@ -801,6 +810,11 @@ class Inverter:
             self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
         if "export_limit" in self.base.args:
             self.export_limit = self.base.get_arg("export_limit", self.export_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
+        # A site can be barred from exporting battery energy while still exporting spare solar, e.g. a Powerwall
+        # left at Tesla's Solar Only export permission (GH#5710). Only an explicit off or false bars it, so a
+        # missing or unavailable entity leaves export planning as it was.
+        battery_export = self.base.get_arg("battery_export_permitted", None, index=self.id)
+        self.inv_battery_export_permitted = str(battery_export).lower() not in ["off", "false"]
 
         # Log inverter details
         if not quiet:

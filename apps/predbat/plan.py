@@ -247,7 +247,7 @@ class Plan:
         threshold_car = self.car_charging_threshold_kw()
 
         # Last period load analysis
-        self.load_last_status = self.dynamic_load_classify()
+        self.load_last_status = self.dynamic_load_classify(prev_last_load_status)
 
         # Update entity for last load
         self.dashboard_item(
@@ -372,7 +372,7 @@ class Plan:
         """
         return self.car_charging_threshold * MINUTE_WATT / 1000
 
-    def dynamic_load_classify(self):
+    def dynamic_load_classify(self, previous=None):
         """
         Classify load_last_period as "high" (above the battery's discharge rate), "low" (below both the
         battery rate and the car's low-load cut-off, so no car can be charging) or "baseline".
@@ -380,9 +380,22 @@ class Plan:
         Shared by dynamic_load(), which runs after the inverter fetch, and dynamic_load_car_check(), which
         runs before it and so uses the previous cycle's battery_rate_max_discharge - it barely moves
         between cycles, and the car grace period spans several of them.
+
+        A high load_last_period is re-checked against the live load_power, as a low one is for the car check.
+        load_last_period is the difference of an energy counter over PREDICT_STEP, and a counter that moves in
+        whole kWh (Solis) reads as 0 or 12kW over five minutes, so each step looks like a load spike. A live
+        reading below the threshold makes it "baseline": no evidence either way. With no live reading the
+        counter stands as before, so a load_power sensor that is down does not switch dynamic load off.
+
+        previous is the last status, from dynamic_load(): an unconfirmed reading leaves a "low" or "baseline"
+        status as it was, so a counter step is not a status change and does not force a re-plan.
         """
         threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
         if self.load_last_period >= threshold_battery:
+            _, live_load = self.dynamic_load_car_live_load()
+            if live_load is not None and live_load < threshold_battery * 0.9:
+                self.log("Dynamic load last period {:.2f}kW is high but live load {:.2f}kW does not confirm it".format(self.load_last_period, live_load))
+                return previous if previous in ("low", "baseline") else "baseline"
             return "high"
         if (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < self.dynamic_load_car_low_kw()):
             return "low"
@@ -2543,13 +2556,15 @@ class Plan:
         what the grid would ever charge for it, and floored at the export arbitrage margin and at
         1p/kWh.
 
-        Both the cap and the export recovery ratio read the base tariff (rate_max_base,
-        rate_export_max_forward), captured before saving sessions and overrides are layered on. A
+        The cap, the export recovery ratio and the export floor all read the base tariff (rate_max_base,
+        rate_export_max_forward, rate_export_min_base), captured before saving sessions and overrides are
+        layered on, and the replacement cost reads rate_min_forward, built before the sessions too. A
         session is a one-off event, not evidence about what the tariff charges for a kWh or pays for a
-        surplus one, and letting one set either term values stored energy above what discharging it can
-        realise - which the planner spends as profit by freeze charging every window up to end_record.
-        Both fall back to their whole-horizon equivalents when the base data is absent, so replaying an
-        older debug file behaves as it did before.
+        surplus one, and letting one set any of these terms values stored energy wrongly - above what
+        discharging it can realise, which the planner spends as profit by freeze charging every window up to
+        end_record, or below it when a free session makes refilling look free. The base terms fall back to
+        their whole-horizon equivalents when the base data is absent, so replaying an older debug file
+        behaves as it did before.
 
         Note `rate_export_min` here is not the export rate - it is the export earnings less the
         replacement cost, so it only raises the value when exporting beats re-importing. It can
@@ -2577,7 +2592,9 @@ class Plan:
             recovery = min(max(export_max / rate_min_raw, 0.0), 1.0)
             rate_min *= self.metric_battery_value_export_scaling + (1.0 - self.metric_battery_value_export_scaling) * recovery
 
-        rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
+        # The export tariff's own minimum, before any saving/Axle session - rate_export_min is scanned with them in
+        export_min = self.rate_export_min if self.rate_export_min_base is None else self.rate_export_min_base
+        rate_export_min = export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
         return max(rate_min, 1.0, rate_export_min)
 
     def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=None, cost90=None, final_iboost90=0.0):

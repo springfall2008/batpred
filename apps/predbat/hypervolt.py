@@ -33,9 +33,9 @@ from typing import Callable, Optional
 
 import aiohttp
 
+from car_charger_control import CarChargerControl, parse_control_setting
 from component_base import ComponentBase
 from predbat_metrics import record_api_call
-from utils import in_car_plan_window, parse_car_plan_windows
 
 HYPERVOLT_TOKEN_URL = "https://kc.prod.hypervolt.co.uk/realms/retail-customers/protocol/openid-connect/token"
 HYPERVOLT_API_URL = "https://api.hypervolt.co.uk/"
@@ -59,6 +59,10 @@ MAX_SENT_IDS = 50
 
 MIN_CURRENT_A = 6
 MAX_CURRENT_A = 32
+# ev_power under this fraction of true_milli_amps x voltage is taken as a stale reading (seen at the start of a charge),
+# once current x voltage is at least the minimum - below it a noisy current reading could invent power
+EV_POWER_TRUST_FRACTION = 0.5
+EV_POWER_MIN_MEASURED_W = 500
 
 # Websocket reconnect back-off, as the Home Assistant integration uses
 BACKOFF_MIN_SECONDS = 3
@@ -187,12 +191,18 @@ def apply_session(charger, result):
         charger.charging = bool(result["charging"])
     if not charger.charging:
         charger.power_w = 0.0
-    elif "ev_power" in result:
-        charger.power_w = _to_float(result["ev_power"]) or 0.0
-    elif "true_milli_amps" in result and "voltage" in result:
-        milliamps = _to_float(result["true_milli_amps"])
-        voltage = _to_float(result["voltage"])
-        charger.power_w = milliamps * voltage / 1000.0 if milliamps is not None and voltage is not None else 0.0
+    else:
+        metered = _to_float(result.get("ev_power"))
+        milliamps = _to_float(result.get("true_milli_amps"))
+        voltage = _to_float(result.get("voltage"))
+        measured = milliamps * voltage / 1000.0 if milliamps is not None and voltage is not None else None
+        if metered is not None and (measured is None or measured < EV_POWER_MIN_MEASURED_W or metered >= measured * EV_POWER_TRUST_FRACTION):
+            charger.power_w = metered
+        elif measured is not None:
+            # A V3 charger reports ev_power as 0 or 3 W for the first few messages of a charge while
+            # true_milli_amps and voltage already show ~30 A at 231 V, so current x voltage wins then
+            charger.power_w = measured
+        # A message with neither leaves the last power alone
     if "session" in result and result["session"] != charger.session_id:
         # A new session: its energy starts again from whatever this message says
         charger.session_id = result["session"]
@@ -712,8 +722,11 @@ class HypervoltTransport:
             await self._send(link, "plugncharge.get")
         await self._send(link, "firmware.version")
         await self._send(link, "get.name")
-        # The integration only ever sees this pushed on a change; asking means a restart need not wait for the cable to move
-        await self._send(link, "get.pilot_status")
+        if charger_major_version(link.charger_id) < 3:
+            # The integration only ever sees this pushed on a change; asking means a restart need not wait for the cable to move.
+            # A V3 charger refuses it ("get.pilot_status not allowed") but pushes the pilot status straight after login anyway.
+            # Decided by the hardware, not the API: a V2 promoted to the V3 API keeps asking, as it did before.
+            await self._send(link, "get.pilot_status")
 
     async def _handle_sync_frame(self, link, text):
         """Route one sync socket frame: a reply to its caller and on_message, a push to on_message."""
@@ -742,7 +755,9 @@ class HypervoltTransport:
                     await self._login_refused(link)
                     return
                 if future and not future.done():
-                    future.set_exception(HypervoltRefusedError("charger {} refused {}: {} {}".format(link.charger_id, method, error.get("code", ""), error.get("error", "")).strip()))
+                    # A V3 charger puts the reason in "message", e.g. {"code": -32601, "data": null, "message": "get.pilot_status not allowed"}
+                    reason = error.get("message") or error.get("error") or ""
+                    future.set_exception(HypervoltRefusedError("charger {} refused {}: {} {}".format(link.charger_id, method, error.get("code", ""), reason).strip()))
                 return
             result = message.get("result")
             if method == "login":
@@ -822,13 +837,22 @@ hypervolt_attribute_table = {
 }
 
 
-class HypervoltAPI(ComponentBase):
-    """Hypervolt component: monitoring, controls and Predbat-led charging for Hypervolt chargers."""
+class HypervoltAPI(ComponentBase, CarChargerControl):
+    """Hypervolt component: monitoring, controls and Predbat-led charging for Hypervolt chargers.
+
+    Predbat-led charging runs on the shared CarChargerControl loop, so a Hypervolt follows Octopus
+    Intelligent the way the other chargers do: left to Octopus when Octopus drives it, and driven
+    to the dispatches when Octopus drives the car and octopus_intelligent_charger_follows_car is on.
+    The component keeps one thing of its own: released_by_predbat, the chargers Predbat stopped and
+    still owes a release, which is saved so a restart can never strand a stopped charger.
+    """
 
     def initialize(self, username, password, automatic=True, hypervolt_control=False):
         """Set up component state and the transport."""
         self.automatic = automatic
-        self.hypervolt_control = bool(hypervolt_control)
+        self.hypervolt_control = parse_control_setting(hypervolt_control)
+        # The control switch is saved by save_control_state(), alongside the released list
+        self.charger_control_setup("hypervolt", "Hypervolt", control=self.hypervolt_control, switch_prefix="hypervolt", control_setting="hypervolt_control")
         # Charger ids in car order: entry N is car N. Append-only, so a car never changes number while Predbat runs
         self.car_order = []
         self.listed = False
@@ -841,11 +865,8 @@ class HypervoltAPI(ComponentBase):
         self.auth_retry_at = 0
         self._auto_configured_order = None
         self.api_2_noted = set()
-        self.control_active = False
-        self.control_enabled = True
         # Chargers Predbat stopped and still owes a release
         self.released_by_predbat = set()
-        self.control_windows = {}
         self.control_state_loaded = False
         self.control_state_dirty = False
         self.release_announced = False
@@ -1048,12 +1069,12 @@ class HypervoltAPI(ComponentBase):
 
     async def switch_event_handler(self, entity_id, service):
         """Let a charger charge or stop it, in response to its charge switch."""
+        if await self.charger_control_guest_event(entity_id, service):
+            return
         if service not in ("turn_on", "turn_off"):
             return
         if entity_id.endswith("_hypervolt_control"):
-            self.control_enabled = service == "turn_on"
-            self.log("Info: hypervolt: charge control switched {}".format("on" if self.control_enabled else "off"))
-            await self.save_control_state()
+            await self.charger_control_set_enabled(service == "turn_on")
             return
         charger = self.charger_for_entity(entity_id)
         if not charger or not entity_id.endswith("_charging"):
@@ -1097,9 +1118,10 @@ class HypervoltAPI(ComponentBase):
 
     async def publish_data(self):
         """Publish every known charger as Predbat entities."""
-        if self.control_active:
+        if self.charger_control_active:
             # Published only while control could act on it, so the switch is never a lie
-            self.dashboard_item("switch.{}_hypervolt_control".format(self.prefix), state="on" if self.control_enabled else "off", attributes=hypervolt_attribute_table["control"], app="hypervolt")
+            self.dashboard_item("switch.{}_hypervolt_control".format(self.prefix), state="on" if self.charger_control_enabled else "off", attributes=hypervolt_attribute_table["control"], app="hypervolt")
+            self.charger_control_publish_guest("hypervolt")
         now = time.time()
         for charger in self.ordered_chargers():
             prefix = self.entity_prefix(charger)
@@ -1139,13 +1161,13 @@ class HypervoltAPI(ComponentBase):
 
         Control needs automatic configuration, because it is that which makes charger N car N.
         """
-        self.control_active = False
+        self.charger_control_active = False
         if not self.hypervolt_control:
             return
         if not self.automatic:
             self.log("Warn: hypervolt: hypervolt_control needs hypervolt_automatic to map each charger to a car, charge control is disabled")
             return
-        self.control_active = True
+        self.charger_control_active = True
         self.log("Info: hypervolt: Predbat-led charge control enabled")
 
     async def load_control_state(self):
@@ -1165,7 +1187,7 @@ class HypervoltAPI(ComponentBase):
         if not isinstance(saved, dict):
             return
         if "control_enabled" in saved:
-            self.control_enabled = bool(saved["control_enabled"])
+            self.charger_control_enabled = bool(saved["control_enabled"])
         if isinstance(saved.get("released"), list):
             self.released_by_predbat.update(str(charger_id) for charger_id in saved["released"])
 
@@ -1174,7 +1196,7 @@ class HypervoltAPI(ComponentBase):
         if self.storage is None:
             self.control_state_dirty = False
             return True
-        state = {"control_enabled": self.control_enabled, "released": sorted(self.released_by_predbat)}
+        state = {"control_enabled": self.charger_control_enabled, "released": sorted(self.released_by_predbat)}
         try:
             saved = await self.storage.save(HYPERVOLT_STORAGE_MODULE, HYPERVOLT_CONTROL_STATE, state)
         except Exception as exc:  # pylint: disable=broad-except
@@ -1186,71 +1208,96 @@ class HypervoltAPI(ComponentBase):
             self.control_state_loaded = True
         return not self.control_state_dirty
 
-    def control_read_only_now(self):
+    async def charger_control_save_enabled(self):
+        """Save the control switch together with the released list, which share one stored document."""
+        await self.save_control_state()
+
+    def charger_control_read_only_now(self):
         """Is Predbat in read only mode.
 
         Read with get_arg: the base's set_read_only attribute is True from reset() until the first
         update_pred(), which comes after this component's first run, so reading it would release
-        every charger Predbat had stopped on each restart.
+        every charger Predbat had stopped on each restart. Axle's VPP read only sets only the
+        attribute, so its own flag is read as well.
         """
-        return bool(self.get_arg("set_read_only", False))
+        return bool(self.get_arg("set_read_only", False)) or bool(getattr(self.base, "set_read_only_axle", False))
 
-    def refresh_car_windows(self, now):
-        """Read each car's planned charging windows. A car with no slot sensor is absent, so its charger is left alone."""
-        windows = {}
-        for car_n in range(len(self.car_order)):
-            postfix = "" if car_n == 0 else "_{}".format(car_n)
-            planned = self.get_state_wrapper("binary_sensor.{}_car_charging_slot{}".format(self.prefix, postfix), attribute="planned")
-            if planned is None:
-                continue
-            windows[car_n] = parse_car_plan_windows(planned, now, self.local_tz)
-        self.control_windows = windows
-        return bool(windows)
+    def charger_control_chargers(self):
+        """The chargers in car order, keyed by charger id, so charger N follows car N."""
+        return [(charger.charger_id, charger) for charger in self.ordered_chargers()]
 
-    async def control_tick(self, now):
-        """Run one cycle of charge control, releasing rather than just going quiet when control cannot run."""
-        if self.control_state_dirty:
-            await self.save_control_state()
-        reason = None
-        if not self.control_active:
-            reason = "charge control is not enabled"
-        elif self.control_read_only_now():
-            reason = "Predbat is in read only mode"
-        elif not self.control_enabled:
-            reason = "the charge control switch is off"
-        if reason:
-            if self.released_by_predbat:
-                if not self.release_announced:
-                    self.log("Info: hypervolt: releasing the chargers because {}".format(reason))
-                    self.release_announced = True
-                await self.release_chargers()
+    def charger_control_car_count(self):
+        """One car per charger: automatic configuration raises num_cars to match."""
+        return len(self.car_order)
+
+    def charger_control_connected(self, charger):
+        """Can Predbat act on this charger now: fresh, not unplugged, and with a car known to be there.
+
+        A charger Predbat stopped counts as there even with no pilot status, as a V2 API charger
+        never reports a car that is not drawing power - otherwise it would never be let charge again.
+        One whose state is not known yet is left alone rather than stopped.
+        """
+        if is_stale(charger, time.time()) or charger.pilot_status == "A":
+            return False
+        return connected_state(charger) == "on" or charger.release_state == "released"
+
+    def charger_control_car_plugged(self, charger):
+        """Is a car plugged in, for ending guest charging - an unknown pilot status reads as plugged in."""
+        return charger.pilot_status != "A"
+
+    def charger_control_drifted(self, charger, charge):
+        """Has the charger been stopped or let charge by something else, e.g. the Hypervolt app."""
+        if charger.release_state is None:
+            return False
+        return charger.release_state != ("default" if charge else "released")
+
+    async def charger_control_send(self, charger, charge, car_n):
+        """Let the charger charge, or stop it. A charger already in that state is sent nothing."""
+        name = charger.name or charger.charger_id
+        if charge:
+            if charger.release_state != "default":
+                self.log("Info: hypervolt: allowing {} to charge for car {}".format(name, car_n))
+                await self.send_command(charger, release_command(True))
+            self.forget(charger)
             return
-        self.release_announced = False
-        await self.control_charge(now)
+        if charger.release_state == "released":
+            # Already stopped - by Predbat before a restart, or by hand - so nothing to send
+            return
+        self.log("Info: hypervolt: stopping {} for car {}".format(name, car_n))
+        # Recorded and stored before it is sent: a stop whose reply is lost may still have been applied
+        if charger.charger_id not in self.released_by_predbat:
+            self.released_by_predbat.add(charger.charger_id)
+            await self.save_control_state()
+        await self.send_command(charger, release_command(False))
 
-    async def per_charger(self, charger, action):
-        """Run one charger's control step so that its failure cannot stop the others. A sign in failure is left to reach run()."""
-        try:
-            await action
-        except HypervoltRefusedError as exc:
-            if not self.refusal_warned:
-                self.log("Warn: hypervolt: charge control refused: {}. Monitoring continues".format(exc))
-                self.refusal_warned = True
-        except HypervoltApiError as exc:
-            self.log("Warn: hypervolt: charge control failed for {}: {}".format(charger.name or charger.charger_id, exc))
+    async def charger_control_release_one(self, charger, charge):
+        """Hand a charger back: let it charge again if Predbat stopped it, and forget it once nothing is owed.
 
-    async def release_chargers(self):
-        """Let every charger Predbat stopped charge again, skipping any whose state is not fresh."""
-        now = time.time()
-        try:
-            for charger_id in sorted(self.released_by_predbat):
-                charger = self.transport.chargers.get(charger_id)
-                if charger is None or is_stale(charger, now):
-                    continue
-                await self.per_charger(charger, self.release_one(charger))
-        finally:
-            if self.control_state_dirty:
-                await self.save_control_state()
+        One not heard from recently cannot be trusted or sent anything, so it stays owed whatever it
+        last read; control_tick() retries it each cycle. Otherwise a charger back in "default" is owed
+        nothing, and one whose state is unknown since a restart is sent the release anyway - letting
+        a charger charge is harmless if it already can - rather than waiting on a report that may
+        never come.
+        """
+        if charger.charger_id in self.released_by_predbat:
+            if is_stale(charger, time.time()):
+                # Even one that last read "default": a stop whose reply was lost may still have landed
+                return
+        if charger.charger_id in self.released_by_predbat and charger.release_state != "default":
+            # Even when unplugged: whether a stop survives the cable coming out is not known
+            self.log("Info: hypervolt: releasing {}".format(charger.name or charger.charger_id))
+            await self.send_command(charger, release_command(True))
+        self.forget(charger)
+
+    async def charger_control_hand_to_octopus(self, charger, charge):
+        """Hand a charger to Octopus, letting it charge again if Predbat had stopped it.
+
+        The shared default leaves a charger Predbat stopped for Octopus to start. Whether Octopus
+        can undo a Hypervolt stop is not known, and a stop it cannot undo would hold the car off
+        for good, so a Hypervolt is released instead: the cost is that it may draw until Octopus
+        next sets it, rather than a car left unable to charge.
+        """
+        await self.charger_control_release_one(charger, charge)
 
     def forget(self, charger):
         """Drop a charger from the released list."""
@@ -1258,58 +1305,79 @@ class HypervoltAPI(ComponentBase):
             self.released_by_predbat.discard(charger.charger_id)
             self.control_state_dirty = True
 
-    async def release_one(self, charger):
-        """Release one charger: send release false if it is still stopped, and forget it once nothing is owed."""
-        if charger.release_state == "released":
-            # Even when unplugged: whether a stop survives the cable coming out is not known
-            self.log("Info: hypervolt: releasing {}".format(charger.name or charger.charger_id))
-            await self.send_command(charger, release_command(True))
-            self.forget(charger)
-        elif charger.pilot_status == "A" or charger.release_state == "default":
-            # Unplugged, or already charging again: nothing is owed
-            self.forget(charger)
+    def sync_held(self):
+        """Line the shared loop's record up with released_by_predbat, the record that survives a restart.
 
-    async def control_charge(self, now):
-        """Drive each charger from its car's plan: let it charge inside a window, stop it outside one."""
-        if not self.refresh_car_windows(now):
-            return
-        wall_now = time.time()
+        A charger Predbat stopped is held as stopped, so the shared loop knows to release it; one
+        held as stopped that is no longer owed a release is dropped.
+        """
+        for charger_id in self.released_by_predbat:
+            if charger_id in self.transport.chargers:
+                self.charger_control_state.setdefault(charger_id, False)
+        for charger_id, charge in list(self.charger_control_state.items()):
+            if charge is False and charger_id not in self.released_by_predbat:
+                del self.charger_control_state[charger_id]
+
+    async def settle_released(self):
+        """Settle every charger owed a release whose situation has changed, whether or not control runs.
+
+        Back to "default": nothing is owed. Unplugged while stopped, or while its state is not known
+        since a restart: released before it is forgotten, as a stop that outlived the unplug would
+        hold the next car too. Done here rather than in the shared loop, which leaves an unplugged
+        charger alone.
+        """
+        now = time.time()
+        for charger_id in sorted(self.released_by_predbat):
+            charger = self.transport.chargers.get(charger_id)
+            if charger is None or is_stale(charger, now):
+                continue
+            if charger.release_state == "default":
+                self.forget(charger)
+            elif charger.pilot_status == "A":
+                # Stopped, or not yet known to be otherwise since a restart
+                self.log("Info: hypervolt: the car was unplugged from {}".format(charger.name or charger.charger_id))
+                await self.guarded(self.charger_control_release_one(charger, False), charger)
+
+    async def guarded(self, action, charger=None):
+        """Run a control step so that a refused or failed command is reported rather than failing the run.
+
+        A refusal is warned about once, as it repeats every cycle; a sign in failure is not an
+        HypervoltApiError, so it still reaches run().
+        """
         try:
-            for car_n, charger_id in enumerate(self.car_order):
-                charger = self.transport.chargers.get(charger_id)
-                if charger is None or car_n not in self.control_windows or is_stale(charger, wall_now):
-                    continue
-                wanted = in_car_plan_window(self.control_windows[car_n], now)
-                await self.per_charger(charger, self.control_one(car_n, charger, wanted))
+            await action
+        except HypervoltRefusedError as exc:
+            if not self.refusal_warned:
+                self.log("Warn: hypervolt: charge control refused: {}. Monitoring continues".format(exc))
+                self.refusal_warned = True
+        except HypervoltApiError as exc:
+            self.log("Warn: hypervolt: charge control failed{}: {}".format(" for {}".format(charger.name or charger.charger_id) if charger else "", exc))
+
+    async def control_tick(self, now):
+        """Run one cycle of charge control on the shared loop.
+
+        With control off, chargers Predbat stopped in an earlier session are still released, so
+        turning hypervolt_control off can never strand a car.
+        """
+        try:
+            await self.settle_released()
+            self.sync_held()
+            if not self.charger_control_active:
+                if self.charger_control_state:
+                    if not self.release_announced:
+                        self.log("Info: hypervolt: releasing the chargers because charge control is not enabled")
+                        self.release_announced = True
+                    await self.guarded(self.charger_control_release())
+                return
+            await self.guarded(self.charger_control_tick(now))
+            if self.charger_control_released is not None and self.released_by_predbat:
+                # The shared loop releases once per reason; a charger that could not be sent the release
+                # then (not heard from) is still owed, so it is tried again each cycle until it goes through
+                self.sync_held()
+                await self.guarded(self.charger_control_release())
         finally:
             if self.control_state_dirty:
                 await self.save_control_state()
-
-    async def control_one(self, car_n, charger, wanted):
-        """Apply the plan to one charger."""
-        if charger.pilot_status == "A":
-            if charger.release_state == "released" and charger.charger_id in self.released_by_predbat:
-                # Hand it back before forgetting it: a stop that outlives the unplug would hold the next car too
-                self.log("Info: hypervolt: releasing {} as the car was unplugged".format(charger.name or charger.charger_id))
-                await self.send_command(charger, release_command(True))
-            self.forget(charger)
-            return
-        if wanted:
-            # Not "connected": a V2 API charger never reports a car that is not drawing power, and releasing an empty charger does no harm
-            if charger.release_state == "released":
-                self.log("Info: hypervolt: allowing {} to charge for car {}".format(charger.name or charger.charger_id, car_n))
-                await self.send_command(charger, release_command(True))
-                self.forget(charger)
-            elif charger.release_state == "default":
-                # Not stopped - a stop that was refused or never sent - so nothing is owed
-                self.forget(charger)
-        elif charger.release_state == "default" and connected_state(charger) == "on":
-            self.log("Info: hypervolt: stopping {} for car {}".format(charger.name or charger.charger_id, car_n))
-            # Recorded and stored before it is sent: a stop whose reply is lost may still have been applied
-            if charger.charger_id not in self.released_by_predbat:
-                self.released_by_predbat.add(charger.charger_id)
-                await self.save_control_state()
-            await self.send_command(charger, release_command(False))
 
     async def final(self):
         """Close every socket so a restart leaves no reader task behind."""

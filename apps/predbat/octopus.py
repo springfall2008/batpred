@@ -32,7 +32,25 @@ from const import (
     OCTOPUS_STATES_NOT_DISPATCHING,
     OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES,
 )
-from utils import RepeatLogGate, str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS, strptime_aware
+from utils import (
+    RepeatLogGate,
+    str2time,
+    minutes_to_time,
+    dp1,
+    dp2,
+    dp4,
+    minute_data,
+    round_out_to_period,
+    filter_payment_method,
+    is_edge_block_body,
+    Backoff,
+    parse_retry_after,
+    TOKEN_MINT_BACKOFF_BASE_SECONDS,
+    TOKEN_MINT_BACKOFF_MAX_SECONDS,
+    GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS,
+    GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
+    strptime_aware,
+)
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 import aiohttp
@@ -65,7 +83,6 @@ OCTOPUS_NIGHT_RATE_WINDOWS = {
     "iog": {"start": (23, 30), "end": (5, 30), "cross_midnight": True, "utc": False},
 }
 
-OCTOPUS_MAX_RETRIES = 5
 # The EV/charge-point catalogue is static reference data, so it is refreshed daily
 CATALOGUE_FRESH_MINUTES = 24 * 60
 CATALOGUE_STALE_MINUTES = 25 * 60
@@ -176,10 +193,12 @@ def parse_date_time(dt_str):
         return None
 
 
-# A generic "403 Forbidden" page is indistinguishable from a WAF page, so after this many
-# consecutive edge blocks fall back to refreshing the token in case the credential really
-# was revoked. Without this the component could never recover from a misclassification.
-EDGE_BLOCK_REFRESH_AFTER = 5
+# A generic "403 Forbidden" page is indistinguishable from a WAF page, so once edge blocks
+# have persisted this long with no successful query in between, fall back to refreshing the
+# token in case the credential really was revoked. Without this the component could never
+# recover from a misclassification. Measured in time rather than a count of blocked requests:
+# one poll sends several queries, so a count of five was reached within a couple of minutes.
+EDGE_BLOCK_REFRESH_AFTER_SECONDS = 30 * 60
 
 
 api_token_query = """mutation {{
@@ -707,11 +726,13 @@ class OctopusAPI(ComponentBase):
         self.graphql_token = None
         self.graphql_expiration = None
         self.consecutive_edge_blocks = 0
-        # Set while the token mint itself is edge blocked - see async_refresh_token
-        self.token_mint_blocked_until = None
-        self.token_mint_block_count = 0
-        self.token_mint_backoff_logged_at = None
-        # Set by async_read_response() when a GraphQL response is a rate limit, so the retry loop does not re-read it
+        # When the current run of edge blocks began, in UTC - see EDGE_BLOCK_REFRESH_AFTER_SECONDS
+        self.edge_block_started_at = None
+        # Running while the token mint itself is edge blocked or rate limited - see async_refresh_token
+        self.token_mint_backoff = Backoff(TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS)
+        # Running while GraphQL queries are paused after a rate limit - see async_graphql_query
+        self.graphql_backoff = Backoff(GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS, GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS)
+        # Set by async_read_response() when a response is a rate limit (KT-CT-1199 or HTTP 429), so the caller backs off
         self.last_read_rate_limited = False
         self.account_data = {}
         self.tariffs = {}
@@ -2012,7 +2033,11 @@ class OctopusAPI(ComponentBase):
             self.log("Warn: OctopusAPI: TOU bucket lookup failed ({}), falling back to hard-wired windows".format(error))
             response_data = None
         windows = _tou_windows_from_measurements(response_data)
-        self.tou_windows_day = today
+        # Only a lookup that returned data settles the day. A failed or rate-limit-held one is
+        # retried on the next fetch rather than leaving the hard-wired windows in place until
+        # UTC midnight.
+        if response_data is not None:
+            self.tou_windows_day = today
         self.tou_windows = windows
         return windows
 
@@ -2321,32 +2346,19 @@ class OctopusAPI(ComponentBase):
 
     async def async_read_response_retry(self, response, url, ignore_errors=False):
         """
-        Read response with retry on failure
-        """
-        max_retries = OCTOPUS_MAX_RETRIES
-        for attempt in range(max_retries):
-            # Check for shutdown signal
-            if self.api_stop:
-                self.log("OctopusAPI: Aborting retry loop due to shutdown")
-                return None
+        Read a response once, counting a failed read in failures_total.
 
-            self.last_read_rate_limited = False
-            data_as_json = await self.async_read_response(response, url, ignore_errors=ignore_errors)
-            if data_as_json is not None:
-                return data_as_json
-            else:
-                # 401/403 and a rate limit (KT-CT-1199) are definitive for this response. aiohttp
-                # caches the body, so re-reading the same response cannot change the outcome - it
-                # would only duplicate log lines and sleep through the backoff for nothing (a
-                # rate-limited request logged five warnings and stalled ~35s before giving up).
-                if response.status in [401, 403] or self.last_read_rate_limited:
-                    self.failures_total += 1
-                    return None
-                if attempt < max_retries - 1:
-                    self.log(f"OctopusAPI: Retrying read response for {url} (attempt {attempt + 2} of {max_retries})")
-                    await asyncio.sleep(2**attempt)  # Exponential backoff
-        self.failures_total += 1
-        return None
+        This used to re-read a failed response up to five times with exponential backoff, but
+        aiohttp caches the body, so a re-read can never change the outcome - it only stalled the
+        poll for ~15s and repeated the warning. A transient failure is retried by the next poll and
+        a rate limit by the backoff in async_refresh_token() and async_graphql_query(), which read
+        last_read_rate_limited straight after this returns.
+        """
+        self.last_read_rate_limited = False
+        data_as_json = await self.async_read_response(response, url, ignore_errors=ignore_errors)
+        if data_as_json is None:
+            self.failures_total += 1
+        return data_as_json
 
     async def async_read_response(self, response, url, ignore_errors=False):
         """Reads the response, logging any json errors"""
@@ -2364,6 +2376,11 @@ class OctopusAPI(ComponentBase):
                 msg = f"Warn: OctopusAPI: Response received - {url} ({request_context}) - Unauthenticated request: {response.status}; {text}"
                 self.log(msg)
                 return None
+            elif response.status == 429:
+                self.log(f"Warn: OctopusAPI: Response received - {url} ({request_context}) - Rate limited: {response.status}; {text}")
+                record_api_call("octopus", False, "rate_limit")
+                self.last_read_rate_limited = True
+                return None
             elif response.status not in [404]:
                 msg = f"Warn: OctopusAPI: Response received - {url} ({request_context}) - Unexpected response received: {response.status}; {text}"
                 self.log(msg)
@@ -2379,8 +2396,7 @@ class OctopusAPI(ComponentBase):
             self.log(f"Warn: OctopusAPI: Failed to extract response json: {e} - {url} - {text}")
             return None
 
-        # Check for rate limit errors - these return None immediately, and async_read_response_retry()
-        # does not re-read them (last_read_rate_limited): re-reading the same response cannot help
+        # Check for rate limit errors - these return None and set last_read_rate_limited so the caller backs off
         if ("graphql" in url) and data_as_json and ("errors" in data_as_json):
             for error in data_as_json.get("errors", []):
                 error_code = error.get("extensions", {}).get("errorCode")
@@ -2394,32 +2410,50 @@ class OctopusAPI(ComponentBase):
         # Return the response as-is - let caller handle other errors (including auth errors that need retry)
         return data_as_json
 
-    def start_token_mint_backoff(self):
-        """Back off from the token mint after a CDN/WAF block.
+    def start_token_mint_backoff(self, reason="edge/WAF blocked", retry_after=None):
+        """Back off from the token mint after a CDN/WAF block or a rate limit, and log why.
 
-        Each consecutive block doubles the wait, capped at TOKEN_MINT_BACKOFF_MAX_SECONDS.
+        Args:
+            reason: How the mint was refused - "edge/WAF blocked" or "rate limited".
+            retry_after: Seconds the server asked us to wait, or None.
         """
-        self.token_mint_block_count += 1
-        delay = token_mint_backoff_seconds(self.token_mint_block_count)
-        now = datetime.now()
-        self.token_mint_blocked_until = now + timedelta(seconds=delay)
-        self.token_mint_backoff_logged_at = now
-        self.log("Warn: OctopusAPI: Token mint edge/WAF blocked (block {}) - this is rate limiting, not a bad API key. Backing off for {}s".format(self.token_mint_block_count, delay))
+        delay = self.token_mint_backoff.start(reason, retry_after)
+        self.log("Warn: OctopusAPI: Token mint {} (block {}) - this is rate limiting, not a bad API key. Backing off for {}s".format(reason, self.token_mint_backoff.count, delay))
 
-    def log_token_mint_backoff(self, now):
+    def log_token_mint_backoff(self):
         """Repeat the backoff reason occasionally so it stays visible in a short log window"""
-        if self.token_mint_backoff_logged_at and (now - self.token_mint_backoff_logged_at).total_seconds() < TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS:
-            return
-        self.token_mint_backoff_logged_at = now
-        self.log("Warn: OctopusAPI: Token mint still edge/WAF blocked (block {}) - suppressing mints until {}".format(self.token_mint_block_count, self.token_mint_blocked_until.strftime(TIME_FORMAT)))
+        if self.token_mint_backoff.due_reminder():
+            backoff = self.token_mint_backoff
+            self.log("Warn: OctopusAPI: Token mint still {} (block {}) - suppressing mints until {}".format(backoff.reason, backoff.count, backoff.until.strftime(TIME_FORMAT)))
 
     def clear_token_mint_backoff(self):
         """Clear the mint backoff after a successful token mint"""
-        if self.token_mint_block_count:
-            self.log("OctopusAPI: Token mint recovered after {} edge/WAF block(s)".format(self.token_mint_block_count))
-        self.token_mint_block_count = 0
-        self.token_mint_blocked_until = None
-        self.token_mint_backoff_logged_at = None
+        count = self.token_mint_backoff.clear()
+        if count:
+            self.log("OctopusAPI: Token mint recovered after {} refused mint(s)".format(count))
+
+    def start_graphql_rate_limit_backoff(self, reason, retry_after=None):
+        """Pause GraphQL queries after a rate limit, so the rest of the poll does not run into the same limit, and log why.
+
+        Args:
+            reason: What limited the query - "rate limited" or "edge/WAF blocked".
+            retry_after: Seconds the server asked us to wait, or None.
+        """
+        delay = self.graphql_backoff.start(reason, retry_after)
+        self.log("Warn: OctopusAPI: GraphQL {} (rate limit {}) - pausing GraphQL queries for {}s".format(reason, self.graphql_backoff.count, delay))
+
+    def log_graphql_rate_limit_backoff(self):
+        """Repeat the pause reason occasionally: held queries send nothing, so would otherwise log nothing"""
+        if self.graphql_backoff.due_reminder():
+            self.log("Warn: OctopusAPI: GraphQL still rate limited (rate limit {}) - holding queries until {}".format(self.graphql_backoff.count, self.graphql_backoff.until.strftime(TIME_FORMAT)))
+
+    def clear_graphql_rate_limit_backoff(self):
+        """Clear the GraphQL pause and the edge block run after a successful query"""
+        count = self.graphql_backoff.clear()
+        if count:
+            self.log("OctopusAPI: GraphQL rate limit cleared after {} rate limit(s)".format(count))
+        self.consecutive_edge_blocks = 0
+        self.edge_block_started_at = None
 
     async def async_refresh_token(self):
         """
@@ -2437,10 +2471,10 @@ class OctopusAPI(ComponentBase):
         # an outage the block itself would not have caused. Callers that hit a genuine auth
         # failure clear graphql_token before re-minting, so a revoked token is never revived
         # here - only one we have simply not been able to renew yet.
-        if self.token_mint_blocked_until and now < self.token_mint_blocked_until:
+        if self.token_mint_backoff.active():
             if expiry and expiry > now:
                 return self.graphql_token
-            self.log_token_mint_backoff(now)
+            self.log_token_mint_backoff()
             return None
 
         client = await self.api.async_create_client_session()
@@ -2466,6 +2500,13 @@ class OctopusAPI(ComponentBase):
                     return None
 
                 token_response_body = await self.async_read_response_retry(token_response, url)
+                # A mint refused by a rate limit (KT-CT-1199 or HTTP 429) backs off exactly as an edge
+                # block does: re-minting on every query would only keep the limit going.
+                if token_response_body is None and self.last_read_rate_limited:
+                    self.start_token_mint_backoff("rate limited", parse_retry_after(token_response.headers.get("Retry-After")))
+                    if expiry and expiry > datetime.now():
+                        return self.graphql_token
+                    return None
                 if (
                     token_response_body is not None
                     and "data" in token_response_body
@@ -2490,7 +2531,14 @@ class OctopusAPI(ComponentBase):
         Execute a graphql query with automatic token refresh on auth errors.
         If use_backend=True, uses api.backend.octopus.energy with no JWT prefix
         (required for saving sessions since Feb 2026 API migration).
+
+        While a rate limit pause is running (see start_graphql_rate_limit_backoff) a query is not sent
+        and returns None. Mutations (returns_data=False) are user commands rather than polls, so they
+        are always sent, and a retry after a token refresh is part of the request that was let through.
         """
+        if returns_data and _retry_count == 0 and self.graphql_backoff.active():
+            self.log_graphql_rate_limit_backoff()
+            return None
         token = await self.async_refresh_token()
         if token is None:
             self.failures_total += 1
@@ -2553,10 +2601,18 @@ class OctopusAPI(ComponentBase):
                     # by async_read_response_retry below
                     error_text = await response.text()
                     log_response(response.status, error_text, always_full=True)
+                    edge_block_token = None
                     if response.status == 403 and is_edge_block_body(error_text):
+                        now = datetime.now(timezone.utc)
                         self.consecutive_edge_blocks += 1
-                        if self.consecutive_edge_blocks <= EDGE_BLOCK_REFRESH_AFTER:
-                            record_api_call("octopus", False, "rate_limit")
+                        if self.edge_block_started_at is None:
+                            self.edge_block_started_at = now
+                        record_api_call("octopus", False, "rate_limit")
+                        self.start_graphql_rate_limit_backoff("edge/WAF blocked", parse_retry_after(response.headers.get("Retry-After")))
+                        blocked_seconds = (now - self.edge_block_started_at).total_seconds()
+                        # While the mint is itself refused, discarding the token would leave nothing
+                        # to query with once the block lifts, so only fall back when it could work.
+                        if blocked_seconds < EDGE_BLOCK_REFRESH_AFTER_SECONDS or self.token_mint_backoff.active():
                             if not ignore_errors:
                                 self.log(f"Warn: OctopusAPI: HTTP {response.status} edge/WAF block for graphql query {request_context} - rate limited, keeping cached token")
                                 self.failures_total += 1
@@ -2564,14 +2620,20 @@ class OctopusAPI(ComponentBase):
                         # Persistently blocked. The body may be a generic 403 page from a revoked
                         # credential rather than a WAF, so fall through and refresh the token.
                         if not ignore_errors:
-                            self.log(f"Warn: OctopusAPI: {self.consecutive_edge_blocks} consecutive edge blocks for {request_context} - refreshing token in case the credential was revoked")
+                            self.log(f"Warn: OctopusAPI: {self.consecutive_edge_blocks} consecutive edge blocks over {int(blocked_seconds / 60)} minutes for {request_context} - refreshing token in case the credential was revoked")
                         self.consecutive_edge_blocks = 0
+                        self.edge_block_started_at = None
+                        edge_block_token = self.graphql_token
                     if not ignore_errors:
                         self.log(f"OctopusAPI: HTTP {response.status} for graphql query {request_context}, forcing token refresh and retry")
                     record_api_call("octopus", False, "auth_error")
                     self.graphql_token = None
                     retry_token = await self.async_refresh_token()
                     if retry_token is None:
+                        # A mint refused by rate limiting says nothing about the token the edge block
+                        # made us doubt, so keep it rather than leave the component with no token at all.
+                        if edge_block_token and self.token_mint_backoff.active():
+                            self.graphql_token = edge_block_token
                         self.failures_total += 1
                         self.log(f"Warn: OctopusAPI: Failed to refresh token for retry of graphql query {request_context}")
                         return None
@@ -2579,6 +2641,8 @@ class OctopusAPI(ComponentBase):
 
                 # Process response (which reads the text)
                 response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
+                if self.last_read_rate_limited:
+                    self.start_graphql_rate_limit_backoff("rate limited", parse_retry_after(response.headers.get("Retry-After")))
                 body_text = str(response_body)
                 # Logged in full with its request: a bad status, a body that is missing (unreadable JSON, a rate limit)
                 # or has no data, or any errors key - even a partial error returned with data when ignore_errors is set
@@ -2614,7 +2678,7 @@ class OctopusAPI(ComponentBase):
                     return None
 
                 if response_body and ("data" in response_body):
-                    self.consecutive_edge_blocks = 0
+                    self.clear_graphql_rate_limit_backoff()
                     self.update_success_timestamp()
                     record_api_call("octopus")
                     return response_body["data"]
@@ -3146,8 +3210,9 @@ class Octopus:
         """
         try:
             r = requests.get(url, timeout=120)
-        except requests.exceptions.ConnectionError:
-            self.log("Warn: Octopus: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+        except requests.exceptions.RequestException as e:
+            # RequestException covers ReadTimeout as well as ConnectionError - a read timeout is not a ConnectionError (#5743)
+            self.log("Warn: Octopus: Unable to download Octopus data from URL {} ({})".format(url, type(e).__name__))
             self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
             return None
 
@@ -3408,8 +3473,9 @@ class Octopus:
                 self.log("Download {}".format(url))
             try:
                 r = requests.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
-            except requests.exceptions.ConnectionError:
-                self.log("Warn: Octopus: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+            except requests.exceptions.RequestException as e:
+                # RequestException covers ReadTimeout as well as ConnectionError - a read timeout is not a ConnectionError (#5743)
+                self.log("Warn: Octopus: Unable to download Octopus data from URL {} ({})".format(url, type(e).__name__))
                 self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if r.status_code not in [200, 201]:
