@@ -496,6 +496,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_export_max = 0
         self.rate_export_max_minute = 0
         self.rate_export_max_forward = {}
+        # The export tariff's own minimum, before saving/Axle sessions - None until fetch builds it
+        self.rate_export_min_base = None
         self.rate_export_average = 0
         self.rate_gas_min = 0
         self.rate_gas_max = 0
