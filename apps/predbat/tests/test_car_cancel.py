@@ -604,6 +604,70 @@ def test_valuation_ready_time_not_free(my_predbat):
         _assert_close("cost", cancelled[0], no_car[0])
 
 
+MARGINAL_NAMES = (
+    "prediction",
+    "charge_limit_best",
+    "charge_window_best",
+    "export_window_best",
+    "export_limits_best",
+    "load_minutes_step",
+    "pv_forecast_minute_step",
+    "marginal_baseline_metric",
+    "marginal_costs_matrix",
+    "marginal_costs_min",
+    "marginal_costs_max",
+    "marginal_time_labels",
+    "marginal_grid_import",
+    "marginal_grid_export",
+)
+
+
+def _marginal_matrix(my_predbat, export_window):
+    """The marginal cost matrix for the fixture's car slots under export_window, with the cancel table the live plan builds."""
+    model = my_predbat.car_charging_slots_model()
+    pv_step, _, load_step, _ = make_step_data(my_predbat, pv_kw=0.0, load_kw=LOAD_KW)
+    table = build_car_cancel_table(my_predbat, model, my_predbat.car_cancel_slots())
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step, car_charging_slots=model, car_cancel=table)
+    my_predbat.load_minutes_step = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.charge_limit_best = []
+    my_predbat.charge_window_best = []
+    my_predbat.export_window_best = export_window
+    my_predbat.export_limits_best = [TARGET_EMPTY] * len(export_window)
+    with contextlib.redirect_stdout(io.StringIO()):
+        my_predbat.calculate_marginal_costs()
+    return table, copy.deepcopy(my_predbat.marginal_costs_matrix)
+
+
+def test_marginal_costs_keep_cancellation(my_predbat):
+    """
+    The what-if predictions behind the marginal cost matrix cancel the same slots as its baseline: with the car's
+    slot cancelled by the export over it, the matrix is the one for no car at all, rather than every cell carrying
+    the car's 10 kWh as if the extra load had brought it back.
+    """
+    saved = {name: copy.deepcopy(getattr(my_predbat, name)) for name in MARGINAL_NAMES if hasattr(my_predbat, name)}
+    missing = [name for name in MARGINAL_NAMES if not hasattr(my_predbat, name)]
+    saved_dashboard = copy.deepcopy(my_predbat.dashboard_values)
+    try:
+        with _engine_scenario(my_predbat):
+            window = [{"start": 1080, "end": 1110, "average": 0.0}]
+            my_predbat.car_charging_slots = [[_car(1080, 1110, octopus=False)]]
+            table, cancelled = _marginal_matrix(my_predbat, window)
+            assert table is not None and cancelled_mask(table.slots, window, [TARGET_EMPTY]) == 1
+            my_predbat.car_charging_slots = [[]]
+            table, no_car = _marginal_matrix(my_predbat, window)
+            assert table is None
+            assert cancelled == no_car, "the cancellation shifted the marginal costs: {} against {}".format(cancelled, no_car)
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+        for name in missing:
+            if hasattr(my_predbat, name):
+                delattr(my_predbat, name)
+        my_predbat.dashboard_values.clear()
+        my_predbat.dashboard_values.update(saved_dashboard)
+
+
 # The switch-off results, captured on the Task 2 commit (6f27acf1) before the cancel table existed
 SWITCH_OFF_NOMINAL = (158.75, 0, 12.0, 0.0, 0.0, 0.0, 1770, 10.0, 0.0, 0, 0)
 SWITCH_OFF_PV10 = (158.75, 0, 12.0, 0.0, 0.0, 0.0, 1770, 10.0, 0.0, 0, 0)
@@ -1200,6 +1264,7 @@ def run_car_cancel_tests(my_predbat):
     test_penalty_respects_car_full(my_predbat)
     test_valuation_ready_time_not_free(my_predbat)
     test_switch_off_identical(my_predbat)
+    test_marginal_costs_keep_cancellation(my_predbat)
     test_valuation_saving_session_wins()
     test_valuation_normal_export_loses()
     test_no_freeze_over_cancellable_slot()
