@@ -19,7 +19,7 @@ until a completed dispatch covers it or OCTOPUS_DISPATCH_HOLD_MINUTES have passe
 import copy
 from datetime import timedelta
 
-from const import OCTOPUS_DISPATCH_HOLD_MINUTES
+from const import OCTOPUS_DISPATCH_HOLD_MINUTES, OCTOPUS_DISPATCH_TAIL_MINUTES
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 RATE_LOW = 6.57
@@ -360,10 +360,11 @@ def _run(my_predbat):
     my_predbat.set_state_wrapper(CAR_SENSOR, "off")
     my_predbat.octopus_held_update(next_half_hour + timedelta(seconds=10))
     failed |= _check("t19 next half hour not held from a stale snapshot", next_half_hour not in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
-    # ...and the other way round: the car starting between cycles is seen on the poll
+    # ...and the other way round: the car starting between cycles is seen on the poll, once past the tail of the
+    # half hour held before it (see test 20)
     my_predbat.set_state_wrapper(CAR_SENSOR, "on")
     my_predbat.car_charging_now = [False]
-    my_predbat.octopus_held_update(next_half_hour + timedelta(seconds=25))
+    my_predbat.octopus_held_update(next_half_hour + timedelta(minutes=OCTOPUS_DISPATCH_TAIL_MINUTES, seconds=10))
     failed |= _check("t19 car seen charging on the poll is held", next_half_hour in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
     # A sensor that gives no evidence leaves the snapshot to decide
     _reset(my_predbat)
@@ -373,6 +374,52 @@ def _run(my_predbat):
     my_predbat.car_charging_now = [True]
     _cycle(my_predbat, 1105)
     failed |= _check("t19 snapshot used when the sensor is unavailable", my_predbat.octopus_slots_held.get(0), "held {}".format(my_predbat.octopus_slots_held))
+
+    print("Test 20: the charging tail of a dispatch that ended at the boundary does not hold the next half hour (GH#5884)")
+    # The dispatch ends at 18:30, the cycle at 18:30:00 still reads the car charging (the sensor dropped 10 seconds
+    # later) and Octopus still reports the smart charge in progress: 18:30-19:00 was never charged in, so stays at the day rate
+    _reset(my_predbat)
+    _device_state(my_predbat, "SMART_CONTROL_IN_PROGRESS")
+    my_predbat.dynamic_load_car_sensors = {0: CAR_SENSOR}
+    my_predbat.set_state_wrapper(CAR_SENSOR, "on")
+    my_predbat.car_charging_now = [True]
+    dispatch = _dispatch(my_predbat, 1089, 1110, kwh=1.2, location=None)
+    _cycle(my_predbat, 1105, planned=[dispatch])
+    _cycle(my_predbat, 1110, planned=[dispatch], seconds=1)
+    next_half_hour = my_predbat.midnight_utc + timedelta(minutes=1110)
+    failed |= _check("t20 dispatch half hour held", my_predbat.midnight_utc + timedelta(minutes=1080) in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+    failed |= _check("t20 next half hour not held at the boundary", next_half_hour not in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+    # A slower sensor lagging by minutes rather than seconds, then going unavailable so the stale snapshot from the
+    # boundary cycle decides: still the tail
+    my_predbat.octopus_held_update(next_half_hour + timedelta(minutes=3))
+    failed |= _check("t20 nor on a poll minutes later", next_half_hour not in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+    my_predbat.set_state_wrapper(CAR_SENSOR, "unavailable")
+    my_predbat.octopus_held_update(next_half_hour + timedelta(minutes=4))
+    failed |= _check("t20 nor from the boundary snapshot", next_half_hour not in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+    my_predbat.set_state_wrapper(CAR_SENSOR, "off")
+    my_predbat.car_charging_now = [False]
+    rates = _cycle(my_predbat, 1115)
+    failed |= _check("t20 dispatch half hour still cheap", _low(rates, 1080, 1110), "rate {}".format(rates[1080]))
+    failed |= _check("t20 next half hour at the day rate", _day(rates, 1110, 1140), "rate {}".format(rates[1110]))
+
+    print("Test 21: a car still charging past the tail of a dispatch holds its half hour as an unlisted smart charge")
+    _reset(my_predbat)
+    _device_state(my_predbat, "SMART_CONTROL_IN_PROGRESS")
+    my_predbat.car_charging_now = [True]
+    dispatch = _dispatch(my_predbat, 1089, 1110, kwh=1.2, location=None)
+    _cycle(my_predbat, 1105, planned=[dispatch])
+    _cycle(my_predbat, 1110, planned=[dispatch])
+    failed |= _check("t21 not held in the tail", next_half_hour not in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+    _cycle(my_predbat, 1110 + OCTOPUS_DISPATCH_TAIL_MINUTES)
+    failed |= _check("t21 held at the cycle past the tail", my_predbat.octopus_slots_held.get(0, {}).get(next_half_hour) == "charging-unlisted", "held {}".format(my_predbat.octopus_slots_held))
+
+    print("Test 22: a car plugged in at the boundary, with no dispatch before it, is held at that cycle")
+    # Not a tail, so an install without the 15 second poll still holds a plug-in charge seen only at the boundary cycle
+    _reset(my_predbat)
+    _device_state(my_predbat, "SMART_CONTROL_IN_PROGRESS")
+    my_predbat.car_charging_now = [True]
+    _cycle(my_predbat, 1110, seconds=1)
+    failed |= _check("t22 held at the boundary", next_half_hour in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
 
     return failed
 

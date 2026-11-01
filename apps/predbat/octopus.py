@@ -26,6 +26,7 @@ from const import (
     DISPATCH_SOURCE_CHARGING_UNLISTED,
     REPEAT_FULL_LOG_SECONDS,
     OCTOPUS_DISPATCH_HOLD_MINUTES,
+    OCTOPUS_DISPATCH_TAIL_MINUTES,
     OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES,
     DISPATCH_BILLING_CHOICES,
     OCTOPUS_STATE_SMART_CONTROL_IN_PROGRESS,
@@ -4527,7 +4528,8 @@ class Octopus:
         shorter than the 5 minute cycle is never running at one (see dispatch_too_short()).
 
         A half hour the car is charging in during a smart charge, with no planned dispatch listed for it,
-        is kept as well (see octopus_charging_unlisted()).
+        is kept as well (see octopus_charging_unlisted()) - but not in the tail of the half hour before it
+        (see octopus_dispatch_tail()).
         """
         hold_minutes = self.octopus_hold_minutes()
         minute_exact = self.dynamic_load_car_minute(now) if now is not None else None
@@ -4543,11 +4545,28 @@ class Octopus:
                 held.pop(period_start, None)
                 continue
             source = self.octopus_planned_running(car_n, self.octopus_slots_planned.get(car_n, []), minute_exact)
-            if source is None and self.octopus_charging_unlisted(car_n):
+            if source is None and not self.octopus_dispatch_tail(held, period_minute, minute_exact) and self.octopus_charging_unlisted(car_n):
                 source = DISPATCH_SOURCE_CHARGING_UNLISTED
             if source is not None:
                 held[period_start] = source
         self.octopus_held_save()
+
+    def octopus_dispatch_tail(self, held, period_minute, minute_exact=None):
+        """
+        Whether it is still the tail of the half hour before period_minute, which held keeps for a dispatch:
+        the first OCTOPUS_DISPATCH_TAIL_MINUTES of the half hour, on the exact clock (minute_exact from the
+        15 second poll; None for this cycle's).
+
+        A dispatch ending at the boundary leaves car_charging_now showing charging for a car that has stopped
+        - seen for 10 seconds - while Octopus still reports the smart charge in progress, and the half hour
+        after it was held as an unlisted smart charge it never had (GH#5884). A car plugged in at the boundary,
+        with nothing held before it, is not in a tail, so its half hour is held straight away.
+        """
+        if self.midnight_utc + timedelta(minutes=period_minute - 30) not in held:
+            return False
+        if minute_exact is None:
+            minute_exact = self.dynamic_load_car_minute(self.now_utc_real)
+        return minute_exact - period_minute < OCTOPUS_DISPATCH_TAIL_MINUTES
 
     def octopus_charging_unlisted(self, car_n):
         """
