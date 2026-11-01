@@ -1013,11 +1013,11 @@ def test_calibration_discards_intent_collected_so_far(my_predbat):
     """
     When any inverter is calibrating the whole fleet is put to full rates and the loop is skipped.
 
-    Inverters processed BEFORE the calibrating one have already recorded their planned intent,
-    though. Applying that afterwards writes those planned rates straight back over the
-    calibration-safe settings - and the stored baseline keeps them, so the 60s poll re-applies
-    them for as long as calibration lasts. Before the intent refactor this could not happen:
-    earlier inverters wrote inline and the calibration reset came after them.
+    Calibration is decided before the plan loop, so no inverter - including one ahead of the
+    calibrating inverter - records intent, and nothing re-arms the fleet at its planned rates.
+    The stored baseline must be left empty as well: anything kept in it would be re-applied by
+    the 60s poll over the calibration-safe full rates for as long as calibration lasts. The
+    500W rate set first makes the full-rate write observable.
     """
     failed = balance_fixture(my_predbat, "calibration_setup")
     if failed:
