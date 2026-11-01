@@ -24,17 +24,15 @@ pred_bat:
   # XXX: This is a configuration template, delete this line once you edit your configuration
   template: True
 
-  days_previous: 7
-  forecast_hours: 48
-
-  load_today:  sensor.solis_household_load_today_energy
-  import_today: sensor.solis_today_energy_imported_from_grid
-  export_today: sensor.solis_today_energy_fed_into_grid
-  pv_today: sensor.solis_pv_today_energy_generation
-  pv_power: sensor.solis_total_pv_power
-  grid_power: sensor.solis_grid_power_net
+  # Some Solis integrations insert an inverter serial number in the entity name.
+  load_today: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_household_load_today_energy)'
+  import_today: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_today_energy_imported_from_grid)'
+  export_today: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_today_energy_fed_into_grid)'
+  pv_today: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_pv_today_energy_generation)'
+  pv_power: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_total_pv_power)'
+  grid_power: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_grid_power_net)'
   grid_power_invert: true
-  load_power: sensor.solis_household_load_power
+  load_power: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_household_load_power)'
 
   # Sets the maximum period of zero load before the gap is filled, default 30 minutes
   # To disable set it to 1440
@@ -92,37 +90,37 @@ pred_bat:
   soc_max: 32
 
   # ---- Battery state ----
-  battery_power: sensor.solis_battery_power
-  soc_percent: sensor.solis_battery_soc
+  battery_power: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_battery_power)'
+  soc_percent: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_battery_soc)'
 
   # ---- RC power control ----
   charge_rate:
-    - number.solis_rc_force_battery_charge_power
+    - 're:(number\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_battery_charge_power)'
 
   discharge_rate:
-    - number.solis_rc_force_battery_discharge_power
+    - 're:(number\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_battery_discharge_power)'
 
   # ---- RC operating mode ----
   charge_start_service:
     - service: select.select_option
-      entity_id: select.solis_rc_force_charge_discharge
+      entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_charge_discharge)'
       option: "Solis RC Force Battery Charge"
       repeat: true
 
   charge_stop_service:
     - service: select.select_option
-      entity_id: select.solis_rc_force_charge_discharge
+      entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_charge_discharge)'
       option: "None"
 
   discharge_start_service:
     - service: select.select_option
-      entity_id: select.solis_rc_force_charge_discharge
+      entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_charge_discharge)'
       option: "Solis RC Force Battery Discharge"
       repeat: true
 
   discharge_stop_service:
     - service: select.select_option
-      entity_id: select.solis_rc_force_charge_discharge
+      entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_charge_discharge)'
       option: "None"
 
   # Set these to match solcast sensor names if not using the cloud interface
