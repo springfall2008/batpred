@@ -2360,6 +2360,10 @@ class GatewayMQTT(ComponentBase):
         stem, filtered to those Home Assistant has seen (the charger convention). car_charging_now is the
         charger's own "charging" sensor here, not a re-binding of the power sensor, so it is kept.
         car_charging_rate is set through expose_config() rather than bound, so it is not an entity.
+
+        The charge point id is declared as the charger's serial: most chargers use their serial as their
+        OCPP id, and the catalogue keeps a declared serial readable wherever it appears (the device_id and
+        the cross-links included) rather than taking a long digit run in it for a misfiled identifier.
         """
         chargers = []
         cars = []
@@ -2376,7 +2380,7 @@ class GatewayMQTT(ComponentBase):
             }
             charger, car = charger_with_stub_car(
                 "gateway:evc:{}".format(ev.charge_point_id),
-                hardware_ids={"charge_point_id": ev.charge_point_id},
+                hardware_ids={"serial": ev.charge_point_id},
                 entities=self.discovery_entities(descriptors),
             )
             chargers.append(charger)

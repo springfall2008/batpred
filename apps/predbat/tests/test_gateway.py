@@ -1904,7 +1904,7 @@ class TestDiscovery:
         report = gw.build_discovery()
         charger, car = report["chargers"][0], report["cars"][0]
         assert charger["device_id"] == "gateway:evc:CP1"
-        assert charger["hardware_ids"] == {"charge_point_id": "CP1"}
+        assert charger["hardware_ids"] == {"serial": "CP1"}
         assert charger["serves_cars"] == ["gateway:evc:CP1:car"]
         assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_now", "car_charging_energy", "car_charging_power"}, charger["entities"]
         assert car == {"device_id": "gateway:evc:CP1:car", "charged_by": "gateway:evc:CP1", "flags": ["stub"]}
@@ -1944,6 +1944,23 @@ class TestDiscovery:
         cleaned = coordinator.reports["gateway"]
         assert cleaned["cars"][0]["flags"] == ["stub"]
         assert len(cleaned["chargers"][0]["entities"]) == 5
+        assert not [line for line in logs if line.startswith("Warn")], logs
+
+    def test_ev_serial_shaped_charge_point_id_stays_readable(self):
+        """A charger whose OCPP id is its serial keeps it readable everywhere, with no redaction warnings (charger ids are not secret)."""
+        from coordinator import Coordinator
+        from mock_base import MockBase
+
+        gw, _ = self._with_ev(charge_point_id="GL1T-2300123456")
+        report = gw.build_discovery()
+        assert report["chargers"][0]["hardware_ids"] == {"serial": "GL1T-2300123456"}, report["chargers"][0]
+        logs = []
+        coordinator = Coordinator(MockBase())
+        coordinator.log = logs.append
+        coordinator.report("gateway", report)
+        catalogue = coordinator.catalogue()
+        assert catalogue["chargers"][0]["device_id"] == "gateway:evc:GL1T-2300123456", catalogue["chargers"][0]
+        assert catalogue["cars"][0]["charged_by"] == "gateway:evc:GL1T-2300123456"
         assert not [line for line in logs if line.startswith("Warn")], logs
 
     def test_no_credentials_in_report(self):
