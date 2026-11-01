@@ -146,6 +146,20 @@ def run_car_charging_smart_tests(my_predbat):
     failed |= run_car_charging_smart_test("smart2", my_predbat, battery_size=12.0, limit=10.0, soc=0, rate=10.0, loss=1.0, max_price=99, smart=False, expect_cost=150, expect_kwh=10)
     failed |= run_car_charging_smart_test("smart3", my_predbat, battery_size=12.0, limit=10.0, soc=2, rate=10.0, loss=1.0, max_price=99, smart=True, expect_cost=80, expect_kwh=8)
     failed |= run_car_charging_smart_test("smart4", my_predbat, battery_size=12.0, limit=10.0, soc=2, rate=10.0, loss=0.5, max_price=99, smart=True, expect_cost=160, expect_kwh=16)
+
+    # car_charging_plan_rolling swaps the ready time for a rolling car_charging_plan_hours window from now
+    my_predbat.expose_config("car_charging_plan_hours", 1)
+    slots = my_predbat.plan_car_charging(0, my_predbat.low_rates)
+    if not any(slot["end"] > my_predbat.minutes_now + 60 for slot in slots):
+        print("ERROR: car_charging_plan_rolling off should keep the ready time, got: {}".format(slots))
+        failed = True
+    my_predbat.expose_config("car_charging_plan_rolling", True)
+    slots = my_predbat.plan_car_charging(0, my_predbat.low_rates)
+    my_predbat.expose_config("car_charging_plan_rolling", False)
+    my_predbat.expose_config("car_charging_plan_hours", 48)
+    if any(slot["end"] > my_predbat.minutes_now + 60 for slot in slots):
+        print("ERROR: car_charging_plan_rolling with 1 hour planned past one hour from now: {}".format(slots))
+        failed = True
     failed |= run_car_charging_smart_test("smart5", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=99, smart=True, expect_cost=12 * 15, expect_kwh=12, plan_time="00:00:00")
     failed |= run_car_charging_smart_test("smart6", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=99, smart=True, expect_cost=14 * 15, expect_kwh=14, plan_time="02:00:00")
     failed |= run_car_charging_smart_test("smart7", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=10, smart=True, expect_cost=7 * 10, expect_kwh=7, plan_time="02:00:00")

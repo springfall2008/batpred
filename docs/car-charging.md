@@ -990,6 +990,11 @@ As with any Predbat setting these are only the initial values, once the input_nu
 
 - Set **select.predbat_car_charging_plan_time** to the time you want the car charging to be completed by
 
+- If you don't need the car ready by a set time, turn on **switch.predbat_car_charging_plan_rolling** (Off by default) and set **input_number.predbat_car_charging_plan_hours** (48 by default).
+Predbat then ignores the ready time and plans the charge in the cheapest low-rate slots within that many hours from now.
+The window moves forward on each plan, but when slots cost the same the earliest one is used, so a cheap slot tonight is not put off to tomorrow night.
+How far ahead Predbat can look is still limited by the import rates it knows (e.g. Agile rates are only published up to the next day).
+
 - **switch.predbat_car_charging_plan_smart** (On by default) makes Predbat use the cheapest slots before the charge-by time.
 When disabled (turned Off) all low-rate slots will be used in time order, so the car starts charging in the first low-rate slot after it is plugged in, even when cheaper slots come later.
 Low-rate slots are time periods where the import rate is below the threshold determined by **input_number.predbat_rate_low_threshold** (*expert mode*).

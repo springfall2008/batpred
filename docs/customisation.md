@@ -323,6 +323,8 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **switch.predbat_octopus_intelligent_trust_slots** (_expert mode_) - when Off, Octopus Intelligent slots are assumed not to happen until the car is seen charging in one, see [Car charging](car-charging.md)
 - **binary_sensor.predbat_car_charging_slot** - set to On by Predbat when the car should be charged (Predbat-led charging)
 - **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
+- **switch.predbat_car_charging_plan_rolling** - when On, ignore the ready time and plan the car charge in the cheapest slots within **input_number.predbat_car_charging_plan_hours** from now (default Off)
+- **input_number.predbat_car_charging_plan_hours** - how many hours from now the car must be charged within when **switch.predbat_car_charging_plan_rolling** is On (default 48)
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots in time order (default On)
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
 - **switch.predbat_car_charging_from_battery** - when On, allows the car to drain the home battery when charging; when Off (the default), Predbat holds the battery while the car charges

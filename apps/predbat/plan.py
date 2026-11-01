@@ -6318,6 +6318,10 @@ class Plan:
         if ready_minutes < self.minutes_now:
             ready_minutes += 24 * 60
 
+        # Rolling "ready within X hours" replaces the fixed ready time when switched on
+        if self.get_arg("car_charging_plan_rolling", False):
+            ready_minutes = self.minutes_now + int(self.get_arg("car_charging_plan_hours", 48) * 60)
+
         # car_charging_now never adds a slot here: this plan drives binary_sensor.predbat_car_charging_slot,
         # which starts the charger, so a slot for "charging now" kept a charge going on its own. The hold
         # for a car charging outside the plan is execute_plan()'s, and dynamic load models its load.
