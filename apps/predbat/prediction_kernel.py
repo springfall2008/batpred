@@ -815,7 +815,7 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_plan_load = double_array(iboost_plan_load)
         ctx.car_load_flat = double_array(car_load_flat)
         ctx.car_rate_flat = double_array(car_rate_flat)
-        if not set_cancel_context(ctx, getattr(pred, "car_cancel", None), n_steps, num_cars):
+        if not set_cancel_context(ctx, getattr(pred, "car_cancel", None), n_steps, num_cars, log=pred.log):
             return 0
 
         ctx.soc_kw = pred.soc_kw
@@ -897,17 +897,24 @@ def create_kernel_context(pred, static_cache=None):
         return 0
 
 
-def set_cancel_context(ctx, car_cancel, n_steps, num_cars):
+def set_cancel_context(ctx, car_cancel, n_steps, num_cars, log=None):
     """Copy a car_cancel.CarCancelTable into the kernel context, or leave cancel_count 0 and the pointers null without one.
 
     Returns False for a table built for another horizon or car count, whose arrays the kernel would read past
     their end: the caller then builds no context, so every prediction runs in the Python engine, which applies
-    the table, rather than in a kernel handed arrays it cannot index.
+    the table, rather than in a kernel handed arrays it cannot index. That is logged as a warning through log,
+    as the slowdown would otherwise be silent.
     """
     if car_cancel is None or not car_cancel.slots:
         ctx.cancel_count = 0
         return True
     if car_cancel.n_steps != n_steps or len(car_cancel.slot_flat) != num_cars * n_steps or len(car_cancel.slots) > CAR_CANCEL_MAX_SLOTS:
+        if log:
+            log(
+                "Warn: Prediction kernel: car slot cancel table does not fit ({} steps, {} slot lookups, {} slots for {} steps and {} cars) - using Python engine".format(
+                    car_cancel.n_steps, len(car_cancel.slot_flat), len(car_cancel.slots), n_steps, num_cars
+                )
+            )
         return False
     slots = car_cancel.slots
     ctx.cancel_count = len(slots)

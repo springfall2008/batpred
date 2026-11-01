@@ -1098,8 +1098,12 @@ def run_cancel_context_tests():
         print("ERROR: set_cancel_context copied the table wrongly")
         failed = True
     for name, bad, num_cars in (("horizon", table(n_steps + 1, [0, -1, 1, 1]), 1), ("car count", table(n_steps, [0, -1, 1, 1]), 2)):
-        if prediction_kernel.set_cancel_context(prediction_kernel.PkContext(), bad, n_steps, num_cars):
+        logs = []
+        if prediction_kernel.set_cancel_context(prediction_kernel.PkContext(), bad, n_steps, num_cars, log=logs.append):
             print("ERROR: set_cancel_context accepted a table built for another {}".format(name))
+            failed = True
+        elif len(logs) != 1 or not logs[0].startswith("Warn: "):
+            print("ERROR: set_cancel_context refused a table built for another {} without one warning: {}".format(name, logs))
             failed = True
     return failed
 
