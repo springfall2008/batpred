@@ -321,29 +321,6 @@
   flex-direction: column;
 }
 
-.app-content > main:has(> .overview-page) > .overview-page {
-  flex: 1 0 auto;
-  height: auto;
-  min-height: calc(100dvh - 94px);
-}
-
-.app-content > #main-content:has(> .overview-page) {
-  height: auto;
-  min-height: 100dvh;
-}
-
-.navigation-horizontal .app-content > #main-content:has(> .overview-page) {
-  min-height: calc(100dvh - 56px);
-}
-
-@media (min-width: 901px) {
-  .app-content > main:has(> .overview-page) .overview-stage {
-    min-height: 36rem;
-    container-type: normal;
-  }
-  .app-content > main:has(> .overview-page) .overview-scene { width: 100%; }
-}
-
 /* ============================================================
  * Reduced motion
  * ============================================================ */
