@@ -130,6 +130,7 @@ SIGENERGY_CODE_ACCOUNT_SYSTEM_ERROR = 1601
 SIGENERGY_CODE_ACCOUNT_ALREADY_REGISTERED = 1602
 SIGENERGY_CODE_ACCOUNT_UNREVIEWED = 1603
 SIGENERGY_CODE_DEVELOPER_NOT_APPROVED = 1604
+SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP = 13001  # Top-level "station info not found", seen for a mistyped system ID (#5691)
 SIGENERGY_TOKEN_EXPIRY_BUFFER = 600   # refresh token 10 min before expiry
 SIGENERGY_MIN_REQUEST_INTERVAL = 6.0  # enforce ≥10 req/min API limit
 SIGENERGY_POLL_INTERVAL = 300         # realtime data poll every 5 minutes
@@ -1285,6 +1286,11 @@ class SigenergyAPI(ComponentBase):
             for sid in system_ids:
                 self.onboard_status[str(sid)] = "firmware_no_vpp"
             self.log("Warn: SigenergyAPI: Onboard failed — system {} firmware does not support VPP (code={})".format(system_ids, code))
+            return False
+        if code in (SIGENERGY_CODE_STATION_NOT_FOUND, SIGENERGY_CODE_STATION_INFO_NOT_FOUND, SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP):
+            for sid in system_ids:
+                self.onboard_status[str(sid)] = "invalid_system_id"
+            self.log("Warn: SigenergyAPI: System ID {} not recognised by Sigenergy, check the ID and region (code={})".format(system_ids, code))
             return False
         if code in (SIGENERGY_CODE_NO_PERMISSION_STATION, SIGENERGY_CODE_STATION_NOT_PERMITTED):
             for sid in system_ids:
