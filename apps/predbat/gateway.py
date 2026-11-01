@@ -297,6 +297,10 @@ def parse_display_preference(name, value, default):
     since that would take inverter control down with it. A 0/1 int (which
     get_arg passes through unconverted) is read as false/true; anything else
     unreadable falls back to the default and returns an error to log.
+
+    Strings from apps.yaml never reach the fallback: get_arg's bool handling
+    (resolve_arg) has already turned any string into true or false, without a
+    warning. The fallback covers values passed directly and non-string types.
     """
     if isinstance(value, int) and not isinstance(value, bool) and value in (0, 1):
         return bool(value), None
