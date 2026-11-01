@@ -68,7 +68,7 @@ from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
 import time
 from math import ceil
-from car_cancel import cancellable_slots
+from car_cancel import build_car_cancel_table, cancellable_slots
 
 # How many windows the post-settle plan pass revisits when calculate_second_pass is off. The near-term
 # windows are the ones about to be executed, so a small budget keeps the common path cheap; raising it
@@ -2299,10 +2299,13 @@ class Plan:
             self.calculate_yesterday()
 
         # The car slots an export may cancel this cycle, which the detailed passes' export gate lets through
-        self.car_cancel_keys = frozenset((slot.car_n, slot.index) for slot in self.car_cancel_slots())
+        cancel_slots = self.car_cancel_slots()
+        self.car_cancel_keys = frozenset((slot.car_n, slot.index) for slot in cancel_slots)
 
-        # Creation prediction object
-        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90, car_charging_slots=self.car_charging_slots_model())
+        # Creation prediction object, with the table that lets its target exports cancel those slots (None with the switch off)
+        car_slots_model = self.car_charging_slots_model()
+        car_cancel = build_car_cancel_table(self, car_slots_model, cancel_slots)
+        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90, car_charging_slots=car_slots_model, car_cancel=car_cancel)
         # The kernel spreads one batched fan-out across threads with the GIL released for the whole
         # call, so these are real cores - unlike a Python ThreadPool, which peaked at 1.15x on two
         # threads and then degraded below serial (perf/threadpool-prototype).
