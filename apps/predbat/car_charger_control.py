@@ -980,6 +980,10 @@ class CarChargerControl:
         for car_n in [car_n for car_n, owner in holdable.items() if owner == name and car_n not in served]:
             del holdable[car_n]
 
+    def charger_control_stopped(self):
+        """The component is stopping: tell the planner it can no longer hold any car off, as only its tick would otherwise."""
+        self.charger_control_publish_holdable(False, [], 0)
+
     async def charger_control_force_hold_tick(self, now):
         """Start, keep and hand back the force holds for slots the plan has cancelled for an export.
 
