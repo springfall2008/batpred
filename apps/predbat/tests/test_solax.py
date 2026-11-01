@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
+import copy
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock
 import json
@@ -24,6 +25,8 @@ from solax import (
     SOLAX_INFO_RETRY_MINUTES,
 )
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session
+from inverter import Inverter
+from const import MINUTE_WATT
 
 
 class MockSolaxAPI(SolaxAPI):
@@ -173,6 +176,8 @@ def run_solax_tests(my_predbat):
             assert not failed
         failed |= asyncio.run(test_publish_device_realtime_data_main())
         failed |= asyncio.run(test_helper_methods_main())
+        failed |= asyncio.run(test_battery_power_models_main())
+        failed |= asyncio.run(test_battery_power_config_main(my_predbat))
         failed |= asyncio.run(test_automatic_config_main())
         failed |= asyncio.run(test_publish_controls_main())
         if failed:
@@ -6700,6 +6705,143 @@ async def test_publish_device_realtime_data_main():
         print("✓ publish_device_realtime_data tests passed")
 
     return failed
+
+
+def battery_power_fixture():
+    """A residential hybrid and a separate PV inverter, with no battery ratedPower."""
+    api = MockSolaxAPI()
+    api.plant_info = [{"plantId": "plant1", "batteryCapacity": 12.0}]
+    api.plant_inverters = {"plant1": ["HYBRID", "PV"]}
+    api.plant_batteries = {"plant1": ["BATTERY"]}
+    api.device_info = {
+        "HYBRID": {"deviceSn": "HYBRID", "plantId": "plant1", "deviceType": 1, "deviceModel": 15, "ratedPower": 3.68},
+        "PV": {"deviceSn": "PV", "plantId": "plant1", "deviceType": 1, "deviceModel": 4, "ratedPower": 3.68},
+        "BATTERY": {"deviceSn": "BATTERY", "plantId": "plant1", "deviceType": 2, "ratedCapacity": 12.0},
+    }
+    api.realtime_device_data["BATTERY"] = {"batterySOC": 50, "batteryRemainings": 6.0}
+    return api
+
+
+async def test_battery_power_models_main():
+    """Exclude known PV-only models without losing explicit ratings or multiple battery inverters."""
+    print("Test: SolaX battery capability on mixed plants")
+    api = battery_power_fixture()
+    assert api.get_max_power_battery("plant1") == 3680, "PV-only inverter must not increase battery capability"
+    assert api.get_max_power_inverter("plant1") == 7360, "Aggregate inverter capability must still include PV"
+
+    for rating in (0, "0", None, "invalid", -1, float("nan"), float("inf")):
+        api.device_info["BATTERY"]["ratedPower"] = rating
+        assert api.get_max_power_battery("plant1") == 3680, f"Unusable battery rating {rating} must use the filtered fallback"
+    for model in (4, 16, 18, 22, 26, 27, 28, 29, 44, "4"):
+        api.device_info["PV"]["deviceModel"] = model
+        assert api.get_max_power_battery("plant1") == 3680, f"Residential PV-only model {model} must be excluded"
+
+    # Device model numbers are scoped to businessType, so commercial model 4 must not be excluded.
+    api.device_info["PV"].update(deviceModel=4, businessType=4)
+    assert api.get_max_power_battery("plant1") == 7360, "Residential model classification must not apply to commercial devices"
+    api.device_info["PV"].pop("businessType")
+    for model in (None, 999, "unknown"):
+        api.device_info["PV"]["deviceModel"] = model
+        assert api.get_max_power_battery("plant1") == 7360, "Unknown models retain the existing inverter fallback"
+    api.device_info["PV"].pop("deviceModel")
+    assert api.get_max_power_battery("plant1") == 7360, "Missing model metadata retains the existing inverter fallback"
+
+    api = battery_power_fixture()
+    for model in (14, 9):  # Another hybrid, or an AC-coupled battery inverter.
+        api.device_info["SECOND"] = {"deviceModel": model, "ratedPower": 5.0}
+        api.plant_inverters["plant1"] = ["HYBRID", "SECOND", "PV"]
+        assert api.get_max_power_battery("plant1") == 8680, "Multiple battery inverters must retain their aggregate capability"
+        assert api.get_max_power_inverter("plant1") == 12360
+
+    api.device_info["BATTERY"]["ratedPower"] = "2.5"
+    api.device_info["BATTERY2"] = {"ratedPower": 4.0}
+    api.plant_batteries["plant1"].append("BATTERY2")
+    assert api.get_max_power_battery("plant1") == 6500, "Explicit battery ratings take precedence over inverter ratings"
+    api.device_info["BATTERY2"]["ratedPower"] = None
+    assert api.get_max_power_battery("plant1") == 2500, "A valid battery rating must survive another battery's missing rating"
+    api.device_info["BATTERY"]["ratedPower"] = 15
+    assert api.get_max_power_battery("plant1") == 15000
+    assert api.control_info("plant1", "charge", "rate")[7] == 12360, "AC controls must retain the aggregate inverter ceiling"
+
+    api = battery_power_fixture()
+    api.plant_inverters["plant1"] = ["HYBRID"]
+    api.device_info["HYBRID"].pop("deviceModel")
+    assert api.get_max_power_battery("plant1") == 3680, "Single inverter fallback must still work without model metadata"
+    for rating in (None, 0, "invalid", -1, float("nan"), float("inf")):
+        api.device_info["HYBRID"]["ratedPower"] = rating
+        assert api.get_max_power_battery("plant1") == 0, f"Unusable inverter rating {rating} must not create battery capability"
+    api.plant_inverters["plant1"] = ["PV"]
+    assert api.get_max_power_battery("plant1") == 0, "PV-only plant must not create battery capability"
+    assert api.get_max_power_battery("missing") == 0
+    return False
+
+
+async def test_battery_power_config_main(my_predbat):
+    """Carry corrected watts through discovery, sensors, automatic configuration and control defaults."""
+    print("Test: SolaX battery capability reaches automatic configuration and controls")
+    api = battery_power_fixture()
+    inverters = [api.device_info[sn] for sn in api.plant_inverters["plant1"]]
+    batteries = [api.device_info["BATTERY"]]
+    with patch.object(api, "fetch_paginated_data", new=AsyncMock(side_effect=[inverters, batteries])):
+        await api.query_device_info("plant1", 1)
+        await api.query_device_info("plant1", 2)
+    assert api.device_info["PV"]["businessType"] == 1, "Discovery must retain the model namespace"
+
+    await api.publish_plant_info()
+    await api.automatic_config()
+    battery_sensor = "sensor.predbat_solax_plant1_battery_max_power"
+    inverter_sensor = "sensor.predbat_solax_plant1_inverter_max_power"
+    assert api.args["battery_rate_max"] == [battery_sensor]
+    assert api.args["inverter_limit"] == [inverter_sensor]
+    assert api.dashboard_items[battery_sensor]["state"] == 3680
+    assert api.dashboard_items[inverter_sensor]["state"] == 7360
+    assert api.dashboard_items[battery_sensor]["attributes"]["unit_of_measurement"] == "W"
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(my_predbat.ha_interface.dummy_items)
+    try:
+        for key in ("inverter_limit_charge", "inverter_limit_charge_dc", "inverter_limit_discharge", "inverter_limit_export", "inverter_limit_override"):
+            my_predbat.args.pop(key, None)
+        my_predbat.args.update(api.args)
+        for entity_id, item in api.dashboard_items.items():
+            my_predbat.ha_interface.dummy_items[entity_id] = {"state": item["state"], **item["attributes"]}
+        inv = Inverter(my_predbat, 0, quiet=True)
+        assert inv.battery_rate_max_raw == 3680
+        for rate in (inv.battery_rate_max_charge, inv.battery_rate_max_charge_dc, inv.battery_rate_max_discharge, inv.battery_rate_max_export):
+            assert round(rate * MINUTE_WATT) == 3680, "The model must use 3.68 kW battery limits"
+        assert round(inv.inverter_limit * MINUTE_WATT) == 7360
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.ha_interface.dummy_items.clear()
+        my_predbat.ha_interface.dummy_items.update(saved_items)
+
+    # Fetching controls on a new installation must use the battery ceiling, not the PV total.
+    await api.fetch_controls("plant1")
+    for direction in ("charge", "export"):
+        info = api.control_info("plant1", direction, "rate")
+        assert info[4] == "W" and info[5] == 3680 and info[7] == 3680
+        assert api.controls["plant1"][direction]["rate"] == 3680
+
+    # A saved rate from before the correction is also clamped when controls are refreshed.
+    api.dashboard_items["number.predbat_solax_plant1_battery_schedule_charge_rate"] = {"state": 7360, "attributes": {}}
+    await api.fetch_controls("plant1")
+    assert api.controls["plant1"]["charge"]["rate"] == 3680
+
+    for direction, target, expected_power in (("charge", 100, 3680), ("export", 10, -3680)):
+        api.controls["plant1"]["charge"]["enable"] = False
+        api.controls["plant1"]["export"]["enable"] = False
+        api.controls["plant1"][direction].update(enable=True, start_time="00:00:00", end_time="00:00:00", target_soc=target)
+        with patch.object(api, "set_default_work_mode", new=AsyncMock(return_value=True)), patch.object(api, "soc_target_control_mode", new=AsyncMock(return_value=True)) as command:
+            await api.apply_controls("plant1")
+        assert command.call_args.kwargs["charge_discharge_power"] == expected_power
+
+    # Commercial discovery uses another model namespace, even when a response omits businessType.
+    with patch.object(api, "fetch_paginated_data", new=AsyncMock(return_value=[{"deviceSn": "COMMERCIAL", "deviceModel": 4, "ratedPower": 50}])):
+        await api.query_device_info("commercial", 1, business_type=4)
+    assert api.device_info["COMMERCIAL"]["businessType"] == 4
+    assert api.get_max_power_battery("commercial") == 50000
+    return False
 
 
 async def test_helper_methods_main():

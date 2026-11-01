@@ -21,6 +21,7 @@ import asyncio
 import json
 import argparse
 import traceback
+from math import isfinite
 from datetime import datetime, timezone, timedelta
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
@@ -255,6 +256,20 @@ SOLAX_DEVICE_MODEL_RESIDENTIAL = {
         1: "X1/X3-EVC", 2: "X1/X3-EVC G1.1", 3: "X1/X3-HAC", 4: "J1-EVC", 5: "A1-HAC", 6: "C1/C3-HAC",  # cspell:disable-line
     },
 }
+
+# Verified residential string-inverter model codes, using the same API enum as above. These have
+# no battery port: X1-Boost/Air/Mini, X1-Boost-G4, X1-Mini-G4 and X1-SMART-G2 respectively.
+# https://www.solaxpower.com/our-products/x1-boost-g3.html
+# https://kb.solaxpower.com/solution/detail/ff80808188eb4b920188f6abcad1006b
+# Also X3-MIC/PRO-G2 (16), A1-Micro 1 in 1 (27), X1-Micro 2 in 1 (28), X1-Micro 4 in 1 (29) and
+# X1-MINI-G4 PLUS (44): their data sheets list only PV input and AC output, with no battery section.
+# https://www.solaxpower.com/uploads/file/solax-x3-mic-g2-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-x3-pro-g2-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-a1-micro-1-in-1-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/x1-microinverter-2-in-1-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-x1-micro-4-in-1-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-x1-mini-g4-plus-series-datasheet-en.pdf
+SOLAX_PV_ONLY_MODELS_RESIDENTIAL = {4, 16, 18, 22, 26, 27, 28, 29, 44}
 
 # Device model mapping for Commercial & Industrial (businessType=4)
 SOLAX_DEVICE_MODEL_COMMERCIAL = {
@@ -794,15 +809,34 @@ class SolaxAPI(ComponentBase):
         return rated_power * 1000  # Convert to Watts
 
     def get_max_power_battery(self, plant_id):
+        """
+        Battery capability in Watts, using explicit battery ratings before inverter ratings.
+
+        The inverter fallback excludes known residential PV-only models. Unknown models retain the
+        existing fallback, as missing metadata is not evidence that an inverter has no battery port.
+        This remains a rated-power estimate, not a measurement of the battery's DC charge limit.
+        """
         rated_power = 0
         for device_id in self.plant_batteries.get(plant_id, []):
             try:
-                rated_power += float(self.device_info.get(device_id, {}).get("ratedPower", 0))  # in kW
+                power = float(self.device_info.get(device_id, {}).get("ratedPower", 0))  # in kW
+                if isfinite(power) and power > 0:
+                    rated_power += power
             except (TypeError, ValueError):
                 pass
         if rated_power == 0:
-            # Fallback to inverter power if no battery power found
-            rated_power = self.get_max_power_inverter(plant_id) / 1000  # Convert back to kW
+            for device_id in self.plant_inverters.get(plant_id, []):
+                device = self.device_info.get(device_id, {})
+                # Older cached records omit businessType; the normal discovery path is residential.
+                residential = as_int(device.get("businessType", BUSINESS_TYPE_RESIDENTIAL)) == BUSINESS_TYPE_RESIDENTIAL
+                if residential and as_int(device.get("deviceModel")) in SOLAX_PV_ONLY_MODELS_RESIDENTIAL:
+                    continue
+                try:
+                    power = float(device.get("ratedPower", 0))  # in kW
+                    if isfinite(power) and power > 0:
+                        rated_power += power
+                except (TypeError, ValueError):
+                    pass
         return rated_power * 1000  # Convert to Watts
 
     def get_max_soc_battery(self, plant_id):
@@ -1083,7 +1117,8 @@ class SolaxAPI(ComponentBase):
             else:
                 default = min_value
         elif field == "rate":
-            max_value = self.get_max_power_inverter(plant_id)
+            # SOC target control takes AC power, so retain the inverter ceiling as well.
+            max_value = min(self.get_max_power_inverter(plant_id), self.get_max_power_battery(plant_id))
             min_value = 0
             default = max_value
             field_type = 'number'
@@ -1653,6 +1688,7 @@ class SolaxAPI(ComponentBase):
                 deviceSn = device.get("deviceSn")
                 if deviceSn:
                     device['deviceType'] = device_type
+                    device['businessType'] = params["businessType"]
                     self.device_info[deviceSn] = device
                     # Store inverter SNs by plant
                     if plant_id not in self.plant_inverters:
