@@ -45,7 +45,7 @@ from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_s
 from tests.test_multi_car_iog import run_multi_car_iog_tests
 from tests.test_car_manual_soc import run_car_manual_soc_tests
 from tests.test_car_max_rate import run_car_max_rate_tests
-from tests.test_fetch_config_options import test_fetch_config_options
+from tests.test_fetch_config_options import test_fetch_config_options, test_save_restore_options_are_per_engine
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_heterogeneous_fleet import test_heterogeneous_fleet
 from tests.test_window2minutes import test_window2minutes
@@ -93,6 +93,7 @@ from tests.test_plan_version_replace import run_plan_version_replace_tests
 from tests.test_pv_calibration_clipping import run_pv_calibration_clipping_tests
 from tests.test_pv_calibration_day_scaling import run_pv_calibration_day_scaling_tests
 from tests.test_export_commitment import run_export_commitment_tests
+from tests.test_export_threshold_per_step import run_export_threshold_per_step_tests
 from tests.test_optimise_export_copy import run_optimise_export_copy_tests
 from tests.test_energydataservice import run_energydataservice_tests
 from tests.test_iboost import run_iboost_smart_tests
@@ -154,6 +155,7 @@ from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
 from tests.test_web_entity_unit_resolution import run_web_entity_unit_resolution_tests
+from tests.test_web_attributes_history import run_web_attributes_history_tests
 from tests.test_web_annual import (
     test_web_annual,
     test_web_annual_error_isolation,
@@ -571,6 +573,7 @@ def main():
         ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
         ("fetch_url_cached", test_fetch_url_cached, "Fetch URL cached tests", False),
         ("fetch_config_options", test_fetch_config_options, "Fetch config options tests", False),
+        ("save_restore_options_per_engine", test_save_restore_options_are_per_engine, "Save/restore options are per engine tests", False),
         ("load_free_slot", test_load_free_slot, "Load free slot tests", False),
         ("octopus_slots_change", test_octopus_slots_change, "Octopus slots change-detection signature tests (in-progress re-clock vs genuine change)", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
@@ -637,6 +640,7 @@ def main():
         ("web_charts", run_web_charts_tests, "Web chart rendering tests (percent/special-character units)", False),
         ("web_chart_grouping", run_web_chart_grouping_tests, "Web /entity chart numeric vs timeline grouping tests", False),
         ("web_entity_unit_resolution", run_web_entity_unit_resolution_tests, "Web /entity chart unit/name resolution tests", False),
+        ("web_attributes_history", run_web_attributes_history_tests, "Web entity attributes read from history without tracking", False),
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("futurerate_auto", test_futurerate_auto, "FutureRate auto Agile detection tests", False),
         ("futurerate_agilepredict", test_futurerate_agilepredict, "FutureRate AgilePredict forecast tests", False),
@@ -852,6 +856,7 @@ def main():
         ("pv_calibration_clipping", run_pv_calibration_clipping_tests, "PV calibration does not learn inverter clipping as forecast error", False),
         ("pv_calibration_day_scaling", run_pv_calibration_day_scaling_tests, "PV calibration per-day scaling keeps dull days at raw x adjustment", False),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
+        ("export_threshold_per_step", run_export_threshold_per_step_tests, "metric_min_improvement_export charged per 5 minutes of export", False),
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),

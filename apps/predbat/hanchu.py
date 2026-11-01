@@ -1129,11 +1129,18 @@ class HanchuAPI(ComponentBase):
             self.set_arg_auto(flag, [False for _ in devices])
 
         # Only map an arg when EVERY device reports the underlying value.
+        #
+        # overwrite=False: these four are the daily energy totals whose recorder HISTORY Predbat
+        # reads (the load model and the day's cost), so a sensor the user named in apps.yaml wins and
+        # keeps its history - set_arg_auto still fills the key in when they named nothing. Claimed
+        # per key, as GivTCP does. The case that needs it: an EV charger wired outside the Hanchu
+        # grid meter, so Hanchu's own import_today misses the car and the user points the key at
+        # their smart meter instead.
         for leaf in ("load_today", "import_today", "export_today", "pv_today"):
             if leaf == "pv_today" and self.automatic_ignore_pv:
                 continue
             if all(leaf in self.device_energy.get(sn, {}) for sn in devices):
-                self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices])
+                self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices], overwrite=False)
             else:
                 self.log("Warn: Hanchu not every device reports {}, it must be set manually in apps.yaml".format(leaf))
 
