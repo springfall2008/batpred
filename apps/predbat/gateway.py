@@ -68,6 +68,21 @@ _COMMAND_ACK_WINDOW = 30
 # counts (matches the number of recent ids the hub remembers for replay protection)
 _COMMAND_ACK_IDS_KEPT = 16
 
+# EVC control: attempts allowed per planned-window state and direction (start or stop) before giving
+# up until the window state next changes, and the minimum gap between attempts so the charger's
+# telemetry can catch up with the last command first
+_EV_COMMAND_ATTEMPTS = 3
+_EV_COMMAND_RETRY_SECONDS = 120
+
+# OCPP StatusNotification values meaning a car is plugged in
+_EV_CAR_CONNECTED_STATUSES = frozenset({"Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"})
+
+# Charger states in which a start cannot work. Any other status is tried: the hub's status string
+# cannot be trusted to show a plugged-in car on older firmware - it reads "Available" after StopTransaction until
+# the charger next sends a StatusNotification, so a car left plugged in between two windows looks
+# unplugged. The attempt cap bounds the cost when no car is there.
+_EV_START_BLOCKED_STATUSES = frozenset({"Unavailable", "Faulted", "Offline"})
+
 # A slot window staged by a select write is shown in place of the Hub's schedule until the
 # schedule write switch sends it. One nobody sends (a manual edit with no press) is dropped
 # after this long, so the selects show the Hub's own schedule again (seconds).
@@ -304,6 +319,8 @@ class GatewayMQTT(ComponentBase):
     _discovery_dirty = False
     _discovery_save_retry_at = 0
     _pv_only_serials = ()
+    _pv_only_counters = ()
+    _coordinator_seen = False
     _inverter_slot_serials = ()
     _slots_without_capacity = frozenset()
     _ev_last_soc = {}  # replaced, never changed in place
@@ -342,9 +359,10 @@ class GatewayMQTT(ComponentBase):
             gateway_evc_automatic: When True, automatically register a connected OCPP EV charger as a
                 PredBat car so the optimizer plans for it. Off by default so existing gateway users are
                 unaffected. Set to ``true`` in apps.yaml to enable.
-            gateway_evc_control: When True (requires gateway_evc_automatic), check once per minute whether
-                the current time falls inside a planned car-charging window and send RemoteStartTransaction
-                plus SetChargingProfile on window entry, or RemoteStopTransaction on window exit.
+            gateway_evc_control: When True (requires gateway_evc_automatic), reconcile the charger once per
+                minute against the planned car-charging windows: inside a window with no session, when the
+                charger is not Unavailable/Faulted/Offline, send SetChargingProfile plus RemoteStartTransaction;
+                outside every window with a session active, send RemoteStopTransaction - whoever started that session.
             gateway_shared_ct: When True (the default), several inverters are taken to share one grid CT
                 clamp, so each reports the same grid and load. Only the first inverter's grid and load
                 readings are then used, so the house's grid and load are not counted once per inverter.
@@ -403,7 +421,6 @@ class GatewayMQTT(ComponentBase):
         self.topic_online = f"{self._topic_base}/online"
         self.topic_schedule = f"{self._topic_base}/schedule"
         self.topic_command = f"{self._topic_base}/command"
-        self.topic_ev_command = f"{self._topic_base}/ev/command"
         self.topic_ack = f"{self._topic_base}/ack/+"
         self._ack_topic_prefix = f"{self._topic_base}/ack/"
 
@@ -420,6 +437,8 @@ class GatewayMQTT(ComponentBase):
         self._loop = None
         self._gateway_online = False
         self._last_telemetry_time = 0
+        self._last_ev_status = None  # the last /status that carried EV chargers, for EVC control
+        self._last_ev_status_time = 0  # time.time() it arrived - also refreshed when it has no inverters
         self._last_plan_data = None
         self._last_plan_publish_time = 0
         # Entries and timezone of the last built plan, kept so the periodic re-publish
@@ -439,7 +458,9 @@ class GatewayMQTT(ComponentBase):
         self._auto_configured = False
         self._configured_inverter_serials = frozenset()  # serials discovered at the last auto-config
         self._inverter_slot_serials = []  # serial bound to each PredBat inverter slot at the last auto-config
-        self._pv_only_serials = ()  # listed inverters with no battery: counted for PV, never written to
+        self._pv_only_serials = ()  # inverters with no battery: counted for PV, never written to
+        self._pv_only_counters = ()  # the PV-only inverters whose pv_today counter is counted too (listed ones)
+        self._coordinator_seen = False  # a Gateway or Plant EMS has been in a status (see _has_coordinator)
         self._slots_without_capacity = frozenset()  # slots bound with no battery size sensor, re-bound once the hub reports a size
         self._last_ratings = {}  # (entity suffix, rating name) -> the last real value the hub reported
         self._assumed_ratings = frozenset()  # entity suffixes of inverters whose maximum rate has never been reported
@@ -449,11 +470,15 @@ class GatewayMQTT(ComponentBase):
         self._discovery_save_retry_at = 0
         self._unavailable_inverters = ((), ())
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
+        self._ev_control_cp_id = None  # charge point id _register_ev_car() registered as car 1, the one gateway_evc_control drives
         self._ev_last_soc = {}  # EV charge point id -> the last SoC the charger reported for the car
         self._last_published_plan = None
         self._pending_plan = None
         self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
-        self._ev_charging_active: bool = False  # last commanded state; avoids duplicate start/stop sends
+        self._ev_desired = None  # planned-window state at the last reconcile; a change resets the attempts
+        self._ev_attempts = {"start": 0, "stop": 0}  # commands published per direction since that change
+        self._ev_last_attempt = 0.0  # time.time() of the last published start/stop
+        self._ev_unknown_warned = False  # warned that the charger state is unknown in this window state
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
         # Incrementing counter included in every published command, seeded from the clock so
@@ -655,40 +680,130 @@ class GatewayMQTT(ComponentBase):
         """Return True if the current local time falls inside any planned charge window."""
         return in_car_plan_window(self._ev_windows, datetime.datetime.now(self.local_tz))
 
-    async def _apply_ev_charging_state(self):
-        """Start or stop EVC charging when the window state transitions.
+    def _ev_charger_status(self, cp_id):
+        """Return the latest telemetry for charge point ``cp_id``, or None when it is not usable.
 
-        Called every run() cycle (once per minute).  On a start transition, sets the
-        charging profile to the configured max current then issues RemoteStartTransaction
-        so the charger begins a session at that rate.  On a stop transition, issues
-        RemoteStopTransaction; the firmware falls back to its internal transaction ID when
-        none is supplied.  No command is sent when the desired state already matches
-        ``self._ev_charging_active``.
+        Not usable means no EV telemetry yet, EV telemetry older than ``_TELEMETRY_STALE_THRESHOLD``, or the
+        charger not connected to the hub - its session fields are then stale and it cannot take a command.
         """
-        if not self._configured_ev_chargers:
+        if self._last_ev_status is None or time.time() - self._last_ev_status_time >= _TELEMETRY_STALE_THRESHOLD:
+            return None
+        ev = next((c for c in self._last_ev_status.ev_chargers if c.charge_point_id == cp_id), None)
+        if ev is None or not ev.connected:
+            return None
+        return ev
+
+    def _ev_control_read_only(self):
+        """Use the live read-only override, falling back to config during startup."""
+        read_only = getattr(self.base, "set_read_only", None)
+        if read_only is None:
+            read_only = self.get_arg("set_read_only", False)
+        return bool(read_only)
+
+    async def _apply_ev_charging_state(self):
+        """Reconcile the charger's reported session against the planned charge windows.
+
+        Called every run() cycle (once per minute). The charger's own telemetry is the state, not a
+        remembered command, so a restart, a lost publish or a charger that refused a command all heal
+        on a later cycle:
+
+        - inside a window with no session, unless the charger is Unavailable/Faulted/Offline:
+          SetChargingProfile at the charger's max current, then RemoteStartTransaction. The status is
+          not used to look for a plugged-in car, as older Hub firmware reads "Available" after a stop
+        - outside every window with a session active: RemoteStopTransaction. Telemetry does not say who
+          started a session, so this stops any session outside the plan, including one started by hand
+          or by the charger's own schedule, while gateway_evc_control is on
+        - otherwise nothing is sent
+
+        Each direction is tried at most ``_EV_COMMAND_ATTEMPTS`` times, ``_EV_COMMAND_RETRY_SECONDS``
+        apart, until the window state next changes; then a warning is logged once, and for a stop
+        also recorded in the Predbat status as an error (a refused start is normal with no car plugged in). An attempt only counts once it was actually published. When the charger's
+        state is unknown (no fresh EV telemetry, or the charger offline) nothing is sent and, once the
+        hub has reported EV chargers at least once, a warning is logged once per window state. Only the charger
+        _register_ev_car() registered as car 1 is controlled, so the plan being enforced is that charger's own.
+        """
+        if self._ev_control_read_only():
+            # Resume with a fresh retry budget when read only ends.
+            self._ev_desired = None
+            return
+        cp_id = self._ev_control_cp_id
+        if not cp_id:
             return
         should_charge = self._should_ev_charge_now()
-        if should_charge == self._ev_charging_active:
+        if should_charge != self._ev_desired:
+            self._ev_desired = should_charge
+            self._ev_attempts = {"start": 0, "stop": 0}
+            self._ev_last_attempt = 0.0
+            self._ev_unknown_warned = False
+        ev = self._ev_charger_status(cp_id)
+        if ev is None:
+            # Silent until the first EV status has arrived: at startup the hub simply has not reported yet
+            if self._last_ev_status is not None and not self._ev_unknown_warned:
+                self.log(f"Warn: GatewayMQTT: EVC control cannot see charger '{cp_id}' (offline, or no EV telemetry in the last {_TELEMETRY_STALE_THRESHOLD}s) - not starting or stopping it")
+                self._ev_unknown_warned = True
             return
-        # min() gives a deterministic choice when multiple chargers are present
-        cp_id = min(self._configured_ev_chargers)
-        if should_charge:
-            current_a = self._ev_max_current.get(cp_id, 32)
-            self.log(f"Info: GatewayMQTT: EVC start charging — current_a={current_a} for '{cp_id}'")
-            await self._send_ev_command({"action": "SetChargingProfile", "current_a": int(current_a)})
-            await self._send_ev_command({"action": "RemoteStartTransaction", "id_tag": "predbat"})
+        if should_charge and not ev.session_active and ev.status not in _EV_START_BLOCKED_STATUSES:
+            direction = "start"
+        elif not should_charge and ev.session_active:
+            direction = "stop"
         else:
-            self.log(f"Info: GatewayMQTT: EVC stop charging for '{cp_id}'")
-            await self._send_ev_command({"action": "RemoteStopTransaction"})
-        self._ev_charging_active = should_charge
+            return
 
-    async def _send_ev_command(self, command):
-        """Publish a single EV command dict as JSON to the EV command topic.
+        attempts = self._ev_attempts[direction]
+        if attempts >= _EV_COMMAND_ATTEMPTS:
+            if attempts == _EV_COMMAND_ATTEMPTS:
+                message = f"Warn: GatewayMQTT: EVC {direction} for '{cp_id}' not taken by the charger after {attempts} attempts (status {ev.status or 'unknown'}), giving up until the plan changes"
+                self.log(message)
+                # A start that does not take is normal - nobody plugged a car in for the window. A session
+                # that will not stop is a fault: the charger keeps drawing outside the plan
+                if direction == "stop":
+                    self.base.record_status(message, had_errors=True)
+                self._ev_attempts[direction] += 1  # warn once
+            return
+        if time.time() - self._ev_last_attempt < _EV_COMMAND_RETRY_SECONDS:
+            return
+
+        if direction == "start":
+            current_a = self._ev_max_current.get(cp_id, 32)
+            self.log(f"Info: GatewayMQTT: EVC start charging — current_a={current_a} for '{cp_id}' (attempt {attempts + 1})")
+            sent = await self._send_ev_command(cp_id, {"action": "SetChargingProfile", "current_a": int(current_a)})
+            sent = sent and await self._send_ev_command(cp_id, {"action": "RemoteStartTransaction", "id_tag": "predbat"})
+        else:
+            self.log(f"Info: GatewayMQTT: EVC stop charging for '{cp_id}' (attempt {attempts + 1})")
+            sent = await self._send_ev_command(cp_id, {"action": "RemoteStopTransaction"})
+        if sent:
+            self._ev_attempts[direction] += 1
+            self._ev_last_attempt = time.time()
+
+    async def _send_ev_command(self, charge_point_id, command):
+        """Publish a single EV command to the shared device command topic.
+
+        The hub only subscribes to ``/command``; EV commands are recognised there by
+        ``"command": "ev"`` and routed to its OCPP server, which targets the charger
+        named by ``charge_point_id``. The hub answers with a transport ack on
+        ``/ack/<command_id>``.
 
         Args:
+            charge_point_id: OCPP charge point id of the charger to control.
             command: Dict with ``action`` key and any command-specific fields.
+
+        Returns:
+            True when the command was published, False when it could not be (not connected,
+            read-only mode, display mode, or the publish failed).
         """
-        await self._publish_raw(self.topic_ev_command, json.dumps(command).encode())
+        if self._ev_control_read_only():
+            return False
+        if self.gateway_display_only or not (self._mqtt_client and self._mqtt_connected):
+            self.log(f"Warn: GatewayMQTT: Not connected — cannot send EV command {command.get('action')} for '{charge_point_id}'")
+            return False
+        payload = {"command": "ev", "command_id": "PBAT" + str(self._next_command_id()), "charge_point_id": charge_point_id}
+        payload.update(command)
+        try:
+            await self._publish_raw(self.topic_command, json.dumps(payload).encode())
+        except Exception as e:
+            self.log(f"Warn: GatewayMQTT: Failed to publish EV command {command.get('action')} for '{charge_point_id}': {e}")
+            return False
+        return True
 
     async def _startup_wait(self, ticks, ready):
         """Poll ``ready`` at 0.5 s intervals until it is true or the startup budget is spent.
@@ -1006,6 +1121,12 @@ class GatewayMQTT(ComponentBase):
             self.api_started = True
             return
 
+        # EVC control reads the chargers from here: a status with no inverters still carries them,
+        # and is returned from below before it can refresh _last_status
+        if status.ev_chargers:
+            self._last_ev_status = status
+            self._last_ev_status_time = time.time()
+
         if len(status.inverters) == 0:
             if not (self.gateway_inverter_serial and self._discovery):
                 return
@@ -1025,10 +1146,11 @@ class GatewayMQTT(ComponentBase):
             self.automatic_config()
             if self._auto_configured:
                 # The injection above ran before this status's inverters were bound, so one that
-                # is only published once bound has no entities yet. Publish those before the API
-                # is declared started below.
+                # is only published once bound has no entities yet, and a PV-only one that is not
+                # being read went out with its frozen powers. Publish those before the API is
+                # declared started below.
                 for inv in status.inverters:
-                    if not inv.primary and self._is_published(inv):
+                    if (not inv.primary or inv.serial in self._pv_only_serials) and self._is_published(inv):
                         self._publish_inverter(inv)
                 # The integration above ran on the slots as they were before this status changed them
                 self._update_integrated_energy(status, rebase=True)
@@ -1171,6 +1293,13 @@ class GatewayMQTT(ComponentBase):
             inv: A ``predbat_InverterEntry`` from the gateway status.
         """
         suffix = _serial_suffix(inv.serial)
+        if inv.serial in self._pv_only_serials and not inv.connected and self._has_telemetry(inv):
+            # The hub repeats a disconnected unit's last readings. For a PV-only inverter, one
+            # that dropped out mid-afternoon would go on adding generation that is not happening:
+            # its entities are published as last read, with its powers zeroed.
+            self._inject_inverter_entities(inv, suffix, site_energy=self._integrated_site_energy(inv))
+            self._inject_unread_inverter(suffix)
+            return
         if not self._has_telemetry(inv):
             if self.get_state_wrapper(f"sensor.{self.prefix}_gateway_{suffix}_soc") is not None:
                 self._inject_unread_inverter(suffix)
@@ -1294,7 +1423,7 @@ class GatewayMQTT(ComponentBase):
         pv_wh = {inv.serial: inv.energy.pv_today_wh for inv in inverters}
         # A PV-only inverter's generation is part of the load too. It has no slot, so it is not
         # needed for the site to be complete: one that is away simply adds nothing meanwhile.
-        pv_wh.update({serial: by_serial[serial].energy.pv_today_wh for serial in self._pv_only_serials if serial in by_serial and by_serial[serial].energy.ByteSize() > 0})
+        pv_wh.update({serial: by_serial[serial].energy.pv_today_wh for serial in self._pv_only_counters if serial in by_serial and by_serial[serial].energy.ByteSize() > 0})
 
         state = self._integrated_energy
         if state is None:
@@ -1615,7 +1744,7 @@ class GatewayMQTT(ComponentBase):
             pfx = f"{self.prefix}_gateway_{suffix}"
 
             self.dashboard_item(f"binary_sensor.{pfx}_online", ev.connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_online", {}), app="gateway")
-            ev_car_connected = ev.connected and ev.status in {"Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"}
+            ev_car_connected = ev.connected and ev.status in _EV_CAR_CONNECTED_STATUSES
             self.dashboard_item(f"binary_sensor.{pfx}_connected", ev_car_connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_connected", {}), app="gateway")
             # Whether a car is plugged in, for car_charging_plugged. Unlike _connected it does not read "no" while the
             # charger itself is offline - that says nothing about the cable - so a charger dropping out is not an unplug
@@ -1713,6 +1842,47 @@ class GatewayMQTT(ComponentBase):
             return True
         return False
 
+    def _auto_pv_only(self, candidates, battery_units):
+        """The PV-only inverters on a site with no serial list and no coordinator.
+
+        One that is not already a battery inverter and has a discovery record which has never
+        shown a battery: so an inverter whose readings have not arrived yet is not taken for
+        one, and one that has ever reported a battery never is. The primary flag is not used:
+        it differs between hub firmware versions.
+
+        Args:
+            candidates: The non-coordinator units in the status.
+            battery_units: The battery inverters auto-config selected.
+
+        Returns:
+            list: The PV-only units.
+        """
+        chosen = set(inv.serial for inv in battery_units)
+        pv_only = []
+        for inv in candidates:
+            record = self._discovery.get(inv.serial.upper())
+            if inv.serial in chosen or record is None or record.get("battery") or inv.battery.ByteSize() > 0:
+                continue
+            pv_only.append(inv)
+        return pv_only
+
+    def _has_coordinator(self, inverters):
+        """Whether the site has a Gateway or Plant EMS: in these inverters, or ever seen.
+
+        Sticky, from this run or a stored discovery record: a status that briefly leaves the
+        coordinator out (a hub rescan) must not make its battery-less AIOs PV-only inverters
+        and move control to the AIOs behind it.
+
+        Args:
+            inverters: The ``predbat_InverterEntry`` items of a status.
+
+        Returns:
+            bool: True when the site has a coordinator.
+        """
+        if any(inv.type in GATEWAY_COORDINATOR_TYPES for inv in inverters):
+            self._coordinator_seen = True
+        return self._coordinator_seen or any(record.get("type") in GATEWAY_COORDINATOR_TYPES for record in self._discovery.values())
+
     def _usable_serials(self, status):
         """What auto-config could act on in this status, as a set of keys.
 
@@ -1723,7 +1893,10 @@ class GatewayMQTT(ComponentBase):
         With ``gateway_inverter_serial`` set, the listed inverters count by their discovery
         record instead (see ``_update_discovery``): the serial for a battery inverter and
         ``<serial>:pv`` for one with no battery, so one that turns out to have a battery
-        after all is new again.
+        after all is new again. With no serial list and no coordinator (see
+        ``_has_coordinator``), a recorded inverter
+        with no battery counts as ``<serial>:pv`` too, so a PV-only inverter the hub only
+        starts reading later (one that powers off at night) re-runs auto-config.
 
         Args:
             status: A decoded GatewayStatus protobuf message.
@@ -1741,6 +1914,13 @@ class GatewayMQTT(ComponentBase):
         if self.gateway_inverter_serial:
             for record in self._discovery.values():
                 usable.add(record["serial"] if record.get("battery") else record["serial"] + ":pv")
+        elif not self._has_coordinator(status.inverters):
+            # With no serial list and no coordinator, a PV-only inverter the hub starts
+            # reading after start-up (one that powers off at night) is new too
+            for inv in status.inverters:
+                record = self._discovery.get(inv.serial.upper())
+                if record is not None and not record.get("battery") and inv.battery.ByteSize() == 0:
+                    usable.add(inv.serial + ":pv")
         return frozenset(usable)
 
     def _discovery_filename(self):
@@ -2033,6 +2213,7 @@ class GatewayMQTT(ComponentBase):
             aios = [inv for inv in candidate_aios if inv.battery.ByteSize() > 0]
 
         pv_only = []
+        pv_only_counted = True
         gateway_coordinates = len(aios) > 1
         if serial_set:
             # gateway_inverter_serial wins: every listed inverter the hub has discovered is
@@ -2042,6 +2223,20 @@ class GatewayMQTT(ComponentBase):
             aios = [inv for inv in candidate_aios if self._discovery.get(inv.serial.upper(), {}).get("battery")]
             pv_only = [inv for inv in candidate_aios if inv.serial.upper() in self._discovery and not self._discovery[inv.serial.upper()].get("battery")]
             gateway_coordinates = gateway_coordinates or len(aios) > 1
+        elif aios and not self._has_coordinator(all_inverters):
+            # No serial list: a battery-less inverter the hub reads alongside the battery
+            # inverter(s), with no Gateway or Plant EMS on the site, is a PV-only inverter
+            # (an AC-coupled PV inverter, or a hybrid with no battery fitted). The hub does not
+            # elect one primary, so it used to be dropped and its generation missed.
+            # Behind a coordinator the battery-less units are AIOs whose readings the
+            # coordinator already carries, so they stay out.
+            pv_only = self._auto_pv_only(candidate_aios, aios)
+            # Only its pv_power is counted. Each inverter's pv_power is its own panels, but on
+            # some sites the battery inverter's pv_today already includes the PV inverter's
+            # generation, and adding its counter would count it twice in the day's PV and in
+            # an integrated load. So the day's PV (and the PV calibration that reads it) is
+            # unchanged; a site where it misses the PV inverter needs gateway_inverter_serial.
+            pv_only_counted = False
 
         if ems_units:
             # A Plant EMS is the single control point for the whole system.
@@ -2091,6 +2286,7 @@ class GatewayMQTT(ComponentBase):
         num_inverters = len(inverters)
         self._inverter_slot_serials = [inv.serial for inv in inverters]
         self._pv_only_serials = tuple(inv.serial for inv in pv_only)
+        self._pv_only_counters = self._pv_only_serials if pv_only_counted else ()
         self.log(f"Info: GatewayMQTT: auto-config: {num_inverters} primary inverter(s) of {len(all_inverters)} total")
 
         # Set inverter type
@@ -2168,6 +2364,7 @@ class GatewayMQTT(ComponentBase):
         if pv_only_bases:
             self.log(f"Info: GatewayMQTT: inverter(s) {list(self._pv_only_serials)} have no battery — configured as PV only")
             pv_power_entities += [f"sensor.{base}_pv_power" for base in pv_only_bases]
+        pv_today_bases = [f"{self.prefix}_gateway_{_serial_suffix(serial)}" for serial in self._pv_only_counters]
 
         # Map entity lists to PredBat args
         self.set_arg("soc_percent", soc_entities)
@@ -2206,7 +2403,7 @@ class GatewayMQTT(ComponentBase):
         base0 = f"{self.prefix}_gateway_{suffix0}"
         bases = [f"{self.prefix}_gateway_{inv.serial[-6:].lower()}" for inv in inverters]
         site_bases = bases[:1] if self.gateway_shared_ct or self.gateway_integrate_power else bases
-        self.set_arg("pv_today", [f"sensor.{base}_pv_today" for base in bases + pv_only_bases])
+        self.set_arg("pv_today", [f"sensor.{base}_pv_today" for base in bases + pv_today_bases])
         self.set_arg("import_today", [f"sensor.{base}_import_today" for base in site_bases])
         self.set_arg("export_today", [f"sensor.{base}_export_today" for base in site_bases])
         self.set_arg("load_today", [f"sensor.{base}_load_today" for base in site_bases])
@@ -2304,6 +2501,8 @@ class GatewayMQTT(ComponentBase):
 
         # For now we overwrite the first charger only; multi-charger support needs work
         ev = next((c for c in chargers if c.connected), chargers[0])
+        # gateway_evc_control drives this charger and no other, so it enforces the plan made for it
+        self._ev_control_cp_id = ev.charge_point_id or None
         pfx = f"{self.prefix}_gateway_{self._ev_suffix(ev, multi=False)}"
         self.set_arg("num_cars", 1)
         # Entity-reference args (resolved by get_arg indirect lookup at fetch time).
@@ -3700,9 +3899,18 @@ class GatewayMQTT(ComponentBase):
 
         self._refresh_in_progress = True
         try:
+            instance_id = self.args.get("user_id", "") if isinstance(self.args, dict) else ""
+
+            refresh_provider = getattr(getattr(self, "base", None), "oauth_refresh_provider", None)
+            if refresh_provider is not None:
+                data = await refresh_provider(instance_id, "predbat_gateway", "")
+                if data is None:
+                    self.log("Warn: GatewayMQTT: Token refresh provider returned no answer")
+                    return False
+                return self._apply_refresh_response(data)
+
             supabase_url = os.environ.get("SUPABASE_URL", "")
             supabase_key = os.environ.get("SUPABASE_KEY", "")
-            instance_id = self.args.get("user_id", "") if isinstance(self.args, dict) else ""
 
             if not supabase_url or not supabase_key or not instance_id:
                 self.log("Warn: GatewayMQTT: Token refresh skipped — missing env vars or instance_id")

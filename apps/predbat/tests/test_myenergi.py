@@ -1382,6 +1382,38 @@ def test_control_saved_modes_are_dropped_when_control_is_off():
     print("  ✓ Stale saved Zappi modes are dropped when control is off")
 
 
+def test_control_off_in_config_releases_a_held_zappi():
+    """#5788: with myenergi_zappi_control turned off and a restart, a Zappi an earlier session held Stopped
+    is released on the first poll, to the mode it had before - not left Stopped."""
+    storage = _MemoryStorage()
+    storage.saved[("myenergi", "control_state")] = {"control_enabled": True, "held": {"Z12345678": False}}
+    storage.saved[("myenergi", "control_saved_modes")] = {"modes": {"Z12345678": "Eco"}}
+    component = _controlling_component(zappi_control=False)
+    component.base.components = storage
+    zappi = _zappi(12345678)
+    zappi.mode = "Stopped"
+    component.transport.fetch_devices = AsyncMock(return_value=[zappi])
+
+    assert run_async(component.run(0, True)) is True
+    assert component.charger_control_active is False
+    assert component.transport.set_mode.await_args.args[1] == "Eco", component.transport.set_mode.await_args
+    assert component.charger_control_state == {} and storage.saved[("myenergi", "control_state")]["held"] == {}
+    assert storage.saved[("myenergi", "control_saved_modes")] == {"modes": {}}, "Released, so its mode is forgotten"
+    print("  ✓ Control turned off in config still releases a held Zappi")
+
+
+def test_control_off_with_controls_disabled_writes_nothing():
+    """With myenergi_enable_controls off Predbat must not write to the Zappi, so a held one is left as it is."""
+    storage = _MemoryStorage()
+    storage.saved[("myenergi", "control_state")] = {"control_enabled": True, "held": {"Z12345678": False}}
+    component = _controlling_component(zappi_control=False, enable_controls=False)
+    component.base.components = storage
+    component.transport.fetch_devices = AsyncMock(return_value=[_zappi(12345678)])
+    assert run_async(component.run(0, True)) is True
+    component.transport.set_mode.assert_not_awaited()
+    print("  ✓ With controls disabled a held Zappi is not written to")
+
+
 def test_control_releases_to_eco_plus_when_nothing_was_saved():
     """With no saved mode - a restart, or a mode that cannot be set - release falls back to Eco+."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
@@ -1521,7 +1553,8 @@ def test_run_enables_control_and_drives_the_zappi():
     zappi = _zappi(12345678)
     component.transport.fetch_devices = AsyncMock(return_value=[zappi])
     component.transport.set_mode = AsyncMock(return_value=True)
-    component.charger_control_load_enabled = AsyncMock()
+    # As the real load does, it marks the saved state as read
+    component.charger_control_load_enabled = AsyncMock(side_effect=lambda: setattr(component, "charger_control_loaded", True))
 
     assert run_async(component.run(0, True)) is True
     assert component.charger_control_active is True
@@ -1598,12 +1631,15 @@ def test_control_failure_does_not_break_the_poll():
     zappi = _zappi(12345678)
     component.transport.fetch_devices = AsyncMock(return_value=[zappi])
     component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("myenergi refused the mode"))
-    component.charger_control_load_enabled = AsyncMock()
+    # As the real load does, it marks the saved state as read
+    component.charger_control_load_enabled = AsyncMock(side_effect=lambda: setattr(component, "charger_control_loaded", True))
 
     assert run_async(component.run(0, True)) is True, "A refused mode must not fail the cycle"
     assert component.last_success_timestamp is not None, "Monitoring still succeeded, so the poll counts"
-    # Nothing was recorded as set, so the next cycle tries again rather than assuming it stuck
-    assert component.charger_control_state == {}, component.charger_control_state
+    # A stop is held as soon as it is sent (it may still have landed) but stays unconfirmed, so the next
+    # cycle tries again rather than assuming it stuck
+    assert component.charger_control_state == {"Z12345678": False}, component.charger_control_state
+    assert "Z12345678" in component.charger_control_unconfirmed
     print("  ✓ A refused mode command warns without failing the poll")
 
 
@@ -2779,6 +2815,8 @@ def test_myenergi(my_predbat=None):
     test_control_releases_to_a_saved_stopped()
     test_control_saved_modes_survive_a_restart()
     test_control_saved_modes_are_dropped_when_control_is_off()
+    test_control_off_in_config_releases_a_held_zappi()
+    test_control_off_with_controls_disabled_writes_nothing()
     test_control_releases_to_eco_plus_when_nothing_was_saved()
     test_control_release_retry_keeps_the_saved_mode()
     test_control_release_forgets_the_saved_mode()

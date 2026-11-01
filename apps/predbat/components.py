@@ -726,6 +726,8 @@ COMPONENT_LIST = {
             "tbc_control": {"required": False, "default": True, "config": "teslemetry_tbc_control"},
             # No default: unset must reach the component as None ("decide from the Powerwall model"), not False
             "hybrid": {"required": False, "config": "teslemetry_hybrid"},
+            # No default either: unset means "decide from site_info's net_meter_mode" (GH#5710)
+            "battery_export": {"required": False, "config": "teslemetry_battery_export"},
             "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
             "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
             "token_hash": {"required": False, "secret": True, "config": "teslemetry_token_hash"},

@@ -749,6 +749,63 @@ def test_reserve_literal_value(test_name, my_predbat, ha, inverter_type, reserve
     return failed
 
 
+def test_reserve_dummy_percent(test_name, my_predbat, ha, stale_state=None):
+    """
+    Test
+       Inverter.__init__ seeds the dummy reserve entity of a type with no reserve register in percent.
+
+    It was seeded with the kWh reserve while labelled %, and the next refresh read that back as
+    reserve_percent_current - the value balance_inverters() checks a peer's SoC against (#5850).
+    battery_min_soc is set low because its floor on that read otherwise hides the kWh number, and
+    stale_state pre-loads an existing kWh-seeded dummy, which create_entity() alone never overwrites;
+    reserve_percent_current must be the corrected value in the same pass that corrects it.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_reserve_min = my_predbat.get_arg("set_reserve_min")
+    saved_items = dict(ha.dummy_items)
+    entity_id = "sensor.{}_HU_0_reserve".format(my_predbat.prefix)
+    try:
+        my_predbat.args["inverter_type"] = ["HU"]
+        my_predbat.args["battery_min_soc"] = 3
+        my_predbat.expose_config("set_reserve_min", 50)
+        ha.dummy_items.pop(entity_id, None)
+        if stale_state is not None:
+            ha.dummy_items[entity_id] = {"state": stale_state, "unit_of_measurement": "%"}
+
+        inv = Inverter(my_predbat, 0)
+        # The pass that corrects a stale dummy reports the corrected value too, not the stale one a cycle late.
+        # A fresh dummy is never rewritten, so its construction pass still reports the arg it replaced (GH#5003)
+        if stale_state is not None and inv.reserve_percent_current != 50:
+            print("ERROR: reserve_percent_current should be 50 on construction got {}".format(inv.reserve_percent_current))
+            failed = True
+        inv.refresh_config()
+        if inv.reserve_percent != 50:
+            print("ERROR: reserve_percent should be 50 got {}".format(inv.reserve_percent))
+            failed = True
+        if my_predbat.args["reserve"][0] != entity_id:
+            print("ERROR: reserve should be the dummy {} got {}".format(entity_id, my_predbat.args["reserve"][0]))
+            failed = True
+        state = ha.get_state(entity_id)
+        unit = ha.get_state(entity_id, attribute="unit_of_measurement")
+        if state != 50 or unit != "%":
+            print("ERROR: dummy reserve should be 50 % got {} {} (reserve is {}kWh)".format(state, unit, inv.reserve))
+            failed = True
+        if inv.reserve_percent_current != 50:
+            print("ERROR: reserve_percent_current should be 50 got {}".format(inv.reserve_percent_current))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.expose_config("set_reserve_min", saved_reserve_min)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+
+    return failed
+
+
 def test_write_and_poll_non_entity(test_name, my_predbat, inv):
     """
     Test
@@ -4434,6 +4491,26 @@ def test_battery_scaling_invalid_value_clamped(test_name, my_predbat):
             print("ERROR: battery_scaling should retain last known-good value 0.72 when source reads {}, got {}".format(bad_scaling, inv.battery_scaling))
             failed = True
 
+    # A source that keeps reading invalid warns once, then logs at Info, until a valid read (#5368)
+    log_messages = []
+    orig_log = my_predbat.log
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        my_predbat.args["battery_scaling"] = [0.0]
+        inv = Inverter(my_predbat, 0)  # __init__ runs the first refresh_config
+        inv.refresh_config(quiet=True)
+        inv.refresh_config(quiet=True)
+        my_predbat.args["battery_scaling"] = [0.8]
+        inv.refresh_config(quiet=True)
+        my_predbat.args["battery_scaling"] = [0.0]
+        inv.refresh_config(quiet=True)
+    finally:
+        my_predbat.log = orig_log
+    levels = [message.split(":")[0] for message in log_messages if "not a valid scaling factor" in message]
+    if levels != ["Warn", "Info", "Info", "Warn"]:
+        print("ERROR: invalid battery_scaling should warn once, then Info, and warn again after a valid read; got levels {}".format(levels))
+        failed = True
+
     del my_predbat.args["battery_scaling"]
     del my_predbat.args["battery_scaling_last_known"]
     return failed
@@ -6024,6 +6101,13 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_reserve_literal_value("reserve_literal_ge", my_predbat, ha, "GE", [12], expect_reserve_percent=12, expect_reserve_percent_current=12, set_reserve_enable=False)
     # An entity id is still resolved as one, rather than everything being treated as a literal
     failed |= test_reserve_literal_value("reserve_entity_still_read", my_predbat, ha, "GE", ["number.reserve"], expect_reserve_percent=4, expect_reserve_percent_current=4, set_reserve_enable=False)
+    if failed:
+        return failed
+
+    # GH#5850: the dummy reserve of a type with no reserve register holds a percent, both when it is
+    # first created and when an earlier version already seeded it with the kWh reserve
+    failed |= test_reserve_dummy_percent("reserve_dummy_seeded_percent", my_predbat, ha)
+    failed |= test_reserve_dummy_percent("reserve_dummy_kwh_seed_corrected", my_predbat, ha, stale_state=5.0)
     if failed:
         return failed
 
