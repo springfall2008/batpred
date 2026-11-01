@@ -2382,6 +2382,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_parallel_master_writes_the_group_current())
         failed |= test_parallel_config_parsing()
         failed |= asyncio.run(test_parallel_master_probed_afresh_at_the_group_limit())
+        failed |= asyncio.run(test_parallel_group_edges())
+        failed |= asyncio.run(test_parallel_probe_upper_saved_and_loaded())
         failed |= asyncio.run(test_control_write_failure_withholds_success_timestamp())
         failed |= asyncio.run(test_control_write_success_updates_success_timestamp())
         failed |= asyncio.run(test_storage_mode_failure_does_not_fail_control_write())
@@ -3849,6 +3851,89 @@ def test_parallel_config_parsing():
 
     if not failed:
         print("PASSED: parallel group configuration")
+    return failed
+
+
+async def test_parallel_group_edges():
+    """Issue #5556 edges: charging is summed too, a slave listed twice counts once, the decoded share is split, and the 0A rule and V1 see the group."""
+    print("\n=== Test: parallel group edges ===")
+    failed = False
+
+    # Charging is summed the same way as discharging
+    api, master, slave = _parallel_api()
+    for sn in (master, slave):
+        api.charge_discharge_time_windows[sn][1].update({"charge_enable": 1, "charge_start_time": "02:00", "charge_end_time": "05:00", "charge_current": 120, "discharge_enable": 0})
+    assert await api.write_time_windows_if_changed(master) is True
+    if _written_for(api, master, SOLIS_CID_CHARGE_CURRENT[0]) != "240.0":
+        print(f"ERROR: two 120A charge shares should write 240.0A, got {_written_for(api, master, SOLIS_CID_CHARGE_CURRENT[0])}")
+        failed = True
+
+    # A slave listed twice, in any case, is counted once
+    api, master, slave = _parallel_api(group_max=400.0, probed=400.0)
+    api.parallel_slaves = api.parse_parallel_slaves({master: [slave, slave.lower()]})
+    assert await api.write_time_windows_if_changed(master) is True
+    if _written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0]) != "270.0":
+        print(f"ERROR: a duplicated slave should count once, got {_written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0])}")
+        failed = True
+
+    # After a restart the master's register holds the group's total; its own share is decoded as an even split
+    api, master, slave = _parallel_api()
+    api.cached_values[master][SOLIS_CID_DISCHARGE_CURRENT[0]] = "270"
+    api.cached_values[slave][SOLIS_CID_DISCHARGE_CURRENT[0]] = "135"
+    await api.decode_time_windows_v2(master)
+    await api.decode_time_windows_v2(slave)
+    shares = (api.charge_discharge_time_windows[master][1]["discharge_current"], api.charge_discharge_time_windows[slave][1]["discharge_current"])
+    if shares != (135.0, 135.0):
+        print(f"ERROR: expected 135A decoded for each member, got {shares}")
+        failed = True
+
+    # With the master's own charge share at 0A but the slave charging, the group is charging: not the 0A Feed-in rule
+    api, master, slave = _parallel_api()
+    api.charge_discharge_time_windows[master][1].update({"charge_enable": 1, "charge_start_time": "02:00", "charge_end_time": "05:00", "charge_current": 0, "discharge_enable": 0})
+    api.charge_discharge_time_windows[slave][1].update({"charge_enable": 1, "charge_start_time": "02:00", "charge_end_time": "05:00", "charge_current": 120, "discharge_enable": 0})
+    assert await api.write_time_windows_if_changed(master) is True
+    modes = [c["mode"] for c in api.set_storage_mode_calls if c["inverter_sn"] == master]
+    if modes != ["Self-Use"]:
+        print(f"ERROR: the master should stay in Self-Use while the group charges, got {modes}")
+        failed = True
+
+    # In V1 mode the group is not applied, and that is warned about once
+    api, master, slave = _parallel_api()
+    api._test_v2_mode = False
+    api._test_now_utc_exact = datetime(2026, 11, 1, 12, 0, tzinfo=api.local_tz)
+    for _ in range(2):
+        await api.write_time_windows_if_changed(master)
+    if len([m for m in api.log_messages if "is not in TOU V2 mode" in m]) != 1:
+        print(f"ERROR: expected one V1 warning, got {[m for m in api.log_messages if 'TOU V2' in m]}")
+        failed = True
+
+    # A bad group limit is ignored
+    for value in ("inf", "nan", True):
+        if api.parse_parallel_slot_current_max(value) is not None:
+            print(f"ERROR: {value!r} should not be taken as a group limit")
+            failed = True
+
+    if not failed:
+        print("PASSED: parallel group edges")
+    return failed
+
+
+async def test_parallel_probe_upper_saved_and_loaded():
+    """The upper limit a ceiling was probed against survives a restart, and a malformed one drops that entry."""
+    print("\n=== Test: probe upper limit saved and loaded ===")
+    failed = False
+    upper = {"charge": 270.0, "discharge": 270.0}
+    saved = {"MASTER01": {"charge": 270, "discharge": 270, "probed_at": "2026-11-01T00:00:00+00:00", "upper": upper}, "OTHER01": {"charge": 60, "discharge": 60, "probed_at": "2026-11-01T00:00:00+00:00", "upper": "junk"}}
+    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): saved}), loaded=False)
+    await api.load_slot_current_probes()
+    if api.slot_current_probed.get("MASTER01", {}).get("upper") != upper:
+        print(f"ERROR: the upper limit should be loaded, got {api.slot_current_probed.get('MASTER01')}")
+        failed = True
+    if "OTHER01" in api.slot_current_probed:
+        print("ERROR: an entry with a malformed upper limit should be ignored")
+        failed = True
+    if not failed:
+        print("PASSED: probe upper limit saved and loaded")
     return failed
 
 
