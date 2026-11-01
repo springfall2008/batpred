@@ -10,9 +10,11 @@ from datetime import datetime, timedelta, timezone
 import base64
 import json as json_module
 import pytz
+import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
 import enphase
 from enphase import EnphaseAPI, ENPHASE_REFRESH_SETTINGS, ENPHASE_REFRESH_SCHEDULE_SYNC, ENPHASE_RECONCILE_MAX_ATTEMPTS
 from tests.test_infra import run_async
+from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 
 
 def _b64(payload):
@@ -2528,6 +2530,115 @@ def test_consecutive_writes_stay_on_one_schedule_across_a_reorder():
     assert written == [SCHEDULES_PATH + "/first", SCHEDULES_PATH + "/first"]  # never swapped onto the sibling
 
 
+# Discovery catalogue reporter
+
+DISCOVERY_SITE = "4815162"
+DISCOVERY_ENVOY = "122530006866"
+
+
+def _discovery_enphase(ignore_pv=False):
+    """An EnphaseAPI holding one fully discovered site: battery status, settings, schedules and the Envoy serial."""
+    api = MockEnphaseAPI()
+    api.automatic = True
+    api.automatic_ignore_pv = ignore_pv
+    api.sites = [{"site_id": DISCOVERY_SITE, "name": "Grandma's House"}]
+    api.battery_status[DISCOVERY_SITE] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": BATTERY_STATUS_PAYLOAD["storages"]}
+    api.battery_settings[DISCOVERY_SITE] = {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25}
+    api.today[DISCOVERY_SITE] = {"serial": DISCOVERY_ENVOY, "totals": {}, "arrays": {}}
+    api.schedules[DISCOVERY_SITE] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    return api
+
+
+def test_enphase_catalogue_none_before_discovery():
+    """Nothing is reported until the site's battery and Envoy are known."""
+    api = MockEnphaseAPI()
+    assert api.build_discovery() is None
+    api = _discovery_enphase()
+    api.today[DISCOVERY_SITE] = {}
+    assert api.build_discovery() is None, "no Envoy serial yet"
+    api = _discovery_enphase()
+    api.battery_status[DISCOVERY_SITE]["max_capacity"] = 0
+    assert api.build_discovery() is None, "no battery yet"
+
+
+def test_enphase_record_shape():
+    """The Envoy is a gateway fronting the batteries; the site id is an account id; ratings are what the site reports."""
+    report = _discovery_enphase().build_discovery()
+    assert report["automatic"] is True
+    record = report["inverters"][0]
+    assert record["device_id"] == "enphase:" + DISCOVERY_ENVOY
+    assert record["inverter_type"] == "EnphaseCloud"
+    assert record["composition"] == "gateway" and record["serials"] == ["B1", "B2"], record
+    assert record["hardware_ids"] == {"serial": DISCOVERY_ENVOY}
+    assert record["account_ids"] == {"site_id": DISCOVERY_SITE}
+    assert record["functions"] == ["solar", "battery"]
+    assert record["capabilities"]["reserve_above_soc_charges_from_grid"] is True
+    assert record["ratings"] == {"soc_max": 10.0, "battery_rate_max": 3840.0, "battery_min_soc": 5}, record["ratings"]
+    assert "Grandma" not in str(report) and "user@example.com" not in str(report)
+
+
+def test_enphase_record_rebuilds_its_inverter_def_row():
+    """The record alone rebuilds the EnphaseCloud row - no base, no exceptions."""
+    record = validated_inverters(_discovery_enphase().build_discovery())[0]
+    assert_definition_complete(record, EnphaseAPI.WRITE_AND_POLL_SLEEP)
+
+
+def test_enphase_record_agrees_with_automatic_config():
+    """The record binds exactly what automatic_config() binds."""
+    api = _discovery_enphase()
+    record = validated_inverters(api.build_discovery())[0]
+    captured = capture_automatic_config(api)
+    assert_record_agrees(record, captured)
+    assert_record_binds_nothing_extra(record, captured)
+
+
+def test_enphase_record_keeps_pv_despite_automatic_ignore_pv():
+    """automatic_ignore_pv stops the binding, not the device fact (spec D11)."""
+    api = _discovery_enphase(ignore_pv=True)
+    record = validated_inverters(api.build_discovery())[0]
+    assert "pv_power" in record["entities"] and "pv_today" in record["entities"]
+    captured = capture_automatic_config(api)
+    assert "pv_power" not in captured
+    assert_record_agrees(record, captured)
+    assert_record_binds_nothing_extra(record, captured, allowed_extra=("pv_power", "pv_today"))
+
+
+def test_enphase_round_trip_hides_site_id():
+    """Through the real Coordinator: the site id is pseudonymised everywhere, the Envoy serial stays readable."""
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("enphase", _discovery_enphase().build_discovery())
+    catalogue = str(coordinator.catalogue())
+    assert DISCOVERY_SITE not in catalogue, "the site id must be pseudonymised, including inside entity ids"
+    assert DISCOVERY_ENVOY in catalogue
+    assert not [line for line in logs if line.startswith("Warn")], logs
+
+
+def test_enphase_catalogue_filed_when_automatic_config_raises():
+    """A site Predbat cannot configure (no CFG scheduling) still has its hardware described."""
+    api = MockEnphaseAPI()
+    api.login_last_success = datetime.now(timezone.utc)
+    api.eauth_token = "tok"
+    api.sites = [{"site_id": DISCOVERY_SITE, "name": "Home"}]
+    filed = []
+    api.report_discovery = filed.append
+    api.set_http_response("/pv/settings/{}/battery_status.json".format(DISCOVERY_SITE), 200, BATTERY_STATUS_PAYLOAD)
+    api.set_http_response("/pv/systems/{}/today".format(DISCOVERY_SITE), 200, {"connectionDetails": [{"serial_num": DISCOVERY_ENVOY}], "stats": [{"totals": {"production": 1000}, "production": [1000], "start_time": 1783724400, "interval_length": 900}]})
+    api.set_http_response("/app-api/{}/get_latest_power".format(DISCOVERY_SITE), 200, {"latest_power": {"value": 450, "units": "w", "time": 1760000000}})
+    api.set_http_response("/service/batteryConfig/api/v1/profile/{}".format(DISCOVERY_SITE), 200, {"profile": "self-consumption", "batteryBackupPercentage": 20})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/{}".format(DISCOVERY_SITE), 200, {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25})
+    api.set_http_response(
+        "/service/batteryConfig/api/v1/battery/sites/{}/schedules".format(DISCOVERY_SITE), 200, {"cfg": {"scheduleSupported": False, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}}
+    )
+    api.automatic = True
+    assert run_async(api.run(0, True)) is False, "automatic_config() raises without CFG"
+    assert len(filed) == 1 and filed[0]["inverters"][0]["device_id"] == "enphase:" + DISCOVERY_ENVOY, filed
+
+
 def run_enphase_api_tests(my_predbat):
     """Run all Enphase API tests, returning 0 on success."""
     test_consecutive_writes_stay_on_one_schedule_across_a_reorder()
@@ -2667,5 +2778,12 @@ def run_enphase_api_tests(my_predbat):
     test_activate_rbd_mode_clears_pending_status_on_success()
     test_apply_pending_dtg_not_reactivated_after_success()
     test_apply_activates_cfg_when_setting_off_but_schedule_matches()
+    test_enphase_catalogue_none_before_discovery()
+    test_enphase_record_shape()
+    test_enphase_record_rebuilds_its_inverter_def_row()
+    test_enphase_record_agrees_with_automatic_config()
+    test_enphase_record_keeps_pv_despite_automatic_ignore_pv()
+    test_enphase_round_trip_hides_site_id()
+    test_enphase_catalogue_filed_when_automatic_config_raises()
     print("**** Enphase API tests passed ****")
     return 0
