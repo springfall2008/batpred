@@ -137,6 +137,108 @@ def test_car_cancel_slots(my_predbat):
             setattr(my_predbat, name, value)
 
 
+GATE_NAMES = ("num_cars", "car_charging_slots", "car_charging_now_slots", "car_planned_by_predbat", "car_force_holdable", "car_force_hold_until", "minutes_now", "car_cancel_keys", "car_charging_from_battery", "export_window_best", "calculate_best_export", "calculate_export_oncharge", "manual_all_times", "iboost_enable")
+
+
+def _gate_setup(my_predbat, slots, planned, switch=True):
+    """Set up cars, car slots and one export window over minutes 60 to 90 and fill in the cancel keys as calculate_plan does."""
+    my_predbat.num_cars = 1
+    my_predbat.minutes_now = 0
+    my_predbat.car_charging_now_slots = [[]]
+    my_predbat.car_charging_slots = [slots]
+    my_predbat.car_planned_by_predbat = {0} if planned else set()
+    my_predbat.car_force_holdable = {}
+    my_predbat.car_force_hold_until = {}
+    my_predbat.car_charging_from_battery = False
+    my_predbat.export_window_best = [{"start": 60, "end": 90, "average": 10.0}]
+    my_predbat.calculate_best_export = True
+    my_predbat.calculate_export_oncharge = True
+    my_predbat.manual_all_times = []
+    my_predbat.iboost_enable = False
+    _set_switch(my_predbat, switch)
+    my_predbat.car_cancel_keys = frozenset((s.car_n, s.index) for s in my_predbat.car_cancel_slots())
+
+
+def _gate_run(my_predbat, slots, planned, switch=True):
+    """Return allow_this_export_window(0) for the setup, restoring the fixture afterwards."""
+    saved = {name: getattr(my_predbat, name) for name in GATE_NAMES}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        _gate_setup(my_predbat, slots, planned, switch)
+        return my_predbat.allow_this_export_window(0)
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def test_gate_relaxed_for_cancellable(my_predbat):
+    """A Predbat-led car's slot no longer blocks an export window."""
+    assert _gate_run(my_predbat, [_slot(60, 90)], True)
+
+
+def test_gate_blocked_for_uncancellable(my_predbat):
+    """A car that is neither Predbat-led nor holdable still blocks the export window."""
+    assert not _gate_run(my_predbat, [_slot(60, 90)], False)
+
+
+def test_gate_switch_off_unchanged(my_predbat):
+    """With the switch off the car slot blocks the window, as before."""
+    assert not _gate_run(my_predbat, [_slot(60, 90)], True, switch=False)
+
+
+def test_gate_mixed_slots(my_predbat):
+    """A window over a cancellable and an uncancellable slot stays blocked."""
+    saved = {name: getattr(my_predbat, name) for name in GATE_NAMES}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        _gate_setup(my_predbat, [_slot(60, 75), _slot(75, 90)], True)
+        # The second slot is not in the cancel set (as if it had no energy left)
+        my_predbat.car_cancel_keys = frozenset(k for k in my_predbat.car_cancel_keys if k[1] == 0)
+        assert len(my_predbat.car_cancel_keys) == 1
+        assert not my_predbat.allow_this_export_window(0)
+        assert my_predbat.hit_uncancellable_car_window(60, 90) is True
+        assert my_predbat.hit_uncancellable_car_window(60, 75) is False
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def test_gate_cap(my_predbat):
+    """A window over the 65th cancellable slot is blocked, as only 64 are cancellable."""
+    slots = [_slot(i * 30, i * 30 + 30) for i in range(CAR_CANCEL_MAX_SLOTS + 1)]
+    saved = {name: getattr(my_predbat, name) for name in GATE_NAMES}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        _gate_setup(my_predbat, slots, True)
+        assert len(my_predbat.car_cancel_keys) == CAR_CANCEL_MAX_SLOTS
+        my_predbat.export_window_best = [{"start": 63 * 30, "end": 64 * 30, "average": 10.0}]
+        assert my_predbat.allow_this_export_window(0)
+        my_predbat.export_window_best = [{"start": 64 * 30, "end": 65 * 30, "average": 10.0}]
+        assert not my_predbat.allow_this_export_window(0)
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def test_levels_and_freeze_unchanged(my_predbat):
+    """hit_car_window, used by the levels pass and freeze export, still sees a cancellable slot."""
+    saved = {name: getattr(my_predbat, name) for name in GATE_NAMES}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        _gate_setup(my_predbat, [_slot(60, 90)], True)
+        assert my_predbat.hit_car_window(60, 90)
+        assert not my_predbat.hit_uncancellable_car_window(60, 90)
+        my_predbat.car_cancel_keys = frozenset()
+        assert my_predbat.hit_uncancellable_car_window(60, 90) == my_predbat.hit_car_window(60, 90)
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
 def test_force_hold_tick_publishes_holdable():
     """The component publishes the cars it can hold, before its early return, and removes only its own."""
     component = FakeComponent([FakeCharger("a")])
@@ -172,6 +274,12 @@ def run_car_cancel_tests(my_predbat):
     test_cancelled_windows()
     test_car_cancellable_cars(my_predbat)
     test_car_cancel_slots(my_predbat)
+    test_gate_relaxed_for_cancellable(my_predbat)
+    test_gate_blocked_for_uncancellable(my_predbat)
+    test_gate_switch_off_unchanged(my_predbat)
+    test_gate_mixed_slots(my_predbat)
+    test_gate_cap(my_predbat)
+    test_levels_and_freeze_unchanged(my_predbat)
     test_force_hold_tick_publishes_holdable()
     print("**** car cancel tests passed ****")
     return False

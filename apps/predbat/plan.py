@@ -2298,6 +2298,9 @@ class Plan:
         if recompute and self.calculate_savings and publish:
             self.calculate_yesterday()
 
+        # The car slots an export may cancel this cycle, which the detailed passes' export gate lets through
+        self.car_cancel_keys = frozenset((slot.car_n, slot.index) for slot in self.car_cancel_slots())
+
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90, car_charging_slots=self.car_charging_slots_model())
         # The kernel spreads one batched fan-out across threads with the GIL released for the whole
@@ -4440,7 +4443,7 @@ class Plan:
                         continue
 
                     # Can not swap into car charging slot
-                    if not self.car_charging_from_battery and self.hit_car_window(window_start_target, self.export_window_best[window_n_target]["end"]):
+                    if not self.car_charging_from_battery and self.hit_uncancellable_car_window(window_start_target, self.export_window_best[window_n_target]["end"]):
                         continue
 
                     # Try to drop the target
@@ -4756,7 +4759,7 @@ class Plan:
                     # Check exact alignment of start and end times, as we allow export to replace entire charge window
                     if not ((self.export_window_best[export_window_n]["start"] <= self.charge_window_best[hit_charge]["start"]) and (self.export_window_best[export_window_n]["end"] >= self.charge_window_best[hit_charge]["end"])):
                         return False
-            if not self.car_charging_from_battery and self.hit_car_window(self.export_window_best[export_window_n]["start"], self.export_window_best[export_window_n]["end"]):
+            if not self.car_charging_from_battery and self.hit_uncancellable_car_window(self.export_window_best[export_window_n]["start"], self.export_window_best[export_window_n]["end"]):
                 return False
             if not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, self.export_window_best[export_window_n]["start"], self.export_window_best[export_window_n]["end"]) >= 0):
                 return False
@@ -6484,6 +6487,22 @@ class Plan:
         if total_kwh > 0.0001:
             return dp2(total_cost / total_kwh)
         return None
+
+    def hit_uncancellable_car_window(self, window_start, window_end):
+        """Does this window intersect a car charging window that an export may not cancel?
+
+        The same scan as hit_car_window() without the cache, skipping the slots in car_cancel_keys. The
+        keys index the car_charging_slots_model() lists, which are the lists scanned here.
+        """
+        if self.num_cars <= 0:
+            return False
+
+        car_slots = self.car_charging_slots_model()
+        for car_n in range(self.num_cars):
+            for index, window in enumerate(car_slots[car_n]):
+                if window["end"] > window_start and window["start"] < window_end and dp2(window["kwh"]) > 0 and (car_n, index) not in self.car_cancel_keys:
+                    return True
+        return False
 
     def hit_car_window(self, window_start, window_end, cache=None):
         """Does this window intersect a car charging window?
