@@ -686,20 +686,20 @@ class UserInterface:
         """
         Update list of current Predbat settings
         """
-        global PREDBAT_SAVE_RESTORE
         self.save_restore_dir = self.config_root + "/predbat_save"
 
         if not os.path.exists(self.save_restore_dir):
             os.mkdir(self.save_restore_dir)
 
-        PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
+        # Build a list local to this engine, so several engines in one process do not share it
+        save_restore_options = ["save current", "restore default"]
         for root, _dirs, files in os.walk(self.save_restore_dir):
             for name in files:
                 filepath = os.path.join(root, name)
                 if filepath.endswith(".yaml") and not name.startswith("."):
-                    PREDBAT_SAVE_RESTORE.append(name)
+                    save_restore_options.append(name)
         item = self.config_index.get("saverestore", None)
-        item["options"] = PREDBAT_SAVE_RESTORE
+        item["options"] = save_restore_options
         self.expose_config("saverestore", None)
 
     async def async_restore_settings_yaml(self, filename):
