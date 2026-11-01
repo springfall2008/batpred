@@ -2586,7 +2586,9 @@ class Plan:
             if publish:
                 self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, best=True, soc=self.predict_soc_best)
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
-                self.publish_car_plan()
+                # Only when cancelling for export is on: the slots it cancels have just changed, and the fetch-time publish covers the rest
+                if self.car_cancel_enabled():
+                    self.publish_car_plan()
 
                 # Compute marginal energy cost matrix (what-if extra load scenarios)
                 self.calculate_marginal_costs()

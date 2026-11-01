@@ -628,7 +628,7 @@ def _plan_scenario(export_rate):
     }
 
 
-def _plan(export_rate):
+def _plan(export_rate, switch=True, publish_calls=None):
     """Plan the scenario on a fresh PredBat with the switch on; return it and the cancellable slots."""
     # Imported here: unit_test imports this module, so a top level import would be circular
     from unit_test import create_predbat
@@ -657,7 +657,10 @@ def _plan(export_rate):
         plan_predbat.args["threads"] = 0
         plan_predbat.plan_valid = False
         plan_predbat.debug_enable = False
-        _set_switch(plan_predbat, True)
+        _set_switch(plan_predbat, switch)
+        if publish_calls is not None:
+            real_publish = plan_predbat.publish_car_plan
+            plan_predbat.publish_car_plan = lambda: (publish_calls.append(1), real_publish())[1]
         plan_predbat.calculate_plan(recompute=True)
     return plan_predbat, plan_predbat.car_cancel_slots()
 
@@ -861,6 +864,16 @@ def test_display_marks_cancelled(my_predbat):
         assert my_predbat.car_charge_slot_kwh_cancelled(base + 90, base + 120) == 0
 
 
+def test_plan_republishes_car_plan_only_when_enabled():
+    """calculate_plan() republishes the car plan after planning only with the switch on; switch off keeps today's single publish."""
+    off_calls = []
+    _plan(200.0, switch=False, publish_calls=off_calls)
+    assert off_calls == [], "switch off published the car plan {} times".format(len(off_calls))
+    on_calls = []
+    _plan(200.0, switch=True, publish_calls=on_calls)
+    assert on_calls, "switch on did not publish the car plan after planning"
+
+
 def run_car_cancel_tests(my_predbat):
     """Run the car cancel tests. Returns True on failure."""
     print("**** Running car cancel tests ****")
@@ -891,6 +904,7 @@ def run_car_cancel_tests(my_predbat):
     test_switch_off_identical(my_predbat)
     test_valuation_saving_session_wins()
     test_valuation_normal_export_loses()
+    test_plan_republishes_car_plan_only_when_enabled()
     test_publish_cancelled_for_export(my_predbat)
     test_publish_partial_overlap_whole_slot(my_predbat)
     test_publish_state_off_when_current_cancelled(my_predbat)
