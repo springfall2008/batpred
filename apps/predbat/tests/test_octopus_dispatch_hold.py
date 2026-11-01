@@ -421,6 +421,26 @@ def _run(my_predbat):
     _cycle(my_predbat, 1110, seconds=1)
     failed |= _check("t22 held at the boundary", next_half_hour in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
 
+    print("Test 23: the tail of a dispatch ending at midnight does not hold 00:00-00:30")
+    # The half hour before is yesterday's 23:30, found by its absolute start once midnight_utc has moved on
+    _reset(my_predbat)
+    _device_state(my_predbat, "SMART_CONTROL_IN_PROGRESS")
+    my_predbat.dynamic_load_car_sensors = {0: CAR_SENSOR}
+    my_predbat.set_state_wrapper(CAR_SENSOR, "on")
+    my_predbat.car_charging_now = [True]
+    _cycle(my_predbat, 1435, planned=[_dispatch(my_predbat, 1425, 1440, kwh=1.2, location=None)])
+    my_predbat.midnight_utc = my_predbat.midnight_utc + timedelta(days=1)
+    _cycle(my_predbat, 0, seconds=1)
+    failed |= _check("t23 yesterday's 23:30 held", my_predbat.midnight_utc - timedelta(minutes=30) in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+    failed |= _check("t23 00:00 not held at the boundary", my_predbat.midnight_utc not in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+    my_predbat.octopus_held_update(my_predbat.midnight_utc + timedelta(minutes=3))
+    failed |= _check("t23 nor on a poll in the tail", my_predbat.midnight_utc not in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+    my_predbat.set_state_wrapper(CAR_SENSOR, "off")
+    my_predbat.car_charging_now = [False]
+    rates = _cycle(my_predbat, 5)
+    failed |= _check("t23 23:30-00:00 still cheap", _low(rates, -30, 0), "rate {}".format(rates[-30]))
+    failed |= _check("t23 00:00-00:30 at the day rate", _day(rates, 0, 30), "rate {}".format(rates[0]))
+
     return failed
 
 
