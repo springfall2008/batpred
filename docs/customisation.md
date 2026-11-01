@@ -189,6 +189,7 @@ This setting will not impact the real calculated costs and is only used for plan
 **switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
 If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
 If the load remains high for two checks in a row, this prediction is extended into the following slot too, so the plan stays up to date across the slot boundary.
+When **load_power** is set in apps.yaml, a high reading is only acted on if the live load power confirms it (at least 90% of the battery rate). Load energy sensors that only move in whole kWh, such as Solis, otherwise make each step look like a 12kW spike; the cost is that a genuine high load your load power sensor under-reads is ignored too. If the load power sensor has no reading, the energy sensor is used on its own as before.
 
 Checking Octopus Intelligent slots against whether the car is actually charging is a separate switch, **switch.predbat_octopus_intelligent_dynamic** - see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car).<BR>
 Whether or not this switch is On, if **car_charging_now** reports your car charging but no charging slot covers the current time, Predbat predicts the car's load at **input_number.predbat_car_charging_rate** until the end of the current slot, with the battery held for the car (unless **switch.predbat_car_charging_from_battery** is On) and no export planned over it. With the switch On, that load is also taken out of the recent-load reading above, so it is not counted twice.<BR>
@@ -324,7 +325,7 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots in time order (default On)
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
-- **switch.predbat_car_charging_from_battery** - prevent the car from draining the home battery when charging
+- **switch.predbat_car_charging_from_battery** - when On, allows the car to drain the home battery when charging; when Off (the default), Predbat holds the battery while the car charges
 - **switch.predbat_car_charging_manual_soc** - ignore the **car_charging_soc** car SoC sensor set in `apps.yaml` and use the manual SoC instead (car 0)
 - **switch.predbat_car_charging_manual_soc_1/2/3** - ignore the **car_charging_soc** car SoC sensor for cars 1/2/3
 - **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC in kWh (car 0), used when the switch above is on, or when **car_charging_soc** is not set for the car and its charger has energy and plugged-in (**car_charging_plugged**) sensors. Otherwise, with a car SoC sensor, it shows the sensor's reading
@@ -370,10 +371,13 @@ This alternative plan is only kept if it does not increase the overall plan metr
 
 ## Battery margins and metrics options
 
-**input_number.predbat_best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep the battery above for the Predbat plan.
-This is a soft constraint only that's used for longer-term planning and is ignored for the forthcoming first 4 hours of the plan.
-As this is not used for short-term planning your SoC can drop below this - use **input_number.predbat_best_soc_min** if you want to force all charges to be above a set level.
+**input_number.predbat_best_soc_keep** is the battery level in kWh that Predbat will try to keep the battery above in the plan.
+This is a soft constraint: for each hour the planned SoC spends below it, the plan is charged the shortfall in kWh times the import rate at that time, scaled by **input_number.predbat_best_soc_keep_weight**. The plan only goes below it when doing so saves more than that.
+It is an absolute level, not an amount above your reserve, so a value at or below your battery's reserve level (in kWh) has no effect.
+The charge fades in over the first 4 hours of the plan, so the next few hours are planned mostly on cost. The exception is once a planned forced export has started - from then on it applies in full, which stops an evening export from taking the battery below this level.
+As it is a soft constraint your SoC can still drop below it - use **input_number.predbat_best_soc_min** if you want to force all charges to be above a set level.
 It's usually good to have best_soc_keep set to 0kWh to use your entire battery, values above zero will end up costing more money but will ensure you have some spare battery kept back for emergency use.
+A value a little above your reserve (for example the reserve plus 0.3-0.5kWh) is usually enough to stop an evening export emptying the battery and leaving the house importing at the peak rate.
 
 **input_number.predbat_best_soc_keep_weight** (_expert_mode_) Is used to tune how strongly you want the keep metric to apply.
 A value of 0 would essentially ignore keep while higher values will make it more important to always stay above your keep threshold even if it costs
@@ -405,10 +409,12 @@ If you use **input_number.predbat_pv_metric10_weight** then you probably don't n
 Do not use it if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
 
-**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced export for.
-A value of 0.1p is the default which prevents any marginal exports as they must be worth at least 0.1 pence for a slot (less for shorter slots).
-If you increase this value (e.g. you only want to force export if very profitable), then exports will become less common.
-The value is in pence per slot of export time.
+**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets how much a forced export has to earn, in pence per slot (30 minutes) of export time, scaled down for exports at lower power.
+Every 5 minutes of a planned export has to earn its share of this, so an export is shortened, or dropped, where its later minutes would earn less than that.
+For example at 0.5p each extra 5 minutes of export must earn about 0.08p, and at 3p about 0.5p.
+A value of 0.1p is the default, which only removes export that earns almost nothing.
+If you increase this value (e.g. you only want to force export if it is clearly profitable), then exports will become shorter and less common.
+An export that is already running is not shortened by this setting.
 
 **input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum pence cost improvement it's worth doing an export freeze for.
 A value of 0.1p is the default which prevents any marginal freezes as they must be worth at least 0.1 pence for a slot duration (less for shorter slots).
@@ -957,4 +963,4 @@ These are described in detail in [Updating Predbat](install.md#predbat-built-in-
 - **select.predbat_update** - List of Predbat software versions you can select to update Predbat to
 - **switch.predbat_auto_update** - When On, Predbat will automatically update itself as new releases are published on GitHub.
 
-Advanced: set `predbat_repository` in `apps.yaml` (format `owner/repo`) to source **main** updates from a fork instead of the default upstream repository. Versioned release options still use the official upstream repository.
+Advanced: the `predbat_repository` and `predbat_branch` settings in `apps.yaml` change where **main** is downloaded from and add branches to this drop-down, to test a fork or a branch. See [predbat_repository](apps-yaml.md#predbat_repository) and [predbat_branch](apps-yaml.md#predbat_branch). Versioned release options still use the official upstream repository.

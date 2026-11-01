@@ -21,6 +21,7 @@ import array
 import ctypes
 import os
 from datetime import datetime, timedelta, timezone, time
+from email.utils import parsedate_to_datetime
 from io import StringIO
 from functools import lru_cache
 from const import (
@@ -387,20 +388,25 @@ def _mask_secrets_in_place(value):
             _mask_secrets_in_place(entry)
 
 
-def load_secrets(log=None):
+def load_secrets(log=None, secrets_file=None):
     """
     Load secrets from secrets.yaml file
-    Priority: PREDBAT_SECRETS_FILE env var, ./secrets.yaml, /config/secrets.yaml
+    Priority: secrets_file argument (else PREDBAT_SECRETS_FILE env var), ./secrets.yaml, /config/secrets.yaml
+
+    A caller that passes secrets_file has already resolved it (Hass.__init__ reads
+    PREDBAT_SECRETS_FILE once per instance), so the environment is only consulted here
+    when no path is given.
     """
     import yaml
 
     log = log or (lambda message, **kwargs: print(message))
     secrets = {}
+    preferred_location = secrets_file if secrets_file is not None else os.getenv("PREDBAT_SECRETS_FILE")
     secrets_file = None
 
     # Try loading from different locations in priority order
     possible_locations = [
-        os.getenv("PREDBAT_SECRETS_FILE"),
+        preferred_location,
         "secrets.yaml",
         "/homeassistant/secrets.yaml",
         "/conf/secrets.yaml",
@@ -442,7 +448,7 @@ def load_secrets(log=None):
     return secrets
 
 
-def load_apps_yaml(apps_file=None, log=None):
+def load_apps_yaml(apps_file=None, log=None, secrets_file=None):
     """
     Load an apps.yaml-format file and return its pred_bat section, with !secret references resolved
 
@@ -451,12 +457,14 @@ def load_apps_yaml(apps_file=None, log=None):
     for a malformed file and KeyError when the pred_bat section is missing, leaving the caller to
     decide whether that is fatal.
 
+    apps_file and secrets_file default to $PREDBAT_APPS_FILE / $PREDBAT_SECRETS_FILE when not given.
+
     Returns (args, secrets).
     """
     import yaml
 
     log = log or (lambda message, **kwargs: print(message))
-    secrets = load_secrets(log=log)
+    secrets = load_secrets(log=log, secrets_file=secrets_file)
 
     def secret_constructor(loader, node):
         """YAML constructor for the !secret tag, resolving against the secrets just loaded."""
@@ -2008,6 +2016,20 @@ def minutes_since_midnight(now, midnight):
     return int((now - midnight).total_seconds() / 60 / PREDICT_STEP) * PREDICT_STEP
 
 
+def next_aligned_run(run_every, now=None):
+    """
+    The first moment after now on a run_every-second boundary of the host's local wall clock, timezone-aware
+
+    Aware, so the scheduler can keep it in UTC: a naive "02:00" worked out at 01:55 BST on the night the clocks
+    go back would mean 02:00 GMT, an hour and five minutes later (#5770). now defaults to the host clock.
+    """
+    if now is None:
+        now = datetime.now().astimezone()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    seconds_now = (now - midnight).seconds
+    return midnight + timedelta(seconds=seconds_now + run_every - seconds_now % run_every)
+
+
 def minutes_since_yesterday(now):
     """
     Calculate the number of minutes since 23:59 yesterday
@@ -2711,29 +2733,151 @@ HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
 # still picked up within the hour.
 TOKEN_MINT_BACKOFF_BASE_SECONDS = 300
 TOKEN_MINT_BACKOFF_MAX_SECONDS = 3600
-# Bound the exponent so a long block cannot grow 2 ** block_count without limit; the delay
+# After a rate limit (KT-CT-1199, HTTP 429 or an edge/WAF block) the Kraken-based components pause
+# their GraphQL queries rather than sending the rest of the poll into the same limit. The pause
+# doubles per consecutive rate limit, capped so a limit that lifts is picked up within the half
+# hour. The base matches the two minute dispatch poll, so the first rate limit skips one poll.
+GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS = 120
+GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS = 1800
+# Bound the exponent so a long run of refusals cannot grow 2 ** count without limit; the delay
 # is capped well before this, so the clamp only stops the arithmetic running away.
-TOKEN_MINT_BACKOFF_MAX_DOUBLINGS = 16
-# While suppressed the mint makes no request and so logs nothing, which leaves a reader of a
-# short log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason
-# at most this often.
-TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS = 600
+BACKOFF_MAX_DOUBLINGS = 16
+# While backing off nothing is sent and so nothing is logged, which leaves a reader of a short
+# log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason at most
+# this often.
+BACKOFF_LOG_INTERVAL_SECONDS = 600
+# Kraken's GraphQL error code for "Too many requests"
+KRAKEN_RATE_LIMIT_ERROR_CODE = "KT-CT-1199"
 
 
-def token_mint_backoff_seconds(block_count):
-    """Backoff delay in seconds after this many consecutive CDN blocks on a token mint.
+def exponential_backoff_seconds(count, base_seconds, max_seconds):
+    """Backoff delay in seconds after this many consecutive failures.
 
-    Doubles per consecutive block from TOKEN_MINT_BACKOFF_BASE_SECONDS, capped at
-    TOKEN_MINT_BACKOFF_MAX_SECONDS so a block that lifts is still picked up within the hour.
+    Doubles per consecutive failure from base_seconds, capped at max_seconds.
 
     Args:
-        block_count: Number of consecutive blocks so far, 1 for the first.
+        count: Number of consecutive failures so far, 1 for the first.
+        base_seconds: Delay after the first failure.
+        max_seconds: Longest delay returned.
 
     Returns:
         int: Delay in seconds.
     """
-    exponent = min(max(block_count - 1, 0), TOKEN_MINT_BACKOFF_MAX_DOUBLINGS)
-    return min(TOKEN_MINT_BACKOFF_BASE_SECONDS * (2**exponent), TOKEN_MINT_BACKOFF_MAX_SECONDS)
+    exponent = min(max(count - 1, 0), BACKOFF_MAX_DOUBLINGS)
+    return min(base_seconds * (2**exponent), max_seconds)
+
+
+class Backoff:
+    """Exponential backoff after consecutive refusals - a rate limit or a CDN/WAF block.
+
+    Shared by every Kraken-based token mint and GraphQL cooldown so the schedule, the cap and
+    the clock live in one place. Each consecutive refusal doubles the wait from base_seconds,
+    capped at max_seconds; a Retry-After from the server lengthens it within the same cap.
+    Times are aware UTC, so a clock change cannot stretch or shorten a wait. Logging is left to
+    the caller, whose wording and prefix differ: start() returns the delay, due_reminder() says
+    when to repeat the reason, and clear() returns how many refusals it cleared.
+
+    Attributes:
+        count: Consecutive refusals so far, 0 when not backing off.
+        until: Aware UTC time the backoff ends, or None.
+        reason: How the last request was refused, for the log.
+    """
+
+    def __init__(self, base_seconds, max_seconds):
+        """Create an inactive backoff with the given schedule."""
+        self.base_seconds = base_seconds
+        self.max_seconds = max_seconds
+        self.count = 0
+        self.until = None
+        self.logged_at = None
+        self.reason = None
+
+    def start(self, reason, retry_after=None):
+        """Record another refusal and start (or extend) the backoff.
+
+        Args:
+            reason: How the request was refused, e.g. "rate limited" or "edge/WAF blocked".
+            retry_after: Seconds the server asked us to wait, or None.
+
+        Returns:
+            int: The delay in seconds.
+        """
+        self.count += 1
+        delay = exponential_backoff_seconds(self.count, self.base_seconds, self.max_seconds)
+        if retry_after:
+            delay = min(max(delay, retry_after), self.max_seconds)
+        now = datetime.now(timezone.utc)
+        self.until = now + timedelta(seconds=delay)
+        self.logged_at = now
+        self.reason = reason
+        return delay
+
+    def active(self):
+        """Return True while the backoff is running."""
+        return self.until is not None and datetime.now(timezone.utc) < self.until
+
+    def due_reminder(self):
+        """Return True, at most every BACKOFF_LOG_INTERVAL_SECONDS, when the caller should repeat why it is backing off."""
+        now = datetime.now(timezone.utc)
+        if self.logged_at and (now - self.logged_at).total_seconds() < BACKOFF_LOG_INTERVAL_SECONDS:
+            return False
+        self.logged_at = now
+        return True
+
+    def clear(self):
+        """End the backoff after a success.
+
+        Returns:
+            int: How many consecutive refusals were cleared, 0 if it was not backing off.
+        """
+        count = self.count
+        self.count = 0
+        self.until = None
+        self.logged_at = None
+        self.reason = None
+        return count
+
+
+def is_kraken_rate_limit_error(errors):
+    """Return True if a GraphQL errors list carries Kraken's rate limit code (KT-CT-1199).
+
+    Args:
+        errors: The "errors" list from a GraphQL response body, or anything else.
+
+    Returns:
+        bool: True if any error is a rate limit.
+    """
+    if not isinstance(errors, list):
+        return False
+    return any(isinstance(error, dict) and isinstance(error.get("extensions"), dict) and error["extensions"].get("errorCode") == KRAKEN_RATE_LIMIT_ERROR_CODE for error in errors)
+
+
+def parse_retry_after(value, now=None):
+    """Parse an HTTP Retry-After header into seconds to wait.
+
+    The header is either a whole number of seconds or an HTTP date. Anything else - a missing
+    header, a negative number, garbage - returns None so the caller falls back to its own schedule.
+
+    Args:
+        value: The header value, or None when the header is absent.
+        now: The current time as an aware datetime, defaulting to now in UTC. Only used for the date form.
+
+    Returns:
+        int or None: Seconds to wait, 0 for a date already passed, None if the header is unusable.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return int(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when is None or when.tzinfo is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    return max(int((when - now).total_seconds()), 0)
 
 
 def is_edge_block_body(text):
@@ -3105,3 +3249,43 @@ def allocate_export_rates(needs, max_rates, p_fleet):
             remaining = 0.0
 
     return alloc
+
+
+# What the Octopus Energy integration's device_type attribute names a charger and a car as (BottlecapDave #1917)
+INTELLIGENT_DEVICE_TYPE_CHARGER = "ELECTRIC_VEHICLE_CHARGERS"
+INTELLIGENT_DEVICE_TYPE_CAR = "ELECTRIC_VEHICLES"
+
+
+def intelligent_device_is_charger(dispatch_attribute, target_attribute=None):
+    """Is a car's Octopus Intelligent device its charger (True), the car itself (False), or can that not be told (None)?
+
+    dispatch_attribute(name) reads an attribute of the car's dispatch sensor, target_attribute(name) one of its
+    Intelligent charge target entity, when there is one. Checked in order:
+
+    - is_charger on the dispatch sensor, published by Predbat's own Octopus and Kraken components.
+    - device_type, which the Octopus Energy integration puts on the charge target entity (and is read from the
+      dispatch sensor too).
+    - Failing both, which size the integration's dispatch sensor fills in: only the charge point's power for a
+      charger, only the battery size for a car.
+    """
+    is_charger = dispatch_attribute("is_charger")
+    if isinstance(is_charger, (bool, int, float)):
+        return bool(is_charger)
+    if isinstance(is_charger, str) and is_charger.strip().lower() not in ("", "unknown", "unavailable", "none"):
+        # The strings get_arg() and the charger control read as true
+        return is_charger.strip().lower() in ("on", "true", "yes", "enabled", "enable", "connected")
+    for read in (target_attribute, dispatch_attribute):
+        if read is None:
+            continue
+        device_type = read("device_type")
+        if device_type == INTELLIGENT_DEVICE_TYPE_CHARGER:
+            return True
+        if device_type == INTELLIGENT_DEVICE_TYPE_CAR:
+            return False
+    size = dispatch_attribute("vehicle_battery_size_in_kwh")
+    rate = dispatch_attribute("charge_point_power_in_kw")
+    if rate is not None and size is None:
+        return True
+    if size is not None and rate is None:
+        return False
+    return None

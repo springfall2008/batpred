@@ -363,8 +363,8 @@ def test_edge_block_does_not_latch_oauth_failed():
 
     assert result is False
     assert mixin.oauth_failed is False, "an edge block must not latch oauth_failed"
-    assert mixin.token_mint_blocked_until is not None
-    assert mixin.token_mint_block_count == 1
+    assert mixin.token_mint_backoff.until is not None
+    assert mixin.token_mint_backoff.count == 1
     # One attempt only - no immediate retry with primary credentials into the same block
     assert mixin._kraken_token_request.call_count == 1
 
@@ -380,7 +380,7 @@ def test_edge_block_suppresses_the_next_mint():
 
     assert result is False
     mixin._kraken_token_request.assert_not_called()
-    assert mixin.token_mint_block_count == 1, "a suppressed attempt must not grow the backoff"
+    assert mixin.token_mint_backoff.count == 1, "a suppressed attempt must not grow the backoff"
 
 
 def test_edge_block_keeps_a_still_valid_token():
@@ -392,7 +392,7 @@ def test_edge_block_keeps_a_still_valid_token():
 
     # The mint is refused, but the token itself is still good for ~3 minutes
     assert asyncio.run(mixin.check_and_refresh_oauth_token()) is True
-    assert mixin.token_mint_blocked_until is not None
+    assert mixin.token_mint_backoff.until is not None
 
     # Next caller, still inside the window, token still has ~3 minutes of life
     mixin._kraken_token_request = AsyncMock()
@@ -412,9 +412,9 @@ def test_elapsed_backoff_reopens_the_mint():
     mixin = make_mixin(auth_method="api_key", key="sk_live_test123")
     mixin._kraken_token_request = edge_blocked_request(mixin)
     asyncio.run(mixin.check_and_refresh_oauth_token())
-    assert mixin.token_mint_blocked_until is not None
+    assert mixin.token_mint_backoff.until is not None
 
-    mixin.token_mint_blocked_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    mixin.token_mint_backoff.until = datetime.now(timezone.utc) - timedelta(seconds=1)
     mixin._kraken_token_request = AsyncMock(
         return_value={"token": "recovered", "refreshToken": "r", "exp": int(time.time()) + 3600}
     )
@@ -423,8 +423,8 @@ def test_elapsed_backoff_reopens_the_mint():
 
     assert result is True
     assert mixin.access_token == "recovered"
-    assert mixin.token_mint_blocked_until is None
-    assert mixin.token_mint_block_count == 0
+    assert mixin.token_mint_backoff.until is None
+    assert mixin.token_mint_backoff.count == 0
     assert mixin.oauth_failed is False
 
 
@@ -437,7 +437,7 @@ def test_genuine_auth_failure_still_latches_oauth_failed():
 
     assert result is False
     assert mixin.oauth_failed is True
-    assert mixin.token_mint_blocked_until is None
+    assert mixin.token_mint_backoff.until is None
 
 
 def test_edge_block_with_a_refresh_token_held():
@@ -453,7 +453,7 @@ def test_edge_block_with_a_refresh_token_held():
     assert mixin.oauth_failed is False
     assert mixin.refresh_token == "still-good-refresh", "the refresh token is not what the CDN objected to"
     assert mixin._kraken_token_request.call_count == 1, "must not recurse into the same block"
-    assert mixin.token_mint_blocked_until is not None
+    assert mixin.token_mint_backoff.until is not None
     assert mixin._refresh_in_progress is False
 
 
@@ -515,3 +515,96 @@ def test_token_request_graphql_rejection_logs_redacted_reason():
     logged = " ".join(str(c.args[0]) for c in mixin.log.call_args_list)
     assert "KT-CT-1138: Invalid data {...}." in logged, logged
     assert "ter2" not in logged and "hun" not in logged, logged
+
+
+def rate_limited_request(mixin, retry_after=None):
+    """Stand-in for _kraken_token_request that reports a rate limit (KT-CT-1199 or HTTP 429)."""
+
+    async def _limited(_input_vars):
+        mixin.token_mint_rate_limited = True
+        mixin.token_mint_retry_after = retry_after
+        return None
+
+    return AsyncMock(side_effect=_limited)
+
+
+def http_response_of(mock_session):
+    """The response a make_http_mixin session hands out, so a test can set its headers."""
+    return mock_session.post.return_value.__aenter__.return_value
+
+
+def test_token_request_flags_http_429():
+    """An HTTP 429 is reported as a rate limit, carrying the Retry-After, not as a plain failure."""
+    mixin, mock_session = make_http_mixin(429, "Too Many Requests")
+    http_response_of(mock_session).headers = {"Retry-After": "900"}
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(mixin._kraken_token_request({"APIKey": "sk_live_test123"}))
+
+    assert result is None
+    assert mixin.token_mint_rate_limited is True
+    assert mixin.token_mint_retry_after == 900
+    assert mixin.token_mint_edge_blocked is False
+
+
+def test_token_request_flags_kt_ct_1199():
+    """A KT-CT-1199 GraphQL error on the mint is reported as a rate limit."""
+    mixin, mock_session = make_http_mixin(200, "", json_data=make_error_response("Too many requests.", "KT-CT-1199"))
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(mixin._kraken_token_request({"APIKey": "sk_live_test123"}))
+
+    assert result is None
+    assert mixin.token_mint_rate_limited is True
+
+
+def test_token_request_does_not_flag_other_errors():
+    """A genuine rejection is not mistaken for a rate limit, so it can still latch oauth_failed."""
+    mixin, mock_session = make_http_mixin(200, "", json_data=make_error_response("Invalid API key", "KT-CT-1138"))
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        asyncio.run(mixin._kraken_token_request({"APIKey": "sk_live_test123"}))
+
+    assert mixin.token_mint_rate_limited is False
+
+
+def test_rate_limited_mint_does_not_latch_oauth_failed():
+    """A rate-limited mint backs off rather than burning the refresh token and latching oauth_failed."""
+    mixin = make_mixin(auth_method="api_key", key="sk_live_test123")
+    mixin.refresh_token = "still-good-refresh"
+    mixin.token_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    mixin._kraken_token_request = rate_limited_request(mixin)
+
+    result = asyncio.run(mixin.check_and_refresh_oauth_token())
+
+    assert result is False
+    assert mixin.oauth_failed is False, "a rate limit must not latch oauth_failed"
+    assert mixin.refresh_token == "still-good-refresh"
+    assert mixin._kraken_token_request.call_count == 1, "must not retry into the same rate limit"
+    assert mixin.token_mint_backoff.until is not None
+    logged = " ".join(str(c.args[0]) for c in mixin.log.call_args_list)
+    assert "Token mint rate limited" in logged, logged
+
+    # The next caller inside the backoff does not mint
+    mixin._kraken_token_request = AsyncMock()
+    asyncio.run(mixin.check_and_refresh_oauth_token())
+    mixin._kraken_token_request.assert_not_called()
+
+
+def test_rate_limited_mint_honours_retry_after():
+    """A Retry-After longer than the backoff schedule lengthens the wait."""
+    mixin = make_mixin(auth_method="api_key", key="sk_live_test123")
+    mixin._kraken_token_request = rate_limited_request(mixin, retry_after=2000)
+    before = datetime.now(timezone.utc)
+
+    asyncio.run(mixin.check_and_refresh_oauth_token())
+
+    assert mixin.token_mint_backoff.until >= before + timedelta(seconds=1999)
+
+
+def test_rate_limited_mint_keeps_a_still_valid_token():
+    """A token inside the proactive-refresh window is still usable while the mint is rate limited."""
+    mixin = make_mixin(auth_method="api_key", key="sk_live_test123")
+    mixin.access_token = "still-good"
+    mixin.token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=3)
+    mixin._kraken_token_request = rate_limited_request(mixin)
+
+    assert asyncio.run(mixin.check_and_refresh_oauth_token()) is True
+    assert mixin.access_token == "still-good"

@@ -44,6 +44,7 @@ from component_base import ComponentBase
 from coordinator import inverter_record
 from alphaess_const import (
     ALPHAESS_BASE_URL,
+    ALPHAESS_MIN_SOC_PERCENT,
     ALPHAESS_ENDPOINTS,
     ALPHAESS_RETURN_CODES,
     ALPHAESS_CODE_OK,
@@ -1370,7 +1371,7 @@ class AlphaESSAPI(ComponentBase):
         """
         window = schedule.get("export", {}) or {}
         enabled = bool(window.get("enable"))
-        reserve = self._clamp_percent(schedule.get("reserve", 0))
+        reserve = self._clamp_percent(schedule.get("reserve", 0), low=ALPHAESS_MIN_SOC_PERCENT)
 
         # The working AlphaESS no-discharge primitive is the charge profile built by
         # build_charge_payload, not an empty discharge programme. Leave discharge time
@@ -1404,7 +1405,7 @@ class AlphaESSAPI(ComponentBase):
             "timeDise1": end1,
             "timeDisf2": start2,
             "timeDise2": end2,
-            "batUseCap": self._clamp_percent(window.get("soc", reserve)) if enabled else reserve,
+            "batUseCap": self._clamp_percent(window.get("soc", reserve), low=ALPHAESS_MIN_SOC_PERCENT) if enabled else reserve,
         }
 
     @staticmethod
@@ -1754,7 +1755,7 @@ class AlphaESSAPI(ComponentBase):
         chargeLimit is documented as [10,100] and anything outside gets 6001, so it is
         clamped to 10 at the bottom rather than passed through as Predbat's 0.
         """
-        entry = {"beginTime": start, "endTime": end, "chargeLimit": self._clamp_percent(soc, low=10, high=100)}
+        entry = {"beginTime": start, "endTime": end, "chargeLimit": self._clamp_percent(soc, low=ALPHAESS_MIN_SOC_PERCENT, high=100)}
         if power > 0:
             entry["chargePower"] = int(power)
         return entry
@@ -1782,7 +1783,7 @@ class AlphaESSAPI(ComponentBase):
             hold_charge = self._hold_charge_window(sn, schedule)
         charge = hold_charge or (schedule.get("charge", {}) or {})
         export = schedule.get("export", {}) or {}
-        reserve = schedule.get("reserve", 10)
+        reserve = schedule.get("reserve", ALPHAESS_MIN_SOC_PERCENT)
         charge_rate = self._as_float(charge.get("power"), 0.0)
         export_rate = self._as_float(export.get("power"), 0.0)
         charge_on = bool(charge.get("enable")) and charge_rate > 0
@@ -1790,7 +1791,7 @@ class AlphaESSAPI(ComponentBase):
         (charge_start, charge_end), _ = self._snapped_periods(sn, "charge", charge.get("start"), charge.get("end"), charge_on)
         if window_is_empty(charge_start, charge_end):
             charge_on = False
-        charge_list = [self._periodic_entry(charge_start, charge_end, charge.get("soc", 100), charge_rate)] if charge_on else [self._periodic_entry(ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED, 10, 0)]
+        charge_list = [self._periodic_entry(charge_start, charge_end, charge.get("soc", 100), charge_rate)] if charge_on else [self._periodic_entry(ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED, ALPHAESS_MIN_SOC_PERCENT, 0)]
 
         # While the hold charge profile is active it is the whole control action. Suppress
         # any export schedule and leave discharge time control in demand mode; AlphaESS

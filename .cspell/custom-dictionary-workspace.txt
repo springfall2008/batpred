@@ -78,6 +78,7 @@ byok
 cadata
 calcsize
 calib
+callees
 Cantarell
 cbat
 CDLL
@@ -186,6 +187,7 @@ ecosmart
 Eddi
 eddis
 edfenergy
+edfgb
 efgh
 elif
 elinter
@@ -215,10 +217,12 @@ enphaseenergy
 Enpower
 entityfilter
 entrez
+eonnext
 epod
 epvtoday
 errno
 ESSAPI
+etime
 ETIMEDOUT
 eto
 etoday
@@ -270,6 +274,7 @@ geseriale
 getaffinity
 getall
 getattr
+getmembers
 getrusage
 Ginlong
 githubusercontent
@@ -407,6 +412,7 @@ maxrss
 maxsoc
 mbat
 mbuhansen
+mdi
 mdlrc
 measurand
 measurands
@@ -481,6 +487,7 @@ OCPP
 octo
 octoplus
 octopoints
+oegb
 OFFPEAK
 Ofgem
 Ohme
@@ -511,6 +518,7 @@ parseable
 pbat
 pbgw
 pcharging
+pcpu
 pcsenmap
 pdata
 pdetails
@@ -579,6 +587,7 @@ reactivepower
 readback
 readbacks
 reasoncodes
+rebooked
 recp
 redownload
 Referer
@@ -591,6 +600,7 @@ remainings
 remotecontrol
 renderable
 replayer
+repr
 resetmidnight
 resultid
 resultmid
@@ -732,8 +742,10 @@ tunables
 twinx
 typecode
 typecodes
+tzdata
 tzfile
 tzpath
+tzset
 unasserted
 uncalibrated
 uncompilable
@@ -762,6 +774,7 @@ untriaged
 urandom
 urlsafe
 uscapacity
+usegmt
 useid
 userinterface
 utcoffset
@@ -782,6 +795,8 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+workstream
+workstreams
 worktree
 writeonly
 wrongsha

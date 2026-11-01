@@ -355,6 +355,11 @@ def classify_ge_failure(data, endpoint=None):
     return {"code": code, "message": ge_code_message(data, code), "reason": reason, "retry": retry}
 
 
+def format_ge_endpoint(endpoint, serial="", setting_id="", uuid="", meter_ids="", start_time="", end_time="", command=""):
+    """Fill an endpoint template's placeholders, giving the request path that is sent and logged (#5777)."""
+    return endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
+
+
 class EVCCommandFailed(Exception):
     """An EV charger command GivEnergy Cloud refused or never confirmed.
 
@@ -2528,13 +2533,15 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     app="gecloud",
                 )
                 self.charger_control_publish_guest("gecloud")
-                try:
-                    await self.charger_control_tick(self.now_utc_exact)
-                except EVCCommandFailed as exc:
-                    # Already logged as an error by async_send_evc_command; nothing is recorded as
-                    # done, so the next cycle tries again - for a release, that is what stops a
-                    # stopped car being stranded
-                    self.log("GECloud: Warn: EV charger control failed, will retry: {}".format(exc))
+            try:
+                # Every cycle, whether or not control is on: with ge_cloud_evc_control since turned off,
+                # a charger an earlier session stopped is still released (#5788)
+                await self.charger_control_tick(self.now_utc_exact)
+            except EVCCommandFailed as exc:
+                # Already logged as an error by async_send_evc_command; nothing is recorded as
+                # done, so the next cycle tries again - for a release, that is what stops a
+                # stopped car being stranded
+                self.log("GECloud: Warn: EV charger control failed, will retry: {}".format(exc))
 
         if first or devices_changed or (seconds % (10 * 60) == 0):
             # Get All registers every now and again in case user changes them
@@ -3294,17 +3301,18 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         Retry API call
         """
         data = None
+        path = format_ge_endpoint(endpoint, serial, setting_id, uuid, meter_ids, start_time, end_time, command)
         for retry in range(RETRIES):
             try:
                 data = await self.async_get_inverter_data(endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time=start_time, end_time=end_time, command=command, measurands=measurands)
             except GECloudTerminalError as e:
-                self.log("GECloud: Warn: Request to {} was rejected: {} (code {}), not retrying".format(endpoint, e.message, e.code))
+                self.log("GECloud: Warn: Request to {} was rejected: {} (code {}), not retrying".format(path, e.message, e.code))
                 return None
             if data is not None:
                 break
             await asyncio.sleep(RETRY_FACTOR * (retry + 1))
         if data is None:
-            self.log("GECloud: Warn: Failed to get data from {}".format(endpoint))
+            self.log("GECloud: Warn: Failed to get data from {}".format(path))
         return data
 
     async def async_get_inverter_data(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command="", measurands=""):
@@ -3314,7 +3322,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # Increment request counter
         self.requests_total += 1
 
-        url = GE_API_URL + endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
+        path = format_ge_endpoint(endpoint, serial, setting_id, uuid, meter_ids, start_time, end_time, command)
+        url = GE_API_URL + path
 
         # Add measurands parameters if provided (for EV charger endpoints)
         if measurands:
@@ -3382,7 +3391,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             if failure:
                 self.failures_total += 1
                 record_api_call("givenergy", False, failure["reason"])
-                self.log("GECloud: Warn: Request to {} was rejected: {} (code {})".format(endpoint, failure["message"], failure["code"]))
+                self.log("GECloud: Warn: Request to {} was rejected: {} (code {})".format(path, failure["message"], failure["code"]))
                 if not failure["retry"]:
                     # Terminal: raise so the caller aborts rather than retrying
                     raise GECloudTerminalError(failure["code"], failure["message"], failure["reason"])
@@ -3397,12 +3406,12 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             # covers accounts without an active GivEnergy Premium subscription, which (since
             # May 2026) is required for cloud API access.
             self.failures_total += 1
-            self.log("GECloud: Warn: API access denied from {}, response code {} — check your GivEnergy API key; a GivEnergy Premium subscription may now be required for API access".format(endpoint, status))
+            self.log("GECloud: Warn: API access denied from {}, response code {} — check your GivEnergy API key; a GivEnergy Premium subscription may now be required for API access".format(path, status))
             record_api_call("givenergy", False, "auth_error")
             return {}
         elif status in [404, 422]:
             self.failures_total += 1
-            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(endpoint, status))
+            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(path, status))
             record_api_call("givenergy", False, "client_error")
             return {}
         elif status == 429:
@@ -3413,7 +3422,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             return None
         else:
             self.failures_total += 1
-            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(endpoint, status))
+            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(path, status))
             record_api_call("givenergy", False, "server_error")
         return None
 

@@ -1828,6 +1828,7 @@ CONFIG_API_OVERRIDE = {
     "inverter_limit_charge": True,
     "inverter_limit_charge_dc": True,
     "inverter_limit_discharge": True,
+    "inverter_limit_export": True,
     "rates_import_override": True,
     "rates_export_override": True,
 }
@@ -2306,6 +2307,8 @@ INVERTER_DEF = {
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
+        # A Powerwall charges from the grid to reach a backup reserve above its SoC, even with grid charging disallowed
+        "reserve_above_soc_charges_from_grid": True,
     },
     "EnphaseCloud": {
         "name": "EnphaseCloud",
@@ -2334,6 +2337,8 @@ INVERTER_DEF = {
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
+        # Holds on the reserve like a Powerwall, so treated the same: a reserve above the SoC may be met from the grid
+        "reserve_above_soc_charges_from_grid": True,
     },
     "DeyeCloud": {
         "name": "DeyeCloud",
@@ -2772,6 +2777,7 @@ APPS_SCHEMA = {
     "inverter_limit_override": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "battery_rate_max": {"type": "sensor_list", "sensor_type": "float", "modify": False, "zero": False, "entries": "num_inverters"},
     "export_limit": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
+    "battery_export_permitted": {"type": "sensor_list", "sensor_type": "boolean", "entries": "num_inverters"},
     "inverter_battery_rate_min": {"type": "integer", "zero": False, "entries": "num_inverters"},
     "inverter_reserve_max": {"type": "integer", "zero": False, "entries": "num_inverters"},
     "battery_charge_power_curve": {"type": "int_float_dict", "or_auto": True},
@@ -2780,6 +2786,7 @@ APPS_SCHEMA = {
     "battery_discharge_power_curve_default": {"type": "int_float_dict"},
     "clock_skew": {"type": "integer"},
     "predbat_repository": {"type": "string", "empty": True},
+    "predbat_branch": {"type": "string|string_list", "empty": False},
     "solcast_api_key": {"type": "string", "empty": False},
     "solcast_host": {"type": "string", "empty": False},
     "solcast_poll_hours": {"type": "float", "zero": False},
@@ -2804,6 +2811,11 @@ APPS_SCHEMA = {
     "car_charging_soc": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_limit": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_exclusive": {"type": "boolean_list", "entries": "num_cars"},
+    # The car's own maximum charge rate in kW, per car: Fetch caps car_charging_rate at it for every
+    # charger integration (car_max_rate_cap()). A list with a number or an entity pointer per car;
+    # a blank entry, 0, or a shorter list means no cap for that car. unknown/unavailable is normal
+    # for a car sensor (the runtime holds the last cap), but an entity that does not exist is an error.
+    "car_charging_max_rate": {"type": "sensor", "sensor_type": "float", "entries": "num_cars", "optional_entries": True, "transient_ok": True, "blank_entries": True},
     "carbon_intensity": {"type": "sensor", "sensor_type": "string"},
     "carbon_postcode": {"type": "string", "empty": False},
     "carbon_automatic": {"type": "boolean"},
@@ -2914,6 +2926,7 @@ APPS_SCHEMA = {
     "teslemetry_automatic": {"type": "boolean"},
     "teslemetry_tbc_control": {"type": "boolean"},
     "teslemetry_hybrid": {"type": "boolean"},
+    "teslemetry_battery_export": {"type": "boolean"},
     "teslemetry_auth_method": {"type": "string", "empty": False},
     "teslemetry_token_expires_at": {"type": "string", "empty": False},
     "teslemetry_token_hash": {"type": "string", "empty": False},

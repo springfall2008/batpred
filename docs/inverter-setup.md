@@ -321,6 +321,7 @@ Predbat has a built-in Enphase Cloud integration that logs in to the Enphase Enl
 - Copy the [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) template over the top of the supplied `apps.yaml` and set `enphase_username` and `enphase_password` to your Enlighten account credentials.
 - Set `enphase_automatic: True` to have Predbat wire up all the sensor and control entities automatically - no manual `apps.yaml` sensor configuration is required.
 - Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules, export windows become discharge-to-grid (DTG) schedules, and freeze-export windows use restrict-battery-discharge (RBD) schedules, with the reserve set through the battery profile. `automatic_config` requires the site to support both CFG and DTG and fails configuration otherwise. Writes are cached optimistically and corrected by the next periodic re-read if they didn't land.
+- When the plan holds the battery (Freeze charging, Hold charging, Hold for car, Hold for iBoost) Predbat sets the reserve to the battery's current charge level rounded down, not 1% above it, so the battery is never asked to charge up to a reserve above its charge level - see [How Predbat holds a Powerwall](#how-predbat-holds-a-powerwall), which works the same way.
 
 See the components documentation for details [Components - Enphase API](components.md#enphase-api-enphase)
 
@@ -636,6 +637,8 @@ Predbat has a built-in Hanchu ESS Cloud integration that talks to the Hanchu clo
 Hanchu publish no API specification, so this integration was built by reading open-source Home Assistant integrations and has so far been tested on only a couple of units. Please report what you see. Every request and response is traced to the log by default, which is what an issue report needs; once everything works you can set `hanchu_api_debug: False` to quieten the log, and turn it back on before reporting a problem.
 
 Copy the template [hanchu.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu.yaml) over your `apps.yaml` and set `hanchu_account` and `hanchu_password` (keep them in `secrets.yaml` - see [Storing secrets](apps-yaml.md#storing-secrets)). With `hanchu_automatic: True` Predbat finds your inverter and wires up its sensors and controls for you. Set `hanchu_control_enable: False` to monitor only.
+
+If you set `load_today`, `import_today`, `export_today` or `pv_today` in `apps.yaml` yourself, your entry is kept and the automatic setup fills in only the ones you leave out. This is useful when the Hanchu meter does not see all of your import - for example an EV charger wired outside it - so you can point `import_today` at your smart meter's daily consumption sensor instead. The sensor must be a cumulative kWh total for the day that Home Assistant records history for.
 
 ### Hanchu ESS Cloud inverter control
 
@@ -1933,7 +1936,6 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 
 - All the Sigenergy entities referenced in `apps.yaml` need to be enabled for Predbat to use them. The following are disabled by default and will need enabling:
 
-    - sensor.sigen_plant_available_max_discharging_capacity
     - sensor.sigen_plant_daily_load_consumption
     - number.sigen_plant_ess_backup_state_of_charge
     - number.sigen_plant_ess_charge_cut_off_state_of_charge
@@ -3115,6 +3117,14 @@ This setup drives the Powerwall through the [Teslemetry](https://www.home-assist
 - Create the two Number helpers and the two pack-total template sensors that the template describes, and set `device_id` to your energy site's device id
 
 Charging dispatches the battery at minus the charge rate Predbat chose, exporting dispatches it at the discharge rate, and charge or export freeze dispatches 0 W to hold it. Predbat writes a new rate after it sends the dispatch, so the first dispatch of a charge or export window can run at the previous rate (after idle, the maximum) for one cycle. Each dispatch lasts 10 minutes and is re-sent every Predbat cycle, so the Powerwall returns to its normal operation on its own if Predbat stops. Predbat never changes the operation mode, export rule, grid charging or backup reserve with this template.
+
+### How Predbat holds a Powerwall
+
+This applies to both the Teslemetry component and the manual configuration below (`inverter_type: TESLA`).
+
+A Powerwall has no way to pause its discharge, so when the plan holds the battery (Freeze charging, Hold charging, Hold for car, Hold for iBoost) Predbat sets the backup reserve to the battery's current charge level, **rounded down** to a whole percent. On most other inverters the reserve is set 1% above the charge level, but a Powerwall charges from the grid to reach a backup reserve above its charge level - even with grid charging turned off - so that would turn every hold into a grid import at whatever the current rate is.
+
+The trade-off is that the battery may drift down by just under 1% before the reserve stops it. If the reserve minimum (`set_reserve_min` / `battery_min_soc`) is above the current charge level, the reserve is still set to that minimum and the Powerwall will charge up to it.
 
 ### Manual configuration via Home Assistant integrations
 

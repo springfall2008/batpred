@@ -42,7 +42,7 @@ Registered in components.py under key 'sigenergy'.
 
 Example apps.yaml config:
 
-  sigenergy_system_id: 'XRTKQ1773829273'
+  sigenergy_system_id: 'TESTA1700000000'
   sigenergy_app_key: !secret sigenergy_app_key
   sigenergy_app_secret: !secret sigenergy_app_secret
   sigenergy_client_pem: !secret sigenergy_client_pem
@@ -134,17 +134,23 @@ SIGENERGY_TOKEN_EXPIRY_BUFFER = 600   # refresh token 10 min before expiry
 SIGENERGY_MIN_REQUEST_INTERVAL = 6.0  # enforce ≥10 req/min API limit
 SIGENERGY_POLL_INTERVAL = 300         # realtime data poll every 5 minutes
 SIGENERGY_MQTT_STALE_SECONDS = 300    # an MQTT period reading older than this on arrival is stale - poll REST instead
+# MQTT counts as keeping energy_flow live if a message arrived within this long. Wider than the poll
+# interval because the broker's ~5 min period cadence jitters to ~410s: a 300s window sent REST polls
+# on healthy feeds, and REST energyFlow is the weaker source (no third-party PV, for one).
+SIGENERGY_MQTT_FRESH_SECONDS = 450
 SIGENERGY_VPP_RECLAIM_INTERVAL = 60   # re-assert VPP ownership every minute (see _manage_vpp_registration)
 SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
 SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
 SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used to convert ratedEnergy (Ah) → kWh
 SIGENERGY_RATED_ENERGY_AH_THRESHOLD = 100.0  # a ratedEnergy above this is Ah (e.g. 314), below it kWh (e.g. 9.04) - see _get_battery_capacity_kwh
 SIGENERGY_MQTT_PORT = 8883             # TLS MQTT port on the Sigenergy broker
+SIGENERGY_MQTT_RESUBSCRIBE_DELAY = 5   # seconds between cancelling and re-requesting the change push (see _mqtt_listener_loop)
 
 # MQTT topic patterns — format with app_key and system_id
 SIGENERGY_MQTT_TOPIC_CHANGE = "openapi/change/{app_key}/{system_id}"    # system data (device state)
 SIGENERGY_MQTT_TOPIC_PERIOD = "openapi/period/{app_key}/{system_id}"    # telemetry data
 SIGENERGY_MQTT_TOPIC_ALARM = "openapi/alarm/{app_key}/{system_id}"      # alarm data
+SIGENERGY_MQTT_TOPIC_UNSUBSCRIBE_CHANGE = "openapi/unsubscription/change"  # cancel change push (see _mqtt_listener_loop)
 SIGENERGY_MQTT_TOPIC_COMMAND = "openapi/instruction/command"            # battery command publish
 SIGENERGY_MQTT_TOPIC_MODE = "openapi/instruction/mode"                  # V1 operating mode switch (MQTT)
 MQTT_RC_NO_MATCHING_SUBSCRIBERS = 0x10  # MQTT 5 PUBACK: accepted, but no client is subscribed so the message went nowhere
@@ -226,10 +232,20 @@ SIGENERGY_HISTORY_NODES = [
     ("FROM_EVDC", "ev_discharge_lifetime", "EV Discharge Lifetime"),
 ]
 
+# Lifetime kWh a PV source (FROM_SOLAR or FROM_THIRD_PARTY_INV) must have produced to count as
+# fitted. Keeps a few stray Wh of native PV on an AC-coupled install (seen: 0.08kWh) from reading
+# as DC strings.
+SIGENERGY_PV_PRESENT_KWH = 1.0
+
 # Storage cache keys for poll-interval system state persisted between restarts (see
 # load_cached_data()). System/device discovery is deliberately excluded — it is always
 # re-fetched fresh on startup.
 SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status", "grid_export", "device_cutoffs"]
+SIGENERGY_CACHE_EXPIRY_DAYS = 1
+# Plant settings that only an openapi/change snapshot reports - kept for longer so a missed snapshot
+# doesn't silently drop the export limit and SoC cut-offs back to their defaults
+SIGENERGY_SETTINGS_CACHE_KEYS = ["grid_export", "device_cutoffs"]
+SIGENERGY_SETTINGS_CACHE_EXPIRY_DAYS = 28
 
 # Sentinel returned by _request() when the API responds with code=0 but an empty/null data field.
 # Distinguishes "success with no payload" from None which always means "request failed".
@@ -1033,17 +1049,73 @@ class SigenergyAPI(ComponentBase):
         battery_kw = -_safe_float(data.get("batteryPower", 0))
         pv_kw = _safe_float(data.get("pvPower", 0))
         grid_kw = _safe_float(data.get("gridPower", 0))
+        load_kw = _safe_float(data.get("loadPower", 0))
+        ev_kw = _safe_float(data.get("evPower", 0))
+        # energyFlow's pvPower (and acPower) leave out a third-party PV inverter's output, although
+        # loadPower and gridPower include it: an AC-coupled site exporting 8.3kW reported pvPower 0,
+        # acPower 0, load 0.74kW, battery charging 0.2kW, while MQTT "PV power" read 9.4kW. Recover
+        # the missing PV from the energy balance, but only where the system has third-party PV, so
+        # a hybrid's PV is never inflated by measurement noise.
+        #
+        # loadPower excludes the DC EV charger, which is its own branch: a site importing 9.22kW at
+        # night with the battery idle reported load 0.42kW and evPower 8.8kW. heatPumpPower is left
+        # out because no live sample has shown whether loadPower covers it, and adding a term
+        # loadPower already holds would over-report PV, where leaving one out can only under-report.
+        if self._has_third_party_pv(system_id):
+            pv_kw = max(pv_kw, load_kw + ev_kw - battery_kw + grid_kw)
         self.energy_flow[system_id] = {
             "batterySoc": soc,
             "batteryPower": battery_kw,
             "pvPower": pv_kw,
             "gridPower": grid_kw,
-            "loadPower": _safe_float(data.get("loadPower", 0)),
-            "evPower": _safe_float(data.get("evPower", 0)),
+            "loadPower": load_kw,
+            "evPower": ev_kw,
         }
         self.log("SigenergyAPI: System {} — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW grid {:.2f}kW".format(system_id, soc, battery_kw, pv_kw, grid_kw))
         self._grid_load_unknown_warned.discard(system_id)  # measured again - warn afresh if it is lost later
         return True
+
+    def _has_third_party_pv(self, system_id):
+        """True when the system's lifetime totals show PV from a third-party (AC-coupled) inverter."""
+        return self.history_totals.get(system_id, {}).get("FROM_THIRD_PARTY_INV", 0.0) >= SIGENERGY_PV_PRESENT_KWH
+
+    def detect_ac_coupled(self, system_id):
+        """Return True (AC-coupled), False (hybrid) or None (undecided) for one system.
+
+        Read from the lifetime totals: native PV (FROM_SOLAR) means DC strings on the Sigenergy
+        inverter, so it is a hybrid even if a third-party inverter is fitted as well; only
+        third-party PV with no native PV is AC-coupled. No totals, or no PV yet, is undecided.
+        """
+        totals = self.history_totals.get(system_id)
+        if not totals:
+            return None
+        if totals.get("FROM_SOLAR", 0.0) >= SIGENERGY_PV_PRESENT_KWH:
+            return False
+        if self._has_third_party_pv(system_id):
+            return True
+        return None
+
+    async def apply_hybrid_verdict(self):
+        """Move switch.predbat_inverter_hybrid only on positive evidence of AC coupling.
+
+        inverter_hybrid is one of Predbat's OWN CONFIG_ITEMS switches rather than an apps.yaml
+        arg, so it is written with set_state_external. Predbat defaults it on, which suits the
+        DC-coupled SigenStor, and the errors are not symmetric: off on a real hybrid lets PV and
+        battery charge plan past inverter_limit, on for an AC-coupled site merely skips the
+        PV->battery conversion loss. So the switch only moves off, and only when every system
+        is AC-coupled.
+        """
+        system_ids = list(self.systems.keys())
+        if not system_ids:
+            return
+        verdicts = [self.detect_ac_coupled(sid) for sid in system_ids]
+        entity = "switch.{}_inverter_hybrid".format(self.prefix)
+        if all(verdict is True for verdict in verdicts):
+            self.log("Info: SigenergyAPI: detected AC coupling (third-party PV inverter, no native PV) for system(s) {}; setting {} off".format(", ".join(system_ids), entity))
+            await self.set_state_external(entity, False)
+            return
+        if any(verdict is None for verdict in verdicts):
+            self.log("Info: SigenergyAPI: could not determine hybrid versus AC coupling for system(s) {} yet; leaving {} at its current value".format(", ".join(system_ids), entity))
 
     async def fetch_daily_summary(self, system_id):
         """Fetch daily/lifetime generation summary for a system.
@@ -2066,6 +2138,13 @@ class SigenergyAPI(ComponentBase):
                         await client.subscribe(topic)
 
                     sub_payload = json.dumps({"accessToken": token, "systemIdList": system_id_list})
+                    # Sigenergy only sends the full openapi/change snapshot (export limit, SoC cut-offs) when it registers
+                    # a new change subscription - re-subscribing after a restart gets nothing. Cancelling it first makes
+                    # every connect a new registration, so the snapshot comes straight back. The two go on different
+                    # topics, so their order isn't guaranteed - sent back to back, the cancel can land second and leave
+                    # the system with no change subscription at all (seen on 2 of 29 live plants), hence the pause.
+                    await client.publish(SIGENERGY_MQTT_TOPIC_UNSUBSCRIBE_CHANGE, payload=sub_payload, qos=1)
+                    await asyncio.sleep(SIGENERGY_MQTT_RESUBSCRIBE_DELAY)
                     for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
                         await client.publish(sub_topic, payload=sub_payload, qos=1)
                     self.log("SigenergyAPI: MQTT subscriptions published for {} system(s)".format(len(system_id_list)))
@@ -2491,6 +2570,8 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("scheduled_discharge_enable", ["switch.{}_sigenergy_{}_export_enable".format(self.prefix, s) for s in slugs])
         self.set_arg("discharge_rate", ["number.{}_sigenergy_{}_export_rate".format(self.prefix, s) for s in slugs])
         self.set_arg("reserve", ["number.{}_sigenergy_{}_reserve".format(self.prefix, s) for s in slugs])
+
+        await self.apply_hybrid_verdict()
 
         self.log("SigenergyAPI: automatic_config complete")
 
@@ -3144,8 +3225,9 @@ class SigenergyAPI(ComponentBase):
         now = datetime.now(self.local_tz)
         self.data_age[key] = now
         if self.storage:
-            # Expire after a day so stale data doesn't linger in the cache forever
-            await self.storage.save("sigenergy", key, data, format="json", expiry=now + timedelta(days=1))
+            # Expire after a day so stale data doesn't linger in the cache forever; plant settings are kept longer
+            days = SIGENERGY_SETTINGS_CACHE_EXPIRY_DAYS if key in SIGENERGY_SETTINGS_CACHE_KEYS else SIGENERGY_CACHE_EXPIRY_DAYS
+            await self.storage.save("sigenergy", key, data, format="json", expiry=now + timedelta(days=days))
 
     async def _load_cache(self, key):
         """Load previously persisted poll-interval system state for a cache key.
@@ -3179,8 +3261,8 @@ class SigenergyAPI(ComponentBase):
         reboot during the API's own nightly dip window can't let a lower reading through. The
         rest (energy_flow, daily_summary, onboard_status) is restored too so entities publish
         sensible values immediately rather than "unknown"/0 while the first poll is in flight.
-        grid_export is restored because nothing but an openapi/change message reports it, and
-        those can be days apart - without it the export limit would read 99999 until the next one.
+        grid_export is restored because nothing but an openapi/change message reports it - without
+        it the export limit would read 99999 until the next one arrives.
         device_cutoffs is restored for the same reason - without it battery_min_soc would fall back to
         the 4% default after every restart and push set_reserve_min back up, and the reserve would
         read the 10% default.
@@ -3360,8 +3442,8 @@ class SigenergyAPI(ComponentBase):
         # every minute and the cache does not need rewriting that often.
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
             await self._save_cache("onboard_status", self.onboard_status)
-            # Rewritten every poll, not just when a change message arrives, because the cache expires
-            # after a day and the plant may go longer than that without reporting its export limit again
+            # Rewritten every poll, not just when a change message arrives, so the cache expiry runs from
+            # the last poll rather than the last snapshot
             if self.grid_export:
                 await self._save_cache("grid_export", self.grid_export)
             if self.device_cutoffs:
@@ -3390,7 +3472,7 @@ class SigenergyAPI(ComponentBase):
                 last_update = self.last_mqtt_update.get(sid, 0)
                 mqtt_age = now_ts - last_update
                 # Arriving recently is not enough - the reading it carried must be recent too
-                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_POLL_INTERVAL and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
+                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_MQTT_FRESH_SECONDS and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
                 if mqtt_fresh:
                     # MQTT is genuinely keeping energy_flow live — worth persisting/re-timestamping.
                     self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))

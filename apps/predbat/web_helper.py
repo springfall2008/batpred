@@ -7337,7 +7337,7 @@ def get_plan_renderer_js():
 
                 // Total cost
                 const totalCostStr = totals.total_cost >= 0 ?
-                    `${jsonData.currency_symbols[0]}${totals.total_cost}` :
+                    `${jsonData.currency_symbols[0]}${totals.total_cost.toFixed(2)}` :
                     `-${jsonData.currency_symbols[0]}${Math.abs(totals.total_cost).toFixed(2)}`;
                 html += `<td bgcolor=#FFFFFF><b>${totalCostStr}</b></td>`;
 
