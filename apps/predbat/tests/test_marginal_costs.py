@@ -185,6 +185,38 @@ def test_marginal_costs(my_predbat):
                     print("ERROR: binary sensor '{}' missing 'cost' attribute".format(bs_key))
                     failed = True
 
+    # --- Cheap/moderate thresholds follow the base tariff, not event-distorted rate_min (#5382) ---
+    # A free session sets rate_min to 0, which used to make the cheap threshold 0 so nothing read as cheap
+    print("*** Running test: marginal_costs cheap threshold during a free session")
+    first_time_label = my_predbat.marginal_time_labels[0]
+    my_predbat.marginal_costs_matrix = {kwh: {first_time_label: 1.0} for kwh in MARGINAL_EXTRA_KWH_LEVELS}
+    my_predbat.rate_min = 0
+    my_predbat.rate_max = 20.0
+    my_predbat.rate_min_base = 10.0
+    my_predbat.rate_max_base = 30.0
+    my_predbat.publish_marginal_costs()
+    for state_name in MARGINAL_EXTRA_KWH_LEVEL_NAMES:
+        for kind, expected in (("cheap", "on"), ("moderate", "off")):
+            bs_key = "binary_sensor.{}_marginal_rate_now_{}_is_{}".format(my_predbat.prefix, state_name, kind)
+            bs_state = my_predbat.dashboard_values.get(bs_key, {}).get("state")
+            if bs_state != expected:
+                print("ERROR: free session: '{}' = '{}' but expected '{}' (1.0p against a 10p base floor is cheap)".format(bs_key, bs_state, expected))
+                failed = True
+
+    # A saving session spikes rate_max, which used to stretch the moderate threshold to half the reward
+    print("*** Running test: marginal_costs moderate threshold during a saving session")
+    my_predbat.marginal_costs_matrix = {kwh: {first_time_label: 20.0} for kwh in MARGINAL_EXTRA_KWH_LEVELS}
+    my_predbat.rate_min = 10.0
+    my_predbat.rate_max = 300.0
+    my_predbat.publish_marginal_costs()
+    for state_name in MARGINAL_EXTRA_KWH_LEVEL_NAMES:
+        for kind in ("cheap", "moderate"):
+            bs_key = "binary_sensor.{}_marginal_rate_now_{}_is_{}".format(my_predbat.prefix, state_name, kind)
+            bs_state = my_predbat.dashboard_values.get(bs_key, {}).get("state")
+            if bs_state != "off":
+                print("ERROR: saving session: '{}' = '{}' but expected 'off' (20p is above the 15p moderate threshold of a 30p base peak)".format(bs_key, bs_state))
+                failed = True
+
     if not failed:
         print("*** test_marginal_costs PASSED ***")
     else:
