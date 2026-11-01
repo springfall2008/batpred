@@ -21,7 +21,8 @@ from typing import NamedTuple
 from const import EXPORT_MODE_TARGET, PREDICT_STEP
 from utils import dp2, export_mode_of, round_out_to_period
 
-# The most slots the planner tracks as cancellable: the cancelled set is a bit mask
+# The most slots the planner tracks as cancellable: the cancelled set is a bit mask. Must equal PK_CANCEL_MAX_SLOTS in
+# prediction_kernel.cpp (it sizes PkContext's cancel arrays), so a change to either needs a KERNEL_ABI_VERSION bump
 CAR_CANCEL_MAX_SLOTS = 64
 
 

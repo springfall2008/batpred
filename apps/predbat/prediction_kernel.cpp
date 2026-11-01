@@ -74,7 +74,7 @@
 // Parity 19: an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted.
 #define PK_PARITY_REVISION 19
 #define PK_MAX_CARS 8
-#define PK_CANCEL_MAX_SLOTS 64 // car_cancel.py CAR_CANCEL_MAX_SLOTS - the cancelled set is a 64-bit mask
+#define PK_CANCEL_MAX_SLOTS 64 // Must equal car_cancel.py CAR_CANCEL_MAX_SLOTS (it sizes PkContext's cancel arrays), so a change to either needs an ABI bump - the cancelled set is a 64-bit mask
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
 #define PK_EXPORT_MODE_FREEZE 1 // const.py EXPORT_MODE_FREEZE
@@ -1017,7 +1017,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                         const int32_t cancel_j = c->cancel_slot_flat[car_n * n_steps + k];
                         if (cancel_j >= 0 && ((cancel_mask >> cancel_j) & 1)) {
                             // Cancelled for an export: the car buys nothing here and keeps its room for later, but the
-                            // energy it would have bought - capped by the room left - must be bought back at peak (score only)
+                            // energy it would have bought - capped by the room left - must be bought back at peak (score only).
+                            // A later uncancelled slot may refill that room, so the penalty can double-count: a deliberate conservative bias
                             car_load_scale = std::max(std::min(car_load_scale, c->car_charging_limit[car_n] - car_soc[car_n] - car_cancelled_kwh[car_n]), 0.0);
                             car_cancelled_kwh[car_n] += car_load_scale;
                             metric_keep += car_load_scale / c->car_charging_loss * c->cancel_penalty_rate;

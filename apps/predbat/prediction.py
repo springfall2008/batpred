@@ -927,7 +927,8 @@ class Prediction(PredictionBatch):
                             cancel_j = cancel_slot_flat[car_n * cancel_n_steps + minute // PREDICT_STEP]
                             if cancel_j >= 0 and (cancel_mask >> cancel_j) & 1:
                                 # Cancelled for an export: the car buys nothing here and keeps its room for later, but the
-                                # energy it would have bought - capped by the room left - must be bought back at peak (score only)
+                                # energy it would have bought - capped by the room left - must be bought back at peak (score only).
+                                # A later uncancelled slot may refill that room, so the penalty can double-count: a deliberate conservative bias
                                 car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n] - car_cancelled_kwh[car_n]), 0)
                                 car_cancelled_kwh[car_n] += car_load_scale
                                 metric_keep += car_load_scale / self.car_charging_loss * cancel_penalty_rate
