@@ -40,7 +40,8 @@ class Marginal:
 
         Runs an internal baseline prediction (save=None, so standing charges are
         excluded) against the current best plan, then runs N what-if simulations
-        with the same save=None conditions.
+        with the same save=None conditions. Each side's cost is net of the value of
+        the energy left in the battery at the end of the plan, as in compute_metric.
         Taking the delta against the internal baseline ensures both sides are
         computed consistently without the standing-charge offset that is only
         added when save='best'/'base'.
@@ -53,13 +54,20 @@ class Marginal:
         """
         # Run a baseline prediction with the original (unmodified) load and save=None
         # so standing charges are NOT included — matching the what-if simulations exactly.
-        (baseline_metric, *_) = self.prediction.run_prediction(
-            self.charge_limit_best,
-            self.charge_window_best,
-            self.export_window_best,
-            self.export_limits_best,
-            False,
-            self.end_record,
+        # Energy left in the battery at the end of the plan is valued as the planner values it
+        # (compute_metric's battery_value term). Without it, extra load the battery covers from
+        # energy it would otherwise still hold at end_record costs nothing, and reads as cheap (#5107).
+        value_rate = self.battery_value_rate(self.minutes_now + self.end_record)
+        baseline_metric = self.marginal_plan_cost(
+            self.prediction.run_prediction(
+                self.charge_limit_best,
+                self.charge_window_best,
+                self.export_window_best,
+                self.export_limits_best,
+                False,
+                self.end_record,
+            ),
+            value_rate,
         )
         self.marginal_baseline_metric = baseline_metric
         self.log("Marginal costs baseline metric (no standing charge): {}".format(baseline_metric))
@@ -96,13 +104,16 @@ class Marginal:
                 pred = Prediction(self, self.pv_forecast_minute_step, self.pv_forecast_minute_step, modified_load, modified_load, kernel_static_cache=kernel_static_cache, car_charging_slots=self.car_charging_slots_model())
 
                 # Run prediction against the current best charge/discharge plan, no save to HA
-                (new_metric, *_) = pred.run_prediction(
-                    self.charge_limit_best,
-                    self.charge_window_best,
-                    self.export_window_best,
-                    self.export_limits_best,
-                    False,
-                    self.end_record,
+                new_metric = self.marginal_plan_cost(
+                    pred.run_prediction(
+                        self.charge_limit_best,
+                        self.charge_window_best,
+                        self.export_window_best,
+                        self.export_limits_best,
+                        False,
+                        self.end_record,
+                    ),
+                    value_rate,
                 )
 
                 # Marginal cost in currency units per kWh = delta metric / extra kWh
@@ -125,6 +136,17 @@ class Marginal:
         self.marginal_grid_import = grid_import
         self.marginal_grid_export = grid_export
         self.publish_marginal_costs()
+
+    def marginal_plan_cost(self, result, value_rate):
+        """Return a run_prediction result's cost less the value of what the plan leaves stored.
+
+        Mirrors the battery_value term of compute_metric (plan.py) - keep the two in step: the
+        battery's end SoC and any iBoost energy, each scaled as the planner scales them, valued at
+        value_rate. Only that term is applied; metric_keep, battery cycle and carbon are planner
+        steering penalties rather than money, so a marginal cost leaves them out.
+        """
+        cost, soc, final_iboost = result[0], result[5], result[9]
+        return cost - (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * value_rate
 
     def publish_marginal_costs(self):
         """Publish the marginal energy cost matrix as a Home Assistant sensor.
