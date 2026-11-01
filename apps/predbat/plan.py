@@ -67,6 +67,8 @@ from prediction_batch import export_end_soc_from_series, prediction_cache_key
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
 import time
+from math import ceil
+from car_cancel import cancellable_slots
 
 # How many windows the post-settle plan pass revisits when calculate_second_pass is off. The near-term
 # windows are the ones about to be executed, so a small budget keeps the common path cheap; raising it
@@ -673,6 +675,29 @@ class Plan:
         """
         hold_until = self.car_force_hold_until.get(car_n)
         return hold_until is not None and hold_until > now
+
+    def car_cancel_enabled(self):
+        """Whether a car slot may be cancelled for an export: the switch is on and there are cars."""
+        return bool(self.get_arg("car_charging_cancel_for_export", False)) and self.num_cars > 0
+
+    def car_cancellable_cars(self):
+        """The cars whose slots an export may cancel: those Predbat plans and those a charger can force-hold off."""
+        if not self.car_cancel_enabled():
+            return set()
+        return self.car_planned_by_predbat | set(self.car_force_holdable)
+
+    def car_cancel_slots(self):
+        """The car slots an export may cancel this cycle, see car_cancel.cancellable_slots()."""
+        if not self.car_cancel_enabled():
+            return []
+        held_until = {}
+        for car_n, end in self.car_force_hold_until.items():
+            minute = ceil((end - self.midnight_utc).total_seconds() / 60)
+            if minute > self.minutes_now:
+                held_until[car_n] = minute
+        now_slots = self.car_charging_now_slots
+        now_slot_counts = [len(now_slots[car_n]) if car_n < len(now_slots) else 0 for car_n in range(len(self.car_charging_slots))]
+        return cancellable_slots(self.car_charging_slots_model(), now_slot_counts, self.car_cancellable_cars(), held_until, self.minutes_now)
 
     def dynamic_load_car_target(self, car_n, minute, now, record=True):
         """

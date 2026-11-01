@@ -962,6 +962,24 @@ class CarChargerControl:
         else:
             hold_until[car_n] = end.astimezone(timezone.utc)
 
+    def charger_control_publish_holdable(self, wanted, chargers, car_count):
+        """Tell the planner which cars this component can force-hold off, so it may cancel their slots for an export."""
+        holdable = getattr(self.base, "car_force_holdable", None)
+        if holdable is None:
+            holdable = {}
+            self.base.car_force_holdable = holdable
+        name = self.charger_control_log_name
+        served = set()
+        for car_n, (_key, handle) in enumerate(chargers[:car_count]):
+            served.add(car_n)
+            if wanted and self.charger_control_can_force_hold(handle):
+                holdable[car_n] = name
+            elif holdable.get(car_n) == name:
+                del holdable[car_n]
+        # A car beyond the chargers or num_cars is no longer ours to hold
+        for car_n in [car_n for car_n, owner in holdable.items() if owner == name and car_n not in served]:
+            del holdable[car_n]
+
     async def charger_control_force_hold_tick(self, now):
         """Start, keep and hand back the force holds for slots the plan has cancelled for an export.
 
@@ -973,10 +991,11 @@ class CarChargerControl:
         handed back too.
         """
         wanted = self.charger_control_force_hold_wanted()
-        if not wanted and not self.charger_control_force_holds:
-            return
         chargers = self.charger_control_chargers()
         car_count = self.charger_control_car_count()
+        self.charger_control_publish_holdable(wanted, chargers, car_count)
+        if not wanted and not self.charger_control_force_holds:
+            return
         steps = [lambda car_n=car_n, key=key, handle=handle: self.charger_control_force_hold_one(car_n, key, handle, now, wanted) for car_n, (key, handle) in enumerate(chargers[:car_count])]
         steps += [lambda key=key, handle=handle: self.charger_control_force_hand_back(key, handle, now) for key, handle in chargers[car_count:] if key in self.charger_control_force_holds]
         await self.charger_control_each(steps)
