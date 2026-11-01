@@ -222,17 +222,35 @@ class Output:
         Publish the car charging plan
         """
         postfix = ""
+        # Always derived fresh from the plan as it stands, which at fetch time is last cycle's: the slots it cancels are
+        # left out of the plan, and listed apart so a charger holds the car off for them (cancelled_for_export)
+        self.car_cancelled_for_export = self.car_cancelled_for_export_windows()
         for car_n in range(self.num_cars):
             # A list of its own per car - shared, every car after the first also carried the windows of
             # the cars before it, and a charger driven from its car's plan would charge in them
             plan = []
             if car_n > 0:
                 postfix = "_" + str(car_n)
-            if not self.car_charging_slots[car_n]:
+            cancelled_windows = self.car_cancelled_for_export.get(car_n, [])
+            cancelled_for_export = []
+            live_slots = []
+            for window in self.car_charging_slots[car_n]:
+                if (window["start"], window["end"]) in cancelled_windows:
+                    cancelled_for_export.append({"start": self.time_abs_str(window.get("start_orig", window["start"])), "end": self.time_abs_str(window["end"])})
+                else:
+                    live_slots.append(window)
+            if not live_slots:
                 self.dashboard_item(
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
                     state="off",
-                    attributes={"planned": plan, "cost": None, "kWh": None, "friendly_name": "Predbat car charging slot" + postfix, "icon": "mdi:home-lightning-bolt-outline"},
+                    attributes={
+                        "planned": plan,
+                        "cost": None,
+                        "kWh": None,
+                        "cancelled_for_export": cancelled_for_export,
+                        "friendly_name": "Predbat car charging slot" + postfix,
+                        "icon": "mdi:home-lightning-bolt-outline",
+                    },
                 )
                 self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
@@ -248,7 +266,7 @@ class Output:
                     },
                 )
             else:
-                window = self.car_charging_slots[car_n][0]
+                window = live_slots[0]
                 if self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window["kwh"] > 0:
                     slot = True
                 else:
@@ -280,7 +298,7 @@ class Output:
 
                 total_kwh = 0
                 total_cost = 0
-                for window in self.car_charging_slots[car_n]:
+                for window in live_slots:
                     start = self.time_abs_str(window.get("start_orig", window["start"]))
                     end = self.time_abs_str(window["end"])
                     kwh = dp2(window["kwh"])
@@ -306,6 +324,7 @@ class Output:
                         "planned": plan,
                         "cost": dp2(total_cost),
                         "kwh": dp2(total_kwh),
+                        "cancelled_for_export": cancelled_for_export,
                         "friendly_name": "Predbat car charging slot" + postfix,
                         "icon": "mdi:home-lightning-bolt-outline",
                     },

@@ -68,7 +68,7 @@ from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
 import time
 from math import ceil
-from car_cancel import build_car_cancel_table, cancellable_slots
+from car_cancel import build_car_cancel_table, cancellable_slots, cancelled_mask, cancelled_windows
 
 # How many windows the post-settle plan pass revisits when calculate_second_pass is off. The near-term
 # windows are the ones about to be executed, so a small budget keeps the common path cheap; raising it
@@ -698,6 +698,16 @@ class Plan:
         now_slots = self.car_charging_now_slots
         now_slot_counts = [len(now_slots[car_n]) if car_n < len(now_slots) else 0 for car_n in range(len(self.car_charging_slots))]
         return cancellable_slots(self.car_charging_slots_model(), now_slot_counts, self.car_cancellable_cars(), held_until, self.minutes_now)
+
+    def car_cancelled_for_export_windows(self):
+        """
+        The (start, end) of each car's slots the plan as it stands cancels for an export, car_n -> list. Always
+        derived fresh from export_window_best and export_limits_best; empty when the switch is off.
+        """
+        slots = self.car_cancel_slots()
+        if not slots:
+            return {}
+        return cancelled_windows(slots, cancelled_mask(slots, self.export_window_best, self.export_limits_best))
 
     def dynamic_load_car_target(self, car_n, minute, now, record=True):
         """
@@ -2576,6 +2586,7 @@ class Plan:
             if publish:
                 self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, best=True, soc=self.predict_soc_best)
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
+                self.publish_car_plan()
 
                 # Compute marginal energy cost matrix (what-if extra load scenarios)
                 self.calculate_marginal_costs()
@@ -6425,13 +6436,17 @@ class Plan:
     def car_charge_slot_kwh(self, minute_start, minute_end):
         """
         Work out car charging amount in KWh for given self.plan_interval_minutes-minute slot
+        (slots cancelled for an export are left out, see car_charge_slot_kwh_cancelled())
         """
         car_charging_kwh = 0.0
         if self.num_cars > 0:
             for car_n in range(self.num_cars):
+                cancelled = self.car_cancelled_for_export.get(car_n, [])
                 for window in self.car_charging_slots[car_n]:
                     start = window["start"]
                     end = window["end"]
+                    if (start, end) in cancelled:
+                        continue
                     if start < minute_end and end > minute_start:
                         kwh = 0
                         if end != start:
@@ -6446,13 +6461,17 @@ class Plan:
         """
         Car charging in kWh that dynamic load has cancelled for the given self.plan_interval_minutes-minute
         slot - the car was not charging, so the plan does not count on it, but it is still shown with a "?".
+        A slot cancelled for an export is shown the same way, with all of its kWh.
         """
         car_charging_kwh = 0.0
         for car_n in range(self.num_cars):
+            cancelled = self.car_cancelled_for_export.get(car_n, [])
             for window in self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []:
                 start = window["start"]
                 end = window["end"]
                 kwh_cancelled = window.get("kwh_cancelled", 0)
+                if (start, end) in cancelled:
+                    kwh_cancelled += window.get("kwh", 0)
                 if kwh_cancelled and start < minute_end and end > minute_start and end != start:
                     kwh = dp2(kwh_cancelled) / (end - start)
                     for minute_offset in range(minute_start, minute_end, PREDICT_STEP):
