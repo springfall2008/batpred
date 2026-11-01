@@ -142,19 +142,21 @@ def run_web_history_table_tests(my_predbat):
         failed += 1
 
     # -------------------------------------------------------------------------
-    print("Test: the top row is the newest slot reached, and nothing reaches past the newest record")
+    # The newest record is normally the current state, stamped at the real time between two 5-minute
+    # marks. Ending the table on the 5-minute mark before it left the current value off the table until
+    # the next mark, up to 5 minutes late.
+    print("Test: the top row is the newest record's own time, so the current value shows at once, and nothing reaches past it")
     records = [record(utc(20, 0), "1"), record(utc(21, 12), "2")]
     rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
-    # 21:12 is not reached until the 21:15 slot, so the newest slot still reads 1
-    if rows[0]["time"] != utc(21, 10) or rows[0]["cells"][0] != ("1", None):
-        print(f"  ERROR: the newest row should be 21:10 reading 1 unmarked, got {rows[0]['time']} {rows[0]['cells']}")
+    if rows[0]["time"] != utc(21, 12) or rows[0]["cells"][0] != ("2", "changed"):
+        print(f"  ERROR: the newest row should be 21:12 reading 2 marked changed, got {rows[0]['time']} {rows[0]['cells']}")
         failed += 1
     future = [detail["time"].strftime("%H:%M") for row in rows for detail in row["details"] if detail["time"] > utc(21, 12)]
     if future:
         print(f"  ERROR: detail slots after the newest record (21:12) should not exist, got {future}")
         failed += 1
-    if [detail["time"] for detail in rows[0]["details"]] != [utc(21, 5)]:
-        print(f"  ERROR: expected the 21:10 row to expand to 21:05 only, got {[detail['time'].strftime('%H:%M') for detail in rows[0]['details']]}")
+    if [(detail["time"], detail["cells"][0]) for detail in rows[0]["details"]] != [(utc(21, 10), ("1", None)), (utc(21, 5), ("1", None))]:
+        print(f"  ERROR: expected the 21:12 row to expand to 21:10 and 21:05 reading 1, got {[(detail['time'].strftime('%H:%M'), detail['cells'][0]) for detail in rows[0]['details']]}")
         failed += 1
     if len(rows) < 2 or rows[1]["time"] != utc(21, 0):
         print(f"  ERROR: the row beneath the newest should be 21:00, got {[row['time'].strftime('%H:%M') for row in rows]}")
@@ -243,6 +245,13 @@ def run_web_history_table_tests(my_predbat):
     rows = build_entity_history_table_data(status, fetch)
     if len(rows) != 1 or rows[0]["cells"][0][0] != "None":
         print(f"  ERROR: expected one 12:00 row reading 'None', got {[(row['time'], row['cells']) for row in rows]}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: history between two 5-minute marks is one row holding its value, not '-'")
+    rows = build_entity_history_table_data(status, {"sensor.status": make_history([record(utc(12, 1), "A"), record(utc(12, 3), "B")])})
+    if [(row["time"], row["cells"], row["details"]) for row in rows] != [(utc(12, 3), [("B", "changed")], [])]:
+        print(f"  ERROR: expected one 12:03 row reading B marked changed with no slots, got {[(row['time'], row['cells'], row['details']) for row in rows]}")
         failed += 1
 
     # -------------------------------------------------------------------------
