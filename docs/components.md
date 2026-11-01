@@ -882,6 +882,14 @@ For each plant (replace `{plant_id}` with your actual plant ID), the component c
 - Battery temperature (°C)
 - Battery max power (W)
 
+Battery max power uses the battery's reported rated power when available. Otherwise it estimates
+the limit from inverter ratings, excluding the residential X1-Boost/Air/Mini, X1-Boost-G4,
+X1-Mini-G4 and X1-SMART-G2 PV-only families. Missing or unrecognised model metadata retains the
+inverter fallback and can still overestimate a mixed plant's battery capability. Use
+`inverter_limit_charge` and `inverter_limit_discharge` to set known limits in that case. This is
+a rated-power estimate, not a measurement of the battery's DC limit. The inverter max power sensor
+continues to include every inverter on the plant.
+
 **System Sensors:**
 
 - Inverter max power (W)
