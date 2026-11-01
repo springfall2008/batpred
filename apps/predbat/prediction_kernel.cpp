@@ -57,7 +57,8 @@
 // export's target is raised to (as a whole percent, rounded down), mirroring floor_export_limits in
 // prediction_batch.py - and PkBatchJob::phase, so a batch can floor a job from its nominal twin's
 // export_end_soc_out within one call.
-#define PK_ABI_VERSION 10
+// ABI 11: the car slot cancel table (cancel_count to cancel_penalty_rate) follows car_rate_flat in PkContext.
+#define PK_ABI_VERSION 11
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
@@ -70,8 +71,10 @@
 // rate, without saving session or Axle rewards) and the slot's own rate (#5163).
 // Parity 18: energy a charge window stores in a confirmed Intelligent dispatch run (io_credit) earns a score
 // only credit off metric_keep.
-#define PK_PARITY_REVISION 18
+// Parity 19: an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted.
+#define PK_PARITY_REVISION 19
 #define PK_MAX_CARS 8
+#define PK_CANCEL_MAX_SLOTS 64 // car_cancel.py CAR_CANCEL_MAX_SLOTS - the cancelled set is a 64-bit mask
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
 #define PK_EXPORT_MODE_FREEZE 1 // const.py EXPORT_MODE_FREEZE
@@ -207,6 +210,17 @@ struct PkContext {
     const double *iboost_plan_load;   // iBoost plan load kW per step (in_iboost_slot)
     const double *car_load_flat;      // car charging load kW, num_cars * n_steps (in_car_slot)
     const double *car_rate_flat;      // car premium rate, num_cars * n_steps (in_car_slot)
+
+    // Car slot cancel table - car_cancel.py CarCancelTable; cancel_count is 0 and the pointers null without one
+    int32_t cancel_count;                     // cancellable slots, at most PK_CANCEL_MAX_SLOTS; bit j of a mask is slot j
+    int32_t cancel_start[PK_CANCEL_MAX_SLOTS]; // slot j's start, absolute minutes
+    int32_t cancel_end[PK_CANCEL_MAX_SLOTS];   // slot j's end, absolute minutes
+    uint64_t cancel_forced_mask;              // the slots a charger is force-holding off, cancelled whatever the plan does
+    const int32_t *cancel_slot_flat;          // num_cars * n_steps: the slot j in_car_slot() picks for that car and step, or -1
+    const uint64_t *cancel_need_mask;         // per step: the cancellable dispatches covering it (rounded out to half hours)
+    const int32_t *cancel_trusted;            // per step: 1 when a dispatch that cannot be cancelled covers it
+    const double *cancel_revert_rate;         // per step: the rate a cancelled dispatch reverts to, or negative when it cannot
+    double cancel_penalty_rate;               // what each cancelled kWh costs to buy back (rate_max_base)
 
     double soc_kw;
     double soc_max;
@@ -426,6 +440,9 @@ struct ContextStore {
     std::vector<double> charge_curve, discharge_curve;
     std::vector<double> carbon, gas_rate, iboost_plan_load;
     std::vector<double> car_load_flat, car_rate_flat;
+    std::vector<int32_t> cancel_slot_flat, cancel_trusted;
+    std::vector<uint64_t> cancel_need_mask;
+    std::vector<double> cancel_revert_rate;
     std::vector<double> soc_percent_threshold; // see build_soc_percent_thresholds
     PkContext ctx;
 };
@@ -602,7 +619,7 @@ int32_t pk_parity_revision(void)
 // Create a per-plan context; deep-copies all arrays. Returns a handle (>0) or 0 on error.
 int64_t pk_context_create(const PkContext *in)
 {
-    if (!in || in->n_steps <= 0 || in->num_cars < 0 || in->num_cars > PK_MAX_CARS) {
+    if (!in || in->n_steps <= 0 || in->num_cars < 0 || in->num_cars > PK_MAX_CARS || in->cancel_count < 0 || in->cancel_count > PK_CANCEL_MAX_SLOTS) {
         return 0;
     }
     auto store = std::make_unique<ContextStore>();
@@ -632,6 +649,14 @@ int64_t pk_context_create(const PkContext *in)
         store->car_load_flat.assign(in->car_load_flat, in->car_load_flat + n_car);
         store->car_rate_flat.assign(in->car_rate_flat, in->car_rate_flat + n_car);
     }
+    if (in->cancel_count > 0) {
+        if (n_car > 0) {
+            store->cancel_slot_flat.assign(in->cancel_slot_flat, in->cancel_slot_flat + n_car);
+        }
+        store->cancel_need_mask.assign(in->cancel_need_mask, in->cancel_need_mask + n);
+        store->cancel_trusted.assign(in->cancel_trusted, in->cancel_trusted + n);
+        store->cancel_revert_rate.assign(in->cancel_revert_rate, in->cancel_revert_rate + n);
+    }
     store->ctx = *in;
     store->ctx.rate_import = store->rate_import.data();
     store->ctx.rate_export = store->rate_export.data();
@@ -654,6 +679,10 @@ int64_t pk_context_create(const PkContext *in)
     store->ctx.iboost_plan_load = store->iboost_plan_load.data();
     store->ctx.car_load_flat = store->car_load_flat.data();
     store->ctx.car_rate_flat = store->car_rate_flat.data();
+    store->ctx.cancel_slot_flat = in->cancel_count > 0 ? store->cancel_slot_flat.data() : nullptr;
+    store->ctx.cancel_need_mask = in->cancel_count > 0 ? store->cancel_need_mask.data() : nullptr;
+    store->ctx.cancel_trusted = in->cancel_count > 0 ? store->cancel_trusted.data() : nullptr;
+    store->ctx.cancel_revert_rate = in->cancel_count > 0 ? store->cancel_revert_rate.data() : nullptr;
 
     std::lock_guard<std::mutex> lock(g_context_mutex);
     int64_t handle = g_next_handle++;
@@ -767,6 +796,25 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         }
     }
 
+    // The car slots this plan's target exports cancel - prediction.py car_cancel / car_cancel.cancelled_mask(). Read
+    // from the scenario's limits as passed in: the export floor never changes a window's mode. With no table or
+    // nothing cancelled the run is exactly as without one.
+    uint64_t cancel_mask = 0;
+    if (c->cancel_count > 0) {
+        cancel_mask = c->cancel_forced_mask;
+        for (int32_t j = 0; j < c->cancel_count; j++) {
+            for (int32_t i = 0; i < s->n_export; i++) {
+                if (s->export_limits[i].mode == PK_EXPORT_MODE_TARGET && s->export_start[i] < c->cancel_end[j] && s->export_end[i] > c->cancel_start[j]) {
+                    cancel_mask |= uint64_t(1) << j;
+                    break;
+                }
+            }
+        }
+    }
+    const bool car_cancel = cancel_mask != 0;
+    // The energy each car would have bought in its cancelled slots so far, which the room left in it caps
+    double car_cancelled_kwh[PK_MAX_CARS] = {0};
+
     // Initial state - prediction.py:435-490
     double soc = c->soc_kw;
     double soc_min = c->soc_max;
@@ -839,8 +887,16 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
         // Rates - prediction.py:577-580
         double import_rate = c->rate_import[k];
-        const double dispatch_rate = import_rate;
-        const bool dispatch_gone = c->io_flag[k] && is_pv10 && minute > 30;
+        double dispatch_rate = import_rate;
+        bool dispatch_gone = c->io_flag[k] && is_pv10 && minute > 30;
+        // car_cancel.step_reverted(): the step can revert, nothing trusted covers it, and every dispatch covering it is cancelled
+        const bool cancel_reverted = car_cancel && c->cancel_revert_rate[k] >= 0 && !c->cancel_trusted[k] && c->cancel_need_mask[k] != 0 && (c->cancel_need_mask[k] & ~cancel_mask) == 0;
+        if (cancel_reverted) {
+            // Every dispatch here is cancelled, so the half hour is billed at peak, and it is no longer a dispatch that can go away
+            import_rate = c->cancel_revert_rate[k];
+            dispatch_rate = import_rate;
+            dispatch_gone = false;
+        }
         if (dispatch_gone) {
             // Worst case the slot goes away: the tariff's highest rate, or the slot's own if an event makes it dearer
             import_rate = std::max(c->rate_max, import_rate);
@@ -957,6 +1013,17 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 if (car_load_now > 0.0) {
                     double car_load_scale = car_load_now * step / 60.0;
                     car_load_scale = car_load_scale * c->car_charging_loss;
+                    if (car_cancel) {
+                        const int32_t cancel_j = c->cancel_slot_flat[car_n * n_steps + k];
+                        if (cancel_j >= 0 && ((cancel_mask >> cancel_j) & 1)) {
+                            // Cancelled for an export: the car buys nothing here and keeps its room for later, but the
+                            // energy it would have bought - capped by the room left - must be bought back at peak (score only)
+                            car_load_scale = std::max(std::min(car_load_scale, c->car_charging_limit[car_n] - car_soc[car_n] - car_cancelled_kwh[car_n]), 0.0);
+                            car_cancelled_kwh[car_n] += car_load_scale;
+                            metric_keep += car_load_scale / c->car_charging_loss * c->cancel_penalty_rate;
+                            continue;
+                        }
+                    }
                     car_load_scale = std::max(std::min(car_load_scale, c->car_charging_limit[car_n] - car_soc[car_n]), 0.0);
                     car_soc[car_n] = car_soc[car_n] + car_load_scale;
 
@@ -1370,7 +1437,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             soc = std::max(soc - battery_draw / battery_loss_discharge, reserve_expected);
         } else {
             // Bird in hand: score only credit for what a charge window stores in a confirmed dispatch run - prediction.py
-            if (force_charging && c->io_credit[k] != 0.0) {
+            // A reverted step's dispatch is cancelled, so there is no confirmed run to bank
+            if (force_charging && c->io_credit[k] != 0.0 && !cancel_reverted) {
                 metric_keep -= std::min(-battery_draw * battery_loss, soc_max - soc) * c->io_credit[k];
             }
             soc = std::min(soc - battery_draw * battery_loss, soc_max);

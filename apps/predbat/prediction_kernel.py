@@ -28,12 +28,15 @@ import platform
 import sys
 import weakref
 
+from car_cancel import CAR_CANCEL_MAX_SLOTS
 from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPORT_POWER
 from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 10
-KERNEL_PARITY_REVISION = 18
+# ABI 11: the car slot cancel table follows car_rate_flat in PkContext.
+KERNEL_ABI_VERSION = 11
+# Parity 19: an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted.
+KERNEL_PARITY_REVISION = 19
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -72,6 +75,16 @@ class PkContext(ctypes.Structure):
         ("iboost_plan_load", ctypes.POINTER(ctypes.c_double)),
         ("car_load_flat", ctypes.POINTER(ctypes.c_double)),
         ("car_rate_flat", ctypes.POINTER(ctypes.c_double)),
+        # The car slot cancel table (car_cancel.CarCancelTable); cancel_count 0 and null pointers without one
+        ("cancel_count", ctypes.c_int32),
+        ("cancel_start", ctypes.c_int32 * CAR_CANCEL_MAX_SLOTS),
+        ("cancel_end", ctypes.c_int32 * CAR_CANCEL_MAX_SLOTS),
+        ("cancel_forced_mask", ctypes.c_uint64),
+        ("cancel_slot_flat", ctypes.POINTER(ctypes.c_int32)),
+        ("cancel_need_mask", ctypes.POINTER(ctypes.c_uint64)),
+        ("cancel_trusted", ctypes.POINTER(ctypes.c_int32)),
+        ("cancel_revert_rate", ctypes.POINTER(ctypes.c_double)),
+        ("cancel_penalty_rate", ctypes.c_double),
         ("soc_kw", ctypes.c_double),
         ("soc_max", ctypes.c_double),
         ("reserve", ctypes.c_double),
@@ -802,6 +815,8 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_plan_load = double_array(iboost_plan_load)
         ctx.car_load_flat = double_array(car_load_flat)
         ctx.car_rate_flat = double_array(car_rate_flat)
+        if not set_cancel_context(ctx, getattr(pred, "car_cancel", None), n_steps, num_cars):
+            return 0
 
         ctx.soc_kw = pred.soc_kw
         ctx.soc_max = pred.soc_max
@@ -880,6 +895,32 @@ def create_kernel_context(pred, static_cache=None):
         if pred.log:
             pred.log("Warn: Prediction kernel context build failed ({}) - using Python engine".format(error))
         return 0
+
+
+def set_cancel_context(ctx, car_cancel, n_steps, num_cars):
+    """Copy a car_cancel.CarCancelTable into the kernel context, or leave cancel_count 0 and the pointers null without one.
+
+    Returns False for a table built for another horizon or car count, whose arrays the kernel would read past
+    their end: the caller then builds no context, so every prediction runs in the Python engine, which applies
+    the table, rather than in a kernel handed arrays it cannot index.
+    """
+    if car_cancel is None or not car_cancel.slots:
+        ctx.cancel_count = 0
+        return True
+    if car_cancel.n_steps != n_steps or len(car_cancel.slot_flat) != num_cars * n_steps or len(car_cancel.slots) > CAR_CANCEL_MAX_SLOTS:
+        return False
+    slots = car_cancel.slots
+    ctx.cancel_count = len(slots)
+    for j, slot in enumerate(slots):
+        ctx.cancel_start[j] = slot.start
+        ctx.cancel_end[j] = slot.end
+    ctx.cancel_forced_mask = car_cancel.forced_mask
+    ctx.cancel_slot_flat = int32_array(car_cancel.slot_flat) if num_cars > 0 else None
+    ctx.cancel_need_mask = (ctypes.c_uint64 * n_steps)(*car_cancel.need_mask)
+    ctx.cancel_trusted = int32_array(car_cancel.trusted)
+    ctx.cancel_revert_rate = double_array(car_cancel.revert_rate)
+    ctx.cancel_penalty_rate = car_cancel.penalty_rate
+    return True
 
 
 def kernel_supported(pred, save, step):

@@ -31,13 +31,15 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import timedelta
 
 import prediction_kernel
+from car_cancel import CancelSlot, CarCancelTable, build_car_cancel_table
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, MINUTE_WATT
 from prediction import Prediction
 from prediction_batch import export_end_soc_from_series, floor_export_limits
 from prediction_kernel import create_kernel_context, run_prediction_kernel, load_kernel
-from utils import remove_intersecting_windows, unpack_export_limit
+from utils import remove_intersecting_windows, round_out_to_period, unpack_export_limit
 from tests.test_infra import reset_inverter, reset_rates
 from tests.test_model import run_model_tests
 
@@ -144,7 +146,17 @@ SCENARIO_STATE_ATTRS = [
     "rate_gas",
     "iboost_plan",
     "end_record",
+    "car_planned_by_predbat",
+    "car_force_holdable",
+    "car_force_hold_until",
+    "rate_import_saving_minutes",
+    "rate_max_base",
+    "car_charging_now_slots",
 ]
+
+# The switch that lets an export cancel a car slot - a config item rather than an attribute, so it is
+# saved and restored on its own by run_kernel_parity_tests
+CAR_CANCEL_SWITCH = "car_charging_cancel_for_export"
 
 
 def snapshot_scenario_state(my_predbat):
@@ -196,8 +208,13 @@ def make_windows(rng, minutes_now, forecast_minutes, count, align=5):
     return windows
 
 
-def apply_random_scenario(my_predbat, rng):
-    """Randomise my_predbat's battery/inverter/rate configuration for one parity scenario"""
+def apply_random_scenario(my_predbat, rng, cancel_rng=None):
+    """Randomise my_predbat's battery/inverter/rate configuration for one parity scenario
+
+    With cancel_rng, car slot cancellation is drawn from it as well (see apply_random_car_cancel) and the
+    car slot model and cancel table for the scenario are returned; otherwise (None, None). The switch is
+    left off unless cancel_rng turns it on.
+    """
     soc_max = rng.choice([4.8, 9.5, 10.0, 19.0, 50.0, 100.0])
     my_predbat.soc_max = soc_max
     my_predbat.soc_kw = round(rng.uniform(0, soc_max), 2)
@@ -340,6 +357,92 @@ def apply_random_scenario(my_predbat, rng):
         else:
             my_predbat.iboost_plan = []
 
+    # Last, and from a generator of its own, so every configuration rng drew before is unchanged
+    if cancel_rng is None:
+        return None, None
+    return apply_random_car_cancel(my_predbat, cancel_rng)
+
+
+def set_car_cancel_switch(my_predbat, value):
+    """Set the car slot cancellation switch the way the UI does"""
+    my_predbat.expose_config(CAR_CANCEL_SWITCH, value, force=True)
+
+
+def apply_random_car_cancel(my_predbat, rng):
+    """With probability 0.3 when there are cars, let exports cancel car slots in this scenario.
+
+    Turns the switch on, picks the cars Predbat plans (and sometimes one a charger force-holds off), makes
+    some slots Octopus dispatches over io_adjusted half hours - some with a confirmed-dispatch credit, some
+    in a saving session - and sets rate_max_base apart from rate_max. Returns the car slot model and the
+    cancel table the live plan would build for it, or (None, None) with the switch off.
+    """
+    enable = my_predbat.num_cars > 0 and rng.random() < 0.3
+    set_car_cancel_switch(my_predbat, enable)
+    if not enable:
+        return None, None
+
+    minutes_now = my_predbat.minutes_now
+    num_cars = my_predbat.num_cars
+    my_predbat.car_planned_by_predbat = {car_n for car_n in range(num_cars) if rng.random() < 0.7}
+    my_predbat.car_force_holdable = {}
+    my_predbat.car_force_hold_until = {}
+    if rng.random() < 0.3:
+        held = rng.randrange(num_cars)
+        my_predbat.car_force_holdable = {held: "Fake"}
+        my_predbat.car_force_hold_until = {held: my_predbat.midnight_utc + timedelta(minutes=minutes_now + rng.randrange(5, 8 * 60, 5))}
+
+    my_predbat.rate_max_base = rng.choice([my_predbat.rate_max, round(rng.uniform(20, 60), 2)])
+    my_predbat.rate_import_saving_minutes = set()
+    # Copies, so the scenario's own dicts are not edited in place
+    my_predbat.io_adjusted = dict(my_predbat.io_adjusted)
+    my_predbat.io_confirmed_credit = dict(my_predbat.io_confirmed_credit)
+    for car_n in range(num_cars):
+        for slot in my_predbat.car_charging_slots[car_n]:
+            if rng.random() < 0.5:
+                slot["octopus"] = True
+            if rng.random() < 0.6:
+                # A dispatch as the rate feed delivers it: io_adjusted over the slot rounded out to half hours
+                start, end = round_out_to_period(slot["start"], slot["end"])
+                credit = rng.choice([0.0, 0.0, 0.1])
+                for minute in range(start, end):
+                    my_predbat.io_adjusted[minute] = True
+                    if credit:
+                        my_predbat.io_confirmed_credit[minute] = credit
+            if rng.random() < 0.15:
+                start = slot["start"] // 30 * 30
+                my_predbat.rate_import_saving_minutes.update(range(start, start + 30))
+    # A few io_adjusted half hours that no slot covers
+    for _ in range(rng.randint(0, 3)):
+        start = minutes_now // 30 * 30 + rng.randrange(0, my_predbat.forecast_minutes, 30)
+        for minute in range(start, start + 30):
+            my_predbat.io_adjusted[minute] = True
+
+    car_slots_model = my_predbat.car_charging_slots_model()
+    return car_slots_model, build_car_cancel_table(my_predbat, car_slots_model, my_predbat.car_cancel_slots())
+
+
+def cover_car_slots(rng, my_predbat, car_cancel, export_window, export_limits):
+    """Add export windows over about half the cancellable slots: mostly target exports, which cancel, and some freezes, which do not.
+
+    Edges are pulled either side of the slot so partial overlaps, touching ends and half-hour splits all
+    turn up. Returns new lists; the ones passed in are not changed.
+    """
+    export_window = list(export_window)
+    export_limits = list(export_limits)
+    horizon_end = my_predbat.minutes_now + my_predbat.forecast_minutes
+    for slot in car_cancel.slots:
+        if rng.random() < 0.5:
+            continue
+        start = max(slot.start + rng.choice([-30, -5, 0, 0, 5, 25]), my_predbat.minutes_now)
+        end = min(slot.end + rng.choice([-25, -5, 0, 0, 5, 30]), horizon_end)
+        if end <= start:
+            end = min(start + 5, horizon_end)
+        if end <= start:
+            continue
+        export_window.append({"start": start, "end": end, "average": round(rng.uniform(0, 40), 2)})
+        export_limits.append(unpack_export_limit(rng.choice([0.0, 0.0, round(rng.uniform(0, 98), 1), 99.0])))
+    return export_window, export_limits
+
 
 def make_step_data(my_predbat, rng=None, pv_kw=0.0, load_kw=0.0):
     """Build pv/load step dictionaries, random per slot when an rng is given"""
@@ -392,8 +495,12 @@ def compare_results(name, python_result, kernel_result):
     return failed
 
 
-def dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, pv90_step=None, load90_step=None):
-    """Run one scenario through both engines and compare, returns True on failure"""
+def dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, pv90_step=None, load90_step=None, car_charging_slots=None, car_cancel=None):
+    """Run one scenario through both engines and compare, returns True on failure
+
+    car_charging_slots and car_cancel are handed to the Prediction as the live plan hands them over:
+    the car slot model and the cancel table built from it (see apply_random_car_cancel).
+    """
     # The cases and the fuzzer both express an export limit as the packed percentage the encoding
     # used to be. Normalise once here so both stay readable. Values the fuzzer draws in (99, 100)
     # become a 99% target: that interval used to decode as neither a freeze nor a target and left
@@ -402,7 +509,7 @@ def dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charg
     export_limits = [unpack_export_limit(limit) for limit in export_limits]
     # Python engine first (kernel disabled so run_prediction cannot dispatch)
     my_predbat.prediction_kernel_enable = False
-    prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step)
+    prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step, car_charging_slots=car_charging_slots, car_cancel=car_cancel)
     # export_floor=False: the pv10 export floor is applied before dispatch, not in the hot loop these compare
     python_result = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, cache=False, export_floor=False)
 
@@ -422,6 +529,17 @@ def dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charg
     prediction.prediction_kernel_enable = True
     dispatch_result = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, cache=False, export_floor=False)
     failed |= compare_results(name + "_dispatch", kernel_result, dispatch_result)
+
+    if car_cancel is not None:
+        # The live plan runs its fan-outs through pk_run_batch, which reads the cancel table from the same context
+        batched = prediction_kernel.run_prediction_kernel_batch(prediction, [prediction_kernel.BatchJob(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, 5)])
+        if batched is None or batched[0][0] is None:
+            print("ERROR: Scenario {} kernel batch run failed".format(name))
+            return True
+        for field, result_name in enumerate(RESULT_NAMES):
+            if batched[0][0][field] != kernel_result[field]:
+                print("ERROR: Scenario {} batch differs on {}: batch {} single {}".format(name, result_name, batched[0][0][field], kernel_result[field]))
+                failed = True
     return failed
 
 
@@ -798,6 +916,191 @@ def run_edge_case_tests(my_predbat):
                 load90_step=load90_step,
             )
         my_predbat.io_adjusted = {}
+
+    failed |= run_car_cancel_edge_case_tests(my_predbat)
+    return failed
+
+
+def car_cancel_dispatch(rate_import, io_adjusted, start, end, rate=7.0):
+    """Make start to end (rounded out to half hours) an Intelligent dispatch: off-peak and io_adjusted, as the rate feed delivers it"""
+    first, last = round_out_to_period(start, end)
+    for minute in range(first, last):
+        rate_import[minute] = rate
+        io_adjusted[minute] = True
+
+
+def car_cancel_edge_cases(my_predbat):
+    """The deterministic car slot cancellation cases: name, config overrides, charge limits and windows, export windows and limits, PV scenarios.
+
+    The fixture clock is 12:00, so 18:00 (1080) is outside the fixed 23:30-05:30 Intelligent Go window,
+    where a cancelled dispatch reverts to peak, and 00:00 (1440) is inside it, where it keeps its rate.
+    """
+    minutes_now = my_predbat.minutes_now
+    horizon = minutes_now + my_predbat.forecast_minutes
+    base = {
+        "num_cars": 1,
+        "car_charging_soc": [10.0, 0, 0, 0],
+        "car_charging_limit": [100.0, 100.0, 100.0, 100.0],
+        "car_charging_loss": 0.9,
+        "car_energy_reported_load": True,
+        "car_charging_from_battery": False,
+        "car_charging_now_slots": [[], [], [], []],
+        "car_planned_by_predbat": {0},
+        "car_force_holdable": {},
+        "car_force_hold_until": {},
+        "rate_import_saving_minutes": set(),
+        "rate_max_base": 30.0,
+        "rate_max": 40.0,
+        "rate_import_tariff_max": 40.0,
+        "soc_kw": 50.0,
+    }
+    nominal_pv10 = (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10)
+
+    def dispatches(spans):
+        """Fresh rate_import and io_adjusted dicts with each (start, end) in spans a dispatch"""
+        rate_import = {minute: 10.0 for minute in range(horizon)}
+        io_adjusted = {}
+        for start, end in spans:
+            car_cancel_dispatch(rate_import, io_adjusted, start, end)
+        return {"rate_import": rate_import, "io_adjusted": io_adjusted}
+
+    def car(start, end, kwh, octopus=True):
+        """One car slot at 7p"""
+        return {"start": start, "end": end, "kwh": kwh, "average": 7.0, "octopus": octopus}
+
+    # The car is 10 kWh from full and three slots would buy 14 kWh each: the two cancelled ones are charged
+    # the buy-back on the room left (capped across both by the running total), and the one between them
+    # still charges, because a cancelled slot leaves the car's room alone
+    penalty = dict(base, car_charging_soc=[40.0, 0, 0, 0], car_charging_limit=[50.0, 100, 100, 100], car_charging_slots=[[car(1080, 1140, 14.0, False), car(1200, 1260, 4.0, False), car(1300, 1330, 14.0, False)], [], [], []])
+    # Cancelled dispatches at 18:00 (reverts, and banks no confirmed credit for the charge window storing in
+    # it), at 21:00 in a saving session (keeps its own rate) and at 00:00 in the fixed window (keeps 7p);
+    # the one at 19:00 is not exported over and keeps both its rate and the credit for its charge window
+    revert_spans = [(1080, 1110), (1140, 1170), (1260, 1290), (1440, 1470)]
+    revert = dict(
+        base,
+        car_charging_slots=[[car(start, end, 7.0) for start, end in revert_spans], [], [], []],
+        io_confirmed_credit={minute: 0.1 for minute in range(1080, 1170)},
+        rate_import_saving_minutes=set(range(1260, 1290)),
+        **dispatches(revert_spans),
+    )
+    # Two dispatches share the 19:00 half hour: cancelling one keeps 7p for the half hour, cancelling both reverts it
+    split = dict(base, car_charging_slots=[[car(1140, 1145, 1.0), car(1145, 1170, 5.0)], [], [], []], **dispatches([(1140, 1170)]))
+    # A charger is holding the car off until 20:00, so its 18:00 dispatch is cancelled with no export at all
+    forced = dict(
+        base,
+        car_planned_by_predbat=set(),
+        car_force_holdable={0: "Fake"},
+        car_force_hold_until={0: my_predbat.midnight_utc + timedelta(minutes=1200)},
+        car_charging_slots=[[car(1080, 1140, 7.0), car(1260, 1320, 7.0)], [], [], []],
+        **dispatches([(1080, 1140), (1260, 1320)]),
+    )
+    # In pv10 the cancelled 18:00 dispatch reverts to rate_max_base and is no longer a dispatch that can go
+    # away, while the 19:00 one it is not cancelled with is assumed gone and pays the tariff maximum
+    pv10 = dict(base, car_charging_slots=[[car(1080, 1140, 7.0), car(1140, 1200, 7.0)], [], [], []], **dispatches([(1080, 1200)]))
+    target = [0.0]
+    return [
+        ("car_cancel_penalty", penalty, [], [], [{"start": 1080, "end": 1140}, {"start": 1300, "end": 1330}], [0.0, 0.0], nominal_pv10),
+        (
+            "car_cancel_revert",
+            revert,
+            [100.0, 100.0],
+            [{"start": 1095, "end": 1110, "average": 7.0}, {"start": 1150, "end": 1170, "average": 7.0}],
+            [{"start": 1080, "end": 1095}, {"start": 1260, "end": 1290}, {"start": 1440, "end": 1470}],
+            [0.0, 0.0, 0.0],
+            nominal_pv10,
+        ),
+        ("car_cancel_split_half_hour_one", split, [], [], [{"start": 1140, "end": 1145}], target, nominal_pv10),
+        ("car_cancel_split_half_hour_both", split, [], [], [{"start": 1140, "end": 1170}], target, nominal_pv10),
+        ("car_cancel_forced", forced, [], [], [], [], nominal_pv10),
+        ("car_cancel_pv10", pv10, [], [], [{"start": 1080, "end": 1110}], target, (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90)),
+        ("car_cancel_pv10_not_reported", dict(pv10, car_energy_reported_load=False), [], [], [{"start": 1080, "end": 1110}], target, (PV_SCENARIO_PV10,)),
+    ]
+
+
+def run_car_cancel_edge_case_tests(my_predbat):
+    """Deterministic car slot cancellation scenarios through both engines, returns True on failure.
+
+    Each case also checks the Python engine scores it differently with the cancel table than without, so a
+    case that stopped cancelling anything could not pass by comparing two runs of the unchanged engine.
+    """
+    failed = False
+    for name, overrides, charge_limit, charge_window, export_window, export_limits, scenarios in car_cancel_edge_cases(my_predbat):
+        reset_inverter(my_predbat)
+        reset_rates(my_predbat, 10.0, 5.0)
+        my_predbat.io_confirmed_credit = {}
+        my_predbat.battery_rate_max_export = my_predbat.battery_rate_max_discharge
+        for key, value in overrides.items():
+            setattr(my_predbat, key, copy.deepcopy(value))
+        set_car_cancel_switch(my_predbat, True)
+        car_slots_model = my_predbat.car_charging_slots_model()
+        car_cancel = build_car_cancel_table(my_predbat, car_slots_model, my_predbat.car_cancel_slots())
+        if car_cancel is None:
+            print("ERROR: Scenario {} built no cancel table".format(name))
+            failed = True
+            continue
+        pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, pv_kw=0.0, load_kw=0.5)
+        for pv_scenario in scenarios:
+            case = "{}_scenario_{}".format(name, pv_scenario)
+            failed |= dual_run(
+                case,
+                my_predbat,
+                pv_step,
+                pv10_step,
+                load_step,
+                load10_step,
+                charge_limit[:],
+                [dict(window) for window in charge_window],
+                [dict(window) for window in export_window],
+                export_limits[:],
+                pv_scenario,
+                my_predbat.forecast_minutes,
+                car_charging_slots=car_slots_model,
+                car_cancel=car_cancel,
+            )
+            limits = [unpack_export_limit(limit) for limit in export_limits]
+            my_predbat.prediction_kernel_enable = False
+            results = []
+            for table in (car_cancel, None):
+                prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step, car_charging_slots=car_slots_model, car_cancel=table)
+                results.append(prediction.run_prediction(charge_limit[:], [dict(window) for window in charge_window], [dict(window) for window in export_window], limits, pv_scenario, my_predbat.forecast_minutes, cache=False, export_floor=False))
+            if results[0][8] == results[1][8]:
+                print("ERROR: Scenario {} cancels nothing: metric_keep {} with the table and without".format(case, results[0][8]))
+                failed = True
+    set_car_cancel_switch(my_predbat, False)
+    my_predbat.io_adjusted = {}
+    my_predbat.io_confirmed_credit = {}
+    return failed
+
+
+def run_cancel_context_tests():
+    """set_cancel_context hands a matching cancel table to the kernel and refuses a mismatched one, returns True on failure"""
+    failed = False
+    n_steps = 4
+    slots = [CancelSlot(0, 0, 10, 20, False), CancelSlot(0, 1, 30, 40, True)]
+
+    def table(table_steps, slot_flat):
+        """A two-slot table with the given horizon and slot lookup"""
+        return CarCancelTable(slots, 0b10, table_steps, slot_flat, [0b01, 0, 0b11, 0], [0, 1, 0, 0], [-1.0, 30.0, 30.0, -1.0], 30.0)
+
+    ctx = prediction_kernel.PkContext()
+    if not prediction_kernel.set_cancel_context(ctx, None, n_steps, 1) or ctx.cancel_count != 0 or ctx.cancel_need_mask:
+        print("ERROR: set_cancel_context without a table should leave cancel_count 0 and the pointers null")
+        failed = True
+    ctx = prediction_kernel.PkContext()
+    if not prediction_kernel.set_cancel_context(ctx, table(n_steps, [0, -1, 1, 1]), n_steps, 1):
+        print("ERROR: set_cancel_context refused a matching table")
+        failed = True
+    elif (
+        (ctx.cancel_count, list(ctx.cancel_start[:2]), list(ctx.cancel_end[:2]), ctx.cancel_forced_mask, ctx.cancel_penalty_rate) != (2, [10, 30], [20, 40], 0b10, 30.0)
+        or [ctx.cancel_need_mask[k] for k in range(n_steps)] != [0b01, 0, 0b11, 0]
+        or [ctx.cancel_slot_flat[k] for k in range(n_steps)] != [0, -1, 1, 1]
+    ):
+        print("ERROR: set_cancel_context copied the table wrongly")
+        failed = True
+    for name, bad, num_cars in (("horizon", table(n_steps + 1, [0, -1, 1, 1]), 1), ("car count", table(n_steps, [0, -1, 1, 1]), 2)):
+        if prediction_kernel.set_cancel_context(prediction_kernel.PkContext(), bad, n_steps, num_cars):
+            print("ERROR: set_cancel_context accepted a table built for another {}".format(name))
+            failed = True
     return failed
 
 
@@ -811,12 +1114,16 @@ def run_random_sweep_tests(my_predbat, count=150):
     """
     failed = False
     scenario_counts = {PV_SCENARIO_NOMINAL: 0, PV_SCENARIO_PV10: 0, PV_SCENARIO_PV90: 0}
+    cancel_count = 0
     for seed in range(count):
         rng = random.Random(seed)
+        # Car slot cancellation draws from a generator of its own, like the p90 series below, so the
+        # configurations drawn from rng are the same as before it was added
+        cancel_rng = random.Random(seed + 2000000)
         reset_inverter(my_predbat)
         reset_rates(my_predbat, 10.0, 5.0)
         my_predbat.battery_rate_max_export = my_predbat.battery_rate_max_discharge
-        apply_random_scenario(my_predbat, rng)
+        car_slots_model, car_cancel = apply_random_scenario(my_predbat, rng, cancel_rng=cancel_rng)
         pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, rng=rng)
 
         # p90 series derived from a separate generator so the main rng stream - and therefore every
@@ -830,6 +1137,9 @@ def run_random_sweep_tests(my_predbat, count=150):
         export_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(0, 3), align=rng.choice([5, 5, 30]))
         export_limits = [unpack_export_limit(rng.choice([100.0, 99.0, 0.0, round(rng.uniform(0, 100), 1)])) for _ in export_window]
         end_record = rng.choice([my_predbat.forecast_minutes, my_predbat.forecast_minutes - 30, rng.randrange(0, my_predbat.forecast_minutes, 5)])
+        if car_cancel is not None:
+            cancel_count += 1
+            export_window, export_limits = cover_car_slots(cancel_rng, my_predbat, car_cancel, export_window, export_limits)
 
         # No scenario is drawn from rng here: the draw that used to sit at this position was the last
         # use of rng in the loop body, so looping the scenarios instead leaves every previously
@@ -837,14 +1147,37 @@ def run_random_sweep_tests(my_predbat, count=150):
         for pv_scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90):
             scenario_counts[pv_scenario] += 1
             failed |= dual_run(
-                "random_{}_s{}".format(seed, pv_scenario), my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, pv90_step=pv90_step, load90_step=load90_step
+                "random_{}_s{}".format(seed, pv_scenario),
+                my_predbat,
+                pv_step,
+                pv10_step,
+                load_step,
+                load10_step,
+                charge_limit,
+                charge_window,
+                export_window,
+                export_limits,
+                pv_scenario,
+                end_record,
+                pv90_step=pv90_step,
+                load90_step=load90_step,
+                car_charging_slots=car_slots_model,
+                car_cancel=car_cancel,
             )
             if failed:
                 print("Random sweep failed at seed {} scenario {}".format(seed, pv_scenario))
                 break
         if failed:
             break
-    print("Random sweep ran {} configurations: nominal {}, pv10 {}, pv90 {}".format(sum(scenario_counts.values()), scenario_counts[PV_SCENARIO_NOMINAL], scenario_counts[PV_SCENARIO_PV10], scenario_counts[PV_SCENARIO_PV90]))
+    print(
+        "Random sweep ran {} configurations: nominal {}, pv10 {}, pv90 {}, {} seeds cancelling car slots".format(
+            sum(scenario_counts.values()), scenario_counts[PV_SCENARIO_NOMINAL], scenario_counts[PV_SCENARIO_PV10], scenario_counts[PV_SCENARIO_PV90], cancel_count
+        )
+    )
+    set_car_cancel_switch(my_predbat, False)
+    if not failed and count >= 100 and cancel_count < 5:
+        print("ERROR: Random sweep only cancelled car slots in {} seeds - the draw no longer reaches the cancel table".format(cancel_count))
+        failed = True
     return failed
 
 
@@ -1633,9 +1966,11 @@ def run_kernel_parity_tests(my_predbat):
         return required_failure
 
     state = snapshot_scenario_state(my_predbat)
+    saved_switch = my_predbat.get_arg(CAR_CANCEL_SWITCH, False)
     try:
         failed = run_marshalling_tests()
         failed |= run_soc_percent_table_tests()
+        failed |= run_cancel_context_tests()
         failed |= run_edge_case_tests(my_predbat)
         failed |= run_export_floor_parity_tests(my_predbat)
         if not failed:
@@ -1659,6 +1994,7 @@ def run_kernel_parity_tests(my_predbat):
         if not failed:
             failed |= run_pool_fork_tests(my_predbat)
     finally:
+        set_car_cancel_switch(my_predbat, saved_switch)
         restore_scenario_state(my_predbat, state)
 
     if failed:

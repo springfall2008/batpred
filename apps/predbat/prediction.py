@@ -104,6 +104,8 @@ class Prediction(PredictionBatch):
         car_cancel, when given, is the car_cancel.CarCancelTable for those slots: a target export over a slot in
         it cancels that slot in the prediction. Only the live plan passes one; None leaves the engine unchanged.
         """
+        # Set before the kernel context is built below, which copies the table into it
+        self.car_cancel = car_cancel
         if base:
             self.minutes_now = base.minutes_now
             self.log = base.log
@@ -232,7 +234,6 @@ class Prediction(PredictionBatch):
         # object and its first enqueue_prediction would otherwise raise AttributeError
         self.pending_batch = []
         self.batch_threads = 1
-        self.car_cancel = car_cancel
         # Window-end SoCs for cached results that were asked for them, keyed on the same hash as
         # prediction_cache (whose entries drop the SoC series)
         self.prediction_cache_export_end = {}
