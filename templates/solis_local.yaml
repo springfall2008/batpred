@@ -24,7 +24,6 @@ pred_bat:
   # XXX: This is a configuration template, delete this line once you edit your configuration
   template: True
 
-  # Some Solis integrations insert an inverter serial number in the entity name.
   load_today: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_household_load_today_energy)'
   import_today: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_today_energy_imported_from_grid)'
   export_today: 're:(sensor\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_today_energy_fed_into_grid)'
