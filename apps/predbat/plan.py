@@ -4192,8 +4192,12 @@ class Plan:
                 if not self.allow_this_export_window(window_n):
                     continue
 
-                snapshot = self.plan_window_snapshot(typ, window_n)
                 window = self.export_window_best[window_n]
+                no_freeze = self.export_freeze_over_car(window.get("start_orig", window["start"]), window["end"])
+                if no_freeze and self.set_export_freeze_only:
+                    continue
+
+                snapshot = self.plan_window_snapshot(typ, window_n)
                 baseline_penalty = self.export_threshold_penalty(self.export_limits_best[window_n], window["start"], window["end"])
                 set_window_start(self.export_window_best[window_n], self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"]))
                 best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan = self.optimise_export(
@@ -4204,6 +4208,7 @@ class Plan:
                     self.export_window_best,
                     self.export_limits_best,
                     end_record=end_record,
+                    allow_freeze=not no_freeze,
                 )
                 self.export_limits_best[window_n] = best_soc
                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
@@ -4403,9 +4408,12 @@ class Plan:
                     continue
                 if not self.allow_this_export_window(window_n):
                     continue
+                no_freeze = self.export_freeze_over_car(window_start, self.export_window_best[window_n]["end"])
+                if no_freeze and self.set_export_freeze_only:
+                    continue
 
                 new_soc, new_start, new_metric, new_cost, new_soc_min, new_soc_min_minute, new_keep, new_cycle, new_carbon, new_import, new_metric_plan = self.optimise_export(
-                    window_n, record_export_windows, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
+                    window_n, record_export_windows, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, allow_freeze=not no_freeze
                 )
                 self.export_limits_best[window_n] = new_soc
                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
@@ -5042,6 +5050,13 @@ class Plan:
                                 self.log("Skip low window {} best limit {} price_set {} price {} level {}".format(window_n, self.export_limits_best[window_n], price_key, price, best_price_export_level))
                             continue
 
+                        # Freeze cancels nothing, so over a car slot only a full export may be tried - and a freeze-only trial is skipped
+                        window = self.export_window_best[window_n]
+                        no_freeze = self.export_freeze_over_car(window.get("start_orig", window["start"]), window["end"])
+                        freeze_only = (typ == "df") or pass_type == "freeze"
+                        if no_freeze and (freeze_only or self.set_export_freeze_only):
+                            continue
+
                         if self.allow_this_export_window(window_n):
                             if not printed_set and self.debug_enable:
                                 self.log(
@@ -5084,8 +5099,8 @@ class Plan:
                                 self.export_window_best,
                                 self.export_limits_best,
                                 end_record=self.end_record,
-                                freeze_only=(typ == "df") or pass_type == "freeze",
-                                allow_freeze=True,
+                                freeze_only=freeze_only,
+                                allow_freeze=not no_freeze,
                             )
                             set_window_start(self.export_window_best[window_n], keep_start)
                             # The export trim pass may only reduce export, never add it, so the cheapest slots
@@ -6526,6 +6541,16 @@ class Plan:
         if total_kwh > 0.0001:
             return dp2(total_cost / total_kwh)
         return None
+
+    def export_freeze_over_car(self, window_start, window_end):
+        """
+        Whether freeze export must not be tried in this export window: cancelling for export is on and the window
+        is over a car slot. The export gate admits such a window only because a full export over it cancels the
+        slot; freeze cancels nothing, so it keeps the hard block hit_car_window() gives it elsewhere.
+
+        With the switch off car_cancel_keys is empty and this is one test: the gate already turns such windows away.
+        """
+        return bool(self.car_cancel_keys) and not self.car_charging_from_battery and self.hit_car_window(window_start, window_end)
 
     def hit_uncancellable_car_window(self, window_start, window_end):
         """Does this window intersect a car charging window that an export may not cancel?

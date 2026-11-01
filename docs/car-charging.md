@@ -1064,7 +1064,7 @@ Which slots can be cancelled:
 - Any other car keeps its slots, and no export is planned over them.
 - A car that is already charged to its limit is never cancelled, as giving up its slot would cost the plan nothing and any export would do it. A charger already holding it off still holds it until the hold ends.
 - An export that overlaps any part of a slot cancels the whole slot. Only a full export cancels: freeze export and idle windows never do.
-- The optimiser's levels pass and freeze export never cancel a slot; the detailed passes that follow can.
+- The optimiser's levels pass and freeze export never cancel a slot; the detailed passes that follow can. Freeze export is never planned over a car slot, as it would hold the battery without cancelling the slot.
 - A slot added because **car_charging_now** reports the car charging with no slot planned is never cancelled, nor is a slot with no energy in it. Only the first 64 cancellable slots in the forecast can be cancelled.
 - The decision is made afresh every time the plan is calculated, so a cancellation that stops being worth it falls away by itself. The exception is a car a charger is already holding off: the hold is kept until the end of its slot, and the plan treats every slot of that car ending by then as cancelled meanwhile.
 A slot that runs on past the hold's end, for example a dispatch Octopus extends during the hold, is judged afresh like any other: the hold carries on into it only if the plan still exports over it, and otherwise ends on time so the car can charge.

@@ -665,11 +665,12 @@ def _plan_scenario(export_rate, octopus=False):
     }
 
 
-def _plan(export_rate, switch=True, publish_calls=None, octopus=False, planned=frozenset({0}), holdable=None, best_keep=None):
+def _plan(export_rate, switch=True, publish_calls=None, octopus=False, planned=frozenset({0}), holdable=None, best_keep=None, freeze=False, export_calls=None):
     """
     Plan the scenario on a fresh PredBat with the switch on; return it and the cancellable slots. The car is
     Predbat-led unless planned says otherwise, and holdable is car_force_holdable. best_keep, a list, gets the
-    metric_keep of every save="best" run.
+    metric_keep of every save="best" run. freeze turns set_export_freeze on, and export_calls, a list, gets
+    (start, end, allow_freeze, freeze_only) for every optimise_export() call, with the window as it is tried.
     """
     # Imported here: unit_test imports this module, so a top level import would be circular
     from unit_test import create_predbat
@@ -704,6 +705,17 @@ def _plan(export_rate, switch=True, publish_calls=None, octopus=False, planned=f
             plan_predbat.publish_car_plan = lambda **kwargs: (publish_calls.append(kwargs), real_publish(**kwargs))[1]
         if best_keep is not None:
             _record_best_keep(plan_predbat, best_keep)
+        if freeze:
+            plan_predbat.set_export_freeze = True
+        if export_calls is not None:
+            real_optimise_export = plan_predbat.optimise_export
+
+            def optimise_export(window_n, record_charge_windows, try_charge_limit, charge_window, export_window, export_limit, **kwargs):
+                """Note the window and the freeze arguments of each call, then optimise as normal."""
+                export_calls.append((export_window[window_n]["start"], export_window[window_n]["end"], kwargs.get("allow_freeze", True), kwargs.get("freeze_only", False)))
+                return real_optimise_export(window_n, record_charge_windows, try_charge_limit, charge_window, export_window, export_limit, **kwargs)
+
+            plan_predbat.optimise_export = optimise_export
         plan_predbat.calculate_plan(recompute=True)
     return plan_predbat, plan_predbat.car_cancel_slots()
 
@@ -760,6 +772,28 @@ def test_valuation_normal_export_loses():
     assert slots, "the slot should be cancellable"
     assert not _exports_over_slot(plan_predbat), "a target export over the slot: {}".format(list(zip(plan_predbat.export_window_best, plan_predbat.export_limits_best)))
     assert cancelled_mask(slots, plan_predbat.export_window_best, plan_predbat.export_limits_best) == 0
+
+
+def test_no_freeze_over_cancellable_slot():
+    """
+    With the switch on the export gate lets a window over a cancellable car slot into the detailed passes, but freeze
+    cancels nothing, so freeze is never tried there: every optimise_export() call over the slot rules it out, and the
+    plan never freezes over it. With the switch off such a window never reaches optimise_export() at all.
+    """
+    slot_start, slot_end = PLAN_SLOT
+    for export_rate in (200.0, 15.0):
+        export_calls = []
+        plan_predbat, slots = _plan(export_rate, freeze=True, export_calls=export_calls)
+        assert slots, "the slot should be cancellable"
+        over = [call for call in export_calls if call[0] < slot_end and call[1] > slot_start]
+        assert over, "no export window over the slot was optimised"
+        assert all(not allow_freeze for _, _, allow_freeze, _ in over), "freeze allowed over the car slot: {}".format(over)
+        assert all(not freeze_only for _, _, _, freeze_only in over), "a freeze-only trial over the car slot: {}".format(over)
+        frozen = [window for window, limit in zip(plan_predbat.export_window_best, plan_predbat.export_limits_best) if export_mode_of(limit) == EXPORT_MODE_FREEZE and window["start"] < slot_end and window["end"] > slot_start]
+        assert not frozen, "freeze export planned over the car slot: {}".format(frozen)
+    export_calls = []
+    _plan(200.0, switch=False, freeze=True, export_calls=export_calls)
+    assert not [call for call in export_calls if call[0] < slot_end and call[1] > slot_start], export_calls
 
 
 def _best_plan(plan_predbat):
@@ -1168,6 +1202,7 @@ def run_car_cancel_tests(my_predbat):
     test_switch_off_identical(my_predbat)
     test_valuation_saving_session_wins()
     test_valuation_normal_export_loses()
+    test_no_freeze_over_cancellable_slot()
     test_plan_republishes_car_plan_only_when_enabled()
     test_cancel_set_consistent()
     test_neither_car_never_cancelled()
