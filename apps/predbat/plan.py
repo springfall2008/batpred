@@ -699,15 +699,26 @@ class Plan:
         now_slot_counts = [len(now_slots[car_n]) if car_n < len(now_slots) else 0 for car_n in range(len(self.car_charging_slots))]
         return cancellable_slots(self.car_charging_slots_model(), now_slot_counts, self.car_cancellable_cars(), held_until, self.minutes_now)
 
-    def car_cancelled_for_export_windows(self):
+    def car_cancelled_for_export_windows(self, after_plan=True):
         """
         The (start, end) of each car's slots the plan as it stands cancels for an export, car_n -> list. Always
         derived fresh from export_window_best and export_limits_best; empty when the switch is off.
+
+        With after_plan False - the publish at fetch, before this cycle's plan - the plan is last cycle's while the
+        slots are rebuilt, so only a forced slot or one the last publish cancelled (car_cancelled_for_export) is
+        kept: a dispatch Octopus has re-cut or extended under last cycle's export has not been judged yet. A slot
+        under way whose start has only walked forward to now, as the car plan and Octopus both trim it, is the
+        same slot.
         """
         slots = self.car_cancel_slots()
         if not slots:
             return {}
-        return cancelled_windows(slots, cancelled_mask(slots, self.export_window_best, self.export_limits_best))
+        mask = cancelled_mask(slots, self.export_window_best, self.export_limits_best)
+        if not after_plan:
+            for j, slot in enumerate(slots):
+                if mask & (1 << j) and not slot.forced and not any(end == slot.end and (start == slot.start or start < slot.start <= self.minutes_now) for start, end in self.car_cancelled_for_export.get(slot.car_n, [])):
+                    mask &= ~(1 << j)
+        return cancelled_windows(slots, mask)
 
     def dynamic_load_car_target(self, car_n, minute, now, record=True):
         """
@@ -2588,7 +2599,7 @@ class Plan:
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
                 # Only when cancelling for export is on: the slots it cancels have just changed, and the fetch-time publish covers the rest
                 if self.car_cancel_enabled():
-                    self.publish_car_plan()
+                    self.publish_car_plan(after_plan=True)
 
                 # Compute marginal energy cost matrix (what-if extra load scenarios)
                 self.calculate_marginal_costs()

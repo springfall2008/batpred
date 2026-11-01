@@ -217,14 +217,17 @@ class Output:
     charging schedules, and financial metric summaries.
     """
 
-    def publish_car_plan(self):
+    def publish_car_plan(self, after_plan=False):
         """
         Publish the car charging plan
+
+        after_plan is True for the publish straight after planning, False for the one at fetch, before it.
         """
         postfix = ""
-        # Always derived fresh from the plan as it stands, which at fetch time is last cycle's: the slots it cancels are
+        # Always derived fresh from the plan as it stands, which at fetch time is last cycle's, so then only what the last
+        # publish cancelled or a charger is holding off (see car_cancelled_for_export_windows()): the slots it cancels are
         # left out of the plan, and listed apart so a charger holds the car off for them (cancelled_for_export)
-        self.car_cancelled_for_export = self.car_cancelled_for_export_windows()
+        self.car_cancelled_for_export = self.car_cancelled_for_export_windows(after_plan=after_plan)
         for car_n in range(self.num_cars):
             # A list of its own per car - shared, every car after the first also carried the windows of
             # the cars before it, and a charger driven from its car's plan would charge in them

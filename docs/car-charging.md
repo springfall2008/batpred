@@ -1072,6 +1072,7 @@ What a cancellation looks like:
 
 - **binary_sensor.predbat_car_charging_slot** (and **binary_sensor.predbat_car_charging_slot_1** etc. for further cars) leaves a cancelled slot out of its `planned` attribute and its `kwh` and `cost` totals, and lists it in a `cancelled_for_export` attribute instead, as a `start` and `end` in the same format as `planned`.
 The sensor stays off during a cancelled slot, so a Predbat-led charger does not start, and a charger that can hold the car off reads the attribute to do so.
+- The sensor is also refreshed when new data is fetched, just before the plan is calculated. That refresh only keeps cancellations the plan has already made: a slot whose times have changed since, such as a dispatch Octopus has re-cut or extended, is listed in `planned` until the plan has looked at it again.
 - The plan table shows the slot's car kWh as cancelled, with a "?".
 - Predbat does not hold the house battery for the car during a cancelled slot, as the car is not charging.
 
