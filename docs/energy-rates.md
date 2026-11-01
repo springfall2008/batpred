@@ -205,6 +205,16 @@ If you do not have an export tariff then forced export will not apply and Predba
 If you do not want Predbat to automatically join Octopus saving sessions and manage your battery activity for the session,
 simply delete or comment out the **octopus_saving_session** entry in `apps.yaml`.
 
+### Intelligent dispatches cancelled for an export
+
+With **switch.predbat_car_charging_cancel_for_export** On the plan can cancel a car charging slot to export over it, for example to export through a saving session that overlaps an Intelligent Octopus dispatch - see [Cancelling a car slot for an export](car-charging.md#cancelling-a-car-slot-for-an-export).
+Octopus bills a half hour of a dispatch at the cheap rate only when the car charges in it, so the plan prices a cancelled dispatch the way it would be billed:
+
+- Outside the fixed 23:30-05:30 off-peak window, the half hours of a cancelled dispatch are costed at the peak rate (the highest base import rate in the forecast) instead of the dispatch rate. Inside 23:30-05:30 they are cheap anyway and keep their rate.
+- A half hour that another car's dispatch, one that is not cancelled, still covers stays cheap, as the rate applies to the whole house. A saving session or free session rate on it still applies.
+- Under the window billing rule (**intelligent_dispatch_billing** set to `window`, the default with `kraken_provider: eon`) the supplier bills the whole planned dispatch at the cheap rate whether or not the car charges, so a cancelled dispatch keeps its cheap rate.
+- Octopus smart control is never touched: Predbat does not suspend smart charging or change your target. The car is held off at its charger, and Octopus goes on planning and reporting its dispatches as normal.
+
 ### Octopus free (Power Up) events
 
 Predbat can automatically detect Octopus free events - now called Power Up events - and adjust your battery plan accordingly. Note that this is derived from external sources, which do not verify your eligibility for free sessions.

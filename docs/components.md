@@ -1212,7 +1212,8 @@ When **car_charging_cancel_for_export** is on and the plan cancels a car chargin
 Things to know:
 
 - Wallbox's cloud, and the Home Assistant Wallbox integration, can go on showing `Charging` for minutes after the charger has stopped. Predbat reads the charger afresh each cycle during a hold and tolerates this, but the sensor lags.
-- The first version relies on **car_charging_cancel_for_export**, which is off by default. The planner support that cancels slots for an export arrives separately, so until then no slot is cancelled and nothing is held.
+- **car_charging_cancel_for_export** is off by default. With it on, the plan cancels a slot only when the export over it is worth more than buying the car's energy back at the peak import rate, which in practice means events such as saving sessions, so most days nothing is held. The cancelled slots are listed in the `cancelled_for_export` attribute of the car's slot sensor; see [Cancelling a car slot for an export](car-charging.md#cancelling-a-car-slot-for-an-export).
+- While Predbat is in read only mode or guest charging is on, the plan does not count the car as one a Wallbox can hold, so its slots are not cancelled unless Predbat leads its charging.
 - A car that is unplugged is not held, and nor is one while guest charging is on.
 
 #### Configuration Options (wallbox)

@@ -599,8 +599,11 @@ def test_switch_off_identical(my_predbat):
 PLAN_SLOT = (18 * 60, 18 * 60 + 30)
 
 
-def _plan_scenario(export_rate):
-    """A one-car day in the random benchmark's format: the car's 10 kWh slot at 7p is under an export at export_rate."""
+def _plan_scenario(export_rate, octopus=False):
+    """
+    A one-car day in the random benchmark's format: the car's 10 kWh slot at 7p is under an export at export_rate.
+    With octopus the slot is an Intelligent dispatch, marked io_adjusted as the rate feed delivers it.
+    """
     slot_start, slot_end = PLAN_SLOT
 
     def import_rate(minute):
@@ -617,7 +620,8 @@ def _plan_scenario(export_rate):
             "inverter": {"hybrid": False, "inverter_limit_kw": 10.0, "export_limit_kw": 10.0},
             "clock": {"minutes_now": MINUTES_NOW},
             "load_scaling": {"nominal": 1.0, "pv10": 1.0, "pv90": 1.0},
-            "cars": {"num_cars": 1, "battery_kwh": [100.0], "slots": [[_car(slot_start, slot_end, octopus=False)]]},
+            "cars": {"num_cars": 1, "battery_kwh": [100.0], "slots": [[_car(slot_start, slot_end, octopus=octopus)]]},
+            "iog": {"enabled": octopus, "run_start_minute": slot_start, "run_slots": (slot_end - slot_start) // 30},
         },
         "data": {
             "rate_import_day": [import_rate(minute) for minute in range(1440)],
@@ -628,8 +632,12 @@ def _plan_scenario(export_rate):
     }
 
 
-def _plan(export_rate, switch=True, publish_calls=None):
-    """Plan the scenario on a fresh PredBat with the switch on; return it and the cancellable slots."""
+def _plan(export_rate, switch=True, publish_calls=None, octopus=False, planned=frozenset({0}), holdable=None, best_keep=None):
+    """
+    Plan the scenario on a fresh PredBat with the switch on; return it and the cancellable slots. The car is
+    Predbat-led unless planned says otherwise, and holdable is car_force_holdable. best_keep, a list, gets the
+    metric_keep of every save="best" run.
+    """
     # Imported here: unit_test imports this module, so a top level import would be circular
     from unit_test import create_predbat
     from tests.test_infra import reset_inverter
@@ -642,12 +650,12 @@ def _plan(export_rate, switch=True, publish_calls=None):
         plan_predbat.config_root = "./"
         plan_predbat.save_restore_dir = "./"
         plan_predbat.load_user_config()
-        apply_scenario_to_predbat(plan_predbat, _plan_scenario(export_rate))
+        apply_scenario_to_predbat(plan_predbat, _plan_scenario(export_rate, octopus=octopus))
         plan_predbat.battery_rate_max_export = 10.0 / 60.0
         plan_predbat.rate_max_base = PEAK
         plan_predbat.car_charging_now_slots = [[]]
-        plan_predbat.car_planned_by_predbat = {0}
-        plan_predbat.car_force_holdable = {}
+        plan_predbat.car_planned_by_predbat = set(planned)
+        plan_predbat.car_force_holdable = dict(holdable or {})
         plan_predbat.car_force_hold_until = {}
         plan_predbat.car_charging_from_battery = False
         plan_predbat.car_energy_reported_load = True
@@ -661,8 +669,24 @@ def _plan(export_rate, switch=True, publish_calls=None):
         if publish_calls is not None:
             real_publish = plan_predbat.publish_car_plan
             plan_predbat.publish_car_plan = lambda: (publish_calls.append(1), real_publish())[1]
+        if best_keep is not None:
+            _record_best_keep(plan_predbat, best_keep)
         plan_predbat.calculate_plan(recompute=True)
     return plan_predbat, plan_predbat.car_cancel_slots()
+
+
+def _record_best_keep(plan_predbat, best_keep):
+    """Wrap run_prediction so the metric_keep of every save="best" run is appended to best_keep."""
+    real_run_prediction = plan_predbat.run_prediction
+
+    def run_prediction(*args, **kwargs):
+        """Run the real prediction and note metric_keep when it is the final best run."""
+        result = real_run_prediction(*args, **kwargs)
+        if kwargs.get("save") == "best":
+            best_keep.append(result[8])
+        return result
+
+    plan_predbat.run_prediction = run_prediction
 
 
 def _exports_over_slot(plan_predbat):
@@ -703,6 +727,100 @@ def test_valuation_normal_export_loses():
     assert slots, "the slot should be cancellable"
     assert not _exports_over_slot(plan_predbat), "a target export over the slot: {}".format(list(zip(plan_predbat.export_window_best, plan_predbat.export_limits_best)))
     assert cancelled_mask(slots, plan_predbat.export_window_best, plan_predbat.export_limits_best) == 0
+
+
+def _best_plan(plan_predbat):
+    """The plan in force as (charge_limit, charge_window, export_window, export_limits) copies."""
+    return (list(plan_predbat.charge_limit_best), copy.deepcopy(plan_predbat.charge_window_best), copy.deepcopy(plan_predbat.export_window_best), list(plan_predbat.export_limits_best))
+
+
+def test_cancel_set_consistent():
+    """
+    The slot a saving session cancels is cancelled, and charged for, identically in a plain re-run of the best
+    plan, in a calculate_plan() that reuses the plan, and when the next recompute re-scores it as the previous plan.
+    """
+    best_keep = []
+    plan_predbat, slots = _plan(200.0, best_keep=best_keep)
+    plan = _best_plan(plan_predbat)
+    assert cancelled_mask(slots, plan[2], plan[3]) == 1, "slot A should be cancelled: {}".format(list(zip(plan[2], plan[3])))
+    assert len(best_keep) == 1, best_keep
+    keep = best_keep[0]
+    assert keep >= CAR_KWH * PEAK - 0.01, "the buy-back penalty is missing from metric_keep {}".format(keep)
+    windows = plan_predbat.car_cancelled_for_export_windows()
+    assert windows == {0: [PLAN_SLOT]}, windows
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        # (a) A plain run_prediction() of the same windows
+        rerun = plan_predbat.run_prediction(*plan, False, end_record=plan_predbat.end_record)
+        _assert_close("metric_keep re-run", rerun[8], keep)
+
+        # (b) calculate_plan() reusing the plan: same windows, same cancel set, same score
+        plan_predbat.calculate_plan(recompute=False)
+        assert len(best_keep) == 2, best_keep
+        _assert_close("metric_keep reused plan", best_keep[1], keep)
+        assert _best_plan(plan_predbat)[2:] == plan[2:], "the export windows moved"
+        assert plan_predbat.car_cancelled_for_export_windows() == windows
+
+        # (c) The next recompute re-scores the plan as the incumbent, through run_prediction_metric() as
+        # should_replace_plan()'s caller does; with no pre-clip snapshot it scores the plan as clipped
+        scored = []
+        replace_args = []
+        real_metric = plan_predbat.run_prediction_metric
+        real_replace = plan_predbat.should_replace_plan
+
+        def run_prediction_metric(*args, **kwargs):
+            """Note each scoring call's windows and result."""
+            result = real_metric(*args, **kwargs)
+            scored.append((args, result))
+            return result
+
+        def should_replace_plan(metric_prev, metric_new, *args, **kwargs):
+            """Note the incumbent's metric and which scoring call produced it."""
+            replace_args.append((metric_prev, len(scored)))
+            return real_replace(metric_prev, metric_new, *args, **kwargs)
+
+        plan_predbat.run_prediction_metric = run_prediction_metric
+        plan_predbat.should_replace_plan = should_replace_plan
+        plan_predbat.plan_valid = True
+        plan_predbat.plan_preclip = None
+        plan_predbat.plan_made_by_version = plan_predbat.running_version
+        plan_predbat.charge_limit_best, plan_predbat.charge_window_best, plan_predbat.export_window_best, plan_predbat.export_limits_best = copy.deepcopy(plan)
+        plan_predbat.calculate_plan(recompute=True)
+    assert len(replace_args) == 1, "the incumbent was not re-scored: {}".format(replace_args)
+    metric_prev, calls = replace_args[0]
+    prev_args, prev_result = scored[calls - 1]
+    assert list(prev_args[2]) == plan[2] and list(prev_args[3]) == plan[3], "the last scoring call before should_replace_plan was not the incumbent: {}".format(prev_args)
+    assert prev_result[0] == metric_prev
+    _assert_close("metric_keep as previous plan", prev_result[3], keep)
+    # And its metric matches a direct score of the plan in the first run
+    direct = real_metric(*copy.deepcopy(plan), end_record=plan_predbat.end_record)
+    _assert_close("metric as previous plan", metric_prev, direct[0])
+
+
+def _car_sensor(plan_predbat):
+    """The attributes of the published car 0 slot sensor."""
+    return plan_predbat.dashboard_values["binary_sensor." + plan_predbat.prefix + "_car_charging_slot"]["attributes"]
+
+
+def test_neither_car_never_cancelled():
+    """A car on an Octopus dispatch with no charger that can hold it is never cancelled, even for a saving session."""
+    plan_predbat, slots = _plan(200.0, octopus=True, planned=frozenset())
+    assert slots == [], slots
+    # The battery hold for the car would also make such an export worthless, so check the gate itself
+    assert plan_predbat.hit_uncancellable_car_window(*PLAN_SLOT)
+    assert not _exports_over_slot(plan_predbat), "a target export over the slot: {}".format(list(zip(plan_predbat.export_window_best, plan_predbat.export_limits_best)))
+    assert plan_predbat.car_cancelled_for_export_windows() == {}
+    assert _car_sensor(plan_predbat)["cancelled_for_export"] == []
+
+
+def test_holdable_car_cancelled():
+    """The same car on a charger that can force-hold it has its slot cancelled for the saving session, and published."""
+    plan_predbat, slots = _plan(200.0, octopus=True, planned=frozenset(), holdable={0: "wallbox"})
+    assert [(slot.car_n, slot.start, slot.end) for slot in slots] == [(0, PLAN_SLOT[0], PLAN_SLOT[1])], slots
+    assert _exports_over_slot(plan_predbat), "no target export over the slot: {}".format(list(zip(plan_predbat.export_window_best, plan_predbat.export_limits_best)))
+    assert plan_predbat.car_cancelled_for_export_windows() == {0: [PLAN_SLOT]}
+    start, end = (plan_predbat.time_abs_str(minute) for minute in PLAN_SLOT)
+    assert _car_sensor(plan_predbat)["cancelled_for_export"] == [{"start": start, "end": end}], _car_sensor(plan_predbat)
 
 
 # ---------------------------------------------------------------------------
@@ -905,6 +1023,9 @@ def run_car_cancel_tests(my_predbat):
     test_valuation_saving_session_wins()
     test_valuation_normal_export_loses()
     test_plan_republishes_car_plan_only_when_enabled()
+    test_cancel_set_consistent()
+    test_neither_car_never_cancelled()
+    test_holdable_car_cancelled()
     test_publish_cancelled_for_export(my_predbat)
     test_publish_partial_overlap_whole_slot(my_predbat)
     test_publish_state_off_when_current_cancelled(my_predbat)
