@@ -22,6 +22,7 @@ from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, MINUTE_WATT, PREDBAT_MOD
 import pytz as _pytz
 
 from component_base import ComponentBase
+from coordinator import inverter_record
 from live_display import live_display_payload, validated_binding, visibility_payload
 
 try:
@@ -162,6 +163,17 @@ GIVENERGY_3PH_MODEL_TOKEN = "3ph"
 GIVENERGY_INVERTER_TYPES = (pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
 # Coordinators: a Plant EMS or a GivEnergy Gateway manages battery inverters and has no battery of its own
 GATEWAY_COORDINATOR_TYPES = (pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
+# INVERTER_DEF["GWMQTT"]'s behaviour, stated in every discovery record so the record alone rebuilds the row
+# (coordinator.inverter_definition()). A Plant EMS record overrides can_span_midnight (see build_discovery()).
+GATEWAY_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": False,
+    "can_span_midnight": True,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": False,
+}
 # Where the discovery record of each inverter in gateway_inverter_serial is kept (see _update_discovery)
 GATEWAY_STORAGE_MODULE = "gateway"
 # How long a failed save of the discovery records waits before it is tried again
@@ -303,6 +315,13 @@ class GatewayMQTT(ComponentBase):
     # Guards _staged: select and switch events arrive on Home Assistant's thread, commits and
     # telemetry run on the gateway's own loop
     _staged_lock = threading.Lock()
+
+    # INVERTER_DEF["GWMQTT"]'s write timing: the hub acks a write over MQTT, so inverter.py waits 10 s before
+    # reading it back and retries 3 times with backoff. Stated here so a discovery record rebuilds the row
+    # (coordinator.inverter_definition()); inverter.py itself still reads the row.
+    WRITE_AND_POLL_SLEEP = 10
+    WRITE_MAX_RETRY = 3
+    WRITE_BACKOFF = True
 
     # Defaults for an instance built without initialize()
     gateway_shared_ct = True
@@ -821,6 +840,17 @@ class GatewayMQTT(ComponentBase):
         return ticks
 
     async def run(self, seconds, first):
+        """Run one cycle, then file the discovery report.
+
+        Every return of _run_cycle() - the first-call path, display-only and the steady state - passes
+        through here, so the report is refreshed once per cycle whatever the cycle returned.
+        refresh_discovery() owns the compare/retry/guard loop and never raises.
+        """
+        result = await self._run_cycle(seconds, first)
+        self.refresh_discovery()
+        return result
+
+    async def _run_cycle(self, seconds, first):
         """Component run loop — called every 60 seconds by ComponentBase.start().
 
         On the first call, starts the background MQTT listener task.
@@ -2154,6 +2184,169 @@ class GatewayMQTT(ComponentBase):
             self._unavailable_inverters = unavailable
         if unread:
             self.non_fatal_error_occurred()
+
+    def _discovery_unit(self, serial, units):
+        """The status entry for *serial*, or one rebuilt from its discovery record when the hub is not reporting it."""
+        if serial in units:
+            return units[serial]
+        record = self._discovery.get(serial.upper())
+        return self._stored_unit(record) if record else None
+
+    def _discovery_entities(self, inv, index, count):
+        """Every setting automatic_config() binds for driven unit *index* of *count*, as discovery entity descriptors.
+
+        Entity ids use the same {prefix}_gateway_{last six of the serial} stem automatic_config() uses;
+        tests/test_gateway.py checks they agree both ways. On a shared CT (gateway_shared_ct, more than
+        one unit) the later units read grid and load as a fixed 0, and with a shared CT or
+        gateway_integrate_power the site counters (import, export, load) are bound from the first unit
+        only. The rate entities carry step_percent_of_capacity on GivEnergy units, as published, and
+        inverter.py reads it from the entity at runtime. Settings automatic_config() sets to None are
+        left out.
+        """
+        stem = f"{self.prefix}_gateway_{inv.serial[-6:].lower()}"
+
+        def sensor(leaf, unit=None, **fields):
+            """A read-only binding to one of the unit's published sensors."""
+            descriptor = {"entity_id": f"sensor.{stem}_{leaf}", "access": "r", **fields}
+            if unit:
+                descriptor["unit"] = unit
+            return descriptor
+
+        def control(domain, leaf, **fields):
+            """A binding to one of the control entities Predbat writes."""
+            return {"entity_id": f"{domain}.{stem}_{leaf}", "access": "rw", "domain": domain, **fields}
+
+        rate_fields = {"unit": "W"}
+        if inv.type in GIVENERGY_INVERTER_TYPES:
+            rate_fields["step_percent_of_capacity"] = GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY
+        shared = self.gateway_shared_ct and count > 1 and index > 0
+        entities = {
+            "soc_percent": sensor("soc", "%"),
+            "battery_power": sensor("battery_power", "W"),
+            "pv_power": sensor("pv_power", "W"),
+            "grid_power": {"value": 0, "access": "r"} if shared else sensor("grid_power", "W"),
+            "load_power": {"value": 0, "access": "r"} if shared else sensor("load_power", "W"),
+            "charge_rate": control("number", "charge_rate", **rate_fields),
+            "discharge_rate": control("number", "discharge_rate", **rate_fields),
+            "reserve": control("number", "reserve_soc", unit="%"),
+            "charge_limit": control("number", "target_soc", unit="%"),
+            "battery_temperature": sensor("battery_temperature", "°C"),
+            "charge_start_time": control("select", "charge_slot1_start", format="HH:MM:SS"),
+            "charge_end_time": control("select", "charge_slot1_end", format="HH:MM:SS"),
+            "discharge_start_time": control("select", "discharge_slot1_start", format="HH:MM:SS"),
+            "discharge_end_time": control("select", "discharge_slot1_end", format="HH:MM:SS"),
+            "scheduled_charge_enable": control("switch", "charge_enabled"),
+            "scheduled_discharge_enable": control("switch", "discharge_enabled"),
+            "schedule_write_button": control("switch", "schedule_write"),
+            "export_limit": sensor("export_limit_w", "W"),
+            "inverter_limit": sensor("inverter_rate_max", "W"),
+            "battery_scaling": sensor("battery_dod"),
+            "battery_rate_max": sensor("battery_rate_max", "W"),
+            "inverter_time": sensor("inverter_time", format="%Y-%m-%dT%H:%M:%S%z"),
+            "pv_today": sensor("pv_today", "kWh"),
+        }
+        if inv.battery.capacity_wh > 0 or self._discovery.get(inv.serial.upper(), {}).get("capacity_wh"):
+            entities["soc_max"] = sensor("battery_capacity", "kWh")
+        if index == 0 or not (self.gateway_shared_ct or self.gateway_integrate_power):
+            for setting in ("import_today", "export_today", "load_today"):
+                entities[setting] = sensor(setting, "kWh")
+        if index == 0:
+            entities["battery_temperature_history"] = sensor("battery_temperature", "°C")
+        return entities
+
+    def _discovery_ratings(self, inv):
+        """The figures the unit itself reports, under Predbat's setting names (spec D14).
+
+        Each falls back to the unit's discovery record, which keeps the last non-zero figure the hub sent.
+        The 6000 W battery rate publish_data() assumes when none is reported is not a rating. An export
+        limit of 0 means never reported and 1 means a limit of zero (the proto's sentinels).
+        """
+        known = self._discovery.get(inv.serial.upper(), {})
+        ratings = {}
+        capacity_wh = int(inv.battery.capacity_wh) or int(known.get("capacity_wh", 0))
+        if capacity_wh:
+            ratings["soc_max"] = round(capacity_wh / 1000.0, 3)
+        rate_w = int(inv.battery.rate_max_w) or int(known.get("rate_max_w", 0))
+        if rate_w:
+            ratings["battery_rate_max"] = rate_w
+        inverter_w = int(inv.inverter.rate_max_w) or int(known.get("inverter_rate_max_w", 0))
+        if inverter_w:
+            ratings["inverter_limit"] = inverter_w
+        export_w = int(inv.control.export_limit_w) or int(known.get("export_limit_w", 0))
+        if export_w:
+            ratings["export_limit"] = 0 if export_w == 1 else export_w
+        return ratings
+
+    def build_discovery(self):
+        """
+        Describe the inverters this gateway drives for the discovery catalogue.
+
+        Built from automatic_config()'s own selection - the serials it bound to Predbat's inverter slots
+        and the PV-only units it counts - rather than a second copy of its topology rules, so the record
+        and the binding cannot disagree about which unit is driven. One record per driven unit, keyed
+        "gateway:{serial}" by the inverter's own serial: GivTCP and GE Cloud key the same hardware by the
+        same serial, so the coordinator's duplicate_serial observation sees two integrations claiming
+        one box. A Plant EMS or a GivEnergy Gateway driven in front of the AIOs is an "ems" or "gateway"
+        record listing the battery units it fronts. A battery-less unit counted for PV gets a solar-only
+        record with its generation and no inverter type (spec D12).
+
+        Never reported: the hub's MQTT username (gateway_device_id) and token, IP addresses, the Wi-Fi
+        network, and the dongle serial.
+
+        Returns None until automatic_config() has chosen the units it drives.
+        """
+        status = self._last_status
+        if status is None or not self._inverter_slot_serials:
+            return None
+        units = {inv.serial: inv for inv in status.inverters}
+        driven = [unit for unit in (self._discovery_unit(serial, units) for serial in self._inverter_slot_serials) if unit is not None]
+        if not driven:
+            return None
+        pv_only = set(self._pv_only_serials)
+        fronted = sorted(inv.serial for inv in status.inverters if inv.type not in GATEWAY_COORDINATOR_TYPES and inv.serial not in pv_only and inv.battery.ByteSize() > 0)
+        inverters = []
+        for index, inv in enumerate(driven):
+            composition = "direct"
+            if inv.type == pb.INVERTER_TYPE_GIVENERGY_EMS:
+                composition = "ems"
+            elif inv.type == pb.INVERTER_TYPE_GIVENERGY_GATEWAY:
+                composition = "gateway"
+            capabilities = dict(GATEWAY_CAPABILITIES)
+            if inv.type == pb.INVERTER_TYPE_GIVENERGY_EMS:
+                # An EMS accepts same-day windows only (_slot_attributes), which inverter.py reads from the select
+                capabilities["can_span_midnight"] = False
+            info = {}
+            if inv.type in GIVENERGY_INVERTER_TYPES:
+                info["vendor"] = "GivEnergy"
+            if inv.model:
+                info["model"] = inv.model
+            inverters.append(
+                inverter_record(
+                    "gateway:{}".format(inv.serial),
+                    inverter_type="GWMQTT",
+                    composition=composition,
+                    serials=fronted if composition != "direct" else None,
+                    functions=["solar", "battery"],
+                    capabilities=capabilities,
+                    hardware_ids={"serial": inv.serial},
+                    info=info,
+                    ratings=self._discovery_ratings(inv),
+                    entities=self._discovery_entities(inv, index, len(driven)),
+                )
+            )
+        for serial in sorted(pv_only):
+            inv = self._discovery_unit(serial, units)
+            if inv is None:
+                continue
+            stem = f"{self.prefix}_gateway_{_serial_suffix(serial)}"
+            entities = {"pv_power": {"entity_id": f"sensor.{stem}_pv_power", "access": "r", "unit": "W"}}
+            if serial in self._pv_only_counters:
+                entities["pv_today"] = {"entity_id": f"sensor.{stem}_pv_today", "access": "r", "unit": "kWh"}
+            info = {"vendor": "GivEnergy"} if inv.type in GIVENERGY_INVERTER_TYPES else {}
+            if inv.model:
+                info["model"] = inv.model
+            inverters.append(inverter_record("gateway:{}".format(serial), composition="direct", functions=["solar"], hardware_ids={"serial": serial}, info=info, entities=entities))
+        return {"automatic": not self.gateway_display_only, "inverters": inverters, "chargers": [], "cars": []}
 
     def automatic_config(self):
         """Register gateway entities with PredBat's inverter model.
