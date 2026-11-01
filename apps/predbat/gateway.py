@@ -22,7 +22,7 @@ from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, MINUTE_WATT, PREDBAT_MOD
 import pytz as _pytz
 
 from component_base import ComponentBase
-from coordinator import inverter_record
+from coordinator import charger_with_stub_car, inverter_record
 from live_display import live_display_payload, validated_binding, visibility_payload
 
 try:
@@ -2290,17 +2290,22 @@ class GatewayMQTT(ComponentBase):
         record listing the battery units it fronts. A battery-less unit counted for PV gets a solar-only
         record with its generation and no inverter type (spec D12).
 
+        Every OCPP EV charger the hub reports is a chargers record with a stub car (the charger knows
+        nothing about the vehicle), keyed "gateway:evc:{charge point id}", whether or not
+        gateway_evc_automatic wires it (_discovery_ev_records()).
+
         Never reported: the hub's MQTT username (gateway_device_id) and token, IP addresses, the Wi-Fi
         network, and the dongle serial.
 
-        Returns None until automatic_config() has chosen the units it drives.
+        Returns None until automatic_config() has chosen the units it drives and no charger is reported either.
         """
         status = self._last_status
-        if status is None or not self._inverter_slot_serials:
+        if status is None:
             return None
+        chargers, cars = self._discovery_ev_records(status)
         units = {inv.serial: inv for inv in status.inverters}
         driven = [unit for unit in (self._discovery_unit(serial, units) for serial in self._inverter_slot_serials) if unit is not None]
-        if not driven:
+        if not driven and not chargers:
             return None
         pv_only = set(self._pv_only_serials)
         fronted = sorted(inv.serial for inv in status.inverters if inv.type not in GATEWAY_COORDINATOR_TYPES and inv.serial not in pv_only and inv.battery.ByteSize() > 0)
@@ -2346,7 +2351,37 @@ class GatewayMQTT(ComponentBase):
             if inv.model:
                 info["model"] = inv.model
             inverters.append(inverter_record("gateway:{}".format(serial), composition="direct", functions=["solar"], hardware_ids={"serial": serial}, info=info, entities=entities))
-        return {"automatic": not self.gateway_display_only, "inverters": inverters, "chargers": [], "cars": []}
+        return {"automatic": not self.gateway_display_only, "inverters": inverters, "chargers": chargers, "cars": cars}
+
+    def _discovery_ev_records(self, status):
+        """(chargers, cars) records for every OCPP EV charger in *status* that has reported its charge point id.
+
+        The entities are the five _register_ev_car() binds, under the same {prefix}_gateway_{_ev_suffix()}
+        stem, filtered to those Home Assistant has seen (the charger convention). car_charging_now is the
+        charger's own "charging" sensor here, not a re-binding of the power sensor, so it is kept.
+        car_charging_rate is set through expose_config() rather than bound, so it is not an entity.
+        """
+        chargers = []
+        cars = []
+        for ev in status.ev_chargers:
+            if not ev.charge_point_id:
+                continue
+            stem = f"{self.prefix}_gateway_{self._ev_suffix(ev, multi=False)}"
+            descriptors = {
+                "car_charging_planned": {"entity_id": f"binary_sensor.{stem}_connected", "domain": "binary_sensor", "access": "r"},
+                "car_charging_plugged": {"entity_id": f"binary_sensor.{stem}_plugged", "domain": "binary_sensor", "access": "r"},
+                "car_charging_now": {"entity_id": f"binary_sensor.{stem}_charging", "domain": "binary_sensor", "access": "r"},
+                "car_charging_energy": {"entity_id": f"sensor.{stem}_session_energy", "domain": "sensor", "access": "r"},
+                "car_charging_power": {"entity_id": f"sensor.{stem}_power", "domain": "sensor", "access": "r"},
+            }
+            charger, car = charger_with_stub_car(
+                "gateway:evc:{}".format(ev.charge_point_id),
+                hardware_ids={"charge_point_id": ev.charge_point_id},
+                entities=self.discovery_entities(descriptors),
+            )
+            chargers.append(charger)
+            cars.append(car)
+        return chargers, cars
 
     def automatic_config(self):
         """Register gateway entities with PredBat's inverter model.

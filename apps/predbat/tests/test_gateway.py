@@ -1889,6 +1889,63 @@ class TestDiscovery:
             assert asyncio.run(gw.run(0, True)) is outcome
             gw.refresh_discovery.assert_called_once_with()
 
+    def _with_ev(self, charge_point_id="CP1", **attrs):
+        """One configured AIO plus an OCPP EV charger."""
+        status = TestAutomaticConfig()._basic_status(serial="CE123456789")
+        ev = status.ev_chargers.add()
+        ev.connected = True
+        ev.charge_point_id = charge_point_id
+        ev.max_current_a = 32
+        return self._configured(status, **attrs)
+
+    def test_ev_charger_record(self):
+        """The EV charger the hub drives is a charger with a stub car, keyed by its OCPP charge point id."""
+        gw, _ = self._with_ev()
+        report = gw.build_discovery()
+        charger, car = report["chargers"][0], report["cars"][0]
+        assert charger["device_id"] == "gateway:evc:CP1"
+        assert charger["hardware_ids"] == {"charge_point_id": "CP1"}
+        assert charger["serves_cars"] == ["gateway:evc:CP1:car"]
+        assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_now", "car_charging_energy", "car_charging_power"}, charger["entities"]
+        assert car == {"device_id": "gateway:evc:CP1:car", "charged_by": "gateway:evc:CP1", "flags": ["stub"]}
+
+    def test_ev_charger_entities_match_register_ev_car(self):
+        """Each charger entity is the one _register_ev_car() binds under the same Predbat name."""
+        gw, captured = self._with_ev(gateway_evc_automatic=True)
+        gw.base.expose_config = lambda *args, **kwargs: None
+        entities = gw.build_discovery()["chargers"][0]["entities"]
+        for setting, descriptor in entities.items():
+            bound = captured[setting]
+            bound = bound[0] if isinstance(bound, list) else bound
+            assert descriptor["entity_id"] == bound, (setting, descriptor, bound)
+
+    def test_ev_charger_reported_without_evc_automatic(self):
+        """The charger is hardware the hub found, so it is described whether or not Predbat wires it."""
+        gw, captured = self._with_ev(gateway_evc_automatic=False)
+        assert "car_charging_planned" not in captured
+        assert len(gw.build_discovery()["chargers"]) == 1
+
+    def test_no_ev_charger_no_records(self):
+        """No charger in the status, no charger or car records."""
+        gw, _ = self._single()
+        report = gw.build_discovery()
+        assert report["chargers"] == [] and report["cars"] == []
+
+    def test_ev_round_trip(self):
+        """Through the real Coordinator: the stub flag and every charger entity survive."""
+        from coordinator import Coordinator
+        from mock_base import MockBase
+
+        gw, _ = self._with_ev()
+        logs = []
+        coordinator = Coordinator(MockBase())
+        coordinator.log = logs.append
+        coordinator.report("gateway", gw.build_discovery())
+        cleaned = coordinator.reports["gateway"]
+        assert cleaned["cars"][0]["flags"] == ["stub"]
+        assert len(cleaned["chargers"][0]["entities"]) == 5
+        assert not [line for line in logs if line.startswith("Warn")], logs
+
     def test_no_credentials_in_report(self):
         """The hub's MQTT username and token and the inverter's network details never reach the report."""
         gw, _ = self._single()
