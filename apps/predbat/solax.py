@@ -821,7 +821,7 @@ class SolaxAPI(ComponentBase):
     def get_charge_discharge_power_battery(self, plant_id):
         total_power = 0
         for device_id in self.plant_batteries.get(plant_id, []):
-            total_power += self.realtime_device_data.get(device_id, {}).get("chargeDischargePower", 0)
+            total_power += self.realtime_device_data.get(device_id, {}).get("chargeDischargePower") or 0
         return total_power  # in Watts
 
     def get_current_soc_battery_kwh(self, plant_id):
@@ -830,8 +830,8 @@ class SolaxAPI(ComponentBase):
         battery_remainings = 0
         battery_size_max = 0
         for device_id in self.plant_batteries.get(plant_id, []):
-            current_soc += self.realtime_device_data.get(device_id, {}).get("batterySOC", 0)
-            battery_remainings += self.realtime_device_data.get(device_id, {}).get("batteryRemainings", 0)
+            current_soc += self.realtime_device_data.get(device_id, {}).get("batterySOC") or 0
+            battery_remainings += self.realtime_device_data.get(device_id, {}).get("batteryRemainings") or 0
             count_devices += 1
         if count_devices > 0:
             current_soc = current_soc / count_devices
@@ -841,7 +841,9 @@ class SolaxAPI(ComponentBase):
     def get_battery_temperature(self, plant_id):
         temperature = 100.0
         for device_id in self.plant_batteries.get(plant_id, []):
-            temperature = min(self.realtime_device_data.get(device_id, {}).get("batteryTemperature", temperature), temperature)
+            battery_temperature = self.realtime_device_data.get(device_id, {}).get("batteryTemperature")
+            if battery_temperature is not None:
+                temperature = min(battery_temperature, temperature)
         if temperature == 100.0:
             temperature = None
         return temperature
