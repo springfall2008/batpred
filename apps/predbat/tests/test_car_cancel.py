@@ -55,13 +55,15 @@ def test_cancellable_slots_cap():
 
 
 def test_cancellable_slots_forced():
-    """Slots starting before the hold ends are forced, and a held car need not be cancellable."""
+    """Slots ending by the time the hold does are forced; one running past it is not, and a held car need not be cancellable."""
     model = [[_slot(30, 60), _slot(60, 90), _slot(90, 120)]]
     slots = cancellable_slots(model, [0], {0}, {0: 90}, 0)
     assert [s.forced for s in slots] == [True, True, False], slots
-    slots = cancellable_slots(model, [0], set(), {0: 61}, 0)
+    # The slot from 60 to 90 starts before a hold ending at 61, but runs past it: an ordinary cancellable slot
+    slots = cancellable_slots(model, [0], {0}, {0: 61}, 0)
+    assert [s.forced for s in slots] == [True, False, False], slots
+    slots = cancellable_slots(model, [0], set(), {0: 90}, 0)
     assert [s.forced for s in slots] == [True, True, False], slots
-    assert len(slots) == 3
     assert cancellable_slots(model, [0], set(), {}, 0) == []
 
 
@@ -947,15 +949,73 @@ def test_publish_switch_off_unchanged(my_predbat):
 
 
 def test_publish_held_car(my_predbat):
-    """A car a charger is holding off lists the slot starting before the hold ends, with no export at all."""
+    """A car a charger is holding off lists the slot ending by the time the hold does, with no export at all."""
     with _publish_scenario(my_predbat) as base:
         my_predbat.car_planned_by_predbat = set()
         my_predbat.car_force_holdable = {0: "Fake"}
-        my_predbat.car_force_hold_until = {0: my_predbat.midnight_utc + timedelta(minutes=base + 40)}
+        my_predbat.car_force_hold_until = {0: my_predbat.midnight_utc + timedelta(minutes=base + 60)}
         my_predbat.publish_car_plan()
         _, attributes = _sensor(my_predbat)
         assert attributes["cancelled_for_export"] == [{"start": my_predbat.time_abs_str(base + 30), "end": my_predbat.time_abs_str(base + 60)}], attributes
         assert len(attributes["planned"]) == 1, attributes
+
+
+def test_publish_held_car_slot_past_hold_not_forced(my_predbat):
+    """
+    A slot that starts before the hold ends but runs on past it is not forced: with no export over it, it stays in
+    the plan and out of cancelled_for_export, so it cannot carry the hold on to its own end.
+    """
+    with _publish_scenario(my_predbat) as base:
+        my_predbat.car_planned_by_predbat = set()
+        my_predbat.car_force_holdable = {0: "Fake"}
+        # Held to T = base + 40; slot A runs from base + 30 to T + 20, slot B from T + 50
+        my_predbat.car_force_hold_until = {0: my_predbat.midnight_utc + timedelta(minutes=base + 40)}
+        assert [(slot.start, slot.forced) for slot in my_predbat.car_cancel_slots()] == [(base + 30, False), (base + 90, False)]
+        my_predbat.publish_car_plan()
+        _, attributes = _sensor(my_predbat)
+        assert attributes["cancelled_for_export"] == [], attributes
+        assert len(attributes["planned"]) == 2, attributes
+        # A slot ending at the hold's end is forced
+        my_predbat.car_charging_slots[0][0]["end"] = base + 40
+        assert [(slot.start, slot.forced) for slot in my_predbat.car_cancel_slots()] == [(base + 30, True), (base + 90, False)]
+        my_predbat.publish_car_plan()
+        _, attributes = _sensor(my_predbat)
+        assert attributes["cancelled_for_export"] == [{"start": my_predbat.time_abs_str(base + 30), "end": my_predbat.time_abs_str(base + 40)}], attributes
+
+
+def test_hold_not_extended_by_its_own_slot(my_predbat):
+    """
+    Plan 1's hold over two cycles while Octopus pushes the held car's dispatch past the hold's end: the slot is not
+    forced, so it is not published as cancelled, and the hold keeps its end rather than chasing the dispatch.
+    """
+    with _publish_scenario(my_predbat, export_over=(-10, 20)) as base:
+        my_predbat.car_planned_by_predbat = set()
+        my_predbat.car_force_holdable = {0: "Fake"}
+        slot = my_predbat.car_charging_slots[0][0]
+        slot.update({"start": base - 10, "end": base + 20, "octopus": True})
+        component = FakeComponent([FakeCharger("a")])
+        component.local_tz = my_predbat.local_tz
+
+        def cycle(minutes_now):
+            """Publish the car plan at minutes_now, hand the attribute to the component and tick it; return the hold's end."""
+            my_predbat.minutes_now = minutes_now
+            my_predbat.publish_car_plan()
+            component.cancelled["binary_sensor.predbat_car_charging_slot"] = _sensor(my_predbat)[1]["cancelled_for_export"]
+            now = (my_predbat.midnight_utc + timedelta(minutes=minutes_now)).astimezone(my_predbat.local_tz)
+            run_async(component.charger_control_tick(now))
+            # The planner hears of the hold as the component publishes it
+            my_predbat.car_force_hold_until = dict(component.base.car_force_hold_until)
+            return component.base.car_force_hold_until.get(0)
+
+        hold_end = my_predbat.midnight_utc + timedelta(minutes=base + 20)
+        assert cycle(base) == hold_end, component.charger_control_force_holds
+        # The plan no longer exports, and Octopus extends the dispatch past the hold's end, twice
+        my_predbat.export_window_best = []
+        my_predbat.export_limits_best = []
+        for minutes_now, end in ((base + 5, base + 80), (base + 10, base + 140)):
+            slot["end"] = end
+            assert cycle(minutes_now) == hold_end, "the hold moved to {} with the dispatch ending at {}".format(component.base.car_force_hold_until.get(0), end)
+            assert _sensor(my_predbat)[1]["cancelled_for_export"] == [], _sensor(my_predbat)[1]
 
 
 def test_publish_all_cancelled_and_no_slots(my_predbat):
@@ -1032,6 +1092,8 @@ def run_car_cancel_tests(my_predbat):
     test_publish_fetch_time_uses_last_plan(my_predbat)
     test_publish_switch_off_unchanged(my_predbat)
     test_publish_held_car(my_predbat)
+    test_publish_held_car_slot_past_hold_not_forced(my_predbat)
+    test_hold_not_extended_by_its_own_slot(my_predbat)
     test_publish_all_cancelled_and_no_slots(my_predbat)
     test_display_marks_cancelled(my_predbat)
     print("**** car cancel tests passed ****")

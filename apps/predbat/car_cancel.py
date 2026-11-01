@@ -41,7 +41,10 @@ def cancellable_slots(car_slots_model, now_slot_counts, cancellable_cars, held_u
 
     A slot qualifies when its car is cancellable or force-held, it is not a car_charging_now_slots
     entry (those come first in the model list, now_slot_counts of them), it has energy and it ends
-    after now. held_until maps car_n to an absolute minute; a slot starting before it is forced.
+    after now. held_until maps car_n to an absolute minute; a slot ending by then is forced. One that runs on
+    past the hold's end is not: it is published whole when cancelled, and the charger's hold extends into any
+    cancelled slot under way at its end, so forcing it would let the hold carry itself on for as long as
+    Octopus keeps extending the dispatch. An export over it may still cancel it, and so extend the hold.
     """
     slots = []
     for car_n, car_slots in enumerate(car_slots_model):
@@ -52,7 +55,7 @@ def cancellable_slots(car_slots_model, now_slot_counts, cancellable_cars, held_u
         for index, slot in enumerate(car_slots):
             if index < first or dp2(slot.get("kwh", 0)) <= 0 or slot["end"] <= minutes_now:
                 continue
-            forced = hold_end is not None and slot["start"] < hold_end
+            forced = hold_end is not None and slot["end"] <= hold_end
             slots.append(CancelSlot(car_n, index, slot["start"], slot["end"], forced))
     slots.sort(key=lambda slot: (slot.start, slot.car_n))
     return slots[:CAR_CANCEL_MAX_SLOTS]
