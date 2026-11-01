@@ -173,6 +173,11 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch, local_
     stayed moved, "reverted" (blue) when it moved and came back. A change therefore marks the row it
     happened in, and expanding that row shows the 5-minute slot it happened at.
 
+    A row is headed by the newest slot of its half hour - the half-hour mark that ends it, or for the
+    newest row the newest slot reached - and expands to the slots before it within that half hour. Heading
+    rows by their oldest slot hid the latest value under the top row and made an expanded table read
+    17:30, 17:55, 17:50 ... rather than newest to oldest all the way down.
+
     Rows run without gaps from the first record to the newest across all selections, and never past it -
     the newest is normally the current state get_history_with_now() appends, so nothing in the future shows.
 
@@ -228,19 +233,23 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch, local_
     if first_slot < oldest:
         first_slot += slot
     newest_slot = floor_to_history_slot(max(all_stamps))
+    first_slot = min(first_slot, newest_slot)
 
+    # Each row covers the half hour (row_end - row_length, row_end], the first being the one holding first_slot
     rows = []
-    row_time = floor_to_local_half_hour(min(first_slot, newest_slot), local_tz)
-    while row_time <= newest_slot:
-        row_end = min(row_time + row_length - slot, newest_slot)
+    row_end = floor_to_local_half_hour(first_slot, local_tz)
+    if row_end < first_slot:
+        row_end += row_length
+    while row_end - row_length < newest_slot:
+        row_start = row_end - row_length
+        row_time = min(row_end, newest_slot)
         details = []
-        detail_time = row_time + slot
-        while detail_time <= row_end:
+        detail_time = row_time - slot
+        while detail_time > row_start and detail_time >= first_slot:
             details.append({"time": detail_time.astimezone(local_tz), "cells": cells_for(detail_time, detail_time - slot, detail_time)})
-            detail_time += slot
-        details.reverse()
-        rows.append({"time": row_time.astimezone(local_tz), "cells": cells_for(row_time, row_time - slot, row_end), "details": details})
-        row_time += row_length
+            detail_time -= slot
+        rows.append({"time": row_time.astimezone(local_tz), "cells": cells_for(row_time, row_start, row_time), "details": details})
+        row_end += row_length
 
     rows.reverse()
     return rows
@@ -294,7 +303,7 @@ def render_entity_history_rows(rows, num_cols):
             text += f"<td{cell_classes.get(kind, '')}>{html_module.escape(str(value))}</td>"
         text += "</tr>\n"
 
-        # Detail rows: the remaining 5-minute slots inside this row's own half hour, newest first
+        # Detail rows: the earlier 5-minute slots of the half hour leading up to this row, newest first
         for detail in row["details"]:
             text += f'<tr class="detail-row" id="detail_{row_index}">'
             text += f"<td>  {detail['time'].strftime(TIME_FORMAT)}</td>"
@@ -1630,7 +1639,7 @@ class WebInterface(ComponentBase):
                 body.dark-mode .reverted-cell { background-color: #0d2e4a; color: #90caff; }
                 </style>
                 """
-                text += '<p style="font-size:0.9em;">Each row shows the value at its time. <span class="changed-cell" style="padding:0 4px;">Changed</span> during that half hour, <span class="reverted-cell" style="padding:0 4px;">changed and changed back</span>. Click a row to see its 5-minute slots.</p>\n'
+                text += '<p style="font-size:0.9em;">Each row shows the value at its time. <span class="changed-cell" style="padding:0 4px;">Changed</span> during the half hour up to it, <span class="reverted-cell" style="padding:0 4px;">changed and changed back</span>. Click a row to see the 5-minute slots before it.</p>\n'
                 text += '<button onclick="downloadEntityCSV()" style="margin-bottom: 10px; padding: 7px 14px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">&#11015; Download CSV</button>\n'
                 text += "<table>\n"
 
