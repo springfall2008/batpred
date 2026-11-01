@@ -261,7 +261,15 @@ SOLAX_DEVICE_MODEL_RESIDENTIAL = {
 # no battery port: X1-Boost/Air/Mini, X1-Boost-G4, X1-Mini-G4 and X1-SMART-G2 respectively.
 # https://www.solaxpower.com/our-products/x1-boost-g3.html
 # https://kb.solaxpower.com/solution/detail/ff80808188eb4b920188f6abcad1006b
-SOLAX_PV_ONLY_MODELS_RESIDENTIAL = {4, 18, 22, 26}
+# Also X3-MIC/PRO-G2 (16), A1-Micro 1 in 1 (27), X1-Micro 2 in 1 (28), X1-Micro 4 in 1 (29) and
+# X1-MINI-G4 PLUS (44): their data sheets list only PV input and AC output, with no battery section.
+# https://www.solaxpower.com/uploads/file/solax-x3-mic-g2-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-x3-pro-g2-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-a1-micro-1-in-1-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/x1-microinverter-2-in-1-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-x1-micro-4-in-1-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-x1-mini-g4-plus-series-datasheet-en.pdf
+SOLAX_PV_ONLY_MODELS_RESIDENTIAL = {4, 16, 18, 22, 26, 27, 28, 29, 44}
 
 # Device model mapping for Commercial & Industrial (businessType=4)
 SOLAX_DEVICE_MODEL_COMMERCIAL = {

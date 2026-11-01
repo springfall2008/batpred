@@ -174,7 +174,7 @@ On a plant with a 3.68 kW X1-Hybrid-G4 and a separate 3.68 kW X1-Boost/Air/Mini,
 a battery without `ratedPower` made `get_max_power_battery()` fall back to the 7.36 kW
 aggregate inverter rating. The battery max power sensor feeds `battery_rate_max`, so this
 inflates planned charging and discharging. The fallback now excludes verified residential
-PV-only model codes 4, 18, 22 and 26, while the inverter max power sensor still includes them.
+PV-only model codes 4, 16, 18, 22, 26, 27, 28, 29 and 44, while the inverter max power sensor still includes them.
 `control_info()` uses the battery estimate too, bounded by the existing AC inverter ceiling.
 Explicit battery ratings still take precedence; multiple battery inverters still add together.
 Missing or unknown models retain the prior fallback and can still overestimate mixed plants,

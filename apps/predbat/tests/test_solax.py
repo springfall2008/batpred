@@ -6732,7 +6732,7 @@ async def test_battery_power_models_main():
     for rating in (0, "0", None, "invalid", -1, float("nan"), float("inf")):
         api.device_info["BATTERY"]["ratedPower"] = rating
         assert api.get_max_power_battery("plant1") == 3680, f"Unusable battery rating {rating} must use the filtered fallback"
-    for model in (4, 18, 22, 26, "4"):
+    for model in (4, 16, 18, 22, 26, 27, 28, 29, 44, "4"):
         api.device_info["PV"]["deviceModel"] = model
         assert api.get_max_power_battery("plant1") == 3680, f"Residential PV-only model {model} must be excluded"
 
