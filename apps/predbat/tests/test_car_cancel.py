@@ -55,16 +55,21 @@ def test_cancellable_slots_cap():
 
 
 def test_cancellable_slots_forced():
-    """Slots ending by the time the hold does are forced; one running past it is not, and a held car need not be cancellable."""
+    """Slots ending by the time the hold does are forced, and one running past it is not."""
     model = [[_slot(30, 60), _slot(60, 90), _slot(90, 120)]]
     slots = cancellable_slots(model, [0], {0}, {0: 90}, 0)
     assert [s.forced for s in slots] == [True, True, False], slots
     # The slot from 60 to 90 starts before a hold ending at 61, but runs past it: an ordinary cancellable slot
     slots = cancellable_slots(model, [0], {0}, {0: 61}, 0)
     assert [s.forced for s in slots] == [True, False, False], slots
-    slots = cancellable_slots(model, [0], set(), {0: 90}, 0)
-    assert [s.forced for s in slots] == [True, True, False], slots
     assert cancellable_slots(model, [0], set(), {}, 0) == []
+
+
+def test_cancellable_slots_held_only_forced():
+    """A held car that is not cancellable - a full one - offers only its forced slots."""
+    model = [[_slot(30, 60), _slot(60, 90), _slot(90, 120)]]
+    slots = cancellable_slots(model, [0], set(), {0: 90}, 0)
+    assert [(s.start, s.forced) for s in slots] == [(30, True), (60, True)], slots
 
 
 def test_cancelled_mask():
@@ -138,6 +143,32 @@ def test_car_cancel_slots(my_predbat):
         # A hold that has ended is dropped
         my_predbat.car_force_hold_until = {0: my_predbat.midnight_utc + timedelta(minutes=60)}
         assert not any(s.forced for s in my_predbat.car_cancel_slots())
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def test_full_car_not_cancellable(my_predbat):
+    """A car already at its charge limit keeps the hard block, so cancelling its slot is never free; a held one keeps its forced slots."""
+    names = ("num_cars", "car_charging_slots", "car_charging_now_slots", "car_planned_by_predbat", "car_force_holdable", "car_force_hold_until", "minutes_now", "car_charging_soc", "car_charging_limit", "car_cancel_keys", "car_charging_from_battery", "export_window_best", "calculate_best_export", "calculate_export_oncharge", "manual_all_times", "iboost_enable")
+    saved = {name: copy.deepcopy(getattr(my_predbat, name)) for name in names}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        _gate_setup(my_predbat, [_slot(60, 90), _slot(120, 150)], True)
+        my_predbat.car_charging_soc = [50.0]
+        my_predbat.car_charging_limit = [50.0]
+        assert my_predbat.car_cancel_slots() == []
+        my_predbat.car_cancel_keys = frozenset((s.car_n, s.index) for s in my_predbat.car_cancel_slots())
+        assert not my_predbat.allow_this_export_window(0), "an export over a full car's slot must stay blocked"
+        # Below the limit it is cancellable again
+        my_predbat.car_charging_soc = [49.9]
+        assert [(s.start, s.forced) for s in my_predbat.car_cancel_slots()] == [(60, False), (120, False)]
+        # A full car a charger is holding off keeps the slot the hold covers, and nothing else
+        my_predbat.car_charging_soc = [51.0]
+        my_predbat.car_force_holdable = {0: "Fake"}
+        my_predbat.car_force_hold_until = {0: my_predbat.midnight_utc + timedelta(minutes=90)}
+        assert [(s.start, s.forced) for s in my_predbat.car_cancel_slots()] == [(60, True)], my_predbat.car_cancel_slots()
     finally:
         _set_switch(my_predbat, saved_switch)
         for name, value in saved.items():
@@ -1111,10 +1142,12 @@ def run_car_cancel_tests(my_predbat):
     test_cancellable_slots_rules()
     test_cancellable_slots_cap()
     test_cancellable_slots_forced()
+    test_cancellable_slots_held_only_forced()
     test_cancelled_mask()
     test_cancelled_windows()
     test_car_cancellable_cars(my_predbat)
     test_car_cancel_slots(my_predbat)
+    test_full_car_not_cancellable(my_predbat)
     test_gate_relaxed_for_cancellable(my_predbat)
     test_gate_blocked_for_uncancellable(my_predbat)
     test_gate_switch_off_unchanged(my_predbat)

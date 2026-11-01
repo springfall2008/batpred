@@ -1062,6 +1062,7 @@ Which slots can be cancelled:
 - Slots of a Predbat-led car, as Predbat's own car plan drives its charger and leaving the slot out is enough.
 - Slots of a car whose charger Predbat can hold off, whoever plans its slots (Octopus Intelligent included). Today that is a Wallbox, see [Holding a charger off for an export](components.md#holding-a-charger-off-for-an-export-wallbox).
 - Any other car keeps its slots, and no export is planned over them.
+- A car that is already charged to its limit is never cancelled, as giving up its slot would cost the plan nothing and any export would do it. A charger already holding it off still holds it until the hold ends.
 - An export that overlaps any part of a slot cancels the whole slot. Only a full export cancels: freeze export and idle windows never do.
 - The optimiser's levels pass and freeze export never cancel a slot; the detailed passes that follow can.
 - A slot added because **car_charging_now** reports the car charging with no slot planned is never cancelled, nor is a slot with no energy in it. Only the first 64 cancellable slots in the forecast can be cancelled.

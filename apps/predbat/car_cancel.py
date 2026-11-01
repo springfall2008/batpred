@@ -39,7 +39,7 @@ def cancellable_slots(car_slots_model, now_slot_counts, cancellable_cars, held_u
     """
     The car slots an export may cancel, sorted by (start, car_n) and capped at CAR_CANCEL_MAX_SLOTS.
 
-    A slot qualifies when its car is cancellable or force-held, it is not a car_charging_now_slots
+    A slot qualifies when its car is cancellable, or force-held and the slot forced, it is not a car_charging_now_slots
     entry (those come first in the model list, now_slot_counts of them), it has energy and it ends
     after now. held_until maps car_n to an absolute minute; a slot ending by then is forced. One that runs on
     past the hold's end is not: it is published whole when cancelled, and the charger's hold extends into any
@@ -56,6 +56,8 @@ def cancellable_slots(car_slots_model, now_slot_counts, cancellable_cars, held_u
             if index < first or dp2(slot.get("kwh", 0)) <= 0 or slot["end"] <= minutes_now:
                 continue
             forced = hold_end is not None and slot["end"] <= hold_end
+            if not forced and car_n not in cancellable_cars:
+                continue
             slots.append(CancelSlot(car_n, index, slot["start"], slot["end"], forced))
     slots.sort(key=lambda slot: (slot.start, slot.car_n))
     return slots[:CAR_CANCEL_MAX_SLOTS]

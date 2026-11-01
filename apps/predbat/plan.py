@@ -697,7 +697,11 @@ class Plan:
                 held_until[car_n] = minute
         now_slots = self.car_charging_now_slots
         now_slot_counts = [len(now_slots[car_n]) if car_n < len(now_slots) else 0 for car_n in range(len(self.car_charging_slots))]
-        return cancellable_slots(self.car_charging_slots_model(), now_slot_counts, self.car_cancellable_cars(), held_until, self.minutes_now)
+        # A car already at its limit would give nothing up, so cancelling its slot would cost nothing and any export
+        # would do it: its slots keep the hard block. A hold under way on it still keeps the slots it covers.
+        soc, limit = self.car_charging_soc, self.car_charging_limit
+        cancellable_cars = {car_n for car_n in self.car_cancellable_cars() if not (car_n < len(soc) and car_n < len(limit) and soc[car_n] >= limit[car_n])}
+        return cancellable_slots(self.car_charging_slots_model(), now_slot_counts, cancellable_cars, held_until, self.minutes_now)
 
     def car_cancelled_for_export_windows(self, after_plan=True):
         """
