@@ -360,6 +360,7 @@ from tests.test_marginal_costs import test_marginal_costs
 from tests.test_savings_stability import test_savings_stability
 from tests.test_calculate_yesterday import test_calculate_yesterday
 from tests.test_history_days import run_history_days_tests
+from tests.test_billing import run_billing_tests
 from tests.test_cloud_modulation import run_cloud_modulation_tests
 from tests.test_load_today_comparison import test_load_today_comparison
 from tests.test_annual_config import test_annual_config
@@ -846,6 +847,7 @@ def main():
         ("savings_stability", test_savings_stability, "Savings yesterday rate_low stability tests", False),
         ("calculate_yesterday", test_calculate_yesterday, "Calculate yesterday savings and IOG car-slot subtraction tests", False),
         ("history_days", run_history_days_tests, "History view replay and 7-day history", False),
+        ("billing", run_billing_tests, "Octopus/Kraken billing parser, cache, sensor and History attach", False),
         ("cloud_modulation", run_cloud_modulation_tests, "Cloud/load divergence modulation tests", False),
         ("load_today_comparison", test_load_today_comparison, "load_today_comparison None-guard regression test", False),
         ("compare", test_compare, "Compare tariff engine tests (hardware overrides, bleed isolation)", False),
