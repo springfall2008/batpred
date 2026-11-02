@@ -366,3 +366,104 @@ class BillingReader:
             return
         state, attributes = self.sensor(supplier, now_utc)
         self.owner.dashboard_item(self.owner.prefix + "." + BILLING_ENTITY_SUFFIX, state=state, attributes=attributes, app=app)
+
+
+# Rate tags Predbat puts on a minute (fetch.py/octopus.py/axle.py rate_replicate) that mean the
+# bill will not match its rate: a saving/VPP event pays separately, an override isn't the tariff.
+BILLING_EVENT_LABELS = {"saving": "Saving event", "manual": "Manual rate", "user": "Manual rate", "increment": "Rate adjustment"}
+
+
+def _pounds(pence):
+    """Pence to the currency's major unit, as the plan JSON's cost fields are."""
+    return round(pence / 100.0, 2)
+
+
+def _row_slot_keys(view_midnight_utc, slot_minute, plan_interval_minutes):
+    """The 30-minute billing slot keys inside one plan row, by UTC instant."""
+    start = view_midnight_utc + timedelta(minutes=slot_minute)
+    return [(start + timedelta(minutes=offset)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT) for offset in range(0, max(plan_interval_minutes, 30), 30)]
+
+
+def _row_event(events, slot_minute, plan_interval_minutes):
+    """The display label for the first known event inside a row, or None."""
+    for minute in range(slot_minute, slot_minute + plan_interval_minutes):
+        label = BILLING_EVENT_LABELS.get(events.get(minute))
+        if label:
+            return label
+    return None
+
+
+def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes, predbat_slot_cost, standing_pence, events, import_only, predbat_import_kwh, predbat_export_kwh):
+    """Add the billed cost, Diff and a day summary to a History view's plan JSON, in place.
+
+    billing is the predbat.billing attributes dict. predbat_slot_cost maps each row's slot_minute
+    to Predbat's own cost for it in pence (net, or import-only when import_only). Predbat adds the
+    day's standing charge at midnight, so standing_pence is taken off rows starting on a day boundary
+    and both standing charges are reported separately. A row is billed only when every half-hour in
+    it is published (and its export too, when export is being read); anything else shows no billing
+    rather than a part figure. Returns plan_json; it is left untouched when no row is billed.
+    """
+    slots = (billing or {}).get("slots") or {}
+    imports = slots.get("import") or {}
+    if not plan_json or not imports:
+        return plan_json
+    exports = {} if import_only else (slots.get("export") or {})
+    export_required = not import_only and ((billing.get("legs") or {}).get("export") is True)
+    events = events or {}
+    updates = []
+    totals = {"predbat": 0.0, "billed": 0.0, "standing_predbat": 0.0, "standing_billed": 0.0, "import_kwh": 0.0, "export_kwh": 0.0}
+    for row in plan_json.get("rows") or []:
+        slot_minute = row.get("slot_minute")
+        if slot_minute is None:
+            continue
+        keys = _row_slot_keys(view_midnight_utc, slot_minute, plan_interval_minutes)
+        billed_pence = None
+        buckets = None
+        if all(key in imports for key in keys) and (not export_required or all(key in exports for key in keys)):
+            billed_pence = 0.0
+            buckets = {}
+            for key in keys:
+                billed_pence += imports[key]["cost"] - (exports[key]["cost"] if key in exports else 0.0)
+                totals["standing_billed"] += imports[key]["standing"]
+                totals["import_kwh"] += imports[key]["kwh"]
+                totals["export_kwh"] += exports[key]["kwh"] if key in exports else 0.0
+                for label, bucket in imports[key]["buckets"].items():
+                    total = buckets.setdefault(label, {"kwh": 0.0, "cost": 0.0})
+                    total["kwh"] += bucket["kwh"]
+                    total["cost"] += bucket["cost"]
+                for label, bucket in (exports[key]["buckets"].items() if key in exports else []):
+                    total = buckets.setdefault("Export " + label, {"kwh": 0.0, "cost": 0.0})
+                    total["kwh"] += bucket["kwh"]
+                    total["cost"] -= bucket["cost"]
+            buckets = {label: {"kwh": round(value["kwh"], 3), "cost": _pounds(value["cost"])} for label, value in buckets.items()}
+        predbat_pence = predbat_slot_cost.get(slot_minute)
+        if predbat_pence is not None and slot_minute % (24 * 60) == 0:
+            predbat_pence -= standing_pence
+            if billed_pence is not None:
+                totals["standing_predbat"] += standing_pence
+        diff = None
+        if billed_pence is not None and predbat_pence is not None:
+            diff = _pounds(billed_pence - predbat_pence)
+            totals["predbat"] += predbat_pence
+            totals["billed"] += billed_pence
+        updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes)))
+    if not any(update[1] is not None for update in updates):
+        return plan_json
+    for row, billed, buckets, diff, event in updates:
+        row["billed"] = billed
+        row["billed_buckets"] = buckets
+        row["billing_diff"] = diff
+        row["billing_event"] = event
+    plan_json["billing_summary"] = {
+        "predbat_cost": _pounds(totals["predbat"]),
+        "billed_cost": _pounds(totals["billed"]),
+        "diff": _pounds(totals["billed"] - totals["predbat"]),
+        "standing_predbat": _pounds(totals["standing_predbat"]),
+        "standing_billed": _pounds(totals["standing_billed"]),
+        "import_kwh": [None if predbat_import_kwh is None else round(predbat_import_kwh, 2), round(totals["import_kwh"], 2)],
+        "export_kwh": [None if predbat_export_kwh is None else round(predbat_export_kwh, 2), None if import_only or not exports else round(totals["export_kwh"], 2)],
+        "complete_until": billing.get("complete_until"),
+        "import_only": bool(import_only),
+        "supplier": billing.get("supplier"),
+    }
+    return plan_json

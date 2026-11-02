@@ -560,6 +560,155 @@ def test_kraken_no_mpan_skips():
     return False
 
 
+
+def _billing_attrs(import_slots, export_slots=None, legs=None, supplier="octopus"):
+    """A predbat.billing attributes dict holding the given slots."""
+    slots = {"import": import_slots}
+    if export_slots is not None:
+        slots["export"] = export_slots
+    complete = sorted(import_slots)[-1] if import_slots else None
+    return {"supplier": supplier, "legs": legs or {"import": True, "export": None}, "complete_until": complete, "slots": slots, "days": {}}
+
+
+def _slot(kwh, cost, label="Home Low Rate", standing=1.15674):
+    """One parsed billing slot."""
+    return {"kwh": kwh, "cost": cost, "standing": standing, "buckets": {label: {"kwh": kwh, "cost": cost}}}
+
+
+def _plan(slot_minutes):
+    """A plan JSON with one row per slot minute."""
+    return {"rows": [{"time": "x", "slot_minute": minute, "cost_change": 0.0} for minute in slot_minutes]}
+
+
+VIEW_MIDNIGHT = datetime(2026, 11, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def _key(minute, midnight=VIEW_MIDNIGHT):
+    """The billing slot key for a minute after the view's midnight."""
+    return (midnight + timedelta(minutes=minute)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_attach_basic():
+    """Billing that matches Predbat's cost gives a zero Diff on every row and in the summary."""
+    from billing import attach_billing
+
+    billing = _billing_attrs({_key(m): _slot(1.0, 10.0) for m in (600, 630)})
+    plan = attach_billing(_plan([600, 630]), billing, VIEW_MIDNIGHT, 30, {600: 10.0, 630: 10.0}, 55.52, {}, False, 2.0, 0.0)
+    rows = plan["rows"]
+    if any(row.get("billed") != 0.1 or row.get("billing_diff") != 0.0 for row in rows):
+        print("ERROR: matching billing should give billed 0.1 and diff 0.0, got {}".format(rows))
+        return True
+    summary = plan.get("billing_summary") or {}
+    if summary.get("diff") != 0.0 or summary.get("billed_cost") != 0.2 or summary.get("predbat_cost") != 0.2 or summary.get("supplier") != "octopus" or summary.get("import_only") is not False:
+        print("ERROR: unexpected summary {}".format(summary))
+        return True
+    if summary.get("import_kwh") != [2.0, 2.0] or rows[0].get("billed_buckets", {}).get("Home Low Rate", {}).get("cost") != 0.1:
+        print("ERROR: summary kWh / row buckets wrong: {} {}".format(summary.get("import_kwh"), rows[0].get("billed_buckets")))
+        return True
+    return False
+
+
+def test_attach_unpublished_row():
+    """A row Octopus hasn't published yet shows no billing and is left out of the summary."""
+    from billing import attach_billing
+
+    billing = _billing_attrs({_key(600): _slot(1.0, 10.0)})
+    plan = attach_billing(_plan([600, 630]), billing, VIEW_MIDNIGHT, 30, {600: 10.0, 630: 99.0}, 55.52, {}, False, None, None)
+    late = plan["rows"][1]
+    if late.get("billed") is not None or late.get("billing_diff") is not None or late.get("billed_buckets") is not None:
+        print("ERROR: the unpublished row should have billed/diff/buckets None, got {}".format(late))
+        return True
+    if plan["billing_summary"]["predbat_cost"] != 0.1:
+        print("ERROR: the summary's Predbat cost should leave the unpublished row out, got {}".format(plan["billing_summary"]["predbat_cost"]))
+        return True
+    return False
+
+
+def test_attach_hour_rows():
+    """An hour-long row sums its two half-hours, and shows nothing unless both are published."""
+    from billing import attach_billing
+
+    billing = _billing_attrs({_key(600): _slot(1.0, 10.0), _key(630): _slot(1.0, 5.0), _key(660): _slot(1.0, 7.0)})
+    plan = attach_billing(_plan([600, 660]), billing, VIEW_MIDNIGHT, 60, {600: 15.0, 660: 7.0}, 55.52, {}, False, None, None)
+    if plan["rows"][0].get("billed") != 0.15 or plan["rows"][0].get("billing_diff") != 0.0:
+        print("ERROR: the 10:00 hour should bill 0.15 with diff 0, got {}".format(plan["rows"][0]))
+        return True
+    if plan["rows"][1].get("billed") is not None:
+        print("ERROR: the 11:00 hour has only one half-hour published and should show no billing, got {}".format(plan["rows"][1]))
+        return True
+    return False
+
+
+def test_attach_standing_stripped():
+    """Predbat adds the day's standing charge at midnight; Diff must not count it as a mismatch."""
+    from billing import attach_billing
+
+    billing = _billing_attrs({_key(0): _slot(1.0, 10.0)})
+    plan = attach_billing(_plan([0]), billing, VIEW_MIDNIGHT, 30, {0: 55.52 + 10.0}, 55.52, {}, False, None, None)
+    summary = plan["billing_summary"]
+    if plan["rows"][0].get("billing_diff") != 0.0 or summary.get("standing_predbat") != 0.56 or summary.get("standing_billed") != 0.01:
+        print("ERROR: midnight standing should be stripped from Diff and shown separately, got row {} summary {}".format(plan["rows"][0], summary))
+        return True
+    return False
+
+
+def test_attach_clock_change():
+    """Rows map to billing by UTC instant, so the clock-change day lines up."""
+    from billing import attach_billing
+
+    midnight = datetime(2026, 10, 25, 0, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    billing = _billing_attrs({"2026-10-25T01:00:00Z": _slot(1.0, 6.6)})
+    plan = attach_billing(_plan([120]), billing, midnight, 30, {120: 6.6}, 55.52, {}, False, None, None)
+    if plan["rows"][0].get("billed") != 0.07:
+        print("ERROR: slot_minute 120 on 25 Oct should pick up 2026-10-25T01:00:00Z, got {}".format(plan["rows"][0]))
+        return True
+    return False
+
+
+def test_attach_event_label():
+    """Rows priced with an event the bill won't carry are labelled with it."""
+    from billing import attach_billing
+
+    billing = _billing_attrs({_key(m): _slot(1.0, 10.0) for m in (600, 630, 660, 690)})
+    events = {605: "saving", 630: "manual", 665: "increment", 690: "future"}
+    plan = attach_billing(_plan([600, 630, 660, 690]), billing, VIEW_MIDNIGHT, 30, {m: 10.0 for m in (600, 630, 660, 690)}, 55.52, events, False, None, None)
+    labels = [row.get("billing_event") for row in plan["rows"]]
+    if labels != ["Saving event", "Manual rate", "Rate adjustment", None]:
+        print("ERROR: unexpected event labels {}".format(labels))
+        return True
+    return False
+
+
+def test_attach_import_only():
+    """When export billing can't be read, Billed and Diff are import-only and say so."""
+    from billing import attach_billing
+
+    billing = _billing_attrs({_key(600): _slot(1.0, 10.0)}, export_slots={_key(600): _slot(0.5, 7.5, label="GENERATION", standing=0.0)}, legs={"import": True, "export": False})
+    plan = attach_billing(_plan([600]), billing, VIEW_MIDNIGHT, 30, {600: 10.0}, 55.52, {}, True, None, None)
+    if plan["rows"][0].get("billed") != 0.1 or plan["billing_summary"].get("import_only") is not True:
+        print("ERROR: import-only billing should ignore export and be flagged, got {} {}".format(plan["rows"][0], plan["billing_summary"]))
+        return True
+    net = attach_billing(_plan([600]), dict(billing, legs={"import": True, "export": True}), VIEW_MIDNIGHT, 30, {600: 2.5}, 55.52, {}, False, None, None)
+    if net["rows"][0].get("billed") != 0.03 or net["rows"][0].get("billing_diff") != 0.0:
+        print("ERROR: net billing should be import less export (2.5p), got {}".format(net["rows"][0]))
+        return True
+    return False
+
+
+def test_attach_no_billing():
+    """No billing leaves the plan exactly as it was."""
+    from billing import attach_billing
+
+    plan = _plan([600])
+    before = copy.deepcopy(plan)
+    attach_billing(plan, {}, VIEW_MIDNIGHT, 30, {600: 10.0}, 55.52, {}, False, None, None)
+    attach_billing(plan, None, VIEW_MIDNIGHT, 30, {600: 10.0}, 55.52, {}, False, None, None)
+    if plan != before:
+        print("ERROR: empty billing should leave the plan untouched, got {}".format(plan))
+        return True
+    return False
+
+
 def run_billing_tests(my_predbat):
     """Run the billing tests."""
     failed = False
@@ -581,7 +730,7 @@ def run_billing_tests(my_predbat):
         if test():
             print("ERROR: {} failed".format(test.__name__))
             failed = True
-    for test in (test_reader_fetches_only_incomplete_days, test_reader_failed_read_marks_leg, test_reader_restart_restores_cache, test_kraken_run_publishes_billing, test_kraken_export_uses_export_account, test_kraken_no_mpan_skips):
+    for test in (test_reader_fetches_only_incomplete_days, test_reader_failed_read_marks_leg, test_reader_restart_restores_cache, test_kraken_run_publishes_billing, test_kraken_export_uses_export_account, test_kraken_no_mpan_skips, test_attach_basic, test_attach_unpublished_row, test_attach_hour_rows, test_attach_standing_stripped, test_attach_clock_change, test_attach_event_label, test_attach_import_only, test_attach_no_billing):
         print("billing: {}".format(test.__name__))
         if test():
             print("ERROR: {} failed".format(test.__name__))
