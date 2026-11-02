@@ -28,6 +28,7 @@ from urllib.parse import urlencode
 import aiohttp
 
 from component_base import ComponentBase
+from coordinator import inverter_record
 from const import EXPORT_LIMIT_FREEZE
 from mock_base import MockBase
 from predbat_metrics import record_api_call
@@ -106,6 +107,20 @@ BATTERY_UI_ORIGIN = "https://battery-profile-ui.enphaseenergy.com"
 
 # Format for the published inverter_time sensor - matches INVERTER_DEF["EnphaseCloud"] clock_time_format
 ENPHASE_CLOCK_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# The EnphaseCloud INVERTER_DEF row's behaviour, stated in every discovery record so the record alone
+# rebuilds the row (coordinator.inverter_definition()). The cloud raises the reserve to freeze charging
+# and meets a reserve above the live SoC from the grid, hence reserve_above_soc_charges_from_grid.
+ENPHASE_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": False,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+    "reserve_above_soc_charges_from_grid": True,
+}
 
 
 def safe_float(value, default=0.0):
@@ -468,6 +483,11 @@ class EnphaseAPI(ComponentBase):
             if self._needs_refresh("schedule_sync", ENPHASE_REFRESH_SCHEDULE_SYNC):
                 await self.apply_battery_schedule(site_id)
                 self.data_age["schedule_sync"] = datetime.now(timezone.utc)
+
+        # Filed every cycle, after this cycle's publish and before automatic_config(), which raises for
+        # a site Predbat cannot drive - exactly the install whose dump most needs to say what was found.
+        # refresh_discovery() owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         # Automatic configuration on first successful data load. A site with no controllable
         # battery (e.g. PV-only) cannot be configured as a Predbat inverter - log and report
@@ -1528,6 +1548,115 @@ class EnphaseAPI(ComponentBase):
         # export_limit is deliberately not set here: the Enphase cloud does not report a grid
         # export power limit, and hardcoding one would override the user's apps.yaml export_limit.
         # Leaving it unset lets the user configure it (Predbat defaults to unlimited otherwise).
+
+    def _discovery_entities(self, site_id):
+        """Every setting automatic_config() binds for the site, as discovery entity descriptors.
+
+        Entity ids are built from the same f"{prefix}_enphase_{site_id}" stem automatic_config() uses,
+        so the two cannot drift; tests/test_enphase_api.py checks they agree both ways. Sensors are read
+        (access "r"); the schedule controls, the reserve and the write switch are written ("rw"). The
+        schedule selects carry HH:MM:SS, the option format publish_schedule_settings_ha() publishes.
+        No descriptor carries invert: publish_data() already emits Predbat's sign conventions.
+
+        pv_power and pv_today are bound whatever automatic_ignore_pv says: the record describes the
+        device, and the user's opt-out is applied by whoever configures from it (spec D11).
+        """
+        entity = f"{self.prefix}_enphase_{site_id}"
+
+        def sensor(leaf, unit=None, **fields):
+            """A read-only binding to one of the site's published sensors."""
+            descriptor = {"entity_id": f"sensor.{entity}_{leaf}", "access": "r", **fields}
+            if unit:
+                descriptor["unit"] = unit
+            return descriptor
+
+        def control(domain, leaf, **fields):
+            """A binding to one of the schedule control entities Predbat writes."""
+            return {"entity_id": f"{domain}.{entity}_{leaf}", "access": "rw", "domain": domain, **fields}
+
+        return {
+            "load_today": sensor("load_today", "kWh"),
+            "import_today": sensor("import_today", "kWh"),
+            "export_today": sensor("export_today", "kWh"),
+            "pv_today": sensor("pv_today", "kWh"),
+            "pv_power": sensor("pv_power", "W"),
+            "soc_percent": sensor("soc_percent", "%"),
+            "soc_max": sensor("battery_capacity", "kWh"),
+            "battery_rate_max": sensor("battery_rate_max", "W"),
+            "battery_power": sensor("battery_power", "W"),
+            "grid_power": sensor("grid_power", "W"),
+            "load_power": sensor("load_power", "W"),
+            "reserve": control("number", "battery_schedule_reserve", unit="%"),
+            "battery_min_soc": sensor("battery_reserve_min", "%"),
+            "inverter_time": sensor("inverter_time", format=ENPHASE_CLOCK_FORMAT),
+            "charge_start_time": control("select", "battery_schedule_charge_start_time", format="HH:MM:SS"),
+            "charge_end_time": control("select", "battery_schedule_charge_end_time", format="HH:MM:SS"),
+            "charge_limit": control("number", "battery_schedule_charge_soc", unit="%"),
+            "scheduled_charge_enable": control("switch", "battery_schedule_charge_enable"),
+            "scheduled_discharge_enable": control("switch", "battery_schedule_export_enable"),
+            "discharge_start_time": control("select", "battery_schedule_export_start_time", format="HH:MM:SS"),
+            "discharge_end_time": control("select", "battery_schedule_export_end_time", format="HH:MM:SS"),
+            "discharge_target_soc": control("number", "battery_schedule_export_soc", unit="%"),
+            "schedule_write_button": control("switch", "battery_schedule_charge_write"),
+        }
+
+    def _discovery_ratings(self, site_id):
+        """The figures the site itself reports, under Predbat's setting names (spec D14).
+
+        battery_min_soc is the device's own floor (veryLowSocMin), never the default 5 publish_data()
+        falls back to. Enphase reports no inverter, PV or export limit.
+        """
+        status = self.battery_status.get(site_id, {})
+        ratings = {}
+        if status.get("max_capacity"):
+            ratings["soc_max"] = status["max_capacity"]
+        if status.get("max_power_kw"):
+            ratings["battery_rate_max"] = round(status["max_power_kw"] * 1000, 1)
+        very_low_min = self.battery_settings.get(site_id, {}).get("veryLowSocMin")
+        if very_low_min is not None:
+            ratings["battery_min_soc"] = very_low_min
+        return ratings
+
+    def build_discovery(self):
+        """
+        Describe the Enphase battery site for the discovery catalogue.
+
+        One record for the site automatic_config() configures (the first discovered). The Envoy is the
+        gateway Predbat talks to, fronting the IQ batteries, so the record is keyed by the Envoy serial
+        with composition "gateway" and the battery serials in serials. The site id is an account
+        identifier: it goes in account_ids, published readable like every identifier, as are the entity
+        ids that embed it.
+
+        Reporting is independent of self.automatic, and of whether automatic_config() would accept
+        the site: a site without CFG/DTG scheduling is still hardware worth describing.
+
+        Never reported: the site name, the login email or user id, timezone and country.
+
+        Returns None until the site's battery capacity and the Envoy serial are known.
+        """
+        if not self.sites:
+            return None
+        site_id = self.sites[0]["site_id"]
+        if not self.battery_status.get(site_id, {}).get("max_capacity"):
+            return None
+        envoy = gateway_serial(self.today.get(site_id))
+        if not envoy:
+            return None
+        batteries = [str(battery.get("serial_num")) for battery in self.battery_status[site_id].get("batteries") or [] if battery.get("serial_num")]
+        record = inverter_record(
+            "enphase:{}".format(envoy),
+            inverter_type="EnphaseCloud",
+            composition="gateway",
+            serials=batteries,
+            functions=["solar", "battery"],
+            capabilities=dict(ENPHASE_CAPABILITIES),
+            hardware_ids={"serial": str(envoy)},
+            account_ids={"site_id": str(site_id)},
+            info={"vendor": "Enphase"},
+            ratings=self._discovery_ratings(site_id),
+            entities=self._discovery_entities(site_id),
+        )
+        return {"automatic": self.automatic, "inverters": [record]}
 
     def login_allowed(self):
         """Return True when a password login attempt is currently permitted by the guard rails."""

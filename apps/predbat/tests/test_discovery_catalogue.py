@@ -6,8 +6,8 @@ Task 1-9 built the coordinator, its typed containers, the redactor and five repo
 Cloud, Octopus, Ohme, Solcast) in isolation, each with its own unit tests. This module is the one
 place that wires several of them together against a SHARED base object and proves three things no
 single-reporter test can: the assembled catalogue tags records from different components by
-source and surfaces the conflicts a mixed fleet actually creates; a seeded corpus of sensitive
-values never survives redaction, in original OR transformed form; and - the release's central
+source and surfaces the conflicts a mixed fleet actually creates; a seeded corpus publishes with
+only its credential and email withheld, every identifier left readable; and - the release's central
 promise - that running the whole discovery path changes not one byte of apps.yaml configuration.
 
 Kraken and Axle also exist in the codebase but report nothing in v1 (see coordinator.py's

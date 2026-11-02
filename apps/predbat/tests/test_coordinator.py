@@ -669,8 +669,8 @@ def test_component_load_error_carries_no_free_text():
     components.load_error() is the raw str() of whatever construction raised - unbounded free text
     that could carry a URL, an account value or a credential from a component's own error message.
     Every other value in this document reaches it through a typed container that cannot hold one;
-    a dump gets attached to a public issue, so the one field outside that boundary is removed
-    rather than trusted to the shape guard. The message stays in the log and on the
+    a dump gets attached to a public issue, so the one field outside that boundary is removed:
+    free text can carry a credential under no name the validation's key check would catch. The message stays in the log and on the
     component-status entity, which is where a maintainer already reads it.
     """
     base, coordinator = _coordinator()
@@ -982,6 +982,46 @@ def _full_record():
     }
 
 
+def test_optional_capability_defaults_false_without_a_gap():
+    """reserve_above_soc_charges_from_grid is optional: absent means False and is not a gap; stated, it is used."""
+    definition, gaps, _ = inverter_definition(_full_record(), 2)
+    assert definition["reserve_above_soc_charges_from_grid"] is False, definition
+    assert "reserve_above_soc_charges_from_grid" not in gaps, gaps
+    record = _full_record()
+    record["capabilities"]["reserve_above_soc_charges_from_grid"] = True
+    definition, gaps, _ = inverter_definition(record, 2)
+    assert definition["reserve_above_soc_charges_from_grid"] is True and gaps == [], (definition, gaps)
+    print("PASS: the optional capability defaults False without a gap, and is used when stated")
+    return 0
+
+
+def test_optional_capability_survives_validation():
+    """The capabilities container accepts the optional key without a warning."""
+    logs = []
+    cleaned = validate_report({"inverters": [{"device_id": "x:1", "capabilities": {"reserve_above_soc_charges_from_grid": True}}]}, "x", logs.append)
+    assert cleaned["inverters"][0]["capabilities"] == {"reserve_above_soc_charges_from_grid": True}, cleaned
+    assert not logs, logs
+    print("PASS: the optional capability survives validation")
+    return 0
+
+
+def test_definition_write_retry_from_component():
+    """write_max_retry and write_backoff come from the component, like write_and_poll_sleep, and are left out when not given."""
+    definition, _, _ = inverter_definition(_full_record(), 10, write_max_retry=3, write_backoff=True)
+    assert definition["write_max_retry"] == 3 and definition["write_backoff"] is True, definition
+    definition, _, _ = inverter_definition(_full_record(), 2)
+    assert "write_max_retry" not in definition and "write_backoff" not in definition, definition
+    print("PASS: write retry and backoff come from the component")
+    return 0
+
+
+def test_solax_and_sigenergy_rows_give_soc_units_kwh():
+    """Both components bind soc_kw, so their rows say kWh; inv_soc_units is never read, so this changes no behaviour."""
+    assert INVERTER_DEF["SolaxCloud"]["soc_units"] == "kWh"
+    assert INVERTER_DEF["SIGCLOUD"]["soc_units"] == "kWh"
+    print("PASS: SolaxCloud and SIGCLOUD rows give soc_units kWh")
+    return 0
+
 def test_inverter_definition_builds_every_field_without_a_base():
     """A full record yields every derived field and no gaps."""
     definition, gaps, not_applicable = inverter_definition(_full_record(), 2)
@@ -1185,6 +1225,21 @@ def test_published_catalogue_scrubs_email_addresses():
     return 0
 
 
+def test_account_ids_drop_an_overlong_string():
+    """account_ids holds strings to MAX_STRING like every other container, so a pasted blob under an innocent key is dropped.
+
+    With identifiers published as reported, the name-based credential check is the only guard on this
+    container; the length cap is its value-side backstop. Every real identifier fits - a 13-digit MPAN,
+    an account number, a 36-character UUID.
+    """
+    logs = []
+    uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"
+    cleaned = validate_report({"cars": [{"device_id": "x:1", "account_ids": {"mpan": "1234567890123", "device": uuid, "note": "eyJ" + "a" * 70}}]}, "x", logs.append)
+    assert cleaned["cars"][0]["account_ids"] == {"mpan": "1234567890123", "device": uuid}, cleaned
+    assert any("account_ids.note" in line for line in logs), logs
+    print("PASS: account_ids drops an over-long string and keeps real identifiers")
+    return 0
+
 def test_published_catalogue_refuses_credentials():
     """Passwords, tokens and keys never reach the catalogue: a credential-named field is refused at validation."""
     catalogue, _ = _published({"inverters": [{"device_id": "x:1", "account_ids": {"password": "hunter2", "api_key": "sk_live_abc", "access_token": "eyJhbGciOi"}}]})
@@ -1203,6 +1258,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_published_catalogue_keeps_location_readable()
     failures += test_published_catalogue_scrubs_email_addresses()
     failures += test_published_catalogue_refuses_credentials()
+    failures += test_account_ids_drop_an_overlong_string()
     failures += test_ratings_rejects_non_numeric()
     failures += test_vocabulary_rejects_free_text()
     failures += test_info_rejects_email_shaped_and_long_strings()
@@ -1232,6 +1288,10 @@ def test_coordinator_all(my_predbat=None):
     failures += test_inverter_record_sorts_a_mixed_type_set_without_raising()
     failures += test_inverter_record_drops_an_empty_string()
     failures += test_charger_record_omits_empty_containers()
+    failures += test_optional_capability_defaults_false_without_a_gap()
+    failures += test_optional_capability_survives_validation()
+    failures += test_definition_write_retry_from_component()
+    failures += test_solax_and_sigenergy_rows_give_soc_units_kwh()
     failures += test_charger_and_car_record_parameters_match_their_sections()
     failures += test_charger_with_stub_car_cross_links()
     failures += test_stub_car_survives_validation()
