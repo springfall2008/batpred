@@ -49,7 +49,7 @@ from const import (
 from battery_curve import BatteryCurve
 from control_ledger import generation_from_state, OWNED, UNOWNED
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, is_entity_id, time_string_to_stamp, minute_data, window2minutes, pack_export_limit, strptime_aware
-from dispatch import InverterDispatch, dispatch_power_for_rate
+from dispatch import InverterDispatch
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -534,6 +534,9 @@ class Inverter(BatteryCurve):
         What stays in __init__ is the identity and the accumulated state that must survive - notably
         the committed-schedule guard, which was being wiped by the rebuild (#4712).
         """
+        # Re-resolve the dispatch configuration once per refresh: enabled() is consulted several
+        # times per inverter per cycle and resolving it can warn, so it is cached on the helper.
+        self.dispatch.refresh()
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
@@ -2344,9 +2347,11 @@ class Inverter(BatteryCurve):
 
         force=True writes even when the read already matches. Some switches are optimistic in HA
         and keep reporting "on" after the device has cleared the register behind them, so the
-        matching-read early return would skip the write that re-arms it. The write still goes
-        through this path rather than a bare service call so the control ledger and write
-        accounting see it.
+        matching-read early return would skip the write that re-arms it. It does not override the
+        degraded-write backoff: a control that has failed repeatedly still gets at most one attempt
+        per interval, otherwise a broken entity would be written (and warned about) every cycle.
+        The write still goes through this path rather than a bare service call so the control
+        ledger and write accounting see it.
         """
         # Re-written to minimise writes
         if not self.check_write_entity("write_and_poll_switch", name, entity_id, new_value):
@@ -2392,10 +2397,6 @@ class Inverter(BatteryCurve):
             return True
 
         attempts = self._write_attempts(name, entity_id, new_value)
-        if force:
-            # A forced write always issues at least one service call, but still stops as soon as
-            # the read confirms the target.
-            attempts = max(attempts, 1)
         retry = 0
         while retry < attempts and (retry == 0 or not switch_matched(raw_state)):
             retry += 1
@@ -3088,8 +3089,14 @@ class Inverter(BatteryCurve):
         if "scheduled_discharge_enable" in self.base.args:
             entity_id = self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id)
             if self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on":
-                self.write_and_poll_switch("scheduled_discharge_enable", entity_id, False)
-                self.log("Inverter {} Turning off scheduled export as real-time dispatch drives the window".format(self.id))
+                if self.write_and_poll_switch("scheduled_discharge_enable", entity_id, False):
+                    self.log("Inverter {} Turning off scheduled export as real-time dispatch drives the window".format(self.id))
+                    # Some inverters (GS_fb00) only commit the schedule when the update button is
+                    # pressed, so writing the switch alone leaves the armed slot live on the device
+                    # and it keeps exporting alongside the dispatch block. The stock path presses
+                    # the same button after the same write; match it.
+                    if getattr(self, "inv_time_button_press", False):
+                        self.press_and_poll_button(side="discharge")
         if not force_export:
             self.adjust_idle_time(discharge_start="00:00:00", discharge_end="00:00:00")
             self.dispatch.disable_dispatch()
@@ -3393,12 +3400,16 @@ class Inverter(BatteryCurve):
         """
         Adjust from exporting or not exporting based on passed target soc
         """
-        # Real-time dispatch (see dispatch.py) owns this inverter's export: it stages the same
-        # block through its own entities, with read-back verification, and is applied from
+        # Real-time dispatch (see dispatch.py) owns this inverter's real export: it stages the
+        # same block through its own entities, with read-back verification, and is applied from
         # execute_plan() after the cycle's rate is known. The service-template path below would be
         # a second, unverified writer against the same block - and its `power` payload is read from
         # the inverter before this cycle's rate write, so it could only ever repeat the old rate.
-        if self.dispatch.enabled():
+        # Freeze and idle calls are deliberately NOT covered: there is no dispatch command meaning
+        # "hold and do not export", so a freeze export keeps the stock path below (including the
+        # caller's discharge_freeze_service and the FB00 energy-control switch), and the dispatch
+        # block is stopped separately because no export rate is planned for the cycle.
+        if self.dispatch.enabled() and target_soc < 100 and not freeze:
             return
 
         # FB00's Energy Storage Control Switch on an exporting cycle: Feed-in priority - No Grid Charging for a freeze
