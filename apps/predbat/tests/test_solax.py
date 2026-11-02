@@ -141,6 +141,111 @@ class MockSolaxAPI(SolaxAPI):
     # Don't override these - let tests call real methods from SolaxAPI and mock send_command_and_wait
 
 
+# Discovery catalogue reporter
+
+DISCOVERY_PLANT = "1618699116555534337"
+DISCOVERY_INVERTER = "H1231231932123"
+DISCOVERY_BATTERY = "TP123456123123"
+
+
+def _discovery_solax(plants=1):
+    """A SolaxAPI holding `plants` battery plants, each with one hybrid inverter and one battery."""
+    api = MockSolaxAPI()
+    api.initialize(client_id="test", client_secret="test", region="eu")
+    api.automatic = True
+    for index in range(plants):
+        plant = str(int(DISCOVERY_PLANT) + index)
+        inverter = DISCOVERY_INVERTER[:-1] + str(index)
+        battery = DISCOVERY_BATTERY[:-1] + str(index)
+        api.plant_info.append({"plantId": plant, "plantName": "Smith Family Home", "batteryCapacity": 15.0, "pvCapacity": 8.5})
+        api.plant_inverters[plant] = [inverter]
+        api.plant_batteries[plant] = [battery]
+        api.device_info[inverter] = {"deviceSn": inverter, "deviceType": 1, "plantId": plant, "deviceModel": 14, "ratedPower": 10.0, "armVersion": "1.51", "dspVersion": "1.55", "registerNo": "SY1231321312", "onlineStatus": 1}
+        api.device_info[battery] = {"deviceSn": battery, "deviceType": 2, "plantId": plant, "deviceModel": 1, "ratedPower": 5.0, "softwareVersion": "3.16", "onlineStatus": 1}
+    return api
+
+
+def _solax_discovery_tests():
+    """Discovery reporter tests; raise AssertionError on failure."""
+    import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
+    from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+    from solax import SolaxAPI
+
+    print("\n=== Testing SolaX discovery reporter ===")
+
+    # test_solax_catalogue_none_without_a_battery_plant
+    api = MockSolaxAPI()
+    api.initialize(client_id="test", client_secret="test", region="eu")
+    assert api.build_discovery() is None
+    api.plant_inverters["p1"] = ["INV001"]
+    api.device_info["INV001"] = {"deviceSn": "INV001", "deviceType": 1, "plantId": "p1", "ratedPower": 10.0}
+    assert api.build_discovery() is None, "a plant with no battery is not configured, so not reported"
+    print("✓ no record without a battery plant")
+
+    # test_solax_record_shape
+    report = _discovery_solax().build_discovery()
+    record = report["inverters"][0]
+    inverter = DISCOVERY_INVERTER[:-1] + "0"
+    assert report["automatic"] is True
+    assert record["device_id"] == "solax:" + inverter, record
+    assert record["inverter_type"] == "SolaxCloud" and record["composition"] == "direct" and record["functions"] == ["solar", "battery"]
+    assert record["hardware_ids"] == {"serial": inverter} and record["account_ids"] == {"plant_id": DISCOVERY_PLANT}
+    assert record["info"] == {"vendor": "SolaX", "model": "X3-Hybrid-G4", "firmware": "ARM 1.51 DSP 1.55"}, record["info"]
+    assert record["ratings"] == {"inverter_limit": 10000.0, "soc_max": 15.0, "battery_rate_max": 5000.0}, record["ratings"]
+    assert record["entities"]["battery_min_soc"] == {"value": SOLAX_MIN_RESERVE_PERCENT, "access": "r"}
+    assert record["entities"]["battery_power"]["invert"] is True
+    assert "Smith" not in str(report) and "SY1231321312" not in str(report), "plant name and dongle serial are not reported"
+    print("✓ record shape")
+
+    # test_solax_record_rebuilds_its_inverter_def_row
+    assert_definition_complete(validated_inverters(_discovery_solax().build_discovery())[0], SolaxAPI.WRITE_AND_POLL_SLEEP)
+    print("✓ record rebuilds the SolaxCloud row")
+
+    # test_solax_record_agrees_with_automatic_config / test_solax_two_plants_two_records
+    for plants in (1, 2):
+        api = _discovery_solax(plants)
+        records = validated_inverters(api.build_discovery())
+        assert len(records) == plants
+        captured = capture_automatic_config(api)
+        for index, record in enumerate(records):
+            assert_record_agrees(record, captured, index=index)
+            assert_record_binds_nothing_extra(record, captured, index=index)
+        assert ("battery_temperature_history" in records[0]["entities"]) and all("battery_temperature_history" not in record["entities"] for record in records[1:])
+    print("✓ records agree with automatic_config, one per plant")
+
+    # test_solax_round_trip_keeps_plant_id_readable
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("solax", _discovery_solax().build_discovery())
+    catalogue = str(coordinator.catalogue())
+    assert "sensor.predbat_solax_{}_battery_soc".format(DISCOVERY_PLANT) in catalogue, "the plant id is not secret, and stays readable inside entity ids"
+    assert inverter in catalogue
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    print("✓ round trip keeps the plant id readable")
+
+    # test_solax_catalogue_filed_when_automatic_config_raises
+    api = _discovery_solax()
+    filed = []
+    api.report_discovery = filed.append
+
+    async def failing_automatic_config():
+        """Stand in for an automatic_config() that raises, as it does for an account with no battery plant."""
+        raise ValueError("SolaX API: No plants with inverters and batteries found, cannot configure")
+
+    api.automatic_config = failing_automatic_config
+    raised = False
+    try:
+        asyncio.run(run_one_cycle(api, 0, True))
+    except ValueError:
+        raised = True
+    assert raised, "the stand-in automatic_config() raised"
+    assert len(filed) == 1 and filed[0]["inverters"][0]["device_id"] == "solax:" + inverter, "the report is filed before automatic_config() can raise"
+    print("✓ report filed before automatic_config() can raise")
+
+
 def run_solax_tests(my_predbat):
     """
     Run all SolaX API tests
@@ -204,6 +309,8 @@ def run_solax_tests(my_predbat):
         failed |= asyncio.run(test_realtime_publish_gating_main(my_predbat))
         failed |= asyncio.run(test_plant_pv_yield_main(my_predbat))
         failed |= asyncio.run(test_counter_dip_main(my_predbat))
+
+        _solax_discovery_tests()
 
         if not failed:
             print("**** SolaX API tests: All tests passed ****")
