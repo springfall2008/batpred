@@ -8017,7 +8017,7 @@ def get_plan_renderer_js():
         html += tile('Export kWh', kwh(summary.export_kwh));
         html += tile('Standing charge', `${money(summary.standing_predbat)} vs ${money(summary.standing_billed)}`);
         html += '</div>';
-        const notes = [complete, summary.import_only ? 'import only: export billing could not be read, so Cost is compared on import' : '', 'slots not yet billed are left out'].filter(Boolean);
+        const notes = [complete, summary.import_only ? 'import only: export billing is not being read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
         html += `<p style="font-size: 12px; margin: 0 0 8px 0; opacity: 0.8;">${notes.join(' &middot; ')}</p>`;
         return html;
     }

@@ -719,7 +719,6 @@ def test_attach_no_billing():
     return False
 
 
-
 def test_parse_missing_cost_rejects_slot():
     """A bucket with kWh but no cost isn't priced yet; the half-hour is left out so the day is read again."""
     nodes = [_node("2026-11-01T10:00:00+00:00", 1.0, [{"type": "CONSUMPTION_COST", "label": "A", "value": "1.0", "costInclTax": {"estimatedAmount": None}}]), _node("2026-11-01T10:30:00+00:00", 1.0, [_stat("CONSUMPTION_COST", "A", 1.0, 5.0)])]

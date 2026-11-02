@@ -281,7 +281,7 @@ def _test_history_days_real_replay(my_predbat, failed):
     rate_import_before = my_predbat.rate_import
     midnight_before = my_predbat.midnight_utc
     day_start = my_predbat.local_tz.localize(datetime(2024, 10, 2)).astimezone(timezone.utc)
-    slot = {"kwh": 1.0, "cost": 0.0, "standing": 1.0, "buckets": {"Home Low Rate": {"kwh": 1.0, "cost": 0.0}}}
+    slot = {"kwh": 0.4, "cost": 10.0, "standing": 1.0, "buckets": {"Home Low Rate": {"kwh": 0.4, "cost": 10.0}}}
     slots = {(day_start + timedelta(minutes=30 * n)).strftime("%Y-%m-%dT%H:%M:%SZ"): dict(slot) for n in range(48)}
     my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=0.0, attributes={"complete_until": "2024-10-03T00:00:00Z", "slots": {"import": slots}, "legs": {"import": True, "export": None}, "supplier": "octopus"})
     try:
@@ -315,18 +315,197 @@ def _test_history_row_costs_strip_next_day_standing(my_predbat, failed):
     my_predbat.plan_interval_minutes = 30
     array = {minute: 55.52 + minute * 0.1 for minute in range(0, 24 * 60)}
     array[24 * 60] = 55.52 + 1440 * 0.1 + 55.52 + 0.4
-    costs = my_predbat.history_row_costs(array, 24 * 60, 55.52)
+    costs = my_predbat.history_row_costs(array, 24 * 60, 55.52, [24 * 60])
     if abs(costs[0] - 3.0) > 0.001 or abs(costs[1410] - 3.4) > 0.001:
         print("ERROR: 00:00 should cost 3p and 23:30 3.4p once the next day's standing is taken off, got {} and {}".format(costs[0], costs[1410]))
         failed = True
     yesterday = {minute: (55.52 + minute * 0.1 if minute < 1440 else 55.52 + 144.0 + 55.52 + (minute - 1440) * 0.1 + 0.4) for minute in range(0, 1440 + 360 + 1)}
-    costs = my_predbat.history_row_costs(yesterday, 1440 + 360, 55.52)
+    costs = my_predbat.history_row_costs(yesterday, 1440 + 360, 55.52, [24 * 60])
     if abs(costs[1410] - 3.4) > 0.001 or abs(costs[1440] - 3.0) > 0.001:
         print("ERROR: across midnight in the yesterday + today view the 23:30 row should be 3.4p and 00:00 3p, got {} and {}".format(costs[1410], costs[1440]))
         failed = True
-    import_only = my_predbat.history_row_costs(array, 24 * 60, 0.0)
+    import_only = my_predbat.history_row_costs(array, 24 * 60, 0.0, [24 * 60])
     if abs(import_only[1410] - (3.4 + 55.52)) > 0.001:
         print("ERROR: with no standing charge to strip, the row cost is left as it is")
+        failed = True
+    return failed
+
+
+def _iog_rate(my_predbat, when):
+    """IOG-style import rate at a UTC instant: 6.6p 23:30-05:30 local, 36.28p otherwise."""
+    local = when.astimezone(my_predbat.local_tz)
+    minutes = local.hour * 60 + local.minute
+    return 6.6 if (minutes >= 23 * 60 + 30 or minutes < 5 * 60 + 30) else 36.28
+
+
+def _realistic_histories(my_predbat, now_utc, days=10):
+    """Recorder-like histories every 5 minutes: cost_today accrues 0.4 kWh per half-hour at the IOG rate and resets (to the standing charge) at local midnight."""
+    start = (now_utc - timedelta(days=days)).replace(minute=0, second=0, microsecond=0)
+    cost, import_cost, rates, socs = [], [], [], []
+    total = 0.0
+    import_total = 0.0
+    when = start
+    local_day = when.astimezone(my_predbat.local_tz).date()
+    while when <= now_utc:
+        this_day = when.astimezone(my_predbat.local_tz).date()
+        if this_day != local_day:
+            local_day = this_day
+            total = 55.52
+            import_total = 0.0
+        stamp = when.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        cost.append({"state": str(round(total, 4)), "last_updated": stamp, "attributes": {}})
+        import_cost.append({"state": str(round(import_total, 4)), "last_updated": stamp, "attributes": {}})
+        rates.append({"state": str(_iog_rate(my_predbat, when)), "last_updated": stamp, "attributes": {}})
+        socs.append({"state": "5.0", "last_updated": stamp, "attributes": {}})
+        for minute in range(5):
+            total += _iog_rate(my_predbat, when + timedelta(minutes=minute)) * 0.4 / 30.0
+            import_total += _iog_rate(my_predbat, when + timedelta(minutes=minute)) * 0.4 / 30.0
+        when += timedelta(minutes=5)
+    histories = {".cost_today": [cost], ".cost_today_import": [import_cost], ".rates": [rates], ".rates_export": [[dict(point, state="15.0") for point in rates]], ".soc_kw_h0": [socs]}
+    prefix = my_predbat.prefix
+    return lambda entity_id, days=30, required=True, tracked=True: histories.get(entity_id[len(prefix) :] if entity_id.startswith(prefix) else entity_id)
+
+
+def _matching_billing(my_predbat, start_utc, end_utc):
+    """Billing that matches the realistic cost_today exactly: 0.4 kWh per half-hour at the IOG rate."""
+    slots = {}
+    when = start_utc
+    while when < end_utc:
+        rate = _iog_rate(my_predbat, when)
+        slots[when.strftime("%Y-%m-%dT%H:%M:%SZ")] = {"kwh": 0.4, "cost": round(0.4 * rate, 4), "standing": 1.15674, "buckets": {"Rate": {"kwh": 0.4, "cost": round(0.4 * rate, 4)}}}
+        when += timedelta(minutes=30)
+    return {"complete_until": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), "slots": {"import": slots}, "legs": {"import": True, "export": None}, "supplier": "octopus"}
+
+
+def _set_clock(my_predbat, local_now):
+    """Put the base's clock at a local time (pytz-aware), as update_time() does."""
+    now_local = my_predbat.local_tz.localize(local_now)
+    my_predbat.now_utc = now_local
+    my_predbat.midnight_utc = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((now_local - my_predbat.midnight_utc).total_seconds() // 60)
+    return now_local.astimezone(timezone.utc)
+
+
+def _older_clock_change_day(my_predbat, local_now, day, expected_rows):
+    """Build the older days around a clock change and return (failed, rows) for day."""
+    from tests.test_calculate_yesterday import _make_mock_step_data
+
+    _setup_base(my_predbat, minutes_now=360)
+    now_utc = _set_clock(my_predbat, local_now)
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _realistic_histories(my_predbat, now_utc)
+    my_predbat.max_days_previous = 8
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.metric_standing_charge = 55.52
+    my_predbat.history_days_built_for = None
+    my_predbat.history_days_billing_mark = None
+    day_start = my_predbat.local_midnight_utc(day).astimezone(timezone.utc)
+    day_end = my_predbat.local_midnight_utc(day + timedelta(days=1)).astimezone(timezone.utc)
+    my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=0.0, attributes=_matching_billing(my_predbat, day_start, day_end))
+    try:
+        my_predbat.calculate_history_days()
+        days = my_predbat.get_state_wrapper(my_predbat.prefix + ".plan_history", attribute="days") or {}
+    finally:
+        del my_predbat.step_data_history
+        del my_predbat.get_history_wrapper
+        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+    rows = (days.get(day.isoformat()) or {}).get("rows") or []
+    if len(rows) != expected_rows:
+        print("ERROR: {} should have {} rows, got {}".format(day, expected_rows, len(rows)))
+        return True, rows
+    bad = [(row.get("time"), row.get("billing_diff")) for row in rows if row.get("billing_diff") is None or abs(row["billing_diff"]) > 0.01]
+    if bad:
+        print("ERROR: {} billing matches Predbat's cost, so every Diff should be ~0, got {}".format(day, bad[:6]))
+        return True, rows
+    summary = days[day.isoformat()].get("billing_summary") or {}
+    if abs(summary.get("diff", 1)) > 0.02 or summary.get("standing_predbat") != summary.get("standing_billed"):
+        print("ERROR: {} summary should match, got {}".format(day, summary))
+        return True, rows
+    return False, rows
+
+
+def _test_clock_change_older_days(my_predbat, failed):
+    """Older days of 50 and 46 half-hours compare cleanly and are labelled in local time."""
+    from datetime import date
+
+    print("history_days: clock-change older days")
+    autumn_failed, rows = _older_clock_change_day(my_predbat, datetime(2026, 10, 27, 6, 0), date(2026, 10, 25), 50)
+    failed = failed or autumn_failed
+    if rows and (not str(rows[0]["time"]).startswith("2026-10-25T00:00:00+01") or not str(rows[-1]["time"]).startswith("2026-10-25T23:30:00+00")):
+        print("ERROR: 25 Oct rows should run 00:00 BST to 23:30 GMT, got {} to {}".format(rows[0]["time"], rows[-1]["time"]))
+        failed = True
+    spring_failed, rows = _older_clock_change_day(my_predbat, datetime(2026, 3, 31, 6, 0), date(2026, 3, 29), 46)
+    failed = failed or spring_failed
+    if rows and (not str(rows[0]["time"]).startswith("2026-03-29T00:00:00+00") or not str(rows[-1]["time"]).startswith("2026-03-29T23:30:00+01")):
+        print("ERROR: 29 Mar rows should run 00:00 GMT to 23:30 BST, got {} to {}".format(rows[0]["time"], rows[-1]["time"]))
+        failed = True
+    return failed
+
+
+def _test_clock_change_yesterday_view(my_predbat, failed):
+    """The day after the clocks go forward, yesterday + today compares cleanly across the shifted midnight."""
+    print("history_days: clock-change yesterday + today view")
+    _setup_base(my_predbat, minutes_now=360)
+    now_utc = _set_clock(my_predbat, datetime(2026, 3, 30, 6, 0))
+    captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc)
+    my_predbat.get_history_wrapper = _realistic_histories(my_predbat, now_utc)
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.metric_standing_charge = 55.52
+    view_minutes = 24 * 60 + my_predbat.minutes_now
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", {"rows": [{"slot_minute": minute, "cost_change": 0.0} for minute in range(0, view_minutes, 30)]})
+    view_start = (my_predbat.midnight_utc - timedelta(days=1)).astimezone(timezone.utc)
+    my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=0.0, attributes=_matching_billing(my_predbat, view_start, now_utc - timedelta(hours=1)))
+    try:
+        my_predbat.calculate_yesterday()
+        plan = my_predbat.get_state_wrapper(my_predbat.prefix + ".cost_yesterday", attribute="json") or {}
+    finally:
+        _restore_methods(my_predbat, original_run_pred)
+        my_predbat.savings_last_updated = None
+        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+    billed = [row for row in plan.get("rows") or [] if row.get("billed") is not None]
+    bad = [(row["slot_minute"], row.get("billing_diff")) for row in billed if row.get("billing_diff") is None or abs(row["billing_diff"]) > 0.01]
+    if len(billed) < 40 or bad:
+        print("ERROR: across the 29 Mar clock change every billed row should match, got {} billed, mismatches {}".format(len(billed), bad[:6]))
+        failed = True
+    return failed
+
+
+def _test_import_only_when_export_not_read(my_predbat, failed):
+    """With no export billing read at all (no export meter known), the comparison is import-only, never net cost against an import bill."""
+    print("history_days: import-only when export isn't read")
+    _yesterday_billing(my_predbat, {"import": True, "export": None})
+    try:
+        plan = _run_yesterday_with_rows(my_predbat)
+    finally:
+        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+    if (plan.get("billing_summary") or {}).get("import_only") is not True:
+        print("ERROR: export not read should compare import only, got {}".format(plan.get("billing_summary")))
+        failed = True
+    return failed
+
+
+def _test_older_day_needs_cost_history(my_predbat, failed):
+    """An older day that cost_today history doesn't reach is left out rather than shown with 0p Predbat costs."""
+    print("history_days: older days need cost_today history")
+    from tests.test_calculate_yesterday import _make_mock_step_data
+
+    _setup_base(my_predbat, minutes_now=360)
+    now_utc = _set_clock(my_predbat, datetime(2026, 11, 2, 6, 0))
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    full = _realistic_histories(my_predbat, now_utc)
+    short = _realistic_histories(my_predbat, now_utc, days=4)
+    my_predbat.get_history_wrapper = lambda entity_id, days=30, required=True, tracked=True: (short if entity_id.endswith(".cost_today") else full)(entity_id, days, required, tracked)
+    my_predbat.max_days_previous = 8
+    my_predbat.history_days_built_for = None
+    my_predbat.history_days_billing_mark = None
+    try:
+        my_predbat.calculate_history_days()
+        days = my_predbat.get_state_wrapper(my_predbat.prefix + ".plan_history", attribute="days") or {}
+    finally:
+        del my_predbat.step_data_history
+        del my_predbat.get_history_wrapper
+    if sorted(days) != ["2026-10-30", "2026-10-31"]:
+        print("ERROR: cost_today history from 06:00 on 29 Oct covers only 30 and 31 Oct in full, got {}".format(sorted(days)))
         failed = True
     return failed
 
@@ -344,4 +523,8 @@ def run_history_days_tests(my_predbat):
     failed = _test_import_only_when_export_leg_missing(my_predbat, failed)
     failed = _test_history_days_real_replay(my_predbat, failed)
     failed = _test_history_row_costs_strip_next_day_standing(my_predbat, failed)
+    failed = _test_clock_change_older_days(my_predbat, failed)
+    failed = _test_clock_change_yesterday_view(my_predbat, failed)
+    failed = _test_import_only_when_export_not_read(my_predbat, failed)
+    failed = _test_older_day_needs_cost_history(my_predbat, failed)
     return failed
