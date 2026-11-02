@@ -247,7 +247,7 @@ class AxleAPI(ComponentBase):
 
         for attempt in range(max_retries):
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.get(url, headers=headers) as response:
                         if response.status == 200:
                             try:
@@ -293,7 +293,7 @@ class AxleAPI(ComponentBase):
         timeout = aiohttp.ClientTimeout(total=30)
 
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.post(
                     url,
                     data={

@@ -83,7 +83,7 @@ except ImportError:
 
 from datetime import datetime, timedelta, timezone
 from axle import fetch_axle_active
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 
@@ -572,7 +572,7 @@ class SigenergyAPI(ComponentBase):
         for attempt in range(SIGENERGY_MAX_RETRIES):
             try:
                 timeout = aiohttp.ClientTimeout(total=SIGENERGY_TIMEOUT)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.post(url, json=payload) as response:
                         if response.status != 200:
                             self.log("Warn: SigenergyAPI: Auth request returned HTTP {} (attempt {}/{})".format(response.status, attempt + 1, SIGENERGY_MAX_RETRIES))
@@ -665,7 +665,7 @@ class SigenergyAPI(ComponentBase):
             await self._enforce_rate_limit()
             try:
                 timeout = aiohttp.ClientTimeout(total=SIGENERGY_TIMEOUT)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     if method == "GET":
                         ctx = session.get(url, headers=headers, params=params)
                     elif method == "POST":
@@ -1206,6 +1206,7 @@ class SigenergyAPI(ComponentBase):
     # Control commands
     # -----------------------------------------------------------------------
 
+    @writes
     async def set_operating_mode(self, system_id, mode_int):
         """Set the energy storage operating mode via MQTT (V1 endpoint).
 
@@ -1242,6 +1243,7 @@ class SigenergyAPI(ComponentBase):
         self.log("SigenergyAPI: Operating mode set to {} ({}) for system {}".format(mode_name, mode_int, system_id))
         return True
 
+    @writes
     async def onboard_systems(self, system_ids):
         """Onboard one or more systems into the Sigenergy platform.
 
@@ -1304,6 +1306,7 @@ class SigenergyAPI(ComponentBase):
         self.log("SigenergyAPI: Onboard accepted for {}: {}".format(system_ids, result))
         return True
 
+    @writes
     async def offboard_systems(self, system_ids):
         """Offboard (remove) one or more systems from the Sigenergy platform.
 
@@ -1381,6 +1384,7 @@ class SigenergyAPI(ComponentBase):
             return [SigenergyAPI.redact(value) for value in payload]
         return payload
 
+    @writes
     async def _publish_mqtt(self, topic, payload_dict):
         """Publish a JSON payload to the Sigenergy MQTT broker.
 
@@ -1414,6 +1418,7 @@ class SigenergyAPI(ComponentBase):
             self.log("Warn: SigenergyAPI: MQTT publish to {} failed: {}".format(topic, e))
             return False
 
+    @writes
     async def send_battery_command(
         self,
         system_id,
@@ -1531,6 +1536,7 @@ class SigenergyAPI(ComponentBase):
             command["dischargePriorityType"] = discharge_priority_type
         return command
 
+    @writes
     async def mqtt_command_probe(self, system_ids, active_mode=SIGENERGY_ACTIVE_MODE_SELF, duration_minutes=5, charging_power_kw=None, listen_seconds=60, try_v5=True):
         """Check end to end that the MQTT broker still accepts battery commands and pushes data.
 
@@ -2746,6 +2752,7 @@ class SigenergyAPI(ComponentBase):
             return not current
         return current
 
+    @writes
     async def _update_control(self, entity_id, value, direction, field, system_id):
         """Apply a single control update and re-publish."""
         if system_id not in self.controls:
@@ -2826,18 +2833,21 @@ class SigenergyAPI(ComponentBase):
 
         return None, None, None
 
+    @writes
     async def select_event(self, entity_id, value):
         """Handle a HA select change event."""
         system_id, direction, field = self._parse_entity_system(entity_id)
         if system_id:
             await self._update_control(entity_id, value, direction, field, system_id)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a HA number change event."""
         system_id, direction, field = self._parse_entity_system(entity_id)
         if system_id:
             await self._update_control(entity_id, value, direction, field, system_id)
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a HA switch service call event."""
         system_id, direction, field = self._parse_entity_system(entity_id)
@@ -2848,6 +2858,7 @@ class SigenergyAPI(ComponentBase):
     # Control application
     # -----------------------------------------------------------------------
 
+    @writes
     async def apply_controls(self, system_id):
         """Compute and apply the charge/discharge/eco command for a system.
 
@@ -3025,6 +3036,7 @@ class SigenergyAPI(ComponentBase):
             return False
         return fetch_axle_active(self)
 
+    @writes
     async def _exit_vpp_for_offboard(self, system_id):
         """Leave VPP mode so the owner's app regains control of an offboarded system.
 
@@ -3067,6 +3079,7 @@ class SigenergyAPI(ComponentBase):
             self._offboard_vpp_exit_done.add(system_id)
         return True
 
+    @writes
     async def _offboard_system_if_needed(self, system_id):
         """Take a system out of VPP and then off the platform, in that order.
 
@@ -3098,6 +3111,7 @@ class SigenergyAPI(ComponentBase):
         self._publish_onboard_status()
         return True
 
+    @writes
     async def _manage_vpp_registration(self, system_id, is_readonly, is_offboard=False):
         """Align the operating mode with the read-only and offboard switch settings.
 

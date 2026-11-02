@@ -22,6 +22,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
 from utils import minutes_since_midnight
+import aiohttp
 import asyncio
 import time
 import traceback
@@ -32,6 +33,51 @@ import traceback
 # bounded by a monotonic deadline rather than by counting ticks, so `timeout` stays honest in
 # seconds however often the flag is checked.
 API_START_POLL_SECONDS = 0.1
+
+# Factory new_http_session() calls in place of aiohttp.ClientSession, or None for the default.
+# Set it with set_http_session_factory().
+_http_session_factory = None
+
+
+def set_http_session_factory(factory):
+    """Install the factory that new_http_session() (and so ComponentBase.http_session()) uses.
+
+    The factory is called with the same keyword arguments as aiohttp.ClientSession and must return
+    an object used the same way: an async context manager with close() and a closed attribute. The caller owns what it
+    returns and closes it exactly as it closes its own session today, so a factory that shares one
+    connection pool between components should hand out sessions that do not own the pool (for
+    example aiohttp.ClientSession(connector=shared, connector_owner=False)). Tests can use it to
+    give every component a fake session.
+
+    Pass None to restore the default, a new aiohttp.ClientSession per call.
+    """
+    global _http_session_factory
+    _http_session_factory = factory
+
+
+def new_http_session(**kwargs):
+    """Return a new HTTP session for the caller to own and close.
+
+    By default this is aiohttp.ClientSession(**kwargs), looked up when called so that code patching
+    aiohttp.ClientSession still takes effect. A factory installed with set_http_session_factory()
+    is used instead when set. For code outside a component (mixins, API clients a component owns);
+    components call self.http_session().
+    """
+    factory = _http_session_factory
+    if factory is None:
+        return aiohttp.ClientSession(**kwargs)
+    return factory(**kwargs)
+
+
+def writes(func):
+    """Mark a component method as one that sends a write to the device or vendor.
+
+    Only sets an attribute; the method itself is returned unchanged and behaves exactly as before.
+    ComponentBase.write_methods() lists the marked methods, so tests and hosts can see which
+    methods change device or account state without reading their code.
+    """
+    func.__predbat_writes__ = True
+    return func
 
 
 class ComponentBase(ABC):
@@ -102,6 +148,27 @@ class ComponentBase(ABC):
         required during initialisation.
         """
         pass
+
+    def http_session(self, **kwargs):
+        """Return a new HTTP session for this component to own and close.
+
+        Takes the same keyword arguments as aiohttp.ClientSession (timeout, headers and so on) and,
+        by default, returns aiohttp.ClientSession(**kwargs). See set_http_session_factory() for how a
+        host or a test supplies the sessions instead.
+        """
+        return new_http_session(**kwargs)
+
+    @classmethod
+    def write_methods(cls):
+        """Return the sorted names of this class's methods marked with @writes.
+
+        An override is judged on its own: overriding a marked method without @writes unmarks it.
+        """
+        names = []
+        for name in dir(cls):
+            if getattr(getattr(cls, name, None), "__predbat_writes__", False):
+                names.append(name)
+        return sorted(names)
 
     def dashboard_item(self, entity, state, attributes, app=None):
         """

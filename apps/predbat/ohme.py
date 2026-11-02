@@ -26,7 +26,7 @@ import time
 from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA, DISPATCH_SOURCE_CHARGER_SCHEDULE
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session
 from coordinator import car_record, charger_record
 from car_charger_control import CarChargerControl, parse_control_setting
 from predbat_metrics import record_api_call
@@ -1262,7 +1262,7 @@ class OhmeApiClient:
     async def async_login(self) -> bool:
         """Refresh the user auth token from the stored credentials."""
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = new_http_session()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):
@@ -1294,7 +1294,7 @@ class OhmeApiClient:
             return True
 
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = new_http_session()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):
@@ -1342,7 +1342,7 @@ class OhmeApiClient:
         await self._async_refresh_session()
 
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = new_http_session()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):

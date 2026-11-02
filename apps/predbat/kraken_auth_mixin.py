@@ -19,6 +19,7 @@ import asyncio
 import json
 from datetime import datetime, timezone, timedelta
 from utils import Backoff, is_edge_block_body, is_kraken_rate_limit_error, parse_retry_after, TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS
+from component_base import new_http_session
 
 # Longest token-error summary written to the log, so one odd response cannot flood it
 TOKEN_ERROR_SUMMARY_MAX_CHARS = 300
@@ -227,7 +228,7 @@ class KrakenAuthMixin:
         secrets = [str(value) for value in input_vars.values() if value]
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with new_http_session(timeout=timeout) as session:
                 async with session.post(
                     url,
                     json={"query": mutation, "variables": {"input": input_vars}},

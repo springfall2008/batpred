@@ -1229,7 +1229,7 @@ class ChatAgent(ComponentBase):
         native = bool(self.provider.get("ollama_details"))
         url = ollama_native_url(self.base_url, "/api/tags") if native else "{}/models".format(self.base_url)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url, headers=headers) as response:
                     if response.status in (401, 403):
                         self.catalogue_error = "{} rejected the API key (HTTP {})".format(self.base_url, response.status)
@@ -1311,7 +1311,7 @@ class ChatAgent(ComponentBase):
         catalogue_url = ollama_native_url(base_url, "/api/tags") if native else "{}/models".format(base_url)
         timeout = aiohttp.ClientTimeout(total=PROBE_TIMEOUT_SECONDS)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(catalogue_url, headers=model_catalogue_headers(api_key)) as response:
                     if response.status in (401, 403):
                         return None, "{} rejected the API key (HTTP {})".format(base_url, response.status)
@@ -1393,7 +1393,7 @@ class ChatAgent(ComponentBase):
         detailed = []
         timeout = aiohttp.ClientTimeout(total=OLLAMA_DETAIL_TIMEOUT_SECONDS)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 # Only a locally loaded model can have been capped, so a catalogue with nothing
                 # local in it has nothing /api/ps could override. Ollama Cloud refuses that
                 # endpoint anyway - 401 with or without a key, because "loaded" is a local-server
@@ -1466,7 +1466,7 @@ class ChatAgent(ComponentBase):
         """
         headers = {"Authorization": "Bearer {}".format(self.api_key), "Content-Type": "application/json", "HTTP-Referer": "https://springfall2008.github.io/batpred/", "X-Title": "Predbat"}
         timeout = aiohttp.ClientTimeout(total=self.request_timeout)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with self.http_session(timeout=timeout) as session:
             async with session.post("{}/chat/completions".format(self.base_url), headers=headers, json=payload) as response:
                 if response.status != 200:
                     body = await response.text()

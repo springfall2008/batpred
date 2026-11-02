@@ -17,8 +17,13 @@ from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from component_base import ComponentBase
+import aiohttp
+
+from component_base import ComponentBase, new_http_session, set_http_session_factory, writes
 from coordinator import inverter_record
+from fox import FoxAPI
+from solis import SolisAPI
+from teslemetry import TeslemetryAPI
 
 
 # Save original sleep before any patching
@@ -841,6 +846,138 @@ def test_component_base_request_replan(my_predbat):
     return False
 
 
+def test_component_base_http_session_default(my_predbat):
+    """
+    With no factory installed, http_session() returns a new aiohttp.ClientSession built from the
+    caller's kwargs, which the caller owns and closes - exactly what each component did itself.
+    """
+    print("\n*** Test: ComponentBase.http_session defaults to a new aiohttp.ClientSession ***")
+    component = TestComponent(MockBase())
+
+    async def build():
+        timeout = aiohttp.ClientTimeout(total=12)
+        first = component.http_session(timeout=timeout, headers={"X-Test": "1"})
+        second = component.http_session()
+        try:
+            assert isinstance(first, aiohttp.ClientSession), "default http_session should be an aiohttp.ClientSession, got {}".format(type(first))
+            assert first is not second, "each call should return a new session"
+            assert first.timeout.total == 12, "timeout kwarg should reach the session"
+            assert first.headers.get("X-Test") == "1", "headers kwarg should reach the session"
+        finally:
+            await first.close()
+            await second.close()
+        assert first.closed, "the caller closes the session it was given"
+
+    asyncio.run(build())
+
+    # Code that patches aiohttp.ClientSession (as many component tests do) must still take effect
+    with patch("aiohttp.ClientSession", return_value="patched") as mock_session:
+        assert component.http_session(timeout="t") == "patched", "a patched aiohttp.ClientSession should still be used"
+        mock_session.assert_called_once_with(timeout="t")
+    print("PASS: http_session returns a caller-owned aiohttp.ClientSession by default")
+    return False
+
+
+def test_component_base_http_session_factory(my_predbat):
+    """
+    A factory installed with set_http_session_factory() is used by every component's http_session()
+    and by new_http_session() (mixins and API clients), with the caller's kwargs passed through.
+    None restores the default.
+    """
+    print("\n*** Test: an installed HTTP session factory is used ***")
+    calls = []
+    sentinel = object()
+
+    def factory(**kwargs):
+        calls.append(kwargs)
+        return sentinel
+
+    component = TestComponent(MockBase())
+    set_http_session_factory(factory)
+    try:
+        with patch("aiohttp.ClientSession", side_effect=AssertionError("default session must not be built while a factory is set")):
+            assert component.http_session(timeout="t", headers={"a": "b"}) is sentinel, "http_session should return the factory's session"
+            assert new_http_session(skip_auto_headers=["User-Agent"]) is sentinel, "new_http_session should return the factory's session"
+            # A real component, built without __init__ as the component tests do, gets it too
+            fox = FoxAPI.__new__(FoxAPI)
+            assert fox.http_session() is sentinel, "a component subclass should use the factory"
+    finally:
+        set_http_session_factory(None)
+
+    assert calls == [{"timeout": "t", "headers": {"a": "b"}}, {"skip_auto_headers": ["User-Agent"]}, {}], "kwargs should pass through unchanged, got {}".format(calls)
+    with patch("aiohttp.ClientSession", return_value="default") as mock_session:
+        assert component.http_session() == "default", "set_http_session_factory(None) should restore the default"
+        mock_session.assert_called_once_with()
+    print("PASS: the installed factory is used, and None restores the default")
+    return False
+
+
+def test_component_base_write_methods(my_predbat):
+    """
+    @writes only marks a method: it returns the same function, which behaves exactly as before.
+    write_methods() lists exactly the marked methods, inherited ones included, and an unmarked
+    override unmarks a method.
+    """
+    print("\n*** Test: @writes marks methods and write_methods lists exactly those ***")
+
+    def plain(self):
+        return "result"
+
+    assert writes(plain) is plain, "@writes should return the same function"
+    assert plain(None) == "result", "a marked method should behave exactly as before"
+
+    class Writer(TestComponent):
+        @writes
+        async def set_mode(self, mode):
+            return mode
+
+        @writes
+        def set_reserve(self, value):
+            return value
+
+        def read_status(self):
+            return "status"
+
+    class Child(Writer):
+        def set_reserve(self, value):
+            """Overridden without @writes, so no longer listed."""
+            return value
+
+        @writes
+        def set_rate(self, value):
+            return value
+
+    assert TestComponent.write_methods() == [], "a component with no marked methods lists none, got {}".format(TestComponent.write_methods())
+    assert Writer.write_methods() == ["set_mode", "set_reserve"], "got {}".format(Writer.write_methods())
+    assert Child.write_methods() == ["set_mode", "set_rate"], "got {}".format(Child.write_methods())
+    writer = Writer(MockBase())
+    assert writer.write_methods() == ["set_mode", "set_reserve"], "write_methods should work on an instance too"
+    assert asyncio.run(writer.set_mode("eco")) == "eco", "a marked coroutine should still be awaitable and return its value"
+    print("PASS: @writes marks, write_methods lists exactly the marked methods")
+    return False
+
+
+def test_component_base_write_methods_components(my_predbat):
+    """
+    Spot check real components: a method that sends a control write is listed, a known read is not.
+    """
+    print("\n*** Test: component writer methods are listed and readers are not ***")
+    cases = [
+        (FoxAPI, ["set_device_setting", "set_scheduler", "set_battery_charging_time"], ["get_device_setting", "get_scheduler", "get_real_time_data", "run"]),
+        (SolisAPI, ["write_cid", "read_and_write_cid", "write_time_windows_if_changed"], ["read_cid", "read_batch", "get_inverter_detail", "run"]),
+        (TeslemetryAPI, ["set_operation_mode", "set_backup_reserve", "set_tariff"], ["run", "publish_site_info"]),
+    ]
+    for cls, writers, readers in cases:
+        listed = cls.write_methods()
+        for name in writers:
+            assert name in listed, "{}.{} sends a write and should be listed".format(cls.__name__, name)
+        for name in readers:
+            assert hasattr(cls, name), "{}.{} should exist for this check to mean anything".format(cls.__name__, name)
+            assert name not in listed, "{}.{} only reads and should not be listed".format(cls.__name__, name)
+    print("PASS: writer methods listed, readers not")
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -866,6 +1003,10 @@ def test_component_base_all(my_predbat):
         ("discovery_refresh_live_state", test_component_base_refresh_discovery_refiles_when_live_state_behind_inverter_record_grows, "a report built from live state is re-filed when that state grows"),
         ("discovery_entities_filter", test_component_base_discovery_entities_keeps_only_what_exists, "discovery_entities keeps only entities that exist"),
         ("request_replan", test_component_base_request_replan, "request_replan sets update_pending without invalidating the plan"),
+        ("http_session_default", test_component_base_http_session_default, "http_session defaults to a new caller-owned aiohttp.ClientSession"),
+        ("http_session_factory", test_component_base_http_session_factory, "an installed HTTP session factory is used, None restores the default"),
+        ("write_methods", test_component_base_write_methods, "@writes marks a method and write_methods lists exactly the marked ones"),
+        ("write_methods_components", test_component_base_write_methods_components, "component writer methods are listed and readers are not"),
     ]
 
     failed = []

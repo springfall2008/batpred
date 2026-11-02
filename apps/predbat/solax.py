@@ -23,7 +23,7 @@ import argparse
 import traceback
 from math import isfinite
 from datetime import datetime, timezone, timedelta
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from mock_base import MockBase as SharedMockBase
 
 SOLAX_TIMEOUT = 20
@@ -894,6 +894,7 @@ class SolaxAPI(ComponentBase):
             current_value = not current_value
         return current_value
 
+    @writes
     async def apply_controls(self, plant_id):
         """
         Apply control settings to the plant
@@ -1244,7 +1245,7 @@ class SolaxAPI(ComponentBase):
 
         try:
             timeout = aiohttp.ClientTimeout(total=SOLAX_TIMEOUT)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.post(url, json=payload) as response:
                     status = response.status
                     try:
@@ -1352,7 +1353,7 @@ class SolaxAPI(ComponentBase):
 
         # Make request
         timeout = aiohttp.ClientTimeout(total=SOLAX_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with self.http_session(timeout=timeout) as session:
             if post:
                 async with session.post(url, headers=headers, json=json_data) as response:
                     status = response.status
@@ -2066,6 +2067,7 @@ class SolaxAPI(ComponentBase):
 
         return status
 
+    @writes
     async def send_command_and_wait(self, endpoint, payload, command_name, sn_list):
         """
         Send a control command and wait for execution result
@@ -2132,6 +2134,7 @@ class SolaxAPI(ComponentBase):
         self.log(f"Warn: SolaX API: Command issuance failed or device offline {sn} status {status} : {status_desc}")
         return False
 
+    @writes
     async def positive_or_negative_mode(self, sn, battery_power, time_of_duration, next_motion=SOLAX_NEXT_MOTION_SELF_CONSUME,
                                         business_type=None):
         """
@@ -2170,6 +2173,7 @@ class SolaxAPI(ComponentBase):
         # Send command and wait for result
         return await self.send_command_and_wait(endpoint, payload, "positive/negative", sn)
 
+    @writes
     async def self_consume_mode(self, sn_list, time_of_duration, next_motion=SOLAX_NEXT_MOTION_SELF_CONSUME,
                                 business_type=None):
         """
@@ -2207,6 +2211,7 @@ class SolaxAPI(ComponentBase):
         # Send command and wait for result
         return await self.send_command_and_wait(endpoint, payload, "self-consume", sn_list)
 
+    @writes
     async def self_consume_charge_only_mode(self, sn_list, time_of_duration, next_motion=SOLAX_NEXT_MOTION_SELF_CONSUME,
                                             business_type=None):
         """
@@ -2245,6 +2250,7 @@ class SolaxAPI(ComponentBase):
         # Send command and wait for result
         return await self.send_command_and_wait(endpoint, payload, "self-consume-charge-only", sn_list)
 
+    @writes
     async def exit_vpp_mode(self, sn_list, business_type=None):
         """
         Exit remote control mode
@@ -2274,6 +2280,7 @@ class SolaxAPI(ComponentBase):
         # Send command and wait for result
         return await self.send_command_and_wait(endpoint, payload, "exit-vpp-mode", sn_list)
 
+    @writes
     async def set_default_work_mode(self, sn_list, business_type=None, mode="selfuse", min_soc=SOLAX_MIN_RESERVE_PERCENT):
         """
         Set the inverter default work mode, the battery holds at min_soc and charges from PV only
@@ -2295,6 +2302,7 @@ class SolaxAPI(ComponentBase):
             self.log(f"Warn: SolaX API: Failed to set default work mode to {mode} min_soc {min_soc} for device {sn_list}")
         return success
 
+    @writes
     async def set_work_mode(self, mode, sn_list, min_soc, charge_upper_soc, charge_from_grid_enable,
                             charge_start_time, charge_end_time,
                             discharge_start_time, discharge_end_time,
@@ -2372,6 +2380,7 @@ class SolaxAPI(ComponentBase):
         # Send command and wait for result
         return await self.send_command_and_wait(endpoint, payload, mode, sn_list)
 
+    @writes
     async def soc_target_control_mode(self, sn_list, target_soc, charge_discharge_power,
                                       business_type=None):
         """

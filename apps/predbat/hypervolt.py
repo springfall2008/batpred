@@ -34,7 +34,7 @@ from typing import Callable, Optional
 import aiohttp
 
 from car_charger_control import CarChargerControl, parse_control_setting
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session
 from coordinator import charger_with_stub_car
 from predbat_metrics import record_api_call
 
@@ -413,7 +413,7 @@ class HypervoltTransport:
     async def _call(self, method, url, headers=None, data=None):
         """Perform one HTTP request and return (status, decoded JSON or None)."""
         try:
-            async with aiohttp.ClientSession() as session:
+            async with new_http_session() as session:
                 async with session.request(method, url, headers=headers or {}, data=data, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
                     status = response.status
                     try:
@@ -636,7 +636,7 @@ class HypervoltTransport:
                 await self.sleep(backoff.next())
                 continue
             try:
-                async with aiohttp.ClientSession() as session:
+                async with new_http_session() as session:
                     async with session.ws_connect(url, headers={"Origin": HYPERVOLT_ORIGIN, "User-Agent": USER_AGENT}, heartbeat=WS_HEARTBEAT_SECONDS) as socket:
                         record_api_call("hypervolt", success=True)
                         await self._read_socket(link, kind, socket, token, backoff)

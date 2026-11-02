@@ -198,7 +198,7 @@ class SolarAPI(ComponentBase):
         self.log("SolarAPI: Fetching {}".format(url))
         try:
             timeout = aiohttp.ClientTimeout(total=60)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url, params=params) as response:
                     status_code = response.status
 

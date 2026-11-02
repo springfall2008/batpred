@@ -51,7 +51,7 @@ from utils import (
     GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
     strptime_aware,
 )
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session
 from mock_base import MockBase as SharedMockBase
 import aiohttp
 import hashlib
@@ -543,7 +543,7 @@ class OctopusEnergyApiClient:
         if self.session is not None:
             return self.session
 
-        self.session = aiohttp.ClientSession(headers=self.default_headers, skip_auto_headers=["User-Agent"])
+        self.session = new_http_session(headers=self.default_headers, skip_auto_headers=["User-Agent"])
         return self.session
 
 
@@ -2189,7 +2189,7 @@ class OctopusAPI(ComponentBase):
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=20)
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}) as response:
                         if response.status not in [200, 201]:
                             self.failures_total += 1

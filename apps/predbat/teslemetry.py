@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 
 import aiohttp
 
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 
@@ -242,7 +242,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         timeout = aiohttp.ClientTimeout(total=TESLEMETRY_TIMEOUT)
         for attempt in range(TESLEMETRY_RETRIES):
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.request(method, url, headers=headers, json=json_body) as resp:
                         if resp.status == 401 and self.auth_method == "oauth" and not _retry_after_refresh:
                             # Force one token refresh and retry the request with the new access token.
@@ -849,6 +849,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             )
         self.dashboard_item(self.entity("schedule_write", domain="switch"), "off", {"friendly_name": "Powerwall Schedule Write", "icon": "mdi:content-save-outline"}, app="teslemetry")
 
+    @writes
     async def apply_schedule(self):
         """Commit the pending schedule atomically, persist it, and assert the device state immediately rather than waiting up to 60s for the next run cycle."""
         self.schedule = copy.deepcopy(self.pending_schedule)
@@ -886,6 +887,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         now = datetime.now(timezone.utc).astimezone(getattr(self, "local_tz", None) or timezone.utc)
         return now.hour * 60 + now.minute
 
+    @writes
     async def assert_device_state(self, desired, force=False):
         """Assert the desired device tuple (export rule, grid charging, reserve, mode); tariff is synced separately.
 
@@ -982,6 +984,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.log("Info: Teslemetry setting {} {} ({})".format(hybrid_entity, "on" if hybrid else "off", reason))
         await self.set_state_external(hybrid_entity, hybrid)
 
+    @writes
     async def schedule_event(self, entity_id, value):
         """Stage a schedule entity write into pending_schedule; the write switch commits it.
 
@@ -1034,6 +1037,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return
         self.publish_schedule_entities()
 
+    @writes
     async def _command(self, path, body):
         """POST a command; return True only if both the transport and the application layer succeeded.
 
@@ -1093,10 +1097,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             self._last_sent[key] = signature
         return ok
 
+    @writes
     async def set_operation_mode(self, mode, force=False):
         """Set the Powerwall operation mode (self_consumption/autonomous/backup), deduped on write-on-change."""
         return await self._apply_command("operation_mode", mode, lambda: self._command("operation", {"default_real_mode": mode}), force=force)
 
+    @writes
     async def set_backup_reserve(self, percent, force=False):
         """Set the backup reserve percentage, deduped on write-on-change.
 
@@ -1109,14 +1115,17 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         percent = int(percent)
         return await self._apply_command("backup_reserve", percent, lambda: self._command("backup", {"backup_reserve_percent": percent}), force=force)
 
+    @writes
     async def set_grid_charging(self, allow, force=False):
         """Allow or disallow charging the battery from the grid, deduped on write-on-change."""
         return await self._apply_command("grid_charging", bool(allow), lambda: self._command("grid_import_export", {"disallow_charge_from_grid_with_solar_installed": not allow}), force=force)
 
+    @writes
     async def set_export_rule(self, rule, force=False):
         """Set the grid export rule (never/pv_only/battery_ok), deduped on write-on-change."""
         return await self._apply_command("export_rule", rule, lambda: self._command("grid_import_export", {"customer_preferred_export_rule": rule}), force=force)
 
+    @writes
     async def set_grid_import_export(self, export_rule, grid_charging, force=False):
         """Assert the export rule and grid-charging flag together in a SINGLE grid_import_export POST.
 
@@ -1546,6 +1555,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             **common,
         }
 
+    @writes
     async def set_tariff(self, tariff, force=False):
         """Push a prebuilt tariff via time_of_use_settings, deduped on the serialised tou_settings body.
 
@@ -1562,6 +1572,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         signature = json.dumps(body, sort_keys=True)
         return await self._apply_command("tariff", signature, lambda: self._command("time_of_use_settings", {"tou_settings": body}), force=force)
 
+    @writes
     async def sync_tariff(self):
         """Build the tariff from current rates + committed discharge window and push it (deduped).
 
@@ -1592,6 +1603,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return False
         return bool(self.get_arg("set_read_only", False))
 
+    @writes
     async def select_event(self, entity_id, value):
         """Handle select changes routed from the service-hook loopback."""
         if "_schedule_" in entity_id:
@@ -1610,6 +1622,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         else:
             self.log("Warn: Teslemetry command failed for {} = {} (state not updated)".format(entity_id, value))
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle number changes routed from the service-hook loopback.
 
@@ -1632,6 +1645,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         else:
             self.log("Warn: Teslemetry unhandled number_event {} = {}".format(entity_id, value))
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle switch service calls routed from the service-hook loopback."""
         if "_schedule_" in entity_id:

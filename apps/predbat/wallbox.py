@@ -32,7 +32,7 @@ from typing import Optional
 
 import aiohttp
 
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session
 from coordinator import charger_with_stub_car
 from mock_base import MockBase
 from predbat_metrics import record_api_call
@@ -325,7 +325,7 @@ class WallboxTransport:
                 bad credentials, and an empty response body is accepted.
         """
         try:
-            async with aiohttp.ClientSession() as session:
+            async with new_http_session() as session:
                 async with session.request(method, url, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
                     status = response.status
                     if status == 429:

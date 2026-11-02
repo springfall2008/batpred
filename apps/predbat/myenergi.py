@@ -32,7 +32,7 @@ from typing import Optional
 
 import aiohttp
 
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session
 from coordinator import charger_with_stub_car
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -412,7 +412,7 @@ class MyEnergiDirectTransport(MyEnergiTransport):
         if not digest_auth_available():
             raise MyEnergiApiError(AIOHTTP_DIGEST_REQUIRED.format(getattr(aiohttp, "__version__", "unknown")))
         digest = aiohttp.DigestAuthMiddleware(self.hub_serial, self.api_key)
-        return aiohttp.ClientSession(middlewares=(digest,), headers={"User-Agent": USER_AGENT})
+        return new_http_session(middlewares=(digest,), headers={"User-Agent": USER_AGENT})
 
     def _update_asn(self, headers):
         """Follow the active server named by the X_MYENERGI-asn response header."""
@@ -621,7 +621,7 @@ class MyEnergiCloudTransport(MyEnergiTransport):
         """Perform one cloud API request and return the decoded JSON body."""
         url = MYENERGI_CLOUD_URL + path
         try:
-            async with aiohttp.ClientSession(headers=self._headers()) as session:
+            async with new_http_session(headers=self._headers()) as session:
                 async with session.request(method, url, json=body, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
                     if response.status == 401:
                         record_api_call("myenergi", success=False, reason="auth_error")
