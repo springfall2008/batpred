@@ -83,7 +83,7 @@ Nothing else is built until this is done. It settles the facts the parser depend
 - Modify: `apps/predbat/unit_test.py`: import and register `("billing", run_billing_tests, "Octopus/Kraken billing parser, cache, sensor and History attach", False)`
 
 **Interfaces:**
-- Consumes: fixtures from Task 1.
+- Consumes: `tests/billing_fixture.json` from Task 1 (keys `octopus_iog_import_2026_10_31`, `octopus_iog_import_2026_10_25`, `octopus_export_2026_10_31`).
 - Produces (all in `billing.py`):
   - `BILLING_DAYS = 7`, `BILLING_REFRESH_MINUTES = 180`, `BILLING_ENTITY_SUFFIX = "billing"`
   - `parse_measurements(response_data: dict | None) -> dict[str, dict] | None`: keyed by slot start as `"%Y-%m-%dT%H:%M:%SZ"` UTC. Each value is `{"kwh": float, "cost": float, "standing": float, "buckets": {label: {"kwh": float, "cost": float}}}` in pence. Returns `None` if `response_data` is `None` (a failed read), and `{}` for a read with zero edges.
@@ -93,7 +93,8 @@ Nothing else is built until this is done. It settles the facts the parser depend
   - `build_billing_sensor(cache: dict, legs: dict, supplier: str, now_utc: datetime, tz) -> tuple[float | None, dict]`: returns `(state, attributes)`.
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_billing.py`:
-  - `test_parse_iog_buckets`: parse `OCTOPUS_IOG_IMPORT_DAY`. Assert 48 slots; for every slot, `abs(sum(b["kwh"]) - kwh) < 0.01` and `cost == sum(b["cost"])`; the standing charge appears in exactly one slot's `standing` and in no `buckets`; labels are exactly the set found in the fixture (no hard-coded names in `billing.py`).
+  - `test_parse_iog_buckets`: parse `OCTOPUS_IOG_IMPORT_DAY`. Assert 48 slots; for every slot, `abs(sum(b["kwh"]) - kwh) < 0.01` and `cost == sum(b["cost"])`; every slot's `standing` is 1.15674 and the day's standing sums to 55.52 (± 0.01), with no standing in `buckets`; labels are exactly the set found in the fixture (no hard-coded names in `billing.py`).
+  - `test_parse_export_generation`: parse `octopus_export_2026_10_31`. 48 slots; the 18:00Z slot has one bucket `GENERATION` with kWh 1.417 and cost 44.86; the day sums to 5.363 kWh and 168.92p.
   - `test_parse_unknown_labels`: a synthetic node whose statistics are labelled `"Zebra"` and `"Yak"` gives buckets `{"Zebra": …, "Yak": …}`.
   - `test_parse_bucket_mismatch_drops_slot`: a node with `value` 1.0 whose buckets sum to 2.0 is left out of the result (an untrusted slot).
   - `test_parse_none_vs_empty`: `parse_measurements(None) is None`; `parse_measurements({"account": {"properties": [{"measurements": {"edges": []}}]}}) == {}`.
@@ -103,7 +104,7 @@ Nothing else is built until this is done. It settles the facts the parser depend
   - `test_sensor_shape`: from a cache holding a complete 1 Nov (import and export) and a partial 2 Nov, `build_billing_sensor` returns `state` equal to 1 Nov's net energy cost in pence. Attributes include `supplier`, `legs` (`{"import": True, "export": True}`), `complete_until` (ISO UTC end of the last contiguous published import slot), `slots` (`{"import": {...}, "export": {...}}`), and `days` (`{"2026-11-01": {"complete": True, "import_cost", "export_cost", "standing", "import_kwh", "export_kwh", "buckets": {label: {"kwh", "cost"}}}}`), plus `friendly_name`, `unit_of_measurement` `"p"` and `icon` `"mdi:receipt-text"`.
   - `test_sensor_no_data`: an empty cache gives `state is None`.
 - [ ] **Step 2: Run** `cd coverage && ./run_all --test billing > /tmp/billing.txt 2>&1; grep -n "ERROR\|FAIL\|passed" /tmp/billing.txt`. Expected: import error (module missing).
-- [ ] **Step 3: Implement the functions** in `billing.py` with the signatures above. A statistic with kWh > 0 is a bucket, keyed by `label` (falling back to `type` when there's no label). A statistic with kWh 0/None and cost ≠ 0 is standing charge. Ignore statistics with zero kWh and zero cost. Cost is `costInclTax.estimatedAmount`, scaled to pence per Task 1. A slot is complete for a day only when every start from `day_slot_starts` is present.
+- [ ] **Step 3: Implement the functions** in `billing.py` with the signatures above. Classify statistics by their `type` enum (verified in Task 1): `STANDING_CHARGE_COST` is standing charge; any other type is a bucket keyed by `label` (falling back to `type`). A bucket's kWh is its own `value`, or the node's `value` when it is `null` and it is the only non-standing statistic (export's `GENERATION_VALUE`). Drop buckets with zero kWh and zero cost. Cost is `costInclTax.estimatedAmount`, already in pence. A slot is complete for a day only when every start from `day_slot_starts` is present.
 - [ ] **Step 4: Run the tests.** Expected: all pass.
 - [ ] **Step 5: Commit** `git commit -m "feat(billing): parse Kraken measurements into a 7-day half-hour billing cache"`
 
@@ -129,7 +130,7 @@ Nothing else is built until this is done. It settles the facts the parser depend
   - `test_reader_restart_restores_cache`: (Review Focus 5) save via a fake Storage, construct a new reader, `load()`. `due()` is False when `fetched_at` was 10 minutes ago, and the slots are restored.
   - `test_octopus_run_publishes_billing`: drive `OctopusAPI.run()` with the test infra's mocked GraphQL (as the existing Octopus tests do) returning the Task 1 fixture. Assert `predbat.billing` was published, and that the import query used `tariffs["import"]["mpan"]` and no other MPAN.
 - [ ] **Step 2: Run** `./run_all --test billing > /tmp/billing.txt 2>&1` and grep. Expected: the new tests FAIL.
-- [ ] **Step 3: Implement `BillingReader`.** Query one local day per request (`first` = 50), using `MEASUREMENTS_QUERY` with `frequency="THIRTY_MIN_INTERVAL"`. Store under Storage `(storage_app, storage_name)` with a 14-day expiry, saving `{"slots": ..., "legs": ..., "fetched_at": ISO}`.
+- [ ] **Step 3: Implement `BillingReader`.** Query one local day per request (`first` = 50), using `billing.BILLING_MEASUREMENTS_QUERY` (the `MEASUREMENTS_QUERY` shape plus `readingDirection: {direction}`; `CONSUMPTION` for import, `GENERATION` for export — Task 1 found the export MPAN returns nothing without it). Store under Storage `(storage_app, storage_name)` with a 14-day expiry, saving `{"slots": ..., "legs": ..., "fetched_at": ISO}`.
 - [ ] **Step 4: Wire it into `OctopusAPI`.** Run `impact` on `OctopusAPI.run` first. Construct the reader in `initialize` with `storage_app="octopus_user"` and `storage_name="billing"`, and `await load()` inside the `if first:` block. After the tariff block, `if self.billing.due(now)`: call `refresh` with a `query_fn` that wraps `self.async_graphql_query(query, context)` and returns `None` whenever the raw response carried `errors`. Then publish the sensor whenever it refreshed, and on `first`. Skip the whole block when `"import"` is not in `self.tariffs` or has no `mpan`.
 - [ ] **Step 5: Run the tests**, plus `./run_all -k octopus_ > /tmp/oct.txt 2>&1`. Expected: all pass, and no existing Octopus test changes.
 - [ ] **Step 6: Commit** `git commit -m "feat(octopus): publish half-hourly billing as predbat.billing"`

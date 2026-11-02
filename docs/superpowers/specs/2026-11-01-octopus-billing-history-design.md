@@ -180,3 +180,31 @@ pointers to confirm, not as settled API documentation.
 - Test design, including recorded `measurements` fixtures for Octopus IOG (four consumption
   buckets + standing charge) and E.ON (single bucket).
 - Documentation for the new sensor and the History view additions in `docs/`.
+
+## Verified data shape (probe, 2 Nov 2026)
+
+Read from one live Octopus account (import `E-1R-IOG-SMB-VAR-24-10-29-L`, 6.6p / 36.28p; export
+`E-1R-AGILE-OUTGOING-19-05-13-L`) for 31 Oct 2026 and the clock-change day 25 Oct 2026, using
+`octopus.MEASUREMENTS_QUERY`. Anonymised payloads are in `apps/predbat/tests/billing_fixture.json`.
+
+- **Units:** `estimatedAmount` is in **pence**, although `costCurrency` says `GBP`
+  (1.485 kWh × 6.6p = `9.801`). Export amounts are rounded to 2 decimal places.
+- **Statistic types:** import half-hours carry `CONSUMPTION_COST` rows (one per bucket:
+  `Home Standard Rate`, `Home Low Rate`, `EV Low Rate`, `EV Standard Rate`, zero rows included) plus
+  one `STANDING_CHARGE_COST` row. Export half-hours carry one `GENERATION_VALUE` row plus a
+  zero `STANDING_CHARGE_COST` row.
+- **No total row:** across 98 import half-hours the `CONSUMPTION_COST` kWh always summed to the
+  node's `value`.
+- **Standing charge:** apportioned to **every** half-hour (1.15674p each, 55.52p/day), with
+  `value: null`. It is not landed on a single slot.
+- **Export kWh:** the `GENERATION_VALUE` row has `value: null`; the kWh is the node's own `value`.
+  Its cost is positive (earnings), e.g. 1.417 kWh → 44.86p at 18:00Z.
+- **Export needs a reading direction:** the export MPAN returns **zero edges** with the plain
+  query. Adding `readingDirection: GENERATION` to `electricityFilters` returns all 48 half-hours.
+- **Clock change:** 25 Oct 2026 returned 50 half-hours.
+- **VAT:** `costInclTax` equals `costExclTax` (GB electricity is zero-rated until 31 Mar 2027), so the
+  basis cannot be told apart from data today. The billed rates (6.6p / 36.28p) match the tariff.
+  `costInclTax` is used, which is the same basis as Predbat's `value_inc_vat` Octopus rates;
+  **re-check after 1 Apr 2027**. The public products unit-rates endpoint returned no rows for
+  this IOG-SMB tariff, so there was no independent REST cross-check.
+- E.ON / EDF: not probed (no account available); Kraken tests use a synthetic single-bucket day.
