@@ -912,12 +912,15 @@ class Execute:
 
                         discharge_rate = export_rate_alloc.get(inverter.id, inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT)
                         rate_owner = "export"
-                        # The depth this export is planned to stop at, per inverter: the planned export
-                        # target, never below this inverter's own reserve. Real-time dispatch uses it as
-                        # the dispatch SOC floor, so between cycles (and for as long as the failsafe
-                        # keeps the block running) the battery cannot discharge past the planned depth -
-                        # the stock path hands the same figure to adjust_export_immediate().
-                        dispatch_soc_min = max(calc_percent_limit(discharge_soc, self.soc_max), inverter.reserve_percent or 0)
+                        # The depth this export is planned to stop at, per inverter: the same
+                        # target the stock path hands adjust_export_immediate()
+                        # (export_target_soc_percent()), scaled to this inverter's share of the
+                        # fleet and never below its own reserve. Real-time dispatch uses it as the
+                        # dispatch SOC floor, so between cycles (and for as long as the failsafe
+                        # keeps the block running) the battery cannot discharge past the depth its
+                        # rate was sized for.
+                        inv_export_target = self.adjust_battery_target_multi(inverter, self.export_target_soc_percent(), False, True, check=True)
+                        dispatch_soc_min = max(inv_export_target, inverter.reserve_percent or 0)
                         dispatch_intent[inverter.id] = int(dispatch_soc_min)
                         inverter.adjust_force_export(True, discharge_start_time, discharge_end_time)
                         if inverter.inv_charge_discharge_with_rate:

@@ -2758,6 +2758,22 @@ APPS_SCHEMA = {
     "scheduled_discharge_enable": {"type": "sensor_list", "sensor_type": "boolean", "modify": True, "entries": "num_inverters"},
     "discharge_start_time": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
     "discharge_end_time": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
+    # Real-time dispatch (see dispatch.py): optional per-inverter entities that let Predbat drive
+    # an export through an inverter's RAM-only remote dispatch block instead of arming the timed
+    # slot. String rather than "sensor" type because a button is not in the modify whitelist and
+    # the helper resolves these itself (including a single value shared by a multi-inverter
+    # install, which it refuses at runtime); leaving them absent changes nothing for anyone else.
+    "dispatch_power": {"type": "string|string_list"},
+    "dispatch_apply_button": {"type": "string|string_list"},
+    "dispatch_control_mode": {"type": "string|string_list"},
+    "dispatch_disable_button": {"type": "string|string_list"},
+    "dispatch_master": {"type": "string|string_list"},
+    "dispatch_soc_min": {"type": "string|string_list"},
+    "dispatch_soc_max": {"type": "string|string_list"},
+    "dispatch_status": {"type": "string|string_list"},
+    "dispatch_failsafe_interval": {"type": "string|string_list"},
+    "dispatch_failsafe_minutes": {"type": "integer|integer_list"},
+    "dispatch_mode": {"type": "string|string_list"},
     "battery_temperature": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
     # Optional. When the entity reports the battery is being calibrated, Predbat disables itself for
     # that inverter - a calibration cycle deliberately drives the battery outside its normal SoC

@@ -21,20 +21,21 @@ written (see Execute.apply_dispatch_intent), not from the export-window writer, 
 power it carries is the rate this cycle chose rather than the previous cycle's.
 
 Optional apps.yaml args (dispatch_power, dispatch_apply_button and dispatch_control_mode
-are required; the rest are optional):
+are required, plus at least one of dispatch_disable_button / dispatch_master; the rest are
+optional):
 
     dispatch_apply_button:      button that block-writes the staged dispatch block
     dispatch_control_mode:      select holding the dispatch mode (see dispatch_mode)
     dispatch_power:             number holding the dispatch power in W, signed
                                 (negative = discharge / export on Solis)
     dispatch_disable_button:    button that stops dispatch and clears the block
+    dispatch_master:            switch enabling the dispatch block (one of this and
+                                dispatch_disable_button is required)
     dispatch_soc_min:           number holding the dispatch SOC floor %
     dispatch_soc_max:           number holding the dispatch SOC ceiling % (optional)
     dispatch_failsafe_interval: number holding the failsafe window in minutes (optional)
     dispatch_failsafe_minutes:  value to arm it with (default 10; never less than two
-                                plan cycles)
-    dispatch_master:            switch enabling the dispatch block (optional; some
-                                integrations gate the block on a master enable)
+                                execution cycles)
     dispatch_status:            sensor reporting whether the inverter-side block is
                                 running (optional)
     dispatch_mode:              select option used for an export (default
@@ -43,7 +44,14 @@ are required; the rest are optional):
 
 Convention: discharge/export commands are negative power. Predbat computes export
 power as a positive discharge rate in W, so the sign is flipped on write.
+
+A freeze export is deliberately NOT driven through dispatch: there is no dispatch command
+that means "hold and do not export", so adjust_export_immediate() leaves freeze exports on
+its stock path (which also issues the caller's discharge_freeze_service) and the dispatch
+block is disabled instead, because no export rate is planned for the cycle.
 """
+
+from const import RUN_EVERY
 
 # Status readings that mean the inverter-side dispatch block is NOT running. Anything else is
 # treated as hot, so an unrecognised status errs towards stopping an export rather than leaving
@@ -63,18 +71,27 @@ class InverterDispatch:
         self.inv = inverter
         self.base = inverter.base
         self.log = inverter.log
-        # Track the last mode we confirmed, so a rejected select write is retried next cycle
-        # rather than assumed to have landed.
-        self.last_mode = None
-        # Whether we believe the inverter-side block is running. Lives with the Inverter (this
-        # helper is built once in __init__, not per cycle), so refresh_config() cannot reset it
-        # and leave a window running past its end with nothing to disable it.
+        # Whether a dispatch block may be running on the inverter, i.e. whether anything has to
+        # be stopped when the window ends. Lives with the Inverter (this helper is built once in
+        # __init__, not per cycle), so refresh_config() cannot reset it and leave a window running
+        # past its end with nothing to disable it.
         self.active = False
+        # Cached answer from enabled(), re-resolved by refresh() once per refresh_config().
+        self._enabled = None
         # Warnings already emitted, keyed by the problem, so a per-cycle check does not spam.
         self._warned = set()
         # Last status reading we pressed Disable for, so a status sensor that has not refreshed
         # yet does not produce a second press next cycle.
         self._disabled_status = None
+
+    def refresh(self):
+        """Re-resolve the configuration: called from Inverter.refresh_config() once a cycle.
+
+        enabled() is consulted several times per inverter per cycle (the force-export writer, the
+        immediate-export writer and the apply pass), and resolving it can warn, so the answer is
+        cached here rather than recomputed on every call.
+        """
+        self._enabled = None
 
     def enabled(self):
         """True when this inverter can actually be driven by dispatch.
@@ -85,12 +102,32 @@ class InverterDispatch:
         short leaves the later inverters with no entity at all. Either way the inverter cannot
         stage the block, so it must keep the scheduled-slot export path it can use - returning
         True on arg presence alone left it with neither.
+
+        A dispatch that cannot be stopped is refused too: with neither a disable button nor a
+        master switch configured, nothing Predbat does at the end of a window reaches the
+        inverter, so the block would run until its failsafe expired.
         """
+        if self._enabled is None:
+            self._enabled = self._compute_enabled()
+        return self._enabled
+
+    def _compute_enabled(self):
+        """Work out whether dispatch is usable for this inverter (the body of enabled())."""
+        args = getattr(self.base, "args", None) or {}
         missing = [arg for arg in DISPATCH_REQUIRED_ARGS if not self._entity(arg)]
         if missing:
+            # Silent when none of the args are set at all: that is the stock timed-slot setup,
+            # not a dispatch misconfiguration, and this runs for every inverter every cycle.
+            if any(args.get(arg) for arg in DISPATCH_REQUIRED_ARGS):
+                self._warn_once(
+                    ("missing",) + tuple(missing),
+                    "Warn: Inverter {} dispatch: {} not set for this inverter, using the scheduled-slot export path".format(self.inv.id, ", ".join(missing)),
+                )
+            return False
+        if not self._entity("dispatch_disable_button") and not self._entity("dispatch_master"):
             self._warn_once(
-                ("missing",) + tuple(missing),
-                "Warn: Inverter {} dispatch: {} not set for this inverter, using the scheduled-slot export path".format(self.inv.id, ", ".join(missing)),
+                ("no_stop",),
+                "Warn: Inverter {} dispatch: neither dispatch_disable_button nor dispatch_master is set, so a running dispatch could not be stopped - using the scheduled-slot export path".format(self.inv.id),
             )
             return False
         shared = self._shared_args()
@@ -109,9 +146,36 @@ class InverterDispatch:
             self.log(message)
 
     def _entity(self, arg):
-        """Return the entity_id for an arg on this inverter, or None."""
-        entity_id = self.base.get_arg(arg, indirect=False, index=self.inv.id)
+        """Return the entity_id for an arg on this inverter, or None.
+
+        Reads the raw apps.yaml entry first so a per-inverter list that is too short, or a
+        single-value arg seen by a later inverter, is handled here rather than by get_arg:
+        get_arg(index=N) on a single value logs Predbat's own "incorrectly setup" warning, and a
+        short list logs "Out of range index", both of which would repeat every cycle for a
+        perfectly deliberate fallback to the scheduled-slot path.
+        """
+        args = getattr(self.base, "args", None) or {}
+        raw = args.get(arg, None)
+        if isinstance(raw, list):
+            if self.inv.id >= len(raw):
+                return None
+            index = self.inv.id
+        else:
+            # A single value is shared by every inverter (refused by _shared_args when there is
+            # more than one), so it is resolved at index 0 to keep get_arg quiet.
+            index = 0
+        entity_id = self.base.get_arg(arg, indirect=False, index=index)
         return entity_id if entity_id else None
+
+    def _setting(self, arg, default):
+        """Return a scalar dispatch setting, per inverter when given as a list."""
+        args = getattr(self.base, "args", None) or {}
+        raw = args.get(arg, None)
+        if isinstance(raw, list):
+            if self.inv.id >= len(raw):
+                return default
+            return self.base.get_arg(arg, default, index=self.inv.id)
+        return self.base.get_arg(arg, default, index=0)
 
     def _shared_args(self):
         """Required dispatch args this inverter resolves to the same entity as another inverter."""
@@ -157,19 +221,32 @@ class InverterDispatch:
         return status is not None and status not in DISPATCH_IDLE_STATUS
 
     def _failsafe_minutes(self):
-        """Failsafe window to arm, in minutes, never shorter than two plan cycles.
+        """Failsafe window to arm, in minutes, never shorter than two execution cycles.
 
-        The failsafe is what stops the export if Predbat or Home Assistant dies mid-window,
-        so a value that expires before the next cycle would disarm an export that is still
-        planned. It is a setting rather than a fixed 10 minutes for the same reason.
+        The failsafe is what stops the export if Predbat or Home Assistant dies mid-window, so it
+        has to outlast the gap between the commands Predbat sends. Predbat re-applies dispatch
+        every cycle, and a cycle is RUN_EVERY minutes - not plan_interval_minutes, which is the
+        width of a plan slot and is 30 by default. Flooring against the plan slot armed a
+        60-minute failsafe on a default install, so a dead Predbat could keep the battery
+        exporting for an hour.
         """
-        minutes = self.base.get_arg("dispatch_failsafe_minutes", 10, index=self.inv.id)
+        minutes = self._setting("dispatch_failsafe_minutes", 10)
         try:
             minutes = int(minutes)
         except (TypeError, ValueError):
             minutes = 10
-        cycle = getattr(self.base, "plan_interval_minutes", 5) or 5
-        return max(minutes, int(cycle) * 2)
+        return max(minutes, RUN_EVERY * 2)
+
+    def _not_applied(self, message):
+        """Log why this cycle's command was not applied, leaving `active` alone.
+
+        A failed staging write says nothing about a block applied on a previous cycle: that one
+        is still running on the inverter until a later Apply replaces it or the failsafe expires.
+        Clearing `active` here was what let an export run past its window with nothing left to
+        disable it, so the flag is only ever cleared by a confirmed Disable.
+        """
+        self.log(message)
+        return False
 
     def apply_dispatch(self, power_w, soc_min=None, soc_max=None, mode=None):
         """Stage the dispatch parameters and apply the dispatch block.
@@ -191,13 +268,11 @@ class InverterDispatch:
                      battery charge/discharge by power sign, on the Solis protocol)
         """
         if mode is None:
-            mode = self.base.get_arg("dispatch_mode", "Battery Charge", index=self.inv.id)
+            mode = self._setting("dispatch_mode", "Battery Charge")
         power_entity = self._entity("dispatch_power")
         apply_entity = self._entity("dispatch_apply_button")
         if not power_entity or not apply_entity:
-            self.log("Warn: Inverter {} dispatch: no dispatch power/apply entity configured, dispatch not applied".format(self.inv.id))
-            self.active = False
-            return False
+            return self._not_applied("Warn: Inverter {} dispatch: no dispatch power/apply entity configured, dispatch not applied".format(self.inv.id))
 
         # Master enable FIRST, unconditionally: never trust the HA switch state for
         # the master. The inverter clears 44100 itself on failsafe expiry or block
@@ -211,25 +286,18 @@ class InverterDispatch:
         master_entity = self._entity("dispatch_master")
         if master_entity:
             if not self.inv.write_and_poll_switch("dispatch_master", master_entity, True, force=True):
-                self.log("Warn: Inverter {} dispatch: master switch did not confirm on, dispatch not applied".format(self.inv.id))
-                self.active = False
-                return False
+                return self._not_applied("Warn: Inverter {} dispatch: master switch did not confirm on, dispatch not applied".format(self.inv.id))
 
-        # Stage the mode first (it selects which element the dispatch acts on). Remember it only
-        # once the write verified, or a rejected mode would be skipped on every later cycle.
+        # Stage the mode first (it selects which element the dispatch acts on). No local cache:
+        # write_and_poll_option already skips a write that changes nothing, and remembering it
+        # here would skip re-staging a mode the inverter had reset after a failsafe expiry.
         mode_entity = self._entity("dispatch_control_mode")
-        if mode_entity and mode != self.last_mode:
-            if not self.inv.write_and_poll_option("dispatch_control_mode", mode_entity, mode):
-                self.log("Warn: Inverter {} dispatch: mode {} did not take, dispatch not applied".format(self.inv.id, mode))
-                self.active = False
-                return False
-            self.last_mode = mode
+        if mode_entity and not self.inv.write_and_poll_option("dispatch_control_mode", mode_entity, mode):
+            return self._not_applied("Warn: Inverter {} dispatch: mode {} did not take, dispatch not applied".format(self.inv.id, mode))
 
         # Stage the signed power (discharge negative)
         if not self._write_and_poll("dispatch_power", power_entity, int(power_w), required_unit="W"):
-            self.log("Warn: Inverter {} dispatch: power {}W did not take, dispatch not applied".format(self.inv.id, int(power_w)))
-            self.active = False
-            return False
+            return self._not_applied("Warn: Inverter {} dispatch: power {}W did not take, dispatch not applied".format(self.inv.id, int(power_w)))
 
         # Stage the SOC window
         for arg, value in (("dispatch_soc_min", soc_min), ("dispatch_soc_max", soc_max)):
@@ -237,9 +305,7 @@ class InverterDispatch:
                 continue
             entity_id = self._entity(arg)
             if entity_id and not self._write_and_poll(arg, entity_id, int(value), required_unit="%"):
-                self.log("Warn: Inverter {} dispatch: {} {} did not take, dispatch not applied".format(self.inv.id, arg, int(value)))
-                self.active = False
-                return False
+                return self._not_applied("Warn: Inverter {} dispatch: {} {} did not take, dispatch not applied".format(self.inv.id, arg, int(value)))
 
         # Failsafe interval: re-armed every cycle, because scattered single-register writes only
         # commit while the master is enabled and an expired failsafe needs the value restored
@@ -248,14 +314,11 @@ class InverterDispatch:
         if failsafe_entity:
             failsafe = self._failsafe_minutes()
             if not self._write_and_poll("dispatch_failsafe_interval", failsafe_entity, failsafe, required_unit="min"):
-                self.log("Warn: Inverter {} dispatch: failsafe interval {}min did not take, dispatch not applied".format(self.inv.id, failsafe))
-                self.active = False
-                return False
+                return self._not_applied("Warn: Inverter {} dispatch: failsafe interval {}min did not take, dispatch not applied".format(self.inv.id, failsafe))
 
         # Apply the block
         if not self._press_button("dispatch apply", apply_entity):
-            self.active = False
-            return False
+            return self._not_applied("Warn: Inverter {} dispatch: apply button did not press, dispatch not applied".format(self.inv.id))
         self.active = True
         self._disabled_status = None
         self.log("Inverter {} dispatch: applied {}W (soc window {}-{}%) mode {}".format(self.inv.id, power_w, soc_min, soc_max, mode))
@@ -267,6 +330,10 @@ class InverterDispatch:
         Idempotent: only writes when a dispatch was previously applied, or when the inverter
         reports the block still running, so the reset paths that call adjust_force_export(False)
         every cycle don't spam the block.
+
+        Returns True only when something confirmed the block was stopped. On a failed press the
+        block is still tracked and the next cycle retries - clearing `active` regardless was what
+        left a running block with nothing left to stop it.
         """
         status = self._dispatch_status()
         hot = self._status_is_hot(status)
@@ -277,17 +344,21 @@ class InverterDispatch:
             return False
         disable_entity = self._entity("dispatch_disable_button")
         master_entity = self._entity("dispatch_master")
+        pressed = False
         if disable_entity:
-            self._press_button("dispatch disable", disable_entity)
+            pressed = self._press_button("dispatch disable", disable_entity)
+        master_off = False
         if master_entity:
             # Always force the master off too: the disable button clears the inverter-side block
             # without updating the HA switch, leaving it optimistically "on" while the register
             # reads 0 - the exact stale-on state that makes the next apply skip the master write
             # and silently kill the dispatch. Turning it off both stops any inverter-side dispatch
             # and re-syncs the HA state so the next apply re-arms.
-            self.inv.write_and_poll_switch("dispatch_master", master_entity, False, force=self.active)
+            master_off = self.inv.write_and_poll_switch("dispatch_master", master_entity, False, force=True)
+        if not pressed and not master_off:
+            self.log("Warn: Inverter {} dispatch: disable was not confirmed, retrying next cycle".format(self.inv.id))
+            return False
         self.active = False
-        self.last_mode = None
         self._disabled_status = status
         self.log("Inverter {} dispatch: disabled".format(self.inv.id))
         return True

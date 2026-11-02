@@ -25,6 +25,9 @@ sys.path.insert(0, os.path.dirname(__file__) + "/..")
 
 from inverter import Inverter
 from dispatch import InverterDispatch, dispatch_power_for_rate
+from const import EXPORT_MODE_TARGET
+from utils import pack_export_limit
+from tests.fleet_rig import FleetInverter, setup_fleet
 
 
 class _DispatchBase:
@@ -34,7 +37,9 @@ class _DispatchBase:
         self.args = args
         self.states = states
         self.calls = []
+        self.logs = []
         self.reject = set()
+        self.fail_services = set()
         self.control_ledger = None
         self.dashboard_index_app = {}
         self.minutes_now = 720
@@ -45,7 +50,8 @@ class _DispatchBase:
         self.inverters = inverters or []
 
     def log(self, message):
-        """Swallow the log output."""
+        """Record the log output so a test can assert on warnings."""
+        self.logs.append(message)
         return None
 
     def record_status(self, message, had_errors=False, **kwargs):
@@ -92,6 +98,8 @@ class _DispatchBase:
         entity_id = kwargs.get("entity_id")
         value = kwargs.get("value", kwargs.get("option"))
         self.calls.append(("service", service, entity_id, value))
+        if service in self.fail_services:
+            return False
         if entity_id in self.reject:
             return True
         if service.endswith("/set_value"):
@@ -122,6 +130,8 @@ def _stub_inverter(base, inv_id=0):
     stub.slept = []
     stub.sleep = lambda seconds: stub.slept.append(seconds)
     stub.inv_write_and_poll_sleep = 0
+    stub.inv_write_max_retry = 3
+    stub.inv_write_backoff = False
     stub.reserve_percent = 20
     stub.reserve_min = 4
     stub.track_charge_start = "00:00:00"
@@ -274,6 +284,7 @@ def test_dispatch_enabled_requires_per_inverter_entities(my_predbat=None):
         "dispatch_power": ["number.solax_dispatch_power"],
         "dispatch_apply_button": ["button.solax_apply_remote_dispatch"],
         "dispatch_control_mode": ["select.solax_dispatch_control_mode"],
+        "dispatch_master": ["switch.solax_dispatch_master"],
     }
     base = _DispatchBase(args, dict(INITIAL_STATES))
     stub0 = _stub_inverter(base, 0)
@@ -289,6 +300,37 @@ def test_dispatch_enabled_requires_per_inverter_entities(my_predbat=None):
 
     if not failed:
         print("PASS: only the inverter with resolvable dispatch entities is enabled")
+    return 1 if failed else 0
+
+
+def test_dispatch_needs_a_way_to_stop(my_predbat=None):
+    """A dispatch with neither a disable button nor a master switch is refused.
+
+    Nothing Predbat did at the end of a window would reach the inverter, so the block would run
+    on until its own failsafe expired - worse than using the scheduled slot, which it can turn off.
+    """
+    failed = False
+    print("**** Testing dispatch needs a way to stop the block ****")
+
+    args = {
+        "dispatch_power": "number.solax_dispatch_power",
+        "dispatch_apply_button": "button.solax_apply_remote_dispatch",
+        "dispatch_control_mode": "select.solax_dispatch_control_mode",
+    }
+    base = _DispatchBase(args, dict(INITIAL_STATES))
+    stub = _stub_inverter(base)
+    base.inverters = [stub]
+
+    if stub.dispatch.enabled():
+        print("ERROR: dispatch reported enabled with neither a disable button nor a master switch")
+        failed = True
+    apply_presses = _services(base, "button/press", "button.solax_apply_remote_dispatch")
+    if apply_presses:
+        print("ERROR: dispatch pressed Apply without a way to stop it")
+        failed = True
+
+    if not failed:
+        print("PASS: a dispatch that cannot be stopped is refused")
     return 1 if failed else 0
 
 
@@ -541,18 +583,376 @@ def test_dispatch_power_for_rate_sign_convention(my_predbat=None):
     return 1 if failed else 0
 
 
+def test_dispatch_failsafe_outlasts_a_cycle(my_predbat=None):
+    """
+    The failsafe floor is two EXECUTION cycles, not two plan slots.
+
+    plan_interval_minutes is the width of a plan slot (30 by default), while Predbat re-applies
+    dispatch every RUN_EVERY minutes (5). Flooring against the plan slot armed a 60-minute failsafe
+    on a default install, so a dead Predbat could keep the battery exporting for an hour.
+    """
+    failed = False
+    print("**** Testing the dispatch failsafe floor follows the execution cycle ****")
+
+    base = _DispatchBase(dict(DISPATCH_ARGS), dict(INITIAL_STATES))
+    base.plan_interval_minutes = 30
+    stub = _stub_inverter(base)
+    base.inverters = [stub]
+
+    if stub.dispatch._failsafe_minutes() != 10:
+        print("ERROR: expected a 10-minute failsafe floor, got {}".format(stub.dispatch._failsafe_minutes()))
+        failed = True
+    base.args["dispatch_failsafe_minutes"] = 25
+    if stub.dispatch._failsafe_minutes() != 25:
+        print("ERROR: a configured 25-minute failsafe should be used as given, got {}".format(stub.dispatch._failsafe_minutes()))
+        failed = True
+    base.args["dispatch_failsafe_minutes"] = 2
+    if stub.dispatch._failsafe_minutes() != 10:
+        print("ERROR: a 2-minute failsafe should be raised to 10, got {}".format(stub.dispatch._failsafe_minutes()))
+        failed = True
+
+    if not failed:
+        print("PASS: the failsafe floor is two 5-minute execution cycles, not two plan slots")
+    return 1 if failed else 0
+
+
+def test_dispatch_is_quiet_when_unconfigured(my_predbat=None):
+    """
+    An inverter with no dispatch args must not warn about them every cycle.
+
+    enabled() runs several times per inverter per cycle, so warning on "not set" printed a
+    dispatch warning for every inverter in every install that does not use the feature.
+    """
+    failed = False
+    print("**** Testing an unconfigured inverter logs no dispatch warning ****")
+
+    base = _DispatchBase({}, {})
+    stub = _stub_inverter(base)
+    base.inverters = [stub]
+    if stub.dispatch.enabled():
+        print("ERROR: dispatch reported enabled with no configuration at all")
+        failed = True
+
+    # A partial configuration is a genuine mistake and must still be reported
+    base2 = _DispatchBase({"dispatch_power": "number.solax_dispatch_power"}, dict(INITIAL_STATES))
+    stub2 = _stub_inverter(base2)
+    base2.inverters = [stub2]
+    if stub2.dispatch.enabled():
+        print("ERROR: dispatch reported enabled with only one of the three required args")
+        failed = True
+    if not any("dispatch" in message and "dispatch_apply_button" in message for message in base2.logs):
+        print("ERROR: a partial dispatch configuration did not warn about the missing args")
+        failed = True
+
+    if not failed:
+        print("PASS: unconfigured inverters are silent, partial configurations warn")
+    return 1 if failed else 0
+
+
+def test_dispatch_failed_staging_keeps_tracking(my_predbat=None):
+    """
+    A failed staging write must not lose track of a block applied last cycle.
+
+    The block staged on the previous cycle is still running on the inverter. Clearing `active`
+    when a later write was rejected left disable_dispatch() with nothing to act on, so without a
+    status sensor the block ran on past the window until the failsafe expired.
+    """
+    failed = False
+    print("**** Testing a failed staging write keeps the running block tracked ****")
+
+    base = _DispatchBase(dict(DISPATCH_ARGS), dict(INITIAL_STATES))
+    stub = _stub_inverter(base)
+    base.inverters = [stub]
+
+    if not stub.dispatch.apply_dispatch(power_w=-500, soc_min=35, soc_max=100):
+        print("ERROR: the first dispatch did not apply")
+        failed = True
+    if not stub.dispatch.active:
+        print("ERROR: a successful apply did not mark dispatch active")
+        failed = True
+
+    # The inverter now refuses the power write for this cycle's command
+    base.reject = {"number.solax_dispatch_power"}
+    if stub.dispatch.apply_dispatch(power_w=-600, soc_min=30, soc_max=100):
+        print("ERROR: a rejected power write was reported as applied")
+        failed = True
+    if not stub.dispatch.active:
+        print("ERROR: losing track of the block still running from the previous cycle")
+        failed = True
+
+    base.reject = set()
+    apply_presses = len(_services(base, "button/press", "button.solax_apply_remote_dispatch"))
+    if apply_presses != 1:
+        print("ERROR: Apply was pressed {} times, expected only the successful cycle".format(apply_presses))
+        failed = True
+
+    if not failed:
+        print("PASS: the block stays tracked after a failed staging write")
+    return 1 if failed else 0
+
+
+def test_dispatch_retries_an_unconfirmed_disable(my_predbat=None):
+    """
+    A disable that could not be confirmed must be retried, not forgotten.
+
+    Clearing `active` on a failed press meant the block was never disabled again.
+    """
+    failed = False
+    print("**** Testing an unconfirmed disable is retried ****")
+
+    base = _DispatchBase(dict(DISPATCH_ARGS), dict(INITIAL_STATES))
+    base.states["switch.solax_dispatch_master"] = "on"
+    stub = _stub_inverter(base)
+    base.inverters = [stub]
+    stub.dispatch.active = True
+
+    base.fail_services = {"button/press"}
+    base.reject = {"switch.solax_dispatch_master"}
+    if stub.dispatch.disable_dispatch():
+        print("ERROR: disable reported success when nothing was confirmed")
+        failed = True
+    if not stub.dispatch.active:
+        print("ERROR: an unconfirmed disable cleared the tracking, so it would never retry")
+        failed = True
+
+    base.fail_services = set()
+    base.reject = set()
+    if not stub.dispatch.disable_dispatch():
+        print("ERROR: the retried disable did not succeed")
+        failed = True
+    if stub.dispatch.active:
+        print("ERROR: a confirmed disable left dispatch marked active")
+        failed = True
+
+    if not failed:
+        print("PASS: an unconfirmed disable keeps tracking and is retried")
+    return 1 if failed else 0
+
+
+def test_dispatch_freeze_keeps_the_stock_path(my_predbat=None):
+    """
+    A freeze export must still take the normal immediate-export path.
+
+    The early return in adjust_export_immediate() covered the freeze call too, so on an FB00
+    inverter a freeze export skipped the Energy Storage Control Switch and the caller's
+    discharge_freeze_service. There is no dispatch command that means "hold", so freeze belongs
+    on the stock path and the dispatch block is stopped instead.
+    """
+    failed = False
+    print("**** Testing a freeze export keeps the stock immediate-export path ****")
+
+    base = _DispatchBase(dict(DISPATCH_ARGS), dict(INITIAL_STATES))
+    stub = _stub_inverter(base)
+    base.inverters = [stub]
+    stub.inv_has_target_soc = False
+    stub.inv_has_solis_energy_control = False
+    stub.soc_percent = 50
+    stub.get_current_discharge_rate = lambda: 1000
+    called = []
+
+    def record_service(name, service_data, domain=None, extra_data=None):
+        """Record a service-template call, reporting that a template was configured."""
+        called.append(name)
+        return True
+
+    stub.call_service_template = record_service
+
+    stub.adjust_export_immediate(50, freeze=True)
+    if "discharge_freeze_service" not in called:
+        print("ERROR: a freeze export did not reach discharge_freeze_service, calls were {}".format(called))
+        failed = True
+
+    # A real export is still owned by dispatch, so it issues no service calls at all
+    called[:] = []
+    stub.adjust_export_immediate(50)
+    if called:
+        print("ERROR: a real export on a dispatch inverter also ran the service path: {}".format(called))
+        failed = True
+
+    if not failed:
+        print("PASS: freeze exports use the stock path, real exports stay on dispatch")
+    return 1 if failed else 0
+
+
+def test_dispatch_slot_disarm_presses_the_update_button(my_predbat=None):
+    """On a button-press inverter the slot disarm has to be committed with the update button."""
+    failed = False
+    print("**** Testing the stale-slot disarm commits on a button-press inverter ****")
+
+    args = dict(DISPATCH_ARGS)
+    args["scheduled_discharge_enable"] = "switch.solax_timed_discharge"
+    base = _DispatchBase(args, dict(INITIAL_STATES))
+    base.states["switch.solax_timed_discharge"] = "on"
+    stub = _stub_inverter(base)
+    base.inverters = [stub]
+    stub.adjust_idle_time = lambda **kwargs: None
+    stub.inv_time_button_press = True
+    pressed = []
+    stub.press_and_poll_button = lambda side="both", **kwargs: pressed.append(side) or True
+
+    stub.adjust_force_export(False)
+
+    if pressed != ["discharge"]:
+        print("ERROR: expected the discharge update button to be pressed once, got {}".format(pressed))
+        failed = True
+
+    if not failed:
+        print("PASS: the disarmed slot is committed with the update button")
+    return 1 if failed else 0
+
+
+def test_dispatch_through_execute_plan(my_predbat):
+    """
+    End to end: a real export window drives dispatch, and the window ending stops it.
+
+    Everything above drives the helper directly, so none of it proves the wiring: that
+    execute_plan() records a per-inverter planned depth, applies the command after the rates
+    are on the inverter, and stops it on the cycle the window ends. This runs the real executor
+    against a real Inverter on the mock HA interface, with only the dispatch entities scripted.
+    """
+    failed = False
+    print("**** Testing dispatch end to end through execute_plan ****")
+
+    if my_predbat is None:
+        print("   (no Predbat fixture, skipped)")
+        return 0
+
+    ha = my_predbat.ha_interface
+    saved_args = dict(my_predbat.args)
+    saved_inverters = list(my_predbat.inverters)
+    saved_store = ha.service_store_enable
+    dispatch_args = {
+        "dispatch_power": "number.solax_dispatch_power",
+        "dispatch_apply_button": "button.solax_apply_remote_dispatch",
+        "dispatch_disable_button": "button.solax_disable_remote_dispatch",
+        "dispatch_control_mode": "select.solax_dispatch_control_mode",
+        "dispatch_soc_min": "number.solax_dispatch_soc_min",
+        "dispatch_failsafe_interval": "number.solax_dispatch_failsafe_interval",
+        "dispatch_master": "switch.solax_dispatch_master",
+    }
+    saved_items = {entity: ha.dummy_items.get(entity) for entity in dispatch_args.values()}
+    saved_call_service = ha.call_service
+    calls = []
+
+    def record(service, **kwargs):
+        """Record every service call, then let the mock apply it."""
+        calls.append((service, kwargs))
+        return saved_call_service(service, **kwargs)
+
+    ha.call_service = record
+
+    try:
+        for arg, entity in dispatch_args.items():
+            my_predbat.args[arg] = entity
+        ha.dummy_items["number.solax_dispatch_power"] = 0
+        ha.dummy_items["select.solax_dispatch_control_mode"] = "Battery Hold"
+        ha.dummy_items["number.solax_dispatch_soc_min"] = 0
+        ha.dummy_items["number.solax_dispatch_failsafe_interval"] = 5
+        ha.dummy_items["switch.solax_dispatch_master"] = "off"
+
+        setup_fleet(my_predbat, [FleetInverter(9.5)], soc=60, reserve=4)
+        # setup_fleet records service calls instead of applying them; dispatch needs the mock
+        # to actually move the entity states for its write-and-poll reads to verify.
+        ha.service_store_enable = False
+        for inverter in my_predbat.inverters:
+            inverter.inv_has_target_soc = True
+            inverter.inv_has_charge_enable_time = True
+            inverter.inv_has_timed_pause = True
+            inverter.inv_charge_discharge_with_rate = True
+            inverter.inv_time_button_press = False
+
+        my_predbat.set_read_only = False
+        my_predbat.set_export_window = True
+        my_predbat.set_charge_window = True
+        my_predbat.set_soc_enable = True
+        my_predbat.set_reserve_enable = True
+        my_predbat.set_export_freeze = False
+        my_predbat.set_discharge_during_charge = True
+        my_predbat.num_cars = 0
+        my_predbat.car_charging_slots = [[]]
+        my_predbat.car_charging_now = [False]
+        my_predbat.car_charging_from_battery = False
+        my_predbat.charge_window_best = []
+        my_predbat.charge_limit_best = []
+        minutes = my_predbat.minutes_now
+        my_predbat.export_window_best = [{"start": minutes, "end": minutes + 30, "average": 1}]
+        my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 40)]
+        my_predbat.fetch_inverter_data()
+
+        status, _ = my_predbat.execute_plan()
+        inverter = my_predbat.inverters[0]
+        applies = [call for call in calls if call[0] == "button/press" and call[1].get("entity_id") == "button.solax_apply_remote_dispatch"]
+        if status != "Exporting":
+            print("ERROR: expected an export cycle, got status {}".format(status))
+            failed = True
+        if not applies:
+            print("ERROR: no dispatch Apply was pressed during an export window")
+            failed = True
+        if ha.dummy_items.get("number.solax_dispatch_power") != -2600:
+            print("ERROR: expected the planned discharge rate (-2600W) to be dispatched, got {}".format(ha.dummy_items.get("number.solax_dispatch_power")))
+            failed = True
+        if ha.dummy_items.get("number.solax_dispatch_soc_min") != 40:
+            print("ERROR: expected the planned export target (40%) as the dispatch floor, got {}".format(ha.dummy_items.get("number.solax_dispatch_soc_min")))
+            failed = True
+        if ha.dummy_items.get("number.solax_dispatch_failsafe_interval") != 10:
+            print("ERROR: expected a 10-minute failsafe, got {}".format(ha.dummy_items.get("number.solax_dispatch_failsafe_interval")))
+            failed = True
+        if not inverter.dispatch.active:
+            print("ERROR: dispatch is not marked active after the export cycle")
+            failed = True
+
+        # The window ends: the next cycle must stop the block
+        calls[:] = []
+        my_predbat.export_window_best = [{"start": minutes + 60, "end": minutes + 90, "average": 1}]
+        my_predbat.execute_plan()
+        disables = [call for call in calls if call[0] == "button/press" and call[1].get("entity_id") == "button.solax_disable_remote_dispatch"]
+        if not disables:
+            print("ERROR: leaving the export window did not press Disable")
+            failed = True
+        if ha.dummy_items.get("switch.solax_dispatch_master") != "off":
+            print("ERROR: the dispatch master was left on after the window ended")
+            failed = True
+        if inverter.dispatch.active:
+            print("ERROR: dispatch is still marked active after the window ended")
+            failed = True
+    finally:
+        ha.call_service = saved_call_service
+        ha.service_store_enable = saved_store
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.inverters = saved_inverters
+        my_predbat.num_inverters = len(saved_inverters)
+        for entity, value in saved_items.items():
+            if value is None:
+                ha.dummy_items.pop(entity, None)
+            else:
+                ha.dummy_items[entity] = value
+
+    if not failed:
+        print("PASS: an export window applies dispatch, and the window ending stops it")
+    return 1 if failed else 0
+
+
 def run_dispatch_control_tests(my_predbat):
     """Run every real-time dispatch control test, returning a non-zero count on failure."""
     failed = 0
     failed += test_dispatch_applies_planned_power_and_depth(my_predbat)
     failed += test_dispatch_stops_when_no_export_intent(my_predbat)
     failed += test_dispatch_enabled_requires_per_inverter_entities(my_predbat)
+    failed += test_dispatch_needs_a_way_to_stop(my_predbat)
     failed += test_dispatch_refuses_a_shared_block(my_predbat)
     failed += test_dispatch_failed_power_write_blocks_apply(my_predbat)
+    failed += test_dispatch_failed_staging_keeps_tracking(my_predbat)
+    failed += test_dispatch_retries_an_unconfirmed_disable(my_predbat)
     failed += test_dispatch_disable_ignores_idle_status(my_predbat)
     failed += test_dispatch_disable_is_idempotent(my_predbat)
     failed += test_dispatch_state_survives_refresh_config(my_predbat)
     failed += test_dispatch_disarms_a_stale_slot(my_predbat)
+    failed += test_dispatch_slot_disarm_presses_the_update_button(my_predbat)
+    failed += test_dispatch_freeze_keeps_the_stock_path(my_predbat)
+    failed += test_dispatch_failsafe_outlasts_a_cycle(my_predbat)
+    failed += test_dispatch_is_quiet_when_unconfigured(my_predbat)
     failed += test_dispatch_unconfigured_uses_stock_path(my_predbat)
     failed += test_dispatch_power_for_rate_sign_convention(my_predbat)
+    failed += test_dispatch_through_execute_plan(my_predbat)
     return failed

@@ -2853,6 +2853,8 @@ Enable it by pointing these `apps.yaml` args at the entities the integration cre
 | `dispatch_apply_button`  | `button.<name>_apply_remote_dispatch`      |
 | `dispatch_control_mode`  | `select.<name>_dispatch_control_mode`      |
 
+You also need a way to stop a running dispatch, so at least one of `dispatch_disable_button` and `dispatch_master` must be set. With neither, Predbat refuses dispatch and uses the timed slot, because nothing it did at the end of a window would reach the inverter.
+
 Optional args:
 
 | Arg                          | Default          | Meaning                                                                                          |
@@ -2863,10 +2865,12 @@ Optional args:
 | `dispatch_disable_button`    | -                | button that stops the dispatch and clears the block                                               |
 | `dispatch_status`            | -                | sensor reporting whether the block is running                                                     |
 | `dispatch_failsafe_interval` | -                | failsafe interval entity, in minutes                                                              |
-| `dispatch_failsafe_minutes`  | `10`             | value to arm the failsafe with; never less than two plan cycles                                   |
+| `dispatch_failsafe_minutes`  | `10`             | value to arm the failsafe with; never less than two execution cycles (10 minutes at the default 5-minute cycle) |
 | `dispatch_mode`              | `Battery Charge` | select option used for an export - the Solis name for "charge or discharge by the sign of the power" |
 
 While an export window is running Predbat re-applies the dispatch block every cycle, which is also what keeps the inverter-side failsafe fed, with the rate that cycle planned and the planned export depth as the SOC floor. Outside a window it disables the block, so if Predbat or Home Assistant stops the failsafe returns the inverter to demand mode. The timed export slot is not used for these inverters, and Predbat turns it off if it finds it armed.
+
+A freeze export is not driven through dispatch - there is no dispatch command that means "hold and do not export" - so it keeps the normal immediate-export path (including any `discharge_freeze_service`) and the dispatch block is stopped instead.
 
 On a multi-inverter system each inverter needs its own dispatch entities - do not share one block between two of them. Predbat warns and falls back to the timed slot rather than driving a shared block.
 
