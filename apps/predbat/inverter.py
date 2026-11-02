@@ -47,7 +47,7 @@ from const import (
 )
 from control_ledger import generation_from_state, OWNED, UNOWNED
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit, strptime_aware
-from dispatch import InverterDispatch, dispatch_power_for_rate
+from dispatch import InverterDispatch
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -432,6 +432,12 @@ class Inverter:
         self.registers_moved = 0
         # Per-control write backoff state, keyed by entity_id - see _write_attempts().
         self.write_backoff = {}
+        # Real-time dispatch support (see dispatch.py): optional, arg-driven. Built here, with
+        # the rest of the state that must survive a cycle, because its `active` flag is what
+        # tells a later cycle that a dispatch was applied and has to be stopped - rebuilding it
+        # in refresh_config() reset that flag every cycle, so an export ran on past its window
+        # until the inverter's failsafe expired.
+        self.dispatch = InverterDispatch(self)
 
         self._init_attribute_defaults()
 
@@ -638,10 +644,6 @@ class Inverter:
                     self.log("Inverter {} charge rate only limits grid charging and cannot stop solar charging - Freeze Export is not supported".format(self.id))
                 self.inv_support_discharge_freeze = False
                 break
-
-        # Real-time dispatch support (see dispatch.py): optional, arg-driven. The
-        # InverterDispatch helper is inert unless the apps.yaml entity args exist.
-        self.dispatch = InverterDispatch(self)
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -2385,11 +2387,6 @@ class Inverter:
         if self.inv_output_charge_control == "current":
             self.set_current_from_power("discharge", new_rate)
 
-        # Real-time dispatch: remember the rate the export branch wants. adjust_force_export()
-        # reads this stash when it applies the dispatch command, so the power applied to the
-        # dispatch block is the same rate Predbat just set for the window.
-        self.dispatch_rate_w = new_rate
-
     def adjust_battery_target(self, soc, isCharging=False, isExporting=False):
         """
         Adjust the battery charging target SoC % in GivTCP
@@ -2553,9 +2550,15 @@ class Inverter:
             state["published_at"] = time.monotonic()
             self.base.log(f"Warn: Inverter {self.id} write of {new_value} to {name} has failed {state['failures']} times in a row, sending it at most once every {INVERTER_WRITE_DEGRADED_INTERVAL} seconds until it verifies")
 
-    def write_and_poll_switch(self, name, entity_id, new_value):
+    def write_and_poll_switch(self, name, entity_id, new_value, force=False):
         """
         GivTCP Workaround, keep writing until correct
+
+        force=True writes even when the read already matches. Some switches are optimistic in HA
+        and keep reporting "on" after the device has cleared the register behind them, so the
+        matching-read early return would skip the write that re-arms it. The write still goes
+        through this path rather than a bare service call so the control ledger and write
+        accounting see it.
         """
         # Re-written to minimise writes
         if not self.check_write_entity("write_and_poll_switch", name, entity_id, new_value):
@@ -2584,10 +2587,10 @@ class Inverter:
         ledger = self.base.control_ledger
         if ledger is not None:
             self._ledger_observe(ledger, name, entity_id, raw_state)
-            if not switch_matched(raw_state):
+            if force or not switch_matched(raw_state):
                 ledger.note_write_attempt(entity_id)
 
-        if switch_matched(raw_state):
+        if switch_matched(raw_state) and not force:
             self.base.log("Inverter {} write_and_poll_switch: No write needed for {} as {} == {}".format(self.id, name, new_value, switch_state(raw_state)))
             # Re-arm. Once an EXTERNAL event (or a clear) has dropped ownership, a control already
             # sitting at Predbat's target reaches this early return on every cycle from now on, so
@@ -2601,8 +2604,12 @@ class Inverter:
             return True
 
         attempts = self._write_attempts(name, entity_id, new_value)
+        if force:
+            # A forced write always issues at least one service call, but still stops as soon as
+            # the read confirms the target.
+            attempts = max(attempts, 1)
         retry = 0
-        while not switch_matched(raw_state) and retry < attempts:
+        while retry < attempts and (retry == 0 or not switch_matched(raw_state)):
             retry += 1
             if domain == "sensor":
                 if new_value:
@@ -3074,39 +3081,16 @@ class Inverter:
 
         """
 
-        # Real-time dispatch path (optional, arg-driven): when the inverter is driven by
-        # a real-time dispatch API, Predbat owns the window cycle-by-cycle instead of
-        # arming a persistent scheduled slot - the inverter's dispatch failsafe reverts
-        # to demand mode if Predbat stops re-applying, which is the RAM-only equivalent
-        # of disabling a timed slot. Applying happens here rather than in
-        # adjust_discharge_rate() because force-export is the export-defining signal
-        # (the rate setters also run in calibration and reset paths, where arming
-        # dispatch would be wrong). The in-window test matters because execute() also
-        # calls this with force_export=True to pre-arm an upcoming window - dispatch
-        # must not start until the window time is actually reached.
+        # Real-time dispatch path (optional, arg-driven): when the inverter is driven by a
+        # real-time dispatch API, Predbat owns the window cycle-by-cycle instead of arming a
+        # persistent scheduled slot - the inverter's dispatch failsafe reverts to demand mode if
+        # Predbat stops re-applying, which is the RAM-only equivalent of disabling a timed slot.
+        # The command itself is applied from execute_plan() after the cycle's rates are written
+        # (Execute.apply_dispatch_intent), so it carries this cycle's planned rate and the
+        # planned export depth rather than the previous cycle's rate and the reserve; this method
+        # only keeps the stock slot machinery out of the way.
         if self.dispatch.enabled():
-            in_window = False
-            if force_export and new_start_time is not None and new_end_time is not None:
-                in_window = self.base.now_utc <= new_end_time and self.base.now_utc >= new_start_time
-            if in_window:
-                rate_w = getattr(self, "dispatch_rate_w", None)
-                if rate_w:
-                    soc_min = int(max(self.reserve_percent, self.reserve_min))
-                    self.dispatch.apply_dispatch(
-                        power_w=dispatch_power_for_rate(rate_w),
-                        soc_min=soc_min,
-                        soc_max=100,
-                        mode="Battery Charge",
-                    )
-                else:
-                    self.log("Warn: Inverter {} dispatch: no discharge rate staged, dispatch not applied".format(self.id))
-            else:
-                # Outside the window (or pre-arming a future one): make sure dispatch
-                # is off. Pre-arms fall through here harmlessly and are re-tried each
-                # cycle until the window opens.
-                self.dispatch.disable_dispatch()
-            # The scheduled-slot writes below are skipped entirely for dispatch-driven
-            # inverters: both paths active at once would double-drive the export power.
+            self.adjust_dispatch_slot_cleanup(force_export)
             return
 
         if "discharge_start_time" in self.base.args:
@@ -3298,6 +3282,29 @@ class Inverter:
         if schedule_changed and changed_start_end:
             if self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} Export time slot set to {new_start} - {new_end} at time {self.base.time_now_str()}")
+
+    def adjust_dispatch_slot_cleanup(self, force_export):
+        """Keep the persistent timed export slot out of the way while dispatch drives the window.
+
+        Dispatch never arms the slot itself, but a slot armed before dispatch was configured (or
+        by the user) would otherwise keep exporting alongside the dispatch block, with neither
+        mechanism aware of the other. Both the enable switch and the idle window are left at the
+        stock "not exporting" values, which is also what stops a slot surviving the point where
+        the last dispatch window ended.
+
+        Args:
+            force_export (bool): whether the caller wanted an export this cycle. The disable is
+                only issued when it did not, so an in-window cycle leaves the block running for
+                this cycle's dispatch write to follow.
+        """
+        if "scheduled_discharge_enable" in self.base.args:
+            entity_id = self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id)
+            if self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on":
+                self.write_and_poll_switch("scheduled_discharge_enable", entity_id, False)
+                self.log("Inverter {} Turning off scheduled export as real-time dispatch drives the window".format(self.id))
+        if not force_export:
+            self.adjust_idle_time(discharge_start="00:00:00", discharge_end="00:00:00")
+            self.dispatch.disable_dispatch()
 
     def disable_charge_window(self, notify=True):
         """
@@ -3598,6 +3605,14 @@ class Inverter:
         """
         Adjust from exporting or not exporting based on passed target soc
         """
+        # Real-time dispatch (see dispatch.py) owns this inverter's export: it stages the same
+        # block through its own entities, with read-back verification, and is applied from
+        # execute_plan() after the cycle's rate is known. The service-template path below would be
+        # a second, unverified writer against the same block - and its `power` payload is read from
+        # the inverter before this cycle's rate write, so it could only ever repeat the old rate.
+        if self.dispatch.enabled():
+            return
+
         # FB00's Energy Storage Control Switch on an exporting cycle: Feed-in priority - No Grid Charging for a freeze
         # export (PV goes to the load then the grid ahead of the battery, which still covers the load - the plugin
         # offers no Feed-in priority with the Battery Reserve bit, so the inverter's own minimum SoC is the floor), and

@@ -40,6 +40,7 @@ from const import (
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
 from predbat_metrics import metrics
 from inverter import Inverter, calibration_reported
+from dispatch import dispatch_power_for_rate
 import time
 from control_monitor import MODE_CHARGING, MODE_EXPORTING, MODE_FREEZE_CHARGING, MODE_FREEZE_EXPORTING, format_failure
 
@@ -341,6 +342,47 @@ class Execute:
         else:
             inverter.requested_discharge_w = int(inverter.battery_rate_max_discharge * MINUTE_WATT) if reset_rates else None
 
+    def apply_dispatch_intent(self, dispatch_intent, intent):
+        """
+        Apply this cycle's real-time dispatch commands, once the rates are on the inverters.
+
+        Dispatch is an immediate control the inverter obeys until its own failsafe expires, so it
+        has to be re-sent every cycle and it has to carry the rate this cycle actually chose. Both
+        of those are only true here: applying it from adjust_force_export(), as the first version
+        of this feature did, sent the rate left on the inverter by the previous cycle - full power
+        on the first cycle of a low-power export - and needed a stashed rate and an active flag
+        that refresh_config() then reset.
+
+        An inverter with no dispatch intent this cycle is not exporting, so any block still running
+        from an earlier window is stopped here rather than left to the failsafe.
+
+        Args:
+            dispatch_intent (dict): inverter id -> dispatch SOC floor % for inverters exporting
+                this cycle; absent for every other inverter.
+            intent (dict): inverter id -> final rate intent, already applied above. An inverter
+                missing from it was skipped by the read-only or calibration branch, so nothing was
+                written for it and its dispatch is left untouched.
+        """
+        for inverter in self.inverters:
+            dispatch = getattr(inverter, "dispatch", None)
+            if dispatch is None or not dispatch.enabled():
+                continue
+            entry = intent.get(inverter.id)
+            if entry is None:
+                continue
+            if inverter.id not in dispatch_intent:
+                dispatch.disable_dispatch()
+                continue
+            rate_w = entry.get("discharge_rate")
+            if rate_w is None:
+                self.log("Warn: Inverter {} dispatch: no discharge rate for this cycle, dispatch not applied".format(inverter.id))
+                continue
+            dispatch.apply_dispatch(
+                power_w=dispatch_power_for_rate(rate_w),
+                soc_min=dispatch_intent[inverter.id],
+                soc_max=100,
+            )
+
     def record_control_expectations(self, status_per_inverter, monitor_slots, now=None):
         """
         Tell the control-failure monitor what each inverter should now be doing.
@@ -492,6 +534,10 @@ class Execute:
         isCharging = False
         isExporting = False
         intent = {}
+        # Inverter id -> dispatch SOC floor % for inverters exporting this cycle. Applied after the
+        # rates are written (see apply_dispatch_intent), so real-time dispatch carries this cycle's
+        # power and planned depth rather than the previous cycle's.
+        dispatch_intent = {}
         export_rate_alloc = self.allocate_fleet_export_rates()
         # Inverter id -> (mode, slot start minutes, slot end minutes, target percent), for the
         # control-failure monitor. Only the four judged modes are recorded.
@@ -866,6 +912,13 @@ class Execute:
 
                         discharge_rate = export_rate_alloc.get(inverter.id, inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT)
                         rate_owner = "export"
+                        # The depth this export is planned to stop at, per inverter: the planned export
+                        # target, never below this inverter's own reserve. Real-time dispatch uses it as
+                        # the dispatch SOC floor, so between cycles (and for as long as the failsafe
+                        # keeps the block running) the battery cannot discharge past the planned depth -
+                        # the stock path hands the same figure to adjust_export_immediate().
+                        dispatch_soc_min = max(calc_percent_limit(discharge_soc, self.soc_max), inverter.reserve_percent or 0)
+                        dispatch_intent[inverter.id] = int(dispatch_soc_min)
                         inverter.adjust_force_export(True, discharge_start_time, discharge_end_time)
                         if inverter.inv_charge_discharge_with_rate:
                             charge_rate = 0
@@ -881,7 +934,7 @@ class Execute:
                         status_per_inverter[inverter.id] = status
                         # adjust_reserve() clamps to each inverter's own minimum, so an inverter with
                         # a higher reserve rightly stops above the fleet target - judge it at its own
-                        monitor_target = max(calc_percent_limit(discharge_soc, self.soc_max), inverter.reserve_percent or 0)
+                        monitor_target = dispatch_soc_min
                         monitor_slots[inverter.id] = (MODE_EXPORTING, window["start"], window["end"], monitor_target)
                         status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, int(target))))  # append multi-inverter target SoC's together
                         # Immediate export mode
@@ -1188,6 +1241,7 @@ class Execute:
         # the whole fleet before anything is written. Inverters that were skipped by the read-only
         # branch (continue) or the calibration branch (break) recorded no intent and are not written.
         self.apply_rate_intent(intent)
+        self.apply_dispatch_intent(dispatch_intent, intent)
         self.record_control_expectations(status_per_inverter, monitor_slots)
 
         # Count register writes - after the apply pass so the rate writes land in this cycle's count
