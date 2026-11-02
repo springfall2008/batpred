@@ -210,6 +210,9 @@ def dominant_slot_status(minute_counts, precedence):
     return dominant
 
 
+# How long after building no older days the History view tries again
+HISTORY_DAYS_RETRY_MINUTES = 180
+
 # Plan state build_history_days() winds back to each older day and puts back afterwards
 HISTORY_DAY_FAKED_STATE = (
     "minutes_now",
@@ -3724,7 +3727,7 @@ class Output:
         billing = self.history_billing()
         if billing:
             import_cost_data = None
-            if (billing.get("legs") or {}).get("export") is not True:
+            if (billing.get("legs") or {}).get("export") is None:
                 import_cost_data = self.history_minute_data(".cost_today_import", 2)
             self.attach_history_billing(
                 plan_json_yesterday,
@@ -4230,11 +4233,12 @@ class Output:
         """Attach the billing to one History view's plan JSON.
 
         cost_data and import_cost_data are the recorded cost_today / cost_today_import histories (minute data
-        keyed by minutes ago). Unless export billing is being read, Billed is import-only and is compared with
-        Predbat's import cost rather than its net cost, which counts export earnings the bill would not; without
-        the history it needs nothing is shown.
+        keyed by minutes ago). With no export meter being read, Billed is import-only and is compared with
+        Predbat's import cost rather than its net cost, which counts export earnings the bill would not. With an
+        export meter, rows whose export billing hasn't arrived (or failed to read) show none. Without the history
+        it needs nothing is shown.
         """
-        import_only = (billing.get("legs") or {}).get("export") is not True
+        import_only = (billing.get("legs") or {}).get("export") is None
         data = import_cost_data if import_only else cost_data
         if not data:
             return
@@ -4267,11 +4271,15 @@ class Output:
         """
         today = self.now_utc.astimezone(self.local_tz).date()
         billing = self.history_billing()
-        billing_mark = billing.get("complete_until") if billing else None
-        if self.history_days_built_for == today and self.history_days_billing_mark == billing_mark:
+        # Any half-hour arriving, a late one filling a gap included, changes the mark
+        import_slots = (billing or {}).get("slots", {}).get("import") or {}
+        billing_mark = [len(import_slots), max(import_slots)] if import_slots else None
+        retry_due = self.history_days_retry_at is not None and self.now_utc >= self.history_days_retry_at
+        if self.history_days_built_for == today and self.history_days_billing_mark == billing_mark and not retry_due:
             return
         self.history_days_built_for = today
         self.history_days_billing_mark = billing_mark
+        self.history_days_retry_at = None
         days = {}
         days_back_max = min(BILLING_DAYS, self.max_days_previous - 1)
         if days_back_max >= 2:
@@ -4281,6 +4289,9 @@ class Output:
                 # The older days are a view; a failure here must never stop the plan
                 self.log("Warn: History: could not build the older days for the History view: {}".format(error))
                 days = {}
+            if not days:
+                # History not readable yet (just started, recorder slow): try again in a few hours rather than tomorrow
+                self.history_days_retry_at = self.now_utc + timedelta(minutes=HISTORY_DAYS_RETRY_MINUTES)
         self.dashboard_item(self.prefix + ".plan_history", state=len(days), attributes={"friendly_name": "Plan history days", "icon": "mdi:history", "days": days})
 
     def build_history_days(self, today, days_back_max, billing):
@@ -4293,7 +4304,7 @@ class Output:
         rates_export_data = self.history_minute_data(".rates_export", history_days) or {}
         soc_data = self.history_minute_data(".soc_kw_h0", history_days) or self.soc_kwh_history
         status_data = self.get_history_wrapper(entity_id=self.prefix + ".status", days=history_days, required=False)
-        import_cost_data = self.history_minute_data(".cost_today_import", history_days) if billing and (billing.get("legs") or {}).get("export") is not True else None
+        import_cost_data = self.history_minute_data(".cost_today_import", history_days) if billing and (billing.get("legs") or {}).get("export") is None else None
 
         saved = {name: getattr(self, name) for name in HISTORY_DAY_FAKED_STATE if hasattr(self, name)}
         saved["car_charging_slots"] = copy.deepcopy(self.car_charging_slots)

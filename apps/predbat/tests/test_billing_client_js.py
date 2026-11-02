@@ -55,7 +55,10 @@ def _check_js(failed):
         ("unpublished billing shown as a dash", "&mdash;" in table),
         ("event label rendered in the row", "billing_event" in table),
         ("COLUMN_HEADER_HELP has billed and billing_diff", "billed:" in table and "billing_diff:" in table),
-        ("summary strip function", "function renderBillingSummary(" in js and "billing_summary" in _function_source(js, "renderBillingSummary") and "billing complete to" in _function_source(js, "renderBillingSummary")),
+        (
+            "summary strip function",
+            "function renderBillingSummary(" in js and "billing_summary" in _function_source(js, "renderBillingSummary") and "billed to" in _function_source(js, "renderBillingSummary") and "missing_slots" in _function_source(js, "renderBillingSummary"),
+        ),
         ("summary strip says import only", "import only" in _function_source(js, "renderBillingSummary")),
         ("picker fetches an older day on demand", "./api/plan_history?date=" in _function_source(js, "selectHistoryDay")),
         ("default History view needs no fetch", "if (!day" in _function_source(js, "selectHistoryDay") or "if (day && " in _function_source(js, "selectHistoryDay")),

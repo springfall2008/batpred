@@ -789,6 +789,62 @@ def test_attach_implausible_rate_hidden():
     return False
 
 
+def test_reader_cache_tied_to_meter():
+    """The saved cache records which meters it came from, and is dropped when the meter changes."""
+    import asyncio
+    from billing import BillingReader
+
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    storage = _FakeStorage()
+    first = BillingReader(_Owner(storage), "octopus_user", "billing")
+
+    async def old_meter(query, context):
+        """A full day of 10p half-hours."""
+        return _day_response(_query_day(query), cost=10.0)
+
+    asyncio.run(first.refresh(old_meter, {"import": ("A-1", "IMP"), "export": None}, now_utc))
+    saved = storage.data.get(("octopus_user", "billing")) or {}
+    if saved.get("mpans") != {"import": "IMP", "export": None}:
+        print("ERROR: the saved billing cache should record its meters, got {}".format(saved.get("mpans")))
+        return True
+    second = BillingReader(_Owner(storage), "octopus_user", "billing")
+    asyncio.run(second.load())
+
+    async def new_meter(query, context):
+        """Nothing published yet on the new meter."""
+        return _response([])
+
+    asyncio.run(second.refresh(new_meter, {"import": ("A-1", "IMP2"), "export": None}, now_utc + timedelta(hours=4)))
+    if second.cache.get("import") or (storage.data.get(("octopus_user", "billing")) or {}).get("mpans") != {"import": "IMP2", "export": None}:
+        print("ERROR: a new meter should drop the old meter's billing and save the new meters")
+        return True
+    return False
+
+
+def test_sensor_needs_export_when_configured():
+    """With an export meter whose read failed, a day isn't complete on import alone, so the state never quietly becomes import-only."""
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    cache = {"import": _slots_for_day(date(2026, 11, 1))}
+    state, attributes = build_billing_sensor(cache, {"import": True, "export": False}, "octopus", now_utc, LONDON)
+    if state is not None or attributes["days"]["2026-11-01"]["complete"] is not False:
+        print("ERROR: a failed export read should leave the day incomplete and no state, got {} {}".format(state, attributes["days"]["2026-11-01"]["complete"]))
+        return True
+    return False
+
+
+def test_attach_shows_gaps():
+    """The summary says how far billing reaches and how many half-hours before that are missing."""
+    from billing import attach_billing
+
+    billing = _billing_attrs({_key(m): _slot(1.0, 10.0) for m in (0, 30, 90, 120)})
+    plan = attach_billing(_plan([0, 30, 60, 90, 120, 150]), billing, VIEW_MIDNIGHT, 30, {m: 10.0 for m in range(0, 180, 30)}, 55.52, {}, False, None, None)
+    summary = plan["billing_summary"]
+    if summary.get("billed_until") != _key(150) or summary.get("missing_slots") != 1:
+        print("ERROR: billing reaches 02:30 with the 01:00 half-hour missing, got {} / {}".format(summary.get("billed_until"), summary.get("missing_slots")))
+        return True
+    return False
+
+
 def run_billing_tests(my_predbat):
     """Run the billing tests."""
     failed = False
@@ -830,6 +886,9 @@ def run_billing_tests(my_predbat):
         test_attach_standing_pro_rata,
         test_attach_hides_diff_when_predbat_saw_nothing,
         test_attach_implausible_rate_hidden,
+        test_reader_cache_tied_to_meter,
+        test_sensor_needs_export_when_configured,
+        test_attach_shows_gaps,
     ):
         print("billing: {}".format(test.__name__))
         if test():

@@ -105,6 +105,7 @@ def _prepare_history_days(my_predbat, max_days_previous=8, missing=()):
     my_predbat.max_days_previous = max_days_previous
     my_predbat.history_days_built_for = None
     my_predbat.history_days_billing_mark = None
+    my_predbat.history_days_retry_at = None
     calls = []
     _spy_replay(my_predbat, calls)
     return now_utc, calls, original_run_pred
@@ -155,7 +156,12 @@ def _test_history_days_rebuild_on_new_billing(my_predbat, failed):
         my_predbat.dashboard_item(
             my_predbat.prefix + ".billing",
             state=1.0,
-            attributes={"complete_until": "2024-10-03T00:00:00Z", "slots": {"import": {"2024-10-01T10:00:00Z": {"kwh": 1.0, "cost": 1.0, "standing": 0.0, "buckets": {}}}}, "legs": {"import": True, "export": None}, "supplier": "octopus"},
+            attributes={
+                "complete_until": "2024-10-03T00:00:00Z",
+                "slots": {"import": {"2024-10-01T10:00:00Z": {"kwh": 1.0, "cost": 1.0, "standing": 0.0, "buckets": {}}, "2024-10-01T10:30:00Z": {"kwh": 1.0, "cost": 1.0, "standing": 0.0, "buckets": {}}}},
+                "legs": {"import": True, "export": None},
+                "supplier": "octopus",
+            },
         )
         my_predbat.calculate_history_days()
         second = len(calls) - first
@@ -163,7 +169,7 @@ def _test_history_days_rebuild_on_new_billing(my_predbat, failed):
         _cleanup_history_days(my_predbat, original_run_pred)
         my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
     if first != 6 or second != 6:
-        print("ERROR: a new complete_until should rebuild the older days, got {} then {}".format(first, second))
+        print("ERROR: new billing should rebuild the older days, got {} then {}".format(first, second))
         failed = True
     return failed
 
@@ -249,7 +255,7 @@ def _test_yesterday_json_has_billing(my_predbat, failed):
 
 
 def _test_import_only_when_export_leg_missing(my_predbat, failed):
-    """With export billing unreadable, yesterday compares import only, and shows nothing without import cost history."""
+    """With an export meter whose billing can't be read, the read counts as failed: no billing is shown rather than an import-only comparison."""
     print("history_days: import-only when the export leg failed")
     _yesterday_billing(my_predbat, {"import": True, "export": False})
     try:
@@ -257,8 +263,8 @@ def _test_import_only_when_export_leg_missing(my_predbat, failed):
         plan_without = _run_yesterday_with_rows(my_predbat, missing=(".cost_today_import",))
     finally:
         my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
-    if (plan.get("billing_summary") or {}).get("import_only") is not True:
-        print("ERROR: an unreadable export leg should make the comparison import-only, got {}".format(plan.get("billing_summary")))
+    if "billing_summary" in plan:
+        print("ERROR: with an export meter whose billing failed to read, rows without export billing should show none, got {}".format(plan.get("billing_summary")))
         failed = True
     if "billing_summary" in plan_without:
         print("ERROR: import-only with no cost_today_import history should show no billing, got {}".format(plan_without.get("billing_summary")))
@@ -510,6 +516,63 @@ def _test_older_day_needs_cost_history(my_predbat, failed):
     return failed
 
 
+def _test_history_days_retry_after_failure(my_predbat, failed):
+    """A build that produced nothing (history not there yet) is tried again a few hours later, not left until tomorrow."""
+    print("history_days: retried a few hours after a failed build")
+    now_utc, calls, original_run_pred = _prepare_history_days(my_predbat, missing=(".rates",))
+    attempts = []
+    real_build = my_predbat.build_history_days
+
+    def _counting_build(*args, **kwargs):
+        """Count build attempts."""
+        attempts.append(my_predbat.now_utc)
+        return real_build(*args, **kwargs)
+
+    my_predbat.build_history_days = _counting_build
+    my_predbat.history_days_retry_at = None
+    try:
+        my_predbat.calculate_history_days()
+        my_predbat.now_utc = now_utc + timedelta(hours=1)
+        my_predbat.calculate_history_days()
+        my_predbat.now_utc = now_utc + timedelta(hours=3, minutes=1)
+        my_predbat.calculate_history_days()
+    finally:
+        del my_predbat.build_history_days
+        _cleanup_history_days(my_predbat, original_run_pred)
+        my_predbat.now_utc = now_utc
+    if len(attempts) != 2:
+        print("ERROR: expected a build, none an hour later, and a retry after 3 hours; got {} attempts".format(len(attempts)))
+        failed = True
+    return failed
+
+
+def _test_rebuild_on_filled_gap(my_predbat, failed):
+    """A late half-hour filling a gap (complete_until unchanged) still rebuilds the older days."""
+    print("history_days: rebuilt when a gap is filled")
+    now_utc, calls, original_run_pred = _prepare_history_days(my_predbat)
+    slot = {"kwh": 1.0, "cost": 1.0, "standing": 0.0, "buckets": {}}
+    try:
+        my_predbat.dashboard_item(
+            my_predbat.prefix + ".billing", state=1.0, attributes={"complete_until": "2024-10-01T10:00:00Z", "slots": {"import": {"2024-10-01T09:30:00Z": slot, "2024-10-01T11:00:00Z": slot}}, "legs": {"import": True, "export": None}, "supplier": "octopus"}
+        )
+        my_predbat.calculate_history_days()
+        first = len(calls)
+        my_predbat.dashboard_item(
+            my_predbat.prefix + ".billing",
+            state=1.0,
+            attributes={"complete_until": "2024-10-01T10:00:00Z", "slots": {"import": {"2024-10-01T09:30:00Z": slot, "2024-10-01T10:30:00Z": slot, "2024-10-01T11:00:00Z": slot}}, "legs": {"import": True, "export": None}, "supplier": "octopus"},
+        )
+        my_predbat.calculate_history_days()
+        second = len(calls) - first
+    finally:
+        _cleanup_history_days(my_predbat, original_run_pred)
+        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+    if first != 6 or second != 6:
+        print("ERROR: a filled gap should rebuild the older days, got {} then {}".format(first, second))
+        failed = True
+    return failed
+
+
 def run_history_days_tests(my_predbat):
     """Run the History replay and 7-day History tests."""
     failed = False
@@ -527,4 +590,6 @@ def run_history_days_tests(my_predbat):
     failed = _test_clock_change_yesterday_view(my_predbat, failed)
     failed = _test_import_only_when_export_not_read(my_predbat, failed)
     failed = _test_older_day_needs_cost_history(my_predbat, failed)
+    failed = _test_history_days_retry_after_failure(my_predbat, failed)
+    failed = _test_rebuild_on_filled_gap(my_predbat, failed)
     return failed

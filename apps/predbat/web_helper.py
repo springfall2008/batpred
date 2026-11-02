@@ -8002,10 +8002,13 @@ def get_plan_renderer_js():
         const diffColor = summary.diff > 0.005 ? '#b00' : (summary.diff < -0.005 ? '#080' : 'inherit');
         const supplier = summary.supplier ? summary.supplier.charAt(0).toUpperCase() + summary.supplier.slice(1) : 'supplier';
         let complete = '';
-        if (summary.complete_until) {
-            const when = new Date(summary.complete_until);
+        if (summary.billed_until) {
+            const when = new Date(summary.billed_until);
             if (!isNaN(when.getTime())) {
-                complete = `billing complete to ${when.toLocaleString([], {weekday: 'short', hour: '2-digit', minute: '2-digit'})}`;
+                complete = `billed to ${when.toLocaleString([], {weekday: 'short', hour: '2-digit', minute: '2-digit'})}`;
+                if (summary.missing_slots > 0) {
+                    complete += ` (${summary.missing_slots} slot${summary.missing_slots === 1 ? '' : 's'} before that not billed yet, shown as &mdash;)`;
+                }
             }
         }
         const tile = (label, value, style) => `<div style="border: 1px solid #ccc; border-radius: 4px; padding: 6px 10px; font-size: 12px;">${label}<b style="display: block; font-size: 15px; ${style || ''}">${value}</b></div>`;
@@ -8017,7 +8020,7 @@ def get_plan_renderer_js():
         html += tile('Export kWh', kwh(summary.export_kwh));
         html += tile('Standing charge', `${money(summary.standing_predbat)} vs ${money(summary.standing_billed)}`);
         html += '</div>';
-        const notes = [complete, summary.import_only ? 'import only: export billing is not being read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
+        const notes = [complete, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
         html += `<p style="font-size: 12px; margin: 0 0 8px 0; opacity: 0.8;">${notes.join(' &middot; ')}</p>`;
         return html;
     }

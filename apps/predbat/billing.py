@@ -227,8 +227,8 @@ def _day_summary(cache, legs, day, tz):
     exports = [cache.get("export", {})[key] for key in keys if key in cache.get("export", {})]
     import_complete = len(imports) == len(keys)
     export_complete = len(exports) == len(keys)
-    # A day whose export is expected but not all published would give a net cost that is wrong
-    export_expected = legs.get("export") is True
+    # With an export meter, a day without all its export (not published, or the read failed) would give a wrong net cost
+    export_expected = legs.get("export") is not None
     return {
         "complete": import_complete and (export_complete or not export_expected),
         "import_cost": round(sum(slot["cost"] for slot in imports), 4),
@@ -296,6 +296,8 @@ class BillingReader:
         self.cache = {}
         self.legs = {"import": None, "export": None}
         self.fetched_at = None
+        # The meters the cache was read from; a different meter (or account) starts the cache afresh
+        self.mpans = None
 
     async def load(self):
         """Restore the cache, legs and last fetch time from storage, if any were saved."""
@@ -305,6 +307,7 @@ class BillingReader:
             return
         self.cache = data.get("slots") or {}
         self.legs = data.get("legs") or self.legs
+        self.mpans = data.get("mpans")
         fetched_at = data.get("fetched_at")
         if isinstance(fetched_at, str):
             try:
@@ -319,7 +322,7 @@ class BillingReader:
         storage = self.owner.storage
         if not storage:
             return
-        blob = {"slots": self.cache, "legs": self.legs, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
+        blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
         await storage.save(self.storage_app, self.storage_name, blob, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=BILLING_DAYS * 2))
 
     def due(self, now_utc):
@@ -337,6 +340,11 @@ class BillingReader:
         """
         tz = _zone(self.owner.local_tz)
         changed = False
+        meters = {leg: (mpans.get(leg) or (None, None))[1] for leg in BILLING_LEGS}
+        if self.mpans is not None and self.mpans != meters:
+            self.owner.log("Billing: meters changed, discarding the billing read for the previous meters")
+            self.cache = {}
+        self.mpans = meters
         for leg in BILLING_LEGS:
             target = mpans.get(leg)
             if not target:
@@ -422,7 +430,8 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         # Rows shorter than (or not a multiple of) the half-hourly bill can't be matched to it
         return plan_json
     exports = {} if import_only else (slots.get("export") or {})
-    export_required = not import_only and ((billing.get("legs") or {}).get("export") is True)
+    # An export meter whose billing hasn't arrived (or failed to read) means no net bill for that row yet
+    export_required = not import_only and ((billing.get("legs") or {}).get("export") is not None)
     events = events or {}
     updates = []
     totals = {"predbat": 0.0, "billed": 0.0, "standing_predbat": 0.0, "standing_billed": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "predbat_import_kwh": 0.0, "predbat_export_kwh": 0.0, "rate_cost": 0.0, "rate_kwh": 0.0, "predbat_rate_cost": 0.0}
@@ -471,6 +480,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes)))
     if not any(update[1] is not None for update in updates):
         return plan_json
+    last_billed = max(index for index, update in enumerate(updates) if update[1] is not None)
+    missing_slots = sum(1 for update in updates[:last_billed] if update[1] is None)
+    billed_until = (view_midnight_utc + timedelta(minutes=updates[last_billed][0]["slot_minute"] + plan_interval_minutes)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)
     if totals["rate_kwh"] > 0.5 and totals["predbat_rate_cost"] > 0:
         ratio = totals["rate_cost"] / totals["predbat_rate_cost"]
         if not BILLING_PLAUSIBLE_RATE_RATIO[0] <= ratio <= BILLING_PLAUSIBLE_RATE_RATIO[1]:
@@ -488,7 +500,8 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         "standing_billed": _pounds(totals["standing_billed"]),
         "import_kwh": [None if predbat_import_kwh is None else round(totals["predbat_import_kwh"], 2), round(totals["import_kwh"], 2)],
         "export_kwh": [None if predbat_export_kwh is None else round(totals["predbat_export_kwh"], 2), None if import_only or not exports else round(totals["export_kwh"], 2)],
-        "complete_until": billing.get("complete_until"),
+        "billed_until": billed_until,
+        "missing_slots": missing_slots,
         "import_only": bool(import_only),
         "supplier": billing.get("supplier"),
     }
