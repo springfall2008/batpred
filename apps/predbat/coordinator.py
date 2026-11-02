@@ -17,9 +17,7 @@ to them when shared. A container taking only numbers cannot leak a name or a cre
 however the catalogue grows, so components add facts freely by choosing a container.
 """
 
-import hashlib
 import re
-import secrets
 import threading
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -113,7 +111,7 @@ def _clean_token(value):
 
 
 def _clean_scalar(value):
-    """Any scalar, for account_ids - the container pseudonymises whatever it holds, so its type is open."""
+    """Any scalar, for account_ids - an identifier may be a string or a number, so its type is open."""
     return value if isinstance(value, (str, int, float, bool)) else None
 
 
@@ -207,586 +205,60 @@ def _clean_descriptor(value):
     return kept
 
 
-# container name -> (redaction class, value cleaner applied per key)
+# container name -> value cleaner applied per key. Every container is published as reported: identifiers
+# are not secret (maintainer decision, 2 Nov 2026), so there is no pseudonymised class any more - see Redactor.
 CONTAINER_SPEC = {
-    "hardware_ids": ("clear", _clean_string),
-    "account_ids": ("pseudonym", _clean_scalar),
-    "info": ("clear", _clean_string),
-    "ratings": ("clear", _clean_number),
-    "coverage": ("clear", _clean_measure_or_tokens),
-    "entities": ("clear", _clean_descriptor),
-    "capabilities": ("clear", _clean_bool),
+    "hardware_ids": _clean_string,
+    "account_ids": _clean_scalar,
+    "info": _clean_string,
+    "ratings": _clean_number,
+    "coverage": _clean_measure_or_tokens,
+    "entities": _clean_descriptor,
+    "capabilities": _clean_bool,
 }
 
 # Containers whose keys are a closed set - anything else is dropped and logged
 CONTAINER_KEYS = {"capabilities": CAPABILITY_KEYS}
 
-# Container name sets derived from CONTAINER_SPEC's own class tags rather than hardcoded, so a
-# container added there later is redacted correctly with nothing extra to keep in sync - a
-# hardcoded tuple here already went stale once, when entities moved into CONTAINER_SPEC as a
-# clear container and a copy of the old tuple would have kept quietly skipping it.
-CLEAR_CONTAINERS = tuple(name for name, (redaction_class, _) in CONTAINER_SPEC.items() if redaction_class == "clear")
-PSEUDONYM_CONTAINERS = tuple(name for name, (redaction_class, _) in CONTAINER_SPEC.items() if redaction_class == "pseudonym")
-
-# Key names _substitute_key must never rewrite, however coincidentally a component's account_ids
-# value equals one of them: Predbat's own document structure (section names, container names, the
-# two fleet-wide keys), not user data, so an exact-match rewrite here would make the whole section
-# or container silently vanish from the published catalogue rather than merely hide one value.
-PROTECTED_KEY_NAMES = frozenset(SECTION_SPEC) | frozenset(CONTAINER_SPEC) | {"components", "observations"}
-
-# A clear-container value shaped like an identifier rather than a measurement, once separators a
-# component might have used to format one are stripped: unanchored so it matches an identifier
-# embedded in a longer string ("MPAN 1234567890123"), not only a value that is nothing else.
-# str() of a misfiled float ("1234567890123.0") still trips it, since the "." is one of the
-# stripped separators, so casting an API number through float() cannot launder it. Underscore and
-# comma are included alongside whitespace/hyphen/slash/dot - grouping digits with "_" (a Python-
-# style numeric literal) or "," (thousands separators) reads identically to a human as the same
-# identifier and was verified, in an adversarial pass, to otherwise slip through untouched.
-DIGIT_RUN_RE = re.compile(r"\d{10,}")
-SEPARATOR_RE = re.compile(r"[\s\-/.,_]")
-
-# Field names that name a location fact by themselves, regardless of what their value looks like.
-# A latitude/longitude pair cannot be recognised from one value in isolation - a plausible
-# latitude and an ordinary rating overlap in numeric range - so this checks what the field is
-# called instead of what it contains.
-LOCATION_KEY_NAMES = frozenset({"lat", "latitude", "lon", "lng", "longitude", "postcode", "post_code"})
+# An email address anywhere in a string: the one kind of personal data the published catalogue withholds
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+")
+EMAIL_PLACEHOLDER = "<email>"
 
 
 class Redactor:
-    """Applies the catalogue's redaction classes to an assembled document.
+    """Removes email addresses from an assembled catalogue - the only thing the published document withholds.
 
-    Pseudonymises everything in a pseudonym container (account_ids today) and anything
-    cross-linking to it, substitutes those originals wherever else they appear (entity ids and
-    dict keys included), and defensively pseudonymises identifier-shaped values misfiled into a
-    clear container or used as a container key - including one nested inside a descriptor dict
-    or a token list, not just a container's top-level scalars. Two asymmetries keep this from
-    over-reaching: substring replacement is reserved for genuine identifiers (never a whole dict
-    key, which is rewritten by exact match only - see _substitute_key), and a value inside
-    hardware_ids is only shape-flagged when it is nothing BUT digits, since a letter-prefixed
-    vendor serial with a long digit tail is that container's entire declared purpose.
+    Identifiers are not secret (maintainer decision, 2 Nov 2026): hardware serials, account, site,
+    plant and system ids, charger ids and location are all published exactly as the components
+    reported them. Replacing them with tokens broke the records for the very reader they exist for - a
+    tokenised entity id is a dead end for anything that re-binds configuration from a record - and
+    an identifier shape guard kept mistaking ordinary values (a Sigenergy system-id slug, a firmware
+    build hash) for misfiled ones.
 
-    A hardware serial is not secret, so a serial a record declares - hardware_ids.serial or an
-    entry in the structural serials list - is clear wherever it appears as a whole token, however
-    many digits it has (Solis, Deye and Sunsynk serials are nothing but digits): in hardware_ids,
-    in a device_id built from it, in a duplicate_serial observation. See _collect_serials.
+    Credentials never get this far: validation refuses any field whose name reads as one
+    (is_secret_key), in every container. What is left to withhold is an email address a component
+    put into a value or a dict key - a login identifier in a device_id, say - which this replaces
+    with EMAIL_PLACEHOLDER wherever it appears.
     """
 
-    # Minimum length of an original before it is substituted inside other strings; below this a
-    # substring replacement would corrupt unrelated text more often than it would hide anything.
-    # Applied to whole-string matches too, so a one- or two-character coincidence cannot trigger
-    # a false-positive rewrite of unrelated data.
-    MIN_SUBSTITUTE = 6
-
-    def __init__(self, salt, log=None, warned=None):
-        """Hold the installation salt, an optional logger for misfiled values, and the set of
-        warnings already logged - owned by the caller so a warning is logged once per process
-        rather than on every redaction (every debug dump and publish)."""
-        self.salt = salt
-        self.log = log
-        self.warned = warned if warned is not None else set()
-        # Shape-guard hits, held until the walk is done - see _flush_warnings
-        self._pending_warnings = []
-        # device_id of the record being walked, so a warning is deduplicated per record rather
-        # than per field - see _flush_warnings
-        self._record_device_id = None
-        # Every variant of an account identifier noted from a pseudonym container or an
-        # identity-derived device_id: a guard hit wholly explained by one of these is the
-        # redaction working as designed, not a misfiling, so it is not warned about
-        self._identity_variants = set()
-        self.originals = {}
-        # Subset of self.originals eligible for substring replacement inside a VALUE (never a
-        # dict key - see _substitute_key) - true identifiers: account_ids values, an
-        # identity-derived device_id (one whose record also carries account_ids - see _walk), and
-        # anything the shape or key guard catches. A device_id with no account_ids alongside it is
-        # never noted at all, so an ordinary word used as one (e.g. "charger") cannot corrupt
-        # unrelated text it happens to share a substring with.
-        self.substring_ok = set()
-        self._substring_order = []
-        # Whole-token patterns for every serial the document's records declare - see _collect_serials
-        self._serial_patterns = []
-
-    def token(self, value):
-        """The stable pseudonym for one value under this installation's salt."""
-        digest = hashlib.sha256((self.salt + str(value)).encode("utf-8")).hexdigest()
-        return "#" + digest[:8]
-
-    def _note(self, value, substring=False, identity=False):
-        """Record an original so it can later be swapped for its token wherever it appears.
-
-        Builds the FULL variant set (see _numeric_variants/_identifier_variants) before minting
-        anything, then reuses whichever token, if any, a previous _note() call already assigned to
-        one of those variants - only minting a fresh token when none of them has been seen before.
-        Without this, the same identifier noted twice in different textual forms (a string MPAN
-        then its float echo; "AB-12CD34" then "ab_12cd34") derived its token from whichever form
-        happened to be handed to THIS call and blindly overwrote any mapping an earlier call had
-        already made for a shared variant - two calls for one real-world identifier then produced
-        two different, order-dependent tokens, defeating the stability a maintainer relies on to
-        correlate records within one dump and across successive dumps from the same installation.
-
-        Registers every numeric variant of the value (see _numeric_variants) and every
-        case-folded / separator-swapped variant (see _identifier_variants), composed together -
-        every combination of the two axes - so an identifier noted once resolves to the same
-        token however a component later echoes it: as a string, an int, a float, upper- or
-        lower-cased, or with "-" and "_" interchanged. That last pair matters because
-        get_entity_name()-style helpers commonly lower-case an identifier and swap "-" for "_"
-        when folding it into an entity id, producing a DIFFERENT string from the noted original -
-        one neither the exact-match nor the substring pass would otherwise ever match.
-        substring=True additionally makes every one of those variants eligible for substring
-        replacement inside a VALUE (never a dict key - see _substitute_key); otherwise each is
-        only ever matched by whole-string equality. Registering a variant here unconditionally,
-        even one shorter than MIN_SUBSTITUTE, is safe: nothing is ever matched against it below
-        that floor - see _exact_match/_substitute_text. identity=True marks the value as an account
-        identifier reported where one belongs - see _flush_warnings.
-        """
-        text = str(value)
-        variants = {text} | self._numeric_variants(text)
-        for variant in list(variants):
-            variants |= self._identifier_variants(variant)
-        existing = next((self.originals[variant] for variant in variants if variant in self.originals), None)
-        token = existing if existing is not None else self.token(text)
-        for variant in variants:
-            self.originals[variant] = token
-            if substring:
-                self.substring_ok.add(variant)
-            if identity:
-                self._identity_variants.add(variant)
-        return token
-
-    def _identifier_variants(self, text):
-        """Every case-folded / separator-swapped form of `text` a component might embed it under.
-
-        A helper shaped like Octopus's get_entity_name() - and Solcast's own entity naming embeds
-        a site id the same way - lower-cases an identifier and replaces "-" with "_" when folding
-        it into an entity id, so "A-1234ABCD" becomes "a_1234abcd": a string that is neither equal
-        to, nor contains as a literal substring, the noted original. Both fold directions are
-        registered, not just lower-casing: the canonical original noted first can itself be
-        lower-case (an entity_id, say), and a component elsewhere echoes an UPPER-cased form of the
-        same identifier (a account number as a user typed it) - folding down alone would leave that
-        upper-cased echo unmatched, since it is a case OTHER than the one that got registered.
-        Registering the lower-cased form, the upper-cased form, both separator directions and every
-        combination of the two axes closes that gap once, in shared code, rather than as a
-        per-component workaround.
-        """
-        variants = {text, text.lower(), text.upper()}
-        for source in list(variants):
-            variants.add(source.replace("-", "_"))
-            variants.add(source.replace("_", "-"))
-        return variants
-
-    def _numeric_variants(self, text):
-        """Every textual form representing the same integral value as `text`.
-
-        An identifier can be reported as a string, an int or a float depending on where a
-        component got it from ("123456" in account_ids, 123456.0 echoed in a ratings field), and
-        the exact-match substitution pass has to catch it whichever form it turns up in elsewhere
-        - a bare digit string and its "X.0" float repr must map to the same token in BOTH
-        directions, or the pair leaks each other's raw form right next to the one that got
-        tokenised.
-        """
-        variants = {text}
-        sign, body = ("-", text[1:]) if text.startswith("-") else ("", text)
-        if body.isdigit():
-            variants.add(sign + body + ".0")
-        elif body.endswith(".0") and body[:-2].isdigit():
-            variants.add(sign + body[:-2])
-        return variants
-
-    @staticmethod
-    def _declared_serials(record):
-        """The serials one record declares for itself: hardware_ids.serial and every entry in serials."""
-        declared = set()
-        hardware_ids = record.get("hardware_ids")
-        if isinstance(hardware_ids, dict) and hardware_ids.get("serial") not in (None, ""):
-            declared.add(str(hardware_ids["serial"]))
-        serials = record.get("serials")
-        if isinstance(serials, list):
-            declared |= {str(serial) for serial in serials if serial not in (None, "")}
-        return declared
-
-    def _collect_serials(self, node):
-        """Every serial any record in the document declares, anywhere in it.
-
-        Collected before the walk so the shape guard can leave a serial readable wherever it
-        turns up - a device_id built from it, the duplicate_serial observation that names it -
-        not only inside the record that declared it.
-        """
-        found = set()
-        if isinstance(node, dict):
-            found |= self._declared_serials(node)
-            for value in node.values():
-                found |= self._collect_serials(value)
-        elif isinstance(node, list):
-            for entry in node:
-                found |= self._collect_serials(entry)
-        return found
-
-    def _strip_serials(self, text):
-        """`text` with every declared serial removed where it stands as a whole token.
-
-        Whole-token only - bounded by a non-alphanumeric character or the string's ends, matched
-        case-insensitively as entity ids fold case - so "solis:1031260253072197" and
-        "sensor.predbat_solis_1031260253072197_soc" lose the serial, but a short serial that
-        happens to sit inside a longer number does not split that number's digit run and let a
-        misfiled MPAN through.
-        """
-        for pattern in self._serial_patterns:
-            text = pattern.sub("", text)
-        return text
-
-    def _pseudonym_values(self, node):
-        """Every value held in a pseudonym container (account_ids) anywhere in this record."""
-        values = set()
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if key in PSEUDONYM_CONTAINERS and isinstance(value, dict):
-                    values |= {str(entry) for entry in value.values()}
-                else:
-                    values |= self._pseudonym_values(value)
-        elif isinstance(node, list):
-            for entry in node:
-                values |= self._pseudonym_values(entry)
-        return values
-
-    @staticmethod
-    def _whole_token(text):
-        """A case-insensitive pattern matching `text` only where it stands as a whole token.
-
-        Bounded by a non-alphanumeric character or the string's ends, so "2306178123" is found in
-        "deye:2306178123" and "sensor.predbat_solis_2306178123_soc" but not inside "inv98765432".
-        """
-        return re.compile(r"(?<![0-9A-Za-z]){}(?![0-9A-Za-z])".format(re.escape(text)), re.IGNORECASE)
-
-    def _serial_derived(self, record):
-        """Whether a record's device_id is built from its own serial rather than from an account identifier.
-
-        True only when a serial the record declares stands in the device_id as a whole token and
-        none of the record's own pseudonym values does - whole tokens both ways, as the shape
-        guard matches serials (see _strip_serials). A serial merely sitting inside a longer token
-        is coincidence, not construction; and an account id counts however short it is, since one
-        under MIN_SUBSTITUTE is not otherwise caught by the substring pass. Deye's "deye:{serial}"
-        beside a station id in account_ids is serial-derived; Octopus's "octopus:{mpan}" declares
-        no serial and a device_id that embeds an account id does, so both stay identity-derived
-        exactly as before.
-        """
-        device_id = record["device_id"]
-        if not any(self._whole_token(serial).search(device_id) for serial in self._declared_serials(record)):
-            return False
-        return not any(self._whole_token(value).search(device_id) for value in self._pseudonym_values(record) if value)
-
-    def _misfiled(self, value, strict_numeric=False):
-        """Whether a value looks like an identifier rather than a measurement, a vendor code, or ordinary text.
-
-        A NUMERIC value is judged on its INTEGER PART's digit count, not its stringified repr: a
-        genuine measurement computed as a float (an efficiency, a percentage, a unit conversion)
-        can easily carry ten-plus digits after the decimal point - str(1/3) is
-        "0.3333333333333" - and judging the whole repr would flag every one of those as a
-        misfiled identifier, silently turning a number into a string for every consumer of a
-        numbers-only container. int(1234567890123.0) is still 1234567890123, so a genuinely
-        misfiled float identifier is still caught. A STRING keeps the separator-stripped
-        digit-run search.
-
-        strict_numeric additionally requires a string to be nothing BUT digits before it counts -
-        used only inside hardware_ids, where a letter-prefixed serial with a long digit tail (the
-        industry-standard shape: "HV2160123456") is that container's entire declared purpose, not
-        a misfiling; a BARE all-digit string there is still genuinely suspicious, since an MPAN
-        misfiled where a serial belongs looks exactly like one.
-
-        A serial some record declares is never a misfiling: it is removed (as a whole token - see
-        _strip_serials) before any of the above is judged, so a declared all-digit serial and a
-        device_id built from one stay readable while anything left beside them is still checked.
-        """
-        if isinstance(value, bool):
-            return False
-        if isinstance(value, (int, float)):
-            try:
-                integer_part = abs(int(value))
-            except (ValueError, OverflowError):
-                return False
-            if not self._strip_serials(str(integer_part)):
-                return False
-            return len(str(integer_part)) >= 10
-        text = self._strip_serials(str(value))
-        if "@" in text:
-            return True
-        stripped = SEPARATOR_RE.sub("", text)
-        if strict_numeric:
-            return len(stripped) >= 10 and stripped.isdigit()
-        return bool(DIGIT_RUN_RE.search(stripped))
-
-    def _is_location_key(self, name):
-        """Whether a field name itself names a location fact, independent of its value's shape."""
-        if not name:
-            return False
-        return name.rsplit(".", 1)[-1].lower() in LOCATION_KEY_NAMES
-
-    def _guard_scalar(self, container, name, value):
-        """Pseudonymise one scalar value if it looks misfiled or sits under a location-named field, logging where it was found."""
-        strict_numeric = container == "hardware_ids"
-        location = self._is_location_key(name)
-        if not (location or self._misfiled(value, strict_numeric=strict_numeric)):
-            return value
-        label = container if container == name else "{}.{}".format(container, name)
-        message = "Warn: Coordinator: {} looks like an identifier in a clear container - pseudonymised".format(label)
-        # A location-named field is flagged by its name, whatever the value, so it is always warned about
-        self._pending_warnings.append((message, None if location else value, strict_numeric, self._record_device_id))
-        return self._note(value, substring=True)
-
-    def _guard_value(self, container, name, value):
-        """Shape-guard one clear-container value, recursing through nested dicts and lists to reach every scalar.
-
-        Most clear containers (hardware_ids, info, ratings, coverage) hold a flat dict of
-        scalars, so guarding the top-level value would be enough for those. entities is the
-        exception every future reporter populates: its values are descriptor dicts (entity_id,
-        unit, min, max, options, ...), so a scalar-only guard would stringify a whole dict and
-        never match a shape pattern - an identifier misfiled into descriptor["max"] or
-        descriptor["unit"] would then reach the published catalogue untouched. Recursing into
-        dict and list values closes that gap for every present and future descriptor-shaped
-        container, not just entities.
-        """
-        if isinstance(value, dict):
-            return {key: self._guard_value(container, "{}.{}".format(name, key), entry) for key, entry in value.items()}
-        if isinstance(value, list):
-            return [self._guard_value(container, name, entry) for entry in value]
-        return self._guard_scalar(container, name, value)
-
-    def _guard_key(self, container, name):
-        """A container dict key, pseudonymised if the key text ITSELF looks like a misfiled identifier.
-
-        A component could key its data by a raw identifier-shaped string (hardware_ids keyed by
-        the serial itself, say) rather than only ever putting one in a value; being a dict key
-        rather than a value does not make it any less publishable.
-
-        Logs only the container name, never `name` itself - unlike a field label, the key here IS
-        the value being hidden, so writing it into the log would republish, in Predbat's own log
-        file, exactly what this guard exists to keep out of the debug dump attached to the same
-        public issue. Matches _guard_scalar, which never logs the raw value it pseudonymises either.
-        """
-        strict_numeric = container == "hardware_ids"
-        if not self._misfiled(name, strict_numeric=strict_numeric):
-            return name
-        self._pending_warnings.append(("Warn: Coordinator: {} key looks like an identifier - pseudonymised".format(container), name, strict_numeric, self._record_device_id))
-        return self._note(name, substring=True)
-
-    def _flush_warnings(self):
-        """Log the shape-guard hits that are genuinely misfiled values, each at most once per process.
-
-        Runs after the walk, once every account identifier in the document has been noted, so a
-        hit can be judged against all of them whatever order the records were walked in. A value
-        that stops looking like an identifier once those are removed - Octopus's
-        "octopus:{mpan}" device_id, a programme's cross-link to it, a station id echoed as a
-        number - is the redaction working as designed: it is still pseudonymised, but warning
-        about it on every debug dump is noise, not advice. The message itself never holds the
-        value (see _guard_key), so it is deduplicated on the message plus the pseudonym of the
-        record's device_id: a second record misfiling the same field is a new leak and warns
-        too, while the same record on the next dump does not.
-        """
-        if not self._pending_warnings:
-            return
-        identities = [self._whole_token(identity) for identity in sorted(self._identity_variants, key=len, reverse=True)]
-        for message, value, strict_numeric, device_id in self._pending_warnings:
-            if value is not None and self._explained_by_identity(value, identities, strict_numeric):
-                continue
-            key = (message, None if device_id is None else self.token(device_id))
-            if key in self.warned:
-                continue
-            self.warned.add(key)
-            if self.log:
-                self.log(message)
-        self._pending_warnings = []
-
-    def _explained_by_identity(self, value, identities, strict_numeric):
-        """Whether a shape-guard hit is wholly an account identifier reported where one belongs.
-
-        `identities` are whole-token patterns (see _whole_token), so a short identifier never
-        splits a longer number's digit run and hides a genuine misfiling. A number is judged by
-        its integer part, as _misfiled does, and is only explained when that IS an identifier -
-        a numeric echo - since stripping digits out of it would rewrite it into something else.
-        """
-        if isinstance(value, bool):
-            return False
-        if isinstance(value, (int, float)):
-            try:
-                text = str(abs(int(value)))
-            except (ValueError, OverflowError):
-                return False
-            return any(identity.fullmatch(text) for identity in identities)
-        # Replaced by a non-digit, non-separator placeholder, not removed: removing it would join
-        # the digit runs either side of it into one that looks like an identifier
-        remaining = str(value)
-        for identity in identities:
-            remaining = identity.sub("|", remaining)
-        return not self._misfiled(remaining, strict_numeric=strict_numeric)
-
-    def _embeds_account_id(self, record):
-        """Whether a record's device_id carries one of its own account identifiers as a whole token."""
-        return any(self._whole_token(value).search(record["device_id"]) for value in self._pseudonym_values(record) if value)
-
-    def _has_pseudonym_container(self, node):
-        """Whether a pseudonym container (account_ids) sits anywhere in this record - the record
-        itself, or a nested sub-record (a meter's tariff, say) - not only its own top-level keys.
-
-        _validate_record accepts account_ids inside any sub-record CONTAINER_SPEC recognises, so
-        a component reporting its account identifier one level down (structurally legal even
-        though v1's own reporters put Octopus's account_ids at meter level) must still mark that
-        record's device_id as identity-derived - checking only node's direct keys left such a
-        device_id, and any free-text echo or cross-link pointing at it, published raw.
-        """
-        if isinstance(node, dict):
-            if any(name in node for name in PSEUDONYM_CONTAINERS):
-                return True
-            return any(self._has_pseudonym_container(value) for value in node.values())
-        if isinstance(node, list):
-            return any(self._has_pseudonym_container(entry) for entry in node)
-        return False
-
-    def _walk(self, node, container=None):
-        """Recursively redact a node: pseudonym containers by class, clear containers via the shape guard.
-
-        A record carrying a pseudonym container (account_ids), anywhere in it - see
-        _has_pseudonym_container - also has its own device_id noted as an original, alongside that
-        container's values. Nothing here has to know that "meter" or "measures_meter" are
-        cross-link field names: the later substitution pass rewrites any string equal to (or,
-        since the id is identity-derived, containing) a noted original wherever it appears, so
-        noting the owning record's device_id is what lets a cross-link field resolve to the same
-        token as the record it points to, even when that field merely repeats the device_id rather
-        than embedding the account identifier itself - and what catches the SAME device_id text
-        left in the clear elsewhere in that record (an entity_id, a free-text note) rather than
-        just tokenising the one place it was noted. A device_id with no pseudonym container
-        anywhere in its record is never noted at all, so an ordinary word used as one still cannot
-        corrupt unrelated text it happens to share a substring with. Every scalar reached through
-        the generic else branch - structural fields (device_id, serials, meter, measures_meter,
-        ...) included - is routed through the same shape guard as a clear container's values,
-        since a misfiled identifier does not stop being one just because it landed outside
-        CONTAINER_SPEC.
-        """
-        if isinstance(node, dict):
-            if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node) and not self._serial_derived(node):
-                self._note(node["device_id"], substring=True, identity=self._embeds_account_id(node))
-            outer_device_id = self._record_device_id
-            if isinstance(node.get("device_id"), str):
-                self._record_device_id = node["device_id"]
-            out = {}
-            for key, value in node.items():
-                if key in PSEUDONYM_CONTAINERS:
-                    out[key] = {self._guard_key(key, name): self._note(entry, substring=True, identity=True) for name, entry in value.items()}
-                elif key in CLEAR_CONTAINERS and isinstance(value, dict):
-                    out[key] = {self._guard_key(key, name): self._guard_value(key, name, entry) for name, entry in value.items()}
-                elif key in VOCAB_CONTAINERS:
-                    # Vocabulary lists are clear too, and a token is free-form enough (digits
-                    # are legal in the pattern) that a misfiled identifier can hide as one.
-                    out[key] = [self._guard_scalar(key, "token", entry) for entry in value]
-                else:
-                    out[key] = self._walk(value, container=key)
-            self._record_device_id = outer_device_id
-            return out
-        if isinstance(node, list):
-            return [self._walk(entry, container=container) for entry in node]
-        if container:
-            return self._guard_scalar(container, container, node)
-        return node
-
-    def _exact_match(self, text):
-        """The token for a noted original if `text` equals it exactly and clears the length floor, else None.
-
-        Exact equality is what lets a device_id with no account_ids alongside it (never
-        substring-eligible - see __init__) resolve nothing at all since it was never noted, what
-        lets a dict key resolve only when it wholly IS a noted original (see _substitute_key), and
-        what catches a non-string scalar echoed verbatim elsewhere (str(node) compared as text) -
-        none of those is a substring-corruption risk, since the entire value is being replaced
-        rather than a fragment of a larger string.
-        """
-        if len(text) >= self.MIN_SUBSTITUTE and text in self.originals:
-            return self.originals[text]
-        return None
-
-    def _substitute_text(self, text):
-        """Replace a VALUE string: an exact match first, then substring-eligible originals, longest first.
-
-        Longest-first matters when one noted original is itself a substring of another (a short
-        MSN inside a longer MPAN): substituting the longer one first replaces it whole, so the
-        shorter original no longer appears as a fragment afterwards. Substituting the shorter one
-        first would splice a token into the middle of the longer identifier and leave the
-        surrounding digits of the longer one exposed on either side. Never called for a dict key -
-        see _substitute_key, which does not do the substring pass at all.
-        """
-        exact = self._exact_match(text)
-        if exact is not None:
-            return exact
-        for original in self._substring_order:
-            if len(original) >= self.MIN_SUBSTITUTE and original in text:
-                text = text.replace(original, self.originals[original])
-        return text
-
-    def _substitute_key(self, key):
-        """Rewrite a dict key by exact match only - never by substring.
-
-        A key drawn from Predbat's own naming - a section name, a container name, a descriptor
-        field a component chose to call something - is short and structural enough that an
-        ordinary account_ids value (nothing stops a component reporting something as mundane as
-        "charge" for an account label) can coincidentally appear as a substring of one:
-        substring-rewriting keys turned exactly that coincidence into an entire published section
-        vanishing from the document. _guard_key (applied earlier, during _walk) is what catches a
-        key that IS ITSELF shaped like a misfiled identifier; this pass only catches a key that
-        happens to equal a noted original in full.
-
-        PROTECTED_KEY_NAMES is checked first for the same reason, one step further: an account_ids
-        value does not even need to be identifier-shaped to collide here, only to equal a structural
-        name byte-for-byte ("chargers", "account_ids", "observations", ...) - exact match alone
-        would still rewrite it away, deleting that whole section or container rather than a value.
-        Excluding Predbat's own structural vocabulary from rewriting closes that regardless of what
-        a component ever reports as an identifier.
-
-        Residual, deliberately accepted: an identifier embedded as a SUBSTRING of a
-        component-chosen key (an entities key like "pv_abcdef123456_today") is not substituted -
-        only whole-key equality is ever rewritten, keys are never substring-matched the way values
-        are (see above). The identifier still appears tokenised in the record's device_id/
-        account_ids, so nothing is lost that could not already be found there.
-        """
-        if key in PROTECTED_KEY_NAMES:
-            return key
-        exact = self._exact_match(key)
-        return exact if exact is not None else key
-
-    def _substitute(self, node):
-        """Replace every noted original wherever it appears: in string values, dict keys, and non-string scalars.
-
-        A dict key is rewritten by _substitute_key (exact match only, never substring - see its
-        docstring); a value string goes through the full exact-then-substring pass. A non-string
-        scalar (an int or float identifier echoed outside its guarded container) is matched by
-        exact equality against every noted numeric variant (see _numeric_variants), since a
-        numeric value cannot meaningfully contain a "substring" of another number the way a
-        longer string can.
-        """
-        if isinstance(node, dict):
-            return {(self._substitute_key(key) if isinstance(key, str) else key): self._substitute(value) for key, value in node.items()}
-        if isinstance(node, list):
-            return [self._substitute(entry) for entry in node]
-        if isinstance(node, str):
-            return self._substitute_text(node)
-        if isinstance(node, (int, float)) and not isinstance(node, bool):
-            return self._exact_match(str(node)) or node
-        return node
-
     def redact(self, catalogue):
-        """Return a redacted copy of an assembled catalogue.
+        """Return a copy of an assembled catalogue with every email address replaced."""
+        return self._walk(catalogue)
 
-        "generated" is restored verbatim afterwards: it is the catalogue's own timestamp, stamped
-        by assemble() itself rather than sourced from any component report, so it can never
-        legitimately hold a cross-link or an embedded identifier - only ever a coincidental digit
-        collision with an unrelated pseudonymised original, which the substitution pass would
-        otherwise be free to corrupt it with.
-        """
-        generated = catalogue.get("generated")
-        # Longest first, so a serial that contains a shorter one is removed whole
-        serials = sorted(self._collect_serials(catalogue), key=len, reverse=True)
-        self._serial_patterns = [self._whole_token(serial) for serial in serials]
-        walked = self._walk(catalogue)
-        self._flush_warnings()
-        self._substring_order = sorted(self.substring_ok, key=len, reverse=True)
-        substituted = self._substitute(walked)
-        if "generated" in catalogue:
-            substituted["generated"] = generated
-        return substituted
+    def _walk(self, node):
+        """Recursively copy a node, scrubbing every string - dict keys included."""
+        if isinstance(node, dict):
+            return {self._scrub(key) if isinstance(key, str) else key: self._walk(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [self._walk(entry) for entry in node]
+        if isinstance(node, str):
+            return self._scrub(node)
+        return node
+
+    @staticmethod
+    def _scrub(text):
+        """`text` with each email address in it replaced by EMAIL_PLACEHOLDER."""
+        return EMAIL_RE.sub(EMAIL_PLACEHOLDER, text)
 
 
 class Coordinator:
@@ -812,9 +284,6 @@ class Coordinator:
         # (see catalogue()'s docstring for why a frozen snapshot missed every report filed after
         # the original startup-barrier assemble() call).
         self.assembled = None
-        self.salt = None
-        # Redaction warnings already logged - see Redactor._flush_warnings
-        self.redaction_warned = set()
 
     def report(self, component_name, report):
         """Validate and store one component's discovery report, replacing any previous one."""
@@ -945,43 +414,8 @@ class Coordinator:
         """What apps.yaml actually ended up as, so every dump compares discovered against configured."""
         return {key: self.base.get_arg(key, None) for key in ("num_inverters", "num_cars", "inverter_type")}
 
-    def load_salt(self):
-        """The per-installation pseudonym salt, generated and stored on first use.
-
-        Without Storage (MockBase, CLI harnesses) a per-process salt is generated instead, so
-        redaction never silently falls back to an unsalted digest - a 13-digit MPAN under one of
-        those is brute-forceable in seconds. ``ha`` is imported lazily here, and only once a
-        Storage component actually exists, rather than at module level: ha.py pulls in
-        aiohttp/requests via component_base, and a later task adds a module-level
-        "from coordinator import Coordinator" to components.py, so a module-level ha import here
-        would widen the startup import graph for every install - including the common case, this
-        method's other branch, where there is no Storage component to talk to at all.
-        """
-        if self.salt:
-            return self.salt
-        components = getattr(self.base, "components", None)
-        storage = components.get_component("storage") if components else None
-        if not storage:
-            self.salt = secrets.token_hex(16)
-            return self.salt
-        from ha import run_async
-
-        try:
-            stored = run_async(storage.load("coordinator", "salt"))
-            if isinstance(stored, dict) and stored.get("salt"):
-                self.salt = str(stored["salt"])
-                return self.salt
-        except Exception as e:
-            self.log("Warn: Coordinator: could not load the pseudonym salt: {}".format(e))
-        self.salt = secrets.token_hex(16)
-        try:
-            run_async(storage.save("coordinator", "salt", {"salt": self.salt}, format="json"))
-        except Exception as e:
-            self.log("Warn: Coordinator: could not save the pseudonym salt: {}".format(e))
-        return self.salt
-
     def catalogue(self):
-        """The assembled catalogue, redacted. This is what every consumer gets.
+        """The assembled catalogue with email addresses scrubbed (see Redactor). This is what every consumer gets.
 
         Re-assembles on every call rather than reusing whatever self.assembled last held. A report
         arrives from a component's own thread at any point in the process's life - a retry after a
@@ -992,10 +426,10 @@ class Coordinator:
         dicts under a lock briefly held to copy self.reports, so redoing it on every debug dump or
         publish() call - its only two callers - costs milliseconds, not a measurable resource.
         """
-        return Redactor(self.load_salt(), log=self.log, warned=self.redaction_warned).redact(self.assemble())
+        return Redactor().redact(self.assemble())
 
     def catalogue_raw(self):
-        """The assembled catalogue, unredacted. In-process diagnostics only - never write this anywhere.
+        """The assembled catalogue as reported, email addresses included. In-process diagnostics only - never write this anywhere.
 
         Re-assembles on every call, consistent with catalogue() - see its docstring.
         """
@@ -1059,7 +493,7 @@ def _validate_container(container_name, value, component_name, section, log):
         return out
     if not isinstance(value, dict):
         return None
-    _, cleaner = CONTAINER_SPEC[container_name]
+    cleaner = CONTAINER_SPEC[container_name]
     allowed = CONTAINER_KEYS.get(container_name)
     out = {}
     for key, entry in value.items():

@@ -359,9 +359,10 @@ class _DiscoveryComponentsStub:
 
 def test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat=None):
     """
-    create_debug_yaml() gains a "discovery" key sourced from the coordinator's redacted catalogue,
-    and a seeded MPAN must not appear in it - the same reachability contract this module enforces
-    for every other member, now extended to the discovery catalogue coordinator.py adds.
+    create_debug_yaml() gains a "discovery" key sourced from the coordinator's published catalogue
+    (catalogue(), never catalogue_raw()): a seeded email address must not appear in it, while the seeded
+    MPAN does - identifiers are not secret (maintainer decision, 2 Nov 2026), only emails, passwords and
+    keys are withheld.
 
     catalogue() re-assembles on every call (final review: a frozen assemble()-once snapshot would
     have missed anything reported after the startup barrier - see coordinator.py's catalogue()
@@ -378,8 +379,7 @@ def test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat=None):
     original_components = my_predbat.components
     try:
         coordinator = Coordinator(my_predbat)
-        coordinator.salt = "test-salt-debug-yaml-scope"
-        coordinator.report("octopus", {"meters": [{"device_id": "octopus:m", "direction": "import", "account_ids": {"mpan": "1234567890123"}}]})
+        coordinator.report("octopus", {"meters": [{"device_id": "octopus:m", "direction": "import", "account_ids": {"mpan": "1234567890123", "login": "jane@example.com"}}]})
         my_predbat.components = _DiscoveryComponentsStub(coordinator)
 
         text = my_predbat.create_debug_yaml(write_file=False)
@@ -388,14 +388,17 @@ def test_debug_yaml_includes_redacted_discovery_catalogue(my_predbat=None):
         if "discovery" not in debug:
             print("ERROR: the debug yaml is missing the 'discovery' key")
             failed = True
-        elif "1234567890123" in str(debug["discovery"]):
-            print("ERROR: the seeded MPAN survived, unredacted, into the debug yaml's discovery catalogue")
+        elif "jane@example.com" in str(debug["discovery"]):
+            print("ERROR: the seeded email address reached the debug yaml's discovery catalogue - it must come from catalogue(), not catalogue_raw()")
+            failed = True
+        elif "1234567890123" not in str(debug["discovery"]):
+            print("ERROR: the seeded MPAN is missing from the debug yaml's discovery catalogue - identifiers are published as reported")
             failed = True
     finally:
         my_predbat.components = original_components
 
     if not failed:
-        print("PASS: the debug yaml carries the redacted discovery catalogue, with the seeded MPAN pseudonymised")
+        print("PASS: the debug yaml carries the published discovery catalogue: the email withheld, the MPAN readable")
     return 1 if failed else 0
 
 
