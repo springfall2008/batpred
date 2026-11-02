@@ -785,6 +785,10 @@ class OctopusAPI(ComponentBase):
         self.tou_samples = None
         self.tou_windows_day = None
         self.free_electricity_events = []
+        # Whether this process has seen a Free Electricity session for the account - the only evidence of
+        # enrolment there is, since the campaign has no joined flag. Kept once set, so the discovery programme
+        # outlives the session; not persisted, as the events themselves are not (build_discovery()).
+        self.free_electricity_seen = False
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -1807,7 +1811,50 @@ class OctopusAPI(ComponentBase):
 
             cars.append(record)
 
-        return {"automatic": self.automatic, "meters": meters, "cars": cars}
+        return {"automatic": self.automatic, "meters": meters, "cars": cars, "programmes": self._discovery_programmes(meters)}
+
+    def _discovery_programmes(self, meters):
+        """The Octoplus flexibility programmes the account is in, for the discovery catalogue.
+
+        saving_session: the account has joined the Saving Sessions campaign (hasJoinedCampaign, which the
+        cache restores across a restart). free_electricity: a Free Electricity session has been seen for
+        the account - that campaign has no joined flag, so a session is the only evidence, and once seen
+        the programme stays for the life of the process rather than flickering as sessions come and go.
+        Both rewrite rates for their windows (fetch_octopus_sessions()), hence rate_override, and both link
+        to the import meter. Their entities are the ones automatic_config() binds - the saving session
+        sensor and its join select, which Predbat writes, and the free electricity sensor - once Home
+        Assistant has seen them; reported whether or not self.automatic wired them.
+        """
+        import_meter = next((record["device_id"] for record in meters if record.get("direction") == "import"), None)
+        if import_meter is None and self.mpan:
+            import_meter = "octopus:{}".format(self.mpan)
+        programmes = []
+
+        def programme(kind, entities):
+            """One programme record of this kind on the import meter."""
+            record = {"device_id": "octopus:{}:{}".format(kind, self.account_id), "kind": kind}
+            if import_meter:
+                record["meter"] = import_meter
+            record["account_ids"] = {"account": self.account_id}
+            record["effects"] = ["rate_override"]
+            seen = self.discovery_entities(entities)
+            if seen:
+                record["entities"] = seen
+            return record
+
+        if (self.saving_sessions or {}).get("account", {}).get("hasJoinedCampaign"):
+            programmes.append(
+                programme(
+                    "saving_session",
+                    {
+                        "octopus_saving_session": {"entity_id": self.get_entity_name("binary_sensor", "saving_session"), "domain": "binary_sensor", "access": "r"},
+                        "octopus_saving_session_join": {"entity_id": self.get_entity_name("select", "saving_session_join"), "domain": "select", "access": "rw"},
+                    },
+                )
+            )
+        if self.free_electricity_seen:
+            programmes.append(programme("free_electricity", {"octopus_free_electricity": {"entity_id": self.get_entity_name("sensor", "free_electricity"), "domain": "sensor", "access": "r"}}))
+        return programmes
 
     async def async_get_saving_sessions(self, account_id):
         """
@@ -1898,6 +1945,8 @@ class OctopusAPI(ComponentBase):
         # dropping the free sessions until the next poll (#5745). An answer with no events still clears them.
         if campaign_data is not None:
             self.free_electricity_events = free_events
+            if free_events:
+                self.free_electricity_seen = True
         elif self.free_electricity_events:
             self.log("Warn: OctopusAPI: Free electricity events not returned, keeping the last known ones")
 
