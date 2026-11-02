@@ -620,8 +620,6 @@ You can disable this feature (_expert mode only_) using **switch.metric_load_div
 
 Predbat has an 'iBoost model' that, instead of exporting excess solar to the grid, can divert power towards an external energy sink. Although Predbat refers to this feature as 'iBoost', the model can be used to control any resistive device. This is typically a water heater, via an iBoost, Fingerbot, MyEnergy Eddi, or any high-power smart switch, provided the device is ultimately controlled by a thermostat.
 
-The Home Assistant entities in this section will only be created by Predbat when **switch.predbat_iboost_enable** is True. Entities, and therefore the iBoost column of the [Predbat plan](predbat-plan-card.md), will be removed when **switch.predbat_iboost_enable** is False again.
-
 ### iBoost basic configuration
 
 - **switch.predbat_iboost_enable** Whether Predbat should use the model - default False.
@@ -638,7 +636,11 @@ The Home Assistant entities in this section will only be created by Predbat when
 
 - **switch.predbat_iboost_on_export** Whether iBoost will run when the battery is forced to export to the grid - default False.
 
-- **switch.predbat_iboost_prevent_discharge** Stops the battery from discharging to the diverter when iBoost is active. Not recommended when iBoost Solar mode is enabled as battery discharge will be prevented during excess solar periods. This could cause additional imports due to passing clouds - default False.
+- **switch.predbat_iboost_prevent_discharge** Stops the battery from discharging to the diverter when iBoost is active. Not recommended when iBoost solar mode is enabled as battery discharge will be prevented during excess solar periods. This could cause additional imports due to passing clouds - default False.
+
+- **switch.predbat_iboost_smart** Whether Predbat will pick the lowest import rate slots within the forecast horizon (48 hours by default) to achieve the desired energy for each day, as specified by **input_number.predbat_iboost_max_energy**. Can be combined with the Solar and Battery modes - default False.
+
+- **input_number.predbat_iboost_smart_min_length** Sets the minimum iBoost duration in minutes. Must be a multiple of the slot duration. Increasing this slot size could increase costs, depending on tariff - default 30.
 
 ### iBoost modes
 
@@ -646,7 +648,7 @@ The Home Assistant entities in this section will only be created by Predbat when
 
 - **switch.predbat_iboost_solar** Whether Predbat assumes the diverter will use solar power - default True.
 
-- **switch.predbat_iboost_solar_excess** Whether Predbat will allow any solar power to be diverted. True restricts the system to excess power that would otherwise be exported - default False.
+- **switch.predbat_iboost_solar_excess** Whether the diverter is restricted to excess solar power (power that would otherwise be exported). When False, any solar power may be diverted, not just excess - default False.
 
 - **input_number.predbat_iboost_min_soc** Sets the minimum battery SoC (percentage) required for the solar diverter to turn on. If 0, diversion can occur regardless of battery level - default 0.
 
@@ -657,10 +659,6 @@ The Home Assistant entities in this section will only be created by Predbat when
 #### Energy rates only
 
 If **switch.predbat_iboost_enable** is True, but **switch.predbat_iboost_solar** and **switch.predbat_iboost_charging** are both False, then iBoost is solely based on energy rates.
-
-- **switch.predbat_iboost_smart** Whether Predbat will pick the lowest import rate slots within 24 hours to achieve the desired energy, as specified by **input_number.predbat_iboost_max_energy** - default False
-
-- **input_number.predbat_iboost_smart_min_length** Sets the minimum iBoost duration in minutes. Must be a multiple of the slot duration. Increasing this slot size could increase costs, depending on tariff - default 30.
 
 ### iBoost energy rate filtering
 
@@ -680,9 +678,11 @@ Gas rates can be considered if iBoost is used for heating water, and the system 
 
 ### iBoost output data
 
+When switch.predbat_iboost_enable is turned On, Predbat creates the configuration entities in the sections above. When it is turned Off, those entities are kept but their friendly names are prefixed with "[Disabled]" and they are omitted from the generated dashboard. The predbat.iboost_best and binary_sensor.predbat_iboost_active entities are published on every plan publish regardless of the switch, showing 0 kWh and off when iBoost is disabled. The iBoost column of the Predbat plan only appears when switch.predbat_iboost_enable is True.
+
 - **predbat.iboost_best** The predicted output from the iBoost solar diverter model. Used to populate the 'iBoost' column of the [Predbat plan](predbat-plan-card.md).
 
-- **input_number.predbat_iboost_today** Tracks the estimated kWh consumed by the solar diverter during the day, resetting at midnight.
+- **input_number.predbat_iboost_today** Tracks the estimated kWh consumed by the solar diverter during the day. Resets at midnight unless an iboost_energy_today feedback sensor is configured, in which case it tracks that sensor and follows its reset behaviour.
 
 - **binary_sensor.predbat_iboost_active** Whether the solar diverter should be active. Used to trigger automations for the heating load. The 'solar' attribute indicates solar diversion should be active, and the 'full' attribute indicates iBoost should run at maximum rate (could be during a charge cycle or grid import).
 
