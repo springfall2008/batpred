@@ -337,8 +337,6 @@ def test_github(my_predbat):
         shutil.rmtree(tmpdir2, ignore_errors=True)
 
     print("  Test 13: predbat_branch adds 'branch: <name>' entries after main in the update options")
-    import github as _github
-
     releases_data = [_make_release("v2.0", "Stable Two", prerelease=False)]
 
     def _options_for(branch):
@@ -351,7 +349,7 @@ def test_github(my_predbat):
             with patch.object(my_predbat, "expose_config"):
                 with patch.object(my_predbat, "download_predbat_version"):
                     my_predbat.download_predbat_releases()
-        return list(_github.PREDBAT_UPDATE_OPTIONS)
+        return list(my_predbat.config_index["update"]["options"])
 
     try:
         options = _options_for("my-feature")
@@ -423,4 +421,84 @@ def test_github(my_predbat):
         my_predbat.args.pop("predbat_branch", None)
         my_predbat.predbat_branch_warned = set()
 
+    return failed
+
+
+def test_update_options_are_per_engine(my_predbat):
+    """Several engine instances in one process each build their own update dropdown options."""
+    import config as _config
+    import github as _github
+    from github import GitHub
+
+    failed = 0
+    print("--- update options are per engine ---")
+
+    sentinel = object()
+    config_before = list(_config.PREDBAT_UPDATE_OPTIONS)
+    module_before = getattr(_github, "PREDBAT_UPDATE_OPTIONS", sentinel)
+    module_before_copy = list(module_before) if isinstance(module_before, list) else module_before
+
+    class _FakeEngine:
+        """Borrows download_predbat_releases from the real class, with the network and config stubbed."""
+
+        download_predbat_releases = GitHub.download_predbat_releases
+
+        def __init__(self, releases):
+            self.releases_data = releases
+            self.args = {}
+            self.config_index = {"update": {"options": ["Loading..."], "value": "x"}}
+            self.logs = []
+
+        def get_arg(self, name, default=None):
+            return default
+
+        def download_predbat_releases_url(self, url):
+            return self.releases_data
+
+        def get_predbat_branches(self):
+            return []
+
+        def log(self, message):
+            self.logs.append(message)
+
+        def download_predbat_version(self, version):
+            pass
+
+        def expose_config(self, name, value, **kwargs):
+            pass
+
+    engine_a = _FakeEngine([_make_release("va1.0", "Alpha One"), _make_release("va0.9", "Alpha Zero")])
+    engine_b = _FakeEngine([_make_release("vb2.0", "Beta Two")])
+
+    engine_a.download_predbat_releases()
+    engine_b.download_predbat_releases()
+
+    options_a = engine_a.config_index["update"]["options"]
+    options_b = engine_b.config_index["update"]["options"]
+
+    if options_a is options_b:
+        print("  FAILED: the two engines share one options list object")
+        failed += 1
+    if not any(o.startswith("va1.0") for o in options_a) or any(o.startswith("vb2.0") for o in options_a):
+        print("  FAILED: engine A options should hold only its own releases, got {}".format(options_a))
+        failed += 1
+    if not any(o.startswith("vb2.0") for o in options_b) or any(o.startswith("va") for o in options_b):
+        print("  FAILED: engine B options should hold only its own releases, got {}".format(options_b))
+        failed += 1
+    # Neither engine runs the current version, so the "(?)" entry must land in the list handed to the dropdown
+    if not options_a[-1].endswith("(?)") or not options_b[-1].endswith("(?)"):
+        print("  FAILED: the unknown version entry should be appended to each engine's own options, got {} and {}".format(options_a, options_b))
+        failed += 1
+    module_after = getattr(_github, "PREDBAT_UPDATE_OPTIONS", sentinel)
+    if module_after is not module_before or (isinstance(module_after, list) and module_after != module_before_copy):
+        print("  FAILED: github.PREDBAT_UPDATE_OPTIONS module attribute was changed by the calls")
+        failed += 1
+    if _config.PREDBAT_UPDATE_OPTIONS != config_before:
+        print("  FAILED: config.PREDBAT_UPDATE_OPTIONS was mutated, got {}".format(_config.PREDBAT_UPDATE_OPTIONS))
+        failed += 1
+
+    if failed:
+        print("  FAILED: test_update_options_are_per_engine")
+    else:
+        print("  OK: test_update_options_are_per_engine")
     return failed

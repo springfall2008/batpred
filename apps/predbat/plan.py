@@ -610,6 +610,10 @@ class Plan:
         1 + n for the nth after it, so the charge lands where it is least likely to vanish. It is score only
         (metric_keep): cost is never touched, so a genuinely cheaper slot still wins.
 
+        The map also marks the run as confirmed for the PV10 hedge in Prediction.run_prediction(): a dispatch
+        minute in it is not assumed gone, as a dispatch that goes away is seen within a cycle, and the house and
+        battery pay RUN_EVERY minutes of each half hour at the worst-case rate instead.
+
         Returns True when a run has just become boosted, so the fetch asks for a replan: with
         octopus_intelligent_trust_slots On nothing else does, as a trusted dispatch starting changes no rates.
         The incumbent plan was optimised without the credit, which is far smaller than

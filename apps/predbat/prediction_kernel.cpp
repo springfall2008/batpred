@@ -70,7 +70,9 @@
 // rate, without saving session or Axle rewards) and the slot's own rate (#5163).
 // Parity 18: energy a charge window stores in a confirmed Intelligent dispatch run (io_credit) earns a score
 // only credit off metric_keep; anti-clipping window splitting in clip_intersecting_charge_windows and discharge clamping in pk_run_one.
-#define PK_PARITY_REVISION 18
+// Parity 19: in PV10, a dispatch minute of a confirmed run (io_credit set) is no longer assumed gone: the
+// dispatch is kept and the non-car import pays PK_RUN_EVERY minutes of each half hour at the worst-case rate.
+#define PK_PARITY_REVISION 19
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -877,7 +879,15 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // Rates - prediction.py:577-580
         double import_rate = c->rate_import[k];
         const double dispatch_rate = import_rate;
-        const bool dispatch_gone = c->io_flag[k] && is_pv10 && minute > 30;
+        bool dispatch_gone = c->io_flag[k] && is_pv10 && minute > 30;
+        double dispatch_risk = 0.0;
+        if (dispatch_gone && c->io_credit[k] != 0.0) {
+            // The car is charging in this run, so a dispatch that goes away is seen within a Predbat cycle: the
+            // dispatch is kept, and the house and battery pay PK_RUN_EVERY minutes of each half hour at the
+            // worst-case rate - prediction.py dispatch_risk
+            dispatch_gone = false;
+            dispatch_risk = (std::max(c->rate_max, import_rate) - import_rate) * PK_RUN_EVERY / 30.0;
+        }
         if (dispatch_gone) {
             // Worst case the slot goes away: the tariff's highest rate, or the slot's own if an event makes it dearer
             import_rate = std::max(c->rate_max, import_rate);
@@ -1491,6 +1501,10 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             // Premium for car charging capped at the actual grid import - prediction.py:1119-1122
             car_amount_premium = std::min(diff, car_amount_premium);
             metric += import_rate * diff + car_rate_premium * car_amount_premium;
+            if (dispatch_risk != 0.0) {
+                // Not on the car's share: the car stops with its dispatch
+                metric += dispatch_risk * (diff - car_amount_premium);
+            }
             if (car_gone_kwh != 0) {
                 // The car's share of the import is paid at its own rate, not the worst-case rate
                 metric -= std::min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh);
