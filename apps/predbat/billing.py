@@ -440,7 +440,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
             buckets = {label: {"kwh": round(value["kwh"], 3), "cost": _pounds(value["cost"])} for label, value in buckets.items()}
         predbat_pence = predbat_slot_cost.get(slot_minute)
         if predbat_pence is not None and slot_minute % (24 * 60) == 0:
-            predbat_pence -= standing_pence
+            # cost_today steps up by the standing charge at midnight; cost_today_import (import_only) never includes it
+            if not import_only:
+                predbat_pence -= standing_pence
             if billed_pence is not None:
                 totals["standing_predbat"] += standing_pence
         diff = None

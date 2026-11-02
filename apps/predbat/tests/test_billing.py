@@ -688,6 +688,10 @@ def test_attach_import_only():
     if plan["rows"][0].get("billed") != 0.1 or plan["billing_summary"].get("import_only") is not True:
         print("ERROR: import-only billing should ignore export and be flagged, got {} {}".format(plan["rows"][0], plan["billing_summary"]))
         return True
+    midnight = attach_billing(_plan([0]), _billing_attrs({_key(0): _slot(1.0, 10.0)}, legs={"import": True, "export": False}), VIEW_MIDNIGHT, 30, {0: 10.0}, 55.52, {}, True, None, None)
+    if midnight["rows"][0].get("billing_diff") != 0.0 or midnight["billing_summary"].get("standing_predbat") != 0.56:
+        print("ERROR: import-only cost has no standing charge in it, so nothing should be taken off the midnight row, got {} {}".format(midnight["rows"][0], midnight["billing_summary"]))
+        return True
     net = attach_billing(_plan([600]), dict(billing, legs={"import": True, "export": True}), VIEW_MIDNIGHT, 30, {600: 2.5}, 55.52, {}, False, None, None)
     if net["rows"][0].get("billed") != 0.03 or net["rows"][0].get("billing_diff") != 0.0:
         print("ERROR: net billing should be import less export (2.5p), got {}".format(net["rows"][0]))
