@@ -34,7 +34,7 @@ from typing import Callable, Optional
 import aiohttp
 
 from car_charger_control import CarChargerControl, parse_control_setting
-from component_base import ComponentBase, new_http_session
+from component_base import ComponentBase, new_http_session, writes
 from coordinator import charger_with_stub_car
 from predbat_metrics import record_api_call
 
@@ -1109,11 +1109,13 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
         """Queue a select change for the run loop."""
         self.queued_events.append((self.select_event_handler, entity_id, value))
 
+    @writes
     async def send_command(self, charger, command):
         """Send a (method, params) command to a charger and wait for its reply."""
         method, params = command
         return await self.transport.request(charger.charger_id, method, params)
 
+    @writes
     async def switch_event_handler(self, entity_id, service):
         """Let a charger charge or stop it, in response to its charge switch."""
         if await self.charger_control_guest_event(entity_id, service):
@@ -1130,6 +1132,7 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
         self.log("Info: hypervolt: {} charging on {}".format("allowing" if charge else "stopping", charger.name or charger.charger_id))
         await self.send_command(charger, release_command(charge))
 
+    @writes
     async def number_event_handler(self, entity_id, value):
         """Set the maximum charging current, clamped to 6-32 A."""
         if not entity_id.endswith("_max_charging_current"):
@@ -1145,6 +1148,7 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
         self.log("Info: hypervolt: setting {} maximum charging current to {}A".format(charger.name or charger.charger_id, command[1]["max_current"] // 1000))
         await self.send_command(charger, command)
 
+    @writes
     async def select_event_handler(self, entity_id, value):
         """Set the charge mode, if the charger offers it."""
         if not entity_id.endswith("_charge_mode"):
@@ -1298,6 +1302,7 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
             return False
         return charger.release_state != ("default" if charge else "released")
 
+    @writes
     async def charger_control_send(self, charger, charge, car_n):
         """Let the charger charge, or stop it. A charger already in that state is sent nothing."""
         name = charger.name or charger.charger_id
@@ -1317,6 +1322,7 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
             await self.save_control_state()
         await self.send_command(charger, release_command(False))
 
+    @writes
     async def charger_control_release_one(self, charger, charge):
         """Hand a charger back: let it charge again if Predbat stopped it, and forget it once nothing is owed.
 
@@ -1336,6 +1342,7 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
             await self.send_command(charger, release_command(True))
         self.forget(charger)
 
+    @writes
     async def charger_control_hand_to_octopus(self, charger, charge):
         """Hand a charger to Octopus, letting it charge again if Predbat had stopped it.
 

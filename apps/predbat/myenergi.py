@@ -32,7 +32,7 @@ from typing import Optional
 
 import aiohttp
 
-from component_base import ComponentBase, new_http_session
+from component_base import ComponentBase, new_http_session, writes
 from coordinator import charger_with_stub_car
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -989,6 +989,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         """Has the Zappi been put in a different mode, e.g. from the myenergi app."""
         return device.mode != (ZAPPI_MODE_CHARGING if charge else ZAPPI_MODE_STOPPED)
 
+    @writes
     async def charger_control_send(self, device, charge, car_n):
         """Fast inside a planned window, Stopped outside one.
 
@@ -1041,6 +1042,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         else:
             await self.save_control_modes()
 
+    @writes
     async def charger_control_release_one(self, device, charge):
         """Hand a held Zappi back, restoring the mode it had before Predbat took over.
 
@@ -1060,6 +1062,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         if self.control_saved_modes.pop(device.device_id, None) is not None:
             await self.save_control_modes()
 
+    @writes
     async def charger_control_hand_to_octopus(self, device, charge):
         """Hand a Zappi to Octopus in the mode it had before Predbat took over, but never Fast.
 
@@ -1215,6 +1218,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             amount = max(BOOST_MINUTES_MIN, min(BOOST_MINUTES_MAX, amount))
         self.boost_amounts[device.device_id] = amount
 
+    @writes
     async def switch_event_handler(self, entity_id, service):
         """Send or cancel a boost in response to the boost switch.
 

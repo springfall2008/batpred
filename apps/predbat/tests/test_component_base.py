@@ -22,8 +22,12 @@ import aiohttp
 from component_base import ComponentBase, new_http_session, set_http_session_factory, writes
 from coordinator import inverter_record
 from fox import FoxAPI
+from hypervolt import HypervoltAPI
+from myenergi import MyEnergiAPI
+from ohme import OhmeAPI
 from solis import SolisAPI
 from teslemetry import TeslemetryAPI
+from wallbox import WallboxAPI
 
 
 # Save original sleep before any patching
@@ -966,6 +970,10 @@ def test_component_base_write_methods_components(my_predbat):
         (FoxAPI, ["set_device_setting", "set_scheduler", "set_battery_charging_time"], ["get_device_setting", "get_scheduler", "get_real_time_data", "run"]),
         (SolisAPI, ["write_cid", "read_and_write_cid", "write_time_windows_if_changed"], ["read_cid", "read_batch", "get_inverter_detail", "run"]),
         (TeslemetryAPI, ["set_operation_mode", "set_backup_reserve", "set_tariff"], ["run", "publish_site_info"]),
+        (OhmeAPI, ["charger_control_send", "charger_control_release_one", "charger_control_hand_to_octopus", "select_event_handler", "number_event_handler", "switch_event_handler"], ["run", "publish_data", "select_event", "apply_slot_mode"]),
+        (MyEnergiAPI, ["charger_control_send", "charger_control_release_one", "charger_control_hand_to_octopus", "switch_event_handler"], ["run", "publish_data", "switch_event", "number_event_handler"]),
+        (HypervoltAPI, ["send_command", "charger_control_send", "charger_control_release_one", "charger_control_hand_to_octopus", "switch_event_handler", "number_event_handler", "select_event_handler"], ["run", "publish_data", "switch_event"]),
+        (WallboxAPI, ["charger_control_send", "charger_control_release_one", "charger_control_hand_to_octopus", "switch_event_handler", "number_event_handler", "select_event_handler"], ["run", "publish_data", "switch_event", "poll"]),
     ]
     for cls, writers, readers in cases:
         listed = cls.write_methods()

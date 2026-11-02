@@ -32,7 +32,7 @@ from typing import Optional
 
 import aiohttp
 
-from component_base import ComponentBase, new_http_session
+from component_base import ComponentBase, new_http_session, writes
 from coordinator import charger_with_stub_car
 from mock_base import MockBase
 from predbat_metrics import record_api_call
@@ -839,6 +839,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         """Queue a select change for the run loop."""
         self.queued_events.append((self.select_event_handler, entity_id, value))
 
+    @writes
     async def switch_event_handler(self, entity_id, service):
         """Pause/resume or lock/unlock in response to a charger switch."""
         if await self.charger_control_guest_event(entity_id, service):
@@ -864,6 +865,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
             self.log("Info: wallbox: {} {}".format("locking" if turn_on else "unlocking", charger.name))
             await self.transport.set_locked(self.api_id(charger), turn_on)
 
+    @writes
     async def number_event_handler(self, entity_id, value):
         """Set the maximum charging current, clamped to what the charger allows."""
         if not entity_id.endswith("_max_charging_current"):
@@ -881,6 +883,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         self.log("Info: wallbox: setting {} maximum charging current to {}A".format(charger.name, amps))
         await self.transport.set_max_charging_current(self.api_id(charger), amps)
 
+    @writes
     async def select_event_handler(self, entity_id, value):
         """Set the Eco-Smart mode on a charger that supports it."""
         if not entity_id.endswith("_eco_smart") or value not in ECO_SMART_OPTIONS:
@@ -981,6 +984,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         """Has the charger been paused, or started charging, against what Predbat set - e.g. from the Wallbox app."""
         return charger.paused if charge else charger.charging
 
+    @writes
     async def charger_control_send(self, charger, charge, car_n):
         """Resume a paused charger inside a window, pause a charging one outside.
 
@@ -1003,6 +1007,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
                 await self.charger_control_save()
             await self.transport.pause(self.api_id(charger))
 
+    @writes
     async def charger_control_release_one(self, charger, charge):
         """Release one charger: resume it if Predbat paused it and it is still paused, then hand it back to its own schedule.
 

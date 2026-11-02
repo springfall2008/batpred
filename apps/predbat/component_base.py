@@ -78,10 +78,11 @@ def writes(func):
 
     Only sets an attribute; the method itself is returned unchanged and behaves exactly as before.
     ComponentBase.write_methods() lists the marked methods, so tests and hosts can see which
-    methods change device or account state without reading their code. Marking is per component and
-    not yet complete: the inverter and gateway components are marked, while car charger and other
-    device components (for example myenergi, Hypervolt, Wallbox, Ohme) are not yet, so an empty
-    listing does not mean a component sends no writes.
+    methods change device or account state without reading their code. Mark the method that issues
+    the write (a control call, or an event handler that sends one), not the loop that calls it, and
+    mark an override again: overriding a marked method without @writes unmarks it. The inverter,
+    gateway and car charger components are marked; a component with no marked method may still
+    write, so an empty listing is not proof that it sends none.
     """
     func.__predbat_writes__ = True
     return func
