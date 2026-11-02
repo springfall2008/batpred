@@ -15,12 +15,12 @@ Two behaviours are covered:
 
 import asyncio
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, PropertyMock
 
 import pytz
 
-from octopus import OctopusAPI, DATE_TIME_STR_FORMAT, _night_time_to_minutes, _windows_from_night_times, _localise_wall_clock
+from octopus import OctopusAPI, DATE_TIME_STR_FORMAT, _night_time_to_minutes, _windows_from_night_times, _localise_wall_clock, _tou_windows_from_measurements, _dominant_label
 
 
 LONDON = pytz.timezone("Europe/London")
@@ -122,6 +122,29 @@ def _stub_tou(api_and_now, labelled_windows_utc):
     api.async_graphql_query = mock_query
 
 
+def _stub_tou_sampled(api_and_now, first_day, days, is_night):
+    """
+    Stub the measurements query with a multi-day sample, labelling each half-hour by is_night(start).
+
+    first_day is the UTC midnight the sample starts at, and is_night receives each slot's aware UTC
+    start, so a schedule fixed to local time can be described across a clock change.
+    """
+    api = api_and_now[0]
+
+    async def mock_query(query, context, **kwargs):
+        """Return the stubbed multi-day measurements response."""
+        if "measurements" not in query:
+            return None
+        edges = []
+        for slot in range(days * 48):
+            start = first_day + timedelta(minutes=30 * slot)
+            label = "NIGHT_RATE" if is_night(start) else "DAY_RATE"
+            edges.append({"node": {"value": "0.100000", "unit": "kwh", "startAt": start.strftime(DATE_TIME_STR_FORMAT), "metaData": {"statistics": [{"type": "TOU_BUCKET_COST", "label": label, "costInclTax": {"estimatedAmount": "1.0"}}]}}})
+        return {"account": {"properties": [{"measurements": {"edges": edges}}]}}
+
+    api.async_graphql_query = mock_query
+
+
 @contextmanager
 def _night_times(my_predbat, value):
     """Set octopus_night_times on the shared fixture for the block (None clears it), restoring the prior state after."""
@@ -177,6 +200,8 @@ async def test_octopus_tou_windows(my_predbat):
     - Test 14: the hard-wired GO window keeps 8 contiguous nights across both clock changes
     - Test 15: IOG and manual windows in the changeover hour stay contiguous and never invert
     - Test 16: _localise_wall_clock directly, and a window wholly inside the skipped hour
+    - Test 17: TOU labels sampled across a clock change keep a local meter on its local window
+    - Test 18: one day's cached labels serve both clocks, and a tied vote goes to the latest label
     """
     print("\n**** Running Octopus TOU window tests ****")
     failed = False
@@ -546,5 +571,104 @@ async def test_octopus_tou_windows(my_predbat):
         failed = True
     else:
         print("PASS: a window wholly inside the skipped hour is dropped on 29 Mar, schedule contiguous")
+
+    # ------------------------------------------------------------------
+    # Test 17: TOU labels sampled across a clock change, read the week after it
+    #
+    # The 7-day sample before 27 Oct is mostly BST. A meter on local time switching at 01:00-06:00
+    # was labelled 00:00-05:00 UTC on those days and 01:00-06:00 UTC after the change. Shifting a
+    # UTC vote by today's offset ran the window an hour early for a week; reading each slot on the
+    # local clock gives 01:00-06:00 throughout. An Economy 7 meter is UTC-fixed and must keep its
+    # labelled 02:00-06:00 UTC however the sample falls. Neither window is a hard-wired default, so
+    # a pass shows the labels were used rather than the fallback.
+    # ------------------------------------------------------------------
+    def local_night17(start):
+        """Off-peak 01:00-06:00 on the local clock."""
+        local = start.astimezone(LONDON)
+        return 60 <= local.hour * 60 + local.minute < 360
+
+    def utc_night17(start):
+        """Off-peak 02:00-06:00 UTC."""
+        return 120 <= start.hour * 60 + start.minute < 360
+
+    for label17, now17, first17, tariff17, is_night17, frame17, want17 in (
+        ("GO after the autumn change", LONDON.localize(datetime(2026, 10, 27, 12, 0, 0)), datetime(2026, 10, 20, tzinfo=timezone.utc), "E-1R-GO-VAR-22-10-14-M", local_night17, LONDON, (60, 360)),
+        ("GO after the spring change", LONDON.localize(datetime(2026, 4, 1, 12, 0, 0)), datetime(2026, 3, 25, tzinfo=timezone.utc), "E-1R-GO-VAR-22-10-14-M", local_night17, LONDON, (60, 360)),
+        ("Economy 7 after the autumn change", LONDON.localize(datetime(2026, 10, 27, 12, 0, 0)), datetime(2026, 10, 20, tzinfo=timezone.utc), eco7, utc_night17, timezone.utc, (120, 360)),
+    ):
+        print("\n*** Test 17: TOU labels for {} ***".format(label17))
+        api17 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=now17)
+        _stub_tou_sampled(api17, first17, 7, is_night17)
+        with _night_times(my_predbat, None):
+            mdata17 = await _run(api17, base_url, tariff17)
+        slots17 = _night_slots_utc(mdata17, 7.00)
+
+        def frame_minutes(stamp):
+            """Minutes from midnight on the clock the meter switches on."""
+            moment = stamp.astimezone(frame17)
+            return moment.hour * 60 + moment.minute
+
+        wrong17 = [(s, e) for s, e in slots17 if (frame_minutes(s), frame_minutes(e)) != want17]
+        if len(slots17) != 8:
+            print("ERROR: {}: expected 8 nights, got {}".format(label17, len(slots17)))
+            failed = True
+        elif wrong17:
+            print("ERROR: {}: nights off the labelled window {}, e.g. {}".format(label17, want17, [(s.astimezone(frame17).strftime("%d %H:%M"), e.astimezone(frame17).strftime("%H:%M")) for s, e in wrong17[:3]]))
+            failed = True
+        else:
+            print("PASS: {}: every night at the labelled {:02d}:{:02d}-{:02d}:{:02d} {}".format(label17, want17[0] // 60, want17[0] % 60, want17[1] // 60, want17[1] % 60, "local" if frame17 is LONDON else "UTC"))
+
+    # The parser itself: a mixed BST/GMT sample reads as one window on the local clock, through the
+    # per-offset tzinfo that production passes as well as the zone itself.
+    print("\n*** Test 17b: _tou_windows_from_measurements on the local clock ***")
+    api17b = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=LONDON.localize(datetime(2026, 10, 27, 12, 0, 0)))
+    _stub_tou_sampled(api17b, datetime(2026, 10, 20, tzinfo=timezone.utc), 7, local_night17)
+    response17b = await api17b[0].async_graphql_query("measurements", "test")
+    for tz_label17b, tz17b in (("zone", LONDON), ("GMT instance", LONDON.localize(datetime(2026, 10, 27, 12, 0)).tzinfo), ("BST instance", LONDON.localize(datetime(2026, 10, 20, 12, 0)).tzinfo)):
+        local17b = _tou_windows_from_measurements(response17b, local_tz=tz17b)
+        if local17b != [(60, 360)]:
+            print("ERROR: {}: local-clock windows should be [(60, 360)], got {}".format(tz_label17b, local17b))
+            failed = True
+        else:
+            print("PASS: {}: mixed BST/GMT sample reads as 01:00-06:00 local".format(tz_label17b))
+
+    # ------------------------------------------------------------------
+    # Test 18: one day's labels serve both clocks from a single lookup, and ties go to the latest vote
+    # ------------------------------------------------------------------
+    print("\n*** Test 18: the day's cached labels serve both clocks ***")
+    api18 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00, now=LONDON.localize(datetime(2026, 10, 27, 12, 0, 0)))
+    _stub_tou_sampled(api18, datetime(2026, 10, 20, tzinfo=timezone.utc), 7, local_night17)
+    lookups18 = []
+    stub18 = api18[0].async_graphql_query
+
+    async def counting_query18(query, context, **kwargs):
+        """Count the measurements lookups made through the stub."""
+        lookups18.append(context)
+        return await stub18(query, context, **kwargs)
+
+    api18[0].async_graphql_query = counting_query18
+    with patch.object(type(api18[0]), "now_utc_exact", new_callable=PropertyMock) as mock_now:
+        mock_now.return_value = api18[1]
+        local18 = await api18[0].async_get_tou_night_windows(local_tz=LONDON)
+        utc18 = await api18[0].async_get_tou_night_windows()
+        local18_again = await api18[0].async_get_tou_night_windows(local_tz=LONDON)
+    # The sample is mostly BST, so on the UTC clock the BST position (00:00-05:00 UTC) wins
+    if len(lookups18) != 1:
+        print("ERROR: expected one measurements lookup for the day, made {}".format(len(lookups18)))
+        failed = True
+    elif local18 != [(60, 360)] or local18_again != local18 or utc18 != [(0, 300)]:
+        print("ERROR: expected local [(60, 360)] twice and UTC [(0, 300)], got local {} / {}, UTC {}".format(local18, local18_again, utc18))
+        failed = True
+    else:
+        print("PASS: one lookup served local {} and UTC {}".format(local18, utc18))
+
+    print("\n*** Test 18b: a tied vote goes to the most recent label ***")
+    for votes18, want18 in ((["DAY_RATE", "NIGHT_RATE"], "NIGHT_RATE"), (["NIGHT_RATE", "DAY_RATE"], "DAY_RATE"), (["NIGHT_RATE", "DAY_RATE", "NIGHT_RATE"], "NIGHT_RATE"), (["DAY_RATE", "DAY_RATE", "NIGHT_RATE"], "DAY_RATE")):
+        got18 = _dominant_label(votes18)
+        if got18 != want18:
+            print("ERROR: votes {} gave {}, expected {}".format(votes18, got18, want18))
+            failed = True
+        else:
+            print("PASS: votes {} -> {}".format(votes18, got18))
 
     return failed

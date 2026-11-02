@@ -19,12 +19,15 @@ without either one mutating os.environ.
 
 import os
 import tempfile
+from types import SimpleNamespace
 
 import yaml
 
 import hass as hass_module
 from hass import Hass
 from predbat import PredBat
+from utils import load_apps_yaml
+from web_annual import AnnualPage
 
 ENV_KEYS = ("PREDBAT_APPS_FILE", "PREDBAT_SECRETS_FILE")
 
@@ -172,8 +175,97 @@ def test_two_instances_in_one_process():
     return failed
 
 
+def test_secret_tag_not_registered_globally():
+    """load_apps_yaml resolves !secret with a private loader and leaves the shared yaml.SafeLoader untouched."""
+    print("**** Running test_secret_tag_not_registered_globally ****")
+    failed = False
+    constructors_before = dict(yaml.SafeLoader.yaml_constructors)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        secrets_path = os.path.join(tmpdir, "secrets.yaml")
+        with open(secrets_path, "w") as handle:
+            yaml.dump({"fox_api_key": "secret-value", "mpan": 1234567890}, handle)
+        apps_path = os.path.join(tmpdir, "apps.yaml")
+        with open(apps_path, "w") as handle:
+            handle.write(
+                "pred_bat:\n"
+                "  module: predbat\n"
+                "  fox_key: !secret fox_api_key\n"
+                "  missing_key: !secret not_in_secrets\n"
+                "  rates:\n"
+                "    - mpan: !secret mpan\n"
+                "      enabled: true\n"
+                "      threshold: 0.5\n"
+                "  times: &times ['00:30:00', '05:30:00']\n"
+                "  copy_times: *times\n"
+                "  empty:\n"
+            )
+
+        args, secrets = load_apps_yaml(apps_file=apps_path, secrets_file=secrets_path, log=lambda message, **kwargs: None)
+        expected = {
+            "module": "predbat",
+            "fox_key": "secret-value",
+            "missing_key": None,
+            "rates": [{"mpan": 1234567890, "enabled": True, "threshold": 0.5}],
+            "times": ["00:30:00", "05:30:00"],
+            "copy_times": ["00:30:00", "05:30:00"],
+            "empty": None,
+        }
+        if args != expected:
+            print("ERROR: apps.yaml parsed differently, expected {} got {}".format(expected, args))
+            failed = True
+        if secrets != {"fox_api_key": "secret-value", "mpan": 1234567890}:
+            print("ERROR: unexpected secrets {}".format(secrets))
+            failed = True
+
+    if "!secret" in yaml.SafeLoader.yaml_constructors:
+        print("ERROR: load_apps_yaml registered !secret on the shared yaml.SafeLoader")
+        failed = True
+    if dict(yaml.SafeLoader.yaml_constructors) != constructors_before:
+        print("ERROR: load_apps_yaml changed the shared yaml.SafeLoader constructors")
+        failed = True
+
+    # A plain safe_load elsewhere in the process no longer resolves !secret against the last-loaded secrets
+    try:
+        leaked = yaml.safe_load("key: !secret fox_api_key\n")
+        print("ERROR: yaml.safe_load resolved !secret after load_apps_yaml, got {}".format(leaked))
+        failed = True
+    except yaml.constructor.ConstructorError:
+        pass
+
+    if not failed:
+        print("**** test_secret_tag_not_registered_globally PASSED ****")
+    return failed
+
+
+def test_annual_config_resolves_secret():
+    """The Annual tab's saved annual.yaml resolves !secret against the running instance's secrets.yaml."""
+    print("**** Running test_annual_config_resolves_secret ****")
+    failed = False
+    with tempfile.TemporaryDirectory() as tmpdir:
+        apps_path, secrets_path = _write_instance_files(tmpdir, "annual", "fox-secret")
+        with open(secrets_path, "a") as handle:
+            yaml.dump({"octopus_key": "sk-annual-secret"}, handle)
+        engine = PredBat(apps_file=apps_path, secrets_file=secrets_path)
+        engine.config_root = tmpdir
+        with open(os.path.join(tmpdir, "annual.yaml"), "w") as handle:
+            handle.write("annual:\n  load:\n    octopus:\n      api_key: !secret octopus_key\n      account_id: !secret not_in_secrets\n")
+
+        page = AnnualPage(SimpleNamespace(base=engine, log=engine.log))
+        config = page.load_config()
+        octopus = (config.get("load") or {}).get("octopus")
+        if octopus != {"api_key": "sk-annual-secret", "account_id": None}:
+            print("ERROR: annual.yaml !secret should resolve against the instance's secrets (missing -> None), got {}".format(octopus))
+            failed = True
+
+    if not failed:
+        print("**** test_annual_config_resolves_secret PASSED ****")
+    return failed
+
+
 def run_env_config_tests(my_predbat=None):
     """Run all per-instance environment configuration tests."""
     failed = test_env_is_default_source()
     failed |= test_two_instances_in_one_process()
+    failed |= test_secret_tag_not_registered_globally()
+    failed |= test_annual_config_resolves_secret()
     return failed

@@ -647,6 +647,11 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch, local_
     stayed moved, "reverted" (blue) when it moved and came back. A change therefore marks the row it
     happened in, and expanding that row shows the 5-minute slot it happened at.
 
+    A row is headed by the newest slot of its half hour - the half-hour mark that ends it, or for the
+    newest row the newest record's own time - and expands to the slots before it within that half hour. Heading
+    rows by their oldest slot hid the latest value under the top row and made an expanded table read
+    17:30, 17:55, 17:50 ... rather than newest to oldest all the way down.
+
     Rows run without gaps from the first record to the newest across all selections, and never past it -
     the newest is normally the current state get_history_with_now() appends, so nothing in the future shows.
 
@@ -696,25 +701,33 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch, local_
         """Each selection's value at when, and what it did over (period_start, period_end]."""
         return [(history_value_at(records, stamps, when), history_period_kind(records, stamps, period_start, period_end)) for records, stamps in entity_records]
 
-    # A record shows from the first slot at or after it; the newest slot is the last one already reached
+    # A record shows from the first slot at or after it. The table ends on the newest record's own time rather
+    # than the slot before it: that record is normally the current state, and waiting for the next 5-minute
+    # mark left it off the table for up to 5 minutes.
     oldest = min(all_stamps)
+    newest = max(all_stamps)
     first_slot = floor_to_history_slot(oldest)
     if first_slot < oldest:
         first_slot += slot
-    newest_slot = floor_to_history_slot(max(all_stamps))
+    first_slot = min(first_slot, newest)
 
+    # Each row covers the half hour (row_end - row_length, row_end], the first being the one holding first_slot
     rows = []
-    row_time = floor_to_local_half_hour(min(first_slot, newest_slot), local_tz)
-    while row_time <= newest_slot:
-        row_end = min(row_time + row_length - slot, newest_slot)
+    row_end = floor_to_local_half_hour(first_slot, local_tz)
+    if row_end < first_slot:
+        row_end += row_length
+    while row_end - row_length < newest:
+        row_start = row_end - row_length
+        row_time = min(row_end, newest)
         details = []
-        detail_time = row_time + slot
-        while detail_time <= row_end:
+        detail_time = floor_to_history_slot(row_time)
+        if detail_time == row_time:
+            detail_time -= slot
+        while detail_time > row_start and detail_time >= first_slot:
             details.append({"time": detail_time.astimezone(local_tz), "cells": cells_for(detail_time, detail_time - slot, detail_time)})
-            detail_time += slot
-        details.reverse()
-        rows.append({"time": row_time.astimezone(local_tz), "cells": cells_for(row_time, row_time - slot, row_end), "details": details})
-        row_time += row_length
+            detail_time -= slot
+        rows.append({"time": row_time.astimezone(local_tz), "cells": cells_for(row_time, row_start, row_time), "details": details})
+        row_end += row_length
 
     rows.reverse()
     return rows
@@ -768,7 +781,7 @@ def render_entity_history_rows(rows, num_cols):
             text += f"<td{cell_classes.get(kind, '')}>{html_module.escape(str(value))}</td>"
         text += "</tr>\n"
 
-        # Detail rows: the remaining 5-minute slots inside this row's own half hour, newest first
+        # Detail rows: the earlier 5-minute slots of the half hour leading up to this row, newest first
         for detail in row["details"]:
             text += f'<tr class="detail-row" id="detail_{row_index}">'
             text += f"<td>  {detail['time'].strftime(TIME_FORMAT)}</td>"
@@ -2121,7 +2134,7 @@ class WebInterface(ComponentBase):
                 body.dark-mode .reverted-cell { background-color: #0d2e4a; color: #90caff; }
                 </style>
                 """
-                text += '<p style="font-size:0.9em;">Each row shows the value at its time. <span class="changed-cell" style="padding:0 4px;">Changed</span> during that half hour, <span class="reverted-cell" style="padding:0 4px;">changed and changed back</span>. Click a row to see its 5-minute slots.</p>\n'
+                text += '<p style="font-size:0.9em;">Each row shows the value at its time. <span class="changed-cell" style="padding:0 4px;">Changed</span> during the half hour up to it, <span class="reverted-cell" style="padding:0 4px;">changed and changed back</span>. Click a row to see the 5-minute slots before it.</p>\n'
                 text += '<button onclick="downloadEntityCSV()" style="margin-bottom: 10px; padding: 7px 14px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">&#11015; Download CSV</button>\n'
                 text += "<table>\n"
 
