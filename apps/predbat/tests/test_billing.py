@@ -261,6 +261,219 @@ def test_billing_constants():
     return False
 
 
+class _FakeStorage:
+    """In-memory stand-in for the Storage component."""
+
+    def __init__(self):
+        self.data = {}
+
+    async def load(self, module, filename):
+        """Return the stored blob, or None."""
+        return copy.deepcopy(self.data.get((module, filename)))
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Store a blob."""
+        self.data[(module, filename)] = copy.deepcopy(data)
+        return True
+
+
+class _Owner:
+    """The bits of a component BillingReader uses: log, storage, local_tz and dashboard_item."""
+
+    def __init__(self, storage=None):
+        self.storage = storage
+        self.local_tz = "Europe/London"
+        self.prefix = "predbat"
+        self.logged = []
+        self.published = {}
+
+    def log(self, message):
+        """Capture a log line."""
+        self.logged.append(str(message))
+
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        """Capture a published entity."""
+        self.published[entity_id] = (state, attributes, app)
+
+
+def _day_response(day, kwh=1.0, cost=10.0, label="Home Low Rate", stat_type="CONSUMPTION_COST"):
+    """A measurements response holding every half-hour of local date day."""
+    nodes = []
+    for start in day_slot_starts(day, LONDON):
+        if stat_type == "GENERATION_VALUE":
+            stats = [_stat("GENERATION_VALUE", "GENERATION", None, cost), _stat("STANDING_CHARGE_COST", None, None, 0)]
+        else:
+            stats = [_stat(stat_type, label, kwh, cost), _stat("STANDING_CHARGE_COST", "SC", None, 1.0)]
+        nodes.append(_node(start.isoformat(), kwh, stats))
+    return _response(nodes)
+
+
+def _query_day(query):
+    """The local date a billing query asks for, from its startAt."""
+    start = query.split('startAt: "')[1].split('"')[0]
+    return datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone(LONDON).date()
+
+
+def test_reader_fetches_only_incomplete_days():
+    """A refresh asks only for days that are not complete yet, one query per day."""
+    import asyncio
+    from billing import BillingReader
+
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    owner = _Owner(_FakeStorage())
+    reader = BillingReader(owner, "octopus_user", "billing")
+    reader.cache = {"import": _slots_for_day(date(2026, 10, 31))}
+    queries = []
+
+    async def query_fn(query, context):
+        """Answer every day with a full day of billing."""
+        queries.append(query)
+        return _day_response(_query_day(query))
+
+    changed = asyncio.run(reader.refresh(query_fn, {"import": ("A-1", "MPAN-IMP"), "export": None}, now_utc))
+    asked = sorted(_query_day(query) for query in queries)
+    if not changed or date(2026, 10, 31) in asked or date(2026, 11, 1) not in asked or date(2026, 11, 2) not in asked or len(asked) != len(set(asked)):
+        print("ERROR: refresh should skip complete 31 Oct and ask once for each other day, asked {}".format(asked))
+        return True
+    if any('readingDirection: CONSUMPTION' not in query or 'marketSupplyPointId: "MPAN-IMP"' not in query or 'accountNumber: "A-1"' not in query for query in queries):
+        print("ERROR: import queries should name the import MPAN, the account and the CONSUMPTION direction")
+        return True
+    if ("octopus_user", "billing") not in owner.storage.data:
+        print("ERROR: refresh should save the cache to storage")
+        return True
+    return False
+
+
+def test_reader_failed_read_marks_leg():
+    """A failed export read marks the leg False and keeps what was already cached."""
+    import asyncio
+    from billing import BillingReader
+
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    reader = BillingReader(_Owner(_FakeStorage()), "octopus_user", "billing")
+    cached_export = _slots_for_day(date(2026, 11, 1), label="GENERATION")
+    reader.cache = {"export": dict(cached_export)}
+
+    async def query_fn(query, context):
+        """Import reads fine, export fails."""
+        if "GENERATION" in query:
+            return None
+        return _day_response(_query_day(query))
+
+    asyncio.run(reader.refresh(query_fn, {"import": ("A-1", "IMP"), "export": ("A-1", "EXP")}, now_utc))
+    state, attributes = reader.sensor("octopus", now_utc)
+    if attributes["legs"] != {"import": True, "export": False}:
+        print("ERROR: legs should be import True, export False, got {}".format(attributes["legs"]))
+        return True
+    if any(key not in reader.cache.get("export", {}) for key in cached_export):
+        print("ERROR: a failed export read should not wipe the cached export")
+        return True
+    return False
+
+
+def test_reader_restart_restores_cache():
+    """A restart restores the cache and doesn't refetch until it is due."""
+    import asyncio
+    from billing import BillingReader
+
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    storage = _FakeStorage()
+    first = BillingReader(_Owner(storage), "octopus_user", "billing")
+
+    async def query_fn(query, context):
+        """Answer every day with a full day of billing."""
+        return _day_response(_query_day(query))
+
+    asyncio.run(first.refresh(query_fn, {"import": ("A-1", "IMP"), "export": None}, now_utc - timedelta(minutes=10)))
+    second = BillingReader(_Owner(storage), "octopus_user", "billing")
+    asyncio.run(second.load())
+    if second.due(now_utc):
+        print("ERROR: a reader restored 10 minutes after a refresh should not be due")
+        return True
+    if not second.due(now_utc + timedelta(minutes=171)):
+        print("ERROR: the reader should be due 180 minutes after the last refresh")
+        return True
+    if second.cache.get("import") != first.cache.get("import") or not second.cache.get("import"):
+        print("ERROR: the restored cache should match what was saved")
+        return True
+    if not BillingReader(_Owner(_FakeStorage()), "octopus_user", "billing").due(now_utc):
+        print("ERROR: a reader that has never fetched should be due")
+        return True
+    return False
+
+
+def test_octopus_partial_errors_is_failure(my_predbat):
+    """A response with data and errors (e.g. KT-CT-4718 on one MPAN) is a failed read, not an empty day."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from octopus import OctopusAPI, integration_context_header
+
+    api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    body = json.dumps({"data": {"account": {"properties": [{"measurements": {"edges": []}}]}}, "errors": [{"message": "Not authorised", "extensions": {"errorCode": "KT-CT-4718"}}]})
+    response = MagicMock()
+    response.status = 200
+    response.text = AsyncMock(return_value=body)
+    response.headers = {}
+    response.request_info = MagicMock()
+    response.request_info.headers = {integration_context_header: "test-context"}
+    response.__aenter__ = AsyncMock(return_value=response)
+    response.__aexit__ = AsyncMock(return_value=None)
+    session = MagicMock()
+    session.post = MagicMock(return_value=response)
+    api.api.async_create_client_session = AsyncMock(return_value=session)
+    api.graphql_token = "token"
+    api.async_refresh_token = AsyncMock(return_value="token")
+    api.log = lambda message: None
+    data = asyncio.run(api.billing_query("query { a }", "billing-import"))
+    if parse_measurements(data) is not None:
+        print("ERROR: a partial-error response should be a failed read (None), got {}".format(data))
+        return True
+    return False
+
+
+def test_octopus_run_publishes_billing(my_predbat):
+    """OctopusAPI.run() reads billing for the modelled import MPAN only and publishes predbat.billing."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from octopus import OctopusAPI
+
+    api = OctopusAPI(my_predbat, key="test-key", account_id="A-TEST", automatic=False)
+    api.async_get_account = AsyncMock(return_value=True)
+    api.async_find_tariffs = AsyncMock(return_value={})
+    api.async_get_flexibility_events = AsyncMock(return_value={})
+    api.get_saving_session_data = lambda: None
+    api.fetch_tariffs = AsyncMock(return_value=None)
+    api.async_update_intelligent_devices = AsyncMock(return_value=None)
+    api.async_intelligent_update_sensor = AsyncMock(return_value=None)
+    api.save_octopus_cache = AsyncMock(return_value=None)
+    api.refresh_discovery = lambda: None
+    api.process_commands = AsyncMock(return_value=False)
+    api.tariffs = {"import": {"tariffCode": "E-1R-IOG-SMB-VAR-24-10-29-L", "mpan": "1111111111111"}, "export": {"tariffCode": "E-1R-AGILE-OUTGOING-19-05-13-L", "mpan": "2222222222222"}}
+    queries = []
+
+    async def fake_query(query, context, **kwargs):
+        """Answer billing queries with a full day; nothing else is expected to reach the API."""
+        queries.append(query)
+        if "GENERATION" in query:
+            return _day_response(_query_day(query), kwh=0.5, cost=7.5, stat_type="GENERATION_VALUE")
+        return _day_response(_query_day(query))
+
+    api.async_graphql_query = fake_query
+    asyncio.run(api.run(60, False))
+    billing_queries = [query for query in queries if "measurements" in query]
+    mpans = {query.split('marketSupplyPointId: "')[1].split('"')[0] for query in billing_queries}
+    if mpans != {"1111111111111", "2222222222222"}:
+        print("ERROR: billing should query exactly the modelled import and export MPANs, got {}".format(mpans))
+        return True
+    state = my_predbat.get_state_wrapper("predbat.billing")
+    legs = my_predbat.get_state_wrapper("predbat.billing", attribute="legs")
+    if state is None or legs != {"import": True, "export": True}:
+        print("ERROR: predbat.billing should be published with both legs, got state {} legs {}".format(state, legs))
+        return True
+    return False
+
+
 def run_billing_tests(my_predbat):
     """Run the billing tests."""
     failed = False
@@ -280,6 +493,16 @@ def run_billing_tests(my_predbat):
     ):
         print("billing: {}".format(test.__name__))
         if test():
+            print("ERROR: {} failed".format(test.__name__))
+            failed = True
+    for test in (test_reader_fetches_only_incomplete_days, test_reader_failed_read_marks_leg, test_reader_restart_restores_cache):
+        print("billing: {}".format(test.__name__))
+        if test():
+            print("ERROR: {} failed".format(test.__name__))
+            failed = True
+    for test in (test_octopus_partial_errors_is_failure, test_octopus_run_publishes_billing):
+        print("billing: {}".format(test.__name__))
+        if test(my_predbat):
             print("ERROR: {} failed".format(test.__name__))
             failed = True
     return failed

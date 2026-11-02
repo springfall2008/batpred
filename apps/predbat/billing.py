@@ -21,6 +21,7 @@ figure is worse than none.
 """
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 BILLING_DAYS = 7
 BILLING_REFRESH_MINUTES = 180
@@ -30,6 +31,42 @@ BILLING_LEGS = ("import", "export")
 
 # The statistic type that carries the standing charge; every other type is a rate bucket.
 STANDING_CHARGE_TYPE = "STANDING_CHARGE_COST"
+
+# The Kraken measurements query, one local day at a time. Same shape as octopus.MEASUREMENTS_QUERY
+# plus a reading direction: an export MPAN returns no half-hours at all unless GENERATION is asked for.
+BILLING_MEASUREMENTS_QUERY = """query {{
+  account(accountNumber: "{account_id}") {{
+    properties {{
+      measurements(
+        first: 50
+        utilityFilters: [{{electricityFilters: {{readingFrequencyType: THIRTY_MIN_INTERVAL, marketSupplyPointId: "{mpan}", readingDirection: {direction}}}}}]
+        startAt: "{start_at}"
+        endAt: "{end_at}"
+        timezone: "Europe/London"
+      ) {{
+        edges {{
+          node {{
+            value
+            unit
+            ... on IntervalMeasurementType {{
+              startAt
+              endAt
+            }}
+            metaData {{
+              statistics {{
+                type
+                label
+                value
+                costInclTax {{ estimatedAmount costCurrency }}
+              }}
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}"""
+BILLING_DIRECTIONS = {"import": "CONSUMPTION", "export": "GENERATION"}
 
 # How far a half-hour's bucket kWh may stray from its metered kWh before it is not trusted.
 BUCKET_KWH_TOLERANCE = 0.01
@@ -223,3 +260,109 @@ def build_billing_sensor(cache, legs, supplier, now_utc, tz):
         "days": days,
     }
     return state, attributes
+
+
+def _zone(tz):
+    """Return tz as a zoneinfo timezone; components may hold a name or a pytz zone."""
+    if isinstance(tz, ZoneInfo):
+        return tz
+    return ZoneInfo(str(tz))
+
+
+class BillingReader:
+    """Keeps the 7-day billing cache for one supplier account: fetches, persists and publishes it.
+
+    owner is the component (OctopusAPI or KrakenAPI); its log, storage, local_tz, prefix and
+    dashboard_item are used. Storage is read through the owner each time because it is a lazy
+    property that may not be available when the component is constructed.
+    """
+
+    def __init__(self, owner, storage_app, storage_name):
+        """Create an empty reader; call load() to restore the cache from storage."""
+        self.owner = owner
+        self.storage_app = storage_app
+        self.storage_name = storage_name
+        self.cache = {}
+        self.legs = {"import": None, "export": None}
+        self.fetched_at = None
+
+    async def load(self):
+        """Restore the cache, legs and last fetch time from storage, if any were saved."""
+        storage = self.owner.storage
+        data = await storage.load(self.storage_app, self.storage_name) if storage else None
+        if not isinstance(data, dict):
+            return
+        self.cache = data.get("slots") or {}
+        self.legs = data.get("legs") or self.legs
+        fetched_at = data.get("fetched_at")
+        if isinstance(fetched_at, str):
+            try:
+                fetched_at = datetime.fromisoformat(fetched_at)
+            except ValueError:
+                fetched_at = None
+        # A stamp without a timezone can't be compared with now; treat it as never fetched
+        self.fetched_at = fetched_at if isinstance(fetched_at, datetime) and fetched_at.tzinfo else None
+
+    async def save(self):
+        """Persist the cache through the Storage component."""
+        storage = self.owner.storage
+        if not storage:
+            return
+        blob = {"slots": self.cache, "legs": self.legs, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
+        await storage.save(self.storage_app, self.storage_name, blob, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=BILLING_DAYS * 2))
+
+    def due(self, now_utc):
+        """True when the billing has never been read, or was last read BILLING_REFRESH_MINUTES ago."""
+        if self.fetched_at is None:
+            return True
+        return now_utc - self.fetched_at >= timedelta(minutes=BILLING_REFRESH_MINUTES)
+
+    async def refresh(self, query_fn, mpans, now_utc):
+        """Read every day in the window that is not complete yet, for each configured leg.
+
+        mpans maps "import"/"export" to (account_id, mpan), or None when that leg isn't configured.
+        query_fn(query, context) returns the GraphQL data, or None for a failed read; a failed read
+        marks the leg False and leaves what was cached alone. Returns True when new slots arrived.
+        """
+        tz = _zone(self.owner.local_tz)
+        changed = False
+        for leg in BILLING_LEGS:
+            target = mpans.get(leg)
+            if not target:
+                self.legs[leg] = None
+                continue
+            account_id, mpan = target
+            ok = True
+            for day in days_to_fetch(self.cache, leg, now_utc, tz):
+                starts = day_slot_starts(day, tz)
+                query = BILLING_MEASUREMENTS_QUERY.format(
+                    account_id=account_id,
+                    mpan=mpan,
+                    direction=BILLING_DIRECTIONS[leg],
+                    start_at=starts[0].strftime(BILLING_SLOT_FORMAT),
+                    end_at=(starts[-1] + timedelta(minutes=30)).strftime(BILLING_SLOT_FORMAT),
+                )
+                slots = parse_measurements(await query_fn(query, "billing-{}-{}".format(leg, day.isoformat())))
+                if slots is None:
+                    ok = False
+                    break
+                changed = changed or bool(slots)
+                self.cache = merge_slots(self.cache, leg, slots, now_utc, tz)
+            self.legs[leg] = ok
+            if not ok:
+                self.owner.log("Warn: Billing: could not read the {} billing for MPAN ...{}, keeping what was already read".format(leg, str(mpan)[-4:]))
+        self.cache = merge_slots(self.cache, "import", {}, now_utc, tz)
+        self.fetched_at = now_utc
+        await self.save()
+        return changed
+
+    def sensor(self, supplier, now_utc):
+        """Return (state, attributes) for predbat.billing from the cache."""
+        return build_billing_sensor(self.cache, self.legs, supplier, now_utc, _zone(self.owner.local_tz))
+
+    def publish(self, supplier, now_utc, app):
+        """Publish predbat.billing, unless there is no import billing to show yet."""
+        if not self.cache.get("import"):
+            return
+        state, attributes = self.sensor(supplier, now_utc)
+        self.owner.dashboard_item(self.owner.prefix + "." + BILLING_ENTITY_SUFFIX, state=state, attributes=attributes, app=app)
