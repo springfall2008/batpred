@@ -2661,7 +2661,16 @@ chart.render();
             return web.json_response({"unchanged": True, "overrides_hash": overrides_hash})
 
         # Build full response with data
-        response_data = {"unchanged": False, "plan": plan_json, "yesterday": yesterday_json, "baseline": baseline_json, "overrides": overrides, "overrides_hash": overrides_hash, "history_days": self.history_day_names()}
+        response_data = {
+            "unchanged": False,
+            "plan": plan_json,
+            "yesterday": yesterday_json,
+            "baseline": baseline_json,
+            "overrides": overrides,
+            "overrides_hash": overrides_hash,
+            "history_days": self.history_day_names(),
+            "history_day_events": self.history_day_events(),
+        }
 
         return web.json_response(response_data)
 
@@ -2669,6 +2678,13 @@ chart.render();
         """The dates (YYYY-MM-DD, oldest first) the History view's day picker can show, from predbat.plan_history."""
         days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
         return sorted(days) if isinstance(days, dict) else []
+
+    def history_day_events(self):
+        """The recorded events (saving session, free electricity, Axle) on each older History day that had any, as {date: [labels]}."""
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        if not isinstance(days, dict):
+            return {}
+        return {day: plan["history_events"] for day, plan in days.items() if isinstance(plan, dict) and plan.get("history_events")}
 
     async def html_api_plan_history(self, request):
         """
@@ -2763,6 +2779,7 @@ chart.render();
         text += f"window.overridesData = {json.dumps(overrides)};"
         text += f"window.overridesHash = {json.dumps(overrides_hash)};"
         text += f"window.historyDays = {json.dumps(self.history_day_names())};"
+        text += f"window.historyDayEvents = {json.dumps(self.history_day_events())};"
         text += "</script>"
 
         # Include renderer JavaScript (which declares newestDataTimestamp variable)

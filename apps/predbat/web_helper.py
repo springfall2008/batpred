@@ -7291,7 +7291,7 @@ def get_plan_renderer_js():
                         billedTitle = Object.entries(row.billed_buckets || {}).map(([label, bucket]) => `${label}: ${bucket.kwh} kWh ${Math.round(bucket.cost * 100)}${minor}`).join('\\n');
                     }
                     if (row.billing_event) {
-                        billedStr += ` <span style="font-size: 11px;" title="${escapeAttr('Predbat priced this slot with a ' + row.billing_event.toLowerCase() + ' your bill will not show')}">(${row.billing_event})</span>`;
+                        billedStr += ` <span style="font-size: 11px;" title="${escapeAttr(row.billing_event + ' in this slot: the bill may not show it the way Predbat priced it')}">(${row.billing_event})</span>`;
                     }
                     html += `<td id=billed bgcolor=${row.billing_event ? '#FFF2B0' : '#EEF6FF'} title="${escapeAttr(billedTitle)}">${billedStr}</td>`;
 
@@ -7959,14 +7959,17 @@ def get_plan_renderer_js():
                 historyDay = null;
             }
             const buttonStyle = 'padding: 4px 10px; border-radius: 3px; font-size: 13px; border: 1px solid #ddd; cursor: pointer;';
+            // A day with a saving session, free electricity or Axle event gets a dot: its bill may not match Predbat's pricing
+            const eventMark = (labels) => (labels && labels.length) ? ` <span style="color: #C08000;" title="${escapeAttr(labels.join(', ') + ' on this day: the bill may not show it the way Predbat priced it')}">&#9679;</span>` : '';
+            const dayEvents = window.historyDayEvents || {};
             let html = '';
             for (const day of days) {
                 const label = new Date(day + 'T12:00:00').toLocaleDateString([], {weekday: 'short', day: 'numeric', month: 'short'});
                 const selected = historyDay === day;
-                html += `<button class="history-day-button" onclick="selectHistoryDay('${day}')" style="${buttonStyle} background-color: ${selected ? '#4CAF50' : '#f0f0f0'}; color: ${selected ? 'white' : 'black'};">${label}</button>`;
+                html += `<button class="history-day-button" onclick="selectHistoryDay('${day}')" style="${buttonStyle} background-color: ${selected ? '#4CAF50' : '#f0f0f0'}; color: ${selected ? 'white' : 'black'};">${label}${eventMark(dayEvents[day])}</button>`;
             }
             const latest = historyDay === null;
-            html += `<button class="history-day-button" onclick="selectHistoryDay(null)" style="${buttonStyle} background-color: ${latest ? '#4CAF50' : '#f0f0f0'}; color: ${latest ? 'white' : 'black'};">Yesterday + today</button>`;
+            html += `<button class="history-day-button" onclick="selectHistoryDay(null)" style="${buttonStyle} background-color: ${latest ? '#4CAF50' : '#f0f0f0'}; color: ${latest ? 'white' : 'black'};">Yesterday + today${eventMark((window.yesterdayData || {}).history_events)}</button>`;
             picker.innerHTML = html;
             picker.style.display = 'flex';
         } else {
@@ -8090,6 +8093,7 @@ def get_plan_renderer_js():
                 // Older days are rebuilt as new billing lands, so drop what was fetched and re-read the one on show
                 window.historyDayData = {};
                 window.historyDays = data.history_days;
+                window.historyDayEvents = data.history_day_events || {};
                 if (historyDay && window.historyDays.includes(historyDay)) {
                     try {
                         const dayResponse = await fetch('./api/plan_history?date=' + encodeURIComponent(historyDay));

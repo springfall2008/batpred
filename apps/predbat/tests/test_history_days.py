@@ -222,11 +222,11 @@ def _yesterday_billing(my_predbat, legs):
     my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=10.0, attributes={"complete_until": "2024-10-03T10:30:00Z", "slots": {"import": {"2024-10-03T10:00:00Z": slot}}, "legs": legs, "supplier": "octopus"})
 
 
-def _run_yesterday_with_rows(my_predbat, missing=()):
-    """Run calculate_yesterday with a renderer that returns one row at 10:00 and return the published json."""
+def _run_yesterday_with_rows(my_predbat, missing=(), events=None):
+    """Run calculate_yesterday with a renderer that returns one row at 10:00 and return the published json; events adds recorded event entity histories."""
     now_utc = _setup_base(my_predbat, minutes_now=360)
     captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc)
-    my_predbat.get_history_wrapper = _history_mock(my_predbat, now_utc, missing=missing)
+    my_predbat.get_history_wrapper = _with_event_histories(_history_mock(my_predbat, now_utc, missing=missing), events or {})
     my_predbat.plan_interval_minutes = 30
     my_predbat.publish_html_plan = lambda *a, **kw: ("", {"rows": [{"slot_minute": 600, "cost_change": 0.0}]})
     my_predbat.rate_import_replicated = {600 - 24 * 60: "saving"}
@@ -573,6 +573,104 @@ def _test_rebuild_on_filled_gap(my_predbat, failed):
     return failed
 
 
+EVENT_ARGS = {"octopus_saving_session": "binary_sensor.predbat_octopus_a_saving_session", "octopus_free_electricity": "sensor.predbat_octopus_a_free_electricity", "axle_session": "binary_sensor.predbat_axle_event"}
+
+
+def _event_history(start_utc, spans):
+    """A recorded on/off history from start_utc, switching on and off at each (on, off) UTC instant in spans."""
+    points = [{"state": "off", "last_updated": start_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")}]
+    for on, off in spans:
+        points.append({"state": "on", "last_updated": on.strftime("%Y-%m-%dT%H:%M:%S+00:00")})
+        points.append({"state": "off", "last_updated": off.strftime("%Y-%m-%dT%H:%M:%S+00:00")})
+    return [points]
+
+
+def _with_event_histories(base_history, events):
+    """Wrap a get_history_wrapper so the event entities in events ({entity_id: history}) return their recorded history."""
+    return lambda entity_id, days=30, required=True, tracked=True: events[entity_id] if entity_id in events else base_history(entity_id, days, required, tracked)
+
+
+def _test_older_days_mark_recorded_events(my_predbat, failed):
+    """Older days mark the half-hours a saving session, free electricity or Axle event was recorded on, and list the day's events for the picker."""
+    print("history_days: older days mark recorded events")
+    from tests.test_calculate_yesterday import _make_mock_step_data
+
+    utc = timezone.utc
+    _setup_base(my_predbat, minutes_now=360)
+    now_utc = _set_clock(my_predbat, datetime(2026, 11, 2, 6, 0))
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    start = now_utc - timedelta(days=10)
+    # The sensors change a few minutes after the event does: 17:32 for a 17:30 start, 18:33 for an 18:30 end
+    events = {
+        EVENT_ARGS["octopus_saving_session"]: _event_history(start, [(datetime(2026, 10, 28, 10, 2, tzinfo=utc), datetime(2026, 10, 28, 10, 31, tzinfo=utc)), (datetime(2026, 10, 31, 17, 32, tzinfo=utc), datetime(2026, 10, 31, 18, 33, tzinfo=utc))]),
+        EVENT_ARGS["octopus_free_electricity"]: _event_history(start, [(datetime(2026, 10, 30, 13, 1, tzinfo=utc), datetime(2026, 10, 30, 14, 2, tzinfo=utc))]),
+        EVENT_ARGS["axle_session"]: _event_history(start, [(datetime(2026, 10, 29, 16, 0, tzinfo=utc), datetime(2026, 10, 29, 16, 30, tzinfo=utc))]),
+    }
+    my_predbat.get_history_wrapper = _with_event_histories(_realistic_histories(my_predbat, now_utc), events)
+    saved_args = {name: my_predbat.args.get(name) for name in EVENT_ARGS}
+    my_predbat.args.update(EVENT_ARGS)
+    my_predbat.max_days_previous = 8
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.metric_standing_charge = 55.52
+    my_predbat.history_days_built_for = None
+    my_predbat.history_days_billing_mark = None
+    my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=0.0, attributes=_matching_billing(my_predbat, datetime(2026, 10, 29, tzinfo=utc), datetime(2026, 11, 1, tzinfo=utc)))
+    try:
+        my_predbat.calculate_history_days()
+        days = my_predbat.get_state_wrapper(my_predbat.prefix + ".plan_history", attribute="days") or {}
+    finally:
+        del my_predbat.step_data_history
+        del my_predbat.get_history_wrapper
+        for name, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(name, None)
+            else:
+                my_predbat.args[name] = value
+        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+
+    def _marked(day):
+        """The local times of the rows marked with an event on day, with their labels."""
+        return [(str(row["time"])[11:16], row.get("billing_event")) for row in (days.get(day) or {}).get("rows") or [] if row.get("billing_event")]
+
+    expected = {
+        "2026-10-31": ([("17:30", "Saving event"), ("18:00", "Saving event")], ["Saving event"]),
+        "2026-10-30": ([("13:00", "Free electricity"), ("13:30", "Free electricity")], ["Free electricity"]),
+        "2026-10-29": ([("16:00", "Axle event")], ["Axle event"]),
+        # Not billed, so no row carries the label, but the picker still flags the day
+        "2026-10-28": ([], ["Saving event"]),
+    }
+    for day, (rows, labels) in expected.items():
+        if _marked(day) != rows or (days.get(day) or {}).get("history_events") != labels:
+            print("ERROR: {} should mark {} and list {}, got {} and {}".format(day, rows, labels, _marked(day), (days.get(day) or {}).get("history_events")))
+            failed = True
+    if (days.get("2026-10-27") or {}).get("history_events"):
+        print("ERROR: 27 Oct had no event, got {}".format(days["2026-10-27"].get("history_events")))
+        failed = True
+    return failed
+
+
+def _test_yesterday_marks_recorded_events(my_predbat, failed):
+    """Yesterday + today marks a recorded event too, and its own label wins over the rates' generic saving tag."""
+    print("history_days: yesterday marks recorded events")
+    _yesterday_billing(my_predbat, {"import": True, "export": None})
+    axle = _event_history(datetime(2024, 10, 1, tzinfo=timezone.utc), [(datetime(2024, 10, 3, 10, 4, tzinfo=timezone.utc), datetime(2024, 10, 3, 10, 34, tzinfo=timezone.utc))])
+    saved = my_predbat.args.get("axle_session")
+    my_predbat.args["axle_session"] = EVENT_ARGS["axle_session"]
+    try:
+        plan = _run_yesterday_with_rows(my_predbat, events={EVENT_ARGS["axle_session"]: axle})
+    finally:
+        if saved is None:
+            my_predbat.args.pop("axle_session", None)
+        else:
+            my_predbat.args["axle_session"] = saved
+        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+    row = (plan.get("rows") or [{}])[0]
+    if row.get("billing_event") != "Axle event" or plan.get("history_events") != ["Axle event"]:
+        print("ERROR: yesterday's 10:00 row should be marked with the recorded Axle event, got {} / {}".format(row.get("billing_event"), plan.get("history_events")))
+        failed = True
+    return failed
+
+
 def run_history_days_tests(my_predbat):
     """Run the History replay and 7-day History tests."""
     failed = False
@@ -592,4 +690,6 @@ def run_history_days_tests(my_predbat):
     failed = _test_older_day_needs_cost_history(my_predbat, failed)
     failed = _test_history_days_retry_after_failure(my_predbat, failed)
     failed = _test_rebuild_on_filled_gap(my_predbat, failed)
+    failed = _test_older_days_mark_recorded_events(my_predbat, failed)
+    failed = _test_yesterday_marks_recorded_events(my_predbat, failed)
     return failed

@@ -389,7 +389,7 @@ class BillingReader:
 
 # Rate tags Predbat puts on a minute (fetch.py/octopus.py/axle.py rate_replicate) that mean the
 # bill will not match its rate: a saving/VPP event pays separately, an override isn't the tariff.
-BILLING_EVENT_LABELS = {"saving": "Saving event", "manual": "Manual rate", "user": "Manual rate", "increment": "Rate adjustment"}
+BILLING_EVENT_LABELS = {"saving": "Saving event", "free": "Free electricity", "axle": "Axle event", "manual": "Manual rate", "user": "Manual rate", "increment": "Rate adjustment"}
 
 
 def _pounds(pence):

@@ -63,6 +63,8 @@ def _check_js(failed):
         ("picker fetches an older day on demand", "./api/plan_history?date=" in _function_source(js, "selectHistoryDay")),
         ("default History view needs no fetch", "if (!day" in _function_source(js, "selectHistoryDay") or "if (day && " in _function_source(js, "selectHistoryDay")),
         ("picker rendered for the History view only", "currentView === 'yesterday'" in _function_source(js, "renderHistoryPicker")),
+        ("picker flags days with a recorded event", "historyDayEvents" in _function_source(js, "renderHistoryPicker") and "history_events" in _function_source(js, "renderHistoryPicker")),
+        ("plan_data refresh keeps the day events", "window.historyDayEvents = data.history_day_events" in js),
     ]
     for label, ok in checks:
         if not ok:
@@ -74,7 +76,10 @@ def _check_js(failed):
 def _check_api(my_predbat, failed):
     """/api/plan_history returns a stored older day, 404 for any other, and plan_data lists the days."""
     web = _make_web(my_predbat)
-    my_predbat.dashboard_item(my_predbat.prefix + ".plan_history", state=1, attributes={"days": {"2026-10-31": {"rows": [{"slot_minute": 0}]}}})
+    yesterday_json = my_predbat.get_state_wrapper(my_predbat.prefix + ".cost_yesterday", attribute="json")
+    # plan_data answers "unchanged" with no view published, so publish one for it to send
+    my_predbat.dashboard_item(my_predbat.prefix + ".cost_yesterday", state=0, attributes={"json": {"timestamp": "2026-11-02T10:00:00", "rows": []}})
+    my_predbat.dashboard_item(my_predbat.prefix + ".plan_history", state=2, attributes={"days": {"2026-10-31": {"rows": [{"slot_minute": 0}]}, "2026-10-30": {"rows": [], "history_events": ["Saving event"]}}})
     try:
         response = asyncio.run(web.html_api_plan_history(make_mocked_request("GET", "/api/plan_history?date=2026-10-31")))
         if response.status != 200 or json.loads(response.text).get("rows") != [{"slot_minute": 0}]:
@@ -86,11 +91,15 @@ def _check_api(my_predbat, failed):
             failed = True
         response = asyncio.run(web.html_api_plan_data(make_mocked_request("GET", "/api/plan_data")))
         body = json.loads(response.text)
-        if body.get("unchanged") is not True and body.get("history_days") != ["2026-10-31"]:
+        if body.get("unchanged") is not False or body.get("history_days") != ["2026-10-30", "2026-10-31"]:
             print("ERROR: /api/plan_data should list the older history days, got {}".format(body.get("history_days")))
+            failed = True
+        if body.get("history_day_events") != {"2026-10-30": ["Saving event"]}:
+            print("ERROR: /api/plan_data should list the days with recorded events, got {}".format(body.get("history_day_events")))
             failed = True
     finally:
         my_predbat.dashboard_item(my_predbat.prefix + ".plan_history", state=0, attributes={"days": {}})
+        my_predbat.dashboard_item(my_predbat.prefix + ".cost_yesterday", state=0, attributes={"json": yesterday_json})
     return failed
 
 

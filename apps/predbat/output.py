@@ -40,7 +40,7 @@ from const import (
 )
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
 from prediction import Prediction
-from billing import attach_billing, BILLING_DAYS
+from billing import attach_billing, BILLING_DAYS, BILLING_EVENT_LABELS
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
 # rendered client-side (web_helper.py) by substituting {placeholder} names against the row's
@@ -212,6 +212,8 @@ def dominant_slot_status(minute_counts, precedence):
 
 # How long after building no older days the History view tries again
 HISTORY_DAYS_RETRY_MINUTES = 180
+# The event entities whose recorded on/off history marks the History view's rows, and the event tag each records
+HISTORY_EVENT_ENTITIES = (("octopus_saving_session", "saving"), ("octopus_free_electricity", "free"), ("axle_session", "axle"))
 
 # Plan state build_history_days() winds back to each older day and puts back afterwards
 HISTORY_DAY_FAKED_STATE = (
@@ -3723,6 +3725,13 @@ class Output:
         )
         self.forecast_minutes = end_record
 
+        # Events recorded on the event entities, which outlast the rates' own tags (a restart clears those)
+        events = self.history_events(rate_import_replicated, rate_export_replicated, 24 * 60)
+        recorded_events, event_labels = self.history_events_in_view(self.history_recorded_events(2), midnight_utc - timedelta(days=1), end_record + minutes_now)
+        events.update(recorded_events)
+        if event_labels:
+            plan_json_yesterday["history_events"] = event_labels
+
         # Put what the supplier actually billed beside each slot, where it has been published
         billing = self.history_billing()
         if billing:
@@ -3737,7 +3746,7 @@ class Output:
                 minutes_now + end_record,
                 cost_data,
                 import_cost_data,
-                self.history_events(rate_import_replicated, rate_export_replicated, 24 * 60),
+                events,
             )
 
         # Restore state
@@ -4229,6 +4238,57 @@ class Output:
                 events[minute + offset] = tag
         return events
 
+    @staticmethod
+    def history_slot_floor(when):
+        """when rounded down to the start of its half-hour, in UTC."""
+        when = when.astimezone(timezone.utc)
+        return when.replace(minute=(when.minute // 30) * 30, second=0, microsecond=0)
+
+    def history_recorded_events(self, days):
+        """The saving session, free electricity and Axle events recorded over the last days, as [(start_utc, end_utc, tag)].
+
+        Read from the on/off history of the entities octopus_saving_session, octopus_free_electricity and axle_session
+        point at. The sensors change a few minutes after an event does and events run on half-hours, so each change is
+        rounded down to its half-hour; an event still on is taken to run to now.
+        """
+        spans = []
+        for arg, tag in HISTORY_EVENT_ENTITIES:
+            entity_id = self.get_arg(arg, None, indirect=False) if arg in self.args else None
+            if not entity_id or not isinstance(entity_id, str):
+                continue
+            history = self.get_history_wrapper(entity_id=entity_id, days=days, required=False)
+            if not history or not history[0]:
+                continue
+            on_since = None
+            for point in history[0]:
+                try:
+                    when = datetime.fromisoformat(str(point.get("last_changed") or point.get("last_updated")).replace("Z", "+00:00"))
+                except (TypeError, ValueError):
+                    continue
+                if when.tzinfo is None:
+                    continue
+                active = str(point.get("state")).lower() in ("on", "true")
+                if active and on_since is None:
+                    on_since = self.history_slot_floor(when)
+                elif not active and on_since is not None:
+                    spans.append((on_since, max(self.history_slot_floor(when), on_since + timedelta(minutes=30)), tag))
+                    on_since = None
+            if on_since is not None:
+                spans.append((on_since, max(self.now_utc.astimezone(timezone.utc), on_since + timedelta(minutes=30)), tag))
+        return spans
+
+    @staticmethod
+    def history_events_in_view(spans, view_midnight, view_minutes):
+        """Map recorded event spans onto one History view: ({view minute: tag}, [the labels of the events in it])."""
+        events = {}
+        for start, end, tag in spans:
+            first = max(0, int((start - view_midnight).total_seconds() // 60))
+            last = min(view_minutes, int((end - view_midnight).total_seconds() // 60))
+            for minute in range(first, last):
+                events[minute] = tag
+        labels = sorted({BILLING_EVENT_LABELS[tag] for tag in events.values() if tag in BILLING_EVENT_LABELS})
+        return events, labels
+
     def attach_history_billing(self, plan_json, billing, view_midnight_utc, view_minutes, status_offset, cost_data, import_cost_data, events):
         """Attach the billing to one History view's plan JSON.
 
@@ -4305,6 +4365,7 @@ class Output:
         soc_data = self.history_minute_data(".soc_kw_h0", history_days) or self.soc_kwh_history
         status_data = self.get_history_wrapper(entity_id=self.prefix + ".status", days=history_days, required=False)
         import_cost_data = self.history_minute_data(".cost_today_import", history_days) if billing and (billing.get("legs") or {}).get("export") is None else None
+        event_spans = self.history_recorded_events(history_days)
 
         saved = {name: getattr(self, name) for name in HISTORY_DAY_FAKED_STATE if hasattr(self, name)}
         saved["car_charging_slots"] = copy.deepcopy(self.car_charging_slots)
@@ -4367,9 +4428,12 @@ class Output:
                     for row in plan_json.get("rows") or []:
                         if row.get("slot_minute") is not None:
                             row["time"] = self.local_tz.normalize(view_midnight + timedelta(minutes=row["slot_minute"])).strftime(TIME_FORMAT)
+                events, event_labels = self.history_events_in_view(event_spans, view_midnight, view_minutes)
+                if event_labels:
+                    plan_json["history_events"] = event_labels
                 if billing:
                     self.minutes_now = minutes_now
-                    self.attach_history_billing(plan_json, billing, view_midnight, view_minutes, status_offset, cost_data, import_cost_data, {})
+                    self.attach_history_billing(plan_json, billing, view_midnight, view_minutes, status_offset, cost_data, import_cost_data, events)
                 days[day.isoformat()] = plan_json
         finally:
             for name in HISTORY_DAY_FAKED_STATE:
