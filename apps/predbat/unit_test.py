@@ -38,7 +38,7 @@ from tests.test_kernel_static_cache import run_kernel_static_cache_tests
 from tests.test_execute import run_execute_tests
 from tests.test_execute_multi_inverter_status import test_multi_inverter_status
 from tests.test_load_car_energy import test_load_car_energy_warns_when_configured_entity_has_no_data
-from tests.test_predheat import test_predheat, test_predheat_smart_thermostat
+from tests.test_predheat import test_predheat, test_predheat_smart_thermostat, test_predheat_optional_energy_history
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_charge_hold import run_charge_hold_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_slot_max_default_tests
@@ -317,7 +317,7 @@ from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
 from tests.test_plan_persistence import test_plan_persistence
-from tests.test_github import test_github
+from tests.test_github import test_github, test_update_options_are_per_engine
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_givtcp_component import test_givtcp_component
@@ -511,6 +511,7 @@ def main():
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),
         ("predheat", test_predheat, "Predheat scheduler and predheat_enable gate tests (#4670)", False),
         ("predheat_smart_thermostat", test_predheat_smart_thermostat, "Predheat smart thermostat pre-heat window tests", False),
+        ("predheat_optional_energy_history", test_predheat_optional_energy_history, "Predheat without optional energy history tests", False),
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
@@ -803,6 +804,7 @@ def main():
         ("storage", test_storage, "Storage component tests (yaml/json/text round-trip, expiry, cleanup)", False),
         ("plan_persistence", test_plan_persistence, "Plan persistence tests (save/load round-trip, expiry, missing storage)", False),
         ("github", test_github, "GitHub mixin tests (cache hit/miss/stale, HTTP errors, release parsing, auto-update)", False),
+        ("update_options_per_engine", test_update_options_are_per_engine, "Update dropdown options are built per engine, not in a module global", False),
         # Ohme EV charger API unit tests
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),

@@ -115,7 +115,7 @@ This is shown explicitly rather than the headline status just reflecting whichev
 If inverters only disagree on sub-state within the same side (e.g. one still actively Charging while another has reached Hold charging), the most active sub-state is shown instead, since Cross-charging specifically means disagreement across the charge/export divide, not within one side.
 
 - **Hold for car** and **Demand, Hold for car** - A car is charging (either Predbat-led or Octopus-led), the battery is in Demand mode,
-but is set to prevent discharging into the car (requires **switch.predbat_car_charging_from_battery** to be set to On).
+but is set to prevent discharging into the car (requires **switch.predbat_car_charging_from_battery** to be Off, the default).
 
 - **Hold for iBoost** and **Demand, Hold for iBoost** - iBoost is active, the battery is in Demand mode, but is set to prevent discharging into the iBoost (requires **switch.predbat_iboost_prevent_discharge** to be set to On).
 
