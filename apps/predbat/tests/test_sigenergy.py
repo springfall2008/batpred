@@ -23,6 +23,9 @@ from sigenergy import (
     SIGENERGY_ACTIVE_MODE_SELF,
     SIGENERGY_ACTIVE_MODE_SELF_GRID,
     SIGENERGY_CODE_IN_OTHER_VPP,
+    SIGENERGY_CODE_STATION_INFO_NOT_FOUND,
+    SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP,
+    SIGENERGY_CODE_STATION_NOT_FOUND,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
     SIGENERGY_LOG_REDACT_KEYS,
     SIGENERGY_MODE_MSC,
@@ -3739,6 +3742,26 @@ def test_sigenergy_onboard_status(my_predbat):
     result2 = run_async(api2.onboard_systems("sys-2"))
     assert result2 is False, "in-other-vpp returns False"
     assert api2.onboard_status["sys-2"] == "in_other_vpp", "in_other_vpp status set"
+
+    # A mistyped system ID (top-level 13001, or the documented 1106/1108) → invalid_system_id, returns False (#5691)
+    for code in (SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP, SIGENERGY_CODE_STATION_NOT_FOUND, SIGENERGY_CODE_STATION_INFO_NOT_FOUND):
+        api3 = MockSigenergyAPI()
+        api3._request = _api_error(api3, code)
+        result3 = run_async(api3.onboard_systems("sys-3"))
+        assert result3 is False, "station not found ({}) returns False".format(code)
+        assert api3.onboard_status["sys-3"] == "invalid_system_id", "invalid_system_id status set for code {}".format(code)
+
+    # The same code can come per system in data[].codeList rather than at the top level
+    api4 = MockSigenergyAPI()
+
+    async def _per_item(*args, **kwargs):
+        """A _request stand-in returning a per-system failure, as the real onboard endpoint does."""
+        return [{"systemId": "sys-4", "result": False, "codeList": [SIGENERGY_CODE_STATION_NOT_FOUND]}]
+
+    api4._request = _per_item
+    result4 = run_async(api4.onboard_systems("sys-4"))
+    assert result4 is False, "per-item station not found returns False"
+    assert api4.onboard_status["sys-4"] == "invalid_system_id", "invalid_system_id status set for a per-item code"
 
     return failed
 

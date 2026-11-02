@@ -2818,6 +2818,23 @@ def _test_component_publish_entity():
 
     print("    PASS: Empty predictions handled correctly")
 
+    # Test 3: the predictor hands back numpy values, and round() keeps them numpy. They must be published as plain
+    # floats, as a numpy scalar in an entity attribute reaches the debug yaml as a pickled object.
+    # Mutation check: dropping the float() conversions in _publish_entity fails this.
+    mock_base.dashboard_calls = []
+    component.load_minutes_now = np.float64(10.5)
+    component.current_predictions = {0: np.float64(0.1), 5: np.float64(0.2), 60: np.float64(1.3), 480: np.float32(9.7), 1440: np.float64(28.9)}
+    component._publish_entity()
+
+    published = list(mock_base.dashboard_calls[0]["attributes"]["results"].values()) + [mock_base.dashboard_calls[1]["state"]]
+    stats = mock_base.dashboard_calls[1]["attributes"]
+    published += [stats[key] for key in ("load_today", "load_today_h1", "load_today_h8", "load_total", "power_today_now", "power_today_h1", "power_today_h8")]
+    leaked = [value for value in published if type(value) is not float]
+    assert not leaked, f"Expected every published value to be a plain float, got {[type(value).__name__ for value in leaked]}"
+    assert abs(stats["load_today_h1"] - 11.8) < 0.01, f"Expected load_today_h1 11.8 from numpy predictions, got {stats['load_today_h1']}"
+
+    print("    PASS: numpy predictions published as plain floats")
+
     print("  All _publish_entity tests passed!")
 
 

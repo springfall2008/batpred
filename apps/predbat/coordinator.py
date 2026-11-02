@@ -1180,23 +1180,35 @@ def inverter_record(
     report, and sorted because string hashing is randomised per process, so list(some_set) comes
     out in a different order after a restart and two dumps of the same hardware would diff for nothing.
     """
-    fields = {
-        "inverter_type": inverter_type,
-        "control": control,
-        "composition": composition,
-        "measures_meter": measures_meter,
-        "serials": serials,
-        "functions": functions,
-        "capabilities": capabilities,
-        "flags": flags,
-        "effects": effects,
-        "hardware_ids": hardware_ids,
-        "account_ids": account_ids,
-        "info": info,
-        "ratings": ratings,
-        "coverage": coverage,
-        "entities": entities,
-    }
+    return _record(
+        device_id,
+        {
+            "inverter_type": inverter_type,
+            "control": control,
+            "composition": composition,
+            "measures_meter": measures_meter,
+            "serials": serials,
+            "functions": functions,
+            "capabilities": capabilities,
+            "flags": flags,
+            "effects": effects,
+            "hardware_ids": hardware_ids,
+            "account_ids": account_ids,
+            "info": info,
+            "ratings": ratings,
+            "coverage": coverage,
+            "entities": entities,
+        },
+    )
+
+
+def _record(device_id, fields):
+    """One record from `device_id` and a field-name -> value dict, by the rules inverter_record() documents.
+
+    Shared by every section's builder so the omit/copy/sort rules live in one place: None, an empty
+    string and an empty container are left out; a bool is always kept; each container is copied;
+    a set or tuple becomes a list, a set sorted by string form.
+    """
     record = {"device_id": device_id}
     for name, value in fields.items():
         if isinstance(value, (set, frozenset)):
@@ -1210,6 +1222,40 @@ def inverter_record(
             continue
         record[name] = value
     return record
+
+
+def charger_record(device_id, *, serves_cars=None, hardware_ids=None, account_ids=None, info=None, ratings=None, entities=None):
+    """Assemble one chargers-section record, omitting every field that is unset or empty.
+
+    The chargers counterpart of inverter_record(), with the same keyword-only schema-as-parameters
+    design and the same omit/copy rules (see _record()). serves_cars names the car records this
+    charger charges - a cross-link that may dangle.
+    """
+    return _record(device_id, {"serves_cars": serves_cars, "hardware_ids": hardware_ids, "account_ids": account_ids, "info": info, "ratings": ratings, "entities": entities})
+
+
+def car_record(device_id, *, charged_by=None, flags=None, hardware_ids=None, info=None, ratings=None, entities=None):
+    """Assemble one cars-section record, omitting every field that is unset or empty.
+
+    The cars counterpart of inverter_record(). charged_by names the charger record that charges
+    this car. A car the reporter knows nothing about carries flags ["stub"] - see
+    charger_with_stub_car().
+    """
+    return _record(device_id, {"charged_by": charged_by, "flags": flags, "hardware_ids": hardware_ids, "info": info, "ratings": ratings, "entities": entities})
+
+
+def charger_with_stub_car(device_id, *, hardware_ids=None, account_ids=None, info=None, entities=None):
+    """A (charger, car) record pair for a charger that knows nothing about the vehicle it charges.
+
+    Predbat indexes cars, not chargers, so every charger is reported with a car even when the
+    integration has no vehicle data at all. That car is a stub - device_id "{charger}:car", flags
+    ["stub"] - cross-linked both ways. The marker is a flag rather than info.stub because info only
+    holds strings, and validation dropped a boolean there (GH#5849).
+    """
+    car_device_id = "{}:car".format(device_id)
+    charger = charger_record(device_id, serves_cars=[car_device_id], hardware_ids=hardware_ids, account_ids=account_ids, info=info, entities=entities)
+    car = car_record(car_device_id, charged_by=device_id, flags=["stub"])
+    return charger, car
 
 
 def _bound_entity(entities, name, access=None):

@@ -325,7 +325,7 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots in time order (default On)
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
-- **switch.predbat_car_charging_from_battery** - prevent the car from draining the home battery when charging
+- **switch.predbat_car_charging_from_battery** - when On, allows the car to drain the home battery when charging; when Off (the default), Predbat holds the battery while the car charges
 - **switch.predbat_car_charging_manual_soc** - ignore the **car_charging_soc** car SoC sensor set in `apps.yaml` and use the manual SoC instead (car 0)
 - **switch.predbat_car_charging_manual_soc_1/2/3** - ignore the **car_charging_soc** car SoC sensor for cars 1/2/3
 - **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC in kWh (car 0), used when the switch above is on, or when **car_charging_soc** is not set for the car and its charger has energy and plugged-in (**car_charging_plugged**) sensors. Otherwise, with a car SoC sensor, it shows the sensor's reading
