@@ -6,7 +6,9 @@ name: owner gate
 # It passes only when the owner has given this PR an explicit go-ahead, whoever authored it:
 # - the owner applied the owner-approved label (the most recent time that label was applied, the
 #   owner applied it - a collaborator labelling a PR does not count), or
-# - the owner enabled auto-merge on it.
+# - the owner enabled auto-merge on it, or
+# - the owner's latest review approves the PR's current head commit (an approval of an earlier commit
+#   is stale and does not count).
 # Authorship deliberately counts for nothing: the triage bot opens PRs under the owner's account, and
 # an unreviewed bot PR must not become mergeable by any collaborator the moment CI goes green.
 #
@@ -14,9 +16,10 @@ name: owner gate
 # auto-merge is switched off - so an approval only ever covers code the owner saw (the same idea as
 # dismissing a stale review). The CI bots that push fixes to PR branches are exempt.
 #
-# pull_request_target so the job always runs this file as it is on main - a PR cannot change the gate
-# that judges it - and gets a token that can remove the label and switch auto-merge off. It never
-# checks out or runs the PR's code, which is what keeps pull_request_target safe here.
+# pull_request_target so the job runs this file as it is on main and gets a token that can remove the
+# label and switch auto-merge off. GitHub has no _target variant of pull_request_review, so a review
+# runs the copy of this file in the PR's merge ref instead - main's copy unless the PR edits it; the
+# review path only reads. Neither path checks out or runs the PR's code.
 on:
   pull_request_target:
     types:
@@ -27,6 +30,10 @@ on:
       - unlabeled
       - auto_merge_enabled
       - auto_merge_disabled
+  pull_request_review:
+    types:
+      - submitted
+      - dismissed
 
 permissions:
   issues: write
@@ -44,14 +51,17 @@ jobs:
               repository(owner: $owner, name: $repo) {
                 pullRequest(number: $number) {
                   id
+                  headRefOid
                   autoMergeRequest { enabledBy { login } }
                   labels(first: 100) { nodes { name } }
+                  latestOpinionatedReviews(first: 100) { nodes { author { login } state commit { oid } } }
                 }
               }
             }' --jq '.data.repository.pullRequest')
           pr_id=$(jq -r '.id' <<< "$state")
           auto_merge_by=$(jq -r '.autoMergeRequest.enabledBy.login // ""' <<< "$state")
           has_label=$(jq -r --arg label "$LABEL" '[.labels.nodes[].name] | index($label) != null' <<< "$state")
+          owner_approved_head=$(jq -r --arg owner "$owner" '.headRefOid as $head | [.latestOpinionatedReviews.nodes[] | select(.author.login == $owner and .state == "APPROVED" and .commit.oid == $head)] | length > 0' <<< "$state")
 
           # New commits from anyone but the owner (or the CI bots) revoke an earlier go-ahead
           if [ "$ACTION" = "synchronize" ] && [ "$SENDER" != "$owner" ] && [ "$SENDER" != "pre-commit-ci[bot]" ] && [ "$SENDER" != "github-actions[bot]" ]; then
@@ -61,7 +71,7 @@ jobs:
             if [ -n "$auto_merge_by" ]; then
               gh api graphql -F id="$pr_id" -f query='mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }' > /dev/null
             fi
-            echo "::error::$SENDER pushed new commits, so any approval was revoked - $owner must apply $LABEL or enable auto-merge again"
+            echo "::error::$SENDER pushed new commits, so any approval was revoked - $owner must apply $LABEL, enable auto-merge or approve the new commits"
             exit 1
           fi
 
@@ -76,10 +86,13 @@ jobs:
               echo "$owner approved this PR with $LABEL - passes"
               exit 0
             fi
-            echo "::error::$LABEL was applied by ${applied_by:-nobody}, not $owner"
-            exit 1
+            echo "$LABEL was applied by ${applied_by:-nobody}, not $owner, so it does not count"
           fi
-          echo "::error::Waiting for $owner to apply the $LABEL label or enable auto-merge"
+          if [ "$owner_approved_head" = "true" ]; then
+            echo "$owner approved the current head commit in a review - passes"
+            exit 0
+          fi
+          echo "::error::Waiting for $owner to apply the $LABEL label, enable auto-merge or approve the PR"
           exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
