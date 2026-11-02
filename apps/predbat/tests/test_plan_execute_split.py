@@ -11,8 +11,9 @@
 
 import itertools
 from contextlib import ExitStack
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 # Gives each recompute of the fake calculate_plan a plan no earlier one had
 _plan_marker = itertools.count(1)
@@ -737,12 +738,110 @@ def _scenario_update_pred_rejects_naive_plan_at(my_predbat):
     return failed
 
 
+def run_embedding_lifecycle_tests(my_predbat):
+    """Exercise host overrides, validation retries, accounting policy and stage timings."""
+    from predbat import PredBat
+
+    failed = 0
+    calls = []
+    probe = SimpleNamespace(
+        auto_config=lambda **kwargs: calls.append(("auto", kwargs)),
+        load_user_config=lambda **kwargs: calls.append(("load", kwargs)),
+        validate_config=lambda: calls.append(("validate", {})) or False,
+        validate_config_schedule_retry=lambda result: calls.append(("retry", result)),
+    )
+    PredBat.initialize_config(probe, quiet=True)
+    valid = PredBat.finalize_config(probe, quiet=True, before_validate=lambda engine: calls.append(("host", engine is probe)), schedule_retry=False)
+    failed = _check(
+        failed,
+        calls
+        == [
+            ("auto", {}),
+            ("load", {"quiet": True, "register": False, "load_config": True}),
+            ("load", {"quiet": True, "register": True}),
+            ("host", True),
+            ("auto", {"final": True}),
+            ("validate", {}),
+        ],
+        "embedded config: host override after registration, before final auto-config and validation, no timer",
+    )
+    failed = _check(failed, valid is False, "embedded config: validation result is returned to host")
+    calls.clear()
+    PredBat.finalize_config(probe)
+    failed = _check(failed, calls[-1] == ("retry", False), "normal config: validation retry remains enabled by default")
+
+    # Drive the real plan_once/execute_once methods through the complete cycle.
+    # The fixture's outer split-cycle test restores its state afterwards.
+    for scheduled in (False, True):
+        for accounting in (None, False):
+            my_predbat.plan_valid = False
+            timings = {}
+            with ExitStack() as stack:
+                _patch_pipeline(my_predbat, stack)
+                book = stack.enter_context(patch.object(my_predbat, "_post_run_bookkeeping"))
+                result = my_predbat.update_pred(scheduled=scheduled, scheduled_bookkeeping=accounting, timings=timings)
+            failed = _check(failed, result == {"recomputed": True, "executed": True}, "embedded cycle: reports a completed recompute")
+            expected = scheduled if accounting is None else accounting
+            failed = _check(failed, book.call_args.args[2] is expected, "embedded cycle: accounting override is independent of planning")
+            failed = _check(failed, set(timings) == {"plan_s", "execute_s"} and all(value >= 0 for value in timings.values()), "embedded cycle: both stages are timed")
+
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack, inverter_ok=False)
+        book = stack.enter_context(patch.object(my_predbat, "_post_run_bookkeeping"))
+        result = my_predbat.update_pred(scheduled=False)
+    failed = _check(failed, result is None and not book.called, "embedded cycle: refused planning does not execute bookkeeping")
+
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack)
+        stack.enter_context(patch.object(my_predbat, "execute_once", return_value=None))
+        book = stack.enter_context(patch.object(my_predbat, "_post_run_bookkeeping"))
+        result = my_predbat.update_pred(scheduled=False)
+    failed = _check(failed, result == {"recomputed": True, "executed": False} and not book.called, "embedded cycle: refused execution reports planning and skips bookkeeping")
+
+    timings = {}
+    with patch.object(my_predbat, "plan_once", side_effect=RuntimeError("synthetic")):
+        try:
+            my_predbat.update_pred(timings=timings)
+        except RuntimeError:
+            pass
+        else:
+            failed += 1
+    failed = _check(failed, "plan_s" in timings and timings["plan_s"] >= 0, "embedded cycle: failed stages retain their timing")
+
+    # No connections, component startup or scheduling are part of state preparation.
+    engine = object.__new__(PredBat)
+    engine.args = {"prefix": "test", "api_key": "synthetic-private"}
+    engine.update_time = Mock(side_effect=lambda **kwargs: setattr(engine, "now_utc_real", 123))
+    engine.reset = Mock()
+    engine.initialize_state()
+    failed = _check(failed, engine.started_time == 123 and engine.update_time.call_count == 2 and engine.reset.call_count == 1, "headless state: initial clock, reset, then fresh clock")
+    failed = _check(failed, "synthetic-private" not in str(engine.args_from_apps_yaml) and engine.apps_yaml_override_warned == set(), "headless state: original args are masked per engine")
+    for age, execute_ok in ((5, True), (6, True), (6, False)):
+        my_predbat.plan_valid = True
+        my_predbat.calculate_plan_every = 10
+        my_predbat.plan_last_updated = my_predbat.now_utc - timedelta(minutes=age)
+        timings = {}
+        with ExitStack() as stack:
+            mocks = _patch_pipeline(my_predbat, stack)
+            stack.enter_context(patch.object(my_predbat, "plan_once", return_value={"recomputed": False}))
+            execute = stack.enter_context(patch.object(my_predbat, "execute_once", side_effect=[("Demand", ""), ("Demand", "") if execute_ok else None]))
+            book = stack.enter_context(patch.object(my_predbat, "_post_run_bookkeeping"))
+            result = my_predbat.update_pred(scheduled=True, scheduled_bookkeeping=False, timings=timings)
+        failed = _check(failed, result == {"recomputed": age > 5, "executed": execute_ok}, "embedded warm cycle: fresh reuse, late replan and refused second execution report correctly")
+        failed = _check(failed, mocks["calculate_plan"].call_count == int(age > 5) and execute.call_count == (2 if age > 5 else 1), "embedded warm cycle: only an ageing plan replans and executes twice")
+        failed = _check(failed, book.called is execute_ok and (not execute_ok or book.call_args.args[2] is False), "embedded warm cycle: accounting stays off and a refused re-execution skips bookkeeping")
+        failed = _check(failed, set(timings) == {"plan_s", "execute_s"} and all(value >= 0 for value in timings.values()), "embedded warm cycle: planning and execution stages are timed")
+    return failed
+
+
 def test_plan_execute_split(my_predbat):
     """Entry point registered in unit_test.py - characterises update_pred and tests plan_once/execute_once."""
     print("**** Running plan/execute split tests ****")
     failed = 0
     saved = _save_state(my_predbat)
     try:
+        _quiet_bookkeeping(my_predbat)
+        failed += run_embedding_lifecycle_tests(my_predbat)
         _quiet_bookkeeping(my_predbat)
         failed += _scenario_fused_fresh_plan(my_predbat)
         failed += _scenario_fused_recompute(my_predbat)
