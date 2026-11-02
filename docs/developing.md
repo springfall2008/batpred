@@ -1180,3 +1180,34 @@ that will be built before merging it in.
 
 The Predbat repository contains a `CLAUDE.md` file, which gives the same guidance (how to run the tests, the coding standards, and the architecture)
 to AI coding assistants such as Claude Code. If you change how the tests are run or the standards that are enforced, keep that file and this guide consistent.
+
+## Embedding the engine
+
+A host that supplies its own state, storage and component adapters can use the same
+startup stages as `initialize()` without starting the normal components or timers:
+
+1. Construct `PredBat` and call `initialize_state()` once for the new engine.
+2. Attach the host's HA interface, storage, components and optional plugin adapter.
+3. Call `initialize_config()`, then complete the host's component discovery.
+4. Call `finalize_config(schedule_retry=False)`. An optional `before_validate(engine)`
+   callback applies discovered settings after registration and before final validation.
+   The return value is the normal `validate_config()` result.
+5. Restore the plan with `load_plan()` after applying the host's configuration policy.
+
+For each run, refresh the adapter's input state and call
+`update_pred(scheduled=True, plan_at=instant)`. Use `scheduled=False` to force a new
+plan. Do not repeat startup between warm cycles: the engine retains its current plan
+and native history cache. Rebuild an engine when its configuration changes; the host
+owns adapter resources and must close them when retiring it. These helpers do not
+make an engine safe for concurrent calls.
+
+`update_pred()` owns planning, execution, late replanning and bookkeeping. It returns
+`None` when planning is refused, otherwise a dictionary containing `recomputed` and
+`executed`. A failed execution skips bookkeeping. An optional `timings` dictionary
+accumulates `plan_s` and `execute_s`, including time spent in failed stages.
+
+`scheduled_bookkeeping` defaults to `scheduled`. A host that reseeds accounting values
+from an external snapshot can set it to `False` to avoid advancing scheduled totals
+while retaining the normal plan reuse policy. It does not disable controls or replace
+the normal read-only switch. Set `plan_random_delay` to zero if the host schedules work
+centrally and must avoid sleeping a worker during late replanning.
