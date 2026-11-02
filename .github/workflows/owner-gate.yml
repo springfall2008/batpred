@@ -1,0 +1,61 @@
+name: owner gate
+# A required check standing in for "only the repository owner merges": main's ruleset requires the
+# owner-gate job, and GitHub's auto-merge never uses an admin bypass, so restricting updates to the
+# owner would also block the owner's own auto-merge. This gate keeps both.
+#
+# - A PR the repository owner authored passes at once, so the owner's PRs auto-merge once CI is green.
+# - Anyone else's PR passes only while it carries the owner-approved label AND the most recent time
+#   that label was applied, the owner applied it. A collaborator labelling their own PR does not count.
+# - New commits pushed to someone else's PR remove the label, so an approval covers only the code the
+#   owner saw (the same idea as dismissing a stale review).
+#
+# pull_request_target so the job always runs this file as it is on main - a PR cannot change the gate
+# that judges it - and gets a token that can remove the label. It never checks out or runs the PR's
+# code, which is what keeps pull_request_target safe here.
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+
+permissions:
+  issues: write
+  pull-requests: read
+
+jobs:
+  owner-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the PR is the owner's, or the owner approved it
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER}"
+          if [ "$PR_AUTHOR" = "$owner" ]; then
+            echo "PR authored by $owner - passes"
+            exit 0
+          fi
+          if [ "$ACTION" = "synchronize" ] && gh api "repos/$GH_REPO/issues/$PR_NUMBER/labels" --jq '.[].name' | grep -qx "$LABEL"; then
+            gh api -X DELETE "repos/$GH_REPO/issues/$PR_NUMBER/labels/$LABEL" > /dev/null
+            echo "::error::New commits were pushed after $owner approved, so $LABEL was removed - $owner must approve again"
+            exit 1
+          fi
+          if ! gh api "repos/$GH_REPO/issues/$PR_NUMBER/labels" --jq '.[].name' | grep -qx "$LABEL"; then
+            echo "::error::Waiting for $owner to apply the $LABEL label"
+            exit 1
+          fi
+          applied_by=$(gh api --paginate "repos/$GH_REPO/issues/$PR_NUMBER/events" \
+            --jq ".[] | select(.event == \"labeled\" and .label.name == \"$LABEL\") | .actor.login" | tail -n 1)
+          if [ "$applied_by" != "$owner" ]; then
+            echo "::error::$LABEL was applied by ${applied_by:-nobody}, not $owner"
+            exit 1
+          fi
+          echo "$owner approved this PR with $LABEL - passes"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          ACTION: ${{ github.event.action }}
+          LABEL: owner-approved
