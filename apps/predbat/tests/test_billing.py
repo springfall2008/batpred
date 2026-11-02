@@ -593,7 +593,7 @@ def test_attach_basic():
     from billing import attach_billing
 
     billing = _billing_attrs({_key(m): _slot(1.0, 10.0) for m in (600, 630)})
-    plan = attach_billing(_plan([600, 630]), billing, VIEW_MIDNIGHT, 30, {600: 10.0, 630: 10.0}, 55.52, {}, False, 2.0, 0.0)
+    plan = attach_billing(_plan([600, 630]), billing, VIEW_MIDNIGHT, 30, {600: 10.0, 630: 10.0}, 55.52, {}, False, {600: 1.0, 630: 1.0, 660: 5.0}, {600: 0.0})
     rows = plan["rows"]
     if any(row.get("billed") != 0.1 or row.get("billing_diff") != 0.0 for row in rows):
         print("ERROR: matching billing should give billed 0.1 and diff 0.0, got {}".format(rows))

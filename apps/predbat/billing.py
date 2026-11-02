@@ -397,7 +397,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     """Add the billed cost, Diff and a day summary to a History view's plan JSON, in place.
 
     billing is the predbat.billing attributes dict. predbat_slot_cost maps each row's slot_minute
-    to Predbat's own cost for it in pence (net, or import-only when import_only). Predbat adds the
+    to Predbat's own cost for it in pence (net, or import-only when import_only), and
+    predbat_import_kwh / predbat_export_kwh map it to Predbat's recorded grid kWh (or are None), so the
+    summary compares only the rows that have billing. Predbat adds the
     day's standing charge at midnight, so standing_pence is taken off rows starting on a day boundary
     and both standing charges are reported separately. A row is billed only when every half-hour in
     it is published (and its export too, when export is being read); anything else shows no billing
@@ -411,7 +413,7 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     export_required = not import_only and ((billing.get("legs") or {}).get("export") is True)
     events = events or {}
     updates = []
-    totals = {"predbat": 0.0, "billed": 0.0, "standing_predbat": 0.0, "standing_billed": 0.0, "import_kwh": 0.0, "export_kwh": 0.0}
+    totals = {"predbat": 0.0, "billed": 0.0, "standing_predbat": 0.0, "standing_billed": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "predbat_import_kwh": 0.0, "predbat_export_kwh": 0.0}
     for row in plan_json.get("rows") or []:
         slot_minute = row.get("slot_minute")
         if slot_minute is None:
@@ -446,6 +448,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
             diff = _pounds(billed_pence - predbat_pence)
             totals["predbat"] += predbat_pence
             totals["billed"] += billed_pence
+        if billed_pence is not None:
+            totals["predbat_import_kwh"] += (predbat_import_kwh or {}).get(slot_minute, 0.0)
+            totals["predbat_export_kwh"] += (predbat_export_kwh or {}).get(slot_minute, 0.0)
         updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes)))
     if not any(update[1] is not None for update in updates):
         return plan_json
@@ -460,8 +465,8 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         "diff": _pounds(totals["billed"] - totals["predbat"]),
         "standing_predbat": _pounds(totals["standing_predbat"]),
         "standing_billed": _pounds(totals["standing_billed"]),
-        "import_kwh": [None if predbat_import_kwh is None else round(predbat_import_kwh, 2), round(totals["import_kwh"], 2)],
-        "export_kwh": [None if predbat_export_kwh is None else round(predbat_export_kwh, 2), None if import_only or not exports else round(totals["export_kwh"], 2)],
+        "import_kwh": [None if predbat_import_kwh is None else round(totals["predbat_import_kwh"], 2), round(totals["import_kwh"], 2)],
+        "export_kwh": [None if predbat_export_kwh is None else round(totals["predbat_export_kwh"], 2), None if import_only or not exports else round(totals["export_kwh"], 2)],
         "complete_until": billing.get("complete_until"),
         "import_only": bool(import_only),
         "supplier": billing.get("supplier"),
