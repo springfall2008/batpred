@@ -2259,6 +2259,7 @@ class Plan:
         # Yesterday data
         if recompute and self.calculate_savings and publish:
             self.calculate_yesterday()
+            self.calculate_history_days()
 
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90, car_charging_slots=self.car_charging_slots_model())

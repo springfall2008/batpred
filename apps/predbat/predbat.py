@@ -657,6 +657,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.savings_today_pvbat = 0.0
         self.savings_today_actual = 0.0
         self.savings_last_updated = None
+        self.history_days_built_for = None
+        self.history_days_billing_mark = None
         self.cost_yesterday_car = 0.0
         self.cost_total_car = 0.0
         self.carbon_yesterday = 0.0

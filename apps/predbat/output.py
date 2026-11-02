@@ -19,7 +19,7 @@ schedules, rate window sensors, and financial metric summaries.
 import math
 import copy
 from html import escape as escape_html
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from predbat import THIS_VERSION_DISPLAY
 from const import (
     TIME_FORMAT,
@@ -40,6 +40,7 @@ from const import (
 )
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
 from prediction import Prediction
+from billing import attach_billing, BILLING_DAYS
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
 # rendered client-side (web_helper.py) by substituting {placeholder} names against the row's
@@ -207,6 +208,35 @@ def dominant_slot_status(minute_counts, precedence):
         if minutes == most_minutes:
             dominant = more_active_slot_status(dominant, status, precedence)
     return dominant
+
+
+# Plan state build_history_days() winds back to each older day and puts back afterwards
+HISTORY_DAY_FAKED_STATE = (
+    "minutes_now",
+    "midnight_utc",
+    "forecast_minutes",
+    "rate_import",
+    "rate_export",
+    "rate_import_replicated",
+    "rate_export_replicated",
+    "cost_today_sofar",
+    "import_today_now",
+    "export_today_now",
+    "carbon_today_sofar",
+    "pv_today_now",
+    "load_minutes_now",
+    "car_charging_hold",
+    "iboost_energy_subtract",
+    "iboost_enable",
+    "plan_debug",
+    "carbon_enable",
+    "predict_soc_best",
+    "predict_soc",
+    "predict_metric_best",
+    "predict_clipped_best",
+    "predict_iboost_best",
+    "predict_carbon_best",
+)
 
 
 class Output:
@@ -3690,6 +3720,23 @@ class Output:
         )
         self.forecast_minutes = end_record
 
+        # Put what the supplier actually billed beside each slot, where it has been published
+        billing = self.history_billing()
+        if billing:
+            import_cost_data = None
+            if (billing.get("legs") or {}).get("export") is False:
+                import_cost_data = self.history_minute_data(".cost_today_import", 2)
+            self.attach_history_billing(
+                plan_json_yesterday,
+                billing,
+                midnight_utc - timedelta(days=1),
+                end_record + minutes_now,
+                minutes_now + end_record,
+                cost_yesterday_array,
+                import_cost_data,
+                self.history_events(rate_import_replicated, rate_export_replicated, 24 * 60),
+            )
+
         # Restore state
         self.charge_limit_best = previous_charge_limit_best
         self.charge_window_best = previous_charge_window_best
@@ -4074,6 +4121,205 @@ class Output:
         self.export_window_best = previous_export_window_best
         self.forecast_minutes = previous_forecast_minutes
         return plan_html, plan_json
+
+    def history_billing(self):
+        """The predbat.billing attributes the History view needs, or None when there is no billing to show."""
+        entity = self.prefix + ".billing"
+        slots = self.get_state_wrapper(entity_id=entity, attribute="slots", default=None)
+        if not isinstance(slots, dict) or not slots.get("import"):
+            return None
+        return {
+            "slots": slots,
+            "legs": self.get_state_wrapper(entity_id=entity, attribute="legs", default=None) or {},
+            "complete_until": self.get_state_wrapper(entity_id=entity, attribute="complete_until", default=None),
+            "supplier": self.get_state_wrapper(entity_id=entity, attribute="supplier", default=None),
+        }
+
+    def history_minute_data(self, suffix, days):
+        """Read a Predbat entity's recorded state history as minute data keyed by minutes ago, or None when there is none."""
+        history = self.get_history_wrapper(entity_id=self.prefix + suffix, days=days, required=False)
+        if not history:
+            return None
+        data, _ = minute_data(history[0], days, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+        return data or None
+
+    @staticmethod
+    def history_cumulative_array(data, status_offset, view_minutes):
+        """Turn a per-day running total that resets at midnight (keyed by minutes ago) into one running total from the view's minute 0.
+
+        Read 4 minutes into each minute's data, and carry each day's final value across midnight, the same way
+        calculate_yesterday() builds cost_yesterday_array.
+        """
+        array = {}
+        carry = 0.0
+        for minute in range(0, view_minutes + 1):
+            if minute and minute % (24 * 60) == 0:
+                carry += data.get(status_offset - minute + 1, 0.0)
+            array[minute] = data.get(status_offset - minute - 4, 0.0) + carry
+        return array
+
+    def history_row_costs(self, cost_array, view_minutes):
+        """Predbat's cost for each History row, in pence, from a running cost array."""
+        costs = {}
+        for minute in range(0, view_minutes, self.plan_interval_minutes):
+            start = cost_array.get(minute, 0.0)
+            costs[minute] = cost_array.get(min(minute + self.plan_interval_minutes, view_minutes), start) - start
+        return costs
+
+    def history_row_kwh(self, incrementing, status_offset, view_minutes):
+        """Predbat's recorded kWh for each History row from an incrementing energy series, or None when there is none."""
+        if not incrementing:
+            return None
+        rows = {}
+        for minute in range(0, view_minutes, self.plan_interval_minutes):
+            rows[minute] = sum(self.get_from_incrementing(incrementing, status_offset - offset - 1) for offset in range(minute, min(minute + self.plan_interval_minutes, view_minutes)))
+        return rows
+
+    @staticmethod
+    def history_events(rate_import_replicated, rate_export_replicated, offset):
+        """The rate tags (saving event, manual rate...) for a History view, keyed by its own minutes; offset maps a rate minute onto the view."""
+        events = {}
+        for tags in (rate_export_replicated or {}, rate_import_replicated or {}):
+            for minute, tag in tags.items():
+                events[minute + offset] = tag
+        return events
+
+    def attach_history_billing(self, plan_json, billing, view_midnight_utc, view_minutes, status_offset, cost_array, import_cost_data, events):
+        """Attach the billing to one History view's plan JSON.
+
+        When the export billing could not be read, Billed is import-only and is compared with Predbat's
+        import cost (cost_today_import) rather than its net cost; without that history nothing is shown.
+        """
+        import_only = (billing.get("legs") or {}).get("export") is False
+        if import_only:
+            if not import_cost_data:
+                return
+            costs = self.history_row_costs(self.history_cumulative_array(import_cost_data, status_offset, view_minutes), view_minutes)
+        else:
+            costs = self.history_row_costs(cost_array, view_minutes)
+        attach_billing(
+            plan_json,
+            billing,
+            view_midnight_utc,
+            self.plan_interval_minutes,
+            costs,
+            self.metric_standing_charge,
+            events,
+            import_only,
+            self.history_row_kwh(self.import_today, status_offset, view_minutes),
+            None if import_only else self.history_row_kwh(self.export_today, status_offset, view_minutes),
+        )
+
+    def local_midnight_utc(self, day):
+        """The UTC instant of local midnight at the start of date day."""
+        naive = datetime(day.year, day.month, day.day)
+        local = self.local_tz.localize(naive) if hasattr(self.local_tz, "localize") else naive.replace(tzinfo=self.local_tz)
+        return local.astimezone(timezone.utc)
+
+    def calculate_history_days(self):
+        """Build the History view for the days before yesterday, for the day picker, and publish them as predbat.plan_history.
+
+        Rebuilt once per local date, or sooner when new billing has been published (its complete_until moves on).
+        Only days the loaded load history reaches (max_days_previous) and the recorded rates cover are built.
+        """
+        today = self.now_utc.astimezone(self.local_tz).date()
+        billing = self.history_billing()
+        billing_mark = billing.get("complete_until") if billing else None
+        if self.history_days_built_for == today and self.history_days_billing_mark == billing_mark:
+            return
+        self.history_days_built_for = today
+        self.history_days_billing_mark = billing_mark
+        days = {}
+        days_back_max = min(BILLING_DAYS, self.max_days_previous - 1)
+        if days_back_max >= 2:
+            try:
+                days = self.build_history_days(today, days_back_max, billing)
+            except (KeyError, TypeError, ValueError, IndexError, AttributeError, ZeroDivisionError) as error:
+                # The older days are a view; a failure here must never stop the plan
+                self.log("Warn: History: could not build the older days for the History view: {}".format(error))
+                days = {}
+        self.dashboard_item(self.prefix + ".plan_history", state=len(days), attributes={"friendly_name": "Plan history days", "icon": "mdi:history", "days": days})
+
+    def build_history_days(self, today, days_back_max, billing):
+        """Replay each day from 2 to days_back_max days back; returns {"YYYY-MM-DD": plan_json}."""
+        history_days = days_back_max + 2
+        cost_data = self.history_minute_data(".cost_today", history_days)
+        rates_data = self.history_minute_data(".rates", history_days)
+        if not cost_data or not rates_data:
+            return {}
+        rates_export_data = self.history_minute_data(".rates_export", history_days) or {}
+        soc_data = self.history_minute_data(".soc_kw_h0", history_days) or self.soc_kwh_history
+        status_data = self.get_history_wrapper(entity_id=self.prefix + ".status", days=history_days, required=False)
+        import_cost_data = self.history_minute_data(".cost_today_import", history_days) if billing and (billing.get("legs") or {}).get("export") is False else None
+
+        saved = {name: getattr(self, name) for name in HISTORY_DAY_FAKED_STATE if hasattr(self, name)}
+        saved["car_charging_slots"] = copy.deepcopy(self.car_charging_slots)
+        now_utc = self.now_utc
+        minutes_now = self.minutes_now
+        days = {}
+        try:
+            for days_back in range(2, days_back_max + 1):
+                day = today - timedelta(days=days_back)
+                view_midnight = self.local_midnight_utc(day)
+                view_minutes = int((self.local_midnight_utc(day + timedelta(days=1)) - view_midnight).total_seconds() // 60)
+                status_offset = int((now_utc - view_midnight).total_seconds() // 60)
+                # Leave out a day the recorded rates don't cover, rather than show it at 0p
+                if (status_offset - view_minutes + 1) not in rates_data or status_offset not in rates_data:
+                    continue
+
+                self.minutes_now = minutes_now
+                self.forecast_minutes = max(saved["forecast_minutes"], view_minutes)
+                load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=status_offset)
+                pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=status_offset)
+
+                cost_array = self.history_cumulative_array(cost_data, status_offset, view_minutes)
+                soc_array = {minute: soc_data.get(status_offset - minute - 4, 0.0) for minute in range(0, view_minutes + 1)}
+
+                self.minutes_now = 0
+                self.midnight_utc = view_midnight
+                self.rate_import = {minute: rates_data.get(status_offset - minute, 0.0) for minute in range(0, view_minutes + self.plan_interval_minutes)}
+                self.rate_export = {minute: rates_export_data.get(status_offset - minute, 0.0) for minute in range(0, view_minutes + self.plan_interval_minutes)}
+                self.rate_import_replicated = {}
+                self.rate_export_replicated = {}
+                self.cost_today_sofar = 0
+                self.import_today_now = 0
+                self.export_today_now = 0
+                self.carbon_today_sofar = 0
+                self.pv_today_now = 0
+                self.load_minutes_now = 0
+                self.car_charging_hold = False
+                self.iboost_energy_subtract = False
+                self.iboost_enable = False
+                self.plan_debug = False
+                self.carbon_enable = False
+                self.car_charging_slots = [[] for _ in range(self.num_cars)]
+                # Simulated values with no recorded history behind them: show nothing rather than another day's
+                self.predict_clipped_best = {}
+                self.predict_iboost_best = {}
+                self.predict_carbon_best = {}
+
+                plan_html, plan_json = self.replay_history_day(
+                    view_minutes=view_minutes,
+                    status_offset=status_offset,
+                    pv_step=pv_step,
+                    load_step=load_step,
+                    soc_array=soc_array,
+                    cost_array=cost_array,
+                    status_data=status_data,
+                    prediction=None,
+                )
+                if billing:
+                    self.minutes_now = minutes_now
+                    self.attach_history_billing(plan_json, billing, view_midnight, view_minutes, status_offset, cost_array, import_cost_data, {})
+                days[day.isoformat()] = plan_json
+        finally:
+            for name in HISTORY_DAY_FAKED_STATE:
+                if name in saved:
+                    setattr(self, name, saved[name])
+                elif name in self.__dict__:
+                    delattr(self, name)
+            self.car_charging_slots = saved["car_charging_slots"]
+        return days
 
     def publish_rate_and_threshold(self):
         """
