@@ -61,7 +61,7 @@ restart Predbat, or read a fresh debug dump, to see anything reported later than
 | `chargers` | EV chargers, cross-linked to the cars they serve |
 | `cars` | Electric vehicles, cross-linked to the charger that charges them |
 | `meters` | Electricity (and gas) supply points, each with a direction (`import`/`export`) and, where known, a nested tariff record |
-| `forecasts` | Solar forecast providers (Solcast, forecast.solar, Open-Meteo, or your own HA sensors) and what each one covers |
+| `forecasts` | Forecast services and what each one covers: solar providers (Solcast, forecast.solar, Open-Meteo, or your own HA sensors) and the carbon intensity forecast for your postcode district |
 | `programmes` | Flexibility enrolments (a VPP, a saving session, a free-electricity event) that emit events and may constrain Predbat, cross-linked to the meter they apply to |
 
 Deye and Sunsynk cannot tell a PV-only inverter from a hybrid: their APIs give no signal, and
@@ -100,7 +100,7 @@ extra top-level sections describe the fleet as a whole rather than any one devic
     Two kinds of component are deliberately left out, because their silence carries no
     information: one you never configured (its absence is its status - the full registry is in
     `components.py`), and one that is running fine but has no reporter at all. Most components are
-    in that second group - `web`, `ha`, `chat`, `carbon`, `temperature` and the rest are not
+    in that second group - `web`, `ha`, `chat`, `temperature` and the rest are not
     hardware sources and will never report. Listing them all made the map thirty-odd entries of
     which a handful said anything, and buried the case that matters: a component that *can* report
     and did not
