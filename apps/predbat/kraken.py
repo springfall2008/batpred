@@ -341,6 +341,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.flextras_sessions = []
         self.flextras_fetched_at = None
         self.flextras_last_status = None
+        # Whether this process has bound octopus_free_electricity to the Flextras sensor - what the discovery
+        # programme record follows (build_discovery()). Never persisted: the binding itself is per process.
+        self.flextras_bound = False
 
         # Export account/MPAN from SaaS config (matched by address at onboarding time).
         # Tariff is always discovered dynamically via GraphQL so changes are detected.
@@ -1796,6 +1799,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         entity = self.get_entity_name("sensor", "free_electricity")
         self.dashboard_item(entity, "on" if active else "off", attributes={"friendly_name": "EDF Flextras Free Hours", "icon": "mdi:flash", "events": events}, app="kraken")
         self.set_arg("octopus_free_electricity", entity)
+        self.flextras_bound = True
 
     def _discovery_meter(self, direction, tariff, mpan, account, entities):
         """One meters record: the supply point, its account, the tariff codes and the bindings Home Assistant has seen."""
@@ -1835,9 +1839,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         intelligent_dispatch slot sensor _publish_dispatch_sensors() wires octopus_intelligent_slot to.
         Battery size and charge-point power are never populated, so there are no ratings.
 
-        programmes: an EDF account enrolled in Flextras - the last Flextras fetch succeeded - is a
-        free_electricity programme cross-linked to the import meter, overriding rates through the
-        octopus_free_electricity sensor. Refused or never fetched, or an E.ON account, gives none.
+        programmes: an EDF account on Flextras is a free_electricity programme cross-linked to the import
+        meter, overriding rates through the octopus_free_electricity sensor. It follows the binding, as
+        every entity here does: present once this process has bound that sensor (which a restart does
+        from cached sessions before any fetch, and a transient server error does not undo) or the last
+        Flextras fetch succeeded. Never bound and never fetched successfully, or an E.ON account, gives none.
 
         Every binding is filtered to entities Home Assistant has seen. Kraken has no automatic flag -
         every set_arg it makes is unconditional - so "automatic" is always True. Identifiers are
@@ -1874,7 +1880,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             cars.append(record)
 
         programmes = []
-        if self.provider == "edf" and self.flextras_last_status == 200:
+        if self.provider == "edf" and (self.flextras_bound or self.flextras_last_status == 200):
             account_ids = {"account": self.account_id}
             if self.flextras_property_id:
                 account_ids["programme_id"] = str(self.flextras_property_id)

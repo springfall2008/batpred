@@ -2696,6 +2696,21 @@ def test_kraken_discovery_no_programme_when_not_enrolled():
     assert api.build_discovery()["programmes"] == []
 
 
+def test_kraken_discovery_programme_follows_the_binding_across_restart_and_errors():
+    """The programme stays while octopus_free_electricity is bound: after a restart that restored the sessions
+    from cache (no Flextras fetch yet, so no status) and through a transient server error."""
+    api = _discovery_kraken()
+    api.flextras_sessions = [{"start": "2026-11-02T13:00:00+00:00", "end": "2026-11-02T14:00:00+00:00"}]
+    api.set_arg = MagicMock()
+    api._publish_free_electricity_sensor()
+    assert api.flextras_last_status is None, "a restart inside the refresh window has fetched nothing yet"
+    assert len(api.build_discovery()["programmes"]) == 1, "the sensor is bound, so the programme is described"
+    api.flextras_last_status = 503
+    assert len(api.build_discovery()["programmes"]) == 1, "a transient server error does not unbind the sensor"
+    fresh = _discovery_kraken()
+    assert fresh.build_discovery()["programmes"] == [], "never fetched and never bound: no programme"
+
+
 def test_kraken_discovery_entities_only_when_published():
     """A binding is claimed only once Home Assistant has seen its entity."""
     api = _discovery_kraken()
