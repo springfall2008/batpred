@@ -72,8 +72,11 @@ is configured as a PV source. A PV-only unit that has been configured as a batte
 usually show it in its record: `battery` among its functions, but no `battery_capacity_ah` rating
 and no `soc_max` entity.
 
-Two reporters populate `programmes`. Kraken reports an EDF account enrolled in Flextras as a
-`free_electricity` programme whose `meter` links to its import meter. Axle reports its VPP enrolment
+Three reporters populate `programmes`. Octopus reports a joined Saving Sessions campaign as a
+`saving_session` programme, and a `free_electricity` programme once the account has had a Free
+Electricity session (that campaign has no joined flag, so a session is the only evidence). Kraken
+reports an EDF account enrolled in Flextras as a `free_electricity` programme. Each of these links
+its `meter` to the account's import meter. Axle reports its VPP enrolment
 as a `vpp` programme with the effects it has on Predbat: `rate_override` always, plus
 `forces_read_only` when `axle_control` is on. Axle cannot tell which supply point it is enrolled on,
 so its record names no `meter`. On other installs the section is present as an empty list rather
