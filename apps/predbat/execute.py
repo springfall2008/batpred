@@ -194,8 +194,10 @@ class Execute:
                     "battery_power": inverter.battery_power,
                     "pv_power": inverter.pv_power,
                     "grid_power": inverter.grid_power,
-                    "charge_rate_now": inverter.charge_rate_now * MINUTE_WATT,
-                    "discharge_rate_now": inverter.discharge_rate_now * MINUTE_WATT,
+                    # Older replay objects lack the readback flags. Nonzero rates retain their
+                    # existing scaling; an actual zero must survive the prediction rate floor.
+                    "charge_rate_now": 0 if getattr(inverter, "charge_rate_is_zero", False) else inverter.charge_rate_now * MINUTE_WATT,
+                    "discharge_rate_now": 0 if getattr(inverter, "discharge_rate_is_zero", False) else inverter.discharge_rate_now * MINUTE_WATT,
                     "battery_rate_max_charge": inverter.battery_rate_max_charge * MINUTE_WATT,
                     "battery_rate_max_discharge": inverter.battery_rate_max_discharge * MINUTE_WATT,
                     "in_calibration": inverter.in_calibration,
