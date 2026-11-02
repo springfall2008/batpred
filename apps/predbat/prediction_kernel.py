@@ -34,9 +34,9 @@ from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 # ABI 11: the car slot cancel table follows car_rate_flat in PkContext.
-KERNEL_ABI_VERSION = 11
+KERNEL_ABI_VERSION = 12
 # Parity 19: an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted.
-KERNEL_PARITY_REVISION = 19
+KERNEL_PARITY_REVISION = 20
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -85,6 +85,7 @@ class PkContext(ctypes.Structure):
         ("cancel_trusted", ctypes.POINTER(ctypes.c_int32)),
         ("cancel_revert_rate", ctypes.POINTER(ctypes.c_double)),
         ("cancel_penalty_rate", ctypes.c_double),
+        ("cancel_floor_kw", ctypes.c_double * CAR_CANCEL_MAX_SLOTS),
         ("soc_kw", ctypes.c_double),
         ("soc_max", ctypes.c_double),
         ("reserve", ctypes.c_double),
@@ -921,6 +922,7 @@ def set_cancel_context(ctx, car_cancel, n_steps, num_cars, log=None):
     for j, slot in enumerate(slots):
         ctx.cancel_start[j] = slot.start
         ctx.cancel_end[j] = slot.end
+        ctx.cancel_floor_kw[j] = car_cancel.floor_kw[j]
     ctx.cancel_forced_mask = car_cancel.forced_mask
     ctx.cancel_slot_flat = int32_array(car_cancel.slot_flat) if num_cars > 0 else None
     ctx.cancel_need_mask = (ctypes.c_uint64 * n_steps)(*car_cancel.need_mask)

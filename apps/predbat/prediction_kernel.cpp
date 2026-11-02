@@ -58,7 +58,8 @@
 // prediction_batch.py - and PkBatchJob::phase, so a batch can floor a job from its nominal twin's
 // export_end_soc_out within one call.
 // ABI 11: the car slot cancel table (cancel_count to cancel_penalty_rate) follows car_rate_flat in PkContext.
-#define PK_ABI_VERSION 11
+// ABI 12: cancel_floor_kw, each cancellable slot's car charge rate, follows cancel_penalty_rate in PkContext.
+#define PK_ABI_VERSION 12
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
@@ -72,7 +73,8 @@
 // Parity 18: energy a charge window stores in a confirmed Intelligent dispatch run (io_credit) earns a score
 // only credit off metric_keep.
 // Parity 19: an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted.
-#define PK_PARITY_REVISION 19
+// Parity 20: a cancelled step is charged the buy-back penalty on at least the car's full charge rate (cancel_floor_kw).
+#define PK_PARITY_REVISION 20
 #define PK_MAX_CARS 8
 #define PK_CANCEL_MAX_SLOTS 64 // Must equal car_cancel.py CAR_CANCEL_MAX_SLOTS (it sizes PkContext's cancel arrays), so a change to either needs an ABI bump - the cancelled set is a 64-bit mask
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
@@ -220,7 +222,8 @@ struct PkContext {
     const uint64_t *cancel_need_mask;         // per step: the cancellable dispatches covering it (rounded out to half hours)
     const int32_t *cancel_trusted;            // per step: 1 when a dispatch that cannot be cancelled covers it
     const double *cancel_revert_rate;         // per step: the rate a cancelled dispatch reverts to, or negative when it cannot
-    double cancel_penalty_rate;               // what each cancelled kWh costs to buy back (rate_max_base)
+    double cancel_penalty_rate;               // what each cancelled kWh costs to buy back (rate_max_base times the margin)
+    double cancel_floor_kw[PK_CANCEL_MAX_SLOTS]; // slot j's car charge rate: a cancelled step is charged on at least this
 
     double soc_kw;
     double soc_max;
@@ -1017,8 +1020,9 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                         const int32_t cancel_j = c->cancel_slot_flat[car_n * n_steps + k];
                         if (cancel_j >= 0 && ((cancel_mask >> cancel_j) & 1)) {
                             // Cancelled for an export: the car buys nothing here and keeps its room for later, but the
-                            // energy it would have bought - capped by the room left - must be bought back at peak (score only).
+                            // energy it would have bought - at least its full charge rate, capped by the room left - must be bought back at peak (score only).
                             // A later uncancelled slot may refill that room, so the penalty can double-count: a deliberate conservative bias
+                            car_load_scale = std::max(car_load_scale, c->cancel_floor_kw[cancel_j] * step / 60.0 * c->car_charging_loss);
                             car_load_scale = std::max(std::min(car_load_scale, c->car_charging_limit[car_n] - car_soc[car_n] - car_cancelled_kwh[car_n]), 0.0);
                             car_cancelled_kwh[car_n] += car_load_scale;
                             metric_keep += car_load_scale / c->car_charging_loss * c->cancel_penalty_rate;

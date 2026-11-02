@@ -17,7 +17,7 @@ from datetime import timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from car_cancel import CAR_CANCEL_MAX_SLOTS, CancelSlot, build_car_cancel_table, cancellable_slots, cancelled_mask, cancelled_windows, step_reverted
+from car_cancel import CAR_CANCEL_MAX_SLOTS, CAR_CANCEL_PENALTY_MARGIN, CancelSlot, build_car_cancel_table, cancellable_slots, cancelled_mask, cancelled_windows, step_reverted
 from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10
 from prediction import Prediction
 from utils import export_mode_of, pack_export_limit, parse_car_plan_windows
@@ -308,10 +308,12 @@ def test_force_hold_tick_publishes_holdable():
 
 PEAK = 30.0  # rate_max_base, the dearest base import rate
 OFF_PEAK = 7.0  # A dispatch's rate, and the car slot's own
+PENALTY = PEAK * CAR_CANCEL_PENALTY_MARGIN  # What each cancelled kWh costs the plan to buy back
 MINUTES_NOW = 12 * 60
 HORIZON = 24 * 60
 LOAD_KW = 0.5
 CAR_KWH = 10.0
+CAR_RATE_KW = 7.4  # car_charging_rate: a cancelled slot is charged as if the car took at least this
 TARGET_EMPTY = pack_export_limit(EXPORT_MODE_TARGET, 0)
 
 
@@ -390,6 +392,7 @@ def _scenario_values(num_cars, soc_kw):
         "pv_today_now": 0,
         "num_cars": num_cars,
         "car_charging_loss": 1.0,
+        "car_charging_rate": [CAR_RATE_KW] * num_cars,
         "car_energy_reported_load": True,
         "car_charging_from_battery": False,
         "car_charging_soc": [0.0] * num_cars,
@@ -542,7 +545,7 @@ def test_revert_window_billing(my_predbat):
         result, table = _predict(my_predbat, [{"start": 1080, "end": 1110}])
         assert all(rate == -1.0 for rate in table.revert_rate)
         _assert_close("cost", result[0], _hand_cost(23.5, 0.5))
-        _assert_close("metric_keep", result[8], CAR_KWH * PEAK)
+        _assert_close("metric_keep", result[8], CAR_KWH * PENALTY)
 
 
 def test_reverted_step_not_dispatch_gone(my_predbat):
@@ -555,7 +558,7 @@ def test_reverted_step_not_dispatch_gone(my_predbat):
         result, _ = _predict(my_predbat, [{"start": 1080, "end": 1110}], pv_scenario=PV_SCENARIO_PV10)
         _assert_close("cost", result[0], _hand_cost(24, 0))
         _assert_close("imports", result[1] + result[2], LOAD_KW * 24)
-        _assert_close("metric_keep", result[8], CAR_KWH * PEAK)
+        _assert_close("metric_keep", result[8], CAR_KWH * PENALTY)
 
 
 def test_reverted_step_no_io_credit(my_predbat):
@@ -573,7 +576,7 @@ def test_reverted_step_no_io_credit(my_predbat):
         result = prediction.run_prediction([10.0], charge_window, [{"start": 1080, "end": 1085}], [TARGET_EMPTY], PV_SCENARIO_NOMINAL, HORIZON)
         assert result[1] > 1.0, "the charge window should store energy: {}".format(result)
         # Only the buy-back penalty, no credit
-        _assert_close("metric_keep", result[8], CAR_KWH * PEAK)
+        _assert_close("metric_keep", result[8], CAR_KWH * PENALTY)
 
 
 def test_penalty_respects_car_full(my_predbat):
@@ -584,12 +587,46 @@ def test_penalty_respects_car_full(my_predbat):
         my_predbat.car_charging_limit = [50.0]
         my_predbat.car_charging_loss = 0.9
         result, _ = _predict(my_predbat, [{"start": 1080, "end": 1110}])
-        _assert_close("metric_keep", result[8], 1.0 / 0.9 * PEAK)
+        _assert_close("metric_keep", result[8], 1.0 / 0.9 * PENALTY)
+
+
+def test_penalty_floor_small_slot(my_predbat):
+    """
+    A cancelled slot is charged as if the car charged at its full rate for the whole slot, so a slot planned to take
+    0.4 kWh costs 30 minutes at 7.4 kW to cancel, and a 10-minute fragment 10 minutes. Without the floor, cancelling
+    a small slot cost next to nothing while freeing the battery to cover the house for the whole slot.
+    """
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1080, 1110, kwh=0.4, octopus=False), _car(1200, 1210, kwh=0.1, octopus=False)]]
+        result, table = _predict(my_predbat, [{"start": 1105, "end": 1110}, {"start": 1205, "end": 1210}])
+        assert table.floor_kw == [CAR_RATE_KW, CAR_RATE_KW], table.floor_kw
+        _assert_close("metric_keep", result[8], CAR_RATE_KW * (30 + 10) / 60.0 * PENALTY)
+
+
+def test_penalty_floor_respects_car_full(my_predbat):
+    """The floor is still capped by the room left in the car: 0.2 kWh from full, a small slot costs 0.2 kWh."""
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1080, 1110, kwh=0.4, octopus=False)]]
+        my_predbat.car_charging_soc = [49.8]
+        my_predbat.car_charging_limit = [50.0]
+        result, _ = _predict(my_predbat, [{"start": 1080, "end": 1110}])
+        _assert_close("metric_keep", result[8], 0.2 * PENALTY)
+
+
+def test_penalty_floor_uncancelled_slot_unchanged(my_predbat):
+    """An uncancelled small slot still charges only what it plans: the floor is a cancellation's score, not a load."""
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1080, 1110, kwh=0.4, octopus=False)]]
+        with_car, _ = _predict(my_predbat, [])
+        my_predbat.car_charging_slots = [[]]
+        no_car, _ = _predict(my_predbat, [], with_table=False)
+        _assert_close("cost", with_car[0] - no_car[0], 0.4 * PEAK)
+        _assert_close("metric_keep", with_car[8], 0.0)
 
 
 def test_valuation_ready_time_not_free(my_predbat):
     """
-    The slot ends at the car's ready time and every rate after it is 7p, but the penalty is the horizon's 30p peak,
+    The slot ends at the car's ready time and every rate after it is 7p, but the penalty is based on the horizon's 30p peak,
     so cancelling is never free just because nothing dear is left before the car leaves.
     """
     with _engine_scenario(my_predbat):
@@ -597,10 +634,10 @@ def test_valuation_ready_time_not_free(my_predbat):
         my_predbat.car_charging_slots = [[_car(1080, 1110, octopus=False)]]
         window = [{"start": 1080, "end": 1110}]
         cancelled, table = _predict(my_predbat, window)
-        assert table.penalty_rate == PEAK
+        assert table.penalty_rate == PENALTY
         my_predbat.car_charging_slots = [[]]
         no_car, _ = _predict(my_predbat, window, with_table=False)
-        _assert_close("metric_keep rise", cancelled[8] - no_car[8], CAR_KWH * PEAK)
+        _assert_close("metric_keep rise", cancelled[8] - no_car[8], CAR_KWH * PENALTY)
         _assert_close("cost", cancelled[0], no_car[0])
 
 
@@ -696,16 +733,18 @@ def test_switch_off_identical(my_predbat):
 PLAN_SLOT = (18 * 60, 18 * 60 + 30)
 
 
-def _plan_scenario(export_rate, octopus=False):
+def _plan_scenario(export_rate, octopus=False, slot_rate=OFF_PEAK):
     """
-    A one-car day in the random benchmark's format: the car's 10 kWh slot at 7p is under an export at export_rate.
-    With octopus the slot is an Intelligent dispatch, marked io_adjusted as the rate feed delivers it.
+    A one-car day in the random benchmark's format: the car's 10 kWh slot at slot_rate (7p) is under an export at
+    export_rate. With octopus the slot is an Intelligent dispatch, marked io_adjusted as the rate feed delivers it.
     """
     slot_start, slot_end = PLAN_SLOT
 
     def import_rate(minute):
-        """7p at night and in the car slot, 30p otherwise."""
-        if minute >= 23 * 60 + 30 or minute < 5 * 60 + 30 or slot_start <= minute < slot_end:
+        """7p at night, slot_rate in the car slot, 30p otherwise."""
+        if slot_start <= minute < slot_end:
+            return slot_rate
+        if minute >= 23 * 60 + 30 or minute < 5 * 60 + 30:
             return OFF_PEAK
         return PEAK
 
@@ -729,7 +768,7 @@ def _plan_scenario(export_rate, octopus=False):
     }
 
 
-def _plan(export_rate, switch=True, publish_calls=None, octopus=False, planned=frozenset({0}), holdable=None, best_keep=None, freeze=False, export_calls=None):
+def _plan(export_rate, switch=True, publish_calls=None, octopus=False, planned=frozenset({0}), holdable=None, best_keep=None, freeze=False, export_calls=None, slot_rate=OFF_PEAK):
     """
     Plan the scenario on a fresh PredBat with the switch on; return it and the cancellable slots. The car is
     Predbat-led unless planned says otherwise, and holdable is car_force_holdable. best_keep, a list, gets the
@@ -748,7 +787,7 @@ def _plan(export_rate, switch=True, publish_calls=None, octopus=False, planned=f
         plan_predbat.config_root = "./"
         plan_predbat.save_restore_dir = "./"
         plan_predbat.load_user_config()
-        apply_scenario_to_predbat(plan_predbat, _plan_scenario(export_rate, octopus=octopus))
+        apply_scenario_to_predbat(plan_predbat, _plan_scenario(export_rate, octopus=octopus, slot_rate=slot_rate))
         plan_predbat.battery_rate_max_export = 10.0 / 60.0
         plan_predbat.rate_max_base = PEAK
         plan_predbat.car_charging_now_slots = [[]]
@@ -805,7 +844,7 @@ def _exports_over_slot(plan_predbat):
 
 
 def test_valuation_saving_session_wins():
-    """A 200p export over a 7p car slot beats buying the 10 kWh back at 30p, and the plan charges exactly that."""
+    """A 200p export over a 7p car slot beats buying the 10 kWh back at 33p (30p plus the margin), and the plan charges exactly that."""
     plan_predbat, slots = _plan(200.0)
     assert plan_predbat.prediction.kernel_handle == 0
     assert _exports_over_slot(plan_predbat), "no target export over the slot: {}".format(list(zip(plan_predbat.export_window_best, plan_predbat.export_limits_best)))
@@ -826,16 +865,27 @@ def test_valuation_saving_session_wins():
         car_charging_slots=no_car_model,
         car_cancel=build_car_cancel_table(plan_predbat, no_car_model, plan_predbat.car_cancel_slots()),
     ).run_prediction(*plan, PV_SCENARIO_NOMINAL, plan_predbat.end_record)
-    _assert_close("metric_keep rise", cancelled[8] - no_car[8], CAR_KWH * PEAK)
+    _assert_close("metric_keep rise", cancelled[8] - no_car[8], CAR_KWH * PENALTY)
     _assert_close("cost", cancelled[0], no_car[0])
 
 
 def test_valuation_normal_export_loses():
-    """A 15p export does not pay for buying the car's energy back at 30p: the window stays idle and the car keeps its slot."""
+    """A 15p export does not pay for buying the car's energy back at 33p: the window stays idle and the car keeps its slot."""
     plan_predbat, slots = _plan(15.0)
     assert slots, "the slot should be cancellable"
     assert not _exports_over_slot(plan_predbat), "a target export over the slot: {}".format(list(zip(plan_predbat.export_window_best, plan_predbat.export_limits_best)))
     assert cancelled_mask(slots, plan_predbat.export_window_best, plan_predbat.export_limits_best) == 0
+
+
+def test_valuation_peak_slot_not_cancelled():
+    """
+    A car slot already at the 30p peak under a 5p export: buying the energy back costs what the slot would have, so
+    without a margin on the penalty the plan cancels it through an export that exports next to nothing, just to free
+    the battery from holding for the car. The margin keeps the slot.
+    """
+    plan_predbat, slots = _plan(5.0, slot_rate=PEAK)
+    assert slots, "the slot should be cancellable"
+    assert cancelled_mask(slots, plan_predbat.export_window_best, plan_predbat.export_limits_best) == 0, "the peak-rate slot was cancelled: {}".format(_exports_over_slot(plan_predbat))
 
 
 def test_no_freeze_over_cancellable_slot():
@@ -876,7 +926,7 @@ def test_cancel_set_consistent():
     assert cancelled_mask(slots, plan[2], plan[3]) == 1, "slot A should be cancelled: {}".format(list(zip(plan[2], plan[3])))
     assert len(best_keep) == 1, best_keep
     keep = best_keep[0]
-    assert keep >= CAR_KWH * PEAK - 0.01, "the buy-back penalty is missing from metric_keep {}".format(keep)
+    assert keep >= CAR_KWH * PENALTY - 0.01, "the buy-back penalty is missing from metric_keep {}".format(keep)
     windows = plan_predbat.car_cancelled_for_export_windows()
     assert windows == {0: [PLAN_SLOT]}, windows
 
@@ -1262,11 +1312,15 @@ def run_car_cancel_tests(my_predbat):
     test_reverted_step_not_dispatch_gone(my_predbat)
     test_reverted_step_no_io_credit(my_predbat)
     test_penalty_respects_car_full(my_predbat)
+    test_penalty_floor_small_slot(my_predbat)
+    test_penalty_floor_respects_car_full(my_predbat)
+    test_penalty_floor_uncancelled_slot_unchanged(my_predbat)
     test_valuation_ready_time_not_free(my_predbat)
     test_switch_off_identical(my_predbat)
     test_marginal_costs_keep_cancellation(my_predbat)
     test_valuation_saving_session_wins()
     test_valuation_normal_export_loses()
+    test_valuation_peak_slot_not_cancelled()
     test_no_freeze_over_cancellable_slot()
     test_plan_republishes_car_plan_only_when_enabled()
     test_cancel_set_consistent()

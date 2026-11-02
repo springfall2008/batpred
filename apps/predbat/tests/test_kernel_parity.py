@@ -417,6 +417,9 @@ def apply_random_car_cancel(my_predbat, rng):
         for minute in range(start, start + 30):
             my_predbat.io_adjusted[minute] = True
 
+    # A charge rate per car, so the buy-back floor sometimes lifts a cancelled slot's energy and sometimes does not
+    my_predbat.car_charging_rate = [rng.choice([3.6, 7.4, 22.0]) for _ in range(num_cars)]
+
     car_slots_model = my_predbat.car_charging_slots_model()
     return car_slots_model, build_car_cancel_table(my_predbat, car_slots_model, my_predbat.car_cancel_slots())
 
@@ -950,6 +953,7 @@ def car_cancel_edge_cases(my_predbat):
         "car_force_hold_until": {},
         "rate_import_saving_minutes": set(),
         "rate_max_base": 30.0,
+        "car_charging_rate": [7.4, 7.4, 7.4, 7.4],
         "rate_max": 40.0,
         "rate_import_tariff_max": 40.0,
         "soc_kw": 50.0,
@@ -997,6 +1001,10 @@ def car_cancel_edge_cases(my_predbat):
     # In pv10 the cancelled 18:00 dispatch reverts to rate_max_base and is no longer a dispatch that can go
     # away, while the 19:00 one it is not cancelled with is assumed gone and pays the tariff maximum
     pv10 = dict(base, car_charging_slots=[[car(1080, 1140, 7.0), car(1140, 1200, 7.0)], [], [], []], **dispatches([(1080, 1200)]))
+    # Small slots: a 0.4 kWh half hour and a 10-minute 0.1 kWh fragment, both charged the floor at 7.4 kW, and a
+    # car 0.2 kWh from full whose floor the room left caps
+    floor = dict(base, car_charging_slots=[[car(1080, 1110, 0.4, False), car(1200, 1210, 0.1, False)], [], [], []])
+    floor_full = dict(floor, car_charging_soc=[49.8, 0, 0, 0], car_charging_limit=[50.0, 100, 100, 100])
     target = [0.0]
     return [
         ("car_cancel_penalty", penalty, [], [], [{"start": 1080, "end": 1140}, {"start": 1300, "end": 1330}], [0.0, 0.0], nominal_pv10),
@@ -1012,6 +1020,8 @@ def car_cancel_edge_cases(my_predbat):
         ("car_cancel_split_half_hour_one", split, [], [], [{"start": 1140, "end": 1145}], target, nominal_pv10),
         ("car_cancel_split_half_hour_both", split, [], [], [{"start": 1140, "end": 1170}], target, nominal_pv10),
         ("car_cancel_forced", forced, [], [], [], [], nominal_pv10),
+        ("car_cancel_floor", floor, [], [], [{"start": 1105, "end": 1110}, {"start": 1205, "end": 1210}], [0.0, 0.0], nominal_pv10),
+        ("car_cancel_floor_car_full", floor_full, [], [], [{"start": 1080, "end": 1110}], target, nominal_pv10),
         ("car_cancel_pv10", pv10, [], [], [{"start": 1080, "end": 1110}], target, (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90)),
         ("car_cancel_pv10_not_reported", dict(pv10, car_energy_reported_load=False), [], [], [{"start": 1080, "end": 1110}], target, (PV_SCENARIO_PV10,)),
     ]
@@ -1080,7 +1090,7 @@ def run_cancel_context_tests():
 
     def table(table_steps, slot_flat):
         """A two-slot table with the given horizon and slot lookup"""
-        return CarCancelTable(slots, 0b10, table_steps, slot_flat, [0b01, 0, 0b11, 0], [0, 1, 0, 0], [-1.0, 30.0, 30.0, -1.0], 30.0)
+        return CarCancelTable(slots, 0b10, table_steps, slot_flat, [0b01, 0, 0b11, 0], [0, 1, 0, 0], [-1.0, 30.0, 30.0, -1.0], 30.0, [7.4, 11.0])
 
     ctx = prediction_kernel.PkContext()
     if not prediction_kernel.set_cancel_context(ctx, None, n_steps, 1) or ctx.cancel_count != 0 or ctx.cancel_need_mask:
@@ -1091,7 +1101,7 @@ def run_cancel_context_tests():
         print("ERROR: set_cancel_context refused a matching table")
         failed = True
     elif (
-        (ctx.cancel_count, list(ctx.cancel_start[:2]), list(ctx.cancel_end[:2]), ctx.cancel_forced_mask, ctx.cancel_penalty_rate) != (2, [10, 30], [20, 40], 0b10, 30.0)
+        (ctx.cancel_count, list(ctx.cancel_start[:2]), list(ctx.cancel_end[:2]), ctx.cancel_forced_mask, ctx.cancel_penalty_rate, list(ctx.cancel_floor_kw[:2])) != (2, [10, 30], [20, 40], 0b10, 30.0, [7.4, 11.0])
         or [ctx.cancel_need_mask[k] for k in range(n_steps)] != [0b01, 0, 0b11, 0]
         or [ctx.cancel_slot_flat[k] for k in range(n_steps)] != [0, -1, 1, 1]
     ):

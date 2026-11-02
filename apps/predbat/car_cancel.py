@@ -25,6 +25,12 @@ from utils import dp2, export_mode_of, round_out_to_period
 # prediction_kernel.cpp (it sizes PkContext's cancel arrays), so a change to either needs a KERNEL_ABI_VERSION bump
 CAR_CANCEL_MAX_SLOTS = 64
 
+# The buy-back penalty on each cancelled kWh is rate_max_base times this. Without a margin a slot already at the peak
+# rate costs nothing to cancel, and the plan cancels it through an export of next to nothing just to stop the battery
+# holding for the car, ignoring that the car's later charge holds it again. The penalty is also charged on at least the
+# car's full charge rate over the slot (floor_kw), as the battery it frees grows with the slot's length, not its energy
+CAR_CANCEL_PENALTY_MARGIN = 1.1
+
 
 class CancelSlot(NamedTuple):
     """A car charging slot that an export may cancel."""
@@ -106,12 +112,13 @@ class CarCancelTable:
     - need_mask: per step, the bits of the cancellable dispatches covering it (rounded out to half hours).
     - trusted: per step, 1 when a dispatch that cannot be cancelled covers it, so its rate stays cheap.
     - revert_rate: per step, rate_max_base where a cancelled dispatch would go back to peak, else -1.
-    - penalty_rate: what each cancelled kWh costs to buy back, rate_max_base.
+    - penalty_rate: what each cancelled kWh costs to buy back, rate_max_base times CAR_CANCEL_PENALTY_MARGIN.
+    - floor_kw: per slot, the car's charge rate; a cancelled step is charged the penalty on at least this.
     """
 
-    __slots__ = ("slots", "forced_mask", "n_steps", "slot_flat", "need_mask", "trusted", "revert_rate", "penalty_rate")
+    __slots__ = ("slots", "forced_mask", "n_steps", "slot_flat", "need_mask", "trusted", "revert_rate", "penalty_rate", "floor_kw")
 
-    def __init__(self, slots, forced_mask, n_steps, slot_flat, need_mask, trusted, revert_rate, penalty_rate):
+    def __init__(self, slots, forced_mask, n_steps, slot_flat, need_mask, trusted, revert_rate, penalty_rate, floor_kw):
         self.slots = slots
         self.forced_mask = forced_mask
         self.n_steps = n_steps
@@ -120,6 +127,7 @@ class CarCancelTable:
         self.trusted = trusted
         self.revert_rate = revert_rate
         self.penalty_rate = penalty_rate
+        self.floor_kw = floor_kw
 
 
 def step_range(minutes_now, n_steps, start, end):
@@ -175,7 +183,8 @@ def build_car_cancel_table(base, car_slots_model, slots):
                 for k in step_range(minutes_now, n_steps, start, end):
                     trusted[k] = 1
 
-    penalty_rate = float(base.rate_max_base)
+    peak_rate = float(base.rate_max_base)
+    penalty_rate = peak_rate * CAR_CANCEL_PENALTY_MARGIN
     revert_rate = [-1.0] * n_steps
     if not base.dispatch_billing_window():
         io_adjusted = base.io_adjusted
@@ -183,8 +192,10 @@ def build_car_cancel_table(base, car_slots_model, slots):
         for k in range(n_steps):
             minute = minutes_now + k * PREDICT_STEP
             if io_adjusted.get(minute, False) and not base.in_iog_fixed_window(minute) and minute not in saving_minutes:
-                revert_rate[k] = penalty_rate
-    return CarCancelTable(slots, forced_mask, n_steps, slot_flat, need_mask, trusted, revert_rate, penalty_rate)
+                revert_rate[k] = peak_rate
+    car_rate = base.car_charging_rate
+    floor_kw = [float(car_rate[slot.car_n]) if slot.car_n < len(car_rate) else 0.0 for slot in slots]
+    return CarCancelTable(slots, forced_mask, n_steps, slot_flat, need_mask, trusted, revert_rate, penalty_rate, floor_kw)
 
 
 def step_reverted(table, k, mask):

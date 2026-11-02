@@ -1050,10 +1050,12 @@ Turn on **switch.predbat_car_charging_cancel_for_export** (default Off) to let t
 
 What a cancellation costs:
 
-- The plan values the car energy given up as if it had to be bought back at the highest base import rate in the forecast, which leaves out saving sessions, free sessions, Intelligent dispatches and rate overrides.
-A cancelled 10kWh slot with a 30p peak rate adds 10 x 30p = 300p to the plan's metric. The car no longer buying its 10kWh at the slot rate comes off the cost, so the export has to earn more than the difference.
-With a 7p slot and a 30p peak that is about 23p for each kWh the car gives up, so a saving session wins and a normal export rate does not.
-- Only the energy the car still has room for is counted: cancelling a slot in which a nearly full car would take 1kWh costs 1kWh at the peak rate.
+- The plan values the car energy given up as if it had to be bought back at 1.1 times the highest base import rate in the forecast, which leaves out saving sessions, free sessions, Intelligent dispatches and rate overrides.
+A cancelled 10kWh slot with a 30p peak rate adds 10 x 33p = 330p to the plan's metric. The car no longer buying its 10kWh at the slot rate comes off the cost, so the export has to earn more than the difference.
+With a 7p slot and a 30p peak that is about 26p for each kWh the car gives up, so a saving session wins and a normal export rate does not.
+- Each cancelled slot is charged as if the car had charged at its full **car_charging_rate** for the whole slot, even when it was planned to take less: a 30-minute slot planned at 0.4kWh on a 7.4kW charger is charged as 3.7kWh.
+- The extra 10% and this minimum stop a slot from being cancelled for nothing. Without them, a slot already at the peak rate, or one planned to take very little, cost almost nothing to give up, and the plan could cancel it with an export of almost nothing just to stop the battery holding for the car for the whole slot.
+- Only the energy the car still has room for is counted: cancelling a slot in which a nearly full car would take 1kWh costs 1kWh at the buy-back rate.
 - The charge is part of the plan's metric only. It never shows in the predicted cost.
 - An Intelligent Octopus dispatch that is cancelled outside 23:30-05:30 is costed at the peak rate rather than the dispatch rate, see [Intelligent dispatches cancelled for an export](energy-rates.md#intelligent-dispatches-cancelled-for-an-export).
 
