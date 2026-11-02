@@ -474,6 +474,92 @@ def test_octopus_run_publishes_billing(my_predbat):
     return False
 
 
+
+def _kraken_api_for_billing(**kwargs):
+    """A KrakenAPI with a discovered tariff, fresh rates, fake storage and recorded queries."""
+    from unittest.mock import AsyncMock, MagicMock
+    from tests.test_kraken import make_kraken_api, attach_fake_storage
+
+    api = make_kraken_api(**kwargs)
+    attach_fake_storage(api)
+    api.current_tariff = {"tariff_code": "E-1R-NEXT-FLEX-01", "product_code": "NEXT-FLEX-01"}
+    api.tariff_fetched_at = datetime.now()
+    api.rates_fetched_at = datetime.now()
+    api.async_discover_smart_devices = AsyncMock()
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+    api.queries = []
+
+    async def fake_query(query, context, **kw):
+        """Answer billing queries with a full single-bucket day."""
+        api.queries.append(query)
+        if "GENERATION" in query:
+            return _day_response(_query_day(query), kwh=0.5, cost=7.5, stat_type="GENERATION_VALUE")
+        return _day_response(_query_day(query), kwh=1.0, cost=6.571, label="CONSUMPTION_CHARGE_STANDARD_B")
+
+    api.async_graphql_query = fake_query
+    return api
+
+
+def _billing_publishes(api):
+    """The predbat.billing calls a mocked dashboard_item received."""
+    return [call for call in api.dashboard_item.call_args_list if call.args and call.args[0] == "predbat.billing"]
+
+
+def test_kraken_run_publishes_billing():
+    """KrakenAPI.run() reads the import MPAN's billing and publishes predbat.billing for the supplier."""
+    import asyncio
+
+    api = _kraken_api_for_billing(provider="eon")
+    api.import_mpan = "3333333333333"
+    asyncio.run(api.run(60, False))
+    calls = _billing_publishes(api)
+    if not calls:
+        print("ERROR: KrakenAPI.run() should publish predbat.billing")
+        return True
+    attributes = calls[-1].kwargs.get("attributes") or {}
+    if attributes.get("supplier") != "eon" or calls[-1].kwargs.get("app") != "kraken":
+        print("ERROR: billing should be published for supplier eon by app kraken, got {} / {}".format(attributes.get("supplier"), calls[-1].kwargs.get("app")))
+        return True
+    slots = attributes.get("slots", {}).get("import", {})
+    if not slots or any(list(slot["buckets"]) != ["CONSUMPTION_CHARGE_STANDARD_B"] for slot in slots.values()):
+        print("ERROR: every E.ON slot should carry its one bucket")
+        return True
+    return False
+
+
+def test_kraken_export_uses_export_account():
+    """Export billing is read on the export account and MPAN, in the GENERATION direction."""
+    import asyncio
+
+    api = _kraken_api_for_billing(provider="edf", export_account_id="A-EXP", export_mpan="X")
+    api.import_mpan = "3333333333333"
+    asyncio.run(api.run(60, False))
+    exports = [query for query in api.queries if "readingDirection: GENERATION" in query]
+    if not exports or any('accountNumber: "A-EXP"' not in query or 'marketSupplyPointId: "X"' not in query for query in exports):
+        print("ERROR: export billing should be read on account A-EXP, MPAN X")
+        return True
+    imports = [query for query in api.queries if "readingDirection: CONSUMPTION" in query]
+    if not imports or any('accountNumber: "A-TEST123"' not in query for query in imports):
+        print("ERROR: import billing should be read on the import account")
+        return True
+    return False
+
+
+def test_kraken_no_mpan_skips():
+    """With no import MPAN known yet, no billing is read or published."""
+    import asyncio
+
+    api = _kraken_api_for_billing(provider="eon")
+    api.import_mpan = None
+    asyncio.run(api.run(60, False))
+    if any("measurements" in query for query in api.queries) or _billing_publishes(api):
+        print("ERROR: no billing should be read or published without an import MPAN")
+        return True
+    return False
+
+
 def run_billing_tests(my_predbat):
     """Run the billing tests."""
     failed = False
@@ -495,7 +581,7 @@ def run_billing_tests(my_predbat):
         if test():
             print("ERROR: {} failed".format(test.__name__))
             failed = True
-    for test in (test_reader_fetches_only_incomplete_days, test_reader_failed_read_marks_leg, test_reader_restart_restores_cache):
+    for test in (test_reader_fetches_only_incomplete_days, test_reader_failed_read_marks_leg, test_reader_restart_restores_cache, test_kraken_run_publishes_billing, test_kraken_export_uses_export_account, test_kraken_no_mpan_skips):
         print("billing: {}".format(test.__name__))
         if test():
             print("ERROR: {} failed".format(test.__name__))

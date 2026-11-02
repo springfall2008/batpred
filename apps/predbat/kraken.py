@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from component_base import ComponentBase
+from billing import BillingReader
 from const import TIME_FORMAT
 from utils import (
     filter_payment_method,
@@ -340,6 +341,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.flextras_property_id = None
         self.flextras_sessions = []
         self.flextras_fetched_at = None
+        # What the supplier actually billed, half-hour by half-hour, published as predbat.billing
+        self.billing = BillingReader(self, "kraken", f"billing_{account_id}")
         self.flextras_last_status = None
 
         # Export account/MPAN from SaaS config (matched by address at onboarding time).
@@ -1812,6 +1815,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         """
         if first:
             await self.load_kraken_cache()
+            await self.billing.load()
 
         had_success = False
 
@@ -1868,6 +1872,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # Publish rate sensors from current in-memory data (cache or fresh)
         if self.current_tariff and (first or rates_due):
             self._publish_rate_sensors()
+
+        # Half-hourly billing for the MPANs Predbat models, refreshed every few hours
+        await self.async_update_billing(first)
 
         # Fetch SmartFlex intelligent dispatches for any known devices, then publish + wire them.
         # dispatch_due stays permanently true for accounts with no devices (dispatch_fetched_at
@@ -1945,6 +1952,25 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             return False
 
         return True
+
+
+    async def async_update_billing(self, first):
+        """Read the half-hourly billing for the modelled import/export MPANs when due, and publish predbat.billing.
+
+        Export is read on the export account when it differs from the import one. KrakenAPI's GraphQL
+        query already returns None for any response carrying errors, so a partial error is a failed read.
+        """
+        if not self.current_tariff or not self.import_mpan:
+            return
+        now_utc = datetime.now(timezone.utc)
+        refreshed = False
+        # The first run only publishes what was cached, keeping a restart free of API calls; the read follows a cycle later
+        if not first and self.billing.due(now_utc):
+            mpans = {"import": (self.account_id, self.import_mpan), "export": (self.export_account_id or self.account_id, self.export_mpan) if self.export_mpan else None}
+            await self.billing.refresh(self.async_graphql_query, mpans, now_utc)
+            refreshed = True
+        if refreshed or first:
+            self.billing.publish(self.provider, now_utc, app="kraken")
 
 
 async def test_kraken_api(

@@ -944,14 +944,15 @@ class OctopusAPI(ComponentBase):
         """Read the half-hourly billing for the modelled import/export MPANs when due, and publish predbat.billing.
 
         Only the MPANs Predbat takes its rates from are read, so another meter on the account can't
-        inflate the bill or hide a day. Published from the restored cache on the first run too.
+        inflate the bill or hide a day. The first run publishes the restored cache without reading anything.
         """
         import_mpan = (self.tariffs.get("import") or {}).get("mpan")
         if not import_mpan:
             return
-        now_utc = self.now_utc_exact
+        now_utc = datetime.now(timezone.utc)
         refreshed = False
-        if self.billing.due(now_utc):
+        # The first run only publishes what was cached, keeping a restart free of API calls; the read follows a cycle later
+        if not first and self.billing.due(now_utc):
             export_mpan = (self.tariffs.get("export") or {}).get("mpan")
             mpans = {"import": (self.account_id, import_mpan), "export": (self.account_id, export_mpan) if export_mpan else None}
             await self.billing.refresh(self.billing_query, mpans, now_utc)
