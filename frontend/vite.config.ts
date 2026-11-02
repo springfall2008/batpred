@@ -15,6 +15,16 @@ const schemaMarkdown = {
   },
 }
 
+const fileManagerFonts: Plugin = {
+  name: 'remove-unused-file-manager-fonts',
+  enforce: 'pre',
+  transform(code, id) {
+    if (id.replaceAll('\\', '/').endsWith('/@cubone/react-file-manager/dist/style.css')) {
+      return code.replace(/@font-face\{font-family:Nunito Sans;[^}]*\}/g, '')
+    }
+  },
+}
+
 const uiDirectory = fileURLToPath(new URL('../apps/predbat/', import.meta.url))
 const uiFilename = /^predbat_ui(?:_[A-Za-z0-9_.-]+)?\.(?:html|js|css|webp|svg|png|woff2)$/
 const uiFiles: Plugin = {
@@ -49,7 +59,7 @@ const uiFiles: Plugin = {
 
 export default defineConfig({
   base: './',
-  plugins: [react(), schemaMarkdown, uiFiles],
+  plugins: [react(), schemaMarkdown, fileManagerFonts, uiFiles],
   optimizeDeps: { rolldownOptions: { plugins: [schemaMarkdown] } },
   build: {
     outDir: uiDirectory,
