@@ -111,8 +111,16 @@ def _clean_token(value):
 
 
 def _clean_scalar(value):
-    """Any scalar, for account_ids - an identifier may be a string or a number, so its type is open."""
-    return value if isinstance(value, (str, int, float, bool)) else None
+    """Any scalar, for account_ids - an identifier may be a string or a number - with strings held to MAX_STRING.
+
+    The cap is the container's value-side backstop: identifiers are published as reported, and the
+    credential check is by key name only, so a blob pasted under an innocent key (a token, say) is
+    dropped here like an over-long info string. Every real identifier fits - an MPAN, an account
+    number, a 36-character UUID.
+    """
+    if isinstance(value, str):
+        return value if len(value) <= MAX_STRING else None
+    return value if isinstance(value, (int, float, bool)) else None
 
 
 def _clean_bool(value):
