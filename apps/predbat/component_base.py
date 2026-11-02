@@ -43,7 +43,11 @@ def set_http_session_factory(factory):
     """Install the factory that new_http_session() (and so ComponentBase.http_session()) uses.
 
     The factory is called with the same keyword arguments as aiohttp.ClientSession and must return
-    an object used the same way: an async context manager with close() and a closed attribute. The caller owns what it
+    an object components can use as they use aiohttp.ClientSession: an async context manager with
+    close() and a closed attribute, and request methods returning aiohttp-style response context
+    managers (get(), post(), put(), patch(), delete(), request()), plus ws_connect() for the
+    components that open a websocket (Hypervolt). A test fake needs whatever subset the component
+    under test calls. The caller owns what it
     returns and closes it exactly as it closes its own session today, so a factory that shares one
     connection pool between components should hand out sessions that do not own the pool (for
     example aiohttp.ClientSession(connector=shared, connector_owner=False)). Tests can use it to
@@ -74,7 +78,10 @@ def writes(func):
 
     Only sets an attribute; the method itself is returned unchanged and behaves exactly as before.
     ComponentBase.write_methods() lists the marked methods, so tests and hosts can see which
-    methods change device or account state without reading their code.
+    methods change device or account state without reading their code. Marking is per component and
+    not yet complete: the inverter and gateway components are marked, while car charger and other
+    device components (for example myenergi, Hypervolt, Wallbox, Ohme) are not yet, so an empty
+    listing does not mean a component sends no writes.
     """
     func.__predbat_writes__ = True
     return func
@@ -163,6 +170,8 @@ class ComponentBase(ABC):
         """Return the sorted names of this class's methods marked with @writes.
 
         An override is judged on its own: overriding a marked method without @writes unmarks it.
+        Only marked methods are listed: an empty result means none are marked, not that the
+        component never writes (see writes()).
         """
         names = []
         for name in dir(cls):
