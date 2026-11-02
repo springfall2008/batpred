@@ -1006,15 +1006,14 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         composition "gateway". A Powerwall 2 is AC coupled - its solar is a separate inverter the
         gateway only meters - so its functions are battery only; a Powerwall 3 is a hybrid inverter with
         its own solar inputs. The energy site id is an account identifier and goes in account_ids,
-        which the catalogue pseudonymises.
+        published readable like every identifier.
 
         Ratings are the figures site_info reports (nameplate energy and power, the configured export
         limit). inverter_limit_charge is derived per battery unit and the battery_count capacity
         estimate is a guess, so neither is a rating; both stay bound as entities where automatic_config()
         binds them.
 
-        Never reported: the site name, address, timezone, gateway DINs and device UUIDs, or the build
-        hash Tesla appends to the firmware version.
+        Never reported: the site name, address, timezone, gateway DINs and device UUIDs.
 
         Returns None until site_info has been read.
         """
@@ -1028,10 +1027,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         info = {"vendor": "Tesla"}
         if gateway.get("part_name"):
             info["model"] = gateway["part_name"]
-        # Only the version proper: Tesla appends a build hash ("26.18.3 184289b9"), and once separators
-        # are stripped its digits run into the version's as an 11-digit block the catalogue's shape guard
-        # takes for a misfiled identifier and pseudonymises.
-        firmware = str(gateway.get("firmware_version") or self.site_version or "").split(" ")[0]
+        firmware = str(gateway.get("firmware_version") or self.site_version or "")
         if firmware:
             info["firmware"] = firmware
         record = inverter_record(

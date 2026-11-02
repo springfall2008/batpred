@@ -546,8 +546,8 @@ class SolaxAPI(ComponentBase):
         One record per plant automatic_config() configures - a plant with an inverter and a battery - in
         the same order, keyed by the plant's first inverter serial, with every inverter's serial in serials
         when there is more than one. SolaX ties batteries to the plant, not to an inverter, so the record
-        stays "direct". The plantId is a cloud identifier and goes in account_ids, which the catalogue
-        pseudonymises - including inside the entity ids that embed it.
+        stays "direct". The plantId is a cloud identifier and goes in account_ids, published readable like
+        every identifier, as are the entity ids that embed it.
 
         Never reported: the plant name, the dongle (registerNo) serial and the API credentials.
 

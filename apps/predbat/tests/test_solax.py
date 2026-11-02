@@ -215,16 +215,16 @@ def _solax_discovery_tests():
         assert ("battery_temperature_history" in records[0]["entities"]) and all("battery_temperature_history" not in record["entities"] for record in records[1:])
     print("✓ records agree with automatic_config, one per plant")
 
-    # test_solax_round_trip_hides_plant_id
+    # test_solax_round_trip_keeps_plant_id_readable
     logs = []
     coordinator = Coordinator(SharedMockBase())
     coordinator.log = logs.append
     coordinator.report("solax", _discovery_solax().build_discovery())
     catalogue = str(coordinator.catalogue())
-    assert DISCOVERY_PLANT not in catalogue, "the plant id must be pseudonymised, including inside entity ids"
+    assert "sensor.predbat_solax_{}_battery_soc".format(DISCOVERY_PLANT) in catalogue, "the plant id is not secret, and stays readable inside entity ids"
     assert inverter in catalogue
     assert not [line for line in logs if line.startswith("Warn")], logs
-    print("✓ round trip hides the plant id")
+    print("✓ round trip keeps the plant id readable")
 
     # test_solax_catalogue_filed_when_automatic_config_raises
     api = _discovery_solax()

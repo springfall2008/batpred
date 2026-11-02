@@ -5049,7 +5049,9 @@ def test_sigenergy_realtime_fallback_unknown_grid_load(my_predbat):
 
 # Discovery catalogue reporter
 
-DISCOVERY_SYSTEM = "C8F2A1B9D04E77K3"
+# The component's own documented example id: its 12-character slug "ta1700000000" holds a 10-digit run,
+# which the identifier shape guard the catalogue no longer has used to mistake for a misfiled identifier
+DISCOVERY_SYSTEM = "TESTA1700000000"
 
 
 def _discovery_sigenergy(systems=1):

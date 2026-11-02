@@ -1624,8 +1624,8 @@ class EnphaseAPI(ComponentBase):
         One record for the site automatic_config() configures (the first discovered). The Envoy is the
         gateway Predbat talks to, fronting the IQ batteries, so the record is keyed by the Envoy serial
         with composition "gateway" and the battery serials in serials. The site id is an account
-        identifier: it goes in account_ids, which the catalogue pseudonymises - including inside the
-        entity ids that embed it.
+        identifier: it goes in account_ids, published readable like every identifier, as are the entity
+        ids that embed it.
 
         Reporting is independent of self.automatic, and of whether automatic_config() would accept
         the site: a site without CFG/DTG scheduling is still hardware worth describing.

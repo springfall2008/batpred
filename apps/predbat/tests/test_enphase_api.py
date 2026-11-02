@@ -2603,8 +2603,8 @@ def test_enphase_record_keeps_pv_despite_automatic_ignore_pv():
     assert_record_binds_nothing_extra(record, captured, allowed_extra=("pv_power", "pv_today"))
 
 
-def test_enphase_round_trip_hides_site_id():
-    """Through the real Coordinator: the site id is pseudonymised everywhere, the Envoy serial stays readable."""
+def test_enphase_round_trip_keeps_site_id_readable():
+    """Through the real Coordinator: the site id and the entity ids that embed it stay readable, as every identifier does."""
     from coordinator import Coordinator
     from mock_base import MockBase as SharedMockBase
 
@@ -2613,7 +2613,7 @@ def test_enphase_round_trip_hides_site_id():
     coordinator.log = logs.append
     coordinator.report("enphase", _discovery_enphase().build_discovery())
     catalogue = str(coordinator.catalogue())
-    assert DISCOVERY_SITE not in catalogue, "the site id must be pseudonymised, including inside entity ids"
+    assert "sensor.predbat_enphase_{}_soc_percent".format(DISCOVERY_SITE) in catalogue, "the site id is not secret, and stays readable inside entity ids"
     assert DISCOVERY_ENVOY in catalogue
     assert not [line for line in logs if line.startswith("Warn")], logs
 
@@ -2783,7 +2783,7 @@ def run_enphase_api_tests(my_predbat):
     test_enphase_record_rebuilds_its_inverter_def_row()
     test_enphase_record_agrees_with_automatic_config()
     test_enphase_record_keeps_pv_despite_automatic_ignore_pv()
-    test_enphase_round_trip_hides_site_id()
+    test_enphase_round_trip_keeps_site_id_readable()
     test_enphase_catalogue_filed_when_automatic_config_raises()
     print("**** Enphase API tests passed ****")
     return 0

@@ -3182,7 +3182,7 @@ def test_teslemetry_record_ac_powerwall():
     assert record["composition"] == "gateway" and record["serials"] == ["TG123022000237"], record
     assert record["hardware_ids"] == {"serial": "CN322313G3J054"}
     assert record["account_ids"] == {"energy_site_id": DISCOVERY_SITE_ID}
-    assert record["info"] == {"vendor": "Tesla", "model": "Tesla Backup Gateway 2", "firmware": "26.18.3"}, record["info"]
+    assert record["info"] == {"vendor": "Tesla", "model": "Tesla Backup Gateway 2", "firmware": "26.18.3 184289b9"}, record["info"]
     assert record["capabilities"]["reserve_above_soc_charges_from_grid"] is True
     assert record["ratings"]["soc_max"] == 13.5 and record["ratings"]["inverter_limit"] == 5000, record["ratings"]
     assert "export_limit" not in record["ratings"], "the unlimited sentinel is not a rating"
@@ -3195,7 +3195,7 @@ def test_teslemetry_record_pw3():
     record = _discovery_tesla(SITE_INFO_PW3_EXPANSION).build_discovery()["inverters"][0]
     assert record["functions"] == ["solar", "battery"], record
     assert record["device_id"] == "teslemetry:TG000000000000"
-    assert record["info"] == {"vendor": "Tesla", "model": "Powerwall 3", "firmware": "26.34.0"}, record["info"]
+    assert record["info"] == {"vendor": "Tesla", "model": "Powerwall 3", "firmware": "26.34.0 7d707328"}, record["info"]
     assert record["ratings"]["soc_max"] == 27.0 and record["ratings"]["inverter_limit"] == 11040, record["ratings"]
     assert "export_limit" in record["ratings"], record["ratings"]
     assert "00000000-0000-0000-0000-000000000001" not in str(record) and "1707000-30-L--TG000000000000" not in str(record), "device UUIDs and DINs are not reported"
@@ -3234,8 +3234,8 @@ def test_teslemetry_conditional_ratings_follow_entity_presence():
     print("  ✓ Discovery conditional bindings follow entity presence")
 
 
-def test_teslemetry_round_trip_hides_site_id():
-    """Through the real Coordinator: the energy site id is pseudonymised, the site name never reported."""
+def test_teslemetry_round_trip_keeps_site_id_readable():
+    """Through the real Coordinator: the energy site id stays readable, the full firmware string survives, the site name is never reported."""
     from coordinator import Coordinator
     from mock_base import MockBase
 
@@ -3246,10 +3246,11 @@ def test_teslemetry_round_trip_hides_site_id():
     coordinator.log = logs.append
     coordinator.report("teslemetry", report)
     catalogue = str(coordinator.catalogue())
-    assert DISCOVERY_SITE_ID not in catalogue
+    assert DISCOVERY_SITE_ID in catalogue, "the energy site id is not secret, and stays readable"
     assert "CN322313G3J054" in catalogue
+    assert "26.18.3 184289b9" in catalogue, "the firmware build hash is no longer mistaken for an identifier"
     assert not [line for line in logs if line.startswith("Warn")], logs
-    print("  ✓ Discovery report round-trips with the site id hidden")
+    print("  ✓ Discovery report round-trips with the site id readable")
 
 
 def test_teslemetry(my_predbat=None):
@@ -3433,6 +3434,6 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_record_rebuilds_its_inverter_def_row()
     test_teslemetry_record_agrees_with_automatic_config()
     test_teslemetry_conditional_ratings_follow_entity_presence()
-    test_teslemetry_round_trip_hides_site_id()
+    test_teslemetry_round_trip_keeps_site_id_readable()
     print("**** Teslemetry tests passed ****")
     return 0
