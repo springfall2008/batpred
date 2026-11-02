@@ -669,8 +669,8 @@ def test_component_load_error_carries_no_free_text():
     components.load_error() is the raw str() of whatever construction raised - unbounded free text
     that could carry a URL, an account value or a credential from a component's own error message.
     Every other value in this document reaches it through a typed container that cannot hold one;
-    a dump gets attached to a public issue, so the one field outside that boundary is removed
-    rather than trusted to the shape guard. The message stays in the log and on the
+    a dump gets attached to a public issue, so the one field outside that boundary is removed:
+    free text can carry a credential under no name the validation's key check would catch. The message stays in the log and on the
     component-status entity, which is where a maintainer already reads it.
     """
     base, coordinator = _coordinator()
@@ -1185,6 +1185,21 @@ def test_published_catalogue_scrubs_email_addresses():
     return 0
 
 
+def test_account_ids_drop_an_overlong_string():
+    """account_ids holds strings to MAX_STRING like every other container, so a pasted blob under an innocent key is dropped.
+
+    With identifiers published as reported, the name-based credential check is the only guard on this
+    container; the length cap is its value-side backstop. Every real identifier fits - a 13-digit MPAN,
+    an account number, a 36-character UUID.
+    """
+    logs = []
+    uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"
+    cleaned = validate_report({"cars": [{"device_id": "x:1", "account_ids": {"mpan": "1234567890123", "device": uuid, "note": "eyJ" + "a" * 70}}]}, "x", logs.append)
+    assert cleaned["cars"][0]["account_ids"] == {"mpan": "1234567890123", "device": uuid}, cleaned
+    assert any("account_ids.note" in line for line in logs), logs
+    print("PASS: account_ids drops an over-long string and keeps real identifiers")
+    return 0
+
 def test_published_catalogue_refuses_credentials():
     """Passwords, tokens and keys never reach the catalogue: a credential-named field is refused at validation."""
     catalogue, _ = _published({"inverters": [{"device_id": "x:1", "account_ids": {"password": "hunter2", "api_key": "sk_live_abc", "access_token": "eyJhbGciOi"}}]})
@@ -1203,6 +1218,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_published_catalogue_keeps_location_readable()
     failures += test_published_catalogue_scrubs_email_addresses()
     failures += test_published_catalogue_refuses_credentials()
+    failures += test_account_ids_drop_an_overlong_string()
     failures += test_ratings_rejects_non_numeric()
     failures += test_vocabulary_rejects_free_text()
     failures += test_info_rejects_email_shaped_and_long_strings()
