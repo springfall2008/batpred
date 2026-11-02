@@ -1953,7 +1953,6 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         return True
 
-
     async def async_update_billing(self, first):
         """Read the half-hourly billing for the modelled import/export MPANs when due, and publish predbat.billing.
 

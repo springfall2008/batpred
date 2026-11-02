@@ -433,7 +433,7 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
                     total = buckets.setdefault(label, {"kwh": 0.0, "cost": 0.0})
                     total["kwh"] += bucket["kwh"]
                     total["cost"] += bucket["cost"]
-                for label, bucket in (exports[key]["buckets"].items() if key in exports else []):
+                for label, bucket in exports[key]["buckets"].items() if key in exports else []:
                     total = buckets.setdefault("Export " + label, {"kwh": 0.0, "cost": 0.0})
                     total["kwh"] += bucket["kwh"]
                     total["cost"] -= bucket["cost"]

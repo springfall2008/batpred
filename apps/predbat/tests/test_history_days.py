@@ -145,10 +145,18 @@ def _test_history_days_rebuild_on_new_billing(my_predbat, failed):
     print("history_days: rebuilt when billing moves on")
     now_utc, calls, original_run_pred = _prepare_history_days(my_predbat)
     try:
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=1.0, attributes={"complete_until": "2024-10-02T00:00:00Z", "slots": {"import": {"2024-10-01T10:00:00Z": {"kwh": 1.0, "cost": 1.0, "standing": 0.0, "buckets": {}}}}, "legs": {"import": True, "export": None}, "supplier": "octopus"})
+        my_predbat.dashboard_item(
+            my_predbat.prefix + ".billing",
+            state=1.0,
+            attributes={"complete_until": "2024-10-02T00:00:00Z", "slots": {"import": {"2024-10-01T10:00:00Z": {"kwh": 1.0, "cost": 1.0, "standing": 0.0, "buckets": {}}}}, "legs": {"import": True, "export": None}, "supplier": "octopus"},
+        )
         my_predbat.calculate_history_days()
         first = len(calls)
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=1.0, attributes={"complete_until": "2024-10-03T00:00:00Z", "slots": {"import": {"2024-10-01T10:00:00Z": {"kwh": 1.0, "cost": 1.0, "standing": 0.0, "buckets": {}}}}, "legs": {"import": True, "export": None}, "supplier": "octopus"})
+        my_predbat.dashboard_item(
+            my_predbat.prefix + ".billing",
+            state=1.0,
+            attributes={"complete_until": "2024-10-03T00:00:00Z", "slots": {"import": {"2024-10-01T10:00:00Z": {"kwh": 1.0, "cost": 1.0, "standing": 0.0, "buckets": {}}}}, "legs": {"import": True, "export": None}, "supplier": "octopus"},
+        )
         my_predbat.calculate_history_days()
         second = len(calls) - first
     finally:

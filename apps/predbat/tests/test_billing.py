@@ -232,7 +232,15 @@ def test_sensor_shape():
         print("ERROR: slots should hold both legs with 52 import half-hours")
         failed = True
     day = attributes["days"].get("2026-11-01")
-    if not day or day.get("complete") is not True or not _close(day.get("import_cost"), 480.0) or not _close(day.get("export_cost"), 360.0) or not _close(day.get("standing"), 48.0) or not _close(day.get("import_kwh"), 48.0) or not _close(day.get("export_kwh"), 24.0):
+    if (
+        not day
+        or day.get("complete") is not True
+        or not _close(day.get("import_cost"), 480.0)
+        or not _close(day.get("export_cost"), 360.0)
+        or not _close(day.get("standing"), 48.0)
+        or not _close(day.get("import_kwh"), 48.0)
+        or not _close(day.get("export_kwh"), 24.0)
+    ):
         print("ERROR: unexpected 1 Nov day summary {}".format(day))
         failed = True
     elif not _close(day["buckets"]["Home Low Rate"]["kwh"], 48.0) or not _close(day["buckets"]["Home Low Rate"]["cost"], 480.0):
@@ -335,7 +343,7 @@ def test_reader_fetches_only_incomplete_days():
     if not changed or date(2026, 10, 31) in asked or date(2026, 11, 1) not in asked or date(2026, 11, 2) not in asked or len(asked) != len(set(asked)):
         print("ERROR: refresh should skip complete 31 Oct and ask once for each other day, asked {}".format(asked))
         return True
-    if any('readingDirection: CONSUMPTION' not in query or 'marketSupplyPointId: "MPAN-IMP"' not in query or 'accountNumber: "A-1"' not in query for query in queries):
+    if any("readingDirection: CONSUMPTION" not in query or 'marketSupplyPointId: "MPAN-IMP"' not in query or 'accountNumber: "A-1"' not in query for query in queries):
         print("ERROR: import queries should name the import MPAN, the account and the CONSUMPTION direction")
         return True
     if ("octopus_user", "billing") not in owner.storage.data:
@@ -474,7 +482,6 @@ def test_octopus_run_publishes_billing(my_predbat):
     return False
 
 
-
 def _kraken_api_for_billing(**kwargs):
     """A KrakenAPI with a discovered tariff, fresh rates, fake storage and recorded queries."""
     from unittest.mock import AsyncMock, MagicMock
@@ -558,7 +565,6 @@ def test_kraken_no_mpan_skips():
         print("ERROR: no billing should be read or published without an import MPAN")
         return True
     return False
-
 
 
 def _billing_attrs(import_slots, export_slots=None, legs=None, supplier="octopus"):
@@ -734,7 +740,22 @@ def run_billing_tests(my_predbat):
         if test():
             print("ERROR: {} failed".format(test.__name__))
             failed = True
-    for test in (test_reader_fetches_only_incomplete_days, test_reader_failed_read_marks_leg, test_reader_restart_restores_cache, test_kraken_run_publishes_billing, test_kraken_export_uses_export_account, test_kraken_no_mpan_skips, test_attach_basic, test_attach_unpublished_row, test_attach_hour_rows, test_attach_standing_stripped, test_attach_clock_change, test_attach_event_label, test_attach_import_only, test_attach_no_billing):
+    for test in (
+        test_reader_fetches_only_incomplete_days,
+        test_reader_failed_read_marks_leg,
+        test_reader_restart_restores_cache,
+        test_kraken_run_publishes_billing,
+        test_kraken_export_uses_export_account,
+        test_kraken_no_mpan_skips,
+        test_attach_basic,
+        test_attach_unpublished_row,
+        test_attach_hour_rows,
+        test_attach_standing_stripped,
+        test_attach_clock_change,
+        test_attach_event_label,
+        test_attach_import_only,
+        test_attach_no_billing,
+    ):
         print("billing: {}".format(test.__name__))
         if test():
             print("ERROR: {} failed".format(test.__name__))
