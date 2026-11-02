@@ -72,8 +72,9 @@ is configured as a PV source. A PV-only unit that has been configured as a batte
 usually show it in its record: `battery` among its functions, but no `battery_capacity_ah` rating
 and no `soc_max` entity.
 
-No reporter populates `programmes` yet - it is part of the schema for a future Axle/VPP-style
-reporter - so today it is always present as an empty list rather than missing from the document.
+Kraken is the first reporter to populate `programmes`: an EDF account enrolled in Flextras is a
+`free_electricity` programme whose `meter` links to its import meter. On other installs the section
+is present as an empty list rather than missing from the document.
 
 A charger integration that knows nothing about the vehicle it charges still reports a car, marked
 `flags: ["stub"]`, because Predbat indexes cars rather than chargers. A car without that flag is a
