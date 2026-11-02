@@ -44,6 +44,12 @@ CAPABILITY_KEYS = (
     "target_soc_used_for_discharge",
 )
 
+# Behaviour fields added to INVERTER_DEF after the record vocabulary was written, each with the value
+# inverter.py uses when a row leaves it out. A record may state one, but leaving it out is not a gap:
+# the field takes base's value, or this default - the rate_step_percent_of_capacity pattern. Only the
+# rows that need one (EnphaseCloud and TESLA set reserve_above_soc_charges_from_grid) have to state it.
+OPTIONAL_CAPABILITY_DEFAULTS = {"reserve_above_soc_charges_from_grid": False}
+
 # INVERTER_DEF presence flags -> the settings that must be bound to a real rw entity for the flag to be
 # True. inverter.py creates a dummy entity for exactly these settings when the flag is False
 # (inverter.py:612-655), and turns has_timed_pause off at runtime when no pause_mode entity exists.
@@ -226,7 +232,7 @@ CONTAINER_SPEC = {
 }
 
 # Containers whose keys are a closed set - anything else is dropped and logged
-CONTAINER_KEYS = {"capabilities": CAPABILITY_KEYS}
+CONTAINER_KEYS = {"capabilities": CAPABILITY_KEYS + tuple(OPTIONAL_CAPABILITY_DEFAULTS)}
 
 # An email address anywhere in a string: the one kind of personal data the published catalogue withholds
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+")
@@ -719,7 +725,7 @@ def _decimal_places(step):
     return max(0, -exponent) if isinstance(exponent, int) else None
 
 
-def inverter_definition(record, write_and_poll_sleep, base=None):
+def inverter_definition(record, write_and_poll_sleep, base=None, write_max_retry=None, write_backoff=False):
     """Rebuild an INVERTER_DEF-shaped definition for one inverter from its discovery record.
 
     Returns (definition, gaps, not_applicable). definition is always a new dict: base, when given, is
@@ -730,7 +736,10 @@ def inverter_definition(record, write_and_poll_sleep, base=None):
     Sources, per the vocabulary spec (docs/superpowers/specs/2026-09-24-discovery-inverter-record-vocabulary-design.md):
     the seven CAPABILITY_KEYS from record["capabilities"]; the PRESENCE_FLAGS and the two GE mode flags
     from which settings record["entities"] binds to a real rw entity; the protocol fields from those
-    entities' descriptors; write_and_poll_sleep from the component. A field it cannot work out - a
+    entities' descriptors; write_and_poll_sleep, write_max_retry and write_backoff from the component
+    (the last two only when the component sets them, as only GWMQTT's row does). The optional
+    capabilities in OPTIONAL_CAPABILITY_DEFAULTS are never gaps: absent, they keep base's value or
+    take the default. A field it cannot work out - a
     missing capability, or a bound entity lacking the format/unit/domain it needs - is listed in gaps
     and keeps base's value (or is left out without a base). A protocol field whose source setting is not
     bound at all does not apply to this device: it takes NOT_APPLICABLE_DEFAULTS' value (or base's) and
@@ -750,6 +759,11 @@ def inverter_definition(record, write_and_poll_sleep, base=None):
             definition[key] = capabilities[key]
         else:
             gaps.append(key)
+    for key, default in OPTIONAL_CAPABILITY_DEFAULTS.items():
+        if isinstance(capabilities.get(key), bool):
+            definition[key] = capabilities[key]
+        else:
+            definition.setdefault(key, default)
 
     for flag, settings in PRESENCE_FLAGS.items():
         definition[flag] = all(_bound_entity(entities, setting, access="rw") is not None for setting in settings)
@@ -830,6 +844,10 @@ def inverter_definition(record, write_and_poll_sleep, base=None):
     definition["num_load_entities"] = count
 
     definition["write_and_poll_sleep"] = write_and_poll_sleep
+    if write_max_retry is not None:
+        definition["write_max_retry"] = write_max_retry
+    if write_backoff:
+        definition["write_backoff"] = True
     return definition, gaps, not_applicable
 
 
