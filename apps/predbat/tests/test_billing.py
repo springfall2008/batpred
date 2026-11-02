@@ -652,7 +652,7 @@ def test_attach_standing_stripped():
     billing = _billing_attrs({_key(0): _slot(1.0, 10.0)})
     plan = attach_billing(_plan([0]), billing, VIEW_MIDNIGHT, 30, {0: 10.0}, 55.52, {}, False, None, None)
     summary = plan["billing_summary"]
-    if plan["rows"][0].get("billing_diff") != 0.0 or summary.get("standing_predbat") != 0.56 or summary.get("standing_billed") != 0.01:
+    if plan["rows"][0].get("billing_diff") != 0.0 or summary.get("standing_predbat") != 0.01 or summary.get("standing_billed") != 0.01:
         print("ERROR: midnight standing should be stripped from Diff and shown separately, got row {} summary {}".format(plan["rows"][0], summary))
         return True
     return False
@@ -695,7 +695,7 @@ def test_attach_import_only():
         print("ERROR: import-only billing should ignore export and be flagged, got {} {}".format(plan["rows"][0], plan["billing_summary"]))
         return True
     midnight = attach_billing(_plan([0]), _billing_attrs({_key(0): _slot(1.0, 10.0)}, legs={"import": True, "export": False}), VIEW_MIDNIGHT, 30, {0: 10.0}, 55.52, {}, True, None, None)
-    if midnight["rows"][0].get("billing_diff") != 0.0 or midnight["billing_summary"].get("standing_predbat") != 0.56:
+    if midnight["rows"][0].get("billing_diff") != 0.0 or midnight["billing_summary"].get("standing_predbat") != 0.01:
         print("ERROR: import-only cost has no standing charge in it, so nothing should be taken off the midnight row, got {} {}".format(midnight["rows"][0], midnight["billing_summary"]))
         return True
     net = attach_billing(_plan([600]), dict(billing, legs={"import": True, "export": True}), VIEW_MIDNIGHT, 30, {600: 2.5}, 55.52, {}, False, None, None)
@@ -715,6 +715,77 @@ def test_attach_no_billing():
     attach_billing(plan, None, VIEW_MIDNIGHT, 30, {600: 10.0}, 55.52, {}, False, None, None)
     if plan != before:
         print("ERROR: empty billing should leave the plan untouched, got {}".format(plan))
+        return True
+    return False
+
+
+
+def test_parse_missing_cost_rejects_slot():
+    """A bucket with kWh but no cost isn't priced yet; the half-hour is left out so the day is read again."""
+    nodes = [_node("2026-11-01T10:00:00+00:00", 1.0, [{"type": "CONSUMPTION_COST", "label": "A", "value": "1.0", "costInclTax": {"estimatedAmount": None}}]), _node("2026-11-01T10:30:00+00:00", 1.0, [_stat("CONSUMPTION_COST", "A", 1.0, 5.0)])]
+    slots = parse_measurements(_response(nodes))
+    if slots is None or "2026-11-01T10:00:00Z" in slots or "2026-11-01T10:30:00Z" not in slots:
+        print("ERROR: a bucket with kWh and no cost should drop its half-hour, got {}".format(None if slots is None else sorted(slots)))
+        return True
+    return False
+
+
+def test_attach_sub_half_hour_interval_skipped():
+    """15-minute plan rows can't be matched to half-hourly billing, so none is attached."""
+    from billing import attach_billing
+
+    plan = _plan([600, 615])
+    before = copy.deepcopy(plan)
+    attach_billing(plan, _billing_attrs({_key(600): _slot(1.0, 10.0)}), VIEW_MIDNIGHT, 15, {600: 5.0, 615: 5.0}, 55.52, {}, False, None, None)
+    if plan != before:
+        print("ERROR: 15-minute rows should get no billing, got {}".format(plan))
+        return True
+    return False
+
+
+def test_attach_standing_pro_rata():
+    """On a part-billed day Predbat's standing charge is counted for the billed half-hours only, so the tile doesn't look like a mismatch."""
+    from billing import attach_billing
+
+    billing = _billing_attrs({_key(m): _slot(1.0, 10.0, standing=1.15674) for m in range(0, 720, 30)})
+    plan = attach_billing(_plan(list(range(0, 1440, 30))), billing, VIEW_MIDNIGHT, 30, {m: 10.0 for m in range(0, 1440, 30)}, 55.52, {}, False, None, None)
+    summary = plan["billing_summary"]
+    if summary["standing_predbat"] != summary["standing_billed"] or summary["standing_billed"] != 0.28:
+        print("ERROR: half a day billed should show £0.28 standing on both sides, got {} vs {}".format(summary["standing_predbat"], summary["standing_billed"]))
+        return True
+    return False
+
+
+def test_attach_hides_diff_when_predbat_saw_nothing():
+    """A row where Predbat recorded no cost and no import but the meter shows energy (Predbat down, recorder gap) gets no Diff."""
+    from billing import attach_billing
+
+    billing = _billing_attrs({_key(600): _slot(1.0, 10.0), _key(630): _slot(1.0, 10.0)})
+    plan = attach_billing(_plan([600, 630]), billing, VIEW_MIDNIGHT, 30, {600: 0.0, 630: 10.0}, 55.52, {}, False, {600: 0.0, 630: 1.0}, None)
+    if plan["rows"][0].get("billed") != 0.1 or plan["rows"][0].get("billing_diff") is not None or plan["rows"][1].get("billing_diff") != 0.0:
+        print("ERROR: the row Predbat recorded nothing for should show Billed but no Diff, got {}".format(plan["rows"]))
+        return True
+    if plan["billing_summary"]["predbat_cost"] != 0.1 or plan["billing_summary"]["billed_cost"] != 0.1:
+        print("ERROR: the summary should leave the unrecorded row out of both sides, got {}".format(plan["billing_summary"]))
+        return True
+    return False
+
+
+def test_attach_implausible_rate_hidden():
+    """Billing whose average rate is nowhere near Predbat's (a units mix-up, say) is not shown at all."""
+    from billing import attach_billing
+
+    plan = {"rows": [{"slot_minute": m, "cost_change": 0.0, "import_rate": 25.0} for m in (600, 630)]}
+    before = copy.deepcopy(plan)
+    billing = _billing_attrs({_key(600): _slot(1.0, 2500.0), _key(630): _slot(1.0, 2500.0)})
+    attach_billing(plan, billing, VIEW_MIDNIGHT, 30, {600: 25.0, 630: 25.0}, 55.52, {}, False, None, None)
+    if plan != before:
+        print("ERROR: billing at 100x Predbat's rate should not be attached")
+        return True
+    plan = {"rows": [{"slot_minute": m, "cost_change": 0.0, "import_rate": 36.28} for m in (600, 630)]}
+    attach_billing(plan, _billing_attrs({_key(600): _slot(1.0, 6.6), _key(630): _slot(1.0, 36.28)}), VIEW_MIDNIGHT, 30, {600: 36.28, 630: 36.28}, 55.52, {}, False, None, None)
+    if plan["rows"][0].get("billed") != 0.07:
+        print("ERROR: one slot billed cheap against a peak rate is a real difference and must still show")
         return True
     return False
 
@@ -755,6 +826,11 @@ def run_billing_tests(my_predbat):
         test_attach_event_label,
         test_attach_import_only,
         test_attach_no_billing,
+        test_parse_missing_cost_rejects_slot,
+        test_attach_sub_half_hour_interval_skipped,
+        test_attach_standing_pro_rata,
+        test_attach_hides_diff_when_predbat_saw_nothing,
+        test_attach_implausible_rate_hidden,
     ):
         print("billing: {}".format(test.__name__))
         if test():

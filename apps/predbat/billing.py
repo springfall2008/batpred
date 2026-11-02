@@ -68,6 +68,13 @@ BILLING_MEASUREMENTS_QUERY = """query {{
 }}"""
 BILLING_DIRECTIONS = {"import": "CONSUMPTION", "export": "GENERATION"}
 
+# Billing whose average rate is outside this multiple of Predbat's own is not shown: a units or VAT mix-up, not a bill
+BILLING_PLAUSIBLE_RATE_RATIO = (0.2, 5.0)
+
+# A half-hour where Predbat recorded no cost and no import while the meter shows more than this is a gap in
+# Predbat's recording (it was down, or the recorder missed it), not a billing difference
+BILLING_UNRECORDED_KWH = 0.05
+
 # How far a half-hour's bucket kWh may stray from its metered kWh before it is not trusted.
 BUCKET_KWH_TOLERANCE = 0.01
 
@@ -106,7 +113,11 @@ def _parse_node(node):
         if stat.get("type") == STANDING_CHARGE_TYPE:
             standing += cost or 0.0
             continue
-        rows.append((stat.get("label") or stat.get("type") or "unknown", _to_float(stat.get("value")), cost or 0.0))
+        stat_kwh = _to_float(stat.get("value"))
+        if cost is None and (stat_kwh is None or stat_kwh > 0):
+            # Energy with no price yet: leave the half-hour out so the day is read again, rather than bill it at 0p
+            return None
+        rows.append((stat.get("label") or stat.get("type") or "unknown", stat_kwh, cost or 0.0))
     buckets = {}
     for label, bucket_kwh, cost in rows:
         if bucket_kwh is None:
@@ -407,13 +418,14 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     """
     slots = (billing or {}).get("slots") or {}
     imports = slots.get("import") or {}
-    if not plan_json or not imports:
+    if not plan_json or not imports or plan_interval_minutes % 30 != 0:
+        # Rows shorter than (or not a multiple of) the half-hourly bill can't be matched to it
         return plan_json
     exports = {} if import_only else (slots.get("export") or {})
     export_required = not import_only and ((billing.get("legs") or {}).get("export") is True)
     events = events or {}
     updates = []
-    totals = {"predbat": 0.0, "billed": 0.0, "standing_predbat": 0.0, "standing_billed": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "predbat_import_kwh": 0.0, "predbat_export_kwh": 0.0}
+    totals = {"predbat": 0.0, "billed": 0.0, "standing_predbat": 0.0, "standing_billed": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "predbat_import_kwh": 0.0, "predbat_export_kwh": 0.0, "rate_cost": 0.0, "rate_kwh": 0.0, "predbat_rate_cost": 0.0}
     for row in plan_json.get("rows") or []:
         slot_minute = row.get("slot_minute")
         if slot_minute is None:
@@ -427,6 +439,12 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
             for key in keys:
                 billed_pence += imports[key]["cost"] - (exports[key]["cost"] if key in exports else 0.0)
                 totals["standing_billed"] += imports[key]["standing"]
+                # Predbat's daily standing charge, counted for the billed half-hours only, so a part-billed day compares like with like
+                totals["standing_predbat"] += standing_pence / 48.0
+                if row.get("import_rate") is not None:
+                    totals["rate_cost"] += imports[key]["cost"]
+                    totals["rate_kwh"] += imports[key]["kwh"]
+                    totals["predbat_rate_cost"] += imports[key]["kwh"] * row["import_rate"]
                 totals["import_kwh"] += imports[key]["kwh"]
                 totals["export_kwh"] += exports[key]["kwh"] if key in exports else 0.0
                 for label, bucket in imports[key]["buckets"].items():
@@ -439,8 +457,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
                     total["cost"] -= bucket["cost"]
             buckets = {label: {"kwh": round(value["kwh"], 3), "cost": _pounds(value["cost"])} for label, value in buckets.items()}
         predbat_pence = predbat_slot_cost.get(slot_minute)
-        if billed_pence is not None and slot_minute % (24 * 60) == 0:
-            totals["standing_predbat"] += standing_pence
+        if billed_pence is not None and predbat_pence is not None and abs(predbat_pence) < 0.005 and predbat_import_kwh is not None and abs(predbat_import_kwh.get(slot_minute, 0.0)) < 0.001:
+            if sum(imports[key]["kwh"] for key in keys) > BILLING_UNRECORDED_KWH:
+                predbat_pence = None
         diff = None
         if billed_pence is not None and predbat_pence is not None:
             diff = _pounds(billed_pence - predbat_pence)
@@ -452,6 +471,10 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes)))
     if not any(update[1] is not None for update in updates):
         return plan_json
+    if totals["rate_kwh"] > 0.5 and totals["predbat_rate_cost"] > 0:
+        ratio = totals["rate_cost"] / totals["predbat_rate_cost"]
+        if not BILLING_PLAUSIBLE_RATE_RATIO[0] <= ratio <= BILLING_PLAUSIBLE_RATE_RATIO[1]:
+            return plan_json
     for row, billed, buckets, diff, event in updates:
         row["billed"] = billed
         row["billed_buckets"] = buckets
