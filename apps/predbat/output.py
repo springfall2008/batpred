@@ -214,6 +214,8 @@ def dominant_slot_status(minute_counts, precedence):
 HISTORY_DAYS_RETRY_MINUTES = 180
 # The event entities whose recorded on/off history marks the History view's rows, and the event tag each records
 HISTORY_EVENT_ENTITIES = (("octopus_saving_session", "saving"), ("octopus_free_electricity", "free"), ("axle_session", "axle"))
+# The rate tags that are a user's override: a manual rate (manual) or an apps.yaml rates_import/export_override (user, increment)
+RATE_OVERRIDE_TAGS = ("manual", "user", "increment")
 
 # Plan state build_history_days() winds back to each older day and puts back afterwards
 HISTORY_DAY_FAKED_STATE = (
@@ -4245,21 +4247,26 @@ class Output:
         return when.replace(minute=(when.minute // 30) * 30, second=0, microsecond=0)
 
     def history_recorded_events(self, days):
-        """The saving session, free electricity and Axle events recorded over the last days, as [(start_utc, end_utc, tag)].
+        """The saving session, free electricity, Axle and rate override events recorded over the last days, as [(start_utc, end_utc, tag)].
 
         Read from the on/off history of the entities octopus_saving_session, octopus_free_electricity and axle_session
-        point at. The sensors change a few minutes after an event does and events run on half-hours, so each change is
+        point at, and of Predbat's own import/export rate override sensors. The sensors change a few minutes after an event does and events run on half-hours, so each change is
         rounded down to its half-hour; an event still on is taken to run to now.
         """
-        spans = []
+        sources = []
         for arg, tag in HISTORY_EVENT_ENTITIES:
             entity_id = self.get_arg(arg, None, indirect=False) if arg in self.args else None
-            if not entity_id or not isinstance(entity_id, str):
-                continue
+            if entity_id and isinstance(entity_id, str):
+                sources.append((entity_id, tag))
+        sources.append(("binary_sensor." + self.prefix + "_rate_override_import", "manual"))
+        sources.append(("binary_sensor." + self.prefix + "_rate_override_export", "manual"))
+        spans = []
+        for entity_id, default_tag in sources:
             history = self.get_history_wrapper(entity_id=entity_id, days=days, required=False)
             if not history or not history[0]:
                 continue
             on_since = None
+            on_tag = None
             for point in history[0]:
                 try:
                     when = datetime.fromisoformat(str(point.get("last_changed") or point.get("last_updated")).replace("Z", "+00:00"))
@@ -4268,13 +4275,17 @@ class Output:
                 if when.tzinfo is None:
                     continue
                 active = str(point.get("state")).lower() in ("on", "true")
+                # The rate override sensors say which kind of override in their tag attribute
+                tag = (point.get("attributes") or {}).get("tag")
+                tag = tag if tag in BILLING_EVENT_LABELS else default_tag
+                if on_since is not None and (not active or tag != on_tag):
+                    spans.append((on_since, max(self.history_slot_floor(when), on_since + timedelta(minutes=30)), on_tag))
+                    on_since = None
                 if active and on_since is None:
                     on_since = self.history_slot_floor(when)
-                elif not active and on_since is not None:
-                    spans.append((on_since, max(self.history_slot_floor(when), on_since + timedelta(minutes=30)), tag))
-                    on_since = None
+                    on_tag = tag
             if on_since is not None:
-                spans.append((on_since, max(self.now_utc.astimezone(timezone.utc), on_since + timedelta(minutes=30)), tag))
+                spans.append((on_since, max(self.now_utc.astimezone(timezone.utc), on_since + timedelta(minutes=30)), on_tag))
         return spans
 
     @staticmethod
@@ -4443,6 +4454,17 @@ class Output:
                     delattr(self, name)
             self.car_charging_slots = saved["car_charging_slots"]
         return days
+
+    def publish_rate_overrides(self):
+        """Publish whether the current slot's import and export rates are a user override, so the History view can mark them later from the recorded history."""
+        for direction, tags in (("import", self.rate_import_replicated), ("export", self.rate_export_replicated)):
+            tag = (tags or {}).get(self.minutes_now)
+            tag = tag if tag in RATE_OVERRIDE_TAGS else None
+            self.dashboard_item(
+                "binary_sensor." + self.prefix + "_rate_override_" + direction,
+                state="on" if tag else "off",
+                attributes={"friendly_name": "Predbat {} rate override".format(direction), "icon": "mdi:cash-edit", "tag": tag},
+            )
 
     def publish_rate_and_threshold(self):
         """

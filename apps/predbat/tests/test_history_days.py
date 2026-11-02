@@ -576,11 +576,11 @@ def _test_rebuild_on_filled_gap(my_predbat, failed):
 EVENT_ARGS = {"octopus_saving_session": "binary_sensor.predbat_octopus_a_saving_session", "octopus_free_electricity": "sensor.predbat_octopus_a_free_electricity", "axle_session": "binary_sensor.predbat_axle_event"}
 
 
-def _event_history(start_utc, spans):
-    """A recorded on/off history from start_utc, switching on and off at each (on, off) UTC instant in spans."""
+def _event_history(start_utc, spans, attributes=None):
+    """A recorded on/off history from start_utc, switching on and off at each (on, off) UTC instant in spans; the on points carry attributes."""
     points = [{"state": "off", "last_updated": start_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")}]
     for on, off in spans:
-        points.append({"state": "on", "last_updated": on.strftime("%Y-%m-%dT%H:%M:%S+00:00")})
+        points.append({"state": "on", "last_updated": on.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": dict(attributes or {})})
         points.append({"state": "off", "last_updated": off.strftime("%Y-%m-%dT%H:%M:%S+00:00")})
     return [points]
 
@@ -671,6 +671,71 @@ def _test_yesterday_marks_recorded_events(my_predbat, failed):
     return failed
 
 
+def _test_rate_override_sensors(my_predbat, failed):
+    """The import and export rate override sensors are on while the current slot's rate is a manual or apps.yaml override, naming which."""
+    print("history_days: rate override sensors")
+    saved = (my_predbat.rate_import_replicated, my_predbat.rate_export_replicated)
+    import_id = "binary_sensor." + my_predbat.prefix + "_rate_override_import"
+    export_id = "binary_sensor." + my_predbat.prefix + "_rate_override_export"
+    now = my_predbat.minutes_now
+    cases = [
+        ({now: "manual"}, {now: "increment"}, ("on", "manual"), ("on", "increment")),
+        ({now: "user"}, {}, ("on", "user"), ("off", None)),
+        # A saving session is flagged by its own entity, and another slot's override isn't this one's
+        ({now: "saving", now + 30: "manual"}, {now - 30: "user"}, ("off", None), ("off", None)),
+    ]
+    try:
+        for import_tags, export_tags, want_import, want_export in cases:
+            my_predbat.rate_import_replicated = import_tags
+            my_predbat.rate_export_replicated = export_tags
+            my_predbat.publish_rate_overrides()
+            got_import = (my_predbat.get_state_wrapper(import_id), my_predbat.get_state_wrapper(import_id, attribute="tag"))
+            got_export = (my_predbat.get_state_wrapper(export_id), my_predbat.get_state_wrapper(export_id, attribute="tag"))
+            if got_import != want_import or got_export != want_export:
+                print("ERROR: tags {} / {} should give {} / {}, got {} / {}".format(import_tags, export_tags, want_import, want_export, got_import, got_export))
+                failed = True
+    finally:
+        my_predbat.rate_import_replicated, my_predbat.rate_export_replicated = saved
+    return failed
+
+
+def _test_older_days_mark_rate_overrides(my_predbat, failed):
+    """Older days mark the half-hours the rate override sensors recorded, with the override's own label."""
+    print("history_days: older days mark recorded rate overrides")
+    from tests.test_calculate_yesterday import _make_mock_step_data
+
+    utc = timezone.utc
+    _setup_base(my_predbat, minutes_now=360)
+    now_utc = _set_clock(my_predbat, datetime(2026, 11, 2, 6, 0))
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    start = now_utc - timedelta(days=10)
+    events = {
+        "binary_sensor." + my_predbat.prefix + "_rate_override_import": _event_history(start, [(datetime(2026, 10, 31, 9, 4, tzinfo=utc), datetime(2026, 10, 31, 9, 34, tzinfo=utc))], {"tag": "manual"}),
+        "binary_sensor." + my_predbat.prefix + "_rate_override_export": _event_history(start, [(datetime(2026, 10, 31, 15, 0, tzinfo=utc), datetime(2026, 10, 31, 16, 3, tzinfo=utc))], {"tag": "increment"}),
+    }
+    my_predbat.get_history_wrapper = _with_event_histories(_realistic_histories(my_predbat, now_utc), events)
+    my_predbat.max_days_previous = 8
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.metric_standing_charge = 55.52
+    my_predbat.history_days_built_for = None
+    my_predbat.history_days_billing_mark = None
+    my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=0.0, attributes=_matching_billing(my_predbat, datetime(2026, 10, 31, tzinfo=utc), datetime(2026, 11, 1, tzinfo=utc)))
+    try:
+        my_predbat.calculate_history_days()
+        days = my_predbat.get_state_wrapper(my_predbat.prefix + ".plan_history", attribute="days") or {}
+    finally:
+        del my_predbat.step_data_history
+        del my_predbat.get_history_wrapper
+        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+    day = days.get("2026-10-31") or {}
+    marked = [(str(row["time"])[11:16], row.get("billing_event")) for row in day.get("rows") or [] if row.get("billing_event")]
+    want = [("09:00", "Manual rate"), ("15:00", "Rate adjustment"), ("15:30", "Rate adjustment")]
+    if marked != want or day.get("history_events") != ["Manual rate", "Rate adjustment"]:
+        print("ERROR: 31 Oct should mark {} and list Manual rate, Rate adjustment, got {} and {}".format(want, marked, day.get("history_events")))
+        failed = True
+    return failed
+
+
 def run_history_days_tests(my_predbat):
     """Run the History replay and 7-day History tests."""
     failed = False
@@ -692,4 +757,6 @@ def run_history_days_tests(my_predbat):
     failed = _test_rebuild_on_filled_gap(my_predbat, failed)
     failed = _test_older_days_mark_recorded_events(my_predbat, failed)
     failed = _test_yesterday_marks_recorded_events(my_predbat, failed)
+    failed = _test_rate_override_sensors(my_predbat, failed)
+    failed = _test_older_days_mark_rate_overrides(my_predbat, failed)
     return failed

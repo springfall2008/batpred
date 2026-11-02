@@ -1376,6 +1376,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Publish rate data
         self.publish_rate_and_threshold()
+        self.publish_rate_overrides()
 
         return {
             "recomputed": recompute,
