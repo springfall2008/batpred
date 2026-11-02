@@ -117,6 +117,12 @@ class ComponentBase(ABC):
     # 10 for the GivEnergy types (GivTCP and GE Cloud override it). See coordinator.inverter_definition().
     WRITE_AND_POLL_SLEEP = 2
 
+    # How inverter.py retries a write that did not stick. None and False leave inverter.py's own
+    # defaults in place; a component whose INVERTER_DEF row sets write_max_retry/write_backoff (only
+    # GWMQTT) overrides these so its discovery record can rebuild the row.
+    WRITE_MAX_RETRY = None
+    WRITE_BACKOFF = False
+
     # Declared on the class, not only assigned in __init__, so they exist even on a component built
     # without it - the test harnesses construct components with Cls.__new__(Cls) to exercise one
     # method in isolation. refresh_discovery() must not be able to raise on such an instance: an

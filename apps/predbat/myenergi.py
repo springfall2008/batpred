@@ -831,11 +831,11 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         filtered to those Home Assistant has seen; car_charging_now is left out because it only re-binds
         the power sensor.
 
-        Never reported: the cloud alias (a user-chosen name) and the hub serial (the digest-auth
-        username). An install with no hub enters the Zappi's own serial as myenergi_hub_serial, so
-        there that serial is the login username too: it is then reported as an account id, which the
-        catalogue pseudonymises wherever it appears, rather than as a hardware serial. An Eddi is a
-        diverter, not a charger, and has no catalogue section.
+        Not reported: the cloud alias (a user-chosen name) and the hub serial, which nothing here
+        needs. A Zappi's serial is reported even on an install with no hub, where it doubles as the
+        digest-auth username: identifiers are not secret (maintainer decision, 2 Nov 2026), and the
+        API key, which is, never enters the record. An Eddi is a diverter, not a charger, and has no
+        catalogue section.
 
         Returns None when there is no Zappi to describe.
         """
@@ -853,11 +853,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 "car_charging_power": {"entity_id": "sensor.{}_power".format(prefix), "domain": "sensor", "access": "r"},
             }
             serial = str(device.serial)
-            is_login = bool(self.hub_serial) and str(self.hub_serial) == serial
             charger, car = charger_with_stub_car(
                 "myenergi:{}".format(serial),
-                hardware_ids=None if is_login else {"serial": serial},
-                account_ids={"hub_serial": serial} if is_login else None,
+                hardware_ids={"serial": serial},
                 info={"vendor": "myenergi", "model": DEVICE_KIND_ZAPPI},
                 entities=self.discovery_entities(descriptors),
             )

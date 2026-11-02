@@ -9,6 +9,8 @@ import copy
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, AsyncMock
 
+import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
+from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
 from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE, FORCED_ASSERT_SECONDS, EXPORT_PERMISSION_RECHECK_SECONDS
 
@@ -3143,6 +3145,114 @@ def test_teslemetry_request_api_key_mode_does_not_refresh():
     run_async(test())
 
 
+# Discovery catalogue reporter
+
+DISCOVERY_SITE_ID = "1689274400123"
+
+
+def _discovery_tesla(site_info=None):
+    """A Teslemetry component that has completed a first cycle against this site_info and LIVE_STATUS."""
+    api = MockTeslemetryAPI()
+    api.automatic = True
+    api.site_id = DISCOVERY_SITE_ID
+    api.mock_responses["/api/1/energy_sites/{}/site_info".format(DISCOVERY_SITE_ID)] = copy.deepcopy(site_info or SITE_INFO_AC_POWERWALL)
+    api.mock_responses["/api/1/energy_sites/{}/live_status".format(DISCOVERY_SITE_ID)] = copy.deepcopy(LIVE_STATUS)
+    api.filed_reports = []
+    api.report_discovery = api.filed_reports.append
+    assert run_async(api.run(0, True)) is True
+    return api
+
+
+def test_teslemetry_catalogue_none_before_site_info():
+    """Nothing is reported until site_info has been read."""
+    api = MockTeslemetryAPI()
+    assert api.build_discovery() is None
+    print("  ✓ Discovery reports nothing before site_info")
+
+
+def test_teslemetry_record_ac_powerwall():
+    """A Powerwall 2 is AC coupled: battery only, its Backup Gateway fronting the Powerwall, the site id an account id."""
+    api = _discovery_tesla()
+    report = api.build_discovery()
+    record = report["inverters"][0]
+    assert report["automatic"] is True
+    assert record["device_id"] == "teslemetry:CN322313G3J054", record
+    assert record["inverter_type"] == "TESLA"
+    assert record["functions"] == ["battery"], record
+    assert record["composition"] == "gateway" and record["serials"] == ["TG123022000237"], record
+    assert record["hardware_ids"] == {"serial": "CN322313G3J054"}
+    assert record["account_ids"] == {"energy_site_id": DISCOVERY_SITE_ID}
+    assert record["info"] == {"vendor": "Tesla", "model": "Tesla Backup Gateway 2", "firmware": "26.18.3 184289b9"}, record["info"]
+    assert record["capabilities"]["reserve_above_soc_charges_from_grid"] is True
+    assert record["ratings"]["soc_max"] == 13.5 and record["ratings"]["inverter_limit"] == 5000, record["ratings"]
+    assert "export_limit" not in record["ratings"], "the unlimited sentinel is not a rating"
+    assert len(api.filed_reports) == 1
+    print("  ✓ Discovery describes an AC-coupled Powerwall")
+
+
+def test_teslemetry_record_pw3():
+    """A Powerwall 3 is a hybrid: solar and battery, firmware from its gateway entry, its export limit a rating."""
+    record = _discovery_tesla(SITE_INFO_PW3_EXPANSION).build_discovery()["inverters"][0]
+    assert record["functions"] == ["solar", "battery"], record
+    assert record["device_id"] == "teslemetry:TG000000000000"
+    assert record["info"] == {"vendor": "Tesla", "model": "Powerwall 3", "firmware": "26.34.0 7d707328"}, record["info"]
+    assert record["ratings"]["soc_max"] == 27.0 and record["ratings"]["inverter_limit"] == 11040, record["ratings"]
+    assert "export_limit" in record["ratings"], record["ratings"]
+    assert "00000000-0000-0000-0000-000000000001" not in str(record) and "1707000-30-L--TG000000000000" not in str(record), "device UUIDs and DINs are not reported"
+    print("  ✓ Discovery describes a Powerwall 3")
+
+
+def test_teslemetry_record_rebuilds_its_inverter_def_row():
+    """The record alone rebuilds the TESLA row - no base, no exceptions."""
+    for site_info in (SITE_INFO_AC_POWERWALL, SITE_INFO_PW3_EXPANSION):
+        record = validated_inverters(_discovery_tesla(site_info).build_discovery())[0]
+        assert_definition_complete(record, TeslemetryAPI.WRITE_AND_POLL_SLEEP)
+    print("  ✓ Discovery record rebuilds the TESLA row")
+
+
+def test_teslemetry_record_agrees_with_automatic_config():
+    """The record binds exactly what automatic_config() binds, for both Powerwall generations."""
+    for site_info in (SITE_INFO_AC_POWERWALL, SITE_INFO_PW3_EXPANSION):
+        api = _discovery_tesla(site_info)
+        record = validated_inverters(api.build_discovery())[0]
+        captured = capture_automatic_config(api)
+        assert_record_agrees(record, captured)
+        assert_record_binds_nothing_extra(record, captured)
+    print("  ✓ Discovery record agrees with automatic_config")
+
+
+def test_teslemetry_conditional_ratings_follow_entity_presence():
+    """A limit automatic_config() skips because its entity is missing is missing from the record too."""
+    api = _discovery_tesla()
+    assert api.get_state_wrapper(api.entity("export_limit")) is None, "the AC fixture publishes no export limit"
+    record = validated_inverters(api.build_discovery())[0]
+    assert "export_limit" not in record["entities"]
+    captured = capture_automatic_config(api)
+    assert "export_limit" not in captured
+    assert_record_agrees(record, captured)
+    assert_record_binds_nothing_extra(record, captured)
+    print("  ✓ Discovery conditional bindings follow entity presence")
+
+
+def test_teslemetry_round_trip_keeps_site_id_readable():
+    """Through the real Coordinator: the energy site id stays readable, the full firmware string survives, the site name is never reported."""
+    from coordinator import Coordinator
+    from mock_base import MockBase
+
+    report = _discovery_tesla().build_discovery()
+    assert "Home" not in str(report) and "Europe/London" not in str(report), "site name and timezone are never reported"
+    logs = []
+    coordinator = Coordinator(MockBase())
+    coordinator.log = logs.append
+    coordinator.report("teslemetry", report)
+    catalogue = str(coordinator.catalogue())
+    assert DISCOVERY_SITE_ID in catalogue, "the energy site id is not secret, and stays readable"
+    assert "CN322313G3J054" in catalogue
+    assert "26.18.3 184289b9" in catalogue, "the firmware build hash is no longer mistaken for an identifier"
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    print("  ✓ Discovery report round-trips with the site id readable")
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -3318,5 +3428,12 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_request_skips_when_oauth_refresh_fails()
     test_teslemetry_request_401_refreshes_and_retries_once()
     test_teslemetry_request_api_key_mode_does_not_refresh()
+    test_teslemetry_catalogue_none_before_site_info()
+    test_teslemetry_record_ac_powerwall()
+    test_teslemetry_record_pw3()
+    test_teslemetry_record_rebuilds_its_inverter_def_row()
+    test_teslemetry_record_agrees_with_automatic_config()
+    test_teslemetry_conditional_ratings_follow_entity_presence()
+    test_teslemetry_round_trip_keeps_site_id_readable()
     print("**** Teslemetry tests passed ****")
     return 0
