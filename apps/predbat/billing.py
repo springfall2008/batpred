@@ -397,11 +397,11 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     """Add the billed cost, Diff and a day summary to a History view's plan JSON, in place.
 
     billing is the predbat.billing attributes dict. predbat_slot_cost maps each row's slot_minute
-    to Predbat's own cost for it in pence (net, or import-only when import_only), and
+    to Predbat's own cost for it in pence, already without the standing charge (net, or import-only when
+    import_only), and
     predbat_import_kwh / predbat_export_kwh map it to Predbat's recorded grid kWh (or are None), so the
-    summary compares only the rows that have billing. Predbat adds the
-    day's standing charge at midnight, so standing_pence is taken off rows starting on a day boundary
-    and both standing charges are reported separately. A row is billed only when every half-hour in
+    summary compares only the rows that have billing. Predbat's daily standing charge (standing_pence)
+    and the billed one are reported separately, once per billed day. A row is billed only when every half-hour in
     it is published (and its export too, when export is being read); anything else shows no billing
     rather than a part figure. Returns plan_json; it is left untouched when no row is billed.
     """
@@ -439,12 +439,8 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
                     total["cost"] -= bucket["cost"]
             buckets = {label: {"kwh": round(value["kwh"], 3), "cost": _pounds(value["cost"])} for label, value in buckets.items()}
         predbat_pence = predbat_slot_cost.get(slot_minute)
-        if predbat_pence is not None and slot_minute % (24 * 60) == 0:
-            # cost_today steps up by the standing charge at midnight; cost_today_import (import_only) never includes it
-            if not import_only:
-                predbat_pence -= standing_pence
-            if billed_pence is not None:
-                totals["standing_predbat"] += standing_pence
+        if billed_pence is not None and slot_minute % (24 * 60) == 0:
+            totals["standing_predbat"] += standing_pence
         diff = None
         if billed_pence is not None and predbat_pence is not None:
             diff = _pounds(billed_pence - predbat_pence)

@@ -289,11 +289,36 @@ def _test_history_days_real_replay(my_predbat, failed):
     elif "billing_summary" not in days["2024-10-02"] or "billing_summary" in days["2024-10-01"]:
         print("ERROR: only 2 Oct has billing and only it should carry a billing summary")
         failed = True
+    elif not str(days["2024-10-02"]["rows"][0].get("time", "")).startswith("2024-10-02T00:00:00+01"):
+        print("ERROR: an older day's first row should be local midnight 2024-10-02T00:00:00+0100, got {}".format(days["2024-10-02"]["rows"][0].get("time")))
+        failed = True
     elif days["2024-10-02"]["rows"][0].get("import_rate") != 25.0:
         print("ERROR: older-day rows should show the recorded 25p rate, got {}".format(days["2024-10-02"]["rows"][0].get("import_rate")))
         failed = True
     if my_predbat.rate_import is not rate_import_before or my_predbat.midnight_utc != midnight_before:
         print("ERROR: the plan's rates and midnight must be put back after building the older days")
+        failed = True
+    return failed
+
+
+def _test_history_row_costs_strip_next_day_standing(my_predbat, failed):
+    """The row ending at midnight reads 4 minutes into the next day, so it carries the next day's standing charge; it is taken off there, not at 00:00."""
+    print("history_days: standing charge stripped from the row that crosses midnight")
+    my_predbat.plan_interval_minutes = 30
+    array = {minute: 55.52 + minute * 0.1 for minute in range(0, 24 * 60)}
+    array[24 * 60] = 55.52 + 1440 * 0.1 + 55.52 + 0.4
+    costs = my_predbat.history_row_costs(array, 24 * 60, 55.52)
+    if abs(costs[0] - 3.0) > 0.001 or abs(costs[1410] - 3.4) > 0.001:
+        print("ERROR: 00:00 should cost 3p and 23:30 3.4p once the next day's standing is taken off, got {} and {}".format(costs[0], costs[1410]))
+        failed = True
+    yesterday = {minute: (55.52 + minute * 0.1 if minute < 1440 else 55.52 + 144.0 + 55.52 + (minute - 1440) * 0.1 + 0.4) for minute in range(0, 1440 + 360 + 1)}
+    costs = my_predbat.history_row_costs(yesterday, 1440 + 360, 55.52)
+    if abs(costs[1410] - 3.4) > 0.001 or abs(costs[1440] - 3.0) > 0.001:
+        print("ERROR: across midnight in the yesterday + today view the 23:30 row should be 3.4p and 00:00 3p, got {} and {}".format(costs[1410], costs[1440]))
+        failed = True
+    import_only = my_predbat.history_row_costs(array, 24 * 60, 0.0)
+    if abs(import_only[1410] - (3.4 + 55.52)) > 0.001:
+        print("ERROR: with no standing charge to strip, the row cost is left as it is")
         failed = True
     return failed
 
@@ -310,4 +335,5 @@ def run_history_days_tests(my_predbat):
     failed = _test_yesterday_json_has_billing(my_predbat, failed)
     failed = _test_import_only_when_export_leg_missing(my_predbat, failed)
     failed = _test_history_days_real_replay(my_predbat, failed)
+    failed = _test_history_row_costs_strip_next_day_standing(my_predbat, failed)
     return failed

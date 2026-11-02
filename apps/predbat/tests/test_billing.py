@@ -640,11 +640,11 @@ def test_attach_hour_rows():
 
 
 def test_attach_standing_stripped():
-    """Predbat adds the day's standing charge at midnight; Diff must not count it as a mismatch."""
+    """Row costs come in without the standing charge; both standing charges are reported once per billed day."""
     from billing import attach_billing
 
     billing = _billing_attrs({_key(0): _slot(1.0, 10.0)})
-    plan = attach_billing(_plan([0]), billing, VIEW_MIDNIGHT, 30, {0: 55.52 + 10.0}, 55.52, {}, False, None, None)
+    plan = attach_billing(_plan([0]), billing, VIEW_MIDNIGHT, 30, {0: 10.0}, 55.52, {}, False, None, None)
     summary = plan["billing_summary"]
     if plan["rows"][0].get("billing_diff") != 0.0 or summary.get("standing_predbat") != 0.56 or summary.get("standing_billed") != 0.01:
         print("ERROR: midnight standing should be stripped from Diff and shown separately, got row {} summary {}".format(plan["rows"][0], summary))

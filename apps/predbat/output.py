@@ -4158,12 +4158,20 @@ class Output:
             array[minute] = data.get(status_offset - minute - 4, 0.0) + carry
         return array
 
-    def history_row_costs(self, cost_array, view_minutes):
-        """Predbat's cost for each History row, in pence, from a running cost array."""
+    def history_row_costs(self, cost_array, view_minutes, standing_pence):
+        """Predbat's cost for each History row, in pence, from a running cost array, without the standing charge.
+
+        The running array is read 4 minutes into each minute, so its value at a midnight already includes the new
+        day's standing charge: the row that ends at midnight carries it, and it is taken off there.
+        """
         costs = {}
         for minute in range(0, view_minutes, self.plan_interval_minutes):
             start = cost_array.get(minute, 0.0)
-            costs[minute] = cost_array.get(min(minute + self.plan_interval_minutes, view_minutes), start) - start
+            end_minute = min(minute + self.plan_interval_minutes, view_minutes)
+            cost = cost_array.get(end_minute, start) - start
+            if end_minute % (24 * 60) == 0 and end_minute in cost_array:
+                cost -= standing_pence
+            costs[minute] = cost
         return costs
 
     def history_row_kwh(self, incrementing, status_offset, view_minutes):
@@ -4194,9 +4202,9 @@ class Output:
         if import_only:
             if not import_cost_data:
                 return
-            costs = self.history_row_costs(self.history_cumulative_array(import_cost_data, status_offset, view_minutes), view_minutes)
+            costs = self.history_row_costs(self.history_cumulative_array(import_cost_data, status_offset, view_minutes), view_minutes, 0.0)
         else:
-            costs = self.history_row_costs(cost_array, view_minutes)
+            costs = self.history_row_costs(cost_array, view_minutes, self.metric_standing_charge)
         attach_billing(
             plan_json,
             billing,
@@ -4211,10 +4219,9 @@ class Output:
         )
 
     def local_midnight_utc(self, day):
-        """The UTC instant of local midnight at the start of date day."""
+        """Local midnight at the start of date day, as a local-time aware datetime like self.midnight_utc (the plan table shows its times as they are)."""
         naive = datetime(day.year, day.month, day.day)
-        local = self.local_tz.localize(naive) if hasattr(self.local_tz, "localize") else naive.replace(tzinfo=self.local_tz)
-        return local.astimezone(timezone.utc)
+        return self.local_tz.localize(naive) if hasattr(self.local_tz, "localize") else naive.replace(tzinfo=self.local_tz)
 
     def calculate_history_days(self):
         """Build the History view for the days before yesterday, for the day picker, and publish them as predbat.plan_history.
