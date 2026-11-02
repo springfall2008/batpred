@@ -1,0 +1,90 @@
+name: owner gate
+# A required check standing in for "only the repository owner merges": main's ruleset requires the
+# owner-gate job. GitHub's auto-merge never uses an admin bypass, so restricting updates to the owner
+# would also block the owner's own auto-merge; this gate keeps both.
+#
+# It passes only when the owner has given this PR an explicit go-ahead, whoever authored it:
+# - the owner applied the owner-approved label (the most recent time that label was applied, the
+#   owner applied it - a collaborator labelling a PR does not count), or
+# - the owner enabled auto-merge on it.
+# Authorship deliberately counts for nothing: the triage bot opens PRs under the owner's account, and
+# an unreviewed bot PR must not become mergeable by any collaborator the moment CI goes green.
+#
+# New commits pushed by anyone other than the owner revoke the go-ahead - the label is removed and
+# auto-merge is switched off - so an approval only ever covers code the owner saw (the same idea as
+# dismissing a stale review). The CI bots that push fixes to PR branches are exempt.
+#
+# pull_request_target so the job always runs this file as it is on main - a PR cannot change the gate
+# that judges it - and gets a token that can remove the label and switch auto-merge off. It never
+# checks out or runs the PR's code, which is what keeps pull_request_target safe here.
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+      - auto_merge_enabled
+      - auto_merge_disabled
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  owner-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the owner approved this PR or enabled auto-merge on it
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER}"
+          state=$(gh api graphql -F owner="$owner" -F repo="${GH_REPO#*/}" -F number="$PR_NUMBER" -f query='
+            query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  id
+                  autoMergeRequest { enabledBy { login } }
+                  labels(first: 100) { nodes { name } }
+                }
+              }
+            }' --jq '.data.repository.pullRequest')
+          pr_id=$(jq -r '.id' <<< "$state")
+          auto_merge_by=$(jq -r '.autoMergeRequest.enabledBy.login // ""' <<< "$state")
+          has_label=$(jq -r --arg label "$LABEL" '[.labels.nodes[].name] | index($label) != null' <<< "$state")
+
+          # New commits from anyone but the owner (or the CI bots) revoke an earlier go-ahead
+          if [ "$ACTION" = "synchronize" ] && [ "$SENDER" != "$owner" ] && [ "$SENDER" != "pre-commit-ci[bot]" ] && [ "$SENDER" != "github-actions[bot]" ]; then
+            if [ "$has_label" = "true" ]; then
+              gh api -X DELETE "repos/$GH_REPO/issues/$PR_NUMBER/labels/$LABEL" > /dev/null
+            fi
+            if [ -n "$auto_merge_by" ]; then
+              gh api graphql -F id="$pr_id" -f query='mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }' > /dev/null
+            fi
+            echo "::error::$SENDER pushed new commits, so any approval was revoked - $owner must apply $LABEL or enable auto-merge again"
+            exit 1
+          fi
+
+          if [ "$auto_merge_by" = "$owner" ]; then
+            echo "$owner enabled auto-merge - passes"
+            exit 0
+          fi
+          if [ "$has_label" = "true" ]; then
+            applied_by=$(gh api --paginate "repos/$GH_REPO/issues/$PR_NUMBER/events" \
+              --jq ".[] | select(.event == \"labeled\" and .label.name == \"$LABEL\") | .actor.login" | tail -n 1)
+            if [ "$applied_by" = "$owner" ]; then
+              echo "$owner approved this PR with $LABEL - passes"
+              exit 0
+            fi
+            echo "::error::$LABEL was applied by ${applied_by:-nobody}, not $owner"
+            exit 1
+          fi
+          echo "::error::Waiting for $owner to apply the $LABEL label or enable auto-merge"
+          exit 1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SENDER: ${{ github.event.sender.login }}
+          ACTION: ${{ github.event.action }}
+          LABEL: owner-approved
