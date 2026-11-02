@@ -6960,6 +6960,9 @@ def get_plan_renderer_js():
     <script>
     // State variables
     let currentView = 'plan';
+    // The History view's chosen older day (YYYY-MM-DD), or null for the default yesterday + today
+    let historyDay = null;
+    window.historyDayData = window.historyDayData || {};
     let newestDataTimestamp = null;  // Track the newest data timestamp we've seen
     let updateIntervalId = null;
     let dropdownCounter = 0;
@@ -7066,6 +7069,8 @@ def get_plan_renderer_js():
                 iboost: 'Energy planned for the solar diverter (iBoost, MyEnergi Eddi, etc) this slot.',
                 soc: 'Estimated battery state of charge at the start of this slot.',
                 cost: 'Estimated cost (or saving) for this slot.',
+                billed: 'What your supplier billed for this slot (hover for the rate buckets). Blank until they publish it, usually 1-2 days later.',
+                billing_diff: 'Billed less the Cost column: red when you were billed more than Predbat recorded, green when less. The standing charge is left out of both.',
                 total: 'Running total cost for today so far, at the start of this slot.',
                 co2_rate: 'Estimated carbon intensity of the grid at the start of this slot.',
                 co2_total: 'Estimated cumulative carbon footprint at the start of this slot.',
@@ -7077,6 +7082,9 @@ def get_plan_renderer_js():
                 const attrs = extraAttrs ? ` ${extraAttrs.trim()}` : '';
                 return `<th${attrs}${titleAttr}><b>${innerHtml}</b></th>`;
             }
+
+            // Billing columns appear on a History view only once the supplier's half-hourly bill is attached
+            const hasBilling = jsonData.rows.some(r => r.billed !== undefined);
 
             // Render header
             html += '<tr>';
@@ -7101,6 +7109,10 @@ def get_plan_renderer_js():
             }
             html += th('soc', 'SoC %');
             html += th('cost', 'Cost');
+            if (hasBilling) {
+                html += th('billed', 'Billed');
+                html += th('billing_diff', 'Diff');
+            }
             html += th('total', 'Total');
             if (jsonData.carbon_enable) {
                 html += th('co2_rate', 'CO2 g/kWh');
@@ -7269,6 +7281,34 @@ def get_plan_renderer_js():
                 }
                 html += `<td id=cost bgcolor=${row.cost_color || '#FFFFFF'}>${costStr}</td>`;
 
+                // What the supplier billed, and how far it is from Predbat's own cost
+                if (hasBilling) {
+                    const minor = jsonData.currency_symbols[1];
+                    let billedStr = '&mdash;';
+                    let billedTitle = '';
+                    if (row.billed !== null && row.billed !== undefined) {
+                        billedStr = `${Math.round(row.billed * 100)} ${minor}`;
+                        billedTitle = Object.entries(row.billed_buckets || {}).map(([label, bucket]) => `${label}: ${bucket.kwh} kWh ${Math.round(bucket.cost * 100)}${minor}`).join('\\n');
+                    }
+                    if (row.billing_event) {
+                        billedStr += ` <span style="font-size: 11px;" title="${escapeAttr('Predbat priced this slot with a ' + row.billing_event.toLowerCase() + ' your bill will not show')}">(${row.billing_event})</span>`;
+                    }
+                    html += `<td id=billed bgcolor=${row.billing_event ? '#FFF2B0' : '#EEF6FF'} title="${escapeAttr(billedTitle)}">${billedStr}</td>`;
+
+                    let diffStr = '&mdash;';
+                    let diffColor = '#FFFFFF';
+                    if (row.billing_diff !== null && row.billing_diff !== undefined) {
+                        const diffPence = Math.round(row.billing_diff * 100);
+                        diffStr = diffPence > 0 ? `+${diffPence} ${minor}` : `${diffPence} ${minor}`;
+                        if (row.billing_diff > 0 && diffPence !== 0) {
+                            diffColor = '#F4C7C3';
+                        } else if (row.billing_diff < 0 && diffPence !== 0) {
+                            diffColor = '#C8F0C8';
+                        }
+                    }
+                    html += `<td id=billing_diff bgcolor=${diffColor}>${diffStr}</td>`;
+                }
+
                 // Total cost
                 const totalCost = row.total_cost ? `${jsonData.currency_symbols[0]}${row.total_cost.toFixed(2)}` : '';
                 html += `<td id=total_cost bgcolor=#FFFFFF>${totalCost}</td>`;
@@ -7334,6 +7374,11 @@ def get_plan_renderer_js():
 
                 // Empty cell for SOC change
                 html += '<td></td>';
+
+                // Billing columns are summarised in the strip above the table
+                if (hasBilling) {
+                    html += '<td></td><td></td>';
+                }
 
                 // Total cost
                 const totalCostStr = totals.total_cost >= 0 ?
@@ -7824,6 +7869,9 @@ def get_plan_renderer_js():
             }
         });
 
+        // The History view's day picker
+        renderHistoryPicker();
+
         // Show/hide debug toggle based on view
         const debugToggleLabel = document.getElementById('debugToggleLabel');
         if (debugToggleLabel) {
@@ -7870,8 +7918,8 @@ def get_plan_renderer_js():
             return;
         }
 
-        // Check for stale data
-        checkStaleness(data);
+        // Check for stale data - an older History day is a fixed record, never stale
+        checkStaleness(currentView === 'yesterday' && historyDay ? null : data);
 
         // Render table
         const editable = (currentView === 'plan');
@@ -7879,7 +7927,7 @@ def get_plan_renderer_js():
         // its rows are entirely in the past, unlike the live Plan view which is mostly
         // future predictions with no corresponding capture.
         const showHistoryLinks = (currentView === 'yesterday');
-        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
+        container.innerHTML = (currentView === 'yesterday' ? renderBillingSummary(data) : '') + renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
 
         // Apply dark mode colors if needed
         updateTableColors();
@@ -7895,7 +7943,83 @@ def get_plan_renderer_js():
 
     // The data the current view shows
     function currentViewData() {
+        if (currentView === 'yesterday' && historyDay) {
+            return window.historyDayData[historyDay] || null;
+        }
         return currentView === 'plan' ? window.planData : (currentView === 'yesterday' ? window.yesterdayData : window.baselineData);
+    }
+
+    // Day picker under the History button: the older days Predbat has rebuilt, oldest first, then the default view
+    function renderHistoryPicker() {
+        const picker = document.getElementById('historyPicker');
+        if (!picker) return;
+        const days = window.historyDays || [];
+        if (currentView === 'yesterday' && days.length > 0) {
+            if (historyDay && !days.includes(historyDay)) {
+                historyDay = null;
+            }
+            const buttonStyle = 'padding: 4px 10px; border-radius: 3px; font-size: 13px; border: 1px solid #ddd; cursor: pointer;';
+            let html = '';
+            for (const day of days) {
+                const label = new Date(day + 'T12:00:00').toLocaleDateString([], {weekday: 'short', day: 'numeric', month: 'short'});
+                const selected = historyDay === day;
+                html += `<button class="history-day-button" onclick="selectHistoryDay('${day}')" style="${buttonStyle} background-color: ${selected ? '#4CAF50' : '#f0f0f0'}; color: ${selected ? 'white' : 'black'};">${label}</button>`;
+            }
+            const latest = historyDay === null;
+            html += `<button class="history-day-button" onclick="selectHistoryDay(null)" style="${buttonStyle} background-color: ${latest ? '#4CAF50' : '#f0f0f0'}; color: ${latest ? 'white' : 'black'};">Yesterday + today</button>`;
+            picker.innerHTML = html;
+            picker.style.display = 'flex';
+        } else {
+            picker.innerHTML = '';
+            picker.style.display = 'none';
+        }
+    }
+
+    // Show one older day (fetched once, on demand) or, with null, the default yesterday + today view
+    async function selectHistoryDay(day) {
+        historyDay = day;
+        renderHistoryPicker();
+        if (day && !window.historyDayData[day]) {
+            try {
+                const response = await fetch('./api/plan_history?date=' + encodeURIComponent(day));
+                if (response.ok) {
+                    window.historyDayData[day] = await response.json();
+                }
+            } catch (error) {
+                console.error('Error fetching history day:', error);
+            }
+        }
+        refreshPlan();
+    }
+
+    // The strip above a History view: the day's Predbat cost against what the supplier billed
+    function renderBillingSummary(jsonData) {
+        const summary = jsonData && jsonData.billing_summary;
+        if (!summary) return '';
+        const major = (jsonData.currency_symbols && jsonData.currency_symbols[0]) || '';
+        const money = value => (value === null || value === undefined) ? '&mdash;' : (value < 0 ? `-${major}${Math.abs(value).toFixed(2)}` : `${major}${value.toFixed(2)}`);
+        const kwh = pair => (pair && pair[0] !== null && pair[1] !== null) ? `${pair[0]} vs ${pair[1]}` : (pair && pair[1] !== null ? `? vs ${pair[1]}` : '&mdash;');
+        const diffColor = summary.diff > 0.005 ? '#b00' : (summary.diff < -0.005 ? '#080' : 'inherit');
+        const supplier = summary.supplier ? summary.supplier.charAt(0).toUpperCase() + summary.supplier.slice(1) : 'supplier';
+        let complete = '';
+        if (summary.complete_until) {
+            const when = new Date(summary.complete_until);
+            if (!isNaN(when.getTime())) {
+                complete = `billing complete to ${when.toLocaleString([], {weekday: 'short', hour: '2-digit', minute: '2-digit'})}`;
+            }
+        }
+        const tile = (label, value, style) => `<div style="border: 1px solid #ccc; border-radius: 4px; padding: 6px 10px; font-size: 12px;">${label}<b style="display: block; font-size: 15px; ${style || ''}">${value}</b></div>`;
+        let html = '<div class="billing-summary" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px;">';
+        html += tile('Predbat cost', money(summary.predbat_cost));
+        html += tile(`Billed (${escapeAttr(supplier)})`, money(summary.billed_cost));
+        html += tile('Difference', (summary.diff > 0 ? '+' : '') + money(summary.diff), `color: ${diffColor};`);
+        html += tile('Import kWh', kwh(summary.import_kwh));
+        html += tile('Export kWh', kwh(summary.export_kwh));
+        html += tile('Standing charge', `${money(summary.standing_predbat)} vs ${money(summary.standing_billed)}`);
+        html += '</div>';
+        const notes = [complete, summary.import_only ? 'import only: export billing could not be read, so Cost is compared on import' : '', 'slots not yet billed are left out'].filter(Boolean);
+        html += `<p style="font-size: 12px; margin: 0 0 8px 0; opacity: 0.8;">${notes.join(' &middot; ')}</p>`;
+        return html;
     }
 
     // Show the stale warning when the view's data is older than it should be; with no data, hide it
@@ -7959,6 +8083,22 @@ def get_plan_renderer_js():
             window.baselineData = data.baseline;
             window.overridesData = data.overrides;
             window.overridesHash = data.overrides_hash;
+            if (Array.isArray(data.history_days)) {
+                // Older days are rebuilt as new billing lands, so drop what was fetched and re-read the one on show
+                window.historyDayData = {};
+                window.historyDays = data.history_days;
+                if (historyDay && window.historyDays.includes(historyDay)) {
+                    try {
+                        const dayResponse = await fetch('./api/plan_history?date=' + encodeURIComponent(historyDay));
+                        if (dayResponse.ok) {
+                            window.historyDayData[historyDay] = await dayResponse.json();
+                        }
+                    } catch (error) {
+                        console.error('Error refreshing history day:', error);
+                    }
+                }
+                renderHistoryPicker();
+            }
 
             // Update newestDataTimestamp to the newest timestamp from the data we just received
             const timestamps = [];

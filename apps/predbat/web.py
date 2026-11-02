@@ -650,6 +650,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
         app.router.add_get("/api/plan_data", self.html_api_plan_data)
+        app.router.add_get("/api/plan_history", self.html_api_plan_history)
         app.router.add_get("/api/log", self.html_api_get_log)
         app.router.add_get("/api/entities", self.html_api_get_entities)
         app.router.add_post("/api/login", self.html_api_login)
@@ -2660,9 +2661,24 @@ chart.render();
             return web.json_response({"unchanged": True, "overrides_hash": overrides_hash})
 
         # Build full response with data
-        response_data = {"unchanged": False, "plan": plan_json, "yesterday": yesterday_json, "baseline": baseline_json, "overrides": overrides, "overrides_hash": overrides_hash}
+        response_data = {"unchanged": False, "plan": plan_json, "yesterday": yesterday_json, "baseline": baseline_json, "overrides": overrides, "overrides_hash": overrides_hash, "history_days": self.history_day_names()}
 
         return web.json_response(response_data)
+
+    def history_day_names(self):
+        """The dates (YYYY-MM-DD, oldest first) the History view's day picker can show, from predbat.plan_history."""
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        return sorted(days) if isinstance(days, dict) else []
+
+    async def html_api_plan_history(self, request):
+        """
+        JSON API - Return the History view's plan JSON for one older day (?date=YYYY-MM-DD), or 404
+        """
+        day = request.rel_url.query.get("date", "")
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        if not isinstance(days, dict) or day not in days:
+            return web.json_response({"error": "no history for date"}, status=404)
+        return web.json_response(days[day])
 
     async def html_plan(self, request):
         """
@@ -2688,6 +2704,9 @@ chart.render();
         text += '<span id="planTimestamp" style="margin-left: 16px; font-size: 13px; color: #666;"></span>'
         text += '<label id="debugToggleLabel" style="margin-left: auto;"><input type="checkbox" id="debugToggle" onchange="onDebugToggleChange()"> Show Debug</label>'
         text += "</div>"
+
+        # Day picker for the History view, filled in by renderHistoryPicker()
+        text += '<div id="historyPicker" style="display:none; margin-bottom: 10px; gap: 6px; flex-wrap: wrap;"></div>'
 
         # Add plan container
         text += '<div id="planContainer"></div>'
@@ -2743,6 +2762,7 @@ chart.render();
         text += f"window.baselineData = {json.dumps(baseline_json)};"
         text += f"window.overridesData = {json.dumps(overrides)};"
         text += f"window.overridesHash = {json.dumps(overrides_hash)};"
+        text += f"window.historyDays = {json.dumps(self.history_day_names())};"
         text += "</script>"
 
         # Include renderer JavaScript (which declares newestDataTimestamp variable)
