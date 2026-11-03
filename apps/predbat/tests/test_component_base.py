@@ -1180,7 +1180,7 @@ def _run_with_global_trap(trap, coroutine):
 def test_component_base_http_session_factory_lookup(my_predbat):
     """
     The base's factory is found by a normal attribute lookup, so a class attribute and a property
-    both work. A mock base answers every attribute and so is never taken for a factory.
+    both work. A mock base answers every attribute, so an attribute it only invents is not taken for a factory.
     """
     print("\n*** Test: http_session factory lookup on the base ***")
     class_factory = FakeSessionFactory("class")
@@ -1211,7 +1211,7 @@ def test_component_base_http_session_factory_lookup(my_predbat):
         assert TestComponent(mock_base).http_session().owner == "global", "a MagicMock base without a factory should fall back to the global factory"
     finally:
         set_http_session_factory(None)
-    print("PASS: class attribute and property factories honoured, mock base ignored")
+    print("PASS: class attribute and property factories honoured, mock base's invented attribute ignored")
     return False
 
 
@@ -1353,7 +1353,7 @@ def _mock_base():
 def test_component_base_mqtt_client(my_predbat):
     """
     mqtt_client prefers base.mqtt_client_factory, passing the keyword arguments straight through, and
-    otherwise builds aiomqtt.Client looked up at call time. A mock base is never taken for a factory,
+    otherwise builds aiomqtt.Client looked up at call time. An attribute a mock base only invents is never taken for a factory,
     and a missing aiomqtt raises a clear ImportError.
     """
     print("\n*** Test: mqtt_client lookup order and default ***")
@@ -1396,7 +1396,7 @@ def test_component_base_mqtt_client(my_predbat):
 def test_component_base_clock(my_predbat):
     """
     monotonic, wall_time and sleep use base.clock when set and otherwise time.monotonic, time.time and
-    asyncio.sleep looked up at call time. A mock base is never taken for a clock.
+    asyncio.sleep looked up at call time. An attribute a mock base only invents is never taken for a clock.
     """
     print("\n*** Test: clock methods lookup order and default ***")
     base = MockBase()
@@ -1606,8 +1606,8 @@ def test_component_base_all(my_predbat):
         ("http_session_hypervolt", test_component_base_http_session_hypervolt_socket, "the Hypervolt websocket session comes from the base factory"),
         ("http_session_myenergi", test_component_base_http_session_myenergi_direct, "the myenergi direct transport session comes from the base factory"),
         ("http_session_kraken", test_component_base_http_session_kraken_mixin, "the Kraken token request session comes from the base factory"),
-        ("mqtt_client", test_component_base_mqtt_client, "mqtt_client prefers the base factory, then aiomqtt.Client, mock base ignored"),
-        ("clock", test_component_base_clock, "monotonic, wall_time and sleep prefer base.clock, then the time module and asyncio, mock base ignored"),
+        ("mqtt_client", test_component_base_mqtt_client, "mqtt_client prefers the base factory, then aiomqtt.Client, an attribute a mock base only invents is ignored, one set explicitly is used"),
+        ("clock", test_component_base_clock, "monotonic, wall_time and sleep prefer base.clock, then the time module and asyncio, an attribute a mock base only invents is ignored, one set explicitly is used"),
         ("clock_isolated", test_component_base_clock_isolated_per_instance, "two instances' clocks are separate"),
         ("override_on_mock_base", test_component_base_override_on_mock_base, "an explicitly set override on a mock base is used, a made-up one is ignored"),
         ("write_methods", test_component_base_write_methods, "@writes marks a method and write_methods lists exactly the marked ones"),

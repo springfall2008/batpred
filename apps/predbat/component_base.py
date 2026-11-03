@@ -217,7 +217,7 @@ class ComponentBase(ABC):
         return aiomqtt.Client(**kwargs)
 
     def _clock(self):
-        """Return base.clock when the owning base has one set, else None (a mock base is ignored)."""
+        """Return base.clock when the owning base has one set, else None (an attribute a mock base only invents is ignored; one set explicitly is used)."""
         return _base_override(self, "clock")
 
     def monotonic(self):

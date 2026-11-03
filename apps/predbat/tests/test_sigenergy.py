@@ -2457,7 +2457,7 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
 
     with _api_mqtt_factory(api, lambda **kwargs: FakeMQTTClient()):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
-            with _api_clock(api, SimpleNamespace(monotonic=time.monotonic, time=time.time, sleep=fake_sleep)):
+            with _api_clock(api, SimpleNamespace(monotonic=lambda: 4321.5, time=time.time, sleep=fake_sleep)):
                 _base_run_async(api._mqtt_listener_loop())
 
     # Period message: energy_flow updated
@@ -2489,6 +2489,7 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
 
     # last_mqtt_update was set per system
     assert api.last_mqtt_update.get("TESTA1700000000", 0) > 0, "last_mqtt_update was set for system"
+    assert api.last_mqtt_mono.get("TESTA1700000000") == 4321.5, "last_mqtt_mono was stamped from the component's monotonic clock, got {}".format(api.last_mqtt_mono)
 
     # MQTT topic subscriptions are scoped to the managed system, not a "#" wildcard
     # across every system on the app_key.
@@ -5567,14 +5568,37 @@ def test_sigenergy_auth_retry_sleeps_on_the_clock(my_predbat):
     failed = False
     from sigenergy import SIGENERGY_COMMAND_RETRY_DELAY as retry_delay, SIGENERGY_MAX_RETRIES as max_retries
 
-    api = MockSigenergyAPI()
-    clock = VirtualClock()
+    async def bad_json(*args, **kwargs):
+        raise ValueError("not json")
+
+    def http_error_session():
+        return _make_mock_session(_make_mock_response(status=500))
+
+    def bad_json_session():
+        response = _make_mock_response(status=200)
+        response.json = bad_json
+        return _make_mock_session(response)
+
+    def raising_session(error):
+        session = _make_mock_session(_make_mock_response(status=200))
+        session.post = MagicMock(side_effect=error)
+        return session
+
+    cases = (
+        ("HTTP error", http_error_session),
+        ("undecodable body", bad_json_session),
+        ("timeout", lambda: raising_session(asyncio.TimeoutError())),
+        ("exception", lambda: raising_session(RuntimeError("boom"))),
+    )
     started = time.monotonic()
-    with _api_clock(api, clock):
-        with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=500))):
-            token = run_async_real(api.get_access_token())
-    assert token is None, "authentication that keeps failing gives no token"
-    assert clock.sleeps == [retry_delay] * (max_retries - 1), "a retry delay between attempts, got {}".format(clock.sleeps)
+    for label, make_session in cases:
+        api = MockSigenergyAPI()
+        clock = VirtualClock()
+        with _api_clock(api, clock):
+            with patch("sigenergy.aiohttp.ClientSession", return_value=make_session()):
+                token = run_async_real(api.get_access_token())
+        assert token is None, "{}: authentication that keeps failing gives no token".format(label)
+        assert clock.sleeps == [retry_delay] * (max_retries - 1), "{}: a retry delay between attempts, got {}".format(label, clock.sleeps)
     assert time.monotonic() - started < 1.0, "no real waiting"
     return failed
 
