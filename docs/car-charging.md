@@ -789,6 +789,7 @@ It only applies to Octopus Intelligent charging (**switch.predbat_octopus_intell
 Octopus only confirms a dispatch as completed some time after it has run, typically 15 to 60 minutes later.
 Until then Predbat keeps the dispatch rate on each half hour the dispatch ran in, unless the check above cancelled it, so today's cost does not jump up after each half hour of charging and fall back later.
 A half hour Octopus has still not confirmed after 90 minutes goes back to your normal rate.
+If Octopus withdraws a dispatch in the half hour it started in, before the car has been seen charging in it, that half hour goes back to your normal rate as soon as the car shows it is not charging (**car_charging_now**, or the house load when the car is inside the CT clamp), as Octopus will not bill it cheap.
 
 With the Octopus component, Predbat also reads what Octopus says the device is doing:
 
