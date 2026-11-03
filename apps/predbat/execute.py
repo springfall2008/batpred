@@ -714,10 +714,11 @@ class Execute:
                                         if self.set_reserve_enable and (not inverter.inv_has_timed_pause or (inverter.soc_percent > inv_target_soc_percent)):
                                             inverter.adjust_reserve(min(hold_reserve_percent(inverter, inv_target_soc_percent), inverter.reserve_max))
                                             resetReserve = False
-                                    elif self.set_discharge_during_charge and not inverter.inv_has_target_soc and inverter.soc_percent > inv_target_soc_percent + 1.0:
+                                    elif self.set_discharge_during_charge and (not inverter.inv_has_target_soc or inverter.inv_charge_window_blocks_discharge) and inverter.soc_percent > inv_target_soc_percent + 1.0:
                                         # No target SoC, reserve or pause can floor the battery at the target, and the plan has the battery cover the
-                                        # house until it is within 1% of the target (see prediction.py). Freezing would hold at the current SoC instead
-                                        # (#5937), so run in demand mode with no charge window until the target is reached.
+                                        # house until it is within 1% of the target (see prediction.py). Freezing (#5937), or an armed window the
+                                        # inverter will not discharge in (#5955), would hold at the current SoC instead, so run in demand mode with
+                                        # no charge window until the target is reached.
                                         inverter.disable_charge_window()
                                         disabled_charge_window = True
                                         discharging_to_target = True

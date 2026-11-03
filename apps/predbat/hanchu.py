@@ -155,6 +155,8 @@ HANCHU_CAPABILITIES = {
     "charge_discharge_with_rate": False,
     "charge_control_immediate": False,
     "target_soc_used_for_discharge": True,
+    # An armed charge slot stops discharge even above its target SoC (batpred#5955)
+    "charge_window_blocks_discharge": True,
 }
 
 

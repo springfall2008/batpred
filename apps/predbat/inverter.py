@@ -586,6 +586,10 @@ class Inverter:
         # True when a reserve above the SoC makes the battery charge from the grid to reach it, so a
         # hold on reserve must not lead the SoC. Defaults False so an inverter type has to opt in.
         self.inv_reserve_above_soc_charges_from_grid = INVERTER_DEF[self.inverter_type].get("reserve_above_soc_charges_from_grid", False)
+        # True when an armed charge window stops the battery discharging even above its target SoC, so the target
+        # is not a discharge floor and a Hold charging slot must disarm the window to discharge down to it (#5955).
+        # Defaults False so an inverter type has to opt in.
+        self.inv_charge_window_blocks_discharge = INVERTER_DEF[self.inverter_type].get("charge_window_blocks_discharge", False)
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
         self.inv_charge_time_entity_is_option = INVERTER_DEF[self.inverter_type]["charge_time_entity_is_option"]
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]

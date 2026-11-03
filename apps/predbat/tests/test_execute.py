@@ -48,6 +48,7 @@ class ActiveTestInverter:
         self.inv_has_charge_enable_time = True
         self.inv_has_timed_pause = True
         self.inv_reserve_above_soc_charges_from_grid = False
+        self.inv_charge_window_blocks_discharge = False
         self.inv_has_discharge_enable_time = True
         self.inv_has_ge_eco_toggle = False
         self.inv_has_ge_inverter_mode = False
@@ -3034,6 +3035,55 @@ def run_execute_tests(my_predbat):
     )
     for inverter in my_predbat.inverters:
         inverter.inv_charge_discharge_with_rate = False
+    if failed:
+        return failed
+
+    # Target SoC but no reserve that reaches it, on an inverter that will not discharge in an armed window (Hanchu):
+    # disarm the window so the battery covers the house down to the target (#5955)
+    for inverter in my_predbat.inverters:
+        inverter.inv_charge_window_blocks_discharge = True
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_window_blocks_discharge",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=100,
+        assert_immediate_soc_target=0,
+        reserve_max=10,
+        has_timed_pause=False,
+        assert_reserve_array=[0, 0],
+    )
+    # Within 1% of the target it holds on the armed window, as before
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_window_blocks_discharge_at_target",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=5.1,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=780,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=50,
+        reserve_max=10,
+        has_timed_pause=False,
+        assert_reserve_array=[0, 0],
+    )
+    for inverter in my_predbat.inverters:
+        inverter.inv_charge_window_blocks_discharge = False
     if failed:
         return failed
 

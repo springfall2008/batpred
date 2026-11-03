@@ -2389,6 +2389,9 @@ INVERTER_DEF = {
         # a charge target below 20% cannot be expressed at all and is clamped, with a warning, by
         # the component. CHG_BAT_SOC_LMT also caps solar charging, so it is never written.
         "has_target_soc": True,
+        # Inside an armed charge slot the battery will not discharge even above DTU_AC_CHG_SOC_LMT, so the
+        # target is no discharge floor and a Hold charging slot above it is disarmed instead (batpred#5955).
+        "charge_window_blocks_discharge": True,
         # DSCHG_BAT_SOC_LMT, which accepts only 5-45 - the mirror-image limitation.
         "has_reserve_soc": True,
         # There is no pause operation anywhere in this API, so Predbat expresses freeze through the
