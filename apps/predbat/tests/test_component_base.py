@@ -1452,6 +1452,54 @@ def test_component_base_clock_isolated_per_instance(my_predbat):
     return False
 
 
+def test_component_base_override_on_mock_base(my_predbat):
+    """
+    On a mock base only an explicitly set override counts: a MagicMock set on purpose as a factory or
+    clock is used, one the mock made up is ignored, and a class attribute or property on a real base
+    is still honoured, for http_session, mqtt_client and the clock alike.
+    """
+    print("\n*** Test: overrides on a mock base ***")
+    http_factory = MagicMock(return_value="http-from-mock")
+    mqtt_factory = MagicMock(return_value="mqtt-from-mock")
+    clock = MagicMock()
+    clock.monotonic.return_value = 41.0
+    clock.time.return_value = 42.0
+    clock.sleep = AsyncMock()
+
+    explicit = _mock_base()
+    explicit.http_session_factory = http_factory
+    explicit.mqtt_client_factory = mqtt_factory
+    explicit.clock = clock
+    component = TestComponent(explicit)
+    assert component.http_session(timeout=1) == "http-from-mock", "an explicitly set MagicMock http factory should be used"
+    http_factory.assert_called_once_with(timeout=1)
+    assert component.mqtt_client(hostname="h") == "mqtt-from-mock", "an explicitly set MagicMock mqtt factory should be used"
+    mqtt_factory.assert_called_once_with(hostname="h")
+    assert component.monotonic() == 41.0 and component.wall_time() == 42.0, "an explicitly set MagicMock clock should be used"
+    asyncio.run(component.sleep(4))
+    clock.sleep.assert_awaited_once_with(4)
+
+    unset = TestComponent(_mock_base())
+    with patch("aiomqtt.Client", return_value="default-mqtt"), patch("time.monotonic", return_value=1.5), patch("aiohttp.ClientSession", return_value="default-http"):
+        assert unset.http_session() == "default-http", "an unset attribute on a mock base should be ignored for http_session"
+        assert unset.mqtt_client() == "default-mqtt", "an unset attribute on a mock base should be ignored for mqtt_client"
+        assert unset.monotonic() == 1.5, "an unset attribute on a mock base should be ignored for the clock"
+
+    class RealBase(MockBase):
+        """Real base with class attribute and property overrides."""
+
+        mqtt_client_factory = staticmethod(lambda **kwargs: "class-mqtt")
+
+        @property
+        def clock(self):
+            return FakeClock(mono=7.0)
+
+    real = TestComponent(RealBase())
+    assert real.mqtt_client() == "class-mqtt" and real.monotonic() == 7.0, "class attribute and property overrides on a real base should be honoured"
+    print("PASS: explicit mock overrides used, made-up ones ignored, real base lookups honoured")
+    return False
+
+
 def test_component_base_write_methods(my_predbat):
     """
     @writes only marks a method: it returns the same function, which behaves exactly as before.
@@ -1561,6 +1609,7 @@ def test_component_base_all(my_predbat):
         ("mqtt_client", test_component_base_mqtt_client, "mqtt_client prefers the base factory, then aiomqtt.Client, mock base ignored"),
         ("clock", test_component_base_clock, "monotonic, wall_time and sleep prefer base.clock, then the time module and asyncio, mock base ignored"),
         ("clock_isolated", test_component_base_clock_isolated_per_instance, "two instances' clocks are separate"),
+        ("override_on_mock_base", test_component_base_override_on_mock_base, "an explicitly set override on a mock base is used, a made-up one is ignored"),
         ("write_methods", test_component_base_write_methods, "@writes marks a method and write_methods lists exactly the marked ones"),
         ("write_methods_components", test_component_base_write_methods_components, "component writer methods are listed and readers are not"),
     ]

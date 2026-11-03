@@ -79,6 +79,20 @@ def new_http_session(**kwargs):
     return factory(**kwargs)
 
 
+def _base_override(component, name):
+    """Return the per-instance override base.<name> of a component, or None when its base has none.
+
+    A mock base answers every attribute lookup, so on a mock base only an attribute that was
+    explicitly set on it counts; one it made up on the fly does not. A real base is read with a
+    normal lookup, so a class attribute or property works. A plain function rather than a method
+    so that test doubles borrowing ComponentBase.http_session without inheriting still work.
+    """
+    base = getattr(component, "base", None)
+    if base is None or (isinstance(base, NonCallableMock) and name not in vars(base)):
+        return None
+    return getattr(base, name, None)
+
+
 def writes(func):
     """Mark a component method as one that sends a write to the device or vendor.
 
@@ -178,9 +192,8 @@ class ComponentBase(ABC):
         instances in one process, or a test, uses this to give each instance its own sessions), then
         the process-wide factory from set_http_session_factory(), then aiohttp.ClientSession.
         """
-        factory = getattr(getattr(self, "base", None), "http_session_factory", None)
-        # A mock base answers every attribute, so a mock is never taken as a factory
-        if factory is not None and not isinstance(factory, NonCallableMock):
+        factory = _base_override(self, "http_session_factory")
+        if factory is not None:
             return factory(**kwargs)
         return new_http_session(**kwargs)
 
@@ -194,9 +207,8 @@ class ComponentBase(ABC):
         uses this to give each instance its own fake broker connection). aiomqtt is optional: without
         it and without a factory this raises ImportError.
         """
-        factory = getattr(getattr(self, "base", None), "mqtt_client_factory", None)
-        # A mock base answers every attribute, so a mock is never taken as a factory
-        if factory is not None and not isinstance(factory, NonCallableMock):
+        factory = _base_override(self, "mqtt_client_factory")
+        if factory is not None:
             return factory(**kwargs)
         try:
             import aiomqtt
@@ -206,10 +218,7 @@ class ComponentBase(ABC):
 
     def _clock(self):
         """Return base.clock when the owning base has one set, else None (a mock base is ignored)."""
-        clock = getattr(getattr(self, "base", None), "clock", None)
-        if clock is not None and not isinstance(clock, NonCallableMock):
-            return clock
-        return None
+        return _base_override(self, "clock")
 
     def monotonic(self):
         """Return a monotonic time in seconds, for measuring intervals that must not follow wall-clock jumps.
