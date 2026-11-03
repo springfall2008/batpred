@@ -198,8 +198,9 @@ Predbat doesn't plan against a single forecast. It simulates three futures and s
 
 The pessimistic scenario also charges the battery more slowly (`charge_scaling10`). The setting names keep the `10` and `90` they were introduced with,
 after the solar percentiles, but each scenario covers load as well as solar: the pessimistic one is a cloudier day with a busier house, the optimistic one
-a sunnier day with a quieter house. **After dark the solar forecasts are all zero, so the scenarios differ only in their load** - overnight the optimistic
-scenario simply means "the house uses less".
+a sunnier day with a quieter house. **After dark the solar forecasts are all zero, so the optimistic scenario differs from the expected one only in its load** -
+overnight it simply means "the house uses less". The pessimistic scenario keeps two further differences after dark: it still charges more slowly, and its
+forced exports are assumed to stop where the expected plan's exports end, rather than at the export target being tried.
 
 The three load scalings are each applied to your historical load directly; they do not multiply each other. So if you raise `load_scaling` above its default,
 consider raising `load_scaling90` (and `load_scaling10`) with it, to keep the gap between the scenarios about what the defaults give. With the defaults the
