@@ -184,6 +184,67 @@ class ComponentBase(ABC):
             return factory(**kwargs)
         return new_http_session(**kwargs)
 
+    def mqtt_client(self, **kwargs):
+        """Return a new MQTT client for this component to use as an async context manager.
+
+        Takes the same keyword arguments as aiomqtt.Client (hostname, port, username, tls_context and
+        so on) and, by default, returns aiomqtt.Client(**kwargs), looked up when called so that code
+        patching aiomqtt.Client still takes effect. base.mqtt_client_factory is used instead when the
+        owning base has one set (a host running several PredBat instances in one process, or a test,
+        uses this to give each instance its own fake broker connection). aiomqtt is optional: without
+        it and without a factory this raises ImportError.
+        """
+        factory = getattr(getattr(self, "base", None), "mqtt_client_factory", None)
+        # A mock base answers every attribute, so a mock is never taken as a factory
+        if factory is not None and not isinstance(factory, NonCallableMock):
+            return factory(**kwargs)
+        try:
+            import aiomqtt
+        except ImportError as exc:
+            raise ImportError("MQTT support requires the 'aiomqtt' package: pip install aiomqtt") from exc
+        return aiomqtt.Client(**kwargs)
+
+    def _clock(self):
+        """Return base.clock when the owning base has one set, else None (a mock base is ignored)."""
+        clock = getattr(getattr(self, "base", None), "clock", None)
+        if clock is not None and not isinstance(clock, NonCallableMock):
+            return clock
+        return None
+
+    def monotonic(self):
+        """Return a monotonic time in seconds, for measuring intervals that must not follow wall-clock jumps.
+
+        Uses base.clock.monotonic() when the owning base has a clock set (an object with monotonic(),
+        time() and an async sleep(seconds); a test uses a virtual one so no real waiting happens),
+        else time.monotonic(), looked up when called.
+        """
+        clock = self._clock()
+        if clock is not None:
+            return clock.monotonic()
+        return time.monotonic()
+
+    def wall_time(self):
+        """Return the wall-clock time as seconds since the epoch (a float), for timestamps.
+
+        Uses base.clock.time() when the owning base has a clock set, else time.time(), looked up when called.
+        """
+        clock = self._clock()
+        if clock is not None:
+            return clock.time()
+        return time.time()
+
+    async def sleep(self, seconds):
+        """Sleep for the given number of seconds.
+
+        Awaits base.clock.sleep(seconds) when the owning base has a clock set, else asyncio.sleep(seconds),
+        looked up when called so that code patching asyncio.sleep still takes effect.
+        """
+        clock = self._clock()
+        if clock is not None:
+            await clock.sleep(seconds)
+        else:
+            await asyncio.sleep(seconds)
+
     @classmethod
     def write_methods(cls):
         """Return the sorted names of this class's methods marked with @writes.
