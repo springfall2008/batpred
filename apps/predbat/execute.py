@@ -715,10 +715,10 @@ class Execute:
                                             inverter.adjust_reserve(min(hold_reserve_percent(inverter, inv_target_soc_percent), inverter.reserve_max))
                                             resetReserve = False
                                     elif self.set_discharge_during_charge and (not inverter.inv_has_target_soc or inverter.inv_charge_window_blocks_discharge) and inverter.soc_percent > inv_target_soc_percent + 1.0:
-                                        # No target SoC, reserve or pause can floor the battery at the target, and the plan has the battery cover the
-                                        # house until it is within 1% of the target (see prediction.py). Freezing (#5937), or an armed window the
-                                        # inverter will not discharge in (#5955), would hold at the current SoC instead, so run in demand mode with
-                                        # no charge window until the target is reached.
+                                        # Neither the reserve nor a pause can floor the battery at the target, and nor can the window: the inverter has
+                                        # no target SoC, so it would be frozen (#5937), or it will not discharge in an armed window at all (#5955). Either
+                                        # way it would hold at the current SoC, but the plan has the battery cover the house until it is within 1% of the
+                                        # target (see prediction.py), so run in demand mode with no charge window until the target is reached.
                                         inverter.disable_charge_window()
                                         disabled_charge_window = True
                                         discharging_to_target = True
@@ -1147,6 +1147,12 @@ class Execute:
                     if not inverter.inv_has_target_soc:
                         self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
                         self.log("Inverter {} setting charging SoC to 0% as we are not within the charge window and inverter doesn't support target SoC".format(inverter.id))
+                    elif discharging_to_target:
+                        # Keep the plan's target in place while the window is disarmed. The window is re-armed first when the battery
+                        # reaches the target, and a reset 100% target still on the inverter then would charge from the grid (#5955)
+                        target_soc = calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max)
+                        self.log("Inverter {} setting charging SoC to {}% as per target while discharging to it".format(inverter.id, target_soc))
+                        self.adjust_battery_target_multi(inverter, target_soc, isCharging, isExporting)
                     elif not self.inverter_hybrid and self.inverter_soc_reset:
                         self.log(
                             "Inverter {} resetting charging SoC as we are not within the window or charge is disabled and inverter_soc_reset is enabled (now {} target set_soc_minutes {} charge start time {})".format(
