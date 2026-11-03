@@ -503,7 +503,7 @@ class SigenergyAPI(ComponentBase):
 
         # Token state
         self.access_token = None
-        self.token_expires_at = 0.0  # UNIX timestamp
+        self.token_expires_at = 0.0  # monotonic time (see monotonic()), not a UNIX timestamp
 
         # Data stores keyed by systemId
         self.systems = {}         # systemId → system info dict

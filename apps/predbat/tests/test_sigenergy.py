@@ -40,7 +40,37 @@ from sigenergy import (
     _safe_float,
     _safe_int,
 )
-from tests.test_infra import run_async as _base_run_async
+from tests.test_infra import run_async as _infra_run_async
+
+
+class _MqttTripwire(BaseException):
+    """Raised by the aiomqtt.Client tripwire. A BaseException so no `except Exception` in the component swallows it."""
+
+
+class _SleepBudgetExceeded(BaseException):
+    """Raised when a test clock is asked to sleep too many times, so a reconnect loop that never ends fails."""
+
+
+SLEEP_BUDGET = 1000
+WATCHDOG_SECONDS = 5
+
+
+def _base_run_async(coro):
+    """Run a coroutine with a tripwire on aiomqtt.Client, so a site that skips mqtt_client() fails fast.
+
+    Each instance's MQTT client comes from its own base.mqtt_client_factory. Building the default
+    aiomqtt.Client means some site bypassed self.mqtt_client() and would try a real connection, so
+    the tripwire turns that into an AssertionError (and a runaway sleep loop into one too).
+    """
+    with patch("aiomqtt.Client", side_effect=_MqttTripwire()):
+        try:
+            return _infra_run_async(asyncio.wait_for(coro, timeout=WATCHDOG_SECONDS))
+        except asyncio.TimeoutError:
+            raise AssertionError("still running after {}s: a sleep bypassed the base clock and is really waiting".format(WATCHDOG_SECONDS)) from None
+        except _MqttTripwire:
+            raise AssertionError("aiomqtt.Client built: a site bypasses mqtt_client()") from None
+        except _SleepBudgetExceeded:
+            raise AssertionError("the test clock was asked to sleep more than {} times: a loop never ended".format(SLEEP_BUDGET)) from None
 
 
 def run_async(coro):
@@ -71,8 +101,11 @@ class InstantClock:
         return time.time()
 
     async def sleep(self, seconds):
-        """Record the request and return without waiting."""
+        """Record the request and return without waiting, after yielding once so the sleeper can be cancelled."""
         self.sleeps.append(seconds)
+        if len(self.sleeps) > SLEEP_BUDGET:
+            raise _SleepBudgetExceeded()
+        await asyncio.sleep(0)
 
 
 class VirtualClock:
@@ -97,8 +130,11 @@ class VirtualClock:
         return self.wall
 
     async def sleep(self, seconds):
-        """Record the request and advance both readings."""
+        """Record the request and advance both readings, after yielding once so the sleeper can be cancelled."""
         self.sleeps.append(seconds)
+        if len(self.sleeps) > SLEEP_BUDGET:
+            raise _SleepBudgetExceeded()
+        await asyncio.sleep(0)
         self.mono += seconds
         self.wall += seconds
 
@@ -238,6 +274,7 @@ class MockSigenergyAPI(SigenergyAPI):
             system_id=None,
             automatic=False,
             enable_controls=True,
+            mqtt_host="mqtt.invalid",  # never resolves, so a connection that bypasses the fake can never reach a real broker
         )
         # ComponentBase attributes not set by initialize() — wire them manually
         self.api_started = False
@@ -5457,6 +5494,90 @@ def test_sigenergy_listener_reconnect_reuses_own_factory(my_predbat):
     return failed
 
 
+def test_sigenergy_auth_retry_sleeps_on_the_clock(my_predbat):
+    """Auth retries wait SIGENERGY_COMMAND_RETRY_DELAY on the base clock, once between each pair of attempts."""
+    failed = False
+    from sigenergy import SIGENERGY_COMMAND_RETRY_DELAY as retry_delay, SIGENERGY_MAX_RETRIES as max_retries
+
+    api = MockSigenergyAPI()
+    clock = VirtualClock()
+    started = time.monotonic()
+    with _api_clock(api, clock):
+        with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(_make_mock_response(status=500))):
+            token = run_async_real(api.get_access_token())
+    assert token is None, "authentication that keeps failing gives no token"
+    assert clock.sleeps == [retry_delay] * (max_retries - 1), "a retry delay between attempts, got {}".format(clock.sleeps)
+    assert time.monotonic() - started < 1.0, "no real waiting"
+    return failed
+
+
+def test_sigenergy_rate_limit_backoff_sleeps_on_the_clock(my_predbat):
+    """A 1201 response backs off 15, 30, 60, 120 then 480 seconds on the base clock while retries remain."""
+    failed = False
+    from sigenergy import SIGENERGY_RATE_LIMIT_BACKOFF as backoff
+
+    api = MockSigenergyAPI()
+    clock = VirtualClock()
+    api.access_token = "fake_token"
+    api.token_expires_at = clock.mono + 100_000
+    api._last_request_time = 0
+    response = _make_mock_response(status=200, json_data={"code": 1201, "msg": "Access restriction", "data": {}})
+    started = time.monotonic()
+    with _api_clock(api, clock):
+        with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(response)):
+            result = run_async_real(api._request("GET", "/openapi/system", retries=len(backoff) + 1))
+    assert result is None, "a request throttled every time gives up"
+    assert backoff == [15, 30, 60, 120, 480], "the backoff schedule this test expects"
+    assert clock.sleeps == backoff, "each backoff waited on the base clock, got {}".format(clock.sleeps)
+    assert time.monotonic() - started < 1.0, "no real waiting"
+    return failed
+
+
+def test_sigenergy_listener_cancel_while_sleeping(my_predbat):
+    """Cancelling the listener while it sleeps between reconnects stops it and leaves no task running."""
+    failed = False
+    from sigenergy import aiomqtt as sigenergy_aiomqtt
+
+    api = _listener_api("keyC", "tokC", "broker-c.example", "SITE_C")
+    record = _new_record()
+
+    class BlockingClock(InstantClock):
+        """Clock whose sleep waits until cancelled, flagging when the sleeper has arrived."""
+
+        def __init__(self):
+            super().__init__()
+            self.sleeping = asyncio.Event()
+
+        async def sleep(self, seconds):
+            self.sleeps.append(seconds)
+            self.sleeping.set()
+            await asyncio.Event().wait()
+
+    clock = BlockingClock()
+
+    async def scenario():
+        task = asyncio.ensure_future(api._mqtt_listener_loop())
+        await asyncio.wait_for(clock.sleeping.wait(), timeout=5)
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=5)
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(0)
+        leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
+        return task, leftover
+
+    with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+        with _api_mqtt_factory(api, _recording_factory(record, fail_enters=[sigenergy_aiomqtt.MqttError("down")])):
+            with _api_clock(api, clock):
+                task, leftover = run_async_real(scenario())
+    assert task.done(), "the listener stopped after being cancelled"
+    assert leftover == [], "no task left running, got {}".format(leftover)
+    assert clock.sleeps == [5], "it was cancelled during its reconnect delay, got {}".format(clock.sleeps)
+    assert len(record["clients"]) == 1, "it did not try to reconnect after the cancel"
+    return failed
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -5625,6 +5746,9 @@ def run_sigenergy_tests(my_predbat):
         ("virtual_clock_drives_rate_limit_and_retry", test_sigenergy_virtual_clock_drives_rate_limit_and_retry),
         ("wall_clock_jump_does_not_change_rate_limit", test_sigenergy_wall_clock_jump_does_not_change_rate_limit),
         ("listener_reconnect_reuses_own_factory", test_sigenergy_listener_reconnect_reuses_own_factory),
+        ("auth_retry_sleeps_on_the_clock", test_sigenergy_auth_retry_sleeps_on_the_clock),
+        ("rate_limit_backoff_sleeps_on_the_clock", test_sigenergy_rate_limit_backoff_sleeps_on_the_clock),
+        ("listener_cancel_while_sleeping", test_sigenergy_listener_cancel_while_sleeping),
     ]
 
     for name, fn in tests:
