@@ -124,6 +124,32 @@ class CarbonAPI(ComponentBase):
 
         self.dashboard_item("sensor." + self.prefix + "_carbon_intensity", state=value_now, app="carbon", attributes={"unit_of_measurement": "gCO2/kWh", "friendly_name": "Carbon Intensity", "forecast": self.carbon_data_points})
 
+    def build_discovery(self):
+        """
+        Describe the carbon intensity forecast service for the discovery catalogue.
+
+        One forecasts record of kind "carbon" for the postcode district fetch_carbon_data() queries (the
+        stem before the space - the Carbon Intensity API's regional lookup), covering the 48 hours the API
+        publishes from now at its 30-minute resolution. Its binding is the intensity sensor
+        automatic_config() wires to carbon_intensity, once Home Assistant has seen it. The postcode
+        district is published readable, as identifiers and location are.
+
+        Returns None without a postcode, since there is then nothing to query.
+        """
+        if not self.postcode:
+            return None
+        district = str(self.postcode).split(" ")[0]
+        record = {
+            "device_id": "carbon:{}".format(district),
+            "kind": "carbon",
+            "info": {"vendor": "Carbon Intensity API", "postcode_district": district},
+            "coverage": {"horizon_hours": 48, "resolution_minutes": 30},
+        }
+        entities = self.discovery_entities({"carbon_intensity": {"entity_id": "sensor." + self.prefix + "_carbon_intensity", "domain": "sensor", "access": "r", "unit": "gCO2/kWh"}})
+        if entities:
+            record["entities"] = entities
+        return {"automatic": self.automatic, "forecasts": [record]}
+
     async def automatic_config(self):
         """
         Automatic configuration based on carbon data
@@ -139,6 +165,10 @@ class CarbonAPI(ComponentBase):
 
         if first and self.automatic:
             await self.automatic_config()
+
+        # Filed every cycle, after any fetch and publish. refresh_discovery() owns the compare/retry/guard
+        # loop and never raises.
+        self.refresh_discovery()
 
         return True
 

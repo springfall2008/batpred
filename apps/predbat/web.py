@@ -6517,7 +6517,8 @@ location.replace(modern ? './ui/' : DESTINATION);
         """
         Return the discovery catalogue as an HTML page
 
-        Redacted by default - what a debug dump would carry - with ?raw=1 for the unredacted view.
+        The published catalogue by default - what a debug dump would carry, email addresses scrubbed -
+        with ?raw=1 for the view with email addresses left in. Identifiers are published in both.
         Reads the coordinator directly rather than parsing sensor.predbat_discovery's attributes
         back out: that entity deliberately carries only a summary, and the coordinator is the
         better coupling anyway (see Coordinator.publish()).
@@ -6561,7 +6562,7 @@ location.replace(modern ? './ui/' : DESTINATION);
         text += "</div>\n"
 
         if raw:
-            text += "<div class='discovery-warning'><strong>Raw view.</strong> Serial numbers, MPANs and account identifiers are shown unredacted - this view is <strong>not safe to share</strong>. Use the redacted view for anything you post in a bug report.</div>\n"
+            text += "<div class='discovery-warning'><strong>Raw view.</strong> Email addresses are shown unredacted - this view is <strong>not safe to share</strong>. Use the default view for anything you post in a bug report.</div>\n"
 
         conflicts = catalogue.get("observations", {}).get("conflicts", [])
         if conflicts:
