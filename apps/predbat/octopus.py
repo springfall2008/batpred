@@ -785,6 +785,10 @@ class OctopusAPI(ComponentBase):
         self.tou_samples = None
         self.tou_windows_day = None
         self.free_electricity_events = []
+        # Whether this process has seen a Free Electricity session for the account - the only evidence of
+        # enrolment there is, since the campaign has no joined flag. Kept once set, so the discovery programme
+        # outlives the session; not persisted, as the events themselves are not (build_discovery()).
+        self.free_electricity_seen = False
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -1710,9 +1714,9 @@ class OctopusAPI(ComponentBase):
         device_id. self.mpan is still the fallback for import alone, the one direction it is known
         to describe. mpan is only known for electricity (import/export); this component tracks no
         separate MPRN for gas, so a gas record's account_ids carries only the account id rather
-        than mislabelling it with the electricity MPAN. Both mpan and account genuinely identify the customer, so they go in
-        account_ids, the pseudonym container the redactor tokenises - see the module's docstring
-        and docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md. The tariff and product
+        than mislabelling it with the electricity MPAN. Both mpan and account identify the customer rather than a
+        product, so they go in account_ids, the container for account identifiers (published readable,
+        like every identifier - see docs/discovery-catalogue.md). The tariff and product
         codes describe a publicly listed Octopus product rather than the customer, so they go in
         the clear, in the nested `tariff` sub-record's info container, alongside flags built from
         this component's own existing classifiers (is_intelligent_go_tariff, has_six_hour_cap) plus
@@ -1731,10 +1735,8 @@ class OctopusAPI(ComponentBase):
         catalogue must not claim one exists that Home Assistant has never seen. Vehicle battery
         size and charge-point power are reported in ratings where Octopus's own vehicle/charger
         catalogue lookup found them. The Intelligent device id itself is carried in account_ids
-        (not left as a bare structural device_id) since it is a UUID unique to this account's
-        vehicle enrolment, not a public identifier - without a pseudonym container present, this
-        record's device_id would have nothing to mark it as identity-derived and would publish the
-        raw UUID verbatim (see coordinator.py's _has_pseudonym_container).
+        as well as in the device_id, labelling it as a UUID unique to this account's vehicle
+        enrolment rather than a public product identifier.
 
         Reporting is independent of self.automatic: it records what Octopus's own account
         describes, not whether this component wired Predbat's apps.yaml to it - that distinction is
@@ -1791,12 +1793,9 @@ class OctopusAPI(ComponentBase):
         for device_id in self.get_active_intelligent_device_ids():
             device = self.intelligent_devices.get(device_id, {})
             index_suffix = self.device_id_to_index_suffix(device_id)
-            # account_ids carries the Intelligent device id itself: it is a UUID assigned by
-            # Octopus to this specific account's vehicle enrolment, not a public identifier like a
-            # tariff or product code, so it belongs in the pseudonymised container on the same
-            # reasoning the meter records above apply to mpan/account - see _has_pseudonym_container.
-            # Without it the record's device_id ("octopus:{uuid}") has no pseudonym container
-            # anywhere in it and is never noted at all, publishing the raw UUID verbatim.
+            # account_ids carries the Intelligent device id itself: it is a UUID assigned by Octopus to
+            # this specific account's vehicle enrolment, not a public identifier like a tariff or
+            # product code, so it is labelled as an account identifier alongside mpan/account above
             record = {"device_id": "octopus:{}".format(device_id), "account_ids": {"intelligent_device_id": device_id}}
 
             ratings = {}
@@ -1812,7 +1811,50 @@ class OctopusAPI(ComponentBase):
 
             cars.append(record)
 
-        return {"automatic": self.automatic, "meters": meters, "cars": cars}
+        return {"automatic": self.automatic, "meters": meters, "cars": cars, "programmes": self._discovery_programmes(meters)}
+
+    def _discovery_programmes(self, meters):
+        """The Octoplus flexibility programmes the account is in, for the discovery catalogue.
+
+        saving_session: the account has joined the Saving Sessions campaign (hasJoinedCampaign, which the
+        cache restores across a restart). free_electricity: a Free Electricity session has been seen for
+        the account - that campaign has no joined flag, so a session is the only evidence, and once seen
+        the programme stays for the life of the process rather than flickering as sessions come and go.
+        Both rewrite rates for their windows (fetch_octopus_sessions()), hence rate_override, and both link
+        to the import meter. Their entities are the ones automatic_config() binds - the saving session
+        sensor and its join select, which Predbat writes, and the free electricity sensor - once Home
+        Assistant has seen them; reported whether or not self.automatic wired them.
+        """
+        import_meter = next((record["device_id"] for record in meters if record.get("direction") == "import"), None)
+        if import_meter is None and self.mpan:
+            import_meter = "octopus:{}".format(self.mpan)
+        programmes = []
+
+        def programme(kind, entities):
+            """One programme record of this kind on the import meter."""
+            record = {"device_id": "octopus:{}:{}".format(kind, self.account_id), "kind": kind}
+            if import_meter:
+                record["meter"] = import_meter
+            record["account_ids"] = {"account": self.account_id}
+            record["effects"] = ["rate_override"]
+            seen = self.discovery_entities(entities)
+            if seen:
+                record["entities"] = seen
+            return record
+
+        if (self.saving_sessions or {}).get("account", {}).get("hasJoinedCampaign"):
+            programmes.append(
+                programme(
+                    "saving_session",
+                    {
+                        "octopus_saving_session": {"entity_id": self.get_entity_name("binary_sensor", "saving_session"), "domain": "binary_sensor", "access": "r"},
+                        "octopus_saving_session_join": {"entity_id": self.get_entity_name("select", "saving_session_join"), "domain": "select", "access": "rw"},
+                    },
+                )
+            )
+        if self.free_electricity_seen:
+            programmes.append(programme("free_electricity", {"octopus_free_electricity": {"entity_id": self.get_entity_name("sensor", "free_electricity"), "domain": "sensor", "access": "r"}}))
+        return programmes
 
     async def async_get_saving_sessions(self, account_id):
         """
@@ -1903,6 +1945,8 @@ class OctopusAPI(ComponentBase):
         # dropping the free sessions until the next poll (#5745). An answer with no events still clears them.
         if campaign_data is not None:
             self.free_electricity_events = free_events
+            if free_events:
+                self.free_electricity_seen = True
         elif self.free_electricity_events:
             self.log("Warn: OctopusAPI: Free electricity events not returned, keeping the last known ones")
 

@@ -228,6 +228,15 @@ directions here.
 
 ### Four classes
 
+> **Superseded 2 Nov 2026 (maintainer decision).** Identifiers are not secret. The catalogue now
+> withholds only credentials (refused at validation by field name) and email addresses (scrubbed by
+> the Redactor); every identifier - serials, MPANs, account, site, plant and system ids, charger ids -
+> and location are published as reported. The pseudonymised class, the identifier shape guard and the
+> location-key guard described below were removed: tokenised entity ids made records useless to
+> anything re-binding configuration from them, and the shape guard kept mistaking ordinary values for
+> misfiled identifiers. `account_ids` remains, as the container for account and site identifiers. The
+> text below is kept as the original design record.
+
 **Never included.** These must not enter the catalogue at all, not even to be masked later.
 Credentials of every kind (API keys, tokens, passwords, secrets, OAuth material); any
 user-authored free text (Solcast site names, charger nicknames, account labels), which can

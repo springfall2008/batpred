@@ -24,6 +24,7 @@ import traceback
 from math import isfinite
 from datetime import datetime, timezone, timedelta
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
 
 SOLAX_TIMEOUT = 20
@@ -235,6 +236,18 @@ SOLAX_API_CODES = {
 }
 
 # Device model mapping for Residential (businessType=1)
+# The SolaxCloud INVERTER_DEF row's behaviour, stated in every discovery record so the record alone
+# rebuilds the row (coordinator.inverter_definition()).
+SOLAX_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": True,
+    "can_span_midnight": True,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
+
 SOLAX_DEVICE_MODEL_RESIDENTIAL = {
     1: {  # Inverter
         1: "X1-LX", 2: "X-Hybrid", 3: "X1-Hybrid-G3", 4: "X1-Boost/Air/Mini", 5: "X3-Hybrid-G1/G2",  # cspell:disable-line
@@ -442,6 +455,133 @@ class SolaxAPI(ComponentBase):
             self.plant_sn_filter = plant_sn
 
         self.log(f"SolaX API: Initialised with region={region}, base_url={self.base_url}")
+
+    def _discovery_plants(self):
+        """The plants automatic_config() configures, in its order: those with an inverter and a battery device."""
+        plants = []
+        for plant_id, inverter_sns in self.plant_inverters.items():
+            if inverter_sns and any(device.get("plantId") == plant_id and device.get("deviceType") == 2 for device in self.device_info.values()):
+                plants.append(plant_id)
+        return plants
+
+    def _discovery_entities(self, plant, first):
+        """Every setting automatic_config() binds for one plant, as discovery entity descriptors.
+
+        Entity ids use the raw plantId and the same f-strings automatic_config() uses, so the two cannot
+        drift; tests/test_solax.py checks they agree both ways. battery_power is published with the
+        opposite sign to Predbat's convention (battery_power_invert), hence invert. battery_min_soc has no
+        entity: automatic_config() sets the constant floor SolaX Cloud clamps to, so it is a value
+        stand-in. battery_temperature_history is site-wide and bound from the first plant only (D15).
+        """
+        stem = f"{self.prefix}_solax_{plant}"
+        load_stem = f"{stem}_{self.plant_inverters[plant][0]}"
+
+        def sensor(leaf, unit=None, prefix=stem, **fields):
+            """A read-only binding to one of the plant's published sensors."""
+            descriptor = {"entity_id": f"sensor.{prefix}_{leaf}", "access": "r", **fields}
+            if unit:
+                descriptor["unit"] = unit
+            return descriptor
+
+        def control(domain, leaf, **fields):
+            """A binding to one of the control entities Predbat writes."""
+            return {"entity_id": f"{domain}.{stem}_{leaf}", "access": "rw", "domain": domain, **fields}
+
+        entities = {
+            "load_today": sensor("total_load", "kWh"),
+            "import_today": sensor("total_imported", "kWh"),
+            "export_today": sensor("total_exported", "kWh"),
+            "pv_today": sensor("pv_yield", "kWh"),
+            "battery_power": sensor("battery_charge_discharge_power", "W", invert=True),
+            "grid_power": sensor("grid_power", "W"),
+            "pv_power": sensor("pv_power", "W"),
+            "load_power": sensor("load_power", "W", prefix=load_stem),
+            "battery_scaling": sensor("battery_soh", prefix=load_stem),
+            "battery_temperature": sensor("battery_temperature", "°C"),
+            "soc_max": sensor("battery_capacity", "kWh"),
+            "soc_kw": sensor("battery_soc", "kWh"),
+            "battery_rate_max": sensor("battery_max_power", "W"),
+            "inverter_limit": sensor("inverter_max_power", "W"),
+            "reserve": control("number", "setting_reserve", unit="%"),
+            "battery_min_soc": {"value": SOLAX_MIN_RESERVE_PERCENT, "access": "r"},
+            "charge_start_time": control("select", "battery_schedule_charge_start_time", format="HH:MM:SS"),
+            "charge_end_time": control("select", "battery_schedule_charge_end_time", format="HH:MM:SS"),
+            "charge_limit": control("number", "battery_schedule_charge_target_soc", unit="%"),
+            "scheduled_charge_enable": control("switch", "battery_schedule_charge_enable"),
+            "charge_rate": control("number", "battery_schedule_charge_rate", unit="W"),
+            "scheduled_discharge_enable": control("switch", "battery_schedule_export_enable"),
+            "discharge_target_soc": control("number", "battery_schedule_export_target_soc", unit="%"),
+            "discharge_start_time": control("select", "battery_schedule_export_start_time", format="HH:MM:SS"),
+            "discharge_end_time": control("select", "battery_schedule_export_end_time", format="HH:MM:SS"),
+            "discharge_rate": control("number", "battery_schedule_export_rate", unit="W"),
+        }
+        if first:
+            entities["battery_temperature_history"] = sensor("battery_temperature", "°C")
+        return entities
+
+    def _discovery_ratings(self, plant):
+        """The figures the plant's devices report, under Predbat's setting names (spec D14).
+
+        inverter_limit sums the inverters' rated power. battery_rate_max is the battery devices' own
+        rated power only - get_max_power_battery() falls back to the inverters' rating when a battery
+        reports none, which is an estimate, not a rating. soc_max is the plant's reported capacity, never
+        the fallback derived from the state of charge.
+        """
+        ratings = {}
+        inverter_w = sum(float(self.device_info.get(sn, {}).get("ratedPower") or 0) for sn in self.plant_inverters.get(plant, [])) * 1000
+        if inverter_w > 0:
+            ratings["inverter_limit"] = inverter_w
+        capacity = sum(float(info.get("batteryCapacity") or 0) for info in self.plant_info or [] if info.get("plantId") == plant)
+        if capacity > 0:
+            ratings["soc_max"] = capacity
+        battery_w = sum(float(device.get("ratedPower") or 0) for device in self.device_info.values() if device.get("plantId") == plant and device.get("deviceType") == 2) * 1000
+        if battery_w > 0:
+            ratings["battery_rate_max"] = battery_w
+        return ratings
+
+    def build_discovery(self):
+        """
+        Describe the SolaX plants for the discovery catalogue.
+
+        One record per plant automatic_config() configures - a plant with an inverter and a battery - in
+        the same order, keyed by the plant's first inverter serial, with every inverter's serial in serials
+        when there is more than one. SolaX ties batteries to the plant, not to an inverter, so the record
+        stays "direct". The plantId is a cloud identifier and goes in account_ids, published readable like
+        every identifier, as are the entity ids that embed it.
+
+        Never reported: the plant name, the dongle (registerNo) serial and the API credentials.
+
+        Returns None when no plant has both an inverter and a battery.
+        """
+        plants = self._discovery_plants()
+        if not plants:
+            return None
+        models = SOLAX_DEVICE_MODEL_RESIDENTIAL.get(1, {})
+        inverters = []
+        for index, plant in enumerate(plants):
+            serials = list(self.plant_inverters[plant])
+            device = self.device_info.get(serials[0], {})
+            info = {"vendor": "SolaX"}
+            if models.get(device.get("deviceModel")):
+                info["model"] = models[device["deviceModel"]]
+            if device.get("armVersion") or device.get("dspVersion"):
+                info["firmware"] = "ARM {} DSP {}".format(device.get("armVersion", "?"), device.get("dspVersion", "?"))
+            inverters.append(
+                inverter_record(
+                    "solax:{}".format(serials[0]),
+                    inverter_type="SolaxCloud",
+                    composition="direct",
+                    serials=serials if len(serials) > 1 else None,
+                    functions=["solar", "battery"],
+                    capabilities=dict(SOLAX_CAPABILITIES),
+                    hardware_ids={"serial": serials[0]},
+                    account_ids={"plant_id": str(plant)},
+                    info=info,
+                    ratings=self._discovery_ratings(plant),
+                    entities=self._discovery_entities(plant, index == 0),
+                )
+            )
+        return {"automatic": self.automatic, "inverters": inverters}
 
     async def automatic_config(self):
         """
@@ -3087,6 +3227,10 @@ class SolaxAPI(ComponentBase):
             await self.publish_device_realtime_data()
             await self.publish_controls()
             await self.save_counter_state()
+
+        # Filed every cycle, after this cycle's publish and before automatic_config(), which raises when
+        # no plant has a battery. refresh_discovery() owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         # Automatic configuration
         if first and self.automatic:
