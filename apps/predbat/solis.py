@@ -694,6 +694,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     pass
         return total
 
+    def inverters_masters_last(self):
+        """The inverters with every parallel master after the rest, so a master's own share is decoded once its slaves' currents are known."""
+        return sorted(self.inverter_sn, key=lambda serial: bool(self.parallel_group_slaves(serial)))
+
+    def parallel_master_share(self, inverter_sn, slot, direction, register_current):
+        """inverter_sn's own share of a slot current read back from its register: the value less what parallel_slot_current() adds for its slaves, never below 0A."""
+        current = float(register_current) if register_current else 0.0
+        return max(0.0, current - self.parallel_slot_current(inverter_sn, slot, direction, 0))
+
     # ==================== Authentication Methods ====================
 
     def _digest(self, body):
@@ -1095,10 +1104,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
     async def decode_time_windows_v2(self, inverter_sn):
         # Reads the new split registers and puts them into the same format as decode_time_windows
         result = {}
-        # A parallel master's slot current is the whole group's (issue #5556). Its own share is taken as an even
-        # split - each member is planned at its own rate - not the total, which the next write would add the
-        # slaves' shares to again, and which its slot power entity would show as the master's alone
-        group_size = 1 + len(self.parallel_group_slaves(inverter_sn))
+        # A parallel master's slot current is the whole group's (issue #5556). Its own share is what is left once
+        # the slaves' currents are taken off, the same ones parallel_slot_current() adds back on the next write, so
+        # an unchanged schedule decodes to an unchanged register. Not the total, which that write would add the
+        # slaves' shares to again, and not an even split, as each member is planned at its own rate and an idle
+        # slave adds nothing. The slaves are decoded first (see inverters_masters_last()); one not yet decoded
+        # adds nothing either way
         for slot_index in range(1, 7):  # Slots 1-6
             charge_current_cid = SOLIS_CID_CHARGE_CURRENT[slot_index - 1]
             discharge_current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot_index - 1]
@@ -1128,8 +1139,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             discharge_end = discharge_parts[1] if len(discharge_parts) > 1 else "00:00"
 
             result[slot_index] = {
-                "charge_current": float(charge_current) / group_size if charge_current else 0.0,
-                "discharge_current": float(discharge_current) / group_size if discharge_current else 0.0,
+                "charge_current": self.parallel_master_share(inverter_sn, slot_index, "charge", charge_current),
+                "discharge_current": self.parallel_master_share(inverter_sn, slot_index, "discharge", discharge_current),
                 "charge_start_time": charge_start,
                 "charge_end_time": charge_end,
                 "discharge_start_time": discharge_start,
@@ -5067,7 +5078,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         # Infrequent polling (every 60 minutes)
         if first or (seconds % 3600 == 0):
-            for sn in self.inverter_sn:
+            for sn in self.inverters_masters_last():
                 if self.datalogger_offline(sn):
                     poll_success = False
                     continue

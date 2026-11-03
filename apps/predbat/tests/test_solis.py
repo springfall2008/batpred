@@ -20,7 +20,7 @@ from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU
 from solis import SOLIS_CID_TOU_V2_MODE, SOLIS_CID_LIST_TOU_V2
 from solis import SOLIS_CID_ALLOW_EXPORT, SOLIS_ALLOW_EXPORT_ON, SOLIS_ALLOW_EXPORT_OFF, SOLIS_CID_BATTERY_RESERVE_SOC
 from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, SOLIS_CID_BATTERY_RECOVERY_SOC, SOLIS_CID_DISCHARGE_SOC
-from solis import SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_DISCHARGE_CURRENT
+from solis import SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_DISCHARGE_CURRENT, SOLIS_CID_DISCHARGE_TIME
 from solis import SOLIS_CID_POWER_LIMIT, SOLIS_BIT_BACKUP_MODE
 from solis import SOLIS_READ_ENDPOINT, SOLIS_READ_BATCH_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_INVERTER_LIST_ENDPOINT, SOLIS_INVERTER_DETAIL_ENDPOINT
 from solis import get_solis_mode_enum, compute_solis_mode_value
@@ -3876,15 +3876,40 @@ async def test_parallel_group_edges():
         print(f"ERROR: a duplicated slave should count once, got {_written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0])}")
         failed = True
 
-    # After a restart the master's register holds the group's total; its own share is decoded as an even split
+    # After a restart the master's register holds the group's total; its own share is that less the slave's enabled
+    # current, so the first write finds nothing to change - with equal shares, unequal ones, or an idle slave
+    for master_register, slave_register, slave_enable, expected in (("270", "135", "1", 135.0), ("185", "50", "1", 135.0), ("135", "50", "0", 135.0)):
+        api, master, slave = _parallel_api()
+        for sn, register in ((master, master_register), (slave, slave_register)):
+            api.cached_values[sn][SOLIS_CID_DISCHARGE_CURRENT[0]] = register
+            api.cached_values[sn][SOLIS_CID_DISCHARGE_ENABLE_BASE] = "1" if sn == master else slave_enable
+            api.cached_values[sn][SOLIS_CID_DISCHARGE_TIME[0]] = "16:00-19:00"
+        # Slaves first, as run_cycle() decodes them
+        await api.decode_time_windows_v2(slave)
+        await api.decode_time_windows_v2(master)
+        share = api.charge_discharge_time_windows[master][1]["discharge_current"]
+        if share != expected:
+            print(f"ERROR: master register {master_register}A with the slave at {slave_register}A (enable {slave_enable}) should decode a {expected}A share, got {share}")
+            failed = True
+        assert await api.write_time_windows_if_changed(master) is True
+        if _written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0]) is not None:
+            print(f"ERROR: an unchanged schedule (master {master_register}A, slave {slave_register}A) should not be rewritten, wrote {_written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0])}")
+            failed = True
+
+    # A slave not yet decoded counts for nothing either way: the master keeps the register's value, and writing it back changes nothing
     api, master, slave = _parallel_api()
-    api.cached_values[master][SOLIS_CID_DISCHARGE_CURRENT[0]] = "270"
-    api.cached_values[slave][SOLIS_CID_DISCHARGE_CURRENT[0]] = "135"
+    api.charge_discharge_time_windows.pop(slave)
+    api.cached_values[master].update({SOLIS_CID_DISCHARGE_CURRENT[0]: "185", SOLIS_CID_DISCHARGE_ENABLE_BASE: "1", SOLIS_CID_DISCHARGE_TIME[0]: "16:00-19:00"})
     await api.decode_time_windows_v2(master)
-    await api.decode_time_windows_v2(slave)
-    shares = (api.charge_discharge_time_windows[master][1]["discharge_current"], api.charge_discharge_time_windows[slave][1]["discharge_current"])
-    if shares != (135.0, 135.0):
-        print(f"ERROR: expected 135A decoded for each member, got {shares}")
+    if api.charge_discharge_time_windows[master][1]["discharge_current"] != 185.0:
+        print(f"ERROR: with the slave not yet decoded the master should keep 185A, got {api.charge_discharge_time_windows[master][1]['discharge_current']}")
+        failed = True
+
+    # The first poll decodes parallel masters after their slaves, whatever order the inverters are listed in
+    api, master, slave = _parallel_api()
+    api.inverter_sn = [master, slave]
+    if api.inverters_masters_last() != [slave, master]:
+        print(f"ERROR: a parallel master should come after its slave, got {api.inverters_masters_last()}")
         failed = True
 
     # With the master's own charge share at 0A but the slave charging, the group is charging: not the 0A Feed-in rule
