@@ -19,7 +19,7 @@ until a completed dispatch covers it or OCTOPUS_DISPATCH_HOLD_MINUTES have passe
 import copy
 from datetime import timedelta
 
-from const import OCTOPUS_DISPATCH_HOLD_MINUTES, OCTOPUS_DISPATCH_TAIL_MINUTES
+from const import DYNAMIC_LOAD_CAR_START_MINUTES, OCTOPUS_DISPATCH_HOLD_MINUTES, OCTOPUS_DISPATCH_TAIL_MINUTES
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 RATE_LOW = 6.57
@@ -579,6 +579,24 @@ def _run_withdrawn(my_predbat):
     failed |= _check("t31 reported for a replan", released is True, "returned {}".format(released))
     released = my_predbat.octopus_held_update(half_hour + timedelta(minutes=6, seconds=15))
     failed |= _check("t31 reported once", released is False, "returned {}".format(released))
+    # A "not charging" reading only counts once the car and charger have had DYNAMIC_LOAD_CAR_START_MINUTES to wake up,
+    # as the dispatch check takes it
+    _withdrawn_setup(my_predbat)
+    my_predbat.octopus_slots_planned = {0: []}
+    my_predbat.octopus_held_update(half_hour + timedelta(minutes=DYNAMIC_LOAD_CAR_START_MINUTES - 1))
+    failed |= _check("t31 kept while the car may still be waking", half_hour in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+    my_predbat.octopus_held_update(half_hour + timedelta(minutes=DYNAMIC_LOAD_CAR_START_MINUTES))
+    failed |= _check("t31 let go once it has had time", half_hour not in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+    # The poll does not judge the load: the window is the last cycle's
+    _withdrawn_setup(my_predbat)
+    my_predbat.dynamic_load_car_sensors = {}
+    my_predbat.car_energy_reported_load = True
+    my_predbat.load_minutes = {0: 1.0}
+    my_predbat.load_last_period = 0.2
+    my_predbat.minutes_now = 1175
+    my_predbat.octopus_slots_planned = {0: []}
+    my_predbat.octopus_held_update(half_hour + timedelta(minutes=6))
+    failed |= _check("t31 the poll leaves the load to the cycle", half_hour in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
 
     print("Test 32: a long dispatch withdrawn later lets go only the half hour in progress")
     _reset(my_predbat)

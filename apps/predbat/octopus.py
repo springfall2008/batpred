@@ -33,6 +33,7 @@ from const import (
     OCTOPUS_STATES_NOT_DISPATCHING,
     OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES,
     PREDICT_STEP,
+    DYNAMIC_LOAD_CAR_START_MINUTES,
 )
 from utils import (
     RepeatLogGate,
@@ -4533,7 +4534,7 @@ class Octopus:
         (see octopus_dispatch_tail()).
 
         One whose dispatch Octopus withdrew before the car charged in it is let go (see
-        octopus_held_withdrawn()). Returns True when one was, so the 15 second poll asks for a replan.
+        octopus_held_withdrawn()). Returns True when one was, so a replan is asked for.
         """
         hold_minutes = self.octopus_hold_minutes()
         minute_exact = self.dynamic_load_car_minute(now) if now is not None else None
@@ -4561,7 +4562,7 @@ class Octopus:
             if running is not None:
                 source, end_minutes = running
                 held_until[period_start] = self.midnight_utc + timedelta(minutes=end_minutes)
-            if (running is not None or period_start in held) and self.octopus_car_charging_reading(car_n, period_minute) is True:
+            if (running is not None or period_start in held) and self.octopus_car_charging_reading(car_n, period_minute, load=now is None) is True:
                 held_charged.add(period_start)
             if running is None and self.octopus_held_withdrawn(car_n, period_start, planned, minute_exact):
                 self.log("Octopus Intelligent: car {} dispatch was withdrawn before the car charged in it, no longer keeping the dispatch rate for the half hour from {}".format(car_n, self.time_abs_str(period_minute)))
@@ -4597,11 +4598,16 @@ class Octopus:
         - the car was never confirmed charging in it (dynamic_load_car_confirmed_periods), nor seen charging at
           any check while it was held (octopus_slots_held_charged): confirmation waits a few minutes into the
           half hour, and a car that filled up in them, with Octopus ending its dispatch, was billed off-peak;
-        - the car is seen not charging now (octopus_car_charging_reading()).
+        - the car is seen not charging now (octopus_car_charging_reading()), from DYNAMIC_LOAD_CAR_START_MINUTES into
+          the half hour, as the dispatch check only takes it once the car and charger have had time to wake up.
+
+        The planned list is the one the last cycle fetched, so a withdrawal is seen at the cycle after it; the 15
+        second poll only lets go a half hour that cycle kept for want of a reading.
 
         minute_exact is the minute to judge it at on the exact clock, from the 15 second poll; None for this cycle's.
         Reads state only, so octopus_held_dispatches() can leave the half hour out in the same cycle.
         """
+        poll = minute_exact is not None
         until = self.octopus_slots_held_until.get(car_n, {}).get(period_start)
         if until is None or period_start not in self.octopus_slots_held.get(car_n, {}):
             return False
@@ -4610,7 +4616,7 @@ class Octopus:
         if minute_exact is None:
             minute_exact = self.dynamic_load_car_minute(self.now_utc_real)
         period_minute = minutes_to_time(period_start, self.midnight_utc)
-        if not period_minute <= minute_exact < period_minute + 30 or minutes_to_time(until, self.midnight_utc) <= minute_exact:
+        if not period_minute + DYNAMIC_LOAD_CAR_START_MINUTES <= minute_exact < period_minute + 30 or minutes_to_time(until, self.midnight_utc) <= minute_exact:
             return False
         for slot in planned:
             start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
@@ -4624,9 +4630,9 @@ class Octopus:
         confirmed = self.dynamic_load_car_confirmed.get(car_n)
         if confirmed is not None and confirmed >= period_end:
             return False
-        return self.octopus_car_charging_reading(car_n, period_minute) is False
+        return self.octopus_car_charging_reading(car_n, period_minute, load=not poll) is False
 
-    def octopus_car_charging_reading(self, car_n, period_minute):
+    def octopus_car_charging_reading(self, car_n, period_minute, load=True):
         """
         Whether car_n is charging now in the half hour from period_minute: True (charging, or may be), False
         (not charging) or None (no evidence), from the evidence the dispatch check uses (see
@@ -4635,12 +4641,14 @@ class Octopus:
         - otherwise the car's own car_charging_now sensor, read live;
         - without one, for a car inside the CT clamp, the load over the last PREDICT_STEP minutes once that
           window lies inside the half hour (see dynamic_load_car_load_low()) - load that is not low may be the car.
+          Only with load True: the 15 second poll passes False, as the window is the last cycle's and judging it
+          again only repeats the sensor reads and the log.
         """
         if self.dynamic_load_any_car_charging_now():
             return True
         if car_n in self.dynamic_load_car_sensors:
             return self.car_charging_now_reading(car_n)
-        if self.car_energy_reported_load and self.load_minutes and self.minutes_now > 5 and self.minutes_now - PREDICT_STEP >= period_minute:
+        if load and self.car_energy_reported_load and self.load_minutes and self.minutes_now > 5 and self.minutes_now - PREDICT_STEP >= period_minute:
             low = self.dynamic_load_car_load_low(car_n, log=False)
             return None if low is None else not low
         return None
