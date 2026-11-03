@@ -3904,6 +3904,10 @@ async def test_parallel_group_edges():
     if api.charge_discharge_time_windows[master][1]["discharge_current"] != 185.0:
         print(f"ERROR: with the slave not yet decoded the master should keep 185A, got {api.charge_discharge_time_windows[master][1]['discharge_current']}")
         failed = True
+    assert await api.write_time_windows_if_changed(master) is True
+    if _written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0]) is not None:
+        print(f"ERROR: with the slave not yet decoded the master's 185A should not be rewritten, wrote {_written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0])}")
+        failed = True
 
     # The first poll decodes parallel masters after their slaves, whatever order the inverters are listed in
     api, master, slave = _parallel_api()

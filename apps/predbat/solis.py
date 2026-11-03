@@ -4894,7 +4894,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
     async def clear_read_only_schedules(self):
         """Disable timed charge/export using fresh registers, preserving battery protection limits."""
         async with self.schedule_control_lock():
-            devices = [sn for sn in self.inverter_sn if self.is_battery_inverter(sn)]
+            devices = [sn for sn in self.inverters_masters_last() if self.is_battery_inverter(sn)]
             if not devices:
                 raise SolisAPIError("No battery inverter available for schedule cleanup")
             for sn in devices:
@@ -5061,7 +5061,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # A TOU mode never read, or last read over a day ago, is read every 5 minutes until one read succeeds. A read that
         # changes the mode re-reads the slot registers in the new layout, retried on the same grid until that read succeeds too
         if not first and (seconds % 300 == 0):
-            for sn in self.inverter_sn:
+            for sn in self.inverters_masters_last():
                 if self.datalogger_offline(sn) or not self.is_battery_inverter(sn):
                     continue
                 if self.tou_v2_mode_due(sn):
