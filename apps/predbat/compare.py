@@ -119,7 +119,6 @@ COMPARE_RESTORED_STATE = (
         "manual_freeze_charge_times",
         "manual_freeze_export_times",
         "manual_demand_times",
-        "manual_all_times",
         "cost_today_sofar",
         "carbon_today_sofar",
         "iboost_today",
@@ -587,7 +586,6 @@ class Compare:
         my_predbat.manual_freeze_charge_times = []
         my_predbat.manual_freeze_export_times = []
         my_predbat.manual_demand_times = []
-        my_predbat.manual_all_times = []
         my_predbat.octopus_intelligent_charging = False
 
         self.recompute_iboost()

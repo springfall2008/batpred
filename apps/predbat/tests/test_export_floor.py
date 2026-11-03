@@ -49,7 +49,6 @@ def setup(my_predbat):
     my_predbat.minutes_now = 720
     my_predbat.end_record = 24 * 60
     my_predbat.forecast_minutes = 48 * 60
-    my_predbat.manual_all_times = []
     my_predbat.all_active_keep_max = {}
     my_predbat.charge_window_best = []
     my_predbat.charge_limit_best = []
@@ -284,7 +283,7 @@ def test_merge_skips_manual_windows(my_predbat):
     print("**** test_merge_skips_manual_windows ****")
     setup(my_predbat)
     staircase(my_predbat, [60, 40])
-    my_predbat.manual_all_times = [1050]
+    my_predbat.manual_export_times = [1050]
     install_nominal_stub(my_predbat, lambda shape: 100.0)
     try:
         my_predbat.merge_export_staircase()

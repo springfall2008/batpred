@@ -1344,6 +1344,16 @@ class Fetch:
                 self.log("Warn: manual_soc_max target {}% at minute {} is below the manual_soc/alert floor {}% for the same minute - ignoring the ceiling there".format(self.all_active_keep_max[minute], minute, floor_value))
                 del self.all_active_keep_max[minute]
 
+    @property
+    def manual_all_times(self):
+        """
+        Every slot under a manual charge, export, demand or freeze override, which the optimiser leaves alone.
+
+        Derived from the per-type manual time lists rather than stored, so it can never disagree with them: not
+        after a reset, nor in a compare run, nor when a debug dump is replayed with one of the lists edited.
+        """
+        return self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
+
     def fetch_sensor_data(self, save=True):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
@@ -2957,6 +2967,9 @@ class Fetch:
         alt_rate_min = min(alt_rates.values()) if alt_rates else 0
         alt_rate_threshold = abs(alt_rate_max - alt_rate_min) * 0.1
 
+        # Looked up for every minute below, so taken once rather than rebuilt from the per-type lists each time
+        manual_all_times = set(self.manual_all_times)
+
         stop_at = self.forecast_minutes + self.minutes_now + 12 * 60
         # Scan for lower rate start and end
         while minute < stop_at and not (minute >= (self.forecast_minutes + self.minutes_now) and (rate_low_start < 0)):
@@ -2975,7 +2988,7 @@ class Fetch:
                 pv_boundary = True
             if minute in rates:
                 rate = rates[minute]
-                if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)) or (minute in self.manual_all_times) or (rate_low_start in self.manual_all_times):
+                if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)) or (minute in manual_all_times) or (rate_low_start in manual_all_times):
                     rate_diff = abs(rate - rate_low_rate)
                     if (rate_low_start >= 0) and rate_diff > self.combine_rate_threshold:
                         # Refuse mixed rates that are different by more than threshold
@@ -2989,7 +3002,7 @@ class Fetch:
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if (rate_low_start in self.manual_all_times or minute in self.manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.plan_interval_minutes):
+                    if (rate_low_start in manual_all_times or minute in manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.plan_interval_minutes):
                         # Manual slot
                         rate_low_end = minute
                         break
@@ -4709,7 +4722,6 @@ class Fetch:
         self.manual_freeze_charge_times = self.manual_times("manual_freeze_charge")
         self.manual_freeze_export_times = self.manual_times("manual_freeze_export")
         self.manual_demand_times = self.manual_times("manual_demand")
-        self.manual_all_times = self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
         self.manual_api = self.api_select_update("manual_api")
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))

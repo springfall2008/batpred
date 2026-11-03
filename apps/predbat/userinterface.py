@@ -870,8 +870,15 @@ class UserInterface:
         if schema_version > DEBUG_SCHEMA_VERSION:
             self.log("Warn: Debug file {} was written by a newer Predbat (schema {} > {}) - replaying it may misread fields that have changed shape".format(filename, schema_version, DEBUG_SCHEMA_VERSION))
 
+        derived_saved = {}
         for key in debug:
             if key == "debug_schema_version":
+                continue
+            # A value now derived by a property (manual_all_times) is not restored: the instance copy would be
+            # ignored on reads but still walked by anything iterating __dict__, such as the next debug dump. Its
+            # saved value is checked against the derived one once everything it is derived from has loaded
+            if isinstance(getattr(type(self), key, None), property):
+                derived_saved[key] = debug[key]
                 continue
             if key not in ["CONFIG_ITEMS", "inverters"]:
                 self.__dict__[key] = copy.deepcopy(debug[key])
@@ -904,6 +911,13 @@ class UserInterface:
             self.plan_preclip[3] = export_limits_from_stored(self.plan_preclip[3])
             self.plan_preclip = tuple(self.plan_preclip)
 
+        # A saved value that disagrees with what is derived means the dump's state was out of step when it was
+        # written, or that the dump has been edited since - either way, what replays is not what was planned live
+        for key, saved in derived_saved.items():
+            derived = getattr(self, key)
+            if sorted(saved or []) != sorted(derived or []):
+                self.log("Warn: Debug file {} saved {} as {} but it derives as {} from the rest of the file - the replay uses the derived value".format(filename, key, saved, derived))
+
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)
             if current:
@@ -935,6 +949,9 @@ class UserInterface:
                         debug[key] = mask_secret_args(self.__dict__[key])
                     else:
                         debug[key] = self.__dict__[key]
+        # Derived from the per-type manual time lists rather than stored, so not in __dict__, but still written for
+        # an older Predbat replaying this dump, which reads it rather than deriving it
+        debug["manual_all_times"] = self.manual_all_times
         inverters_debug = []
         for inverter in self.inverters:
             inverter_debug = {}
