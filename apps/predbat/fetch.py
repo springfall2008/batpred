@@ -19,7 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id
+from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -1656,6 +1656,10 @@ class Fetch:
             # legitimate IOG discount wherever a session and a dispatch slot overlap, and the automatic
             # threshold scan could then miss a genuinely cheap slot.
             self.rate_import_pre_saving = import_rates.copy()
+            # rate_min_forward is what replacing a stored kWh costs (battery_value_rate), so it is built here from
+            # the tariff before any saving/free/Axle session - a one-off free hour tomorrow is not what refilling
+            # the battery costs
+            self.rate_min_forward = self.rate_min_forward_calc(import_rates)
             self.load_saving_slot(self.octopus_saving_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             load_axle_slot(self, self.axle_sessions, import_rates, export=False, rate_replicate=self.rate_import_replicated)
@@ -1689,6 +1693,8 @@ class Fetch:
             # Built here, from the base rates, so the saving session and overrides applied below stay
             # out of it - battery_value_rate needs the tariff's own export price, not an event price
             self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
+            # Likewise the export floor in battery_value_rate: the lowest price the tariff itself pays
+            self.rate_export_min_base = self.rate_minmax(self.rate_export_base)[0]
             # Export has no IOG overlay, so the pre-saving tariff matches rate_export_base - copied
             # rather than aliased so the two can never be corrupted together by a future in-place
             # mutation of either.
@@ -2416,8 +2422,28 @@ class Fetch:
                         except (ValueError, TypeError):
                             self.log("Warn: octopus_charge_limit is set to a bad value {} for car {} in apps.yaml, must be a number".format(octopus_limit, car_n))
                             octopus_limit = None
+                    # With the charger linked rather than the car, Octopus's target is a percentage to add, not a
+                    # SoC to reach (#3034), so it counts from the SoC the car had when it was plugged in. The plug
+                    # sensor decides where there is one - car_charging_planned can turn off at the end of a charge
+                    # with the car still plugged in. Without one, planned dispatches only say the car is plugged in
+                    # when they are dropped for an unplugged car
+                    plug_arg = self.car_plug_arg(car_n)
+                    plugged = self.car_plugged_in_now(car_n, plug_arg) if plug_arg else None
+                    if plugged is None:
+                        plugged = bool(self.car_charging_planned[car_n] or self.car_charging_now[car_n] or (planned and not self.octopus_intelligent_ignore_unplugged))
+                    base_soc = self.octopus_charge_target_base_soc(car_n, plugged, save)
                     if octopus_limit:
                         octopus_limit = dp3(float(octopus_limit) * self.car_charging_battery_size[car_n] / 100.0)
+                        added = self.octopus_charge_target_is_added(entity_id, car_n)
+                        # Said when it changes, not on every cycle. While unplugged the base follows the SoC, so it
+                        # is not a plug-in SoC yet and is left out
+                        logged_key = (added, base_soc if plugged else None)
+                        if save and logged_key != self.octopus_charge_target_logged.get(car_n):
+                            self.octopus_charge_target_logged[car_n] = logged_key
+                            if added and plugged:
+                                self.log("Car {} Octopus is linked to the charger, so its target adds {}kWh to the {}kWh the car had when plugged in".format(car_n, octopus_limit, base_soc))
+                        if added:
+                            octopus_limit = dp3(base_soc + octopus_limit)
                         self.car_charging_limit[car_n] = min(self.car_charging_limit[car_n], octopus_limit)
                     if octopus_ready_time:
                         self.car_charging_plan_time[car_n] = octopus_ready_time
@@ -2479,6 +2505,47 @@ class Fetch:
         # Live plan only, as for car_manual_soc_track() - a compare.py re-run must not publish anything
         if save:
             self.car_manual_soc_mirror()
+
+    def octopus_charge_target_is_added(self, entity_id, car_n=0):
+        """
+        Is the Octopus Intelligent charge target for this dispatch sensor a percentage to add, rather than a SoC to reach?
+
+        Octopus takes a percentage to add when the charger is linked, and a SoC to reach when the car is (#3034).
+        Which device is linked is decided by intelligent_device_is_charger(), from the dispatch sensor and the
+        car's octopus_charge_limit entity when that is an entity rather than a number. None when nothing says,
+        which keeps the target read as a SoC to reach, as it always was - and for car 0 when another charger
+        component (Ohme) has claimed its charge limit, which is then that charger's own SoC target.
+        """
+        if car_n == 0 and self.car_slot_owner not in (None, "octopus"):
+            # Another charger component (Ohme) has wired octopus_charge_limit to its own target, a SoC to reach
+            return None
+        target = self.get_arg("octopus_charge_limit", None, indirect=False, index=car_n)
+        target_attribute = None
+        if is_entity_id(target):
+            target_attribute = lambda name: self.get_state_wrapper(entity_id=target, attribute=name)
+        return intelligent_device_is_charger(lambda name: self.get_state_wrapper(entity_id=entity_id, attribute=name), target_attribute)
+
+    def octopus_charge_target_base_soc(self, car_n, plugged, save):
+        """
+        The car's SoC (kWh) when it was plugged in, which a charger-linked Octopus target adds to.
+
+        While the car is unplugged this follows its SoC; once it is plugged in it is held at the last reading from
+        before, so a stale or partial low reading while it charges cannot drag the base, and with it the limit,
+        down. A SoC of 0 is a sensor that could not be read, so it never replaces a base. Not saved: after a
+        restart part way through a charge it starts again from the SoC then, which can only put the limit
+        higher, not lower. Only the live fetch records it - compare.py's re-runs (save=False) take the live
+        fetch's as it is, since car_charging_planned there is no longer the plug sensor's reading.
+        """
+        soc = self.car_charging_soc[car_n]
+        base = self.octopus_charge_target_base.get(car_n)
+        if not save:
+            return soc if base is None else base
+        if soc > 0 and (not plugged or not base):
+            base = soc
+        if base is None:
+            return soc
+        self.octopus_charge_target_base[car_n] = base
+        return base
 
     def fetch_pv_forecast(self):
         """
@@ -3538,12 +3605,8 @@ class Fetch:
         curr = self.currency_symbols[1]
 
         if print:
-            # Calculate minimum forward rates only once rate replicate has run (when print is True).
-            # Use the `rates` argument, not self.rate_import: during fetch's atomic rebuild self.rate_import
-            # still holds the PREVIOUS cycle's data (publish is deferred to the end of the block), so
-            # reading it here would make rate_min_forward - which drives plan.py charge/discharge economics
-            # - a cycle stale. `rates` is the freshly-built current-cycle dict being scanned.
-            self.rate_min_forward = self.rate_min_forward_calc(rates)
+            # rate_min_forward is not built here: fetch_sensor_data() builds it from the tariff before the
+            # saving/free/Axle sessions are added, which the rates scanned here already include
             self.log("Import rates: min {}{}, max {}{}, average {}{}".format(self.rate_min, curr, self.rate_max, curr, self.rate_average, curr))
 
     def rate_export_max_forward_calc(self, rates):
@@ -4327,7 +4390,9 @@ class Fetch:
         """
         reason = None
         if self.export_more_solar:
-            if not self.calculate_best_export:
+            if not self.battery_export_permitted:
+                reason = "the inverter is not permitted to export battery energy, so export slots are not planned. Turn export_more_solar off."
+            elif not self.calculate_best_export:
                 reason = "Predbat mode is not Control charge & discharge, so export slots are not planned. Change the mode, or turn export_more_solar off."
             elif not self.set_export_freeze:
                 # Ask the inverter rather than the switch: an unsupported inverter forces set_export_freeze off

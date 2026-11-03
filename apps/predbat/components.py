@@ -726,6 +726,8 @@ COMPONENT_LIST = {
             "tbc_control": {"required": False, "default": True, "config": "teslemetry_tbc_control"},
             # No default: unset must reach the component as None ("decide from the Powerwall model"), not False
             "hybrid": {"required": False, "config": "teslemetry_hybrid"},
+            # No default either: unset means "decide from site_info's net_meter_mode" (GH#5710)
+            "battery_export": {"required": False, "config": "teslemetry_battery_export"},
             "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
             "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
             "token_hash": {"required": False, "secret": True, "config": "teslemetry_token_hash"},
@@ -856,9 +858,9 @@ class Components:
 
         The coordinator lives here - never as a PredBat attribute - because create_debug_yaml()
         dumps every non-excluded member of PredBat.__dict__, and the coordinator holds the raw
-        unredacted reports plus the pseudonym salt. "components" is in DEBUG_EXCLUDE_LIST (as is
-        "coordinator", defensively), so nothing under self.components is dumped automatically at
-        all; create_debug_yaml() instead adds a plain redacted dict via coordinator.catalogue().
+        raw reports. "components" is in DEBUG_EXCLUDE_LIST (as is "coordinator", defensively),
+        so nothing under self.components is dumped automatically at all; create_debug_yaml() instead
+        adds a plain dict via coordinator.catalogue(), which scrubs email addresses.
         """
         self.components = {}
         self.component_tasks = {}

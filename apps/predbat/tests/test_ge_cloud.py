@@ -10,7 +10,7 @@
 # fmt on
 
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
-from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
+from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
 from gecloud import EVCCommandFailed, GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
 from gecloud import DEVICE_REFRESH_SECONDS, SETTINGS_SLOW_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
 from utils import dp4
@@ -111,6 +111,8 @@ class MockGECloudDirect(GECloudDirect):
             def __init__(self):
                 self.ha_interface = MockHAInterface()
                 self.num_cars = 0
+                # As reset() leaves it: no Axle VPP event is forcing read only
+                self.set_read_only_axle = False
                 # What the user actually wrote in apps.yaml, which set_arg_auto uses to decide
                 # whether auto-discovery may replace a setting
                 self.args_from_apps_yaml = {}
@@ -243,6 +245,7 @@ def test_ge_cloud(my_predbat=None):
         ("publish_status_auth_unavailable", _test_publish_status_auth_failure_marks_time_unavailable, "Auth failure marks time sensor unavailable"),
         ("run_auth_denied_scoped", _test_run_reports_auth_denied_scoped, "Auth-denied status scoped to inverter poll cycle"),
         ("non_auth_clears_auth_flag", _test_async_get_inverter_data_non_auth_clears_flag, "Non-401/403 response clears api_auth_failed"),
+        ("rejection_logs_name_device", _test_rejection_logs_name_device_and_setting, "Rejected setting reads log the serial and setting id, not the URL template"),
         ("auth_status_transition_only", _test_run_auth_status_reported_on_transition_only, "Auth-denied status reported once per episode"),
         ("api_rate_limit", _test_async_get_inverter_data_rate_limit, "API rate limit handling"),
         ("api_timeout", _test_async_get_inverter_data_timeout, "API timeout handling"),
@@ -352,6 +355,9 @@ def test_ge_cloud(my_predbat=None):
         ("discovery_record_load_today_ignored", _test_discovery_record_load_today_ignored, "load_today stays in the record despite ge_cloud_load_today_ignore"),
         ("discovery_record_pv_only", _test_discovery_record_pv_only_carries_generation, "PV-only record carries pv_power and pv_today only"),
         ("discovery_write_and_poll_sleep", _test_discovery_write_and_poll_sleep, "GE Cloud write_and_poll_sleep is 10"),
+        ("discovery_evc", _test_build_discovery_evc, "build_discovery reports EV chargers with a stub car"),
+        ("discovery_evc_round_trip", _test_build_discovery_evc_round_trip, "EV charger records round-trip through the Coordinator and Redactor"),
+        ("discovery_evc_skips_unread", _test_build_discovery_evc_skips_unread_charger, "an EV charger with no serial yet is not reported"),
         ("publish_evc_device", _test_publish_evc_device, "Publish EVC device status"),
         ("automatic_config_evc", _test_async_automatic_config_evc, "Automatic config for EV chargers"),
         ("evc_control", _test_evc_control, "EV charger control from the car plan"),
@@ -366,6 +372,7 @@ def test_ge_cloud(my_predbat=None):
         ("inverter_control_off_user_writes", _test_inverter_control_off_user_writes, "Inverter control off still sends the user's writes, but not Predbat's"),
         ("evc_direct_setting", _test_evc_direct_setting, "ge_cloud_evc_direct starts GE Cloud Direct for the EV charger alone"),
         ("inverter_roles", _test_inverter_roles_from_settings, "ge_cloud_direct monitors the inverter, ge_cloud_inverter_control controls it"),
+        ("evc_control_off_releases_held", _test_evc_control_off_releases_held, "EVC control turned off in config still releases a charger an earlier session stopped"),
         ("evc_only_run", _test_evc_only_run, "EV charger only never reads, writes or reports an inverter"),
         ("evc_only_not_inverter_source", _test_evc_only_not_inverter_source, "EV charger only is not an inverter source"),
         ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
@@ -649,6 +656,43 @@ def _test_async_get_inverter_data_non_auth_clears_flag(my_predbat):
                     if ge_cloud.api_auth_failed:
                         print("ERROR: a {} response should clear api_auth_failed (not an auth failure)".format(status))
                         return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_rejection_logs_name_device_and_setting(my_predbat):
+    """A settings read GivEnergy rejects must log the device serial and setting id it was for, not the
+    raw endpoint template with literal {inverter_serial_number}/{setting_id} placeholders (#5777) -
+    for the per-attempt retryable warning, the retries-exhausted warning and the terminal one."""
+
+    async def test():
+        expected = "inverter/inv001/settings/17/read"
+        cases = [
+            # (description, HTTP status, response body, expected log fragments)
+            ("retryable -1", 200, {"data": {"success": True, "value": -1}}, ["Request to {} was rejected: the device did not respond before the request timed out (code -1)".format(expected)]),
+            ("terminal -7", 200, {"data": {"success": False, "value": -7, "message": "Inverter Locked"}}, ["Request to {} was rejected: Inverter Locked (code -7), not retrying".format(expected)]),
+            ("retries exhausted", 500, {"error": "x"}, ["Failed to get data from {}, response code 500".format(expected), "Failed to get data from {}".format(expected)]),
+        ]
+        for description, status, body, fragments in cases:
+            ge_cloud = MockGECloudDirect()
+            mock_response = create_aiohttp_mock_response(status=status, json_data=body)
+            mock_session = create_aiohttp_mock_session(mock_response)
+
+            with patch("aiohttp.ClientSession") as mock_session_class:
+                with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                    mock_session_class.return_value = mock_session
+                    await ge_cloud.async_get_inverter_data_retry(GE_API_INVERTER_READ_SETTING, serial="inv001", setting_id=17, post=True)
+
+            templated = [message for message in ge_cloud.log_messages if "{inverter_serial_number}" in message or "{setting_id}" in message]
+            if templated:
+                print("ERROR: {}: log printed the unformatted endpoint template: {}".format(description, templated))
+                return 1
+            # Matched as line endings, so the retry wrapper's bare "Failed to get data from <path>" is told apart from the per-request one
+            for fragment in fragments:
+                if not any(message.endswith(fragment) for message in ge_cloud.log_messages):
+                    print("ERROR: {}: expected a log ending '{}', got {}".format(description, fragment, ge_cloud.log_messages))
+                    return 1
         return 0
 
     return run_async(test())
@@ -6577,7 +6621,7 @@ def _test_evc_control(my_predbat):
         await ge.charger_control_apply(inside)
         assert commands == [("evc-first", "start-charge")], "Only the charger with a car should be commanded, got {}".format(commands)
 
-        # Test 11: a command GE Cloud refuses is not recorded as sent, so it is tried again
+        # Test 11: a stop GE Cloud refuses is held as stopped (it may still have landed) but sent again until it confirms
         commands = []
         ge = _evc_control_component(commands)
         ge.evc_device_list = ["evc-001"]
@@ -6597,13 +6641,13 @@ def _test_evc_control(my_predbat):
             assert False, "A refused command should raise"
         except EVCCommandFailed:
             pass
-        assert ge.charger_control_state == {}, "A refused stop must not be recorded, got {}".format(ge.charger_control_state)
+        assert ge.charger_control_state == {"evc-001": False} and "evc-001" in ge.charger_control_unconfirmed, "A refused stop is held but unconfirmed, got {}".format(ge.charger_control_state)
 
         ge.async_send_evc_command = real_send
         await ge.charger_control_apply(outside)
         assert commands == [("evc-001", "stop-charge")], "The stop should be retried, got {}".format(commands)
 
-        # Test 12: a refused release is not latched as done, so the stopped charger is not stranded
+        # Test 12: a refused release leaves the charger held, so it is retried and the stopped charger is not stranded
         commands.clear()
         ge._read_only = True
         ge.async_send_evc_command = refuse
@@ -6612,7 +6656,6 @@ def _test_evc_control(my_predbat):
             assert False, "A refused release should raise"
         except EVCCommandFailed:
             pass
-        assert ge.charger_control_released is None, "A refused release must not be recorded as done"
         assert ge.charger_control_state == {"evc-001": False}, "Predbat still holds the stopped charger"
 
         ge.async_send_evc_command = real_send
@@ -8697,6 +8740,124 @@ def _test_inverter_roles_from_settings(my_predbat):
     return 0
 
 
+def _test_evc_control_off_releases_held(my_predbat):
+    """#5788: with ge_cloud_evc_control turned off and a restart, an EV charger an earlier session stopped is started again"""
+
+    async def test():
+        ge_cloud, api, calls = _make_rediscovery_ge_cloud(_gec_devices(battery=["inv001"]), evc_devices=[{"uuid": "evc-1"}])
+        GECloudDirect.initialize(ge_cloud, False, "key", True, automatic_evc=True, evc_control=False, evc_direct=True)
+        ge_cloud.log_messages = []
+        saved = {("gecloud", "evc_control_state"): {"evc_control_enabled": True, "held": {"evc-1": False}}}
+
+        class _Storage:
+            """In-memory stand-in for the Storage component."""
+
+            async def save(self, module, key, value, **kwargs):
+                """Record a save."""
+                saved[(module, key)] = value
+
+            async def load(self, module, key):
+                """Return what was saved."""
+                return saved.get((module, key))
+
+        ge_cloud._mock_storage = _Storage()
+        commands = []
+
+        async def mock_send(uuid, command, params):
+            """Record each EV charger command."""
+            commands.append((uuid, command))
+            return {"success": True}
+
+        ge_cloud.async_send_evc_command = mock_send
+        await ge_cloud.run(seconds=0, first=True)
+        if ge_cloud.charger_control_active:
+            print("ERROR: control should be off with ge_cloud_evc_control false")
+            return 1
+        if commands != [("evc-1", "start-charge")]:
+            print("ERROR: the charger an earlier session stopped should be started again, got {}".format(commands))
+            return 1
+        if saved[("gecloud", "evc_control_state")]["held"] != {}:
+            print("ERROR: the release should be saved, got {}".format(saved))
+            return 1
+        await ge_cloud.run(seconds=60, first=False)
+        if commands != [("evc-1", "start-charge")]:
+            print("ERROR: a released charger should not be commanded again, got {}".format(commands))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _evc_discovery_ge(evc_devices, publish=True):
+    """A charger-only MockGECloudDirect holding these EV chargers (uuid -> evc_device entry).
+
+    With publish, every entity GE Cloud's EV charger automatic config binds is staged in the state
+    store under the lowercased serial, exactly as publish_evc_device()/publish_evc_data() name them.
+    """
+    ge = MockGECloudDirect()
+    ge.inverter_monitor = False
+    ge.inverter_control = False
+    ge.devices_dict = {}
+    ge.evc_device_list = list(evc_devices)
+    ge.evc_device = copy.deepcopy(evc_devices)
+    ge.evc_devices_dict = [{"uuid": uuid, "alias": entry.get("alias")} for uuid, entry in evc_devices.items()]
+    if publish:
+        for entry in evc_devices.values():
+            stem = "predbat_gecloud_{}".format(entry["serial_number"]).lower()
+            for entity_id in ("binary_sensor." + stem + "_evc_car_connected", "binary_sensor." + stem + "_evc_car_plugged", "sensor." + stem + "_evc_energy_active_import_register", "sensor." + stem + "_evc_power_active_import"):
+                ge.entity_states[entity_id] = "on"
+    return ge
+
+
+def _test_build_discovery_evc(my_predbat):
+    """An EV charger is a chargers record keyed by its hardware serial, with a stub car; its alias is never reported"""
+    ge = _evc_discovery_ge({"evc-1": {"uuid": "evc-1", "alias": "Garage", "serial_number": "EV2244G123"}})
+    report = ge.build_discovery()
+    assert report["inverters"] == []
+    charger, car = report["chargers"][0], report["cars"][0]
+    assert charger["device_id"] == "gecloud:EV2244G123", charger
+    assert charger["hardware_ids"] == {"serial": "EV2244G123"}, charger
+    assert charger["info"] == {"vendor": "GivEnergy"}, charger
+    assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_energy", "car_charging_power"}, charger["entities"]
+    assert charger["entities"]["car_charging_energy"]["entity_id"] == "sensor.predbat_gecloud_ev2244g123_evc_energy_active_import_register"
+    assert car == {"device_id": "gecloud:EV2244G123:car", "charged_by": "gecloud:EV2244G123", "flags": ["stub"]}, car
+    text = str(report)
+    assert "Garage" not in text and "evc-1" not in text, "neither the alias nor the cloud uuid may be reported: {}".format(text)
+    return 0
+
+
+def _test_build_discovery_evc_round_trip(my_predbat):
+    """An upper-case serial with lower-cased entity ids: all four entities survive validation and redaction, the serial stays readable"""
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    ge = _evc_discovery_ge({"evc-1": {"uuid": "evc-1", "serial_number": "EV2244G123"}})
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("gecloud", ge.build_discovery())
+    cleaned = coordinator.reports["gecloud"]
+    assert len(cleaned["chargers"][0]["entities"]) == 4, cleaned
+    assert cleaned["cars"][0]["flags"] == ["stub"], cleaned
+    catalogue = coordinator.catalogue()
+    redacted = catalogue["chargers"][0]
+    assert len(redacted["entities"]) == 4, redacted
+    assert redacted["entities"]["car_charging_power"]["entity_id"] == "sensor.predbat_gecloud_ev2244g123_evc_power_active_import", redacted["entities"]
+    assert "EV2244G123" in str(catalogue), "the charger serial is hardware, and stays readable"
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    return 0
+
+
+def _test_build_discovery_evc_skips_unread_charger(my_predbat):
+    """A charger that has not answered with a serial yet is not reported"""
+    ge = _evc_discovery_ge({"evc-1": {"uuid": "evc-1", "serial_number": "EV2244G123"}, "evc-2": {"uuid": "evc-2"}}, publish=False)
+    ge.evc_device["evc-2"] = {"uuid": "evc-2"}
+    report = ge.build_discovery()
+    assert [charger["device_id"] for charger in report["chargers"]] == ["gecloud:EV2244G123"], report["chargers"]
+    assert "chargers" in report and len(report["cars"]) == 1
+    return 0
+
+
 def _test_evc_only_run(my_predbat):
     """With ge_cloud_evc_direct and no ge_cloud_direct, run() never reads, writes or reports an inverter, but still serves the EV charger"""
 
@@ -8720,6 +8881,9 @@ def _test_evc_only_run(my_predbat):
         report = ge_cloud.build_discovery()
         if report["inverters"] or report["automatic"] is not False:
             print("ERROR: no inverter should be reported, got {}".format(report))
+            return 1
+        if [charger["device_id"] for charger in report.get("chargers", [])] != ["gecloud:evc-1-sn"]:
+            print("ERROR: the EV charger should be reported, got {}".format(report.get("chargers")))
             return 1
         if calls["site"]:
             print("ERROR: the inverter site should not be looked up, got {} update_site calls".format(calls["site"]))

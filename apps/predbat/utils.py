@@ -388,20 +388,25 @@ def _mask_secrets_in_place(value):
             _mask_secrets_in_place(entry)
 
 
-def load_secrets(log=None):
+def load_secrets(log=None, secrets_file=None):
     """
     Load secrets from secrets.yaml file
-    Priority: PREDBAT_SECRETS_FILE env var, ./secrets.yaml, /config/secrets.yaml
+    Priority: secrets_file argument (else PREDBAT_SECRETS_FILE env var), ./secrets.yaml, /config/secrets.yaml
+
+    A caller that passes secrets_file has already resolved it (Hass.__init__ reads
+    PREDBAT_SECRETS_FILE once per instance), so the environment is only consulted here
+    when no path is given.
     """
     import yaml
 
     log = log or (lambda message, **kwargs: print(message))
     secrets = {}
+    preferred_location = secrets_file if secrets_file is not None else os.getenv("PREDBAT_SECRETS_FILE")
     secrets_file = None
 
     # Try loading from different locations in priority order
     possible_locations = [
-        os.getenv("PREDBAT_SECRETS_FILE"),
+        preferred_location,
         "secrets.yaml",
         "/homeassistant/secrets.yaml",
         "/conf/secrets.yaml",
@@ -443,7 +448,7 @@ def load_secrets(log=None):
     return secrets
 
 
-def load_apps_yaml(apps_file=None, log=None):
+def load_apps_yaml(apps_file=None, log=None, secrets_file=None):
     """
     Load an apps.yaml-format file and return its pred_bat section, with !secret references resolved
 
@@ -452,28 +457,45 @@ def load_apps_yaml(apps_file=None, log=None):
     for a malformed file and KeyError when the pred_bat section is missing, leaving the caller to
     decide whether that is fatal.
 
+    apps_file and secrets_file default to $PREDBAT_APPS_FILE / $PREDBAT_SECRETS_FILE when not given.
+
     Returns (args, secrets).
     """
     import yaml
 
     log = log or (lambda message, **kwargs: print(message))
-    secrets = load_secrets(log=log)
+    secrets = load_secrets(log=log, secrets_file=secrets_file)
+
+    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+    log(f"Loading {apps_file}", quiet=False)
+    with open(apps_file, "r") as stream:
+        config = yaml.load(stream, Loader=secret_yaml_loader(secrets, log))  # nosec B506 - a SafeLoader subclass
+    return config["pred_bat"], secrets
+
+
+def secret_yaml_loader(secrets, log):
+    """
+    Return a yaml.SafeLoader subclass that resolves !secret against the given secrets dict
+
+    A new class per call, so the !secret constructor is never registered on the process-wide
+    yaml.SafeLoader that every other yaml.safe_load() uses. A missing secret logs a warning and
+    resolves to None. Use as yaml.load(stream, Loader=secret_yaml_loader(secrets, log)).
+    """
+    import yaml
 
     def secret_constructor(loader, node):
-        """YAML constructor for the !secret tag, resolving against the secrets just loaded."""
+        """YAML constructor for the !secret tag, resolving against the given secrets."""
         secret_key = loader.construct_scalar(node)
         if secret_key in secrets:
             return secrets[secret_key]
         log(f"Warn: Secret '{secret_key}' not found in secrets.yaml")
         return None
 
-    yaml.add_constructor("!secret", secret_constructor, Loader=yaml.SafeLoader)
+    class SecretYamlLoader(yaml.SafeLoader):
+        pass
 
-    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
-    log(f"Loading {apps_file}", quiet=False)
-    with open(apps_file, "r") as stream:
-        config = yaml.safe_load(stream)
-    return config["pred_bat"], secrets
+    SecretYamlLoader.add_constructor("!secret", secret_constructor)
+    return SecretYamlLoader
 
 
 def mask_secret_args(args):
@@ -3242,3 +3264,43 @@ def allocate_export_rates(needs, max_rates, p_fleet):
             remaining = 0.0
 
     return alloc
+
+
+# What the Octopus Energy integration's device_type attribute names a charger and a car as (BottlecapDave #1917)
+INTELLIGENT_DEVICE_TYPE_CHARGER = "ELECTRIC_VEHICLE_CHARGERS"
+INTELLIGENT_DEVICE_TYPE_CAR = "ELECTRIC_VEHICLES"
+
+
+def intelligent_device_is_charger(dispatch_attribute, target_attribute=None):
+    """Is a car's Octopus Intelligent device its charger (True), the car itself (False), or can that not be told (None)?
+
+    dispatch_attribute(name) reads an attribute of the car's dispatch sensor, target_attribute(name) one of its
+    Intelligent charge target entity, when there is one. Checked in order:
+
+    - is_charger on the dispatch sensor, published by Predbat's own Octopus and Kraken components.
+    - device_type, which the Octopus Energy integration puts on the charge target entity (and is read from the
+      dispatch sensor too).
+    - Failing both, which size the integration's dispatch sensor fills in: only the charge point's power for a
+      charger, only the battery size for a car.
+    """
+    is_charger = dispatch_attribute("is_charger")
+    if isinstance(is_charger, (bool, int, float)):
+        return bool(is_charger)
+    if isinstance(is_charger, str) and is_charger.strip().lower() not in ("", "unknown", "unavailable", "none"):
+        # The strings get_arg() and the charger control read as true
+        return is_charger.strip().lower() in ("on", "true", "yes", "enabled", "enable", "connected")
+    for read in (target_attribute, dispatch_attribute):
+        if read is None:
+            continue
+        device_type = read("device_type")
+        if device_type == INTELLIGENT_DEVICE_TYPE_CHARGER:
+            return True
+        if device_type == INTELLIGENT_DEVICE_TYPE_CAR:
+            return False
+    size = dispatch_attribute("vehicle_battery_size_in_kwh")
+    rate = dispatch_attribute("charge_point_power_in_kw")
+    if rate is not None and size is None:
+        return True
+    if size is not None and rate is None:
+        return False
+    return None

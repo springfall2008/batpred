@@ -543,6 +543,12 @@ You can also override the import or export energy rates (regardless of whether t
 Rate override is used to set the specific date and time period where your rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two),
 or the British Gas half-price electricity on Sundays.
 
+Overrides are meant for events and adjustments on top of your tariff, not for describing the tariff itself.
+Set your normal day-to-day rates with [rate bands](#rate-bands-to-manually-configure-energy-rates) (or the Octopus integration/URL) and use overrides only for the periods that differ.
+Some features measure prices against your normal tariff with overrides left out: for example the
+[marginal cost cheap/moderate sensors](output-data.md#cheapmoderate-binary-sensors), so a free Power Up session entered as an override
+does not stop other slots reading as cheap.
+
 Unfortunately, there aren't any API's available to feed this information automatically into Predbat so you will have to define your own input controls and use the [Predbat Manual API](manual-api.md#example-solution-to-over-ride-predicted-house-load),
 or edit `apps.yaml` manually to set the appropriate rate over-ride dates and times:
 
@@ -672,7 +678,7 @@ hours that neither Octopus nor Nord Pool has published yet - for example the sec
   futurerate_adjust_auto: true
 ```
 
-Predbat fetches the next five days of the forecast and caches it for 30 minutes. AgilePredict is a free community service, so please do not poll it more often.
+Predbat fetches the next five days of the forecast and caches it for three hours. AgilePredict is a free community service, so please do not poll it more often.
 The forecast is only applied to your Agile import/export rates, not to gas or to tariffs being compared.
 
 ## Axle VPP

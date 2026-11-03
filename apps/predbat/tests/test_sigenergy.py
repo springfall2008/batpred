@@ -23,11 +23,15 @@ from sigenergy import (
     SIGENERGY_ACTIVE_MODE_SELF,
     SIGENERGY_ACTIVE_MODE_SELF_GRID,
     SIGENERGY_CODE_IN_OTHER_VPP,
+    SIGENERGY_CODE_STATION_INFO_NOT_FOUND,
+    SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP,
+    SIGENERGY_CODE_STATION_NOT_FOUND,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
     SIGENERGY_LOG_REDACT_KEYS,
     SIGENERGY_MODE_MSC,
     SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
+    SIGENERGY_MQTT_RESUBSCRIBE_DELAY,
     SIGENERGY_MQTT_TOPIC_MODE,
     SIGENERGY_VPP_RECLAIM_INTERVAL,
     SIGENERGY_OPTIONS_TIME,
@@ -107,10 +111,12 @@ class FakeStorage:
     def __init__(self):
         """Initialise an empty in-memory store keyed by (module, filename)."""
         self.data = {}
+        self.expiry = {}
 
     async def save(self, module, filename, data, format="yaml", expiry=None):
         """Store data under (module, filename), mirroring StorageBase.save's signature and return value."""
         self.data[(module, filename)] = data
+        self.expiry[(module, filename)] = expiry
         return True
 
     async def load(self, module, filename):
@@ -1287,6 +1293,28 @@ def test_sigenergy_save_load_cache_round_trip(my_predbat):
     return failed
 
 
+def test_sigenergy_save_cache_settings_expiry(my_predbat):
+    """Test plant settings (export limit, SoC cut-offs) are cached for 28 days and poll data for one day."""
+    failed = False
+    api = MockSigenergyAPI()
+    storage = FakeStorage()
+    api._mock_storage = storage
+
+    for key in ("energy_flow", "grid_export", "device_cutoffs"):
+        run_async(api._save_cache(key, {"SIG001": {}}))
+    now = datetime.now(timezone.utc)
+
+    def days_left(key):
+        """Days until the saved entry for key expires."""
+        return (storage.expiry[("sigenergy", key)] - now).total_seconds() / 86400
+
+    assert 0.99 < days_left("energy_flow") <= 1.0, "poll data expires after a day, got {:.2f}".format(days_left("energy_flow"))
+    assert 27.99 < days_left("grid_export") <= 28.0, "export limit kept for 28 days, got {:.2f}".format(days_left("grid_export"))
+    assert 27.99 < days_left("device_cutoffs") <= 28.0, "SoC cut-offs kept for 28 days, got {:.2f}".format(days_left("device_cutoffs"))
+
+    return failed
+
+
 def test_sigenergy_load_cached_data(my_predbat):
     """Test load_cached_data restores energy_flow/daily_summary/history_totals/onboard_status."""
     failed = False
@@ -2225,12 +2253,12 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
     api = MockSigenergyAPI()
     api.access_token = "tok"
     api.token_expires_at = 9_999_999_999
-    api.systems["XRTKQ1773829273"] = {"systemName": "Test"}
+    api.systems["TESTA1700000000"] = {"systemName": "Test"}
     api.api_stop = False
 
     period_payload = _json.dumps([{
         "deviceType": "system",
-        "systemId": "XRTKQ1773829273",
+        "systemId": "TESTA1700000000",
         "value": {
             "storageSOC%": "55.0",
             "storageChargeDischargePowerW": "1000.0",
@@ -2241,7 +2269,7 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
 
     change_payload = _json.dumps([{
         "deviceType": "system",
-        "systemId": "XRTKQ1773829273",
+        "systemId": "TESTA1700000000",
         "value": {
             "backupCutOffSOC%": "20.0",
             "chargeCutOffSOC%": "95.0",
@@ -2258,8 +2286,8 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
             self.retain = False
 
     messages_to_deliver = [
-        FakeMessage("openapi/period/test_app_key/XRTKQ1773829273", period_payload),
-        FakeMessage("openapi/change/test_app_key/XRTKQ1773829273", change_payload),
+        FakeMessage("openapi/period/test_app_key/TESTA1700000000", period_payload),
+        FakeMessage("openapi/change/test_app_key/TESTA1700000000", change_payload),
     ]
 
     publishes = []
@@ -2302,18 +2330,23 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
         def messages(self):
             return FakeMQTTClient._Messages(messages_to_deliver, api)
 
+    async def fake_sleep(seconds):
+        """Record each pause in line with the publishes, so their order can be checked."""
+        publishes.append(("sleep", seconds))
+
     with patch("sigenergy.aiomqtt.Client", return_value=FakeMQTTClient()):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
-            run_async(api._mqtt_listener_loop())
+            with patch("sigenergy.asyncio.sleep", side_effect=fake_sleep):
+                _base_run_async(api._mqtt_listener_loop())
 
     # Period message: energy_flow updated
-    flow = api.energy_flow.get("XRTKQ1773829273", {})
+    flow = api.energy_flow.get("TESTA1700000000", {})
     assert abs(flow.get("batterySoc", 0) - 55.0) < 0.01, "batterySoc from MQTT period = 55%"
     # storageChargeDischargePowerW +1000W (charging), negated to -1.0 kW (Predbat convention: negative=charging)
     assert abs(flow.get("batteryPower", 0) - (-1.0)) < 0.01, "batteryPower = -1.0 kW (charging)"
 
     # Change message: controls updated
-    ctrl = api.controls.get("XRTKQ1773829273", {})
+    ctrl = api.controls.get("TESTA1700000000", {})
     assert ctrl.get("reserve") == 10, "reserve = 10 (dischargeCutOffSOC%) from MQTT change"
     assert ctrl.get("charge", {}).get("target_soc") == 95, "charge target_soc = 95"
     assert ctrl.get("export", {}).get("target_soc") is None, "export target_soc is Predbat's own, not the device's discharge cut-off"
@@ -2323,14 +2356,23 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
     assert "openapi/subscription/period" in sub_topics, "period subscription published"
     assert "openapi/subscription/change" in sub_topics, "change subscription published"
     assert "openapi/subscription/alarm" in sub_topics, "alarm subscription published"
+    # The change subscription is cancelled first, so Sigenergy treats it as new and sends the full snapshot
+    assert "openapi/unsubscription/change" in sub_topics, "change subscription cancelled before re-subscribing"
+    assert sub_topics.index("openapi/unsubscription/change") < sub_topics.index("openapi/subscription/change"), "cancel precedes subscribe: {}".format(sub_topics)
+    payloads = dict(publishes)
+    assert payloads["openapi/unsubscription/change"] == payloads["openapi/subscription/change"], "cancel carries the same token and system list"
+    # Different topics, so delivery order isn't guaranteed - the subscribe waits for the cancel to land
+    cancel_at = sub_topics.index("openapi/unsubscription/change")
+    assert publishes[cancel_at + 1] == ("sleep", SIGENERGY_MQTT_RESUBSCRIBE_DELAY), "pause after the cancel, got {}".format(publishes[cancel_at + 1])
+    assert publishes[cancel_at + 1][1] > 0, "pause must be non-zero, got {}".format(publishes[cancel_at + 1])
 
     # last_mqtt_update was set per system
-    assert api.last_mqtt_update.get("XRTKQ1773829273", 0) > 0, "last_mqtt_update was set for system"
+    assert api.last_mqtt_update.get("TESTA1700000000", 0) > 0, "last_mqtt_update was set for system"
 
     # MQTT topic subscriptions are scoped to the managed system, not a "#" wildcard
     # across every system on the app_key.
     assert len(subscribed_topics) == 3, "one topic per message type for the single managed system, got {}".format(subscribed_topics)
-    assert all("XRTKQ1773829273" in t for t in subscribed_topics), "topics scoped to the managed system_id: {}".format(subscribed_topics)
+    assert all("TESTA1700000000" in t for t in subscribed_topics), "topics scoped to the managed system_id: {}".format(subscribed_topics)
     assert not any("#" in t for t in subscribed_topics), "no wildcard system_id in subscribed topics: {}".format(subscribed_topics)
 
     return failed
@@ -2356,7 +2398,7 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
 
     period_payload_other_system = _json.dumps([{
         "deviceType": "system",
-        "systemId": "XRTKQ1773829273",  # not in api.systems - must be ignored
+        "systemId": "TESTA1700000000",  # not in api.systems - must be ignored
         "value": {
             "storageSOC%": "80.0",
             "storageChargeDischargePowerW": "1000.0",
@@ -2373,7 +2415,7 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
             self.retain = False
 
     messages_to_deliver = [
-        FakeMessage("openapi/period/test_app_key/XRTKQ1773829273", period_payload_other_system),
+        FakeMessage("openapi/period/test_app_key/TESTA1700000000", period_payload_other_system),
     ]
 
     class FakeMQTTClient:
@@ -2412,9 +2454,9 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
             run_async(api._mqtt_listener_loop())
 
-    assert "XRTKQ1773829273" not in api.energy_flow, "energy_flow not populated for out-of-scope system"
-    assert "XRTKQ1773829273" not in api.last_mqtt_update, "last_mqtt_update not set for out-of-scope system"
-    other_slug = api._system_slug("XRTKQ1773829273")
+    assert "TESTA1700000000" not in api.energy_flow, "energy_flow not populated for out-of-scope system"
+    assert "TESTA1700000000" not in api.last_mqtt_update, "last_mqtt_update not set for out-of-scope system"
+    other_slug = api._system_slug("TESTA1700000000")
     assert "sensor.predbat_sigenergy_{}_battery_soc".format(other_slug) not in api.dashboard_items, "no entities published for out-of-scope system"
 
     return failed
@@ -2561,6 +2603,45 @@ def test_sigenergy_run_polls_rest_when_mqtt_lagging(my_predbat):
     api = _make_api(lag_seconds=20)
     run_async(api.run(seconds=300, first=False))
     api.fetch_energy_flow.assert_not_called()
+    return failed
+
+
+def test_sigenergy_run_mqtt_fresh_window_covers_cadence_jitter(my_predbat):
+    """The broker's ~5 min period cadence jitters past 300s, so a message up to 450s old still counts as fresh.
+
+    Live gaps between period messages ran 214-411s; with a 300s window a poll tick landing in that
+    jitter sent a REST poll on a healthy feed (6 of 16 REST polls in one afternoon). A genuine broker
+    silence (10-20 min seen) must still fall back to REST.
+    """
+    sid = "SIG001"
+
+    def _run_with_mqtt_age(age_seconds):
+        """Run one poll tick with the last MQTT message age_seconds old, carrying a current reading."""
+        api = MockSigenergyAPI()
+        api.systems = {sid: {"deviceList": []}}
+        api.current_mode = {sid: SIGENERGY_MODE_VPP}
+        api.system_id_filter = {sid}
+        task = MagicMock()
+        task.done = MagicMock(return_value=False)
+        api._mqtt_task = task
+        api._manage_vpp_registration = AsyncMock(return_value=True)
+        api.fetch_energy_flow = AsyncMock(return_value=True)
+        api.fetch_inverter_realtime = AsyncMock(return_value=True)
+        api.fetch_daily_summary = AsyncMock(return_value=True)
+        api.fetch_history_totals = AsyncMock(return_value=True)
+        api.publish_system_entities = AsyncMock()
+        api.apply_controls = AsyncMock()
+        api.last_mqtt_update[sid] = time.time() - age_seconds
+        api.mqtt_data_lag[sid] = 5
+        run_async(api.run(seconds=300, first=False))
+        return api.fetch_energy_flow.call_count
+
+    failed = False
+    for age, expected_polls in ((60, 0), (366, 0), (418, 0), (449, 0), (451, 1), (720, 1)):
+        polls = _run_with_mqtt_age(age)
+        if polls != expected_polls:
+            print("ERROR: MQTT {}s old: expected {} REST poll(s), got {}".format(age, expected_polls, polls))
+            failed = True
     return failed
 
 
@@ -3661,6 +3742,26 @@ def test_sigenergy_onboard_status(my_predbat):
     result2 = run_async(api2.onboard_systems("sys-2"))
     assert result2 is False, "in-other-vpp returns False"
     assert api2.onboard_status["sys-2"] == "in_other_vpp", "in_other_vpp status set"
+
+    # A mistyped system ID (top-level 13001, or the documented 1106/1108) → invalid_system_id, returns False (#5691)
+    for code in (SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP, SIGENERGY_CODE_STATION_NOT_FOUND, SIGENERGY_CODE_STATION_INFO_NOT_FOUND):
+        api3 = MockSigenergyAPI()
+        api3._request = _api_error(api3, code)
+        result3 = run_async(api3.onboard_systems("sys-3"))
+        assert result3 is False, "station not found ({}) returns False".format(code)
+        assert api3.onboard_status["sys-3"] == "invalid_system_id", "invalid_system_id status set for code {}".format(code)
+
+    # The same code can come per system in data[].codeList rather than at the top level
+    api4 = MockSigenergyAPI()
+
+    async def _per_item(*args, **kwargs):
+        """A _request stand-in returning a per-system failure, as the real onboard endpoint does."""
+        return [{"systemId": "sys-4", "result": False, "codeList": [SIGENERGY_CODE_STATION_NOT_FOUND]}]
+
+    api4._request = _per_item
+    result4 = run_async(api4.onboard_systems("sys-4"))
+    assert result4 is False, "per-item station not found returns False"
+    assert api4.onboard_status["sys-4"] == "invalid_system_id", "invalid_system_id status set for a per-item code"
 
     return failed
 
@@ -4946,6 +5047,105 @@ def test_sigenergy_realtime_fallback_unknown_grid_load(my_predbat):
     return failed
 
 
+# Discovery catalogue reporter
+
+# The component's own documented example id: its 12-character slug "ta1700000000" holds a 10-digit run,
+# which the identifier shape guard the catalogue no longer has used to mistake for a misfiled identifier
+DISCOVERY_SYSTEM = "TESTA1700000000"
+
+
+def _discovery_sigenergy(systems=1):
+    """A SigenergyAPI holding `systems` discovered systems, each with one inverter, one battery and MQTT-reported limits."""
+    api = MockSigenergyAPI()
+    api.automatic = True
+    for index in range(systems):
+        sid = DISCOVERY_SYSTEM[:-1] + str(index)
+        api.systems[sid] = {"systemName": "Jane's Cottage", "batteryCapacity": 9.04, "pvCapacity": 6.0}
+        api.devices[sid] = [
+            {"deviceType": "Inverter", "serialNumber": "110A0001{}".format(index), "status": "Normal", "attrMap": {"ratedActivePower": 5.0}},
+            {"deviceType": "Battery", "serialNumber": "BAT0001{}".format(index), "status": "Normal", "attrMap": {"ratedEnergy": 9.04, "ratedChargePower": 4.4}},
+        ]
+        api.device_cutoffs[sid] = {"backup": 16.0, "discharge": 20.0}
+        api.grid_export[sid] = {"antiReflux": "on", "gridMaxBackfeedPowerW": 3680.0}
+    return api
+
+
+def test_sigenergy_catalogue_none_before_discovery(my_predbat):
+    """Nothing is reported before a system has been discovered."""
+    assert MockSigenergyAPI().build_discovery() is None
+    return False
+
+
+def test_sigenergy_record_shape(my_predbat):
+    """One record per system: inverter serial, readable system id, read-only reserve, third-party PV flag, reported ratings."""
+    report = _discovery_sigenergy().build_discovery()
+    record = report["inverters"][0]
+    sid = DISCOVERY_SYSTEM[:-1] + "0"
+    assert report["automatic"] is True
+    assert record["device_id"] == "sigenergy:110A00010", record
+    assert record["inverter_type"] == "SIGCLOUD" and record["composition"] == "direct"
+    assert record["hardware_ids"] == {"serial": "110A00010", "system_id": sid}, record["hardware_ids"]
+    assert "account_ids" not in record
+    assert record["flags"] == ["third_party_gen"]
+    assert record["entities"]["reserve"]["access"] == "r", "SIGCLOUD has no reserve control"
+    assert record["entities"]["soc_kw"]["unit"] == "kWh"
+    assert record["ratings"] == {"inverter_limit": 5000.0, "soc_max": 9.04, "export_limit": 3680, "battery_min_soc": 16.0}, record["ratings"]
+    assert "Jane" not in str(report), "the system name is never reported"
+    return False
+
+
+def test_sigenergy_export_limit_only_when_reported(my_predbat):
+    """The 99999 'no limit known' sentinel is not a rating."""
+    api = _discovery_sigenergy()
+    api.grid_export = {}
+    assert "export_limit" not in api.build_discovery()["inverters"][0]["ratings"]
+    return False
+
+
+def test_sigenergy_record_rebuilds_its_inverter_def_row(my_predbat):
+    """The record alone rebuilds the SIGCLOUD row; the clock is described as the ISO format the sensor really publishes."""
+    import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
+    from tests.discovery_contract import assert_definition_complete, validated_inverters
+
+    record = validated_inverters(_discovery_sigenergy().build_discovery())[0]
+    assert_definition_complete(record, SigenergyAPI.WRITE_AND_POLL_SLEEP, except_fields=("clock_time_format",))
+    return False
+
+
+def test_sigenergy_record_agrees_with_automatic_config(my_predbat):
+    """Each system's record binds exactly what automatic_config() binds at its index, for one and for two systems."""
+    import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
+    from tests.discovery_contract import assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
+
+    for systems in (1, 2):
+        api = _discovery_sigenergy(systems)
+        records = validated_inverters(api.build_discovery())
+        assert len(records) == systems
+        captured = capture_automatic_config(api)
+        for index, record in enumerate(records):
+            assert_record_agrees(record, captured, index=index)
+            assert_record_binds_nothing_extra(record, captured, index=index)
+    return False
+
+
+def test_sigenergy_round_trip_keeps_system_id(my_predbat):
+    """Through the real Coordinator: the system id and the entity ids stay readable, with nothing pseudonymised."""
+    from coordinator import Coordinator
+    from mock_base import MockBase
+
+    logs = []
+    coordinator = Coordinator(MockBase())
+    coordinator.log = logs.append
+    coordinator.report("sigenergy", _discovery_sigenergy().build_discovery())
+    catalogue = coordinator.catalogue()
+    sid = DISCOVERY_SYSTEM[:-1] + "0"
+    assert sid in str(catalogue), "the system id is not secret"
+    entity = catalogue["inverters"][0]["entities"]["soc_kw"]["entity_id"]
+    assert entity == "sensor.predbat_sigenergy_{}_battery_soc".format(sid[-12:].lower()), entity
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    return False
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -4998,6 +5198,7 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_history_totals_keeps_missing_node", test_sigenergy_fetch_history_totals_keeps_missing_node),
         ("save_load_cache_no_storage", test_sigenergy_save_load_cache_no_storage),
         ("save_load_cache_round_trip", test_sigenergy_save_load_cache_round_trip),
+        ("save_cache_settings_expiry", test_sigenergy_save_cache_settings_expiry),
         ("load_cached_data", test_sigenergy_load_cached_data),
         ("load_cached_data_no_storage_leaves_defaults", test_sigenergy_load_cached_data_no_storage_leaves_defaults),
         ("history_totals_clamp_survives_restart", test_sigenergy_history_totals_clamp_survives_restart),
@@ -5026,6 +5227,7 @@ def run_sigenergy_tests(my_predbat):
         ("mqtt_listener_ignores_stale_period", test_sigenergy_mqtt_listener_ignores_stale_period),
         ("mqtt_listener_applies_fresh_period", test_sigenergy_mqtt_listener_applies_fresh_period),
         ("run_polls_rest_when_mqtt_lagging", test_sigenergy_run_polls_rest_when_mqtt_lagging),
+        ("run_mqtt_fresh_window_covers_cadence_jitter", test_sigenergy_run_mqtt_fresh_window_covers_cadence_jitter),
         ("fetch_inverter_realtime", test_sigenergy_fetch_inverter_realtime),
         ("fetch_inverter_realtime_pv_power_key_fallback", test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback),
         ("fetch_energy_flow", test_sigenergy_fetch_energy_flow),
@@ -5102,6 +5304,12 @@ def run_sigenergy_tests(my_predbat):
         ("system_status_from_inverter_device", test_sigenergy_system_status_from_inverter_device),
         ("fetch_system_list_does_not_log_other_systems", test_sigenergy_fetch_system_list_does_not_log_other_systems),
         ("rate_limit_last_attempt_does_not_claim_to_wait", test_sigenergy_rate_limit_last_attempt_does_not_claim_to_wait),
+        ("catalogue_none_before_discovery", test_sigenergy_catalogue_none_before_discovery),
+        ("record_shape", test_sigenergy_record_shape),
+        ("export_limit_only_when_reported", test_sigenergy_export_limit_only_when_reported),
+        ("record_rebuilds_its_inverter_def_row", test_sigenergy_record_rebuilds_its_inverter_def_row),
+        ("record_agrees_with_automatic_config", test_sigenergy_record_agrees_with_automatic_config),
+        ("round_trip_keeps_system_id", test_sigenergy_round_trip_keeps_system_id),
     ]
 
     for name, fn in tests:

@@ -641,26 +641,6 @@ def _merge_minute_windows(minutes):
     return sorted(tuple(window) for window in windows)
 
 
-def _tou_window_to_local(start_minute, end_minute, utc_offset_minutes):
-    """
-    Shift a TOU window given in UTC minutes into wall-clock minutes from local midnight.
-
-    The measurements API labels UTC instants, so a meter whose off-peak period is fixed to local
-    time reports it shifted by whatever offset was in force when it was sampled. Both ends move
-    together so the window keeps its length, and the pair is then normalised as a unit so the start
-    falls within the day while a window crossing midnight keeps an end beyond 1440.
-    """
-    start_minute += utc_offset_minutes
-    end_minute += utc_offset_minutes
-    while start_minute < 0:
-        start_minute += 24 * 60
-        end_minute += 24 * 60
-    while start_minute >= 24 * 60:
-        start_minute -= 24 * 60
-        end_minute -= 24 * 60
-    return start_minute, end_minute
-
-
 def _localise_wall_clock(local_tz, wall_clock):
     """
     Attach a zone to a naive wall-clock time, taking the offset in force at that time.
@@ -681,17 +661,15 @@ def _localise_wall_clock(local_tz, wall_clock):
             wall_clock = wall_clock.replace(second=0, microsecond=0) + timedelta(minutes=1)
 
 
-def _tou_windows_from_measurements(response_data):
+def _tou_samples_from_measurements(response_data):
     """
-    Derive the meter's off-peak windows from measurement TOU bucket labels.
+    Read the labelled half-hours out of a measurements response as (UTC start, TOU label) pairs.
 
-    Returns (start_minute, end_minute) offsets from UTC midnight, or None when the response carries
-    no labels or only a single bucket, in which case there is nothing to distinguish an off-peak
-    period and the caller should fall back to the hard-wired windows.
+    Returns them in time order, or None when the response carries no labels at all.
     """
     if not response_data:
         return None
-    labels_by_slot = {}
+    samples = []
     for prop in (response_data.get("account", {}) or {}).get("properties", []) or []:
         for edge in (prop.get("measurements", {}) or {}).get("edges", []) or []:
             node = edge.get("node", {}) or {}
@@ -699,15 +677,54 @@ def _tou_windows_from_measurements(response_data):
             label = _slot_tou_label(node)
             if not stamp or not label:
                 continue
-            start = str2time(stamp).astimezone(timezone.utc)
-            labels_by_slot.setdefault(start.hour * 60 + start.minute, []).append(label)
-    if not labels_by_slot:
+            samples.append((str2time(stamp).astimezone(timezone.utc), label))
+    # Order by time alone, so a half-hour the response repeats keeps the API's own order
+    return sorted(samples, key=lambda sample: sample[0]) if samples else None
+
+
+def _dominant_label(labels):
+    """
+    Pick the label voted most often from a time-ordered list.
+
+    A slot's votes can tie on the local clock, where the changeover day adds or removes one. A tie
+    goes to the label seen most recently - the meter's current schedule - so the result never
+    depends on set ordering.
+    """
+    last_seen = {label: index for index, label in enumerate(labels)}
+    return max(last_seen, key=lambda label: (labels.count(label), last_seen[label]))
+
+
+def _tou_windows_from_samples(samples, local_tz=None):
+    """
+    Derive the meter's off-peak windows from labelled half-hour samples.
+
+    Returns (start_minute, end_minute) offsets from UTC midnight, or from local midnight when
+    local_tz is given, or None when there are no samples or only a single bucket, in which case
+    there is nothing to distinguish an off-peak period and the caller should fall back to the
+    hard-wired windows.
+
+    The labels are stamped as UTC instants. A meter switching on local time moves by an hour in UTC
+    across a clock change, so for such a meter each slot is placed by its own local wall-clock time
+    rather than shifted afterwards by a single offset - a sample straddling the change would
+    otherwise split its votes between two UTC positions, and today's offset would misplace the
+    days sampled before the change.
+    """
+    if not samples:
         return None
-    dominant = {slot: max(set(values), key=values.count) for slot, values in labels_by_slot.items()}
+    labels_by_slot = {}
+    for start, label in samples:
+        start = start.astimezone(local_tz or timezone.utc)
+        labels_by_slot.setdefault(start.hour * 60 + start.minute, []).append(label)
+    dominant = {slot: _dominant_label(values) for slot, values in labels_by_slot.items()}
     off_peak = _off_peak_tou_label(set(dominant.values()))
     if not off_peak or len(set(dominant.values())) < 2:
         return None
     return _merge_minute_windows(sorted(slot for slot, label in dominant.items() if label == off_peak))
+
+
+def _tou_windows_from_measurements(response_data, local_tz=None):
+    """Derive the meter's off-peak windows straight from a measurements response - see _tou_windows_from_samples."""
+    return _tou_windows_from_samples(_tou_samples_from_measurements(response_data), local_tz=local_tz)
 
 
 class OctopusAPI(ComponentBase):
@@ -765,9 +782,13 @@ class OctopusAPI(ComponentBase):
         self.automatic = automatic
         self.commands = []
         self.mpan = None
-        self.tou_windows = None
+        self.tou_samples = None
         self.tou_windows_day = None
         self.free_electricity_events = []
+        # Whether this process has seen a Free Electricity session for the account - the only evidence of
+        # enrolment there is, since the campaign has no joined flag. Kept once set, so the discovery programme
+        # outlives the session; not persisted, as the events themselves are not (build_discovery()).
+        self.free_electricity_seen = False
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -1693,9 +1714,9 @@ class OctopusAPI(ComponentBase):
         device_id. self.mpan is still the fallback for import alone, the one direction it is known
         to describe. mpan is only known for electricity (import/export); this component tracks no
         separate MPRN for gas, so a gas record's account_ids carries only the account id rather
-        than mislabelling it with the electricity MPAN. Both mpan and account genuinely identify the customer, so they go in
-        account_ids, the pseudonym container the redactor tokenises - see the module's docstring
-        and docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md. The tariff and product
+        than mislabelling it with the electricity MPAN. Both mpan and account identify the customer rather than a
+        product, so they go in account_ids, the container for account identifiers (published readable,
+        like every identifier - see docs/discovery-catalogue.md). The tariff and product
         codes describe a publicly listed Octopus product rather than the customer, so they go in
         the clear, in the nested `tariff` sub-record's info container, alongside flags built from
         this component's own existing classifiers (is_intelligent_go_tariff, has_six_hour_cap) plus
@@ -1714,10 +1735,8 @@ class OctopusAPI(ComponentBase):
         catalogue must not claim one exists that Home Assistant has never seen. Vehicle battery
         size and charge-point power are reported in ratings where Octopus's own vehicle/charger
         catalogue lookup found them. The Intelligent device id itself is carried in account_ids
-        (not left as a bare structural device_id) since it is a UUID unique to this account's
-        vehicle enrolment, not a public identifier - without a pseudonym container present, this
-        record's device_id would have nothing to mark it as identity-derived and would publish the
-        raw UUID verbatim (see coordinator.py's _has_pseudonym_container).
+        as well as in the device_id, labelling it as a UUID unique to this account's vehicle
+        enrolment rather than a public product identifier.
 
         Reporting is independent of self.automatic: it records what Octopus's own account
         describes, not whether this component wired Predbat's apps.yaml to it - that distinction is
@@ -1774,12 +1793,9 @@ class OctopusAPI(ComponentBase):
         for device_id in self.get_active_intelligent_device_ids():
             device = self.intelligent_devices.get(device_id, {})
             index_suffix = self.device_id_to_index_suffix(device_id)
-            # account_ids carries the Intelligent device id itself: it is a UUID assigned by
-            # Octopus to this specific account's vehicle enrolment, not a public identifier like a
-            # tariff or product code, so it belongs in the pseudonymised container on the same
-            # reasoning the meter records above apply to mpan/account - see _has_pseudonym_container.
-            # Without it the record's device_id ("octopus:{uuid}") has no pseudonym container
-            # anywhere in it and is never noted at all, publishing the raw UUID verbatim.
+            # account_ids carries the Intelligent device id itself: it is a UUID assigned by Octopus to
+            # this specific account's vehicle enrolment, not a public identifier like a tariff or
+            # product code, so it is labelled as an account identifier alongside mpan/account above
             record = {"device_id": "octopus:{}".format(device_id), "account_ids": {"intelligent_device_id": device_id}}
 
             ratings = {}
@@ -1795,7 +1811,50 @@ class OctopusAPI(ComponentBase):
 
             cars.append(record)
 
-        return {"automatic": self.automatic, "meters": meters, "cars": cars}
+        return {"automatic": self.automatic, "meters": meters, "cars": cars, "programmes": self._discovery_programmes(meters)}
+
+    def _discovery_programmes(self, meters):
+        """The Octoplus flexibility programmes the account is in, for the discovery catalogue.
+
+        saving_session: the account has joined the Saving Sessions campaign (hasJoinedCampaign, which the
+        cache restores across a restart). free_electricity: a Free Electricity session has been seen for
+        the account - that campaign has no joined flag, so a session is the only evidence, and once seen
+        the programme stays for the life of the process rather than flickering as sessions come and go.
+        Both rewrite rates for their windows (fetch_octopus_sessions()), hence rate_override, and both link
+        to the import meter. Their entities are the ones automatic_config() binds - the saving session
+        sensor and its join select, which Predbat writes, and the free electricity sensor - once Home
+        Assistant has seen them; reported whether or not self.automatic wired them.
+        """
+        import_meter = next((record["device_id"] for record in meters if record.get("direction") == "import"), None)
+        if import_meter is None and self.mpan:
+            import_meter = "octopus:{}".format(self.mpan)
+        programmes = []
+
+        def programme(kind, entities):
+            """One programme record of this kind on the import meter."""
+            record = {"device_id": "octopus:{}:{}".format(kind, self.account_id), "kind": kind}
+            if import_meter:
+                record["meter"] = import_meter
+            record["account_ids"] = {"account": self.account_id}
+            record["effects"] = ["rate_override"]
+            seen = self.discovery_entities(entities)
+            if seen:
+                record["entities"] = seen
+            return record
+
+        if (self.saving_sessions or {}).get("account", {}).get("hasJoinedCampaign"):
+            programmes.append(
+                programme(
+                    "saving_session",
+                    {
+                        "octopus_saving_session": {"entity_id": self.get_entity_name("binary_sensor", "saving_session"), "domain": "binary_sensor", "access": "r"},
+                        "octopus_saving_session_join": {"entity_id": self.get_entity_name("select", "saving_session_join"), "domain": "select", "access": "rw"},
+                    },
+                )
+            )
+        if self.free_electricity_seen:
+            programmes.append(programme("free_electricity", {"octopus_free_electricity": {"entity_id": self.get_entity_name("sensor", "free_electricity"), "domain": "sensor", "access": "r"}}))
+        return programmes
 
     async def async_get_saving_sessions(self, account_id):
         """
@@ -1886,6 +1945,8 @@ class OctopusAPI(ComponentBase):
         # dropping the free sessions until the next poll (#5745). An answer with no events still clears them.
         if campaign_data is not None:
             self.free_electricity_events = free_events
+            if free_events:
+                self.free_electricity_seen = True
         elif self.free_electricity_events:
             self.log("Warn: OctopusAPI: Free electricity events not returned, keeping the last known ones")
 
@@ -2001,21 +2062,23 @@ class OctopusAPI(ComponentBase):
         """
         return bool(tariff_code) and "IOG-SMB" in tariff_code
 
-    async def async_get_tou_night_windows(self, days=7):
+    async def async_get_tou_night_windows(self, days=7, local_tz=None):
         """
         Read the meter's real off-peak windows from the measurements API's TOU bucket labels.
 
         Octopus labels every half-hour interval with the time-of-use bucket it bills against, which
         is the meter's actual switching schedule rather than something inferred from the tariff
-        code. Returns (start_minute, end_minute) offsets from UTC midnight, or None when the labels
-        are unavailable so the caller falls back to the hard-wired windows. The result is cached
-        for the day, since a meter's schedule does not change between polls.
+        code. Returns (start_minute, end_minute) offsets from UTC midnight, or from local midnight
+        when local_tz is given for a meter on local time, or None when the labels are unavailable
+        so the caller falls back to the hard-wired windows. The labelled samples are cached for the
+        day, since a meter's schedule does not change between polls, and either clock is read from
+        them.
         """
         if not self.mpan or not self.account_id:
             return None
         today = self.now_utc_exact.astimezone(timezone.utc).strftime(DATE_STR_FORMAT)
         if self.tou_windows_day == today:
-            return self.tou_windows
+            return _tou_windows_from_samples(self.tou_samples, local_tz=local_tz)
 
         end_at = self.now_utc_exact.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         start_at = end_at - timedelta(days=days)
@@ -2032,14 +2095,13 @@ class OctopusAPI(ComponentBase):
         except Exception as error:  # noqa: BLE001 - a diagnostic lookup must never break rate fetching
             self.log("Warn: OctopusAPI: TOU bucket lookup failed ({}), falling back to hard-wired windows".format(error))
             response_data = None
-        windows = _tou_windows_from_measurements(response_data)
         # Only a lookup that returned data settles the day. A failed or rate-limit-held one is
         # retried on the next fetch rather than leaving the hard-wired windows in place until
         # UTC midnight.
         if response_data is not None:
             self.tou_windows_day = today
-        self.tou_windows = windows
-        return windows
+        self.tou_samples = _tou_samples_from_measurements(response_data)
+        return _tou_windows_from_samples(self.tou_samples, local_tz=local_tz)
 
     def _fallback_night_window(self, tariff_code, log_unknown=True):
         """
@@ -2064,9 +2126,9 @@ class OctopusAPI(ComponentBase):
         Get day and night rates from Octopus.
 
         Selects the correct night/day window based on the tariff type:
-        - IOG TOU (product_code contains INTELLI+IOG+TOU): 23:30 to 05:30 (crosses midnight)
-        - Economy 7 (tariff_code starts with E-2R-) or unknown (400-error fallback): 00:30 to 07:30
-        - GO and other day/night tariffs: 00:30 to 05:30
+        - IOG TOU (product_code contains INTELLI+IOG+TOU): 23:30 to 05:30 local (crosses midnight)
+        - Economy 7 (tariff_code starts with E-2R-): 00:30 to 07:30 UTC
+        - GO, and any tariff code not recognised: 00:30 to 05:30 local
         """
         mdata = []
         self.log("Info: OctopusAPI: tariff has day and night rates, fetching both")
@@ -2094,21 +2156,15 @@ class OctopusAPI(ComponentBase):
                 # The guaranteed window taken below is the only fixed part of an IOG day.
                 self.log("Info: OctopusAPI: Tariff {} is Intelligent GO, its off-peak periods are dispatch-driven so the TOU labels are not read as a schedule".format(tariff_code))
             else:
-                tou_windows = await self.async_get_tou_night_windows()
+                # The labels are UTC instants, but only some meters are on a UTC-fixed schedule. Read
+                # them on whichever clock this tariff's off-peak period is really fixed to - holding a
+                # summer-sampled window at its UTC offset would run it an hour early through winter.
+                anchor_utc = self._fallback_night_window(tariff_code, log_unknown=False).get("utc", False)
+                tou_windows = await self.async_get_tou_night_windows(local_tz=None if anchor_utc else self.now_utc_exact.tzinfo)
                 if tou_windows:
-                    # The labels are UTC instants, but only some meters are on a UTC-fixed schedule.
-                    # Anchor them to whichever clock this tariff's off-peak period is really fixed to,
-                    # converting the offsets to wall-clock minutes for a local one - holding a
-                    # summer-sampled window at its UTC offset would run it an hour early through winter.
-                    anchor_utc = self._fallback_night_window(tariff_code, log_unknown=False).get("utc", False)
-                    if anchor_utc:
-                        windows = sorted((start_minute, end_minute, True) for start_minute, end_minute in tou_windows)
-                    else:
-                        utc_offset = self.now_utc_exact.utcoffset()
-                        utc_offset_minutes = int(utc_offset.total_seconds() // 60) if utc_offset else 0
-                        windows = sorted((*_tou_window_to_local(start_minute, end_minute, utc_offset_minutes), False) for start_minute, end_minute in tou_windows)
-                    applied_windows = [(start_minute, end_minute) for start_minute, end_minute, _ in windows]
-                    self.log("Info: OctopusAPI: Using off-peak windows {} ({} minutes from midnight) from measurement TOU labels, anchored to {}".format(applied_windows, "UTC" if anchor_utc else "local", "UTC" if anchor_utc else "local time"))
+                    windows = [(start_minute, end_minute, anchor_utc) for start_minute, end_minute in tou_windows]
+                    clock_name = "UTC" if anchor_utc else "local"
+                    self.log("Info: OctopusAPI: Using off-peak windows {} ({} minutes from midnight) from measurement TOU labels, anchored to {} time".format(tou_windows, clock_name, clock_name))
             if not windows:
                 window = self._fallback_night_window(tariff_code)
                 start_minute = window["start"][0] * 60 + window["start"][1]
@@ -2118,10 +2174,10 @@ class OctopusAPI(ComponentBase):
                 windows = [(start_minute, end_minute, window.get("utc", False))]
                 self.log("Info: OctopusAPI: Using hard-wired night rate window {} anchored to {} based on tariff code {}".format(window, "UTC" if window.get("utc", False) else "local time", tariff_code))
 
-            # Anchor each window to whichever clock it is fixed to. Economy 7 and any TOU-derived
-            # schedule are UTC, so anchoring them locally would run them an hour early through
-            # British Summer Time; GO and Intelligent GO are local wall-clock windows and must not
-            # move with the seasons. A hand-configured schedule may mix the two.
+            # Anchor each window to whichever clock it is fixed to. Economy 7 is UTC, so anchoring it
+            # locally would run it an hour early through British Summer Time; GO and Intelligent GO
+            # are local wall-clock windows and must not move with the seasons. A TOU-derived schedule
+            # takes its tariff's clock, and a hand-configured one may mix the two.
             utc_midnight = self.now_utc_exact.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             local_tz = self.now_utc_exact.tzinfo
             local_midnight_naive = self.now_utc_exact.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
@@ -3210,8 +3266,9 @@ class Octopus:
         """
         try:
             r = requests.get(url, timeout=120)
-        except requests.exceptions.ConnectionError:
-            self.log("Warn: Octopus: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+        except requests.exceptions.RequestException as e:
+            # RequestException covers ReadTimeout as well as ConnectionError - a read timeout is not a ConnectionError (#5743)
+            self.log("Warn: Octopus: Unable to download Octopus data from URL {} ({})".format(url, type(e).__name__))
             self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
             return None
 
@@ -3472,8 +3529,9 @@ class Octopus:
                 self.log("Download {}".format(url))
             try:
                 r = requests.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
-            except requests.exceptions.ConnectionError:
-                self.log("Warn: Octopus: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+            except requests.exceptions.RequestException as e:
+                # RequestException covers ReadTimeout as well as ConnectionError - a read timeout is not a ConnectionError (#5743)
+                self.log("Warn: Octopus: Unable to download Octopus data from URL {} ({})".format(url, type(e).__name__))
                 self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if r.status_code not in [200, 201]:

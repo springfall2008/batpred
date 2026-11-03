@@ -155,6 +155,9 @@ For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per c
 
 - **octopus_charge_limit** - Points to the Octopus Energy integration sensor that provides the car charging limit you want the car to charge to.
 For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car.
+When Octopus is linked to your charger rather than your car, Octopus's target is how much charge to add, not the level to charge to.
+Predbat detects this from the Octopus dispatch sensor (from Predbat's own Octopus component, or from which of the charge point power and the battery size the Octopus Energy integration fills in), and adds the target to the car's SoC when it was plugged in, still capped by **car_charging_limit**. It also reads a `device_type` attribute on the charge target entity you set as **octopus_charge_limit**, should the integration add one.
+If neither says which is linked (for example a charger model Octopus does not list), the target is read as the level to charge to.
 
 If you are using Octopus-led charging with the [Octopus direct connection](energy-rates.md#octopus-energy-direct) method:
 
@@ -707,15 +710,19 @@ The GivEnergy Gateway's `gateway_evc_control` (above) works the same way: off un
 
 On Octopus Intelligent (or E.ON/EDF SmartFlex through the Kraken component), what Predbat does depends on which device Octopus drives for that car. Predbat reads this from the car's own dispatch sensor in `octopus_intelligent_slot`:
 
-- **Octopus drives the charger** - your charger is the Intelligent device, or that car's Intelligent slots come from the Ohme. Predbat leaves the charger alone, and hands it back if it was holding it, so the two do not fight. Handing back never starts a charge: a charger Predbat had stopped is left for Octopus to start, an Ohme has max charge turned off, and a Zappi goes back to its own mode (Eco+ in place of Fast).
+- **Octopus drives the charger** - your charger is the Intelligent device, or that car's Intelligent slots come from the Ohme. Predbat leaves the charger alone, and hands it back if it was holding it, so the two do not fight. Handing back never starts a charge: a charger Predbat had stopped is left for Octopus to start, an Ohme has max charge turned off, and a Zappi goes back to its own mode (Eco+ in place of Fast). The exception is a Hypervolt, which is let charge again: it is not known whether Octopus can undo a Hypervolt stop, and a stop it could not undo would leave the car unable to charge.
 - **Octopus drives the car** - the car itself is the Intelligent device, so the car starts and stops its own charge. By default Predbat leaves the charger alone, and hands back a charger it was holding as usual, so one it had stopped is started again rather than left stopped. Turn on **switch.predbat_octopus_intelligent_charger_follows_car** (*expert mode*) to have Predbat drive the charger instead: on while a dispatch is running, off otherwise, so the car cannot charge outside the dispatches on its own timers. It follows both its plan and the dispatch times on the car's dispatch sensor, so a new dispatch starts the charger within a few minutes of Octopus announcing it rather than waiting for the next plan, and the charger stops when the dispatch ends.
 - **Predbat cannot tell** - for example the dispatch sensor comes from the Octopus Energy integration, which does not say, or Predbat's Octopus component has not discovered your devices yet. Setting the charger's control setting to `true` tells Predbat your charger is not the Octopus device, so Predbat drives the charger to its plan. If your charger is the Octopus device, leave its control setting off.
 
 **switch.predbat_octopus_intelligent_charging** only changes Predbat's own planning. With it off, a charger Octopus drives is still left to Octopus - Octopus goes on switching it either way - and a charger for a car Octopus drives follows Predbat's own plan, whether or not **switch.predbat_octopus_intelligent_charger_follows_car** is on.
 
+### Restarts and charger control
+
+For the GivEnergy, myenergi, Ohme and Wallbox chargers, Predbat saves which chargers it has stopped, alongside the control switch. After a restart it still knows, so turning on read only mode, turning the control switch off, turning on guest charging or turning the charger's control setting off in `apps.yaml` lets them charge again. If Octopus Intelligent now drives that charger, Predbat hands it to Octopus instead of starting it. A restart on its own releases nothing, so it does not interrupt a charge. A stop is saved before it is sent, so one whose reply was lost is released like any other. With `myenergi_enable_controls` off Predbat never writes to a Zappi, so it is not released either.
+
 ### Guest charging
 
-While Predbat drives a charger it holds it off outside the planned windows, so a visitor's car would not charge. Turn on the charger's guest charging switch - `switch.predbat_gecloud_guest_charging`, `switch.predbat_myenergi_guest_charging` or `switch.predbat_ohme_guest_charging` - and Predbat hands the charger back, as it does for read only mode. Choose how the guest charges (boost, solar only and so on) on the charger itself.
+While Predbat drives a charger it holds it off outside the planned windows, so a visitor's car would not charge. Turn on the charger's guest charging switch - `switch.predbat_gecloud_guest_charging`, `switch.predbat_myenergi_guest_charging`, `switch.predbat_ohme_guest_charging` or `switch.predbat_hypervolt_guest_charging` or `switch.predbat_wallbox_guest_charging` - and Predbat hands the charger back, as it does for read only mode. Choose how the guest charges (boost, solar only and so on) on the charger itself.
 
 Guest charging turns itself off when a car plugged in after you switched it on is unplugged, or after 12 hours. Unplugging a car that was already on the charger - your own, making way for the guest - does not end it, so if the guest plugged in before you switched it on, it runs until the 12 hours are up or you switch it off. It is not remembered across a restart, which puts Predbat back in charge.
 
@@ -769,6 +776,8 @@ It only applies when **switch.predbat_octopus_intelligent_charging** is On, as i
 In that scenario, any part of a dispatch more than 30 minutes ahead that is cheap only because of the dispatch - not the fixed 23:30-05:30 off-peak - is assumed to go away.
 The rest of the house then pays the peak rate for those minutes, and the battery is not held for the car, although the car's own charging is still costed at the dispatch rate so the two scenarios stay comparable.
 The effect is that with a low battery Predbat may top it up in the first half hour of a dispatch, which is treated as certain, so that it can carry the house through to the fixed off-peak window if the rest of the dispatch disappears.
+Once your car is charging in the dispatch (see **Charging the battery while the car is charging** below), the rest of that dispatch is no longer assumed to go away: if it did, Predbat would notice within a cycle (5 minutes).
+Instead the house and battery pay the peak rate for 5 minutes of each half hour of it, and the car's own charging pays none of that, as the car stops with its dispatch.
 This applies whether the dispatches come from the Octopus Energy integration or from Predbat's own Octopus connection.
 
 - Let the Octopus app control when your car charges.
@@ -891,6 +900,7 @@ While your car is in a dispatch that has not been cancelled (the same check that
 
 - This only breaks ties: it never changes the predicted cost, and a cheaper slot later on still wins.
 - It does not apply to a dispatch inside your fixed off-peak window, which carries no such risk.
+- While the car charges, the pessimistic PV10% scenario charges only 5 minutes of each later half hour of the dispatch at the peak rate, instead of assuming it all goes away. Where the battery would otherwise power the house through the dispatch and refill after 23:30, Predbat may instead keep it full and let the house use the dispatch rate, which saves the battery's charge and discharge losses. When the fixed off-peak window can fill the battery anyway, waiting for it still costs slightly less, so Predbat still waits.
 - The log shows `Octopus Intelligent: car charging in its dispatch, preferring battery charge in the run to ...`, and Predbat replans straight away when this starts.
 
 #### Reading the dispatch timeline in the logs

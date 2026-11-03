@@ -33,6 +33,7 @@ from typing import Optional
 import aiohttp
 
 from component_base import ComponentBase
+from coordinator import charger_with_stub_car
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from predbat_metrics import record_api_call
@@ -820,6 +821,49 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         """Return the entity name prefix for a device, e.g. predbat_myenergi_zappi_12345678."""
         return "{}_myenergi_{}_{}".format(self.prefix, device.kind, device.serial)
 
+    def build_discovery(self):
+        """Describe each Zappi, and the car it charges, for the discovery catalogue.
+
+        One charger record per Zappi in controlled_zappis() order - the car order automatic_config()
+        and charge control use - keyed "myenergi:{serial}" by the hardware serial, so the direct and
+        cloud transports (whose device_ids differ) give the same identity. myenergi knows nothing about
+        the vehicle, so each car is a stub. The entities are the four automatic_config() binds per Zappi,
+        filtered to those Home Assistant has seen; car_charging_now is left out because it only re-binds
+        the power sensor.
+
+        Not reported: the cloud alias (a user-chosen name) and the hub serial, which nothing here
+        needs. A Zappi's serial is reported even on an install with no hub, where it doubles as the
+        digest-auth username: identifiers are not secret (maintainer decision, 2 Nov 2026), and the
+        API key, which is, never enters the record. An Eddi is a diverter, not a charger, and has no
+        catalogue section.
+
+        Returns None when there is no Zappi to describe.
+        """
+        zappis = self.controlled_zappis()
+        if not zappis:
+            return None
+        chargers = []
+        cars = []
+        for device in zappis:
+            prefix = self.entity_prefix(device)
+            descriptors = {
+                "car_charging_planned": {"entity_id": "sensor.{}_plug_status".format(prefix), "domain": "sensor", "access": "r"},
+                "car_charging_plugged": {"entity_id": "binary_sensor.{}_plugged".format(prefix), "domain": "binary_sensor", "access": "r"},
+                "car_charging_energy": {"entity_id": "sensor.{}_session_energy".format(prefix), "domain": "sensor", "access": "r"},
+                "car_charging_power": {"entity_id": "sensor.{}_power".format(prefix), "domain": "sensor", "access": "r"},
+            }
+            serial = str(device.serial)
+            charger, car = charger_with_stub_car(
+                "myenergi:{}".format(serial),
+                hardware_ids={"serial": serial},
+                info={"vendor": "myenergi", "model": DEVICE_KIND_ZAPPI},
+                entities=self.discovery_entities(descriptors),
+            )
+            chargers.append(charger)
+            cars.append(car)
+        # Both switches gate the Zappi wiring in automatic_config(), so both decide whether these were bound
+        return {"automatic": bool(self.automatic and self.automatic_zappi), "chargers": chargers, "cars": cars}
+
     def automatic_config(self):
         """Wire the device sensors into Predbat's load and car planning inputs.
 
@@ -976,8 +1020,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
     async def load_control_modes(self):
         """Restore the saved Zappi modes from storage - called once control has been decided.
 
-        With control off nothing is held, so modes left over from an earlier session are
-        dropped: restored months later they would no longer be where the user left the Zappi.
+        With control off and nothing held, modes left over from an earlier session are dropped:
+        restored months later they would no longer be where the user left the Zappi. While a Zappi
+        is still held they are kept, as releasing it needs them (#5788).
         """
         if self.storage is None:
             return
@@ -989,7 +1034,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         modes = saved.get("modes") if isinstance(saved, dict) else None
         if not isinstance(modes, dict) or not modes:
             return
-        if self.charger_control_active:
+        if self.charger_control_active or self.charger_control_state:
             self.control_saved_modes = {str(device_id): mode for device_id, mode in modes.items()}
         else:
             await self.save_control_modes()
@@ -1091,7 +1136,10 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 if self.automatic and not self._auto_configured:
                     self.automatic_config()
                     self._auto_configured = True
-                if self.charger_control_active:
+                # Whether or not control is on: with myenergi_zappi_control since turned off, a Zappi an
+                # earlier session stopped is still released (#5788). Not with myenergi_enable_controls off,
+                # which means Predbat must not write to the Zappi at all
+                if self.enable_controls:
                     try:
                         await self.charger_control_tick(self.now_utc_exact)
                     except MyEnergiError as exc:
@@ -1106,6 +1154,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             # real API contact. poll_seconds is capped at MAX_POLL_SECONDS for exactly
             # this reason - see the comment there.
             self.update_success_timestamp()
+        # Every cycle, polled or not, outside the first-only work above: a report that failed to file
+        # is retried on the next run() rather than the next poll - see ComponentBase.refresh_discovery()
+        self.refresh_discovery()
         return True
 
     async def _retry_poll_after_refresh(self, exc):
