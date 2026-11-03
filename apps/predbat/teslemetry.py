@@ -110,10 +110,6 @@ REAL_TIERS = ["SUPER_OFF_PEAK", "OFF_PEAK", "PARTIAL_PEAK"]
 BOOST_TIER = "ON_PEAK"
 SLOTS_PER_DAY = 48
 SLOT_MINUTES = 30
-# Minutes before a committed export window starts that its boost band is first pushed (GH#5960). Any
-# earlier and Tesla's optimiser sees a sale worth more than covering house load and holds the battery
-# through the run-up, so the house imports while Predbat's plan has the battery serving it.
-EXPORT_BAND_LEAD_MINUTES = 5
 
 # Signal-tariff control mode (GH#4892). In this mode the pushed tariff stops describing real prices
 # and becomes a control signal saying when Predbat wants energy moved, so Tesla's own optimiser runs
@@ -1555,18 +1551,18 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         return self._committed_window("discharge")
 
     @staticmethod
-    def _export_window_due(window, minutes_now):
-        """Return the export window if its boost band belongs on the device now, else None (GH#5960).
+    def _export_window_active(window, minutes_now):
+        """Return the export window while it is running, else None, so its boost band is only pushed once it starts (GH#5960).
 
-        Due from EXPORT_BAND_LEAD_MINUTES before the start until the end, midnight wrap included. The
-        window is otherwise left out of the tariff, so the minutes before it stay in the normal band.
+        Pushed any earlier, Tesla's optimiser sees an upcoming sale worth more than covering house load
+        and holds the battery through the run-up, so the house imports while Predbat's plan has the
+        battery serving it. The device acts on a tariff push within a couple of minutes, so starting
+        the band at the window start costs only that much of the export. Midnight wrap is supported.
         """
         if not window:
             return None
         start, end = window
-        length = (end - start) % 1440
-        elapsed = (minutes_now - start) % 1440
-        if elapsed < length or (start - minutes_now) % 1440 <= EXPORT_BAND_LEAD_MINUTES:
+        if (minutes_now - start) % 1440 < (end - start) % 1440:
             return window
         return None
 
@@ -1722,13 +1718,13 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one; it
         depends only on the committed windows, so it re-pushes strictly less often.
 
-        On both paths the discharge window only reaches the tariff once it is due (see
-        _export_window_due), which costs up to two extra pushes per export window: one as the band
-        appears and one as it is withdrawn after the window ends.
+        On both paths the discharge window only reaches the tariff while it is running (see
+        _export_window_active), which costs up to two extra pushes per export window: one as the band
+        appears at its start and one as it is withdrawn at its end.
         """
         if self._is_read_only():
             return True
-        export_window = self._export_window_due(self._discharge_window(), self.get_minutes_now())
+        export_window = self._export_window_active(self._discharge_window(), self.get_minutes_now())
         if getattr(self, "tbc_control", self.DEFAULT_TBC_CONTROL):
             tariff = self.build_signal_tariff(self._charge_window(), export_window)
         else:
