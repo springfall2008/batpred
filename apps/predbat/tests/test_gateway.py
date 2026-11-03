@@ -5610,7 +5610,6 @@ class TestCheckCommandedSerials:
     def _make_gateway(self, read_only=False, alive=True, auto_configured=True, online=True, mode="Control charge & discharge"):
         from gateway import GatewayMQTT
         from unittest.mock import MagicMock
-        import time as time_mod
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.log = MagicMock()
@@ -5623,7 +5622,7 @@ class TestCheckCommandedSerials:
         gw._commanded_serials_sent_time = 0
         gw._mqtt_connected = alive
         gw._gateway_online = online
-        gw._last_telemetry_time = time_mod.time()
+        gw._last_telemetry_time = gw.monotonic()
         gw._auto_configured = auto_configured
         gw._read_only = read_only
         gw._published = []
@@ -5796,12 +5795,11 @@ class TestCheckRateCaps:
         gw.base = MagicMock()
         gw.base.inverters = []
         gw._inverter_slot_serials = []
-        import time as time_mod
 
         gw._rate_caps_sent = {}
         gw._mqtt_connected = alive
         gw._gateway_online = True
-        gw._last_telemetry_time = time_mod.time()  # fresh telemetry -> is_alive() True when connected
+        gw._last_telemetry_time = gw.monotonic()  # fresh telemetry -> is_alive() True when connected
         gw._auto_configured = auto_configured
         gw._read_only = read_only
         gw._published = []
@@ -6911,10 +6909,8 @@ class TestEvControl:
     @staticmethod
     def _set_charger(gw, session_active=False, status="Preparing", connected=True, cp_id="CP10000001"):
         """Give the gateway fresh telemetry for one charger in the given state."""
-        import time
-
         gw._last_ev_status = pb.GatewayStatus(ev_chargers=[pb.EvCharger(charge_point_id=cp_id, connected=connected, session_active=session_active, status=status)])
-        gw._last_ev_status_time = time.time()
+        gw._last_ev_status_time = gw.monotonic()
 
     @staticmethod
     def _in_window(gw):
@@ -7090,8 +7086,6 @@ class TestEvControl:
 
     def test_apply_drives_registered_charger_not_lowest_id(self):
         """With two chargers, the reconcile drives the one registered as car 1, even when another has a lower id."""
-        import time
-
         gw = self._make_gateway(configured_chargers=["CP_B", "CP_A"], ev_max_current={"CP_B": 16})
         assert gw._ev_control_cp_id == "CP_B"
         self._in_window(gw)
@@ -7101,7 +7095,7 @@ class TestEvControl:
                 pb.EvCharger(charge_point_id="CP_A", connected=True, session_active=False, status="Preparing"),
             ]
         )
-        gw._last_ev_status_time = time.time()
+        gw._last_ev_status_time = gw.monotonic()
 
         self._apply(gw)
 
@@ -7190,16 +7184,13 @@ class TestEvControl:
 
     def test_refused_stop_is_capped_and_recorded(self):
         """A charger that keeps its session after three stops gets no more, and the failure reaches the status."""
-        from unittest.mock import patch
-        import gateway as gateway_mod
-
         gw = self._make_gateway()
-        clock = [1_000_000.0]
-        with patch.object(gateway_mod.time, "time", side_effect=lambda: clock[0]):
+        clock = VirtualClock(monotonic=1_000_000.0)
+        with _gw_clock(gw, clock):
             for _ in range(20):
                 self._set_charger(gw, session_active=True, status="Charging")
                 self._apply(gw)
-                clock[0] += 60
+                clock.advance(60)
         assert self._actions(gw) == ["RemoteStopTransaction"] * 3
         gw.base.record_status.assert_called_once()
         assert "stop" in gw.base.record_status.call_args.args[0]
@@ -7250,17 +7241,14 @@ class TestEvControl:
 
     def test_refused_start_retries_are_spaced_and_capped(self):
         """A charger that never starts gets at most three starts, two minutes apart, then one warning."""
-        from unittest.mock import patch
-        import gateway as gateway_mod
-
         gw = self._make_gateway()
         self._in_window(gw)
-        clock = [1_000_000.0]
-        with patch.object(gateway_mod.time, "time", side_effect=lambda: clock[0]):
+        clock = VirtualClock(monotonic=1_000_000.0)
+        with _gw_clock(gw, clock):
             for _ in range(20):  # 20 minutes of the charger staying in Preparing
                 self._set_charger(gw, session_active=False, status="Preparing")
                 self._apply(gw)
-                clock[0] += 60
+                clock.advance(60)
         assert self._actions(gw).count("RemoteStartTransaction") == 3
         warnings = [c for c in gw.log.call_args_list if "giving up" in str(c)]
         assert len(warnings) == 1
@@ -7269,7 +7257,7 @@ class TestEvControl:
 
         # The window ends and the next one starts: the attempts are reset
         gw._ev_windows = []
-        with patch.object(gateway_mod.time, "time", side_effect=lambda: clock[0]):
+        with _gw_clock(gw, clock):
             self._set_charger(gw, session_active=False, status="Preparing")
             self._apply(gw)
             self._in_window(gw)
@@ -7349,6 +7337,7 @@ def test_ev_two_windows_through_planner(my_predbat):
     my_predbat.low_rates_tariff = [{"start": 60, "end": 90, "average": 5}, {"start": 120, "end": 150, "average": 5}]
     midnight = dt.datetime(2026, 1, 15, tzinfo=pytz.UTC)
     clock = [midnight]
+    step_clock = VirtualClock(monotonic=5000.0, wall=midnight.timestamp())
 
     class FixedDateTime(dt.datetime):
         """Give the real gateway window parser and reconciler the simulated plan-cycle clock."""
@@ -7361,6 +7350,8 @@ def test_ev_two_windows_through_planner(my_predbat):
     def cycle(minute, charger_status, session_active):
         """Inject a firmware report and execute a full car planning/publication/reconciliation cycle."""
         clock[0] = midnight + dt.timedelta(minutes=minute)
+        step_clock.wall = clock[0].timestamp()
+        step_clock.mono = 5000.0 + minute * 60
         my_predbat.now_utc = clock[0]
         my_predbat.midnight_utc = midnight
         my_predbat.minutes_now = minute
@@ -7368,7 +7359,7 @@ def test_ev_two_windows_through_planner(my_predbat):
         ev.status = charger_status
         ev.session_active = session_active
         gw._last_ev_status = status
-        gw._last_ev_status_time = clock[0].timestamp()
+        gw._last_ev_status_time = step_clock.mono
         gw._inject_ev_entities(status)
         my_predbat.get_car_charging_planned()
         my_predbat.fetch_sensor_data_car_planning()
@@ -7376,7 +7367,7 @@ def test_ev_two_windows_through_planner(my_predbat):
         gw._refresh_ev_windows()
         asyncio.run(gw._apply_ev_charging_state())
 
-    with patch("gateway.datetime.datetime", FixedDateTime), patch("gateway.time.time", side_effect=lambda: clock[0].timestamp()):
+    with patch("gateway.datetime.datetime", FixedDateTime), _gw_clock(gw, step_clock):
         cycle(60, "Preparing", False)
         cycle(90, "Charging", True)
         cycle(95, "Finishing", False)  # firmware #501 preserves the plugged-in car after StopTransaction
@@ -8740,7 +8731,6 @@ class TestGatewayOnlineTopic:
         """Build a minimal GatewayMQTT stub that _handle_message() can route an online message through."""
         from gateway import GatewayMQTT
         from unittest.mock import MagicMock
-        import time as time_mod
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.log = MagicMock()
@@ -8755,7 +8745,7 @@ class TestGatewayOnlineTopic:
         gw._rate_caps_sent = {}
         gw._mqtt_connected = True
         gw._gateway_online = False
-        gw._last_telemetry_time = time_mod.time()
+        gw._last_telemetry_time = gw.monotonic()
         return gw
 
     def _online(self, gw, payload):
@@ -8795,12 +8785,11 @@ class TestGatewayOnlineTopic:
 
     def test_stale_telemetry_is_not_alive_while_online(self):
         """A hub that says it is online but has sent no telemetry for over two minutes is a frozen feed."""
-        import time as time_mod
 
         gw = self._make_gateway()
         self._online(gw, b"online")
         assert gw.is_alive() is True
-        gw._last_telemetry_time = time_mod.time() - 300
+        gw._last_telemetry_time = gw.monotonic() - 300
         assert gw.is_alive() is False
 
     def _make_control_gateway(self):
@@ -8826,7 +8815,6 @@ class TestGatewayOnlineTopic:
     def test_silent_hub_goes_unhealthy_even_when_offline(self):
         """Housekeeping is not a success: a hub that has sent nothing for two hours is unhealthy, whatever its LWT says."""
         import datetime
-        import time as time_mod
         from components import Components
         from types import SimpleNamespace
         from unittest.mock import patch
@@ -8838,7 +8826,7 @@ class TestGatewayOnlineTopic:
         comps.component_errors = {}
 
         gw._gateway_online = False
-        gw._last_telemetry_time = time_mod.time() - 7200
+        gw._last_telemetry_time = gw.monotonic() - 7200
         gw.last_success_timestamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
         with patch("gateway.HAS_AIOMQTT", True):
             assert asyncio.run(gw.run(60, False))
@@ -9054,14 +9042,13 @@ class TestGatewayClockSeams:
         # A re-publish rebuilds it with the wall clock of the moment
         from gateway import _PLAN_REPUBLISH_INTERVAL
 
-        gw._last_plan_publish_time -= _PLAN_REPUBLISH_INTERVAL + 60
-        clock.jump_wall(5)
+        clock.advance(_PLAN_REPUBLISH_INTERVAL + 60)
         _guarded_run(gw._republish_plan_if_stale())
         assert len(gw._published) == 2, "the stale plan was re-published"
         plan = pb.ExecutionPlan()
         plan.ParseFromString(gw._published[1][1])
-        assert plan.timestamp == 1_700_000_128, "the re-published plan carries the injected wall clock, got {}".format(plan.timestamp)
-        clock.wall = 1_700_000_123.9  # back to the reading the rest of this test expects
+        assert plan.timestamp == 1_700_000_123 + _PLAN_REPUBLISH_INTERVAL + 60, "the re-published plan carries the injected wall clock, got {}".format(plan.timestamp)
+        clock.wall, clock.mono = 1_700_000_123.9, 1000.0  # back to the readings the rest of this test expects
 
         # So does the live predbat_data payload
         data_test = TestPublishPredbatData()
@@ -9142,6 +9129,252 @@ def _async_recorder():
     return Recorder()
 
 
+class TestGatewayElapsedWindows:
+    """Windows that only compare two readings of the clock run on the monotonic clock, so a wall clock that steps cannot stretch or shorten them.
+
+    Each test stamps something, then moves the wall clock one way while the monotonic clock moves the
+    other (or not at all), and checks the window follows the monotonic clock. Anything that is sent to
+    the hub or compared with an epoch value stays on the wall clock (see TestGatewayClockSeams).
+    """
+
+    HOUR = 3600
+
+    def test_telemetry_staleness_ignores_wall_clock_steps(self):
+        """is_alive() and the display health sensor age the last telemetry on the monotonic clock."""
+        from gateway import _TELEMETRY_STALE_THRESHOLD
+
+        clock = VirtualClock()
+
+        # A status with inverters stamps the monotonic clock, not the wall clock
+        unit = TestGatewayUnitControlBinding()
+        gw = unit._make_handler_gateway()
+        with _gw_clock(gw, clock):
+            gw._process_telemetry(unit._two_ac_status("ok").SerializeToString())
+            assert gw._last_telemetry_time == clock.mono, "stamped from the monotonic clock, got {}".format(gw._last_telemetry_time)
+            gw._mqtt_connected = True
+            gw._gateway_online = True
+            gw.gateway_display_only = False
+            assert gw.is_alive() is True
+            # The wall clock steps back an hour while telemetry has been silent past the threshold
+            clock.mono += _TELEMETRY_STALE_THRESHOLD + 1
+            clock.jump_wall(-self.HOUR)
+            assert gw.is_alive() is False, "silent past the threshold on the monotonic clock, so stale even though the wall clock went back"
+            # A fresh status makes it live again, and a wall clock that jumps forward does not age it
+            gw._process_telemetry(unit._two_ac_status("ok").SerializeToString())
+            clock.mono += 10
+            clock.jump_wall(+self.HOUR)
+            assert gw.is_alive() is True, "10 s on the monotonic clock, so still fresh even though the wall clock went forward an hour"
+
+        # The same window drives the display health sensor, for a status that carries no inverter
+        from tests.test_gateway_display import TestGatewayDisplayOnly
+
+        display = TestGatewayDisplayOnly()
+        gw = display._make_gateway()
+        gw.dashboard_item = lambda entity_id, state=None, attributes=None, **kwargs: states.__setitem__(entity_id, state)
+        states = {}
+        sensor = "binary_sensor.predbat_gateway_display_online"
+        clock = VirtualClock()
+        with _gw_clock(gw, clock):
+            gw._process_telemetry(pb.GatewayStatus(device_id="pbgw_test").SerializeToString())
+            assert gw._last_telemetry_time == clock.mono, "display status stamped from the monotonic clock"
+            gw._mqtt_connected = True
+            gw._gateway_online = True
+            gw._update_display_health()
+            assert states[sensor] == "on"
+            clock.mono += _TELEMETRY_STALE_THRESHOLD + 1
+            clock.jump_wall(-self.HOUR)
+            gw._update_display_health()
+            assert states[sensor] == "off", "stale on the monotonic clock although the wall clock went back"
+
+    def test_ev_status_staleness_ignores_wall_clock_steps(self):
+        """EV telemetry older than the stale threshold stops the reconcile, measured on the monotonic clock."""
+        from gateway import _TELEMETRY_STALE_THRESHOLD
+
+        clock = VirtualClock()
+        ev = TestEvControl()
+
+        # An EV-only status stamps the monotonic clock
+        unit = TestGatewayUnitControlBinding()
+        handler = unit._make_handler_gateway()
+        with _gw_clock(handler, clock):
+            handler._process_telemetry(TestEvTelemetry()._status_with_ev().SerializeToString())
+            assert handler._last_ev_status_time == clock.mono, "EV status stamped from the monotonic clock, got {}".format(handler._last_ev_status_time)
+
+        gw = ev._make_gateway()
+        ev._in_window(gw)
+        with _gw_clock(gw, clock):
+            ev._set_charger(gw, session_active=False, status="Preparing")
+            assert gw._ev_charger_status("CP10000001") is not None
+            clock.mono += _TELEMETRY_STALE_THRESHOLD + 1
+            clock.jump_wall(-self.HOUR)
+            assert gw._ev_charger_status("CP10000001") is None, "stale on the monotonic clock although the wall clock went back"
+            ev._set_charger(gw, session_active=False, status="Preparing")
+            clock.mono += 10
+            clock.jump_wall(+self.HOUR)
+            assert gw._ev_charger_status("CP10000001") is not None, "fresh on the monotonic clock although the wall clock went forward an hour"
+
+    def test_ev_command_retry_ignores_wall_clock_steps(self):
+        """A refused start is retried after the retry delay on the monotonic clock, whatever the wall clock does."""
+        from gateway import _EV_COMMAND_RETRY_SECONDS
+
+        ev = TestEvControl()
+        gw = ev._make_gateway()
+        ev._in_window(gw)
+        clock = VirtualClock()
+        with _gw_clock(gw, clock):
+            ev._set_charger(gw, session_active=False, status="Preparing")
+            ev._apply(gw)
+            assert ev._actions(gw).count("RemoteStartTransaction") == 1
+            assert gw._ev_last_attempt == clock.mono, "the attempt is stamped from the monotonic clock, got {}".format(gw._ev_last_attempt)
+
+            # The wall clock goes forward more than the delay but little monotonic time has passed: no retry
+            clock.mono += 10
+            clock.jump_wall(+self.HOUR)
+            ev._set_charger(gw, session_active=False, status="Preparing")
+            ev._apply(gw)
+            assert ev._actions(gw).count("RemoteStartTransaction") == 1, "too soon on the monotonic clock, so no retry"
+
+            # The wall clock goes back an hour but the delay has passed on the monotonic clock: retry
+            clock.mono += _EV_COMMAND_RETRY_SECONDS
+            clock.jump_wall(-2 * self.HOUR)
+            ev._set_charger(gw, session_active=False, status="Preparing")
+            ev._apply(gw)
+            assert ev._actions(gw).count("RemoteStartTransaction") == 2, "the delay has passed on the monotonic clock, so the start is retried"
+
+    def test_plan_republish_ignores_wall_clock_steps(self):
+        """The plan is re-published once the interval has passed on the monotonic clock, whatever the wall clock does."""
+        from gateway import _PLAN_REPUBLISH_INTERVAL
+
+        plan_test = TestPlanRepublish()
+        gw = plan_test._make_gateway()
+        gw.base = SimpleNamespace()
+        clock = VirtualClock(wall=1_700_000_000.0)
+        with _gw_clock(gw, clock):
+            _guarded_run(gw.publish_plan(plan_test._entries(), "Europe/London"))
+            assert gw._last_plan_publish_time == clock.mono, "stamped from the monotonic clock, got {}".format(gw._last_plan_publish_time)
+            assert len(gw._published) == 1
+
+            clock.mono += 60
+            clock.jump_wall(+self.HOUR)
+            _guarded_run(gw._republish_plan_if_stale())
+            assert len(gw._published) == 1, "only 60 s on the monotonic clock, so not re-published despite the wall clock jumping forward"
+
+            clock.mono += _PLAN_REPUBLISH_INTERVAL
+            clock.jump_wall(-2 * self.HOUR)
+            _guarded_run(gw._republish_plan_if_stale())
+            assert len(gw._published) == 2, "the interval has passed on the monotonic clock, so the plan is re-published despite the wall clock going back"
+            plan = pb.ExecutionPlan()
+            plan.ParseFromString(gw._published[1][1])
+            assert plan.timestamp == int(clock.wall), "the re-published plan still carries the wall clock, got {}".format(plan.timestamp)
+            assert gw._last_plan_publish_time == clock.mono
+
+    def test_live_display_heartbeat_ignores_wall_clock_steps(self):
+        """An unchanged live display payload is sent again after 60 s on the monotonic clock, whatever the wall clock does."""
+        from live_display import source_identity
+        from tests.test_live_display import DEVICE, base_for, provider
+
+        # The payload is held constant so only the clock decides whether it is sent again (the real one ages its source reading against the wall clock)
+        constant = {"v": 1, "enabled": True, "device_id": DEVICE, "available": False}
+        data_test = TestPublishPredbatData()
+        gw = data_test._make_gateway()
+        gw.gateway_device_id = DEVICE
+        gw.gateway_inverter_serial = "INV001"
+        gw.gateway_display_only = True
+        gw.gateway_live_display = True
+        gw.gateway_live_display_binding = {"enabled": True, "device_id": DEVICE, "provider": "givenergy", "source_id": source_identity("givenergy", ["INV001"])}
+        gw._last_live_display_publish = 0
+        gw.base = base_for(provider())
+        clock = VirtualClock(wall=1_800_000_000.0)
+        with _gw_clock(gw, clock), patch("gateway.live_display_payload", lambda *args: dict(constant)):
+            _guarded_run(gw._publish_predbat_data())
+            assert len(gw._published) == 1
+            assert gw._last_live_display_publish == clock.mono, "stamped from the monotonic clock, got {}".format(gw._last_live_display_publish)
+
+            clock.mono += 10
+            clock.jump_wall(+self.HOUR)
+            _guarded_run(gw._publish_predbat_data())
+            assert len(gw._published) == 1, "10 s on the monotonic clock, so the unchanged payload is suppressed despite the wall clock going forward"
+
+            clock.mono += 61
+            clock.jump_wall(-2 * self.HOUR)
+            _guarded_run(gw._publish_predbat_data())
+            assert len(gw._published) == 2, "61 s on the monotonic clock, so the heartbeat is sent despite the wall clock going back"
+            assert json.loads(gw._published[1][1])["timestamp"] == int(clock.wall), "the payload still carries the wall clock"
+
+    def test_display_binding_duplicate_window_ignores_wall_clock_steps(self):
+        """An unchanged display binding is sent again after 60 s on the monotonic clock, and still carries wall clock times."""
+        from tests.test_gateway_display import TestGatewayDisplayOnly
+
+        display = TestGatewayDisplayOnly()
+        gw = display._make_gateway(False)
+        gw.gateway_device_id = "pbgw_0123456789ab"
+        gw._topic_base = "predbat/devices/" + gw.gateway_device_id
+        gw.gateway_display_enabled = False
+        gw.gateway_display_visibility = {"v": 1, "device_id": gw.gateway_device_id, "instance_id": "00000000-0000-4000-8000-000000000123", "revision": 42, "enabled": False}
+        clock = VirtualClock(wall=1_800_000_000.0)
+        with _gw_clock(gw, clock):
+            asyncio.run(gw._publish_display_binding())
+            assert gw._mqtt_client.publish.await_count == 1
+            assert gw._last_live_binding_publish == clock.mono, "stamped from the monotonic clock, got {}".format(gw._last_live_binding_publish)
+
+            clock.mono += 10
+            clock.jump_wall(+self.HOUR)
+            asyncio.run(gw._publish_display_binding())
+            assert gw._mqtt_client.publish.await_count == 1, "10 s on the monotonic clock, so the unchanged binding is suppressed despite the wall clock going forward"
+
+            clock.mono += 61
+            clock.jump_wall(-2 * self.HOUR)
+            asyncio.run(gw._publish_display_binding())
+            assert gw._mqtt_client.publish.await_count == 2, "61 s on the monotonic clock, so it is sent again despite the wall clock going back"
+            sent = json.loads(gw._mqtt_client.publish.await_args.args[1])
+            assert sent["display_visibility"]["issued_at"] == int(clock.wall), "issued_at is the wall clock, got {}".format(sent)
+
+    def test_read_only_resend_ignores_wall_clock_steps(self):
+        """An unchanged read-only state is re-sent every 30 minutes of monotonic time, whatever the wall clock does."""
+        test = TestCheckReadOnlyState()
+        gw = test._make_gateway(read_only=False)
+        gw.base = SimpleNamespace()
+        clock = VirtualClock()
+        with _gw_clock(gw, clock):
+            _guarded_run(gw._check_read_only_state())
+            assert len(gw._published) == 1
+            assert gw._last_read_only_sent_time == clock.mono, "stamped from the monotonic clock, got {}".format(gw._last_read_only_sent_time)
+
+            clock.mono += 60
+            clock.jump_wall(+self.HOUR)
+            _guarded_run(gw._check_read_only_state())
+            assert len(gw._published) == 1, "1 minute of monotonic time, so not re-sent despite the wall clock going forward"
+
+            clock.mono += 30 * 60
+            clock.jump_wall(-3 * self.HOUR)
+            _guarded_run(gw._check_read_only_state())
+            assert len(gw._published) == 2, "30 minutes of monotonic time, so re-sent despite the wall clock going back"
+
+    def test_commanded_serials_resend_ignores_wall_clock_steps(self):
+        """An unchanged commanded-serials declaration is repeated every 30 minutes of monotonic time, whatever the wall clock does."""
+        test = TestCheckCommandedSerials()
+        gw = test._make_gateway()
+        gw.base.inverters = [test._inverter(0)]
+        clock = VirtualClock()
+        with _gw_clock(gw, clock):
+            gw._last_telemetry_time = clock.mono
+            _guarded_run(gw._check_commanded_serials())
+            assert len(gw._published) == 1
+            assert gw._commanded_serials_sent_time == clock.mono, "stamped from the monotonic clock, got {}".format(gw._commanded_serials_sent_time)
+
+            clock.mono += 60
+            clock.jump_wall(+self.HOUR)
+            gw._last_telemetry_time = clock.mono
+            _guarded_run(gw._check_commanded_serials())
+            assert len(gw._published) == 1, "1 minute of monotonic time, so not repeated despite the wall clock going forward"
+
+            clock.mono += 30 * 60
+            clock.jump_wall(-3 * self.HOUR)
+            gw._last_telemetry_time = clock.mono
+            _guarded_run(gw._check_commanded_serials())
+            assert len(gw._published) == 2, "30 minutes of monotonic time, so repeated despite the wall clock going back"
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError, TestTokenRefreshProvider
@@ -9204,6 +9437,7 @@ def run_gateway_tests(my_predbat=None):
         TestRateAnchors,
         TestPublishRawLoopSafety,
         TestGatewayClockSeams,
+        TestGatewayElapsedWindows,
     ]
     for cls in test_classes:
         instance = cls()

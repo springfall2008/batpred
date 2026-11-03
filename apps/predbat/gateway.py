@@ -396,9 +396,9 @@ class GatewayMQTT(ComponentBase):
         self.gateway_display_visibility = kwargs.get("gateway_display_visibility")
         self.gateway_live_display = parse_display_flag("gateway_live_display", kwargs.get("gateway_live_display", False))
         self.gateway_live_display_binding = kwargs.get("gateway_live_display_binding")
-        self._last_live_display_publish = 0
+        self._last_live_display_publish = 0  # monotonic time of the last live display publish, 0 for none yet
         self._last_live_binding = None
-        self._last_live_binding_publish = 0
+        self._last_live_binding_publish = 0  # monotonic time of the last display binding publish, 0 for none yet
         self.gateway_display_only = parse_display_flag("gateway_display_only", gateway_display_only)
         self.gateway_evc_automatic = bool(gateway_evc_automatic)
         self.gateway_evc_control = bool(gateway_evc_control)
@@ -455,11 +455,11 @@ class GatewayMQTT(ComponentBase):
         # dispatches onto this loop when called from elsewhere.
         self._loop = None
         self._gateway_online = False
-        self._last_telemetry_time = 0
+        self._last_telemetry_time = 0  # monotonic time (see monotonic()) of the last status with an inverter in it, 0 until one arrives
         self._last_ev_status = None  # the last /status that carried EV chargers, for EVC control
-        self._last_ev_status_time = 0  # time.time() it arrived - also refreshed when it has no inverters
+        self._last_ev_status_time = 0  # monotonic time it arrived - also refreshed when it has no inverters
         self._last_plan_data = None
-        self._last_plan_publish_time = 0
+        self._last_plan_publish_time = 0  # monotonic time of the last plan publish, 0 for none yet
         # Entries and timezone of the last built plan, kept so the periodic re-publish
         # can rebuild the protobuf with a fresh timestamp (re-sending the cached bytes
         # would keep the original timestamp and the device would think the plan is stale)
@@ -496,7 +496,7 @@ class GatewayMQTT(ComponentBase):
         self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
         self._ev_desired = None  # planned-window state at the last reconcile; a change resets the attempts
         self._ev_attempts = {"start": 0, "stop": 0}  # commands published per direction since that change
-        self._ev_last_attempt = 0.0  # time.time() of the last published start/stop
+        self._ev_last_attempt = 0.0  # monotonic time of the last published start/stop, 0 for none yet
         self._ev_unknown_warned = False  # warned that the charger state is unknown in this window state
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
@@ -527,14 +527,14 @@ class GatewayMQTT(ComponentBase):
         self._rate_caps_sent = {}
 
         # Serials last declared to the hub with set_commanded_serials (None until the first
-        # send) and when, so the declaration is repeated periodically even when unchanged
+        # send) and when (monotonic time), so the declaration is repeated periodically even when unchanged
         self._commanded_serials_sent = None
         self._commanded_serials_sent_time = 0
 
         # Last read-only state sent to the gateway (None until the first send,
         # so the current state is always pushed once on startup)
         self._last_read_only = None
-        # Monotonic-ish timestamp of the last set_read_only send, used to force a
+        # Monotonic time of the last set_read_only send, used to force a
         # periodic re-send so the gateway re-syncs even if a command was missed
         self._last_read_only_sent_time = 0
         # Latch so a gateway whose reported read-only state disagrees with what PredBat
@@ -705,7 +705,7 @@ class GatewayMQTT(ComponentBase):
         Not usable means no EV telemetry yet, EV telemetry older than ``_TELEMETRY_STALE_THRESHOLD``, or the
         charger not connected to the hub - its session fields are then stale and it cannot take a command.
         """
-        if self._last_ev_status is None or time.time() - self._last_ev_status_time >= _TELEMETRY_STALE_THRESHOLD:
+        if self._last_ev_status is None or self.monotonic() - self._last_ev_status_time >= _TELEMETRY_STALE_THRESHOLD:
             return None
         ev = next((c for c in self._last_ev_status.ev_chargers if c.charge_point_id == cp_id), None)
         if ev is None or not ev.connected:
@@ -780,7 +780,7 @@ class GatewayMQTT(ComponentBase):
                     self.base.record_status(message, had_errors=True)
                 self._ev_attempts[direction] += 1  # warn once
             return
-        if time.time() - self._ev_last_attempt < _EV_COMMAND_RETRY_SECONDS:
+        if self._ev_last_attempt and self.monotonic() - self._ev_last_attempt < _EV_COMMAND_RETRY_SECONDS:
             return
 
         if direction == "start":
@@ -793,7 +793,7 @@ class GatewayMQTT(ComponentBase):
             sent = await self._send_ev_command(cp_id, {"action": "RemoteStopTransaction"})
         if sent:
             self._ev_attempts[direction] += 1
-            self._ev_last_attempt = time.time()
+            self._ev_last_attempt = self.monotonic()
 
     @writes
     async def _send_ev_command(self, charge_point_id, command):
@@ -1148,7 +1148,7 @@ class GatewayMQTT(ComponentBase):
             # A desk display need not discover an inverter. Do not inject the hub's
             # inverter entities or register hardware against the selected provider.
             self._last_status = status
-            self._last_telemetry_time = time.time()
+            self._last_telemetry_time = self.monotonic()
             self.update_success_timestamp()
             self.api_started = True
             return
@@ -1157,7 +1157,7 @@ class GatewayMQTT(ComponentBase):
         # and is returned from below before it can refresh _last_status
         if status.ev_chargers:
             self._last_ev_status = status
-            self._last_ev_status_time = time.time()
+            self._last_ev_status_time = self.monotonic()
 
         if len(status.inverters) == 0:
             if not (self.gateway_inverter_serial and self._discovery):
@@ -1166,7 +1166,7 @@ class GatewayMQTT(ComponentBase):
             # so a status naming none of them is every one of them unread, not nothing to do
             # (#5471). It is not fresh data though, so it does not count towards being alive.
         else:
-            self._last_telemetry_time = time.time()
+            self._last_telemetry_time = self.monotonic()
             self.update_success_timestamp()
         self._last_status = status
 
@@ -2939,7 +2939,7 @@ class GatewayMQTT(ComponentBase):
                 payload["block_state"] = str(payload["block_state"])[:15]
 
             # Live readings need a heartbeat even at genuine zero/unchanged SOC.
-            if payload == self._last_predbat_data and (not live_enabled or time.time() - self._last_live_display_publish < 60):
+            if payload == self._last_predbat_data and (not live_enabled or (self._last_live_display_publish and self.monotonic() - self._last_live_display_publish < 60)):
                 return
 
             dedup_payload = dict(payload)
@@ -2958,7 +2958,7 @@ class GatewayMQTT(ComponentBase):
             await self._publish_raw(topic, payload_json.encode(), retain=True)
             self._last_predbat_data = dedup_payload  # store after the publish call completes
             if live_enabled:
-                self._last_live_display_publish = time.time()
+                self._last_live_display_publish = self.monotonic()
             self.log(f"Info: Published predbat_data: price={payload['current_price']}p avg={payload['avg_price']}p cost=£{payload['total_cost']}")
 
         except Exception as e:
@@ -2982,9 +2982,9 @@ class GatewayMQTT(ComponentBase):
             self._last_read_only = None
             return
         read_only = bool(self.get_arg("set_read_only", False))
-        now = time.time()
+        now = self.monotonic()
         changed = read_only != self._last_read_only
-        stale = now - self._last_read_only_sent_time >= 30 * 60
+        stale = not self._last_read_only_sent_time or now - self._last_read_only_sent_time >= 30 * 60
         if not changed and not stale:
             return
         await self.publish_command("set_read_only", enable=read_only)
@@ -3114,8 +3114,8 @@ class GatewayMQTT(ComponentBase):
         serials = self._driven_serials()
         if not serials:
             return  # no inverter bound to the hub yet
-        now = time.time()
-        if serials == self._commanded_serials_sent and now - self._commanded_serials_sent_time < 30 * 60:
+        now = self.monotonic()
+        if serials == self._commanded_serials_sent and self._commanded_serials_sent_time and now - self._commanded_serials_sent_time < 30 * 60:
             return
         await self.publish_command("set_commanded_serials", serials=serials)
         self._commanded_serials_sent = serials
@@ -3189,7 +3189,7 @@ class GatewayMQTT(ComponentBase):
         self._last_plan_data = data
         self._last_plan_entries = plan_entries
         self._last_plan_timezone = timezone_str
-        self._last_plan_publish_time = time.time()
+        self._last_plan_publish_time = self.monotonic()
 
         self._debug_dump(f"TX execution plan v{self._plan_version}", raw=data, message_type=pb.ExecutionPlan)
         await self._publish_raw(self.topic_schedule, data, retain=True)
@@ -3209,13 +3209,13 @@ class GatewayMQTT(ComponentBase):
         """
         if self._last_plan_entries is None or self._last_plan_timezone is None or not self._mqtt_connected:
             return
-        if time.time() - self._last_plan_publish_time <= _PLAN_REPUBLISH_INTERVAL:
+        if self._last_plan_publish_time and self.monotonic() - self._last_plan_publish_time <= _PLAN_REPUBLISH_INTERVAL:
             return
         data = self.build_execution_plan(self._last_plan_entries, plan_version=self._plan_version, timezone=self._last_plan_timezone, timestamp=self.wall_time())
         self._debug_dump("TX execution plan (re-publish)", raw=data, message_type=pb.ExecutionPlan)
         await self._publish_raw(self.topic_schedule, data, retain=True)
         self._last_plan_data = data
-        self._last_plan_publish_time = time.time()
+        self._last_plan_publish_time = self.monotonic()
         self.log("Info: GatewayMQTT: Re-published execution plan (refreshed timestamp)")
 
     def _next_command_id(self):
@@ -3260,7 +3260,7 @@ class GatewayMQTT(ComponentBase):
             return
         if not re.fullmatch(r"pbgw_[a-f0-9]{12}", self.gateway_device_id) or self._topic_base != f"predbat/devices/{self.gateway_device_id}":
             return
-        now = self.wall_time()
+        now = self.wall_time()  # goes in the payload; the duplicate window below runs on the monotonic clock
         visibility = visibility_payload(self.gateway_display_visibility, self.gateway_device_id, int(now))
         binding = {"live_display": self._live_display_binding()} if self.gateway_display_only else {}
         if visibility is not None:
@@ -3271,7 +3271,7 @@ class GatewayMQTT(ComponentBase):
         preference = {**binding}
         if visibility is not None:
             preference["display_visibility"] = {k: v for k, v in visibility.items() if k not in ("issued_at", "expires_at")}
-        if not force and preference == self._last_live_binding and now - self._last_live_binding_publish < 60:
+        if not force and preference == self._last_live_binding and self._last_live_binding_publish and self.monotonic() - self._last_live_binding_publish < 60:
             return
         topic = f"{self._topic_base}/config"
         payload = json.dumps(binding, separators=(",", ":")).encode()
@@ -3287,7 +3287,7 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Warn: GatewayMQTT: Display binding publish failed: {error}")
             return
         self._last_live_binding = preference
-        self._last_live_binding_publish = now
+        self._last_live_binding_publish = self.monotonic()
 
     async def _publish_raw(self, topic, payload, retain=False):
         """Publish raw bytes to an MQTT topic.
@@ -3323,7 +3323,7 @@ class GatewayMQTT(ComponentBase):
 
     def _update_display_health(self):
         """Report optional display connectivity separately from the component loop's health."""
-        online = self._mqtt_connected and self._gateway_online and self._last_telemetry_time > 0 and time.time() - self._last_telemetry_time < _TELEMETRY_STALE_THRESHOLD
+        online = self._mqtt_connected and self._gateway_online and self._last_telemetry_time > 0 and self.monotonic() - self._last_telemetry_time < _TELEMETRY_STALE_THRESHOLD
         self.dashboard_item(
             f"binary_sensor.{self.prefix}_gateway_display_online",
             state="on" if online else "off",
@@ -3362,7 +3362,7 @@ class GatewayMQTT(ComponentBase):
         if self._last_telemetry_time == 0:
             return False
 
-        return (time.time() - self._last_telemetry_time) < _TELEMETRY_STALE_THRESHOLD
+        return (self.monotonic() - self._last_telemetry_time) < _TELEMETRY_STALE_THRESHOLD
 
     def get_error_count(self):
         """Return the cumulative error count (decode failures, MQTT disconnects, publish failures)."""
