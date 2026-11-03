@@ -20,6 +20,7 @@ from this class.
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from unittest.mock import NonCallableMock
 
 from utils import minutes_since_midnight
 import aiohttp
@@ -177,10 +178,9 @@ class ComponentBase(ABC):
         instances in one process, or a test, uses this to give each instance its own sessions), then
         the process-wide factory from set_http_session_factory(), then aiohttp.ClientSession.
         """
-        # Read from the instance's own attributes, so a mock base (where every attribute exists)
-        # does not look like it supplies a factory.
-        factory = getattr(getattr(self, "base", None), "__dict__", {}).get("http_session_factory")
-        if factory is not None:
+        factory = getattr(getattr(self, "base", None), "http_session_factory", None)
+        # A mock base answers every attribute, so a mock is never taken as a factory
+        if factory is not None and not isinstance(factory, NonCallableMock):
             return factory(**kwargs)
         return new_http_session(**kwargs)
 

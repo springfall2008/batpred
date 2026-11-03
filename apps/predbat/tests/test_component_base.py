@@ -13,18 +13,19 @@ Tests for ComponentBase start method and backoff behavior
 """
 
 import asyncio
+import time
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import aiohttp
 
 from component_base import ComponentBase, new_http_session, set_http_session_factory, writes
 from coordinator import inverter_record
 from fox import FoxAPI
-from hypervolt import HypervoltAPI
+from hypervolt import ChargerLink, HypervoltAPI
 from myenergi import MyEnergiAPI
-from octopus import OctopusEnergyApiClient
+from octopus import OctopusAPI, OctopusEnergyApiClient
 from ohme import OhmeAPI
 from solis import SolisAPI
 from teslemetry import TeslemetryAPI
@@ -921,7 +922,11 @@ class FakeResponse:
     """Async context manager standing in for an aiohttp response; every reply carries the same JSON."""
 
     status = 200
-    payload = {"idToken": "id", "refreshToken": "refresh", "success": True, "access_token": "new-token", "expires_at": "2099-01-01T00:00:00Z", "ok": 1}
+    headers = {}
+    payload = {"idToken": "id", "refreshToken": "refresh", "id_token": "id2", "refresh_token": "refresh2", "success": True, "access_token": "new-token", "expires_at": "2099-01-01T00:00:00Z", "ok": 1}
+
+    def __init__(self, text=""):
+        self.body_text = text
 
     async def __aenter__(self):
         await asyncio.sleep(0)  # yield so that concurrent callers really interleave
@@ -934,16 +939,18 @@ class FakeResponse:
         return dict(self.payload)
 
     async def text(self):
-        return ""
+        return self.body_text
 
 
 class FakeSession:
     """Records the requests made on it and whether it has been closed."""
 
-    def __init__(self, owner, kwargs):
+    def __init__(self, owner, kwargs, text=""):
         self.owner = owner
         self.kwargs = kwargs
+        self.text = text
         self.requests = []
+        self.sockets = []
         self.closed = False
 
     async def __aenter__(self):
@@ -957,7 +964,11 @@ class FakeSession:
 
     def request(self, method, url, **kwargs):
         self.requests.append((method, url))
-        return FakeResponse()
+        return FakeResponse(self.text)
+
+    def ws_connect(self, url, **kwargs):
+        self.sockets.append(url)
+        return FakeWebSocket()
 
     def get(self, url, **kwargs):
         return self.request("GET", url, **kwargs)
@@ -966,15 +977,29 @@ class FakeSession:
         return self.request("POST", url, **kwargs)
 
 
+class FakeWebSocket:
+    """Async context manager standing in for a websocket that is closed as soon as it is read."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    async def receive(self):
+        return SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None)
+
+
 class FakeSessionFactory:
     """A session factory that remembers every session it hands out."""
 
-    def __init__(self, name):
+    def __init__(self, name, text=""):
         self.name = name
+        self.text = text
         self.sessions = []
 
     def __call__(self, **kwargs):
-        session = FakeSession(self.name, kwargs)
+        session = FakeSession(self.name, kwargs, self.text)
         self.sessions.append(session)
         return session
 
@@ -1134,6 +1159,165 @@ def test_component_base_http_session_close_isolation(my_predbat):
     return False
 
 
+def _assert_only_base_factory(label, factory, trap, expect_sessions=1):
+    """Assert the base factory (not the global trap) supplied the sessions a code path made."""
+    assert trap.sessions == [], "{}: the global factory supplied a session, so the path ignored the base factory".format(label)
+    assert len(factory.sessions) == expect_sessions, "{}: expected {} session(s) from the base factory, got {}".format(label, expect_sessions, len(factory.sessions))
+    return factory.sessions
+
+
+def _run_with_global_trap(trap, coroutine):
+    """Run a coroutine with a global factory installed as a trap and the default session made fatal."""
+    set_http_session_factory(trap)
+    try:
+        with patch("aiohttp.ClientSession", side_effect=AssertionError("the default session must not be built")):
+            return asyncio.run(coroutine)
+    finally:
+        set_http_session_factory(None)
+
+
+def test_component_base_http_session_factory_lookup(my_predbat):
+    """
+    The base's factory is found by a normal attribute lookup, so a class attribute and a property
+    both work. A mock base answers every attribute and so is never taken for a factory.
+    """
+    print("\n*** Test: http_session factory lookup on the base ***")
+    class_factory = FakeSessionFactory("class")
+    property_factory = FakeSessionFactory("property")
+    global_factory = FakeSessionFactory("global")
+
+    class ClassAttributeBase(MockBase):
+        """Base whose factory is a class attribute."""
+
+        http_session_factory = class_factory
+
+    class PropertyBase(MockBase):
+        """Base whose factory is a property."""
+
+        @property
+        def http_session_factory(self):
+            return property_factory
+
+    assert TestComponent(ClassAttributeBase()).http_session().owner == "class", "a class attribute factory should be honoured"
+    assert TestComponent(PropertyBase()).http_session().owner == "property", "a property factory should be honoured"
+
+    set_http_session_factory(global_factory)
+    try:
+        mock_base = MagicMock()
+        mock_base.local_tz = timezone.utc
+        mock_base.prefix = "predbat"
+        mock_base.args = {}
+        assert TestComponent(mock_base).http_session().owner == "global", "a MagicMock base without a factory should fall back to the global factory"
+    finally:
+        set_http_session_factory(None)
+    print("PASS: class attribute and property factories honoured, mock base ignored")
+    return False
+
+
+def test_component_base_http_session_octopus_wiring(my_predbat):
+    """OctopusAPI hands its client the component's http_session, so the client's session comes from the base factory."""
+    print("\n*** Test: Octopus client session comes from the base factory ***")
+    factory = FakeSessionFactory("octopus")
+    trap = FakeSessionFactory("global")
+    component = OctopusAPI(FactoryBase(factory), key="key", account_id="A-1", automatic=False)
+    session = _run_with_global_trap(trap, component.api.async_create_client_session())
+    sessions = _assert_only_base_factory("octopus", factory, trap)
+    assert session is sessions[0], "the client should hold the base factory's session"
+    assert "skip_auto_headers" in session.kwargs, "the client's headers should be passed through the factory"
+    print("PASS: octopus client session came from the base factory")
+    return False
+
+
+def test_component_base_http_session_ohme_wiring(my_predbat):
+    """OhmeAPI's client builds its sessions from the base factory on both the token refresh and the request path."""
+    print("\n*** Test: Ohme refresh and request sessions come from the base factory ***")
+    # Token refresh path: an old token makes _async_refresh_session post to the token endpoint
+    factory = FakeSessionFactory("ohme-refresh")
+    trap = FakeSessionFactory("global")
+    component = OhmeAPI(FactoryBase(factory), email="driver@example.com", password="secret")
+    client = component.client
+    client._token = "old"
+    client._refresh_token = "refresh"
+    client._token_birth = time.time() - 3000
+    assert _run_with_global_trap(trap, client._async_refresh_session()) is True, "the token refresh should succeed through the fake session"
+    sessions = _assert_only_base_factory("ohme refresh", factory, trap)
+    assert any("securetoken" in url for _, url in sessions[0].requests), "the refresh should have posted to the token endpoint"
+
+    # Request path: a fresh token skips the refresh, so _make_request builds the session itself
+    factory = FakeSessionFactory("ohme-request")
+    trap = FakeSessionFactory("global")
+    component = OhmeAPI(FactoryBase(factory), email="driver@example.com", password="secret")
+    client = component.client
+    client._token = "token"
+    client._refresh_token = "refresh"
+    client._token_birth = time.time()
+    result = _run_with_global_trap(trap, client._make_request("GET", "/v1/test"))
+    assert result.get("ok") == 1, "the request should be answered by the fake session"
+    sessions = _assert_only_base_factory("ohme request", factory, trap)
+    assert any("api.ohme.io/v1/test" in url for _, url in sessions[0].requests), "the request should have been made on the base factory's session"
+    print("PASS: ohme refresh and request sessions came from the base factory")
+    return False
+
+
+def test_component_base_http_session_hypervolt_socket(my_predbat):
+    """The Hypervolt websocket reader opens its connection on a session from the base factory."""
+    print("\n*** Test: Hypervolt websocket session comes from the base factory ***")
+    factory = FakeSessionFactory("hypervolt")
+    trap = FakeSessionFactory("global")
+    component = HypervoltAPI(FactoryBase(factory), username="driver", password="secret")
+    # A V3 charger's session reader returns after its one connection, which the fake closes at once
+    link = ChargerLink("12345", 3)
+    _run_with_global_trap(trap, component.transport._reader(link, "session"))
+    sessions = _assert_only_base_factory("hypervolt socket", factory, trap)
+    assert len(sessions[0].sockets) == 1 and sessions[0].sockets[0].endswith("12345/session/in-progress"), "the socket should have been opened on the base factory's session: {}".format(sessions[0].sockets)
+    print("PASS: hypervolt websocket session came from the base factory")
+    return False
+
+
+def test_component_base_http_session_myenergi_direct(my_predbat):
+    """The myenergi direct (digest) transport builds its session from the base factory, passing the digest middleware."""
+    print("\n*** Test: myenergi direct transport session comes from the base factory ***")
+    factory = FakeSessionFactory("myenergi")
+    trap = FakeSessionFactory("global")
+    component = MyEnergiAPI(FactoryBase(factory), auth_method="direct", hub_serial="12345678", api_key="secret-key")
+    assert type(component.transport).__name__ == "MyEnergiDirectTransport", "the direct transport should have been built"
+
+    async def make_session():
+        return component.transport._new_session()
+
+    session = _run_with_global_trap(trap, make_session())
+    _assert_only_base_factory("myenergi direct", factory, trap)
+    assert session.kwargs.get("middlewares") and "User-Agent" in session.kwargs.get("headers", {}), "the digest middleware and headers should reach the factory"
+    print("PASS: myenergi direct session came from the base factory")
+    return False
+
+
+def test_component_base_http_session_kraken_mixin(my_predbat):
+    """KrakenAuthMixin mints tokens on a session from its host's base factory."""
+    print("\n*** Test: Kraken token request session comes from the base factory ***")
+    from kraken_auth_mixin import KrakenAuthMixin
+
+    class KrakenHost(KrakenAuthMixin, ComponentBase):
+        """Minimal component carrying the mixin."""
+
+        def initialize(self, **kwargs):
+            self.base_url = "https://kraken.example"
+            self._init_kraken_auth("api_key", key="sk_live_test")
+
+        async def run(self, seconds, first):
+            return True
+
+    factory = FakeSessionFactory("kraken")
+    trap = FakeSessionFactory("global")
+    host = KrakenHost(FactoryBase(factory))
+    result = _run_with_global_trap(trap, host._kraken_token_request({"APIKey": "sk_live_test"}))
+    sessions = _assert_only_base_factory("kraken mixin", factory, trap)
+    assert any("kraken.example/v1/graphql" in url for _, url in sessions[0].requests), "the mutation should have been posted on the base factory's session"
+    assert result is None, "the fake reply carries no token, so the mint reports failure"
+    print("PASS: kraken token request session came from the base factory")
+    return False
+
+
 def test_component_base_write_methods(my_predbat):
     """
     @writes only marks a method: it returns the same function, which behaves exactly as before.
@@ -1234,6 +1418,12 @@ def test_component_base_all(my_predbat):
         ("http_session_order", test_component_base_http_session_resolution_order, "http_session prefers the base factory, then the global factory, then aiohttp"),
         ("http_session_isolated", test_component_base_http_session_isolated_per_instance, "two instances' components only get sessions from their own factory"),
         ("http_session_close", test_component_base_http_session_close_isolation, "closing one instance's session leaves another's open; an exception still closes"),
+        ("http_session_lookup", test_component_base_http_session_factory_lookup, "a class attribute or property factory is honoured, a mock base is not taken for one"),
+        ("http_session_octopus", test_component_base_http_session_octopus_wiring, "the Octopus client's session comes from the base factory"),
+        ("http_session_ohme", test_component_base_http_session_ohme_wiring, "Ohme refresh and request sessions come from the base factory"),
+        ("http_session_hypervolt", test_component_base_http_session_hypervolt_socket, "the Hypervolt websocket session comes from the base factory"),
+        ("http_session_myenergi", test_component_base_http_session_myenergi_direct, "the myenergi direct transport session comes from the base factory"),
+        ("http_session_kraken", test_component_base_http_session_kraken_mixin, "the Kraken token request session comes from the base factory"),
         ("write_methods", test_component_base_write_methods, "@writes marks a method and write_methods lists exactly the marked ones"),
         ("write_methods_components", test_component_base_write_methods_components, "component writer methods are listed and readers are not"),
     ]
