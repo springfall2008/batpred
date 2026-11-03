@@ -139,6 +139,12 @@ The following `apps.yaml` configuration items are pre-defined with regular expre
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
 ```
 
+*Note:* if your Octopus Intelligent device is an **Ohme charger**, the Octopus Energy integration does not create the charge target or target time entities, and its 'intelligent dispatching' sensor
+never turns on (see the [integration's intelligent entities page](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/)).
+Predbat will log that `octopus_ready_time` and `octopus_charge_limit` match no entity and disable them, so it has no ready time or charge target for the car.
+Use the [Ohme car charger direct integration](#ohme-car-charger-direct-integration) with `ohme_automatic_octopus_intelligent: true` instead, which takes the planned slots,
+ready time and charge limit from Ohme. See [Completed slots on Octopus Intelligent](#completed-slots-on-octopus-intelligent) for why `octopus_intelligent_slot` can stay as it is.
+
 - **octopus_intelligent_slot** - Points to the Octopus Energy integration 'intelligent dispatching' sensor in the Octopus Energy integration that indicates
 whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
 For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car (see [Multiple Electric Cars](#multiple-electric-cars)).
