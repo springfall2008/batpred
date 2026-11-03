@@ -11,6 +11,7 @@
 """Unit tests for the Sigenergy Cloud API integration component."""
 
 import asyncio
+import contextlib
 import time
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
@@ -45,14 +46,97 @@ from tests.test_infra import run_async as _base_run_async
 def run_async(coro):
     """Like test_infra.run_async but makes all sleeps in sigenergy instant.
 
-    Patches the retry/rate-limit delay constants to 0 so that asyncio.sleep(0)
-    completes in a single event loop tick.  Also patches asyncio.sleep itself
-    with AsyncMock as a belt-and-suspenders measure.
+    Patches the retry/rate-limit delay constants to 0 so that the component's sleeps
+    complete in a single event loop tick.  MockSigenergyAPI also carries an instant
+    clock on its base, so no sleep reaches asyncio.sleep.
     """
     with patch("sigenergy.SIGENERGY_COMMAND_RETRY_DELAY", 0):
         with patch("sigenergy.SIGENERGY_MIN_REQUEST_INTERVAL", 0):
-            with patch("sigenergy.asyncio.sleep", new_callable=AsyncMock):
-                return _base_run_async(coro)
+            return _base_run_async(coro)
+
+
+class InstantClock:
+    """Clock for base.clock whose sleep returns at once, so a test never waits."""
+
+    def __init__(self):
+        """Start with no recorded sleeps."""
+        self.sleeps = []
+
+    def monotonic(self):
+        """Real monotonic time."""
+        return time.monotonic()
+
+    def time(self):
+        """Real wall-clock time."""
+        return time.time()
+
+    async def sleep(self, seconds):
+        """Record the request and return without waiting."""
+        self.sleeps.append(seconds)
+
+
+class VirtualClock:
+    """Clock for base.clock with a monotonic and a wall-clock reading of its own.
+
+    sleep() advances both readings by the requested seconds and returns at once; jump_wall()
+    moves only the wall clock, as an NTP step or a manual change would.
+    """
+
+    def __init__(self, monotonic=1000.0, wall=1_700_000_000.0):
+        """Start at the given readings with no recorded sleeps."""
+        self.mono = monotonic
+        self.wall = wall
+        self.sleeps = []
+
+    def monotonic(self):
+        """Virtual monotonic reading."""
+        return self.mono
+
+    def time(self):
+        """Virtual wall-clock reading."""
+        return self.wall
+
+    async def sleep(self, seconds):
+        """Record the request and advance both readings."""
+        self.sleeps.append(seconds)
+        self.mono += seconds
+        self.wall += seconds
+
+    def jump_wall(self, seconds):
+        """Move the wall clock alone, forwards or backwards."""
+        self.wall += seconds
+
+
+@contextlib.contextmanager
+def _base_attr(api, name, value):
+    """Set an attribute on api.base for the duration of the block, then put it back.
+
+    Restores the previous value, or removes the attribute if there was none, so a base shared
+    between tests (my_predbat) is left as it was found.
+    """
+    missing = object()
+    previous = getattr(api.base, name, missing)
+    setattr(api.base, name, value)
+    try:
+        yield
+    finally:
+        if previous is missing:
+            delattr(api.base, name)
+        else:
+            setattr(api.base, name, previous)
+
+
+def _api_mqtt_factory(api, factory):
+    """Make api build its MQTT clients with factory(**kwargs) instead of aiomqtt.Client."""
+    return _base_attr(api, "mqtt_client_factory", factory)
+
+
+def _api_clock(api, clock):
+    """Make api use clock for monotonic(), wall_time() and sleep()."""
+    return _base_attr(api, "clock", clock)
+
+
+run_async_real = _base_run_async
 
 
 def _make_mock_response(status=200, json_data=None):
@@ -145,7 +229,7 @@ class MockSigenergyAPI(SigenergyAPI):
         self.set_args = {}
         self.args = {}
         # The parts of PredBat that ComponentBase.set_arg_auto() reads: the apps.yaml snapshot and its one-time warning set
-        self.base = SimpleNamespace(args_from_apps_yaml={}, apps_yaml_override_warned=set())
+        self.base = SimpleNamespace(args_from_apps_yaml={}, apps_yaml_override_warned=set(), clock=InstantClock())
 
         # Now call the SigenergyAPI initialize directly
         self.initialize(
@@ -1828,7 +1912,7 @@ def test_sigenergy_publish_mqtt_success(my_predbat):
     mock_client = _make_mock_aiomqtt_client()
 
     with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
-        with patch("sigenergy.aiomqtt.Client", return_value=mock_client):
+        with _api_mqtt_factory(api, lambda **kwargs: mock_client):
             ok = run_async(SigenergyAPI._publish_mqtt(api, "openapi/instruction/command", {"activeMode": "charge", "systemId": "SIG1"}))
 
     assert ok is True, "_publish_mqtt should return True on success"
@@ -1893,7 +1977,7 @@ def test_sigenergy_publish_mqtt_redacts_token(my_predbat):
     payload = {"accessToken": "live-secret-token", "commands": [{"systemId": "SIG1", "activeMode": "charge", "password": "nested-secret"}]}
 
     with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
-        with patch("sigenergy.aiomqtt.Client", return_value=mock_client):
+        with _api_mqtt_factory(api, lambda **kwargs: mock_client):
             ok = run_async(SigenergyAPI._publish_mqtt(api, "openapi/instruction/command", payload))
 
     assert ok is True, "_publish_mqtt should return True on success"
@@ -1962,7 +2046,7 @@ def test_sigenergy_publish_mqtt_failure(my_predbat):
         raise ConnectionRefusedError("broker unavailable")
 
     with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
-        with patch("sigenergy.aiomqtt.Client", side_effect=raise_error):
+        with _api_mqtt_factory(api, raise_error):
             ok = run_async(SigenergyAPI._publish_mqtt(api, "openapi/instruction/command", {}))
 
     assert ok is False, "_publish_mqtt should return False on connection error"
@@ -2334,9 +2418,9 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
         """Record each pause in line with the publishes, so their order can be checked."""
         publishes.append(("sleep", seconds))
 
-    with patch("sigenergy.aiomqtt.Client", return_value=FakeMQTTClient()):
+    with _api_mqtt_factory(api, lambda **kwargs: FakeMQTTClient()):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
-            with patch("sigenergy.asyncio.sleep", side_effect=fake_sleep):
+            with _api_clock(api, SimpleNamespace(monotonic=time.monotonic, time=time.time, sleep=fake_sleep)):
                 _base_run_async(api._mqtt_listener_loop())
 
     # Period message: energy_flow updated
@@ -2450,7 +2534,7 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
         def messages(self):
             return FakeMQTTClient._Messages(messages_to_deliver, api)
 
-    with patch("sigenergy.aiomqtt.Client", return_value=FakeMQTTClient()):
+    with _api_mqtt_factory(api, lambda **kwargs: FakeMQTTClient()):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
             run_async(api._mqtt_listener_loop())
 
@@ -2509,7 +2593,7 @@ def _run_listener_with_messages(api, messages):
         def messages(self):
             return _Messages([FakeMessage(topic, payload) for topic, payload in messages])
 
-    with patch("sigenergy.aiomqtt.Client", return_value=FakeMQTTClient()):
+    with _api_mqtt_factory(api, lambda **kwargs: FakeMQTTClient()):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
             run_async(api._mqtt_listener_loop())
 
@@ -4208,7 +4292,7 @@ def _run_probe(api, system_ids, factory, **kwargs):
     def _client(*args, **client_kwargs):
         return factory(client_kwargs["protocol"])
 
-    with patch("sigenergy.aiomqtt.Client", side_effect=_client):
+    with _api_mqtt_factory(api, _client):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
             return run_async(api.mqtt_command_probe(system_ids, **kwargs))
 
@@ -4873,7 +4957,7 @@ def _run_scan(api, system_ids, factory, **kwargs):
     def _client(*args, **client_kwargs):
         return factory(client_kwargs["protocol"])
 
-    with patch("sigenergy.aiomqtt.Client", side_effect=_client):
+    with _api_mqtt_factory(api, _client):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
             return run_async(api.mqtt_topic_scan(system_ids, **kwargs))
 
@@ -5146,6 +5230,233 @@ def test_sigenergy_round_trip_keeps_system_id(my_predbat):
     return False
 
 
+# ---------------------------------------------------------------------------
+# Per-instance MQTT client factory and clock (base.mqtt_client_factory, base.clock)
+# ---------------------------------------------------------------------------
+
+
+class RecordingMQTTClient:
+    """Fake MQTT client that records what an instance does with it.
+
+    Args:
+        kwargs: The keyword arguments the component built the client with.
+        record: The dict this instance's factory fills in (clients, subscribed, published).
+        stop_api: A SigenergyAPI whose api_stop is set once its message stream is read, so the
+            listener loop ends after one connection. None for a publish-only client.
+        fail_enter: An exception raised when the connection is entered, standing in for a broker error.
+    """
+
+    def __init__(self, kwargs, record, stop_api=None, fail_enter=None):
+        """Remember the arguments and add this client to the record."""
+        self.kwargs = kwargs
+        self.record = record
+        self.stop_api = stop_api
+        self.fail_enter = fail_enter
+        record["clients"].append(kwargs)
+
+    async def __aenter__(self):
+        """Connect, or fail as configured."""
+        if self.fail_enter is not None:
+            raise self.fail_enter
+        return self
+
+    async def __aexit__(self, *args):
+        """Disconnect."""
+        pass
+
+    async def subscribe(self, topic):
+        """Record the subscription."""
+        self.record["subscribed"].append(topic)
+
+    async def publish(self, topic, payload=None, qos=0, **kwargs):
+        """Record the publish."""
+        self.record["published"].append((topic, payload))
+
+    @property
+    def messages(self):
+        """A message stream that is empty and ends the listener loop."""
+        stop_api = self.stop_api
+
+        class _Empty:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if stop_api is not None:
+                    stop_api.api_stop = True
+                raise StopAsyncIteration
+
+        return _Empty()
+
+
+def _recording_factory(record, stop_api=None, fail_enters=()):
+    """Build a factory(**kwargs) for base.mqtt_client_factory that records into record.
+
+    fail_enters lists exceptions to fail the first connections with, one per call, in order.
+    """
+    pending = list(fail_enters)
+
+    def factory(**kwargs):
+        return RecordingMQTTClient(kwargs, record, stop_api=stop_api, fail_enter=pending.pop(0) if pending else None)
+
+    return factory
+
+
+def _new_record():
+    """An empty record for a RecordingMQTTClient factory."""
+    return {"clients": [], "subscribed": [], "published": []}
+
+
+def _listener_api(app_key, token, host, system_id):
+    """A MockSigenergyAPI with its own credentials, broker and system, ready for the MQTT paths."""
+    api = MockSigenergyAPI()
+    api.app_key = app_key
+    api.access_token = token
+    api.token_expires_at = 9_999_999_999
+    api.mqtt_host = host
+    api.mqtt_port = 8883
+    api.systems[system_id] = {"systemName": system_id}
+    api.api_stop = False
+    return api
+
+
+def test_sigenergy_instances_use_their_own_mqtt_factory(my_predbat):
+    """Two instances on separate bases publish and listen at once, each only through its own MQTT factory."""
+    failed = False
+    api_a = _listener_api("keyA", "tokA", "broker-a.example", "SITE_A")
+    api_b = _listener_api("keyB", "tokB", "broker-b.example", "SITE_B")
+    record_a, record_b = _new_record(), _new_record()
+    assert api_a.base is not api_b.base, "each instance has its own base"
+
+    async def both():
+        # A fresh publish and the real listener connect on each instance, all four running together
+        return await asyncio.gather(
+            SigenergyAPI._publish_mqtt(api_a, "topic/a", {"cmd": "a"}),
+            SigenergyAPI._publish_mqtt(api_b, "topic/b", {"cmd": "b"}),
+            api_a._mqtt_listener_loop(),
+            api_b._mqtt_listener_loop(),
+        )
+
+    with _api_mqtt_factory(api_a, _recording_factory(record_a, stop_api=api_a)):
+        with _api_mqtt_factory(api_b, _recording_factory(record_b, stop_api=api_b)):
+            with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+                # aiomqtt.Client must never be reached: it would try to connect for real
+                with patch("aiomqtt.Client", side_effect=AssertionError("the default aiomqtt.Client must not be built")):
+                    results = run_async(both())
+
+    assert results[0] is True and results[1] is True, "both publishes succeed, got {}".format(results)
+    for label, record, key, token, host, system_id, topic in (
+        ("A", record_a, "keyA", "tokA", "broker-a.example", "SITE_A", "topic/a"),
+        ("B", record_b, "keyB", "tokB", "broker-b.example", "SITE_B", "topic/b"),
+    ):
+        assert len(record["clients"]) == 2, "{}: one publish client and one listener client, got {}".format(label, len(record["clients"]))
+        for kwargs in record["clients"]:
+            assert kwargs["username"] == key and kwargs["password"] == token, "{}: only its own credentials, got {}".format(label, kwargs)
+            assert kwargs["hostname"] == host, "{}: only its own broker, got {}".format(label, kwargs["hostname"])
+        assert any(t == topic for t, _ in record["published"]), "{}: its publish arrived through its own factory".format(label)
+        assert record["subscribed"] and all(key in t and system_id in t for t in record["subscribed"]), "{}: listener subscribed only to its own system, got {}".format(label, record["subscribed"])
+        assert not any(("keyB" if key == "keyA" else "keyA") in str(item) for item in record["subscribed"] + record["published"]), "{}: nothing from the other instance".format(label)
+    assert api_a.api_stop and api_b.api_stop, "both listeners ran and ended"
+    return failed
+
+
+def test_sigenergy_virtual_clock_drives_rate_limit_and_retry(my_predbat):
+    """A virtual clock on the base drives the request interval and the command retry delay with no real waiting."""
+    failed = False
+    from sigenergy import SIGENERGY_COMMAND_RETRY_DELAY as retry_delay, SIGENERGY_MIN_REQUEST_INTERVAL as interval
+
+    api = MockSigenergyAPI()
+    clock = VirtualClock()
+    api.access_token = "fake_token"
+    api.token_expires_at = clock.mono + 10_000
+
+    started = time.monotonic()
+    with _api_clock(api, clock):
+        # Two requests back to back: the second has to wait out the whole interval
+        api._last_request_time = 0
+        run_async_real(api._enforce_rate_limit())
+        assert clock.sleeps == [], "no wait when the last request was long ago, got {}".format(clock.sleeps)
+        run_async_real(api._enforce_rate_limit())
+        assert clock.sleeps == [interval], "an immediate second request waits the full interval, got {}".format(clock.sleeps)
+        # A request part way through the interval waits only for the remainder
+        clock.mono += 2.5
+        run_async_real(api._enforce_rate_limit())
+        assert abs(clock.sleeps[-1] - (interval - 2.5)) < 1e-9, "only the remainder is waited, got {}".format(clock.sleeps)
+
+        # A failing request retries after the command retry delay, each attempt also waiting out the interval
+        clock.sleeps.clear()
+        api._last_request_time = 0
+        response = _make_mock_response(status=500, json_data={})
+        with patch("sigenergy.aiohttp.ClientSession", return_value=_make_mock_session(response)):
+            result = run_async_real(api._request("GET", "/openapi/system", retries=3))
+    elapsed = time.monotonic() - started
+
+    assert result is None, "a request that keeps failing returns None"
+    expected = [retry_delay, interval - retry_delay, retry_delay, interval - retry_delay]
+    assert len(clock.sleeps) == len(expected) and all(abs(a - b) < 1e-9 for a, b in zip(clock.sleeps, expected)), "retry delay then the rest of the interval, twice: expected {}, got {}".format(expected, clock.sleeps)
+    assert elapsed < 1.0, "the virtual clock means no real waiting, but {:.2f}s passed".format(elapsed)
+    assert sum(clock.sleeps) > 2 * interval - 1e-9 and elapsed < sum(clock.sleeps), "more virtual time passed than real time"
+    return failed
+
+
+def test_sigenergy_wall_clock_jump_does_not_change_rate_limit(my_predbat):
+    """The rate-limit wait follows the monotonic clock, so a wall-clock step either way leaves it unchanged."""
+    failed = False
+    from sigenergy import SIGENERGY_MIN_REQUEST_INTERVAL as interval
+
+    api = MockSigenergyAPI()
+    clock = VirtualClock()
+    with _api_clock(api, clock):
+        api._last_request_time = clock.monotonic()
+        wall_before = api.wall_time()
+        clock.jump_wall(-86_400)
+        assert api.wall_time() == wall_before - 86_400, "the wall clock really did step back"
+        run_async_real(api._enforce_rate_limit())
+        assert clock.sleeps == [interval], "a backwards wall step leaves the wait at the full interval, got {}".format(clock.sleeps)
+
+        clock.jump_wall(+7 * 86_400)
+        run_async_real(api._enforce_rate_limit())
+        assert clock.sleeps == [interval, interval], "a forwards wall step does not skip the wait, got {}".format(clock.sleeps)
+
+        # And a wall step during the wait does not shorten the remainder of a part-elapsed interval
+        clock.mono += 4.0
+        clock.jump_wall(-3_600)
+        run_async_real(api._enforce_rate_limit())
+        assert abs(clock.sleeps[-1] - (interval - 4.0)) < 1e-9, "remainder measured on the monotonic clock, got {}".format(clock.sleeps)
+    return failed
+
+
+def test_sigenergy_listener_reconnect_reuses_own_factory(my_predbat):
+    """After an MqttError the listener reconnects through the same instance's factory with identical TLS arguments."""
+    failed = False
+    from sigenergy import aiomqtt as sigenergy_aiomqtt
+
+    api = _listener_api("keyR", "tokR", "broker-r.example", "SITE_R")
+    other = _listener_api("keyO", "tokO", "broker-o.example", "SITE_O")
+    record, other_record = _new_record(), _new_record()
+    clock = InstantClock()
+
+    with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+        with _api_mqtt_factory(api, _recording_factory(record, stop_api=api, fail_enters=[sigenergy_aiomqtt.MqttError("broker dropped")])):
+            with _api_mqtt_factory(other, _recording_factory(other_record)):
+                with _api_clock(api, clock):
+                    with patch("aiomqtt.Client", side_effect=AssertionError("the default aiomqtt.Client must not be built")):
+                        run_async(api._mqtt_listener_loop())
+
+    assert len(record["clients"]) == 2, "connected, failed, then reconnected through the same factory: {}".format(len(record["clients"]))
+    first, second = record["clients"]
+    assert first == second, "the reconnect uses identical arguments, got {} then {}".format(first, second)
+    assert first["tls_context"] is second["tls_context"], "the same TLS context is reused"
+    assert first["username"] == "keyR" and first["password"] == "tokR" and first["hostname"] == "broker-r.example", "its own connection details"
+    assert other_record["clients"] == [], "the other instance's factory was never touched"
+    # The reconnect delay after the error, the pause between cancelling and re-requesting the change push on
+    # the second connection, then the delay after that connection ends, all on the instance's own clock
+    assert clock.sleeps == [5, SIGENERGY_MQTT_RESUBSCRIBE_DELAY, 5], "sleeps went to the instance's own clock, got {}".format(clock.sleeps)
+    assert any("MQTT error" in m and "broker dropped" in m for m in api.log_messages), "the error is logged"
+    assert record["subscribed"], "the second connection subscribed"
+    return failed
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -5310,6 +5621,10 @@ def run_sigenergy_tests(my_predbat):
         ("record_rebuilds_its_inverter_def_row", test_sigenergy_record_rebuilds_its_inverter_def_row),
         ("record_agrees_with_automatic_config", test_sigenergy_record_agrees_with_automatic_config),
         ("round_trip_keeps_system_id", test_sigenergy_round_trip_keeps_system_id),
+        ("instances_use_their_own_mqtt_factory", test_sigenergy_instances_use_their_own_mqtt_factory),
+        ("virtual_clock_drives_rate_limit_and_retry", test_sigenergy_virtual_clock_drives_rate_limit_and_retry),
+        ("wall_clock_jump_does_not_change_rate_limit", test_sigenergy_wall_clock_jump_does_not_change_rate_limit),
+        ("listener_reconnect_reuses_own_factory", test_sigenergy_listener_reconnect_reuses_own_factory),
     ]
 
     for name, fn in tests:
