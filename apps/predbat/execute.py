@@ -721,8 +721,10 @@ class Execute:
                                         inverter.disable_charge_window()
                                         disabled_charge_window = True
                                         discharging_to_target = True
-                                        if inverter.inv_charge_discharge_with_rate:
-                                            discharge_rate = None
+                                        # Leave the rates as demand would, or the crosscharge balancer treats this inverter as charging
+                                        charge_rate = None
+                                        discharge_rate = None
+                                        rate_owner = "demand"
                                         self.log("Inverter {} discharging to target SoC {}% as it cannot hold there".format(inverter.id, dp0(inv_target_soc_percent)))
                                     else:
                                         inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
@@ -1163,8 +1165,12 @@ class Execute:
                     # Charge immediate
                     if isCharging:
                         if discharging_to_target:
-                            # Stop rather than freeze, so a service-controlled inverter returns to demand and covers the house
-                            inverter.adjust_charge_immediate(0)
+                            # Stop rather than freeze, so a service-controlled inverter returns to demand and covers the house,
+                            # unless a car or iBoost hold wants the battery held, as it would be outside a charge window
+                            if carHolding or boostHolding:
+                                inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
+                            else:
+                                inverter.adjust_charge_immediate(0)
                         elif self.is_freeze_charge(self.charge_limit_best[0]):
                             inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(self.soc_kw, self.soc_max), isCharging, isExporting, check=True, isFreezeCharge=True)
                             inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)

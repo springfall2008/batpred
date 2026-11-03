@@ -2947,6 +2947,12 @@ def run_execute_tests(my_predbat):
         has_target_soc=False,
         has_charge_enable_time=False,
     )
+    # Its rates are claimed as demand, so the crosscharge balancer does not hold the discharge against a charging fleet
+    for inverter in my_predbat.inverters:
+        owner = my_predbat.inverter_rate_intent[inverter.id].get("owner")
+        if owner != "demand":
+            print("ERROR: Inverter {} discharging to target should claim its rates as demand, got {}".format(inverter.id, owner))
+            failed = True
     if failed:
         return failed
 
@@ -3020,6 +3026,7 @@ def run_execute_tests(my_predbat):
         assert_pause_discharge=False,
         assert_soc_target=0,
         assert_immediate_soc_target=0,
+        assert_immediate_charge_soc_freeze_array=[False, False],
         set_reserve_enable=False,
         has_timed_pause=False,
         has_target_soc=False,
@@ -3027,6 +3034,34 @@ def run_execute_tests(my_predbat):
     )
     for inverter in my_predbat.inverters:
         inverter.inv_charge_discharge_with_rate = False
+    if failed:
+        return failed
+
+    # A car hold still holds the battery at its current SoC while discharging to the target
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_car",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging, Hold for car",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=0,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_immediate_soc_target=90,
+        assert_immediate_charge_soc_freeze_array=[True, True],
+        car_slot=charge_window_best_slot,
+        car_charging_from_battery=False,
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
     if failed:
         return failed
 
