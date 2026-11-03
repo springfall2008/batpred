@@ -44,7 +44,7 @@ except ImportError:
     HAS_AIOHTTP = False
 
 try:
-    import aiomqtt
+    import aiomqtt  # noqa: F401 - only checks it is installed; clients are built by self.mqtt_client()
 
     HAS_AIOMQTT = True
 except ImportError:
@@ -503,7 +503,7 @@ class GatewayMQTT(ComponentBase):
         # Incrementing counter included in every published command, seeded from the clock so
         # ids do not restart at PBAT1 after a restart: the hub rejects ids it has recently seen
         # as replays, and a late ack for the previous process's PBAT1 must not match ours.
-        self._command_id = int(time.time() * 1000)
+        self._command_id = int(self.wall_time() * 1000)
 
         # Command acks (predbat/devices/<id>/ack/<command_id>). Control writes are
         # tracked per entity so an identical re-send can wait for the hub's ack
@@ -837,7 +837,7 @@ class GatewayMQTT(ComponentBase):
             int: The total ticks consumed, to pass to the next wait in the chain.
         """
         while ticks < _STARTUP_WAIT_TICKS and not self.api_stop and not ready():
-            await asyncio.sleep(0.5)
+            await self.sleep(0.5)
             ticks += 1
         return ticks
 
@@ -987,7 +987,7 @@ class GatewayMQTT(ComponentBase):
 
                 client_id = f"predbat-{self.gateway_device_id}-{uuid.uuid4().hex[:8]}"
 
-                async with aiomqtt.Client(
+                async with self.mqtt_client(
                     hostname=self.mqtt_host,
                     port=self.mqtt_port,
                     username=self.gateway_device_id,
@@ -1039,7 +1039,7 @@ class GatewayMQTT(ComponentBase):
                 await self._maybe_refresh_on_auth_error(e)
 
                 self.log(f"Info: GatewayMQTT: Reconnecting in {backoff}s")
-                await asyncio.sleep(backoff)
+                await self.sleep(backoff)
                 backoff = min(backoff * 2, max_backoff)
 
         self._mqtt_connected = False
@@ -1425,7 +1425,7 @@ class GatewayMQTT(ComponentBase):
             return
         by_serial = {inv.serial: inv for inv in status.inverters}
         inverters = [by_serial[serial] for serial in serials if serial in by_serial]
-        now = status.timestamp if status.timestamp > 0 else int(time.time())
+        now = status.timestamp if status.timestamp > 0 else int(self.wall_time())
         local_now = datetime.datetime.fromtimestamp(now, tz=self.local_tz)
         day = local_now.date()
         zeroed = {"import_wh": 0.0, "export_wh": 0.0, "charge_wh": 0.0, "discharge_wh": 0.0, "load_wh": 0.0, "load_published_wh": 0.0}
@@ -2929,7 +2929,7 @@ class GatewayMQTT(ComponentBase):
 
             live_enabled = self.gateway_display_only and self.gateway_live_display
             if live_enabled:
-                payload["live_display"] = live_display_payload(self.base, self.gateway_device_id, self.gateway_inverter_serial, int(time.time()))
+                payload["live_display"] = live_display_payload(self.base, self.gateway_device_id, self.gateway_inverter_serial, int(self.wall_time()))
                 if not self._live_display_binding()["enabled"]:
                     payload["live_display"] = {"v": 1, "enabled": True, "device_id": self.gateway_device_id, "available": False}
                 # Bound existing optional strings/matrices too: predbat_data's
@@ -2943,7 +2943,7 @@ class GatewayMQTT(ComponentBase):
                 return
 
             dedup_payload = dict(payload)
-            payload["timestamp"] = int(time.time())
+            payload["timestamp"] = int(self.wall_time())
             topic = f"{self._topic_base}/predbat_data"
             payload_json = json.dumps(payload, separators=(",", ":")) if live_enabled else json.dumps(payload)
             # Include UTF-8 topic bytes and a conservative MQTT header budget.
@@ -3185,7 +3185,7 @@ class GatewayMQTT(ComponentBase):
             return
 
         self._plan_version += 1
-        data = self.build_execution_plan(plan_entries, plan_version=self._plan_version, timezone=timezone_str)
+        data = self.build_execution_plan(plan_entries, plan_version=self._plan_version, timezone=timezone_str, timestamp=self.wall_time())
         self._last_plan_data = data
         self._last_plan_entries = plan_entries
         self._last_plan_timezone = timezone_str
@@ -3211,7 +3211,7 @@ class GatewayMQTT(ComponentBase):
             return
         if time.time() - self._last_plan_publish_time <= _PLAN_REPUBLISH_INTERVAL:
             return
-        data = self.build_execution_plan(self._last_plan_entries, plan_version=self._plan_version, timezone=self._last_plan_timezone)
+        data = self.build_execution_plan(self._last_plan_entries, plan_version=self._plan_version, timezone=self._last_plan_timezone, timestamp=self.wall_time())
         self._debug_dump("TX execution plan (re-publish)", raw=data, message_type=pb.ExecutionPlan)
         await self._publish_raw(self.topic_schedule, data, retain=True)
         self._last_plan_data = data
@@ -3260,7 +3260,7 @@ class GatewayMQTT(ComponentBase):
             return
         if not re.fullmatch(r"pbgw_[a-f0-9]{12}", self.gateway_device_id) or self._topic_base != f"predbat/devices/{self.gateway_device_id}":
             return
-        now = time.time()
+        now = self.wall_time()
         visibility = visibility_payload(self.gateway_display_visibility, self.gateway_device_id, int(now))
         binding = {"live_display": self._live_display_binding()} if self.gateway_display_only else {}
         if visibility is not None:
@@ -4086,7 +4086,7 @@ class GatewayMQTT(ComponentBase):
         if self.mqtt_token_expires_at == -1:
             return
 
-        if self.mqtt_token_expires_at and self.mqtt_token_expires_at > 0 and not self.token_needs_refresh(self.mqtt_token_expires_at):
+        if self.mqtt_token_expires_at and self.mqtt_token_expires_at > 0 and not self.token_needs_refresh(self.mqtt_token_expires_at, now=self.wall_time()):
             return
 
         await self._do_token_refresh()
@@ -4260,19 +4260,20 @@ class GatewayMQTT(ComponentBase):
             return "UTC0"
 
     @staticmethod
-    def build_execution_plan(entries, plan_version, timezone):
+    def build_execution_plan(entries, plan_version, timezone, timestamp=None):
         """Build protobuf ExecutionPlan from a list of plan entry dicts.
 
         Args:
             entries: List of dicts with keys matching PlanEntry fields.
             plan_version: Monotonic version number.
             timezone: IANA timezone string (e.g. "Europe/London") — converted to POSIX format internally.
+            timestamp: Epoch seconds to stamp the plan with (the component passes its wall clock); the system clock when None.
 
         Returns:
             Serialized protobuf bytes.
         """
         plan = pb.ExecutionPlan()
-        plan.timestamp = int(time.time())
+        plan.timestamp = int(time.time() if timestamp is None else timestamp)
         plan.plan_version = plan_version
         plan.timezone = GatewayMQTT.iana_to_posix_tz(timezone)
 
@@ -4315,16 +4316,17 @@ class GatewayMQTT(ComponentBase):
             return 0
 
     @staticmethod
-    def token_needs_refresh(exp_epoch):
+    def token_needs_refresh(exp_epoch, now=None):
         """Check if token should be refreshed (1 hour before expiry).
 
         Args:
             exp_epoch: Unix timestamp of token expiry.
+            now: Current epoch seconds (the component passes its wall clock); the system clock when None.
 
         Returns:
             True if token expires within 1 hour.
         """
-        return (exp_epoch - int(time.time())) < 3600
+        return (exp_epoch - int(time.time() if now is None else now)) < 3600
 
     @staticmethod
     def build_command(command, **kwargs):

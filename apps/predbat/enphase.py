@@ -1242,7 +1242,7 @@ class EnphaseAPI(ComponentBase):
             if await self._reconcile_once(site_id):
                 return True
             if attempt < ENPHASE_RECONCILE_MAX_ATTEMPTS - 1:
-                await asyncio.sleep(1 + attempt * random.random() * 3)
+                await self.sleep(1 + attempt * random.random() * 3)
         return False
 
     async def get_battery_status(self, site_id):
@@ -1355,7 +1355,7 @@ class EnphaseAPI(ComponentBase):
 
         async def consume():
             """Subscribe and return the first decodable reading."""
-            async with aiomqtt.Client(
+            async with self.mqtt_client(
                 hostname=boot["aws_iot_endpoint"],
                 port=443,
                 transport="websockets",
@@ -1929,7 +1929,7 @@ class EnphaseAPI(ComponentBase):
             except (asyncio.TimeoutError, aiohttp.ClientError) as error:
                 self.log(f"Warn: Enphase: Request error on {path}: {error}")
                 record_api_call("enphase", False, "connection_error")
-                await asyncio.sleep(1 + retry * random.random() * 5)
+                await self.sleep(1 + retry * random.random() * 5)
                 continue
 
             self.requests_today += 1
@@ -1952,7 +1952,7 @@ class EnphaseAPI(ComponentBase):
 
             if status == 429 or status >= 500:
                 record_api_call("enphase", False, "rate_limit" if status == 429 else "server_error")
-                await asyncio.sleep(min(30, (retry + 1) * (2 + random.random() * 3)))
+                await self.sleep(min(30, (retry + 1) * (2 + random.random() * 3)))
                 continue
 
             if status != 200 and not (allow_empty and status == 204):

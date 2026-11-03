@@ -7,7 +7,11 @@ import os
 import math
 import json
 import asyncio
+import contextlib
+import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -23,6 +27,142 @@ HAS_AIOMQTT = importlib.util.find_spec("aiomqtt") is not None
 def approx_equal(actual, expected, abs_tol=0.01):
     """Simple float comparison for when pytest is not available."""
     return math.isclose(actual, expected, abs_tol=abs_tol)
+
+
+class _MqttTripwire(BaseException):
+    """Raised by the aiomqtt.Client tripwire. A BaseException so no `except Exception` in the component swallows it."""
+
+
+class _SleepBudgetExceeded(BaseException):
+    """Raised when a test clock is asked to sleep too many times, so a reconnect loop that never ends fails."""
+
+
+SLEEP_BUDGET = 1000
+WATCHDOG_SECONDS = 5
+
+
+def _guarded_run(coro):
+    """Run a coroutine with a tripwire on aiomqtt.Client, so a site that skips mqtt_client() fails fast.
+
+    Each gateway's MQTT client comes from its own base.mqtt_client_factory. Building the default
+    aiomqtt.Client means some site bypassed self.mqtt_client() and would try a real connection, so
+    the tripwire turns that into an AssertionError (and a sleep that really waits, or a loop that
+    never ends, into one too).
+    """
+
+    async def watched():
+        return await asyncio.wait_for(coro, timeout=WATCHDOG_SECONDS)
+
+    with patch("aiomqtt.Client", side_effect=_MqttTripwire()):
+        try:
+            return asyncio.run(watched())
+        except asyncio.TimeoutError:
+            raise AssertionError("still running after {}s: a sleep bypassed the base clock and is really waiting".format(WATCHDOG_SECONDS)) from None
+        except _MqttTripwire:
+            raise AssertionError("aiomqtt.Client built: a site bypasses mqtt_client()") from None
+        except _SleepBudgetExceeded:
+            raise AssertionError("the test clock was asked to sleep more than {} times: a loop never ended".format(SLEEP_BUDGET)) from None
+
+
+class InstantClock:
+    """Clock for base.clock whose sleep returns at once, so a test never waits."""
+
+    def __init__(self):
+        """Start with no recorded sleeps."""
+        self.sleeps = []
+
+    def monotonic(self):
+        """Real monotonic time."""
+        return time.monotonic()
+
+    def time(self):
+        """Real wall-clock time."""
+        return time.time()
+
+    async def sleep(self, seconds):
+        """Record the request and return without waiting, after yielding once so the sleeper can be cancelled."""
+        self.sleeps.append(seconds)
+        if len(self.sleeps) > SLEEP_BUDGET:
+            raise _SleepBudgetExceeded()
+        await asyncio.sleep(0)
+
+
+class VirtualClock:
+    """Clock for base.clock with a monotonic and a wall-clock reading of its own.
+
+    sleep() advances both readings by the requested seconds and returns at once; jump_wall()
+    moves only the wall clock, as an NTP step or a manual change would.
+    """
+
+    def __init__(self, monotonic=1000.0, wall=1_700_000_000.0):
+        """Start at the given readings with no recorded sleeps."""
+        self.mono = monotonic
+        self.wall = wall
+        self.sleeps = []
+
+    def monotonic(self):
+        """Virtual monotonic reading."""
+        return self.mono
+
+    def time(self):
+        """Virtual wall-clock reading."""
+        return self.wall
+
+    async def sleep(self, seconds):
+        """Record the request and advance both readings, after yielding once so the sleeper can be cancelled."""
+        self.sleeps.append(seconds)
+        if len(self.sleeps) > SLEEP_BUDGET:
+            raise _SleepBudgetExceeded()
+        await asyncio.sleep(0)
+        self.mono += seconds
+        self.wall += seconds
+
+    def advance(self, seconds):
+        """Move both readings forward together, as real time passing between calls does."""
+        self.mono += seconds
+        self.wall += seconds
+
+    def jump_wall(self, seconds):
+        """Move the wall clock alone, forwards or backwards."""
+        self.wall += seconds
+
+
+class _FnClock(InstantClock):
+    """Clock whose sleep is a test-supplied coroutine function (real monotonic and wall readings)."""
+
+    def __init__(self, sleep):
+        """Use the given coroutine function for sleep()."""
+        super().__init__()
+        self.sleep = sleep
+
+
+@contextlib.contextmanager
+def _base_attr(gw, name, value):
+    """Set an attribute on gw.base for the duration of the block, then put it back.
+
+    Restores the previous value, or removes the attribute if there was none, so a base shared
+    between tests (my_predbat) is left as it was found.
+    """
+    missing = object()
+    previous = getattr(gw.base, name, missing)
+    setattr(gw.base, name, value)
+    try:
+        yield
+    finally:
+        if previous is missing:
+            delattr(gw.base, name)
+        else:
+            setattr(gw.base, name, previous)
+
+
+def _gw_clock(gw, clock):
+    """Make gw use clock for monotonic(), wall_time() and sleep()."""
+    return _base_attr(gw, "clock", clock)
+
+
+def _gw_mqtt_factory(gw, factory):
+    """Make gw build its MQTT clients with factory(**kwargs) instead of aiomqtt.Client."""
+    return _base_attr(gw, "mqtt_client_factory", factory)
 
 
 class TestProtobufDecode:
@@ -5973,16 +6113,12 @@ class TestRunStartupWait:
         return gw
 
     def _run(self, coro):
-        import asyncio
-
-        return asyncio.run(coro)
+        return _guarded_run(coro)
 
     def test_returns_true_without_sleeping_when_flag_already_set(self):
         """When both startup conditions are pre-set, run() returns True without sleeping."""
         if not HAS_AIOMQTT:
             return
-        from unittest.mock import patch, AsyncMock
-
         gw = self._make_gateway()
         gw._first_connection_attempted = True
         gw._auto_configured = True
@@ -5992,9 +6128,10 @@ class TestRunStartupWait:
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-                result = await gw.run(0, True)
-            return result, mock_sleep.call_count
+            clock = InstantClock()
+            gw.base = SimpleNamespace(clock=clock)
+            result = await gw.run(0, True)
+            return result, len(clock.sleeps)
 
         result, sleep_count = self._run(run_test())
         assert result is True
@@ -6004,8 +6141,6 @@ class TestRunStartupWait:
         """run() exits the wait loop as soon as the flags are set, after a single sleep."""
         if not HAS_AIOMQTT:
             return
-        from unittest.mock import patch
-
         gw = self._make_gateway()
         sleep_count = [0]
 
@@ -6020,8 +6155,8 @@ class TestRunStartupWait:
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            with patch("asyncio.sleep", side_effect=fake_sleep):
-                result = await gw.run(0, True)
+            gw.base = SimpleNamespace(clock=_FnClock(fake_sleep))
+            result = await gw.run(0, True)
             return result
 
         result = self._run(run_test())
@@ -6032,8 +6167,6 @@ class TestRunStartupWait:
         """run() returns True and logs a Warn when the flag is never set within the timeout."""
         if not HAS_AIOMQTT:
             return
-        from unittest.mock import patch
-
         gw = self._make_gateway()
         sleep_count = [0]
 
@@ -6045,8 +6178,8 @@ class TestRunStartupWait:
                 pass  # Never sets _first_connection_attempted
 
             gw._mqtt_loop = fake_mqtt_loop
-            with patch("asyncio.sleep", side_effect=fast_sleep):
-                result = await gw.run(0, True)
+            gw.base = SimpleNamespace(clock=_FnClock(fast_sleep))
+            result = await gw.run(0, True)
             return result
 
         result = self._run(run_test())
@@ -6061,8 +6194,6 @@ class TestRunStartupWait:
         """When connected, run() waits for _auto_configured before returning."""
         if not HAS_AIOMQTT:
             return
-        from unittest.mock import patch
-
         gw = self._make_gateway()
         gw._first_connection_attempted = True
         gw._mqtt_connected = True
@@ -6077,8 +6208,8 @@ class TestRunStartupWait:
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            with patch("asyncio.sleep", side_effect=fake_sleep):
-                result = await gw.run(0, True)
+            gw.base = SimpleNamespace(clock=_FnClock(fake_sleep))
+            result = await gw.run(0, True)
             return result
 
         result = self._run(run_test())
@@ -6089,8 +6220,6 @@ class TestRunStartupWait:
         """When connected but device never sends telemetry, run() logs Warn after 60s and continues."""
         if not HAS_AIOMQTT:
             return
-        from unittest.mock import patch
-
         gw = self._make_gateway()
         gw._first_connection_attempted = True
         gw._mqtt_connected = True
@@ -6104,8 +6233,8 @@ class TestRunStartupWait:
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            with patch("asyncio.sleep", side_effect=fast_sleep):
-                result = await gw.run(0, True)
+            gw.base = SimpleNamespace(clock=_FnClock(fast_sleep))
+            result = await gw.run(0, True)
             return result
 
         result = self._run(run_test())
@@ -6124,8 +6253,6 @@ class TestRunStartupWait:
         """
         if not HAS_AIOMQTT:
             return
-        from unittest.mock import patch
-
         gw = self._make_gateway()
         gw._first_connection_attempted = True
         # _mqtt_connected stays False (first attempt failed)
@@ -6142,8 +6269,8 @@ class TestRunStartupWait:
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            with patch("asyncio.sleep", side_effect=fake_sleep):
-                result = await gw.run(0, True)
+            gw.base = SimpleNamespace(clock=_FnClock(fake_sleep))
+            result = await gw.run(0, True)
             return result
 
         result = self._run(run_test())
@@ -6154,8 +6281,6 @@ class TestRunStartupWait:
         """A broker that never comes up still releases startup after the 60s cap."""
         if not HAS_AIOMQTT:
             return
-        from unittest.mock import patch
-
         gw = self._make_gateway()
         gw._first_connection_attempted = True
         sleep_count = [0]
@@ -6168,8 +6293,8 @@ class TestRunStartupWait:
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            with patch("asyncio.sleep", side_effect=fast_sleep):
-                result = await gw.run(0, True)
+            gw.base = SimpleNamespace(clock=_FnClock(fast_sleep))
+            result = await gw.run(0, True)
             return result
 
         result = self._run(run_test())
@@ -8748,6 +8873,275 @@ class TestGatewayOnlineTopic:
         assert [command for command, _ in gw._published] == ["set_rate_cap"]
 
 
+class RecordingMQTTClient:
+    """Fake MQTT client that records what a gateway does with it.
+
+    Args:
+        kwargs: The keyword arguments the gateway built the client with.
+        record: The dict this gateway's factory fills in (clients, subscribed).
+        stop_gw: A GatewayMQTT whose api_stop is set once its message stream is read, so the
+            loop ends after one connection. None to leave the loop running.
+        fail_enter: An exception raised when the connection is entered, standing in for a broker error.
+    """
+
+    def __init__(self, kwargs, record, stop_gw=None, fail_enter=None):
+        """Remember the arguments and add this client to the record."""
+        self.kwargs = kwargs
+        self.record = record
+        self.stop_gw = stop_gw
+        self.fail_enter = fail_enter
+        record["clients"].append(kwargs)
+
+    async def __aenter__(self):
+        """Connect, or fail as configured."""
+        if self.fail_enter is not None:
+            raise self.fail_enter
+        return self
+
+    async def __aexit__(self, *args):
+        """Disconnect."""
+        pass
+
+    async def subscribe(self, topic, qos=0):
+        """Record the subscription."""
+        self.record["subscribed"].append(topic)
+
+    @property
+    def messages(self):
+        """A message stream that is empty and ends the loop."""
+        stop_gw = self.stop_gw
+
+        class _Empty:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if stop_gw is not None:
+                    stop_gw.api_stop = True
+                raise StopAsyncIteration
+
+        return _Empty()
+
+
+def _recording_factory(record, stop_gw=None, fail_enters=()):
+    """Build a factory(**kwargs) for base.mqtt_client_factory that records into record.
+
+    fail_enters lists exceptions to fail the first connections with, one per call, in order.
+    """
+    pending = list(fail_enters)
+
+    def factory(**kwargs):
+        return RecordingMQTTClient(kwargs, record, stop_gw=stop_gw, fail_enter=pending.pop(0) if pending else None)
+
+    return factory
+
+
+def _new_record():
+    """An empty record for a RecordingMQTTClient factory."""
+    return {"clients": [], "subscribed": []}
+
+
+class TestGatewayClockSeams:
+    """The gateway builds its MQTT clients, sleeps and stamps payloads through its own base (mqtt_client_factory, clock)."""
+
+    def _make_gateway(self, device_id="pbgw_0123456789ab", host="mqtt.test", token="tok"):
+        """A gateway on a base of its own, initialised with its own broker details."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.prefix = "predbat"
+        gw.args = {}
+        gw.log = MagicMock()
+        gw.initialize(gateway_device_id=device_id, mqtt_host=host, mqtt_token=token)
+        gw.update_success_timestamp = MagicMock()
+        gw.api_stop = False
+        return gw
+
+    def test_instances_use_their_own_mqtt_factory(self):
+        """Two gateways on separate bases listen at once, each only through its own MQTT factory."""
+        gw_a = self._make_gateway("pbgw_0123456789ab", "broker-a.example", "tokA")
+        gw_b = self._make_gateway("pbgw_ba9876543210", "broker-b.example", "tokB")
+        record_a, record_b = _new_record(), _new_record()
+        assert gw_a.base is not gw_b.base, "each gateway has its own base"
+
+        async def both():
+            await asyncio.gather(gw_a._mqtt_loop(), gw_b._mqtt_loop())
+
+        with _gw_mqtt_factory(gw_a, _recording_factory(record_a, stop_gw=gw_a)):
+            with _gw_mqtt_factory(gw_b, _recording_factory(record_b, stop_gw=gw_b)):
+                _guarded_run(both())
+
+        for label, record, device_id, host, token in (
+            ("A", record_a, "pbgw_0123456789ab", "broker-a.example", "tokA"),
+            ("B", record_b, "pbgw_ba9876543210", "broker-b.example", "tokB"),
+        ):
+            assert len(record["clients"]) == 1, "{}: one client, got {}".format(label, len(record["clients"]))
+            kwargs = record["clients"][0]
+            assert kwargs["hostname"] == host and kwargs["username"] == device_id and kwargs["password"] == token, "{}: only its own broker details, got {}".format(label, kwargs)
+            assert kwargs["port"] == 8883 and kwargs["keepalive"] == 60 and kwargs["tls_context"] is not None, "{}: TLS and keepalive arguments unchanged, got {}".format(label, kwargs)
+            assert kwargs["identifier"].startswith("predbat-" + device_id + "-"), "{}: client id carries its own device id, got {}".format(label, kwargs["identifier"])
+            assert record["subscribed"] and all(device_id in topic for topic in record["subscribed"]), "{}: subscribed only to its own topics, got {}".format(label, record["subscribed"])
+        assert gw_a.api_stop and gw_b.api_stop, "both loops ran and ended"
+
+    def test_reconnect_backoff_uses_own_factory_and_clock(self):
+        """After a broker error the loop waits on its own clock and reconnects through the same factory."""
+        gw = self._make_gateway("pbgw_0123456789ab", "broker-r.example", "tokR")
+        other = self._make_gateway("pbgw_ba9876543210", "broker-o.example", "tokO")
+        record, other_record = _new_record(), _new_record()
+        clock = InstantClock()
+
+        with _gw_mqtt_factory(gw, _recording_factory(record, stop_gw=gw, fail_enters=[RuntimeError("broker dropped")])):
+            with _gw_mqtt_factory(other, _recording_factory(other_record)):
+                with _gw_clock(gw, clock):
+                    _guarded_run(gw._mqtt_loop())
+
+        assert len(record["clients"]) == 2, "failed, then reconnected through the same factory: {}".format(len(record["clients"]))
+        first, second = [{k: v for k, v in kwargs.items() if k != "identifier"} for kwargs in record["clients"]]
+        assert first.keys() == second.keys() and all(first[k] == second[k] for k in first if k != "tls_context"), "the reconnect uses the same arguments, got {} then {}".format(first, second)
+        assert other_record["clients"] == [], "the other gateway's factory was never touched"
+        assert clock.sleeps == [5], "the backoff went to the gateway's own clock, got {}".format(clock.sleeps)
+        assert any("broker dropped" in str(call.args[0]) for call in gw.log.call_args_list), "the error is logged"
+
+    def test_backoff_doubles_up_to_the_cap_on_the_clock(self):
+        """Repeated failures wait 5, 10, 20, 40 then 60 seconds on the base clock, with no real waiting."""
+        gw = self._make_gateway()
+        record = _new_record()
+        clock = VirtualClock()
+        started = time.monotonic()
+
+        with _gw_mqtt_factory(gw, _recording_factory(record, stop_gw=gw, fail_enters=[RuntimeError("down")] * 6)):
+            with _gw_clock(gw, clock):
+                _guarded_run(gw._mqtt_loop())
+
+        assert clock.sleeps == [5, 10, 20, 40, 60, 60], "exponential backoff capped at 60, got {}".format(clock.sleeps)
+        assert time.monotonic() - started < 2.0, "no real waiting"
+        assert clock.mono == 1000.0 + sum(clock.sleeps), "virtual time moved by what was slept"
+
+    def test_startup_wait_ticks_on_the_clock(self):
+        """The startup wait sleeps 0.5 s per tick on the base clock until its budget is used."""
+        if not HAS_AIOMQTT:
+            return
+        gw = TestRunStartupWait()._make_gateway()
+        gw._first_connection_attempted = True
+        clock = VirtualClock()
+        started = time.monotonic()
+
+        async def fake_mqtt_loop():
+            pass
+
+        gw._mqtt_loop = fake_mqtt_loop
+        gw.base = SimpleNamespace(clock=clock)
+        result = _guarded_run(gw.run(0, True))
+        assert result is True
+        assert clock.sleeps == [0.5] * _STARTUP_WAIT_TICKS, "one half second sleep per tick, got {} sleeps".format(len(clock.sleeps))
+        assert time.monotonic() - started < 2.0, "no real waiting"
+
+    def test_payload_timestamps_come_from_the_component_wall_clock(self):
+        """Timestamps put in published payloads, and the epoch values they are compared with, use the wall clock of the component's base."""
+        clock = VirtualClock(wall=1_700_000_123.9)
+
+        # The plan carries its build time
+        plan_test = TestPlanRepublish()
+        gw = plan_test._make_gateway()
+        gw.base = SimpleNamespace(clock=clock)
+        _guarded_run(gw.publish_plan(plan_test._entries(), "Europe/London"))
+        plan = pb.ExecutionPlan()
+        plan.ParseFromString(gw._published[0][1])
+        assert plan.timestamp == 1_700_000_123, "plan.timestamp is the injected wall clock, got {}".format(plan.timestamp)
+
+        # A re-publish rebuilds it with the wall clock of the moment
+        from gateway import _PLAN_REPUBLISH_INTERVAL
+
+        gw._last_plan_publish_time -= _PLAN_REPUBLISH_INTERVAL + 60
+        clock.jump_wall(5)
+        _guarded_run(gw._republish_plan_if_stale())
+        assert len(gw._published) == 2, "the stale plan was re-published"
+        plan = pb.ExecutionPlan()
+        plan.ParseFromString(gw._published[1][1])
+        assert plan.timestamp == 1_700_000_128, "the re-published plan carries the injected wall clock, got {}".format(plan.timestamp)
+        clock.wall = 1_700_000_123.9  # back to the reading the rest of this test expects
+
+        # So does the live predbat_data payload
+        data_test = TestPublishPredbatData()
+        gw = data_test._make_gateway()
+        gw.base = SimpleNamespace(clock=clock)
+        _guarded_run(gw._publish_predbat_data())
+        assert data_test._get_published_payload(gw)["timestamp"] == 1_700_000_123, "predbat_data timestamp is the injected wall clock"
+
+        # So does the live display payload, which is stamped with it
+        live_test = TestPublishPredbatData()
+        gw = live_test._make_gateway()
+        gw.base = SimpleNamespace(clock=clock)
+        gw.gateway_display_only = True
+        gw.gateway_live_display = True
+        gw.gateway_device_id = "pbgw_0123456789ab"
+        gw.gateway_inverter_serial = []
+        gw._live_display_binding = lambda: {"enabled": True}
+        seen = []
+
+        def fake_live_display_payload(base, device_id, serials, now):
+            seen.append(now)
+            return {"v": 1, "enabled": True, "device_id": device_id, "available": False}
+
+        with patch("gateway.live_display_payload", fake_live_display_payload):
+            _guarded_run(gw._publish_predbat_data())
+        assert seen == [1_700_000_123], "the live display is stamped with the injected wall clock, got {}".format(seen)
+
+        # The command ids are seeded from it
+        seeded = self._make_gateway_on(clock)
+        assert seeded._command_id == 1_700_000_123_900, "command ids start from the injected wall clock, got {}".format(seeded._command_id)
+
+        # The token is judged against it: an hour before expiry is the line
+        for expires_in, expect_refresh in ((1800, True), (7200, False)):
+            gw = self._make_gateway()
+            gw.base = SimpleNamespace(clock=clock)
+            gw.mqtt_token_expires_at = 1_700_000_123 + expires_in
+            gw._do_token_refresh = _async_recorder()
+            with patch("gateway.HAS_AIOHTTP", True):
+                _guarded_run(gw._check_token_refresh())
+            assert bool(gw._do_token_refresh.calls) is expect_refresh, "token expiring in {}s of the injected clock: refresh {}, got {}".format(expires_in, expect_refresh, gw._do_token_refresh.calls)
+
+    def _make_gateway_on(self, clock):
+        """A gateway initialised on a base that already carries clock."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.base.clock = clock
+        gw.prefix = "predbat"
+        gw.args = {}
+        gw.log = MagicMock()
+        gw.initialize(gateway_device_id="pbgw_0123456789ab", mqtt_host="mqtt.test")
+        return gw
+
+    def test_integration_day_anchor_uses_the_component_wall_clock(self):
+        """A status with no device timestamp is placed in time by the component's wall clock."""
+        clock = VirtualClock(wall=TestIntegratePower.BASE_TIME)
+        test = TestIntegratePower()
+        gw = test._make_gateway()
+        gw.base.clock = clock
+        test._feed(gw, test._status(0, grid_w=-2000))
+        clock.advance(600)
+        test._feed(gw, test._status(0, grid_w=-3000))
+        assert approx_equal(gw._integrated_energy["import_wh"], 416.67), "ten minutes of 2.5 kW mean import on the injected clock, got {}".format(gw._integrated_energy)
+
+
+def _async_recorder():
+    """An async callable that records its calls."""
+
+    class Recorder:
+        def __init__(self):
+            self.calls = []
+
+        async def __call__(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    return Recorder()
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError, TestTokenRefreshProvider
@@ -8809,6 +9203,7 @@ def run_gateway_tests(my_predbat=None):
         TestTokenRefreshProvider,
         TestRateAnchors,
         TestPublishRawLoopSafety,
+        TestGatewayClockSeams,
     ]
     for cls in test_classes:
         instance = cls()
