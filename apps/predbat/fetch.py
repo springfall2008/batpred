@@ -39,6 +39,7 @@ from const import (
     CAR_MANUAL_SOC_IDLE_MINUTES,
     CAR_MANUAL_SOC_RATE_MARGIN,
     CAR_MANUAL_SOC_ENERGY_SLACK,
+    CARBON_WARN_COVERAGE_HOURS,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -4322,7 +4323,10 @@ class Fetch:
                 carbon_data, _ = minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
                 carbon_data, carbon_replicated = self.carbon_replicate(carbon_data)
                 if carbon_replicated:
-                    self.log("Warn: Carbon intensity forecast only covers {} hours of the {} hour plan, replicating it forward to cover the rest".format(dp1(min(carbon_replicated) / 60), dp1(self.forecast_minutes / 60)))
+                    # Coverage shrinks every cycle between the component's ~4 hourly polls, so only warn once it is thin
+                    covered_hours = min(carbon_replicated) / 60
+                    severity = "Warn: " if covered_hours < CARBON_WARN_COVERAGE_HOURS else ""
+                    self.log("{}Carbon intensity forecast only covers {} hours of the {} hour plan, replicating it forward to cover the rest".format(severity, dp1(covered_hours), dp1(self.forecast_minutes / 60)))
 
         entity_id = self.prefix + ".carbon_now"
         state = self.get_state_wrapper(entity_id=entity_id)
