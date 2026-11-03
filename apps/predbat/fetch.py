@@ -571,6 +571,10 @@ class Fetch:
                     period_start = None
                 last_value = current_value
 
+        # A flat run that reaches the oldest minute never closes above (the value past max_minute defaults to the run's own), and
+        # widening below can't walk a closed run into it, so it is never filled here. That is deliberate: the history starts at 0,
+        # so a flat run there can't tell a counter that didn't exist yet from one that stalled, and is left for the history and gap fillers
+
         # Fill zero periods with integrated power data
         if zero_periods:
             # Work on the whole flat run: detection leaves out the minutes at either edge that still hold the
@@ -592,10 +596,6 @@ class Fetch:
             filled_runs = []
             lift_after = {}
             for period_start, period_end, base_value in flat_runs:
-                if base_value == 0 and period_end == max_minute:
-                    # The history starts at 0, so a flat run at the oldest minute can't tell a counter that didn't
-                    # exist yet from one that stalled: left for the history and gap fillers
-                    continue
                 # The value at a minute is the reading at that time, so the energy up to it is the power of the
                 # minutes after the run's oldest reading: period_end itself is the starting point
                 run_energy = sum(max(load_power_data.get(minute, 0), 0) for minute in range(period_start, period_end)) / 60.0 / 1000.0
