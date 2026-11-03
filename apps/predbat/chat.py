@@ -1737,9 +1737,9 @@ class ChatAgent(ComponentBase):
             self.emit(conversation_id, "title", {"title": title})
             return {"success": True, "error": None, "data": {"title": title}}
         if name == "search_docs":
-            return await search_docs(self.storage, arguments.get("query"), max_results=arguments.get("max_results", 5))
+            return await search_docs(self.storage, arguments.get("query"), max_results=arguments.get("max_results", 5), session_factory=self.http_session)
         if name == "read_docs":
-            return await read_docs(self.storage, arguments.get("section"), offset=arguments.get("offset", 0))
+            return await read_docs(self.storage, arguments.get("section"), offset=arguments.get("offset", 0), session_factory=self.http_session)
         # read_source is bounded work on this loop, which is fine: the component loop's only
         # other job is a five-second tick, and the web server is a different loop in a different
         # thread. search_source is different - it runs a MODEL-SUPPLIED regular expression, and
@@ -1758,7 +1758,7 @@ class ChatAgent(ComponentBase):
         if name == "read_source":
             return read_source(arguments.get("file"), start_line=arguments.get("start_line", 1), max_lines=arguments.get("max_lines", 200))
         if name == "fetch_url":
-            return await fetch_url(arguments.get("url"), allowlist=self.fetch_allowlist)
+            return await fetch_url(arguments.get("url"), allowlist=self.fetch_allowlist, session_factory=self.http_session)
         if name == "set_apps_config":
             # Synchronous file I/O on this loop, same as read_source above - apps.yaml is small,
             # and this mirrors WebInterface.html_apps_post doing the same open()/write() inline in

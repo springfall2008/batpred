@@ -6117,9 +6117,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         action = data.get("action")
         if action == "check":
-            result = await kraken_key.check_kraken_key(base_url, token)
+            result = await kraken_key.check_kraken_key(base_url, token, session_factory=self.http_session)
         elif action == "generate":
-            result = await kraken_key.generate_kraken_key(base_url, token)
+            result = await kraken_key.generate_kraken_key(base_url, token, session_factory=self.http_session)
         else:
             return web.json_response({"status": "error", "error": "Unknown action"}, status=400, headers=headers)
 
