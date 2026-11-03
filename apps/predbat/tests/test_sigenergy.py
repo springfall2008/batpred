@@ -2714,6 +2714,7 @@ def test_sigenergy_run_polls_rest_when_mqtt_lagging(my_predbat):
         api.publish_system_entities = AsyncMock()
         api.apply_controls = AsyncMock()
         api.last_mqtt_update[sid] = time.time() - 30
+        api.last_mqtt_mono[sid] = api.monotonic() - 30
         api.mqtt_data_lag[sid] = lag_seconds
         return api
 
@@ -2753,6 +2754,7 @@ def test_sigenergy_run_mqtt_fresh_window_covers_cadence_jitter(my_predbat):
         api.publish_system_entities = AsyncMock()
         api.apply_controls = AsyncMock()
         api.last_mqtt_update[sid] = time.time() - age_seconds
+        api.last_mqtt_mono[sid] = api.monotonic() - age_seconds
         api.mqtt_data_lag[sid] = 5
         run_async(api.run(seconds=300, first=False))
         return api.fetch_energy_flow.call_count
@@ -5494,6 +5496,72 @@ def test_sigenergy_listener_reconnect_reuses_own_factory(my_predbat):
     return failed
 
 
+def test_sigenergy_duplicate_command_window_ignores_wall_clock(my_predbat):
+    """The 5 minute duplicate-command window follows the monotonic clock, not a wall clock that steps."""
+    failed = False
+    api = MockSigenergyAPI()
+    clock = VirtualClock()
+    api.access_token = "tok"
+    api.token_expires_at = clock.mono + 100_000
+    api._publish_mqtt = AsyncMock(return_value=True)
+
+    def send():
+        return run_async(api.send_battery_command("SIG1", SIGENERGY_ACTIVE_MODE_CHARGE, 30, charging_power_kw=3.0))
+
+    with _api_clock(api, clock):
+        assert send() is True and api._publish_mqtt.call_count == 1, "first command sent"
+        first_start = api._publish_mqtt.call_args[0][1]["commands"][0]["startTime"]
+        assert first_start == int(clock.wall), "startTime is still a wall-clock timestamp"
+        clock.jump_wall(+3600)
+        clock.mono += 10
+        assert send() is True and api._publish_mqtt.call_count == 1, "a wall step forwards does not make the identical command look old"
+        clock.jump_wall(-7200)
+        clock.mono += 10
+        assert send() is True and api._publish_mqtt.call_count == 1, "a wall step back does not extend or reset the window"
+        clock.mono += 301
+        assert send() is True and api._publish_mqtt.call_count == 2, "301s of monotonic time later, with the wall clock an hour back, the identical command is sent again"
+    return failed
+
+
+def test_sigenergy_mqtt_freshness_ignores_wall_clock(my_predbat):
+    """MQTT freshness is aged on the monotonic clock: a wall clock stepping back cannot keep silent MQTT looking fresh."""
+    failed = False
+    from sigenergy import SIGENERGY_MQTT_FRESH_SECONDS as fresh_limit
+    sid = "SIG001"
+    api = MockSigenergyAPI()
+    clock = VirtualClock()
+    api.systems = {sid: {"deviceList": []}}
+    api.current_mode = {sid: SIGENERGY_MODE_VPP}
+    api.system_id_filter = {sid}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api._manage_vpp_registration = AsyncMock(return_value=True)
+    api.fetch_energy_flow = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock(return_value=True)
+    api.fetch_history_totals = AsyncMock(return_value=True)
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+    api.mqtt_data_lag[sid] = 5
+    with _api_clock(api, clock):
+        api.last_mqtt_update[sid] = clock.wall
+        api.last_mqtt_mono[sid] = clock.mono
+        clock.mono += 60
+        clock.wall += 60
+        run_async(api.run(seconds=300, first=False))
+        assert api.fetch_energy_flow.call_count == 0, "MQTT 60s old is fresh, so no REST poll"
+
+        # The cache age (datetime based, not under test here) must not be what decides the next tick
+        api.data_age.clear()
+        # Wall clock jumps back an hour while MQTT has been silent past the limit
+        clock.mono += fresh_limit
+        clock.jump_wall(-3600)
+        run_async(api.run(seconds=300, first=False))
+        assert api.fetch_energy_flow.call_count == 1, "MQTT silent past the limit on the monotonic clock, so REST runs even though the wall clock says it is recent"
+    return failed
+
+
 def test_sigenergy_auth_retry_sleeps_on_the_clock(my_predbat):
     """Auth retries wait SIGENERGY_COMMAND_RETRY_DELAY on the base clock, once between each pair of attempts."""
     failed = False
@@ -5746,6 +5814,8 @@ def run_sigenergy_tests(my_predbat):
         ("virtual_clock_drives_rate_limit_and_retry", test_sigenergy_virtual_clock_drives_rate_limit_and_retry),
         ("wall_clock_jump_does_not_change_rate_limit", test_sigenergy_wall_clock_jump_does_not_change_rate_limit),
         ("listener_reconnect_reuses_own_factory", test_sigenergy_listener_reconnect_reuses_own_factory),
+        ("duplicate_command_window_ignores_wall_clock", test_sigenergy_duplicate_command_window_ignores_wall_clock),
+        ("mqtt_freshness_ignores_wall_clock", test_sigenergy_mqtt_freshness_ignores_wall_clock),
         ("auth_retry_sleeps_on_the_clock", test_sigenergy_auth_retry_sleeps_on_the_clock),
         ("rate_limit_backoff_sleeps_on_the_clock", test_sigenergy_rate_limit_backoff_sleeps_on_the_clock),
         ("listener_cancel_while_sleeping", test_sigenergy_listener_cancel_while_sleeping),

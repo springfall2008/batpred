@@ -548,6 +548,7 @@ class SigenergyAPI(ComponentBase):
         # Background MQTT listener task
         self._mqtt_task = None
         self.last_mqtt_update = {}  # UNIX timestamp of last MQTT message received, keyed by system_id
+        self.last_mqtt_mono = {}  # monotonic time of the same message, for the freshness window (a wall-clock step must not change it)
         self.mqtt_data_lag = {}  # seconds between the last MQTT period reading (statisticsTime) and its arrival, keyed by system_id
         self._tls_context = None  # cached SSLContext built once on first use
 
@@ -1482,10 +1483,12 @@ class SigenergyAPI(ComponentBase):
         """
         # De-duplication: skip if identical command sent within the last 5 minutes
         command_hash = hash((active_mode, charging_power_kw, pv_power_kw, max_sell_power_kw, max_purchase_power_kw, charge_priority_type, discharge_priority_type))
-        last_hash, last_start_time = self._last_battery_command.get(system_id, (None, 0))
-        now_ts = int(self.wall_time())
-        if last_hash == command_hash and (now_ts - last_start_time) < 300:
-            self.log("SigenergyAPI: Skipping duplicate battery command {} for system {} ({:.1f} min ago)".format(active_mode, system_id, (now_ts - last_start_time) / 60))
+        # The window is measured on the monotonic clock so a wall-clock step cannot stretch or shorten it
+        last_hash, last_sent = self._last_battery_command.get(system_id, (None, 0))
+        now_mono = self.monotonic()
+        now_ts = int(self.wall_time())  # wall time, because it goes in the command as its start time
+        if last_hash == command_hash and (now_mono - last_sent) < 300:
+            self.log("SigenergyAPI: Skipping duplicate battery command {} for system {} ({:.1f} min ago)".format(active_mode, system_id, (now_mono - last_sent) / 60))
             return True
 
         token = await self.get_access_token()
@@ -1512,7 +1515,7 @@ class SigenergyAPI(ComponentBase):
 
         ok = await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_COMMAND, payload)
         if ok:
-            self._last_battery_command[system_id] = (command_hash, now_ts)
+            self._last_battery_command[system_id] = (command_hash, now_mono)
         return ok
 
     @staticmethod
@@ -2210,6 +2213,7 @@ class SigenergyAPI(ComponentBase):
                                 # a stray message arrives (e.g. system list changed mid-connection).
                                 continue
                             self.last_mqtt_update[entry_sid] = self.wall_time()
+                            self.last_mqtt_mono[entry_sid] = self.monotonic()
                             value_dict = entry.get("value", {})
                             self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(safe_topic, entry_sid, msg_type, value_dict))
                             if msg_type == "period":
@@ -3617,10 +3621,11 @@ class SigenergyAPI(ComponentBase):
             refresh_summary = self._needs_refresh("daily_summary", SIGENERGY_POLL_INTERVAL / 60.0)
             refresh_history = self._needs_refresh("history_totals", SIGENERGY_POLL_INTERVAL / 60.0)
             for sid in list(self.systems.keys()):
-                last_update = self.last_mqtt_update.get(sid, 0)
-                mqtt_age = now_ts - last_update
+                # Age is measured on the monotonic clock so a wall-clock step cannot keep stale MQTT looking fresh
+                last_update = self.last_mqtt_mono.get(sid)
+                mqtt_age = self.monotonic() - last_update if last_update is not None else 0
                 # Arriving recently is not enough - the reading it carried must be recent too
-                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_MQTT_FRESH_SECONDS and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
+                mqtt_fresh = last_update is not None and mqtt_age < SIGENERGY_MQTT_FRESH_SECONDS and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
                 if mqtt_fresh:
                     # MQTT is genuinely keeping energy_flow live — worth persisting/re-timestamping.
                     self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))
