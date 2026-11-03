@@ -1486,10 +1486,18 @@ def run_random_scenario_reapply_tests(my_predbat):
         if scenario != pristine:
             print("ERROR: scenario {} was modified by running it".format(scenario["id"]))
             failed = True
-        second = run_scenario(scenario_predbat, scenario)
-        if first["metric"] != second["metric"]:
-            print("ERROR: scenario {} planned differently on the second run: metric {} -> {}".format(scenario["id"], first["metric"], second["metric"]))
+        if first["failed"]:
+            print("ERROR: scenario {} failed to run, so its repeatability is untested".format(scenario["id"]))
             failed = True
+            continue
+        second = run_scenario(scenario_predbat, scenario)
+        # Whole result, not just the metric - a leak can move parts that net out in the aggregate
+        for field in first:
+            if field in RANDOM_IGNORED_FIELDS:
+                continue
+            if first[field] != second.get(field):
+                print("ERROR: scenario {} planned differently on the second run: {} {} -> {}".format(scenario["id"], field, first[field], second.get(field)))
+                failed = True
 
     if not failed:
         print("All {} car scenarios unchanged by running and repeatable".format(len(scenarios)))
