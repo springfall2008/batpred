@@ -46,6 +46,7 @@ from const import (
 from predbat_metrics import metrics
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
+from shared_power import normalise_shared_power_groups
 
 import ast
 import copy
@@ -4412,6 +4413,12 @@ class Fetch:
             self.log("Warn: num_cars {} exceeds the {} cars Predbat supports - clamping to {}".format(self.num_cars, PREDBAT_MAX_CARS, PREDBAT_MAX_CARS))
             self.record_status("Warn: num_cars {} clamped to the maximum of {} supported cars".format(self.num_cars, PREDBAT_MAX_CARS), had_errors=True)
             self.num_cars = PREDBAT_MAX_CARS
+        try:
+            self.shared_power_groups = normalise_shared_power_groups(self.get_arg("shared_power_groups", [], indirect=False), self.num_cars, int(self.get_arg("num_inverters", 1)))
+        except ValueError as error:
+            self.shared_power_groups = []
+            self.log("Warn: Invalid shared_power_groups configuration, shared capacity modelling disabled: {}".format(error))
+            self.record_status("Warn: Invalid shared_power_groups configuration: {}".format(error), had_errors=True)
         self.calculate_plan_every = max(self.get_arg("calculate_plan_every"), 5)
         self.calculate_savings_max_charge_slots = self.get_arg("calculate_savings_max_charge_slots", 1)
 

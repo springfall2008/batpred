@@ -659,6 +659,8 @@ def reset_inverter(my_predbat):
     my_predbat.export_limit = 10 / 60.0
     my_predbat.pv_ac_limit = 0
     my_predbat.inverters = [TestInverter()]
+    my_predbat.inverters[0].battery_rate_max_charge = 1 / 60.0
+    my_predbat.shared_power_groups = []
     my_predbat.charge_window = []
     my_predbat.export_window = []
     my_predbat.export_limits = []

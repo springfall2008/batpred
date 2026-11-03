@@ -57,7 +57,8 @@
 // export's target is raised to (as a whole percent, rounded down), mirroring floor_export_limits in
 // prediction_batch.py - and PkBatchJob::phase, so a batch can floor a job from its nominal twin's
 // export_end_soc_out within one call.
-#define PK_ABI_VERSION 10
+// ABI 11: shared charging-capacity group arrays and car membership were added to PkContext.
+#define PK_ABI_VERSION 11
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
@@ -72,7 +73,9 @@
 // only credit off metric_keep.
 // Parity 19: in PV10, a dispatch minute of a confirmed run (io_credit set) is no longer assumed gone: the
 // dispatch is kept and the non-car import pays PK_RUN_EVERY minutes of each half hour at the worst-case rate.
-#define PK_PARITY_REVISION 19
+// Parity 20: EV-first shared conversion capacity reduces grid-derived home-battery charging while
+// preserving direct DC solar charging, including partial EV intervals and EV completion.
+#define PK_PARITY_REVISION 20
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -209,6 +212,9 @@ struct PkContext {
     const double *iboost_plan_load;   // iBoost plan load kW per step (in_iboost_slot)
     const double *car_load_flat;      // car charging load kW, num_cars * n_steps (in_car_slot)
     const double *car_rate_flat;      // car premium rate, num_cars * n_steps (in_car_slot)
+    const double *shared_power_group_limit;        // per-minute combined DC output rate, n_shared_power_groups
+    const double *shared_power_group_battery_rate; // per-minute battery charge rate, n_shared_power_groups
+    const int32_t *shared_power_car_group;          // group index per car, -1 means unconstrained
 
     double soc_kw;
     double soc_max;
@@ -239,6 +245,7 @@ struct PkContext {
     double export_today_now;
     double iboost_today;
     double car_charging_loss;
+    double shared_power_unconstrained_battery_rate;
     double car_charging_limit[PK_MAX_CARS];
     double car_charging_soc[PK_MAX_CARS];
     double iboost_max_energy;
@@ -264,6 +271,7 @@ struct PkContext {
     int32_t inverter_can_charge_during_export;
     int32_t inverter_support_feedin_first;
     int32_t num_cars;
+    int32_t n_shared_power_groups;
     int32_t car_energy_reported_load;
     int32_t car_charging_from_battery;
     int32_t carbon_enable;
@@ -393,6 +401,7 @@ struct PkScratch {
     std::vector<double> clipped_limit;
     std::vector<int32_t> export_end_at_step;
     std::vector<int32_t> export_floor_percent;
+    std::vector<double> shared_power_ev_energy;
 
     PkScratch()
     {
@@ -428,6 +437,8 @@ struct ContextStore {
     std::vector<double> charge_curve, discharge_curve;
     std::vector<double> carbon, gas_rate, iboost_plan_load;
     std::vector<double> car_load_flat, car_rate_flat;
+    std::vector<double> shared_power_group_limit, shared_power_group_battery_rate;
+    std::vector<int32_t> shared_power_car_group;
     std::vector<double> soc_percent_threshold; // see build_soc_percent_thresholds
     PkContext ctx;
 };
@@ -604,8 +615,16 @@ int32_t pk_parity_revision(void)
 // Create a per-plan context; deep-copies all arrays. Returns a handle (>0) or 0 on error.
 int64_t pk_context_create(const PkContext *in)
 {
-    if (!in || in->n_steps <= 0 || in->num_cars < 0 || in->num_cars > PK_MAX_CARS) {
+    if (!in || in->n_steps <= 0 || in->num_cars < 0 || in->num_cars > PK_MAX_CARS || in->n_shared_power_groups < 0) {
         return 0;
+    }
+    if (in->n_shared_power_groups > 0 && (!in->shared_power_group_limit || !in->shared_power_group_battery_rate || (in->num_cars > 0 && !in->shared_power_car_group))) {
+        return 0;
+    }
+    for (int32_t car_n = 0; car_n < in->num_cars; car_n++) {
+        if (in->shared_power_car_group && (in->shared_power_car_group[car_n] < -1 || in->shared_power_car_group[car_n] >= in->n_shared_power_groups)) {
+            return 0;
+        }
     }
     auto store = std::make_unique<ContextStore>();
     build_soc_percent_thresholds(store->soc_percent_threshold, in->soc_max);
@@ -633,6 +652,11 @@ int64_t pk_context_create(const PkContext *in)
     if (n_car > 0) {
         store->car_load_flat.assign(in->car_load_flat, in->car_load_flat + n_car);
         store->car_rate_flat.assign(in->car_rate_flat, in->car_rate_flat + n_car);
+        store->shared_power_car_group.assign(in->shared_power_car_group, in->shared_power_car_group + in->num_cars);
+    }
+    if (in->n_shared_power_groups > 0) {
+        store->shared_power_group_limit.assign(in->shared_power_group_limit, in->shared_power_group_limit + in->n_shared_power_groups);
+        store->shared_power_group_battery_rate.assign(in->shared_power_group_battery_rate, in->shared_power_group_battery_rate + in->n_shared_power_groups);
     }
     store->ctx = *in;
     store->ctx.rate_import = store->rate_import.data();
@@ -656,6 +680,9 @@ int64_t pk_context_create(const PkContext *in)
     store->ctx.iboost_plan_load = store->iboost_plan_load.data();
     store->ctx.car_load_flat = store->car_load_flat.data();
     store->ctx.car_rate_flat = store->car_rate_flat.data();
+    store->ctx.shared_power_group_limit = store->shared_power_group_limit.data();
+    store->ctx.shared_power_group_battery_rate = store->shared_power_group_battery_rate.data();
+    store->ctx.shared_power_car_group = store->shared_power_car_group.data();
 
     std::lock_guard<std::mutex> lock(g_context_mutex);
     int64_t handle = g_next_handle++;
@@ -717,6 +744,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     // Window membership - prediction.py:494-495 / find_charge_window_optimised
     std::vector<int32_t> &charge_window_optimised = scratch.charge_member;
     std::vector<int32_t> &export_window_optimised = scratch.export_member;
+    std::vector<double> &shared_power_ev_energy = scratch.shared_power_ev_energy;
+    shared_power_ev_energy.assign(c->n_shared_power_groups, 0.0);
 
     // The caller hands over the raw charge windows; clipping them against the export windows used to
     // be done in Python on every simulation, which cost more than the simulation itself
@@ -961,6 +990,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double car_load_energy_bypass = 0;
         double car_gone_kwh = 0;  // Car energy in a dispatch that has gone away, kept off the battery
         double car_gone_cost = 0; // ...and what it costs at the rate the nominal case pays for it
+        std::fill(shared_power_ev_energy.begin(), shared_power_ev_energy.end(), 0.0);
         if (car_enable) {
             for (int32_t car_n = 0; car_n < c->num_cars; car_n++) {
                 const double car_load_now = c->car_load_flat[car_n * n_steps + k];
@@ -969,6 +999,10 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                     car_load_scale = car_load_scale * c->car_charging_loss;
                     car_load_scale = std::max(std::min(car_load_scale, c->car_charging_limit[car_n] - car_soc[car_n]), 0.0);
                     car_soc[car_n] = car_soc[car_n] + car_load_scale;
+                    const int32_t shared_group_n = c->shared_power_car_group[car_n];
+                    if (shared_group_n >= 0) {
+                        shared_power_ev_energy[shared_group_n] += car_load_scale;
+                    }
 
                     if (dispatch_gone) {
                         // Worst case the dispatch has gone away: the car is still charged at the rate the
@@ -1305,6 +1339,24 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                         freeze_draw = std::max(freeze_draw - (std::abs(freeze_diff) - export_limit) * inverter_loss_recp, 0.0);
                     }
                     battery_draw = freeze_draw;
+                }
+            }
+        }
+
+        // EV-first shared grid-to-DC conversion capacity. Direct hybrid PV is already in pv_dc,
+        // so only the grid-derived part of battery charging competes with the EV.
+        if (c->n_shared_power_groups > 0 && battery_draw < 0) {
+            const double grid_battery_charge = std::max(std::fabs(battery_draw) - pv_dc, 0.0);
+            double shared_charge_limit = c->shared_power_unconstrained_battery_rate * step;
+            for (int32_t group_n = 0; group_n < c->n_shared_power_groups; group_n++) {
+                const double group_available = std::max(c->shared_power_group_limit[group_n] * step - shared_power_ev_energy[group_n], 0.0);
+                shared_charge_limit += std::min(c->shared_power_group_battery_rate[group_n] * step, group_available);
+            }
+            if (grid_battery_charge > shared_charge_limit) {
+                battery_draw += grid_battery_charge - shared_charge_limit;
+                if (inverter_hybrid) {
+                    pv_dc = std::min(std::fabs(battery_draw), pv_now);
+                    pv_ac = (pv_now - pv_dc) * inverter_loss_ac;
                 }
             }
         }

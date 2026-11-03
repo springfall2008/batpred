@@ -346,6 +346,16 @@ pred_bat:
   # Defines the number of cars modelled by the system, set to 0 for no car
   num_cars: 1
 
+  # Optional prediction-only model for DC EV chargers that share grid-to-DC conversion
+  # capacity with one or more home-battery inverters. limit_kw is combined DC output in kW.
+  # Cars and inverters are zero-based indexes; EV-first is the only supported priority.
+  #shared_power_groups:
+  #  - id: grid_to_dc
+  #    limit_kw: 10.5
+  #    priority: ev_first
+  #    cars: [0]
+  #    inverters: [0]
+
   # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
   # This should not be needed if you use Intelligent Octopus slots which will take priority if enabled
   # The list of possible values is in car_charging_planned_response

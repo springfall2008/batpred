@@ -30,10 +30,11 @@ import weakref
 
 from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPORT_POWER
 from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
+from shared_power import car_slot_average
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 10
-KERNEL_PARITY_REVISION = 19
+KERNEL_ABI_VERSION = 11
+KERNEL_PARITY_REVISION = 20
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -72,6 +73,9 @@ class PkContext(ctypes.Structure):
         ("iboost_plan_load", ctypes.POINTER(ctypes.c_double)),
         ("car_load_flat", ctypes.POINTER(ctypes.c_double)),
         ("car_rate_flat", ctypes.POINTER(ctypes.c_double)),
+        ("shared_power_group_limit", ctypes.POINTER(ctypes.c_double)),
+        ("shared_power_group_battery_rate", ctypes.POINTER(ctypes.c_double)),
+        ("shared_power_car_group", ctypes.POINTER(ctypes.c_int32)),
         ("soc_kw", ctypes.c_double),
         ("soc_max", ctypes.c_double),
         ("reserve", ctypes.c_double),
@@ -101,6 +105,7 @@ class PkContext(ctypes.Structure):
         ("export_today_now", ctypes.c_double),
         ("iboost_today", ctypes.c_double),
         ("car_charging_loss", ctypes.c_double),
+        ("shared_power_unconstrained_battery_rate", ctypes.c_double),
         ("car_charging_limit", ctypes.c_double * KERNEL_MAX_CARS),
         ("car_charging_soc", ctypes.c_double * KERNEL_MAX_CARS),
         ("iboost_max_energy", ctypes.c_double),
@@ -125,6 +130,7 @@ class PkContext(ctypes.Structure):
         ("inverter_can_charge_during_export", ctypes.c_int32),
         ("inverter_support_feedin_first", ctypes.c_int32),
         ("num_cars", ctypes.c_int32),
+        ("n_shared_power_groups", ctypes.c_int32),
         ("car_energy_reported_load", ctypes.c_int32),
         ("car_charging_from_battery", ctypes.c_int32),
         ("carbon_enable", ctypes.c_int32),
@@ -722,6 +728,8 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
         if num_cars > 0:
             car_load, car_rate_slot = in_car_slot(minute_absolute, num_cars, pred.car_charging_slots)
             for car_n in range(num_cars):
+                if pred.shared_power_car_group[car_n] >= 0:
+                    car_load[car_n], car_rate_slot[car_n] = car_slot_average(minute_absolute, PREDICT_STEP, car_n, pred.car_charging_slots)
                 car_load_flat[car_n * n_steps + k] = car_load[car_n]
                 car_rate_flat[car_n * n_steps + k] = car_rate_slot[car_n]
 
@@ -772,7 +780,7 @@ def create_kernel_context(pred, static_cache=None):
 
         # Keyed on the shape the arrays were built for, so a cache handed to a differently shaped
         # Prediction rebuilds rather than returning arrays of the wrong length
-        shape = (n_steps, minutes_now, num_cars)
+        shape = (n_steps, minutes_now, num_cars, tuple(pred.shared_power_car_group))
         static = static_cache.get("arrays") if static_cache is not None else None
         if static is None or static[0] != shape:
             static = (shape, build_static_context_arrays(pred, n_steps, minutes_now, num_cars))
@@ -802,6 +810,9 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_plan_load = double_array(iboost_plan_load)
         ctx.car_load_flat = double_array(car_load_flat)
         ctx.car_rate_flat = double_array(car_rate_flat)
+        ctx.shared_power_group_limit = double_array(pred.shared_power_group_limit) if pred.shared_power_group_limit else None
+        ctx.shared_power_group_battery_rate = double_array(pred.shared_power_group_battery_rate) if pred.shared_power_group_battery_rate else None
+        ctx.shared_power_car_group = int32_array(pred.shared_power_car_group) if num_cars else None
 
         ctx.soc_kw = pred.soc_kw
         ctx.soc_max = pred.soc_max
@@ -832,6 +843,7 @@ def create_kernel_context(pred, static_cache=None):
         ctx.export_today_now = pred.export_today_now
         ctx.iboost_today = pred.iboost_today
         ctx.car_charging_loss = pred.car_charging_loss
+        ctx.shared_power_unconstrained_battery_rate = pred.shared_power_unconstrained_battery_rate
         for car_n in range(num_cars):
             ctx.car_charging_limit[car_n] = pred.car_charging_limit[car_n]
             ctx.car_charging_soc[car_n] = pred.car_charging_soc[car_n]
@@ -858,6 +870,7 @@ def create_kernel_context(pred, static_cache=None):
         ctx.inverter_can_charge_during_export = 1 if pred.inverter_can_charge_during_export else 0
         ctx.inverter_support_feedin_first = 1 if pred.inverter_support_feedin_first else 0
         ctx.num_cars = num_cars
+        ctx.n_shared_power_groups = len(pred.shared_power_group_limit)
         ctx.car_energy_reported_load = 1 if pred.car_energy_reported_load else 0
         ctx.car_charging_from_battery = 1 if pred.car_charging_from_battery else 0
         ctx.carbon_enable = 1 if pred.carbon_enable else 0
