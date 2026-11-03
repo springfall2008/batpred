@@ -779,9 +779,9 @@ class SolarAPI(ComponentBase):
 
         - One `solar` record per Solcast resource id seen so far (self.discovered_sites, populated
           by download_solcast_data()'s site loop - see that method). device_id "solcast:{resource
-          id}"; the resource id goes in account_ids (site and plant ids are registry-flagged
-          credentials - see docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md), never
-          in info, so the redactor pseudonymises it; info.vendor "Solcast"; coverage describing the
+          id}"; the resource id goes in account_ids, the container for an id that names the user's
+          account or site rather than hardware (published readable, like every identifier); info.vendor
+          "Solcast"; coverage describing the
           service itself (the "hours": 168 this component actually requests from Solcast's
           forecasts endpoint, its 30-minute native resolution, and the pv10/pv50/pv90 variants the
           endpoint returns by default - see SOLCAST_DISCOVERY_COVERAGE). Deliberately never the
