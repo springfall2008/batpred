@@ -13,6 +13,7 @@ from tests.test_infra import run_async, create_aiohttp_mock_response, create_aio
 
 # Import the real mixin (will exist in SaaS builds)
 from oauth_mixin import OAuthMixin, OAUTH_REFRESH_RETRIES
+from component_base import ComponentBase
 
 
 async def _no_sleep(seconds):
@@ -23,11 +24,15 @@ async def _no_sleep(seconds):
 class MockOAuthComponent(OAuthMixin):
     """Mock component that uses the OAuthMixin for testing."""
 
+    # Borrow the real session lookup, as every component the mixin is used by has it
+    http_session = ComponentBase.http_session
+
     def __init__(self):
         self.log_messages = []
         self.base = MagicMock()
         self.base.args = {"user_id": "test-instance-id-1234"}
         self.base.oauth_refresh_provider = None  # As on the real base: no host hook
+        self.base.http_session_factory = None  # As on the real base: no per-instance session factory
 
     def log(self, message):
         self.log_messages.append(message)

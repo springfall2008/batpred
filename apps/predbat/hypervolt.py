@@ -375,9 +375,11 @@ def redact(message):
 class HypervoltTransport:
     """Owns the Hypervolt tokens, the REST call, and the websockets to each charger."""
 
-    def __init__(self, log, username, password):
+    def __init__(self, log, username, password, session_factory=None):
         """Store the credentials and start with no token or links."""
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
         self.username = username
         self.password = password
         self.access_token = None
@@ -413,7 +415,7 @@ class HypervoltTransport:
     async def _call(self, method, url, headers=None, data=None):
         """Perform one HTTP request and return (status, decoded JSON or None)."""
         try:
-            async with new_http_session() as session:
+            async with self._session_factory() as session:
                 async with session.request(method, url, headers=headers or {}, data=data, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
                     status = response.status
                     try:
@@ -636,7 +638,7 @@ class HypervoltTransport:
                 await self.sleep(backoff.next())
                 continue
             try:
-                async with new_http_session() as session:
+                async with self._session_factory() as session:
                     async with session.ws_connect(url, headers={"Origin": HYPERVOLT_ORIGIN, "User-Agent": USER_AGENT}, heartbeat=WS_HEARTBEAT_SECONDS) as socket:
                         record_api_call("hypervolt", success=True)
                         await self._read_socket(link, kind, socket, token, backoff)
@@ -876,7 +878,7 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
         if not username or not password:
             self.log("Error: hypervolt: hypervolt_username and hypervolt_password must both be set")
             return
-        self.transport = HypervoltTransport(self.log, username, password)
+        self.transport = HypervoltTransport(self.log, username, password, self.http_session)
 
     def entity_prefix(self, charger):
         """Return the entity name prefix for a charger, e.g. predbat_hypervolt_12345."""

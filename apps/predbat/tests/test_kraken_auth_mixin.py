@@ -46,10 +46,14 @@ def make_error_response(message="Auth failed", error_code=None):
 
 def make_mixin(auth_method="api_key", key=None, email=None, password=None):
     """Create a KrakenAuthMixin instance with mock base."""
+    from component_base import ComponentBase
     from kraken_auth_mixin import KrakenAuthMixin
 
     mixin = KrakenAuthMixin.__new__(KrakenAuthMixin)
+    # Borrow the real session lookup, as every component the mixin is used by has it
+    mixin.http_session = ComponentBase.http_session.__get__(mixin)
     mixin.base = MagicMock()
+    mixin.base.http_session_factory = None  # As on the real base: no per-instance session factory
     mixin.base.session = AsyncMock()
     mixin.base_url = "https://api.edfgb-kraken.energy"
     mixin.log = MagicMock()

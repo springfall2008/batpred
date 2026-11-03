@@ -236,7 +236,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """Initialise the Ohme API component"""
         self.email = email
         self.password = password
-        self.client = OhmeApiClient(email, password, self.log)
+        self.client = OhmeApiClient(email, password, self.log, self.http_session)
         self.queued_events = []
         self.ohme_automatic = ohme_automatic
         # Tri-state: True/False force the Intelligent wiring on or off, None auto-detects it
@@ -1222,7 +1222,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
 class OhmeApiClient:
     """API client for Ohme EV chargers."""
 
-    def __init__(self, email: str, password: str, log):
+    def __init__(self, email: str, password: str, log, session_factory=None):
         if email is None or password is None:
             raise AuthException("Credentials not provided")
 
@@ -1230,6 +1230,8 @@ class OhmeApiClient:
         self.email = email
         self._password = password
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
 
         # Charger and its capabilities
         self.device_info: dict[str, Any] = {}
@@ -1268,7 +1270,7 @@ class OhmeApiClient:
     async def async_login(self) -> bool:
         """Refresh the user auth token from the stored credentials."""
         if self._session is None:
-            self._session = new_http_session()
+            self._session = self._session_factory()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):
@@ -1300,7 +1302,7 @@ class OhmeApiClient:
             return True
 
         if self._session is None:
-            self._session = new_http_session()
+            self._session = self._session_factory()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):
@@ -1348,7 +1350,7 @@ class OhmeApiClient:
         await self._async_refresh_session()
 
         if self._session is None:
-            self._session = new_http_session()
+            self._session = self._session_factory()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):

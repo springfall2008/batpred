@@ -24,6 +24,7 @@ from coordinator import inverter_record
 from fox import FoxAPI
 from hypervolt import HypervoltAPI
 from myenergi import MyEnergiAPI
+from octopus import OctopusEnergyApiClient
 from ohme import OhmeAPI
 from solis import SolisAPI
 from teslemetry import TeslemetryAPI
@@ -916,6 +917,223 @@ def test_component_base_http_session_factory(my_predbat):
     return False
 
 
+class FakeResponse:
+    """Async context manager standing in for an aiohttp response; every reply carries the same JSON."""
+
+    status = 200
+    payload = {"idToken": "id", "refreshToken": "refresh", "success": True, "access_token": "new-token", "expires_at": "2099-01-01T00:00:00Z", "ok": 1}
+
+    async def __aenter__(self):
+        await asyncio.sleep(0)  # yield so that concurrent callers really interleave
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    async def json(self, **kwargs):
+        return dict(self.payload)
+
+    async def text(self):
+        return ""
+
+
+class FakeSession:
+    """Records the requests made on it and whether it has been closed."""
+
+    def __init__(self, owner, kwargs):
+        self.owner = owner
+        self.kwargs = kwargs
+        self.requests = []
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.close()
+
+    async def close(self):
+        self.closed = True
+
+    def request(self, method, url, **kwargs):
+        self.requests.append((method, url))
+        return FakeResponse()
+
+    def get(self, url, **kwargs):
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self.request("POST", url, **kwargs)
+
+
+class FakeSessionFactory:
+    """A session factory that remembers every session it hands out."""
+
+    def __init__(self, name):
+        self.name = name
+        self.sessions = []
+
+    def __call__(self, **kwargs):
+        session = FakeSession(self.name, kwargs)
+        self.sessions.append(session)
+        return session
+
+
+class FactoryBase(MockBase):
+    """MockBase for one PredBat instance, optionally carrying its own session factory."""
+
+    def __init__(self, factory=None):
+        super().__init__()
+        self.args = {"user_id": "instance-" + (factory.name if factory else "none")}
+        if factory is not None:
+            self.http_session_factory = factory
+
+
+def test_component_base_http_session_resolution_order(my_predbat):
+    """
+    http_session() picks base.http_session_factory first, then the global factory, then
+    aiohttp.ClientSession looked up at call time. The base attribute is read on every call, and a
+    component built with Cls.__new__ (no base) falls back to the global path.
+    """
+    print("\n*** Test: http_session resolution order ***")
+    base_factory = FakeSessionFactory("base")
+    global_factory = FakeSessionFactory("global")
+
+    # Nothing set anywhere: the default is aiohttp.ClientSession, observed by patching it
+    component = TestComponent(FactoryBase())
+    with patch("aiohttp.ClientSession", return_value="default") as mock_session:
+        assert component.http_session(timeout="t") == "default", "no factory anywhere should build an aiohttp.ClientSession"
+        mock_session.assert_called_once_with(timeout="t")
+
+    set_http_session_factory(global_factory)
+    try:
+        # The global factory is used when the base has none
+        assert component.http_session(a=1).owner == "global", "the global factory should be used when the base has none"
+        component.base.http_session_factory = None
+        assert component.http_session().owner == "global", "a base factory of None should fall through to the global factory"
+
+        # The base factory beats the global one, with the caller's kwargs passed through
+        component.base.http_session_factory = base_factory
+        session = component.http_session(timeout="t")
+        assert session.owner == "base" and session.kwargs == {"timeout": "t"}, "the base factory should win and get the kwargs"
+
+        # Read at call time, not cached when the component was built
+        component.base.http_session_factory = None
+        assert component.http_session().owner == "global", "removing the base factory should take effect on the next call"
+
+        # No base at all (built with Cls.__new__ as the component tests do)
+        bare = FoxAPI.__new__(FoxAPI)
+        assert bare.http_session().owner == "global", "a component without a base should use the global factory"
+    finally:
+        set_http_session_factory(None)
+
+    assert [s.owner for s in base_factory.sessions] == ["base"], "the base factory should only have been asked once"
+    with patch("aiohttp.ClientSession", return_value="default") as mock_session:
+        assert FoxAPI.__new__(FoxAPI).http_session() == "default", "a component without a base should default to aiohttp.ClientSession"
+    print("PASS: base factory, then global factory, then aiohttp.ClientSession")
+    return False
+
+
+def _build_instance_components(base):
+    """Build the real provider components for one fake PredBat instance."""
+    ohme = OhmeAPI(base, email="driver@example.com", password="secret")
+    hypervolt = HypervoltAPI(base, username="driver", password="secret")
+    wallbox = WallboxAPI(base, username="driver", password="secret")
+    myenergi = MyEnergiAPI(base, auth_method="oauth", key="old-token", token_hash="hash")
+    return ohme, hypervolt, wallbox, myenergi
+
+
+async def _use_instance_components(components):
+    """Drive the real session-using code of each provider component, concurrently."""
+    ohme, hypervolt, wallbox, myenergi = components
+    results = await asyncio.gather(
+        ohme.client.async_login(),
+        hypervolt.transport._call("GET", "https://hypervolt.example/api"),
+        wallbox.transport._call("GET", "https://wallbox.example/api", {}),
+        myenergi.transport._request("GET", "/devices"),
+        myenergi.check_and_refresh_oauth_token(),  # OAuthMixin refresh path
+    )
+    # The Octopus client is handed its component's factory the same way
+    octopus_session = await OctopusEnergyApiClient("key", print, session_factory=myenergi.http_session).async_create_client_session()
+    return results, octopus_session
+
+
+def test_component_base_http_session_isolated_per_instance(my_predbat):
+    """
+    Two instances in one process, each with its own base factory, run real provider code
+    concurrently. Every session comes from the factory of the instance that owns the component,
+    including those made by the transports, API clients and the OAuth mixin, and a global factory
+    installed as a trap is never used.
+    """
+    print("\n*** Test: sessions stay with the instance that owns the component ***")
+    factory_a = FakeSessionFactory("A")
+    factory_b = FakeSessionFactory("B")
+    trap = FakeSessionFactory("global")
+    comps_a = _build_instance_components(FactoryBase(factory_a))
+    comps_b = _build_instance_components(FactoryBase(factory_b))
+
+    async def run_both():
+        return await asyncio.gather(_use_instance_components(comps_a), _use_instance_components(comps_b))
+
+    set_http_session_factory(trap)
+    try:
+        with patch.dict("os.environ", {"SUPABASE_URL": "https://supabase.example", "SUPABASE_KEY": "key"}):
+            with patch("aiohttp.ClientSession", side_effect=AssertionError("the default session must not be built")):
+                (results_a, octopus_a), (results_b, octopus_b) = asyncio.run(run_both())
+    finally:
+        set_http_session_factory(None)
+
+    assert trap.sessions == [], "the global factory must not be used when the base has its own"
+    for name, factory, results, octopus in (("A", factory_a, results_a, octopus_a), ("B", factory_b, results_b, octopus_b)):
+        assert results[0] is True, "{} ohme login should succeed through the fake session".format(name)
+        assert results[4] is True, "{} oauth refresh should succeed through the fake session".format(name)
+        assert octopus.owner == name, "{} octopus client session should come from its own factory".format(name)
+        # Ohme login, Hypervolt call, Wallbox call, myenergi request, OAuth refresh, Octopus client
+        assert len(factory.sessions) == 6, "{} should have made six sessions, got {}".format(name, len(factory.sessions))
+        assert all(s.owner == name for s in factory.sessions), "{} only gets its own sessions".format(name)
+        urls = sorted(url for s in factory.sessions for _, url in s.requests)
+        assert any("verifyPassword" in url for url in urls), "{} ohme login should have posted".format(name)
+        assert any("oauth-refresh" in url for url in urls), "{} oauth refresh should have posted".format(name)
+        assert any("hypervolt.example" in url for url in urls) and any("wallbox.example" in url for url in urls), "{} transports should have called".format(name)
+    assert comps_a[3].access_token == "new-token" and comps_b[3].access_token == "new-token", "both refreshed tokens applied"
+    print("PASS: each instance's components only ever got sessions from their own factory")
+    return False
+
+
+def test_component_base_http_session_close_isolation(my_predbat):
+    """
+    Closing one instance's session leaves the other's open, and an exception raised inside
+    `async with self.http_session()` still closes the session and propagates.
+    """
+    print("\n*** Test: session close isolation and close on exception ***")
+    factory_a = FakeSessionFactory("A")
+    factory_b = FakeSessionFactory("B")
+    comp_a = TestComponent(FactoryBase(factory_a))
+    comp_b = TestComponent(FactoryBase(factory_b))
+
+    async def scenario():
+        session_a = comp_a.http_session()
+        session_b = comp_b.http_session()
+        await session_a.close()
+        assert session_a.closed and not session_b.closed, "closing A's session must leave B's open"
+        await session_b.close()
+
+        raised = None
+        try:
+            async with comp_a.http_session() as session:
+                raise ValueError("boom")
+        except ValueError as exc:
+            raised = exc
+        assert raised is not None, "the exception should propagate out of async with"
+        assert session.closed, "the session must be closed when the body raises"
+        return session
+
+    asyncio.run(scenario())
+    assert len(factory_a.sessions) == 2 and len(factory_b.sessions) == 1, "each factory only served its own component"
+    print("PASS: close is per session, and an exception still closes it")
+    return False
+
+
 def test_component_base_write_methods(my_predbat):
     """
     @writes only marks a method: it returns the same function, which behaves exactly as before.
@@ -1013,6 +1231,9 @@ def test_component_base_all(my_predbat):
         ("request_replan", test_component_base_request_replan, "request_replan sets update_pending without invalidating the plan"),
         ("http_session_default", test_component_base_http_session_default, "http_session defaults to a new caller-owned aiohttp.ClientSession"),
         ("http_session_factory", test_component_base_http_session_factory, "an installed HTTP session factory is used, None restores the default"),
+        ("http_session_order", test_component_base_http_session_resolution_order, "http_session prefers the base factory, then the global factory, then aiohttp"),
+        ("http_session_isolated", test_component_base_http_session_isolated_per_instance, "two instances' components only get sessions from their own factory"),
+        ("http_session_close", test_component_base_http_session_close_isolation, "closing one instance's session leaves another's open; an exception still closes"),
         ("write_methods", test_component_base_write_methods, "@writes marks a method and write_methods lists exactly the marked ones"),
         ("write_methods_components", test_component_base_write_methods_components, "component writer methods are listed and readers are not"),
     ]

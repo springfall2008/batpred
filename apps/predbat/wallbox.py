@@ -282,9 +282,11 @@ def basic_auth_header(username, password):
 class WallboxTransport:
     """Owns the Wallbox tokens and performs every HTTP call."""
 
-    def __init__(self, log, username, password):
+    def __init__(self, log, username, password, session_factory=None):
         """Store the credentials and start with no token."""
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
         self.username = username
         self.password = password
         self.token = None
@@ -325,7 +327,7 @@ class WallboxTransport:
                 bad credentials, and an empty response body is accepted.
         """
         try:
-            async with new_http_session() as session:
+            async with self._session_factory() as session:
                 async with session.request(method, url, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
                     status = response.status
                     if status == 429:
@@ -522,7 +524,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         if not username or not password:
             self.log("Error: wallbox: wallbox_username and wallbox_password must both be set")
             return
-        self.transport = WallboxTransport(self.log, username, password)
+        self.transport = WallboxTransport(self.log, username, password, self.http_session)
 
     def entity_prefix(self, charger):
         """Return the entity name prefix for a charger, e.g. predbat_wallbox_12345."""

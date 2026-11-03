@@ -19,7 +19,6 @@ import time
 import aiohttp
 import asyncio
 from datetime import datetime
-from component_base import new_http_session
 
 
 # Refresh when less than this remains (seconds). Kept well under the shortest token lifetime in
@@ -155,7 +154,7 @@ class OAuthMixin:
             last_error = None
             for attempt in range(OAUTH_REFRESH_RETRIES):
                 try:
-                    async with new_http_session(timeout=timeout) as session:
+                    async with self.http_session(timeout=timeout) as session:
                         async with session.post(url, headers=headers, json=payload) as response:
                             if response.status == 200:
                                 data = await response.json()

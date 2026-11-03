@@ -19,6 +19,7 @@ def make_mock_base():
     base.prefix = "predbat"
     base.local_tz = "Europe/London"
     base.args = {"user_id": "test-instance-123"}
+    base.http_session_factory = None  # As on the real base: no per-instance session factory
     # A real clock, as update_time() sets before any component runs - the component's midnight_utc
     # is derived from it, and the published rate window is measured from that midnight.
     base.now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)

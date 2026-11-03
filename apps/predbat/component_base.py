@@ -40,7 +40,11 @@ _http_session_factory = None
 
 
 def set_http_session_factory(factory):
-    """Install the factory that new_http_session() (and so ComponentBase.http_session()) uses.
+    """Install the process-wide factory that new_http_session() (and so ComponentBase.http_session()) uses.
+
+    This is the fallback for every component in the process. A host running several PredBat
+    instances in one process, or a test that needs two components to have separate sessions, sets
+    base.http_session_factory instead: ComponentBase.http_session() prefers that over this global.
 
     The factory is called with the same keyword arguments as aiohttp.ClientSession and must return
     an object components can use as they use aiohttp.ClientSession: an async context manager with
@@ -64,8 +68,9 @@ def new_http_session(**kwargs):
 
     By default this is aiohttp.ClientSession(**kwargs), looked up when called so that code patching
     aiohttp.ClientSession still takes effect. A factory installed with set_http_session_factory()
-    is used instead when set. For code outside a component (mixins, API clients a component owns);
-    components call self.http_session().
+    is used instead when set. This is the process-wide path and ignores base.http_session_factory;
+    components call self.http_session(), which honours that per-instance override first, and hand
+    that bound method to the API clients they own.
     """
     factory = _http_session_factory
     if factory is None:
@@ -167,9 +172,15 @@ class ComponentBase(ABC):
         """Return a new HTTP session for this component to own and close.
 
         Takes the same keyword arguments as aiohttp.ClientSession (timeout, headers and so on) and,
-        by default, returns aiohttp.ClientSession(**kwargs). See set_http_session_factory() for how a
-        host or a test supplies the sessions instead.
+        by default, returns aiohttp.ClientSession(**kwargs). The factory is chosen in this order:
+        base.http_session_factory when the owning base has one set (a host running several PredBat
+        instances in one process, or a test, uses this to give each instance its own sessions), then
+        the process-wide factory from set_http_session_factory(), then aiohttp.ClientSession.
         """
+        base = getattr(self, "base", None)
+        factory = getattr(base, "http_session_factory", None)
+        if factory is not None:
+            return factory(**kwargs)
         return new_http_session(**kwargs)
 
     @classmethod
