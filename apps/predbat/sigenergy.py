@@ -3609,7 +3609,6 @@ class SigenergyAPI(ComponentBase):
 
         # Realtime data refresh — skip live power/SOC fetch when MQTT is providing fresh data
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
-            now_ts = self.wall_time()
             energy_updated = False
             summary_updated = False
             history_updated = False

@@ -2457,7 +2457,7 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
 
     with _api_mqtt_factory(api, lambda **kwargs: FakeMQTTClient()):
         with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
-            with _api_clock(api, SimpleNamespace(monotonic=lambda: 4321.5, time=time.time, sleep=fake_sleep)):
+            with _api_clock(api, SimpleNamespace(monotonic=lambda: 4321.5, time=lambda: 1_700_001_234.5, sleep=fake_sleep)):
                 _base_run_async(api._mqtt_listener_loop())
 
     # Period message: energy_flow updated
@@ -2488,7 +2488,7 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
     assert publishes[cancel_at + 1][1] > 0, "pause must be non-zero, got {}".format(publishes[cancel_at + 1])
 
     # last_mqtt_update was set per system
-    assert api.last_mqtt_update.get("TESTA1700000000", 0) > 0, "last_mqtt_update was set for system"
+    assert api.last_mqtt_update.get("TESTA1700000000") == 1_700_001_234.5, "last_mqtt_update was stamped from the component's wall clock, got {}".format(api.last_mqtt_update)
     assert api.last_mqtt_mono.get("TESTA1700000000") == 4321.5, "last_mqtt_mono was stamped from the component's monotonic clock, got {}".format(api.last_mqtt_mono)
 
     # MQTT topic subscriptions are scoped to the managed system, not a "#" wildcard
@@ -4376,7 +4376,9 @@ def test_sigenergy_mqtt_command_probe_success(my_predbat):
     api = _probe_api()
     messages = [("openapi/period/test_app_key/SIG001", b'[{"systemId": "SIG001", "value": {}}]')]
 
-    report = _run_probe(api, ["SIG001", "SIG002"], lambda protocol: FakeProbeClient(protocol, messages=messages), active_mode="idle", duration_minutes=3, charging_power_kw=0.0, listen_seconds=5)
+    clock = VirtualClock(wall=1_700_000_123.0)
+    with _api_clock(api, clock):
+        report = _run_probe(api, ["SIG001", "SIG002"], lambda protocol: FakeProbeClient(protocol, messages=messages), active_mode="idle", duration_minutes=3, charging_power_kw=0.0, listen_seconds=5)
 
     assert report["connected"] is True and report["error"] is None, "connected cleanly, got {}".format(report)
     assert report["protocol"] == "V5", "MQTT 5 is tried first, got {}".format(report["protocol"])
@@ -4395,6 +4397,7 @@ def test_sigenergy_mqtt_command_probe_success(my_predbat):
     assert cmd["accessToken"] == "probe_token", "command carries the token"
     assert cmd["commands"][0]["systemId"] == "SIG001" and cmd["commands"][0]["activeMode"] == "idle", "command for the first system, got {}".format(cmd)
     assert cmd["commands"][0]["duration"] == 3 and cmd["commands"][0]["chargingPower"] == 0.0, "duration and power passed through, got {}".format(cmd)
+    assert cmd["commands"][0]["startTime"] == 1_700_000_123, "startTime is the component's wall-clock time in epoch seconds, got {}".format(cmd)
     assert json.loads(client.published[4][1])["commands"][0]["systemId"] == "SIG002", "second command for the second system"
 
     assert len(report["publish"]) == 5 and all(pub["ok"] for pub in report["publish"]), "all publishes acknowledged, got {}".format(report["publish"])
