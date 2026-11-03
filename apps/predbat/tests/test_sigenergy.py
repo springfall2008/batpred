@@ -5047,6 +5047,105 @@ def test_sigenergy_realtime_fallback_unknown_grid_load(my_predbat):
     return failed
 
 
+# Discovery catalogue reporter
+
+# The component's own documented example id: its 12-character slug "ta1700000000" holds a 10-digit run,
+# which the identifier shape guard the catalogue no longer has used to mistake for a misfiled identifier
+DISCOVERY_SYSTEM = "TESTA1700000000"
+
+
+def _discovery_sigenergy(systems=1):
+    """A SigenergyAPI holding `systems` discovered systems, each with one inverter, one battery and MQTT-reported limits."""
+    api = MockSigenergyAPI()
+    api.automatic = True
+    for index in range(systems):
+        sid = DISCOVERY_SYSTEM[:-1] + str(index)
+        api.systems[sid] = {"systemName": "Jane's Cottage", "batteryCapacity": 9.04, "pvCapacity": 6.0}
+        api.devices[sid] = [
+            {"deviceType": "Inverter", "serialNumber": "110A0001{}".format(index), "status": "Normal", "attrMap": {"ratedActivePower": 5.0}},
+            {"deviceType": "Battery", "serialNumber": "BAT0001{}".format(index), "status": "Normal", "attrMap": {"ratedEnergy": 9.04, "ratedChargePower": 4.4}},
+        ]
+        api.device_cutoffs[sid] = {"backup": 16.0, "discharge": 20.0}
+        api.grid_export[sid] = {"antiReflux": "on", "gridMaxBackfeedPowerW": 3680.0}
+    return api
+
+
+def test_sigenergy_catalogue_none_before_discovery(my_predbat):
+    """Nothing is reported before a system has been discovered."""
+    assert MockSigenergyAPI().build_discovery() is None
+    return False
+
+
+def test_sigenergy_record_shape(my_predbat):
+    """One record per system: inverter serial, readable system id, read-only reserve, third-party PV flag, reported ratings."""
+    report = _discovery_sigenergy().build_discovery()
+    record = report["inverters"][0]
+    sid = DISCOVERY_SYSTEM[:-1] + "0"
+    assert report["automatic"] is True
+    assert record["device_id"] == "sigenergy:110A00010", record
+    assert record["inverter_type"] == "SIGCLOUD" and record["composition"] == "direct"
+    assert record["hardware_ids"] == {"serial": "110A00010", "system_id": sid}, record["hardware_ids"]
+    assert "account_ids" not in record
+    assert record["flags"] == ["third_party_gen"]
+    assert record["entities"]["reserve"]["access"] == "r", "SIGCLOUD has no reserve control"
+    assert record["entities"]["soc_kw"]["unit"] == "kWh"
+    assert record["ratings"] == {"inverter_limit": 5000.0, "soc_max": 9.04, "export_limit": 3680, "battery_min_soc": 16.0}, record["ratings"]
+    assert "Jane" not in str(report), "the system name is never reported"
+    return False
+
+
+def test_sigenergy_export_limit_only_when_reported(my_predbat):
+    """The 99999 'no limit known' sentinel is not a rating."""
+    api = _discovery_sigenergy()
+    api.grid_export = {}
+    assert "export_limit" not in api.build_discovery()["inverters"][0]["ratings"]
+    return False
+
+
+def test_sigenergy_record_rebuilds_its_inverter_def_row(my_predbat):
+    """The record alone rebuilds the SIGCLOUD row; the clock is described as the ISO format the sensor really publishes."""
+    import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
+    from tests.discovery_contract import assert_definition_complete, validated_inverters
+
+    record = validated_inverters(_discovery_sigenergy().build_discovery())[0]
+    assert_definition_complete(record, SigenergyAPI.WRITE_AND_POLL_SLEEP, except_fields=("clock_time_format",))
+    return False
+
+
+def test_sigenergy_record_agrees_with_automatic_config(my_predbat):
+    """Each system's record binds exactly what automatic_config() binds at its index, for one and for two systems."""
+    import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
+    from tests.discovery_contract import assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
+
+    for systems in (1, 2):
+        api = _discovery_sigenergy(systems)
+        records = validated_inverters(api.build_discovery())
+        assert len(records) == systems
+        captured = capture_automatic_config(api)
+        for index, record in enumerate(records):
+            assert_record_agrees(record, captured, index=index)
+            assert_record_binds_nothing_extra(record, captured, index=index)
+    return False
+
+
+def test_sigenergy_round_trip_keeps_system_id(my_predbat):
+    """Through the real Coordinator: the system id and the entity ids stay readable, with nothing pseudonymised."""
+    from coordinator import Coordinator
+    from mock_base import MockBase
+
+    logs = []
+    coordinator = Coordinator(MockBase())
+    coordinator.log = logs.append
+    coordinator.report("sigenergy", _discovery_sigenergy().build_discovery())
+    catalogue = coordinator.catalogue()
+    sid = DISCOVERY_SYSTEM[:-1] + "0"
+    assert sid in str(catalogue), "the system id is not secret"
+    entity = catalogue["inverters"][0]["entities"]["soc_kw"]["entity_id"]
+    assert entity == "sensor.predbat_sigenergy_{}_battery_soc".format(sid[-12:].lower()), entity
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    return False
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -5205,6 +5304,12 @@ def run_sigenergy_tests(my_predbat):
         ("system_status_from_inverter_device", test_sigenergy_system_status_from_inverter_device),
         ("fetch_system_list_does_not_log_other_systems", test_sigenergy_fetch_system_list_does_not_log_other_systems),
         ("rate_limit_last_attempt_does_not_claim_to_wait", test_sigenergy_rate_limit_last_attempt_does_not_claim_to_wait),
+        ("catalogue_none_before_discovery", test_sigenergy_catalogue_none_before_discovery),
+        ("record_shape", test_sigenergy_record_shape),
+        ("export_limit_only_when_reported", test_sigenergy_export_limit_only_when_reported),
+        ("record_rebuilds_its_inverter_def_row", test_sigenergy_record_rebuilds_its_inverter_def_row),
+        ("record_agrees_with_automatic_config", test_sigenergy_record_agrees_with_automatic_config),
+        ("round_trip_keeps_system_id", test_sigenergy_round_trip_keeps_system_id),
     ]
 
     for name, fn in tests:
