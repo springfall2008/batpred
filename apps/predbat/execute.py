@@ -541,6 +541,7 @@ class Execute:
             resetPause = self.set_charge_window or self.set_export_window
             resetReserve = self.set_charge_window or self.set_export_window
             disabled_charge_window = False
+            discharging_to_target = False
             disabled_export = False
 
             # Re-programme charge window based on low rates?
@@ -713,6 +714,16 @@ class Execute:
                                         if self.set_reserve_enable and (not inverter.inv_has_timed_pause or (inverter.soc_percent > inv_target_soc_percent)):
                                             inverter.adjust_reserve(min(hold_reserve_percent(inverter, inv_target_soc_percent), inverter.reserve_max))
                                             resetReserve = False
+                                    elif self.set_discharge_during_charge and not inverter.inv_has_target_soc and inverter.soc_percent > inv_target_soc_percent + 1.0:
+                                        # No target SoC, reserve or pause can floor the battery at the target, and the plan has the battery cover the
+                                        # house until it is within 1% of the target (see prediction.py). Freezing would hold at the current SoC instead
+                                        # (#5937), so run in demand mode with no charge window until the target is reached.
+                                        inverter.disable_charge_window()
+                                        disabled_charge_window = True
+                                        discharging_to_target = True
+                                        if inverter.inv_charge_discharge_with_rate:
+                                            discharge_rate = None
+                                        self.log("Inverter {} discharging to target SoC {}% as it cannot hold there".format(inverter.id, dp0(inv_target_soc_percent)))
                                     else:
                                         inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
 
@@ -1151,7 +1162,10 @@ class Execute:
 
                     # Charge immediate
                     if isCharging:
-                        if self.is_freeze_charge(self.charge_limit_best[0]):
+                        if discharging_to_target:
+                            # Stop rather than freeze, so a service-controlled inverter returns to demand and covers the house
+                            inverter.adjust_charge_immediate(0)
+                        elif self.is_freeze_charge(self.charge_limit_best[0]):
                             inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(self.soc_kw, self.soc_max), isCharging, isExporting, check=True, isFreezeCharge=True)
                             inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
                         else:

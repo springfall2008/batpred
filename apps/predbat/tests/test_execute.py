@@ -2923,6 +2923,113 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
+
+    # No target SoC, reserve or pause (Sigenergy): stop rather than freeze, so the battery covers the house down to the target (#5937)
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_immediate_soc_target=0,
+        assert_immediate_charge_soc_freeze_array=[False, False],
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
+    if failed:
+        return failed
+
+    # The same inverter at the target holds with a freeze, as #5541 intended
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_at_target",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=5.1,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=780,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=50,
+        assert_immediate_soc_target=50,
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
+    if failed:
+        return failed
+
+    # With set_discharge_during_charge off the plan never discharges in the window, so keep holding
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_no_discharge",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=780,
+        assert_discharge_rate=0,
+        assert_pause_discharge=False,
+        assert_soc_target=50,
+        assert_immediate_soc_target=50,
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+        set_discharge_during_charge=False,
+    )
+    if failed:
+        return failed
+
+    # A rate-controlled inverter (Huawei) also needs its discharge rate back, or a zero rate still holds the battery
+    for inverter in my_predbat.inverters:
+        inverter.inv_charge_discharge_with_rate = True
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_with_rate",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_immediate_soc_target=0,
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
+    for inverter in my_predbat.inverters:
+        inverter.inv_charge_discharge_with_rate = False
+    if failed:
+        return failed
+
     # Here the target is 5kWh and we are at 9kWh so we will let it discharge.
     failed |= run_execute_test(
         my_predbat,
