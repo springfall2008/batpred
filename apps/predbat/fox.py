@@ -2595,8 +2595,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
         user-authored free text that can hold a street address (get_device_list()'s own sample
         holds one), and the info container's guards - a length cap and no "@" - would let an
         address straight into a debug dump users post publicly. Neither identifier describes the
-        hardware; a station ID, if one is ever wanted, belongs in account_ids, which is
-        pseudonymised.
+        hardware; a station ID, if one is ever wanted, belongs in account_ids, the container for
+        account and site identifiers.
 
         No battery capacity is reported. A real batteryList mixes control units that carry no
         capacity (bcu, ivu) with bmu entries carrying one in Wh, and the per-entry figures cannot
