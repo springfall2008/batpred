@@ -21,12 +21,35 @@ requirements and costs for heat pump systems.
 
 from datetime import datetime, timedelta, timezone
 import pytz
-from utils import str2time, dp2, dp3, minute_data, minutes_since_midnight, next_aligned_run
+from utils import str2time, dp2, dp3, is_entity_id, minute_data, minutes_since_midnight, next_aligned_run
 
 from const import TIME_FORMAT
 
 MAX_INCREMENT = 100
 PREDICT_STEP = 5
+FAHRENHEIT_UNITS = ("°F", "F", "℉")
+KELVIN_UNITS = ("K",)
+
+
+def to_celsius(value, unit):
+    """
+    Return a temperature as a °C float, converting from °F or K when the unit says so (#5153).
+    Values that aren't numbers are returned unchanged for the caller to skip.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return value
+    if unit in FAHRENHEIT_UNITS:
+        return (number - 32) * 5 / 9
+    if unit in KELVIN_UNITS:
+        return number - 273.15
+    return number
+
+
+def from_celsius(value, unit):
+    """Return a °C temperature in the given display unit (°F or °C)."""
+    return value * 9 / 5 + 32 if unit in FAHRENHEIT_UNITS else value
 
 
 """
@@ -118,6 +141,11 @@ class PredHeat:
         self.record_status = base.record_status
         self.get_arg = base.get_arg
         self.set_state = base.set_state_wrapper
+        self.get_state = base.get_state_wrapper
+        # The model works in °C. system_unit is Home Assistant's, as the weather entity reports it; the published
+        # temperatures follow the internal temperature sensor's unit, or the system's if it has none
+        self.system_unit = None
+        self.display_unit = "°C"
         self.call_service = base.call_service_wrapper
         self.get_history = base.get_history_wrapper
         self.expose_config = base.expose_config
@@ -193,6 +221,10 @@ class PredHeat:
             data = {}
 
         self.temperatures = {}
+        # The forecast comes in the weather entity's own unit; the model works in °C (#5153)
+        unit = self.system_unit or self.display_unit
+        if data and unit not in (None, "°C"):
+            data = [dict(item, temperature=to_celsius(item.get("temperature"), unit)) if isinstance(item, dict) else item for item in data]
 
         if data:
             self.temperatures, _ = minute_data(data, self.forecast_days, now_utc, "temperature", "datetime", backwards=False, smoothing=True, prev_last_updated_time=now_utc, last_state=self.external_temperature[0], max_increment=MAX_INCREMENT)
@@ -200,9 +232,10 @@ class PredHeat:
             self.log("WARN: Unable to fetch data for {}".format(entity_id))
             self.record_status("Warn - Unable to fetch data from {}".format(entity_id), had_errors=True)
 
-    def minute_data_entity(self, now_utc, key, incrementing=False, smoothing=False, scaling=1.0):
+    def minute_data_entity(self, now_utc, key, incrementing=False, smoothing=False, scaling=1.0, temperature=False):
         """
-        Download one or more entities of data
+        Download one or more entities of data. With temperature set, each entity's history is converted to °C
+        from its own unit, so sensors in °F and °C can be mixed (#5153).
         """
         entity_ids = self.get_arg(key, indirect=False, domain="predheat", default=None)
         if not entity_ids:
@@ -232,6 +265,13 @@ class PredHeat:
                 else:
                     age_days = min(age_days, age.days)
 
+            if temperature and history and len(history[0]) > 0:
+                # Each record in its own unit where it has one, so a sensor that changed unit mid-history reads right
+                unit = self.temperature_unit(entity_id)
+                record_units = {(item.get("attributes") or {}).get("unit_of_measurement") or unit for item in history[0]}
+                if record_units - {"°C"}:
+                    history = [[dict(item, state=to_celsius(item.get("state"), (item.get("attributes") or {}).get("unit_of_measurement") or unit)) for item in history[0]]]
+
             if history and len(history[0]) > 0:
                 data_points, _ = minute_data(
                     history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=smoothing, scale=scaling / total_count, clean_increment=incrementing, accumulate=data_points, max_increment=MAX_INCREMENT
@@ -243,6 +283,62 @@ class PredHeat:
         if age_days is None:
             age_days = 0
         return data_points, age_days
+
+    def entity_unit(self, entity_id):
+        """Return an entity's own unit_of_measurement (an entity$attribute reference reads the entity's), or None."""
+        return self.get_state(entity_id.split("$")[0], attribute="unit_of_measurement")
+
+    def temperature_unit(self, entity_id):
+        """
+        Return the temperature unit to read an entity in: its own, else Home Assistant's (a climate entity or a
+        template sensor often has none), else the display unit.
+        """
+        return self.entity_unit(entity_id) or self.system_unit or self.display_unit
+
+    def first_entity(self, name):
+        """Return the first entity id configured for a Predheat setting, or None."""
+        entity_ids = self.get_arg(name, None, indirect=False, domain="predheat")
+        if isinstance(entity_ids, list):
+            entity_ids = entity_ids[0] if entity_ids else None
+        return entity_ids if is_entity_id(entity_ids) else None
+
+    def get_temperature_arg(self, name, default, domain="predheat"):
+        """
+        Read a temperature setting in °C: a number is taken as °C, as documented, and a sensor is converted from
+        its own unit (#5153) - a helper with no unit is taken as °C like a typed number. A sensor that can't be
+        read gives the default, which is already °C.
+        """
+        entity_id = self.get_arg(name, None, indirect=False, domain=domain)
+        if is_entity_id(entity_id):
+            value = self.get_arg(name, None, domain=domain)
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                self.log("Warn: Predheat: {} sensor {} reads {}, using {} °C".format(name, entity_id, value, dp2(default)))
+                return default
+            return to_celsius(value, self.entity_unit(entity_id) or "°C")
+        return self.get_arg(name, default, domain=domain)
+
+    def set_units(self):
+        """
+        Work out the units for this run: Home Assistant's, as the weather entity reports it, and the display unit
+        for published temperatures - the first internal temperature sensor's, else Home Assistant's, else °C.
+        """
+        weather_id = self.get_arg("weather", None, indirect=False, domain="predheat")
+        self.system_unit = self.get_state(weather_id, attribute="temperature_unit") if is_entity_id(weather_id) else None
+        internal_id = self.first_entity("internal_temperature")
+        internal_unit = self.entity_unit(internal_id) if internal_id else None
+        self.display_unit = "°F" if (internal_unit or self.system_unit) in FAHRENHEIT_UNITS else "°C"
+
+    def display_temperature(self, value, zero_is_off=False):
+        """Return a °C temperature for publishing, in the display unit. With zero_is_off a 0 (heating off) stays 0."""
+        if zero_is_off and value == 0:
+            return value
+        return dp2(from_celsius(value, self.display_unit))
+
+    def display_series(self, series, zero_is_off=False):
+        """Return a {time: °C temperature} series for publishing, in the display unit."""
+        return {stamp: self.display_temperature(value, zero_is_off) for stamp, value in series.items()}
 
     def get_from_incrementing(self, data, index):
         """
@@ -480,21 +576,37 @@ class PredHeat:
         if save == "best":
             self.set_state(
                 self.prefix + ".internal_temp",
-                state=dp2(self.internal_temperature[0]),
-                attributes={"results": internal_temp_predict_stamp, "friendly_name": "Internal Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "°C"},
+                state=self.display_temperature(self.internal_temperature[0]),
+                attributes={"results": self.display_series(internal_temp_predict_stamp), "friendly_name": "Internal Temperature Predicted", "state_class": "measurement", "unit_of_measurement": self.display_unit},
             )
             self.set_state(
                 self.prefix + ".external_temp",
-                state=dp2(self.external_temperature[0]),
-                attributes={"results": external_temp_predict_stamp, "friendly_name": "External Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "°C"},
+                state=self.display_temperature(self.external_temperature[0]),
+                attributes={"results": self.display_series(external_temp_predict_stamp), "friendly_name": "External Temperature Predicted", "state_class": "measurement", "unit_of_measurement": self.display_unit},
             )
             self.set_state(
-                self.prefix + ".target_temp", state=dp2(target_temp_predict_minute[0]), attributes={"results": target_temp_predict_stamp, "friendly_name": "Target Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "°C"}
+                self.prefix + ".target_temp",
+                state=self.display_temperature(target_temp_predict_minute[0]),
+                attributes={"results": self.display_series(target_temp_predict_stamp), "friendly_name": "Target Temperature Predicted", "state_class": "measurement", "unit_of_measurement": self.display_unit},
             )
-            self.set_state(self.prefix + ".heat_to_temp", state=dp2(heat_to_predict_temperature[0]), attributes={"results": heat_to_predict_stamp, "friendly_name": "Predict heating to target", "state_class": "measurement", "unit_of_measurement": "°C"})
-            self.set_state(self.prefix + ".internal_temp_h1", state=dp2(internal_temp_predict_minute[60]), attributes={"friendly_name": "Internal Temperature Predicted +1hr", "state_class": "measurement", "unit_of_measurement": "°C"})
-            self.set_state(self.prefix + ".internal_temp_h2", state=dp2(internal_temp_predict_minute[60 * 2]), attributes={"friendly_name": "Internal Temperature Predicted +2hr", "state_class": "measurement", "unit_of_measurement": "°C"})
-            self.set_state(self.prefix + ".internal_temp_h8", state=dp2(internal_temp_predict_minute[60 * 8]), attributes={"friendly_name": "Internal Temperature Predicted +8hrs", "state_class": "measurement", "unit_of_measurement": "°C"})
+            self.set_state(
+                self.prefix + ".heat_to_temp",
+                state=self.display_temperature(heat_to_predict_temperature[0], zero_is_off=True),
+                attributes={"results": self.display_series(heat_to_predict_stamp, zero_is_off=True), "friendly_name": "Predict heating to target", "state_class": "measurement", "unit_of_measurement": self.display_unit},
+            )
+            self.set_state(
+                self.prefix + ".internal_temp_h1", state=self.display_temperature(internal_temp_predict_minute[60]), attributes={"friendly_name": "Internal Temperature Predicted +1hr", "state_class": "measurement", "unit_of_measurement": self.display_unit}
+            )
+            self.set_state(
+                self.prefix + ".internal_temp_h2",
+                state=self.display_temperature(internal_temp_predict_minute[60 * 2]),
+                attributes={"friendly_name": "Internal Temperature Predicted +2hr", "state_class": "measurement", "unit_of_measurement": self.display_unit},
+            )
+            self.set_state(
+                self.prefix + ".internal_temp_h8",
+                state=self.display_temperature(internal_temp_predict_minute[60 * 8]),
+                attributes={"friendly_name": "Internal Temperature Predicted +8hrs", "state_class": "measurement", "unit_of_measurement": self.display_unit},
+            )
             self.set_state(
                 self.prefix + ".heat_energy",
                 state=self.heat_energy_today,
@@ -503,7 +615,11 @@ class PredHeat:
             self.set_state(self.prefix + ".heat_energy_h1", state=heat_energy_predict_minute[60], attributes={"friendly_name": "Predict heating energy +1hr", "state_class": "measurement", "unit_of_measurement": "kWh"})
             self.set_state(self.prefix + ".heat_energy_h2", state=heat_energy_predict_minute[60 * 2], attributes={"friendly_name": "Predict heating energy +2hrs", "state_class": "measurement", "unit_of_measurement": "kWh"})
             self.set_state(self.prefix + ".heat_energy_h8", state=heat_energy_predict_minute[60 * 8], attributes={"friendly_name": "Predict heating energy +8hrs", "state_class": "measurement", "unit_of_measurement": "kWh"})
-            self.set_state(self.prefix + ".volume_temp", state=dp2(next_volume_temp), attributes={"results": volume_temp_stamp, "friendly_name": "Volume temperature", "state_class": "measurement", "unit_of_measurement": "°C"})
+            self.set_state(
+                self.prefix + ".volume_temp",
+                state=self.display_temperature(next_volume_temp),
+                attributes={"results": self.display_series(volume_temp_stamp), "friendly_name": "Volume temperature", "state_class": "measurement", "unit_of_measurement": self.display_unit},
+            )
             self.set_state(self.prefix + ".cost", state=dp2(cost), attributes={"results": cost_stamp, "friendly_name": "Predicted cost", "state_class": "measurement", "unit_of_measurement": "p"})
             self.set_state(self.prefix + ".cost_h1", state=dp2(cost_minute[60]), attributes={"friendly_name": "Predicted cost +1hr", "state_class": "measurement", "unit_of_measurement": "p"})
             self.set_state(self.prefix + ".cost_h2", state=dp2(cost_minute[60 * 2]), attributes={"friendly_name": "Predicted cost +2hrs", "state_class": "measurement", "unit_of_measurement": "p"})
@@ -580,9 +696,10 @@ class PredHeat:
         self.max_days_previous = max(self.days_previous) + 1
         self.heating_energy_scaling = self.get_arg("heating_energy_scaling", 1.0, domain="predheat")
 
-        self.external_temperature, age_external = self.minute_data_entity(now_utc, "external_temperature", smoothing=True)
-        self.internal_temperature, age_internal = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True)
-        self.target_temperature, age_target = self.minute_data_entity(now_utc, "target_temperature")
+        self.set_units()
+        self.external_temperature, age_external = self.minute_data_entity(now_utc, "external_temperature", smoothing=True, temperature=True)
+        self.internal_temperature, age_internal = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True, temperature=True)
+        self.target_temperature, age_target = self.minute_data_entity(now_utc, "target_temperature", temperature=True)
         self.heating_energy, age_energy = self.minute_data_entity(now_utc, "heating_energy", incrementing=True, smoothing=True, scaling=self.heating_energy_scaling)
         # Heating energy history is optional; without it, valid temperature and
         # thermostat histories should still drive the forecast schedule.
@@ -594,7 +711,7 @@ class PredHeat:
         self.heat_energy_today = self.heating_energy.get(0, 0) - self.heating_energy.get(self.minutes_now, 0)
 
         self.mode = self.get_arg("mode", "pump", domain="predheat")
-        self.flow_temp = self.get_arg("flow_temp", 40.0, domain="predheat")
+        self.flow_temp = self.get_temperature_arg("flow_temp", 40.0)
         if self.mode == "gas":
             self.flow_difference_target = self.get_arg("flow_difference_target", 20.0, domain="predheat")
         else:
@@ -612,7 +729,8 @@ class PredHeat:
         self.smart_thermostat = self.get_arg("smart_thermostat", False, domain="predheat")
         self.smart_thermostat_max_minutes = self.get_smart_thermostat_max_minutes()
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
-        self.next_volume_temp = self.get_arg("volume_temp", self.get_arg("next_volume_temp", self.internal_temperature[0]))
+        # A volume_temp sensor is converted from its own unit; next_volume_temp is Predheat's own, in °C
+        self.next_volume_temp = self.get_temperature_arg("volume_temp", self.get_arg("next_volume_temp", self.internal_temperature[0]), domain=None)
 
         self.log("Predheat: Hysteresis On {} off {} heat loss {} W heat loss {} W per degree".format(self.hysteresis_on, self.hysteresis_off, self.heat_loss_watts, self.heat_loss_degrees))
         self.log(
