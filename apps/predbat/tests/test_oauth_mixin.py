@@ -32,7 +32,6 @@ class MockOAuthComponent(OAuthMixin):
         self.base = MagicMock()
         self.base.args = {"user_id": "test-instance-id-1234"}
         self.base.oauth_refresh_provider = None  # As on the real base: no host hook
-        self.base.http_session_factory = None  # As on the real base: no per-instance session factory
 
     def log(self, message):
         self.log_messages.append(message)

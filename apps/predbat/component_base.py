@@ -177,8 +177,9 @@ class ComponentBase(ABC):
         instances in one process, or a test, uses this to give each instance its own sessions), then
         the process-wide factory from set_http_session_factory(), then aiohttp.ClientSession.
         """
-        base = getattr(self, "base", None)
-        factory = getattr(base, "http_session_factory", None)
+        # Read from the instance's own attributes, so a mock base (where every attribute exists)
+        # does not look like it supplies a factory.
+        factory = getattr(getattr(self, "base", None), "__dict__", {}).get("http_session_factory")
         if factory is not None:
             return factory(**kwargs)
         return new_http_session(**kwargs)

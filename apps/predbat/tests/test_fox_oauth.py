@@ -48,7 +48,6 @@ class MockFoxOAuth(FoxAPI):
         self.base = MagicMock()
         self.base.args = {"user_id": "test-instance-123"}
         self.base.oauth_refresh_provider = None  # As on the real base: no host hook
-        self.base.http_session_factory = None  # As on the real base: no per-instance session factory
         self.base.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Initialise OAuth
