@@ -310,7 +310,7 @@ from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
 from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
 from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
-from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests
+from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests, run_random_scenario_reapply_tests
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
 from tests.test_plan_persistence import test_plan_persistence
@@ -902,6 +902,7 @@ def main():
         # Production-scale ML training harness against a captured history fixture
         ("ml_training_perf", run_ml_training_perf_tests, "ML training performance tests", True),
         ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),
+        ("random_reapply", run_random_scenario_reapply_tests, "Running a random scenario leaves it unchanged, so a re-run plans identically", False),
         ("debug_history", test_debug_history, "Rolling debug-history snapshot buffer tests", False),
         ("debug_history_capture", test_debug_history_capture, "Debug history capture throttle/force-capture tests", False),
         ("debug_history_capture_alignment", test_debug_history_capture_slot_alignment, "Debug history capture timestamp is floored to the plan slot grid", False),
