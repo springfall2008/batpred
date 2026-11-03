@@ -1345,6 +1345,7 @@ def test_teslemetry_sync_tariff_pushes_on_window_change():
     """Enabling a discharge window changes the tariff and triggers a second push."""
     api = MockTeslemetryAPI()
     api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.get_minutes_now = lambda: 17 * 60  # inside the window, so its boost band is due
     api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
     run_async(api.sync_tariff())
     api.schedule["discharge"] = {"start_time": "17:00:00", "end_time": "18:00:00", "soc": 30, "enable": 1}
@@ -1384,6 +1385,7 @@ def test_teslemetry_tbc_control_on_pushes_the_signal_tariff():
     api.base = _rate_base(import_p=28.0, export_p=15.0)
     api.tbc_control = True
     api.schedule = {"reserve": 15, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}}
+    api.get_minutes_now = lambda: 18 * 60  # inside the export window, so its band is due
     pushed = {}
     api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
     run_async(api.sync_tariff())
@@ -1391,6 +1393,58 @@ def test_teslemetry_tbc_control_on_pushes_the_signal_tariff():
     assert _signal_tier_at(pushed["tariff"], 0, 180) == "SUPER_OFF_PEAK"
     assert _signal_tier_at(pushed["tariff"], 0, 1080) == "ON_PEAK"
     assert api.evaluate_schedule(3 * 60, 40)["mode"] == "autonomous"
+
+
+def test_teslemetry_export_window_due_lead_and_wrap():
+    """The export window is due from 5 minutes before its start until its end, across midnight too (GH#5960)."""
+    due = TeslemetryAPI._export_window_due
+    window = (18 * 60 + 10, 18 * 60 + 30)  # 18:10-18:30
+    assert due(window, 18 * 60) is None  # 10 minutes ahead: not yet
+    assert due(window, 18 * 60 + 4) is None  # 6 minutes ahead: not yet
+    assert due(window, 18 * 60 + 5) == window  # 5 minutes ahead: due
+    assert due(window, 18 * 60 + 10) == window  # at the start
+    assert due(window, 18 * 60 + 29) == window  # last minute
+    assert due(window, 18 * 60 + 30) is None  # ended
+    wrap = (23 * 60 + 30, 30)  # 23:30-00:30
+    assert due(wrap, 23 * 60 + 25) == wrap
+    assert due(wrap, 15) == wrap
+    assert due(wrap, 30) is None
+    assert due((23 * 60, 0), 23 * 60 + 59) == (23 * 60, 0)  # runs to midnight
+    assert due((2, 60), 23 * 60 + 58) == (2, 60)  # lead crosses midnight
+    assert due(None, 0) is None
+
+
+def test_teslemetry_tbc_holds_back_the_export_band_until_the_lead():
+    """Ahead of an export window the signal tariff keeps the base band over it, so Tesla's optimiser
+    has no peak sale to hold the battery for while Predbat's plan has it covering the house (GH#5960)."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.tbc_control = True
+    api.schedule = {"reserve": 4, "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": 0}, "discharge": {"start_time": "18:10:00", "end_time": "18:30:00", "soc": 13, "enable": 1}}
+    pushed = {}
+    api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
+    api.get_minutes_now = lambda: 18 * 60 + 1
+    run_async(api.sync_tariff())
+    assert _signal_tier_at(pushed["tariff"], 0, 18 * 60 + 15, sell=True) == "PARTIAL_PEAK"
+    api.get_minutes_now = lambda: 18 * 60 + 5
+    run_async(api.sync_tariff())
+    assert _signal_tier_at(pushed["tariff"], 0, 18 * 60 + 15, sell=True) == "ON_PEAK"
+
+
+def test_teslemetry_real_rate_tariff_holds_back_the_boost_until_the_lead():
+    """The real-rate path withholds its synthetic export boost the same way (GH#5960)."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.tbc_control = False
+    api.schedule = {"reserve": 4, "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": 0}, "discharge": {"start_time": "18:10:00", "end_time": "18:30:00", "soc": 13, "enable": 1}}
+    pushed = {}
+    api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
+    api.get_minutes_now = lambda: 18 * 60 + 1
+    run_async(api.sync_tariff())
+    assert "ON_PEAK" not in pushed["tariff"]["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
+    api.get_minutes_now = lambda: 18 * 60 + 5
+    run_async(api.sync_tariff())
+    assert "ON_PEAK" in pushed["tariff"]["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
 
 
 def test_teslemetry_initialize_sets_tbc_control_from_component_arg():
@@ -3320,6 +3374,9 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_sync_tariff_pushes_on_window_change()
     test_teslemetry_tbc_control_off_uses_the_real_rate_tariff()
     test_teslemetry_tbc_control_on_pushes_the_signal_tariff()
+    test_teslemetry_export_window_due_lead_and_wrap()
+    test_teslemetry_tbc_holds_back_the_export_band_until_the_lead()
+    test_teslemetry_real_rate_tariff_holds_back_the_boost_until_the_lead()
     test_teslemetry_initialize_sets_tbc_control_from_component_arg()
     test_teslemetry_tbc_control_defaults_on_via_the_registry()
     test_teslemetry_tbc_control_fallback_matches_the_documented_default()
