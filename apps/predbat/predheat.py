@@ -319,6 +319,15 @@ class PredHeat:
             return to_celsius(value, self.entity_unit(entity_id) or "°C")
         return self.get_arg(name, default, domain=domain)
 
+    def read_volume_temp(self, default):
+        """
+        Read volume_temp, the radiator water temperature, in °C: from the predheat section, as documented, else the
+        top level, where it used to be read from. A sensor is converted from its own unit. Without one, default -
+        next_volume_temp, Predheat's own saved state, in °C - is used.
+        """
+        domain = "predheat" if self.get_arg("volume_temp", None, indirect=False, domain="predheat") is not None else None
+        return self.get_temperature_arg("volume_temp", default, domain=domain)
+
     def set_units(self):
         """
         Work out the units for this run: Home Assistant's, as the weather entity reports it, and the display unit
@@ -729,8 +738,7 @@ class PredHeat:
         self.smart_thermostat = self.get_arg("smart_thermostat", False, domain="predheat")
         self.smart_thermostat_max_minutes = self.get_smart_thermostat_max_minutes()
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
-        # A volume_temp sensor is converted from its own unit; next_volume_temp is Predheat's own, in °C
-        self.next_volume_temp = self.get_temperature_arg("volume_temp", self.get_arg("next_volume_temp", self.internal_temperature[0]), domain=None)
+        self.next_volume_temp = self.read_volume_temp(self.get_arg("next_volume_temp", self.internal_temperature[0]))
 
         self.log("Predheat: Hysteresis On {} off {} heat loss {} W heat loss {} W per degree".format(self.hysteresis_on, self.hysteresis_off, self.heat_loss_watts, self.heat_loss_degrees))
         self.log(

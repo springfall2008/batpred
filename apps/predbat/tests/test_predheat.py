@@ -465,9 +465,25 @@ def test_predheat_temperature_units(my_predbat):
             if abs(predheat.get_temperature_arg("flow_temp", 40.0) - 50.0) > 0.01:
                 print("ERROR: a 122 °F flow temperature sensor should read 50 °C, got {}".format(predheat.get_temperature_arg("flow_temp", 40.0)))
                 failed = True
+            # volume_temp through the path update_pred uses: from the predheat section as documented, else the top level
             my_predbat.args["predheat"]["volume_temp"] = "sensor.vol_f"
-            if abs(predheat.get_temperature_arg("volume_temp", 25.0) - 60.0) > 0.01:
-                print("ERROR: a 140 °F volume temperature sensor should read 60 °C, got {}".format(predheat.get_temperature_arg("volume_temp", 25.0)))
+            if abs(predheat.read_volume_temp(25.0) - 60.0) > 0.01:
+                print("ERROR: a 140 °F volume temperature sensor in the predheat section should read 60 °C, got {}".format(predheat.read_volume_temp(25.0)))
+                failed = True
+            del my_predbat.args["predheat"]["volume_temp"]
+            saved_top = my_predbat.args.get("volume_temp", None)
+            my_predbat.args["volume_temp"] = "sensor.vol_f"
+            try:
+                if abs(predheat.read_volume_temp(25.0) - 60.0) > 0.01:
+                    print("ERROR: a volume temperature sensor at the top level should still be read, got {}".format(predheat.read_volume_temp(25.0)))
+                    failed = True
+            finally:
+                if saved_top is None:
+                    my_predbat.args.pop("volume_temp", None)
+                else:
+                    my_predbat.args["volume_temp"] = saved_top
+            if predheat.read_volume_temp(25.0) != 25.0:
+                print("ERROR: with no volume_temp configured the saved next_volume_temp should be used, got {}".format(predheat.read_volume_temp(25.0)))
                 failed = True
             # A helper with no unit is a setting, taken as °C like a typed number, even in a °F Home Assistant
             my_predbat.ha_interface.dummy_items["input_number.flow"] = "45"
