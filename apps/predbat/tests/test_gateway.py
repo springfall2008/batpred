@@ -4348,9 +4348,7 @@ class TestGatewayUnitControlBinding:
             return False
 
         now = [1000.0]
-        real_monotonic = gateway._monotonic
-        gateway._monotonic = lambda: now[0]
-        try:
+        with _gw_clock(gw, SimpleNamespace(monotonic=lambda: now[0], time=time.time, sleep=asyncio.sleep)):
             storage.save = failing_save
             gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
             asyncio.run(gw._save_discovery())
@@ -4368,8 +4366,6 @@ class TestGatewayUnitControlBinding:
             asyncio.run(gw._save_discovery())
             assert gw._discovery_dirty is False
             assert sorted(gw._saved[("gateway", "discovery_pbgw_two_ac")]["inverters"]) == ["CE2223G800", "CE2225G400"]
-        finally:
-            gateway._monotonic = real_monotonic
 
     def test_newly_bound_inverter_has_its_entities_on_the_same_status(self):
         """An inverter auto-config has just bound is published before the API is declared started.
@@ -7562,13 +7558,11 @@ class TestCommandAck:
         hours, minutes = value.split(":")[:2]
         return gw._send_control(entity_id, "set_charge_slot", schedule_json=json.dumps({field: int(hours) * 100 + int(minutes)}), serial="CE123456789")
 
-    def _clock(self):
-        """A controllable clock for the ack window."""
-        from unittest.mock import patch
+    def _clock(self, gw):
+        """A controllable clock for the ack window, installed on the gateway's own base."""
+        from tests.test_gateway_commit import clock
 
-        clock = {"now": 1000.0}
-        patcher = patch("gateway._monotonic", lambda: clock["now"])
-        return clock, patcher
+        return clock(gw)
 
     def _ack(self, gw, command_id, command, ok=True, error=None, applied=None):
         import json
@@ -7587,7 +7581,7 @@ class TestCommandAck:
         """The generic loop polls every 2 s; an ack arriving after 10 s means one publish, then a matching read-back."""
         gw = self._make_gateway()
         gw.cache[self.SLOT_START] = "00:00:00"
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             matched = False
             for step in range(10):
@@ -7606,7 +7600,7 @@ class TestCommandAck:
     def test_refusal_logged_and_not_resent_within_window(self):
         """A refused command logs the hub's reason and is not re-sent until the window has passed."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(self._send_slot(gw, self.SLOT_END, "00:00:00"))
             clock["now"] = 1001.0
@@ -7626,7 +7620,7 @@ class TestCommandAck:
     def test_no_ack_resends_once_after_window_then_falls_back(self):
         """No ack: suppressed for the window, re-sent once, then acks stop being relied on."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             for step in range(1, 15):
@@ -7651,7 +7645,7 @@ class TestCommandAck:
     def test_new_value_while_in_flight_publishes_immediately(self):
         """A different value is not held back by the pending one, and the stale ack is ignored."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             clock["now"] = 1001.0
@@ -7667,7 +7661,7 @@ class TestCommandAck:
         """An ok ack updates an enable switch from `applied` and later identical calls are not re-sent."""
         gw = self._make_gateway()
         gw.cache[self.CHARGE_ENABLED] = "off"
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.switch_event(self.CHARGE_ENABLED, "turn_on"))
             self._ack(gw, "PBAT1", "set_charge_enable", applied={"enable": True, "slot": 0})
@@ -7679,7 +7673,7 @@ class TestCommandAck:
     def test_staged_or_recorded_slot_ack_does_not_update_cache(self):
         """EMS staged/recorded endpoints were not written to the inverter, so the cache is left alone."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"staged": True, "start": 30, "slot": 0})
@@ -7690,7 +7684,7 @@ class TestCommandAck:
     def test_number_ack_does_not_update_cache(self):
         """Numbers wait for telemetry; only slots and enables are applied from the ack."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
@@ -7700,7 +7694,7 @@ class TestCommandAck:
     def test_replay_error_resends_with_new_id(self):
         """A 'replay' rejection means the value was never considered: the next call publishes under a new id."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="replay")
@@ -7713,7 +7707,7 @@ class TestCommandAck:
     def test_without_ack_subscription_behaviour_is_unchanged(self):
         """No ack subscription: every call publishes, with the same arguments as before."""
         gw = self._make_gateway(subscribed=False, acks_seen=False)
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             for _ in range(3):
                 self._run(gw.number_event(self.CHARGE_RATE, 2000))
@@ -7723,7 +7717,7 @@ class TestCommandAck:
     def test_no_suppression_until_an_ack_has_been_seen(self):
         """Subscribed but no ack matched yet (e.g. firmware without acks): publish every call, as before."""
         gw = self._make_gateway(acks_seen=False)
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             clock["now"] = 1002.0
@@ -7739,7 +7733,7 @@ class TestCommandAck:
     def test_ack_for_an_earlier_send_of_the_same_value_counts(self):
         """Before suppression is on, each poll re-sends under a new id; an ack for any of them confirms the value."""
         gw = self._make_gateway(acks_seen=False)
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             for step in range(3):
                 clock["now"] = 1000.0 + step * 2
@@ -7764,7 +7758,7 @@ class TestCommandAck:
             gw.cache[self.SLOT_END] = "00:00:00"
 
         gw._inject_entities = fake_inject_entities
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
@@ -7781,7 +7775,7 @@ class TestCommandAck:
     def test_unusable_first_ok_does_not_block_a_later_cache_update(self):
         """A staged ok from one unit, then a plain ok from another: the plain one still updates the cache."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"staged": True, "start": 30, "slot": 0})
@@ -7792,7 +7786,7 @@ class TestCommandAck:
     def test_refusal_restarts_the_window_even_when_another_send_succeeded(self):
         """Any refusal restarts the cooldown, so an identical call is not re-sent within 30 s of it."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             gw._acks_seen = False  # force a second send of the same value
@@ -7812,7 +7806,7 @@ class TestCommandAck:
     def test_ok_for_a_later_send_beats_refusal_of_an_earlier_one(self):
         """Distinct sends of the same value: an ok for any of them means the value was applied."""
         gw = self._make_gateway(acks_seen=False)
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             clock["now"] = 1002.0
@@ -7837,7 +7831,7 @@ class TestCommandAck:
         async def failing_publish_command(command, command_id=None, **kwargs):
             raise RuntimeError("broker gone")
 
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             clock["now"] = 1002.0
@@ -7858,7 +7852,7 @@ class TestCommandAck:
         gw = self._make_gateway()
         gw.prefix = "house_charge_slot1_x"
         entity = "select.house_charge_slot1_x_gateway_456789_charge_slot1_start"
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(self._send_slot(gw, entity, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
@@ -7867,7 +7861,7 @@ class TestCommandAck:
     def test_late_refusal_for_an_earlier_attempt_is_still_handled(self):
         """After an answered attempt, a fresh attempt keeps earlier ids: a late refusal is logged and restarts the window."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
@@ -7884,7 +7878,7 @@ class TestCommandAck:
     def test_each_refusal_for_the_same_id_is_logged_and_restarts_the_window(self):
         """Two units refusing one command: both reasons are logged and the window runs from the second."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             clock["now"] = 1001.0
@@ -7911,7 +7905,7 @@ class TestCommandAck:
             gw.cache[self.SLOT_START] = "00:00:00"
 
         gw._inject_entities = fake_inject_entities
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
@@ -7934,7 +7928,7 @@ class TestCommandAck:
             raise RuntimeError("connection lost before the broker confirmed")
 
         gw.publish_command = ack_then_fail
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             try:
                 self._run(gw.number_event(self.CHARGE_RATE, 2000))
@@ -7949,7 +7943,7 @@ class TestCommandAck:
     def test_refusal_from_an_earlier_attempt_still_outranks_its_late_ok(self):
         """PBAT1 refused, fresh attempt PBAT2, then another unit's late ok for PBAT1: it must not count as applied."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
@@ -7967,7 +7961,7 @@ class TestCommandAck:
     def test_replay_after_an_answer_is_logged_as_a_refusal(self):
         """A replay from another unit after the command was answered is logged and restarts the window."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
@@ -7985,7 +7979,7 @@ class TestCommandAck:
         gw._last_status = object()
         restored = []
         gw._inject_entities = lambda status: restored.append(status)
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
@@ -8005,7 +7999,7 @@ class TestCommandAck:
     def test_replay_for_the_newest_id_after_an_earlier_send_applied(self):
         """PBAT1 unanswered, PBAT2 re-sent, PBAT1 ok, then PBAT2 replay: PBAT2 is forgotten and the applied value stays suppressed."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             clock["now"] = 1030.0
@@ -8029,7 +8023,7 @@ class TestCommandAck:
     def test_replay_for_the_newest_id_with_only_an_older_attempts_ok_drops_the_entry(self):
         """An ok from an earlier attempt does not count: a replay of the fresh attempt's id re-sends straight away."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
@@ -8044,7 +8038,7 @@ class TestCommandAck:
     def test_failed_publish_with_full_id_history_restores_the_pruned_id(self):
         """With 16 ids kept, a failed 17th send puts back the pruned oldest id and the earlier timing."""
         gw = self._make_gateway(acks_seen=False)
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             for step in range(16):
                 clock["now"] = 1000.0 + step * 2
@@ -8074,7 +8068,7 @@ class TestCommandAck:
     def test_repeated_refusal_during_a_failing_publish_is_not_rolled_back(self):
         """A refusal repeated while a later publish awaits the broker keeps its restarted window when that publish fails."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="not_managed")
@@ -8102,7 +8096,7 @@ class TestCommandAck:
     def test_full_history_failing_publish_with_concurrent_ack_keeps_all_earlier_ids(self):
         """16 ids kept, a 17th send fails while an ack for PBAT2 arrives: PBAT1..PBAT16 all stay matchable."""
         gw = self._make_gateway(acks_seen=False)
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             for step in range(16):
                 clock["now"] = 1000.0 + step * 2
@@ -8129,7 +8123,7 @@ class TestCommandAck:
     def test_outcomes_do_not_grow_past_the_kept_ids(self):
         """Per-id outcomes are pruned with the ids, so a value re-sent for a long time does not grow the entry."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             for attempt in range(40):
                 clock["now"] = 1000.0 + attempt * 31
@@ -8142,7 +8136,7 @@ class TestCommandAck:
     def test_attempt_ids_do_not_grow_without_acks(self):
         """Subscribed but no acks ever: every call re-sends, and the id lists stay bounded."""
         gw = self._make_gateway(acks_seen=False)
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             for step in range(50):
                 clock["now"] = 1000.0 + step * 2
@@ -8155,7 +8149,7 @@ class TestCommandAck:
     def test_second_ok_ack_does_not_overwrite_cache(self):
         """Only the first ok ack for a command updates the cached slot times."""
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(self._send_slot(gw, self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
@@ -8177,7 +8171,7 @@ class TestCommandAck:
     def test_unknown_or_mismatched_acks_ignored(self):
         """Acks for ids PredBat is not tracking, or for a different command, change nothing."""
         gw = self._make_gateway(acks_seen=False)
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             self._ack(gw, "PBAT99", "set_charge_rate")
@@ -8207,7 +8201,7 @@ class TestCommandAck:
         from unittest.mock import MagicMock
 
         gw = self._make_gateway()
-        clock, patcher = self._clock()
+        clock, patcher = self._clock(gw)
         with patcher:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             message = MagicMock()
@@ -9375,6 +9369,120 @@ class TestGatewayElapsedWindows:
             assert len(gw._published) == 2, "30 minutes of monotonic time, so repeated despite the wall clock going back"
 
 
+class TestGatewayFreshBootGuards:
+    """A stamp still at its initial 0 means "not yet", even on a host whose monotonic clock reads only a few seconds.
+
+    Each window starts from 0 until its first event. On a freshly booted host monotonic() is small, so
+    an unguarded `monotonic() - 0 < window` would read as "just happened" and suppress the first cycle.
+    """
+
+    def _boot_clock(self):
+        """A clock that has been running for five seconds."""
+        return VirtualClock(monotonic=5.0, wall=1_800_000_000.0)
+
+    def test_first_ev_command_is_not_held_back(self):
+        """With no earlier attempt the first start goes out at once."""
+        ev = TestEvControl()
+        gw = ev._make_gateway()
+        ev._in_window(gw)
+        with _gw_clock(gw, self._boot_clock()):
+            ev._set_charger(gw, session_active=False, status="Preparing")
+            assert gw._ev_last_attempt == 0.0
+            ev._apply(gw)
+            assert ev._actions(gw).count("RemoteStartTransaction") == 1, "no attempt yet, so not inside the retry delay"
+
+    def test_first_live_display_publish_is_not_suppressed(self):
+        """An unchanged live display payload is still sent when none has been sent yet."""
+        from live_display import source_identity
+        from tests.test_live_display import DEVICE, base_for, provider
+
+        constant = {"v": 1, "enabled": True, "device_id": DEVICE, "available": False}
+        gw = TestPublishPredbatData()._make_gateway()
+        gw.gateway_device_id = DEVICE
+        gw.gateway_inverter_serial = "INV001"
+        gw.gateway_display_only = True
+        gw.gateway_live_display = True
+        gw.gateway_live_display_binding = {"enabled": True, "device_id": DEVICE, "provider": "givenergy", "source_id": source_identity("givenergy", ["INV001"])}
+        gw.base = base_for(provider())
+        with _gw_clock(gw, self._boot_clock()), patch("gateway.live_display_payload", lambda *args: dict(constant)):
+            _guarded_run(gw._publish_predbat_data())
+            assert len(gw._published) == 1
+            gw._last_live_display_publish = 0  # as if the heartbeat had never been sent, with the payload unchanged
+            _guarded_run(gw._publish_predbat_data())
+            assert len(gw._published) == 2, "no heartbeat sent yet, so the unchanged payload goes out"
+
+    def test_first_read_only_resend_is_not_held_back(self):
+        """A read-only state that was never stamped is sent again even though it has not changed."""
+        test = TestCheckReadOnlyState()
+        gw = test._make_gateway(read_only=False)
+        gw.base = SimpleNamespace()
+        gw._last_read_only = False
+        with _gw_clock(gw, self._boot_clock()):
+            assert gw._last_read_only_sent_time == 0
+            _guarded_run(gw._check_read_only_state())
+            assert len(gw._published) == 1, "never stamped, so treated as stale"
+
+    def test_first_commanded_serials_resend_is_not_held_back(self):
+        """A declaration that matches the last one but was never stamped is sent again."""
+        test = TestCheckCommandedSerials()
+        gw = test._make_gateway()
+        gw.base.inverters = [test._inverter(0)]
+        clock = self._boot_clock()
+        with _gw_clock(gw, clock):
+            gw._last_telemetry_time = clock.mono
+            _guarded_run(gw._check_commanded_serials())
+            assert len(gw._published) == 1
+            gw._commanded_serials_sent_time = 0
+            _guarded_run(gw._check_commanded_serials())
+            assert len(gw._published) == 2, "never stamped, so not inside the 30 minute window"
+
+    def test_plan_with_no_publish_stamp_is_republished(self):
+        """A plan whose publish time was never stamped is treated as stale."""
+        plan_test = TestPlanRepublish()
+        gw = plan_test._make_gateway()
+        gw.base = SimpleNamespace()
+        with _gw_clock(gw, self._boot_clock()):
+            _guarded_run(gw.publish_plan(plan_test._entries(), "Europe/London"))
+            gw._last_plan_publish_time = 0
+            _guarded_run(gw._republish_plan_if_stale())
+            assert len(gw._published) == 2, "never stamped, so not inside the republish interval"
+
+    def test_first_display_binding_is_not_suppressed(self):
+        """An unchanged display binding is sent again when its publish time was never stamped."""
+        from tests.test_gateway_display import TestGatewayDisplayOnly
+
+        gw = TestGatewayDisplayOnly()._make_gateway(False)
+        gw.gateway_device_id = "pbgw_0123456789ab"
+        gw._topic_base = "predbat/devices/" + gw.gateway_device_id
+        gw.gateway_display_enabled = False
+        gw.gateway_display_visibility = {"v": 1, "device_id": gw.gateway_device_id, "instance_id": "00000000-0000-4000-8000-000000000123", "revision": 42, "enabled": False}
+        with _gw_clock(gw, self._boot_clock()):
+            asyncio.run(gw._publish_display_binding())
+            gw._last_live_binding_publish = 0
+            asyncio.run(gw._publish_display_binding())
+            assert gw._mqtt_client.publish.await_count == 2, "never stamped, so not inside the duplicate window"
+
+    def test_no_telemetry_yet_is_not_fresh(self):
+        """Before any status has arrived the hub is neither alive nor displayed as online."""
+        from tests.test_gateway_display import TestGatewayDisplayOnly
+
+        online_test = TestGatewayOnlineTopic()
+        gw = online_test._make_gateway()
+        gw._gateway_online = True
+        gw._last_telemetry_time = 0
+        with _gw_clock(gw, self._boot_clock()):
+            assert gw.is_alive() is False, "no telemetry yet"
+
+        display = TestGatewayDisplayOnly()._make_gateway()
+        states = {}
+        display.dashboard_item = lambda entity_id, state=None, attributes=None, **kwargs: states.__setitem__(entity_id, state)
+        display._gateway_online = True
+        display._last_telemetry_time = 0
+        with _gw_clock(display, self._boot_clock()):
+            display._update_display_health()
+        assert states["binary_sensor.predbat_gateway_display_online"] == "off", "no telemetry yet"
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError, TestTokenRefreshProvider
@@ -9438,6 +9546,8 @@ def run_gateway_tests(my_predbat=None):
         TestPublishRawLoopSafety,
         TestGatewayClockSeams,
         TestGatewayElapsedWindows,
+        TestGatewayFreshBootGuards,
+        TestSerialFromEntityId,
     ]
     for cls in test_classes:
         instance = cls()

@@ -117,16 +117,6 @@ def _split_same_day_plan_entries(entries):
     return split_entries
 
 
-def _monotonic():
-    """Clock for the ack window: immune to wall-clock corrections, and patchable in tests."""
-    return time.monotonic()
-
-
-async def _commit_pause():
-    """Wait before looking again for a schedule-write command's ack (patchable in tests)."""
-    await asyncio.sleep(_COMMIT_POLL_SECONDS)
-
-
 # Total startup wait budget, in 0.5 s ticks, shared by the connection and auto-config waits
 _STARTUP_WAIT_TICKS = 120 * 2
 _STARTUP_WAIT_SECONDS = _STARTUP_WAIT_TICKS * 0.5
@@ -513,7 +503,7 @@ class GatewayMQTT(ComponentBase):
         self._acks_seen = False  # at least one ack matched a tracked command on this connection
         self._ack_subscribe_warned = False  # the denied-subscription warning is logged once
         # Slot windows written but not yet sent to the Hub: (serial suffix, "charge"|"discharge") ->
-        # {start, end (HHMM or None), enable (bool or None), at (_monotonic)}. See _stage_slot().
+        # {start, end (HHMM or None), enable (bool or None), at (self.monotonic())}. See _stage_slot().
         self._staged = {}
         self._commit_inflight = set()  # (serial suffix, side) being written to the Hub right now
         self._commit_tasks = set()  # commits started on this loop, kept until done
@@ -2067,7 +2057,7 @@ class GatewayMQTT(ComponentBase):
         inverter the hub cannot read would be left out after the next restart.
         """
         storage = self.storage
-        if not self._discovery_dirty or storage is None or _monotonic() < self._discovery_save_retry_at:
+        if not self._discovery_dirty or storage is None or self.monotonic() < self._discovery_save_retry_at:
             return
         # Cleared before the save so a record that changes while it is being written is saved again
         self._discovery_dirty = False
@@ -2083,7 +2073,7 @@ class GatewayMQTT(ComponentBase):
             self._discovery_save_retry_at = 0
         else:
             self._discovery_dirty = True
-            self._discovery_save_retry_at = _monotonic() + GATEWAY_DISCOVERY_SAVE_RETRY_SECONDS
+            self._discovery_save_retry_at = self.monotonic() + GATEWAY_DISCOVERY_SAVE_RETRY_SECONDS
 
     @staticmethod
     def _stored_unit(record):
@@ -3444,7 +3434,7 @@ class GatewayMQTT(ComponentBase):
         Called once per status frame and before each commit or new staged write, so an entry
         for an inverter that has left the status frame is dropped too.
         """
-        now = _monotonic()
+        now = self.monotonic()
         with self._staged_lock:
             staged = getattr(self, "_staged", {})
             expired = [key for key, entry in staged.items() if now - entry["at"] > _STAGED_EXPIRY_SECONDS]
@@ -3467,7 +3457,7 @@ class GatewayMQTT(ComponentBase):
             if entry is None:
                 entry = {"start": None, "end": None, "enable": None}
                 entry[other] = self._time_str_to_hhmm(self.get_state_wrapper(entity_id[: -len(field)] + other))
-            entry = {**entry, field: hhmm, "at": _monotonic()}
+            entry = {**entry, field: hhmm, "at": self.monotonic()}
             self._staged = {**getattr(self, "_staged", {}), (suffix, side): entry}
         if entry[other] is None:
             self.log(f"Warn: GatewayMQTT: {side} slot {other} for {serial} is unknown, so the staged {side} window stays incomplete until it is written too")
@@ -3595,7 +3585,7 @@ class GatewayMQTT(ComponentBase):
             if entry is not None:
                 # Written alongside a staged window: an EMS will not enable onto a window it does
                 # not have yet, so the enable goes after the window when the schedule is written
-                self._staged = {**self._staged, (suffix, side): {**entry, "enable": is_on, "at": _monotonic()}}
+                self._staged = {**self._staged, (suffix, side): {**entry, "enable": is_on, "at": self.monotonic()}}
         if entry is not None:
             self.dashboard_item(entity_id, "on" if is_on else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{side}_enabled", {}), app="gateway")
             self.log(f"Info: GatewayMQTT: {side.capitalize()} {'enable' if is_on else 'disable'} for {serial} staged until the schedule is written")
@@ -3813,16 +3803,16 @@ class GatewayMQTT(ComponentBase):
         Returns:
             tuple: ("applied" or "refused", the ack's applied payload), or (None, None) if unanswered.
         """
-        deadline = _monotonic() + timeout
+        deadline = self.monotonic() + timeout
         while True:
             state, applied = self._attempt_outcome(entity_id, command, kwargs)
             if state == "gone":
                 return None, None
             if state is not None:
                 return state, applied
-            if _monotonic() >= deadline:
+            if self.monotonic() >= deadline:
                 return None, None
-            await _commit_pause()
+            await self.sleep(_COMMIT_POLL_SECONDS)
 
     @writes
     async def _send_control(self, entity_id, command, **kwargs):
@@ -3849,7 +3839,7 @@ class GatewayMQTT(ComponentBase):
             await self.publish_command(command, **kwargs)
             return
 
-        now = _monotonic()
+        now = self.monotonic()
         with self._command_lock:
             entry = self._pending_commands.get(entity_id)
             same = entry is not None and entry["command"] == command and entry["kwargs"] == kwargs
@@ -3946,7 +3936,7 @@ class GatewayMQTT(ComponentBase):
                 # Another send in this attempt already applied the value: only forget this id
                 entry["command_ids"].remove(command_id)
                 entry["attempt_ids"].remove(command_id)
-                entry["sent_at"] = _monotonic()  # still a refusal: the window runs from it
+                entry["sent_at"] = self.monotonic()  # still a refusal: the window runs from it
             elif drop_replay:
                 del self._pending_commands[entity_id]
             else:
@@ -3960,7 +3950,7 @@ class GatewayMQTT(ComponentBase):
                 if ok:
                     entry["applied"] = ack.get("applied")  # e.g. {"recorded": true} from an EMS that is off
                 if not ok:
-                    entry["sent_at"] = _monotonic()  # the window runs from the latest refusal
+                    entry["sent_at"] = self.monotonic()  # the window runs from the latest refusal
                     # Another unit refused an id whose ok updated the cache (in this attempt or an
                     # earlier one): that update overstated what was applied, so put back the last
                     # telemetry until the next status arrives

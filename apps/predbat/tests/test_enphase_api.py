@@ -2987,6 +2987,7 @@ def run_enphase_api_tests(my_predbat):
     test_enphase_record_keeps_pv_despite_automatic_ignore_pv()
     test_enphase_round_trip_keeps_site_id_readable()
     test_enphase_catalogue_filed_when_automatic_config_raises()
+    test_delete_schedule_posts_to_the_delete_endpoint()
     test_instances_use_their_own_mqtt_factory()
     test_livestream_failure_through_the_factory_is_swallowed()
     test_request_retry_backoff_sleeps_on_the_clock()
