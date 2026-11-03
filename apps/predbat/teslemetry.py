@@ -1715,20 +1715,22 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         Cheap to call every cycle: set_tariff only reaches the API when the serialised tariff changes,
         i.e. on a genuine rate-band, discharge-window or day-of-week change. Gated on read-only mode.
 
-        With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one; it
-        depends only on the committed windows, so it re-pushes strictly less often.
+        With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one. Its
+        discharge window only reaches the tariff while it is running (see _export_window_active), so it
+        depends on the committed windows and on whether the export window is live, which costs up to
+        two extra pushes per export window: one as the band appears and one as it is withdrawn.
 
-        On both paths the discharge window only reaches the tariff while it is running (see
-        _export_window_active), which costs up to two extra pushes per export window: one as the band
-        appears at its start and one as it is withdrawn at its end.
+        The real-rate path keeps the whole committed window: it also uses it to keep the export slots
+        out of the band quantisation, and outside the window the device is in self_consumption, which
+        does not act on the tariff, so it has no run-up hold to avoid.
         """
         if self._is_read_only():
             return True
-        export_window = self._export_window_active(self._discharge_window(), self.get_minutes_now())
         if getattr(self, "tbc_control", self.DEFAULT_TBC_CONTROL):
+            export_window = self._export_window_active(self._discharge_window(), self.get_minutes_now())
             tariff = self.build_signal_tariff(self._charge_window(), export_window)
         else:
-            tariff = self.build_tariff(export_window)
+            tariff = self.build_tariff(self._discharge_window())
         return await self.set_tariff(tariff)
 
     def _is_read_only(self):

@@ -1434,8 +1434,9 @@ def test_teslemetry_tbc_holds_back_the_export_band_until_the_start():
     assert _signal_tier_at(pushed["tariff"], 0, 18 * 60 + 15, sell=True) == "PARTIAL_PEAK"
 
 
-def test_teslemetry_real_rate_tariff_holds_back_the_boost_until_the_start():
-    """The real-rate path withholds its synthetic export boost the same way (GH#5960)."""
+def test_teslemetry_real_rate_tariff_keeps_the_whole_export_window():
+    """The real-rate path is not gated (GH#5960): it still carves the committed window ahead of its
+    start, which also keeps the export slots out of the real-band quantisation."""
     api = MockTeslemetryAPI()
     api.base = _rate_base(import_p=28.0, export_p=15.0)
     api.tbc_control = False
@@ -1443,9 +1444,6 @@ def test_teslemetry_real_rate_tariff_holds_back_the_boost_until_the_start():
     pushed = {}
     api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
     api.get_minutes_now = lambda: 18 * 60 + 9
-    run_async(api.sync_tariff())
-    assert "ON_PEAK" not in pushed["tariff"]["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
-    api.get_minutes_now = lambda: 18 * 60 + 10
     run_async(api.sync_tariff())
     assert "ON_PEAK" in pushed["tariff"]["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
 
@@ -3379,7 +3377,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_tbc_control_on_pushes_the_signal_tariff()
     test_teslemetry_export_window_active_bounds_and_wrap()
     test_teslemetry_tbc_holds_back_the_export_band_until_the_start()
-    test_teslemetry_real_rate_tariff_holds_back_the_boost_until_the_start()
+    test_teslemetry_real_rate_tariff_keeps_the_whole_export_window()
     test_teslemetry_initialize_sets_tbc_control_from_component_arg()
     test_teslemetry_tbc_control_defaults_on_via_the_registry()
     test_teslemetry_tbc_control_fallback_matches_the_documented_default()
