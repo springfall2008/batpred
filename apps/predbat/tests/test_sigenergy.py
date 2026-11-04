@@ -5673,6 +5673,207 @@ def test_sigenergy_listener_cancel_while_sleeping(my_predbat):
     return failed
 
 
+def test_sigenergy_cancel_during_subscription_reset(my_predbat):
+    """Cancellation after cancelling the change push restores it before the MQTT connection closes."""
+    api = _listener_api("keyC", "tokC", "broker-c.example", "SITE_C")
+    record = _new_record()
+    events = []
+
+    class Client(RecordingMQTTClient):
+        """Record the real listener's requests and connection close in order."""
+
+        async def publish(self, topic, payload=None, qos=0, **kwargs):
+            """Record every request while keeping the ordinary fake's payload evidence."""
+            events.append(("publish", topic))
+            await super().publish(topic, payload, qos, **kwargs)
+
+        async def __aexit__(self, *args):
+            """Record when the listener closes its connection."""
+            events.append(("disconnect", None))
+
+    class Clock(VirtualClock):
+        """Pause the first resubscribe sleep and advance virtual time during recovery."""
+
+        def __init__(self):
+            """Start the observation event on this test's loop."""
+            super().__init__()
+            self.paused = asyncio.Event()
+
+        async def sleep(self, seconds):
+            """Expose the cancellation window, then let bounded recovery make progress."""
+            if not self.sleeps:
+                self.sleeps.append(seconds)
+                self.paused.set()
+                await asyncio.Event().wait()
+            else:
+                await super().sleep(seconds)
+
+    clock = Clock()
+
+    async def scenario():
+        """Cancel the actual listener in its resubscribe pause and await all cleanup."""
+        task = asyncio.create_task(api._mqtt_listener_loop())
+        try:
+            await asyncio.wait_for(clock.paused.wait(), timeout=1)
+            assert events == [("publish", "openapi/unsubscription/change")], events
+            task.cancel()
+            await asyncio.wait_for(task, timeout=1)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        assert not [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()], "listener left a task running"
+
+    with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+        with _api_mqtt_factory(api, lambda **kwargs: Client(kwargs, record)):
+            with _api_clock(api, clock):
+                run_async_real(scenario())
+    assert events == [("publish", "openapi/unsubscription/change"), ("publish", "openapi/subscription/change"), ("disconnect", None)], events
+    assert record["published"][0][1] == record["published"][1][1], "restore uses this connection's token and systems"
+    assert len(record["clients"]) == 1, "shutdown never reconnects"
+    assert len(clock.sleeps) == 2 and clock.sleeps[1] <= SIGENERGY_MQTT_RESUBSCRIBE_DELAY, clock.sleeps
+    return False
+
+
+def test_sigenergy_subscription_recovery_outcomes(my_predbat):
+    """Interrupted setup restores only a pending change push; failures and timeouts finish without leaked tasks."""
+    from sigenergy import aiomqtt as sigenergy_aiomqtt
+
+    for failure in ("unsubscribe", "period", "alarm", "restore", "timeout"):
+        api = _listener_api("keyC", "tokC", "broker-c.example", "SITE_C")
+        record = _new_record()
+        events = []
+        clock = VirtualClock()
+
+        class Client(RecordingMQTTClient):
+            """Break the selected subscription step and record bounded restoration before close."""
+
+            async def publish(self, topic, payload=None, qos=0, **kwargs):
+                """Record the actual listener's request and simulate the selected broker failure."""
+                await super().publish(topic, payload, qos, **kwargs)
+                events.append(topic)
+                if topic == "openapi/unsubscription/change" and failure in ("unsubscribe", "restore", "timeout"):
+                    raise asyncio.CancelledError()
+                if topic == "openapi/subscription/period" and failure == "period":
+                    raise sigenergy_aiomqtt.MqttError("period failed")
+                if topic == "openapi/subscription/alarm" and failure == "alarm":
+                    raise sigenergy_aiomqtt.MqttError("alarm failed")
+                if topic == "openapi/subscription/change" and failure == "restore":
+                    raise sigenergy_aiomqtt.MqttError("secret-in-exception")
+                if topic == "openapi/subscription/change" and failure == "timeout":
+                    await asyncio.Event().wait()
+
+            async def __aexit__(self, *args):
+                """Close the connection and prevent any subsequent reconnect."""
+                events.append("disconnect")
+                api.api_stop = True
+
+        async def scenario():
+            """Run the provider listener and inspect cleanup before the runner can cancel stray tasks."""
+            await api._mqtt_listener_loop()
+            assert not [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()], "cleanup leaked a task"
+
+        with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+            with _api_mqtt_factory(api, lambda **kwargs: Client(kwargs, record)):
+                with _api_clock(api, clock):
+                    with patch("sigenergy.SIGENERGY_MQTT_RESUBSCRIBE_DELAY", 0.01):
+                        with patch("sigenergy.SIGENERGY_MQTT_RESTORE_TIMEOUT", 0.01):
+                            run_async_real(scenario())
+        assert events[-1] == "disconnect", (failure, events)
+        assert events.count("openapi/subscription/change") == 1, "{}: one change request, got {}".format(failure, events)
+        assert len(record["clients"]) == 1, "{}: shutdown never creates a fresh client".format(failure)
+        assert record["published"][0][1] == next(payload for topic, payload in record["published"] if topic == "openapi/subscription/change"), "restoration keeps the original payload"
+        messages = "\n".join(api.log_messages)
+        assert "secret-in-exception" not in messages, "cleanup must not log exception payloads"
+        if failure in ("restore", "timeout"):
+            assert "Change subscription restoration failed" in messages, (failure, messages)
+        if failure == "alarm":
+            assert events.count("openapi/subscription/alarm") == 1, "already restored change push is not requested again"
+    return False
+
+
+def test_sigenergy_final_waits_for_subscription_recovery(my_predbat):
+    """Actual component shutdown waits out the remaining pause; a real timeout or second cancellation leaves no tasks."""
+    for outcome in ("partial", "timeout", "second_cancel"):
+        api = _listener_api("keyC", "tokC", "broker-c.example", "SITE_C")
+        record = _new_record()
+        delay = SIGENERGY_MQTT_RESUBSCRIBE_DELAY if outcome == "partial" else 0.01
+        restoring = asyncio.Event()
+        disconnected = []
+
+        class Client(RecordingMQTTClient):
+            """Expose a restoration that completes, hangs until timeout, or is cancelled again."""
+
+            async def publish(self, topic, payload=None, qos=0, **kwargs):
+                """Record requests and expose the restoration publish without contacting a broker."""
+                await super().publish(topic, payload, qos, **kwargs)
+                if topic == "openapi/subscription/change":
+                    restoring.set()
+                    if outcome != "partial":
+                        await asyncio.Event().wait()
+
+            async def __aexit__(self, *args):
+                """Record disconnect after cleanup finishes or is explicitly interrupted."""
+                disconnected.append(True)
+
+        class Clock(VirtualClock):
+            """Advance part of the first pause, then allow recovery to finish its remaining time."""
+
+            def __init__(self):
+                """Expose when the listener can safely be shut down."""
+                super().__init__()
+                self.paused = asyncio.Event()
+
+            async def sleep(self, seconds):
+                """Pause the initial reset after sixty per cent of its delay has elapsed."""
+                if not self.sleeps:
+                    self.sleeps.append(seconds)
+                    self.mono += delay * 0.6
+                    self.paused.set()
+                    await asyncio.Event().wait()
+                else:
+                    await super().sleep(seconds)
+
+        clock = Clock()
+
+        async def scenario():
+            """Use final() to issue the first real cancellation and await the listener's cleanup."""
+            api._mqtt_task = asyncio.create_task(api._mqtt_listener_loop())
+            closing = None
+            try:
+                await asyncio.wait_for(clock.paused.wait(), timeout=1)
+                closing = asyncio.create_task(api.final())
+                if outcome == "second_cancel":
+                    await asyncio.wait_for(restoring.wait(), timeout=1)
+                    api._mqtt_task.cancel()
+                await asyncio.wait_for(closing, timeout=1)
+            finally:
+                tasks = [task for task in (closing, api._mqtt_task) if task is not None and not task.done()]
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            assert not [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()], "shutdown leaked a task"
+
+        with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()):
+            with _api_mqtt_factory(api, lambda **kwargs: Client(kwargs, record)):
+                with _api_clock(api, clock):
+                    with patch("sigenergy.SIGENERGY_MQTT_RESUBSCRIBE_DELAY", delay):
+                        with patch("sigenergy.SIGENERGY_MQTT_RESTORE_TIMEOUT", 0.01 if outcome == "timeout" else 5):
+                            run_async_real(scenario())
+        assert restoring.is_set(), "shutdown attempted the change subscription restore"
+        assert disconnected == [True], "final() awaited the listener and its connection close"
+        assert len(clock.sleeps) == 2 and abs(clock.sleeps[1] - delay * 0.4) < 0.000001, clock.sleeps
+        assert len(record["clients"]) == 1, "shutdown did not reconnect"
+        messages = "\n".join(api.log_messages)
+        if outcome == "timeout":
+            assert "restoration failed (TimeoutError)" in messages, messages
+        elif outcome == "second_cancel":
+            assert "restoration cancelled" in messages, messages
+        else:
+            assert "restoration failed" not in messages and "restoration cancelled" not in messages, messages
+    return False
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -5846,6 +6047,9 @@ def run_sigenergy_tests(my_predbat):
         ("auth_retry_sleeps_on_the_clock", test_sigenergy_auth_retry_sleeps_on_the_clock),
         ("rate_limit_backoff_sleeps_on_the_clock", test_sigenergy_rate_limit_backoff_sleeps_on_the_clock),
         ("listener_cancel_while_sleeping", test_sigenergy_listener_cancel_while_sleeping),
+        ("cancel_during_subscription_reset", test_sigenergy_cancel_during_subscription_reset),
+        ("subscription_recovery_outcomes", test_sigenergy_subscription_recovery_outcomes),
+        ("final_waits_for_subscription_recovery", test_sigenergy_final_waits_for_subscription_recovery),
     ]
 
     for name, fn in tests:
