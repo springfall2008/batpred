@@ -278,6 +278,7 @@ Predbat blends the three simulated futures into one metric, so a value of 0.1 as
 running weight to 0.0 regardless of this setting, so no PV90% simulation is run and the plan is exactly as it would be without this setting. Giving weight to
 the possibility of a better-than-forecast day makes Predbat somewhat less willing to charge from the grid, since it now prices in a chance of more free solar
 than the central forecast predicts.
+It does not plan a forced export on that chance alone: an export must also pay in the central forecast (see `metric_min_improvement_export`).
 If `pv_metric10_weight` and `pv_metric90_weight` together exceed 1.0 they are scaled back proportionally so the central scenario is never given a negative weighting.
 
 **switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use your historical solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
@@ -414,9 +415,13 @@ Every 5 minutes of a planned export has to earn its share of this, so an export 
 For example at 0.5p each extra 5 minutes of export must earn about 0.08p, and at 3p about 0.5p.
 A value of 0.1p is the default, which only removes export that earns almost nothing.
 If you increase this value (e.g. you only want to force export if it is clearly profitable), then exports will become shorter and less common.
-An export that is already running is not shortened by this setting.
+An export that is already running is not shortened by this setting.<BR>
+An export also has to earn this in the central (nominal) forecast on its own, not just in the plan's blend of the central forecast with the PV10 and PV90 scenarios.
+That is measured on the plan metric - cost, less the value of what is left in the battery, plus carbon, battery cycles and self sufficiency - but leaving out the `best_soc_keep` penalty,
+which a slow or freeze export can lower without saving anything.
+So an export that only pays if solar turns out much better (PV90) or worse (PV10) than forecast is not planned.
 
-**input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum pence cost improvement it's worth doing an export freeze for.
+**input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum improvement, in the central forecast, it's worth doing an export freeze for.
 A value of 0.1p is the default which prevents any marginal freezes as they must be worth at least 0.1 pence for a slot duration (less for shorter slots).
 If you increase this value (e.g. you only want to freeze export if very profitable), then freeze exports will become less common.
 The value is in pence per slot of export time.
