@@ -30,6 +30,11 @@ to tell "a source is configured but has not answered yet" - transient, retry nex
 apart from "no source is configured at all", which is a setup gap that will never resolve.
 Before the tag existed that question was asked as "givtcp_rest or ge_cloud_direct", which
 was simply the two sources that happened to have been wired up when the check was written.
+
+Set "align_minute": True on an entry whose run() acts on minute-resolution schedule edges, so its
+loop runs just after each wall-clock minute boundary instead of every 60 seconds from process start
+(see ComponentBase.start()). Leave it off otherwise: the free-running loops spread components across
+the minute, where aligning them all would put every API call and its processing in the same second.
 """
 
 import importlib
@@ -734,6 +739,9 @@ COMPONENT_LIST = {
         },
         "phase": 1,
         "can_restart": True,
+        # The signal tariff's export band is pushed on the first run inside its window (GH#5960), so
+        # an unaligned loop starts every export up to a minute late, more as run() durations drift it.
+        "align_minute": True,
     },
     "solax": {
         "class": "solax.SolaxAPI",
@@ -930,6 +938,7 @@ class Components:
                     # Overrides the class-name fallback ComponentBase.__init__ set, with the
                     # registry key report_discovery() should file this component's reports under.
                     self.components[component_name].component_name = component_name
+                    self.components[component_name].align_minute = component_info.get("align_minute", False)
                 except Exception as e:
                     # A component that will not import (a missing package, a syntax error) or
                     # construct must not take Predbat down with it: record why, leave it inactive
