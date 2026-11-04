@@ -63,7 +63,7 @@ class CarbonAPI(ComponentBase):
         url = f"https://api.carbonintensity.org.uk/regional/intensity/{date_from}/fw48h/postcode/{postcode}"
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url) as response:
                     if response.status == 200:
                         try:

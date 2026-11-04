@@ -858,9 +858,9 @@ class Components:
 
         The coordinator lives here - never as a PredBat attribute - because create_debug_yaml()
         dumps every non-excluded member of PredBat.__dict__, and the coordinator holds the raw
-        unredacted reports plus the pseudonym salt. "components" is in DEBUG_EXCLUDE_LIST (as is
-        "coordinator", defensively), so nothing under self.components is dumped automatically at
-        all; create_debug_yaml() instead adds a plain redacted dict via coordinator.catalogue().
+        raw reports. "components" is in DEBUG_EXCLUDE_LIST (as is "coordinator", defensively),
+        so nothing under self.components is dumped automatically at all; create_debug_yaml() instead
+        adds a plain dict via coordinator.catalogue(), which scrubs email addresses.
         """
         self.components = {}
         self.component_tasks = {}

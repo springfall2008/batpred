@@ -5855,7 +5855,7 @@ def test_pv_calibration_all_days_down(my_predbat):
 def test_build_discovery_solcast_sites(my_predbat):
     """
     build_discovery() reports one forecasts record per Solcast resource id already discovered,
-    with the resource id pseudonymised via account_ids rather than published in the clear via info.
+    with the resource id in account_ids (the container for account and site identifiers) rather than info.
     """
     print("  - test_build_discovery_solcast_sites")
     failed = False
@@ -6642,14 +6642,11 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
     Feed build_discovery()'s output through the real Coordinator.report()/assemble() and then
     through the real Redactor, exactly as it will be at runtime.
 
-    This is the first discovery reporter to exercise the redactor's case-folded/separator-swapped
-    identifier variant matching (_identifier_variants) for a site id specifically - a real HACS
-    Solcast integration slugifies a site's resource id (lower-cased, "-" swapped for "_") into its
-    own entity ids, so the resource id can appear in a DIFFERENT, transformed form inside a
-    pv_forecast_* entity_id the user configured, not just in its own raw form inside account_ids.
-    The Octopus reporter leaked exactly this shape of value once, before the redactor grew this
-    mechanism (get_entity_name() lower-cases and swaps "-" for "_") - this proves the mechanism
-    catches it for a site id too, rather than assuming it does.
+    A real HACS Solcast integration slugifies a site's resource id (lower-cased, "-" swapped for "_")
+    into its own entity ids, so the resource id appears both raw in account_ids and transformed inside
+    a pv_forecast_* entity_id the user configured. Identifiers are not secret (maintainer decision,
+    2 Nov 2026), so both forms must reach the published catalogue unchanged - a tokenised entity id
+    would be useless to anything re-binding configuration from the record.
     """
     print("  - test_build_discovery_round_trips_through_coordinator_and_redaction")
 
@@ -6723,12 +6720,11 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
         catalogue = coordinator.catalogue()
         catalogue_text = str(catalogue)
 
-        check(resource_id not in catalogue_text, "the raw Solcast resource id appears in the clear in the redacted catalogue")
-        # The transformed form a real HACS Solcast integration would fold into its own entity id -
-        # lower-cased, "-" swapped for "_" - embedded above inside the externally-configured
-        # pv_forecast_today entity_id. Checking only the raw string (as above) would miss this.
+        check(resource_id in catalogue_text, "the Solcast resource id is an identifier and must stay readable in the published catalogue")
+        # The transformed form a real HACS Solcast integration folds into its own entity id - lower-cased,
+        # "-" swapped for "_" - embedded above inside the externally-configured pv_forecast_today entity_id
         transformed = resource_id.lower().replace("-", "_")
-        check(transformed not in catalogue_text, "the case-folded, separator-swapped resource id form appears in the clear in the redacted catalogue")
+        check(transformed in catalogue_text, "the entity id embedding the resource id must reach the published catalogue unchanged")
         check("Solcast" in catalogue_text, "the vendor should survive in the clear, but is missing from the redacted catalogue")
         check("forecast_solar" in catalogue_text, "the forecast_solar device id should survive in the clear, but is missing from the redacted catalogue")
         check("pv10" in catalogue_text and "pv90" in catalogue_text, "the coverage variants should survive redaction in the clear, but are missing from the redacted catalogue")

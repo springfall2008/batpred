@@ -188,7 +188,7 @@ class TestGatewayDisplayOnly:
         for connected, online in ((False, False), (True, False), (True, True)):
             gw._mqtt_connected = connected
             gw._gateway_online = online
-            gw._last_telemetry_time = time.time() - 7200
+            gw._last_telemetry_time = gw.monotonic() - 7200
             gw.last_success_timestamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
             with patch("gateway.HAS_AIOMQTT", True):
                 assert asyncio.run(gw.run(60, False))
@@ -201,7 +201,7 @@ class TestGatewayDisplayOnly:
 
         gw._mqtt_connected = True
         gw._gateway_online = True
-        gw._last_telemetry_time = time.time()
+        gw._last_telemetry_time = gw.monotonic()
         gw._update_display_health()
         assert base.dashboard_item.call_args.args[1] == "on"
         # A stopped component thread remains a real process-health failure.
@@ -286,7 +286,7 @@ class TestGatewayDisplayOnly:
         assert not gw.is_alive()
         gw._mqtt_connected = True
         gw._gateway_online = True
-        gw._last_telemetry_time = time.time() - 121
+        gw._last_telemetry_time = gw.monotonic() - 121
         assert not gw.is_alive()
 
 
@@ -304,8 +304,8 @@ class TestIndependentVisibility:
         asyncio.run(gw._publish_display_binding(force=True))
         gw._mqtt_client.publish.assert_not_awaited()
         gw._mqtt_connected = True
-        with patch("gateway.time.time", return_value=1800000000):
-            asyncio.run(gw._publish_display_binding(force=True))
+        gw.base.component_clock = SimpleNamespace(monotonic=time.monotonic, time=lambda: 1800000000, sleep=asyncio.sleep)
+        asyncio.run(gw._publish_display_binding(force=True))
         call = gw._mqtt_client.publish.await_args
         assert call.args[0] == gw._topic_base + "/config"
         assert call.kwargs == {"qos": 1, "retain": False}

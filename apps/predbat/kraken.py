@@ -341,6 +341,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.flextras_sessions = []
         self.flextras_fetched_at = None
         self.flextras_last_status = None
+        # Whether this process has bound octopus_free_electricity to the Flextras sensor - what the discovery
+        # programme record follows (build_discovery()). Never persisted: the binding itself is per process.
+        self.flextras_bound = False
 
         # Export account/MPAN from SaaS config (matched by address at onboarding time).
         # Tariff is always discovered dynamically via GraphQL so changes are detected.
@@ -440,7 +443,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         try:
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.post(url, json={"query": query}, headers=headers) as response:
                     if response.status != 200:
                         # Include the response body — Kraken returns GraphQL validation errors
@@ -1013,7 +1016,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         pages = 0
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 while url and pages < 3:
                     async with session.get(url, auth=auth, headers=headers) as response:
                         if response.status != 200:
@@ -1187,7 +1190,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         http_error_status = None
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url) as response:
                     if response.status != 200:
                         http_error_status = response.status
@@ -1744,7 +1747,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         try:
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url, headers=headers) as response:
                     status = response.status
                     body = await response.json(content_type=None) if status == 200 else await response.text()
@@ -1796,6 +1799,98 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         entity = self.get_entity_name("sensor", "free_electricity")
         self.dashboard_item(entity, "on" if active else "off", attributes={"friendly_name": "EDF Flextras Free Hours", "icon": "mdi:flash", "events": events}, app="kraken")
         self.set_arg("octopus_free_electricity", entity)
+        self.flextras_bound = True
+
+    def _discovery_meter(self, direction, tariff, mpan, account, entities):
+        """One meters record: the supply point, its account, the tariff codes and the bindings Home Assistant has seen."""
+        record = {"device_id": "kraken:{}".format(mpan or direction), "direction": direction}
+        account_ids = {}
+        if mpan:
+            account_ids["mpan"] = str(mpan)
+        if account:
+            account_ids["account"] = account
+        if account_ids:
+            record["account_ids"] = account_ids
+        info = {}
+        if tariff.get("tariff_code"):
+            info["tariff_code"] = tariff["tariff_code"]
+        if tariff.get("product_code"):
+            info["product_code"] = tariff["product_code"]
+        if info:
+            record["tariff"] = {"info": info}
+        seen = self.discovery_entities(entities)
+        if seen:
+            record["entities"] = seen
+        return record
+
+    def build_discovery(self):
+        """
+        Describe the Kraken (EDF / E.ON Next) account for the discovery catalogue.
+
+        meters: the import supply point once a tariff is found, and the export one once an export tariff
+        is - each keyed "kraken:{mpan}" with its MPAN and account in account_ids (E.ON can put export on
+        its own account, export_account_id), the tariff and product codes, and the import standing
+        charge in pence. Each carries the metric_octopus_* binding run() makes for it, under the same
+        condition as the set_arg (export rates only once they are actually available) but regardless
+        of the one-shot wired latches, since the record describes the account, not whether wiring
+        already happened. No tariff flags: Kraken exposes nothing to derive them from.
+
+        cars: one record per LIVE SmartFlex EV (every entry in intelligent_devices), bound to the
+        intelligent_dispatch slot sensor _publish_dispatch_sensors() wires octopus_intelligent_slot to.
+        Battery size and charge-point power are never populated, so there are no ratings.
+
+        programmes: an EDF account on Flextras is a free_electricity programme cross-linked to the import
+        meter, overriding rates through the octopus_free_electricity sensor. It follows the binding, as
+        every entity here does: present once this process has bound that sensor (which a restart does
+        from cached sessions before any fetch, and a transient server error does not undo) or the last
+        Flextras fetch succeeded. Never bound and never fetched successfully, or an E.ON account, gives none.
+
+        Every binding is filtered to entities Home Assistant has seen. Kraken has no automatic flag -
+        every set_arg it makes is unconditional - so "automatic" is always True. Identifiers are
+        published readable; credentials (API key, login email, password, tokens) and the account
+        address are never read.
+
+        Returns None until a tariff has been found.
+        """
+        if not self.current_tariff:
+            return None
+
+        def sensor(setting, suffix, domain="sensor"):
+            """The descriptor for one binding run() makes."""
+            return {setting: {"entity_id": self.get_entity_name(domain, suffix), "domain": domain, "access": "r"}}
+
+        import_mpan = self.import_mpan or self.configured_mpan
+        import_meter = self._discovery_meter("import", self.current_tariff, import_mpan, self.account_id, {**sensor("metric_octopus_import", "import_rates"), **sensor("metric_standing_charge", "import_standing")})
+        if self.import_standing_charge is not None:
+            import_meter["ratings"] = {"standing_charge_p": round(self.import_standing_charge * 100, 4)}
+        meters = [import_meter]
+        if self.export_tariff:
+            meters.append(self._discovery_meter("export", self.export_tariff, self.export_mpan, self.export_account_id or self.account_id, sensor("metric_octopus_export", "export_rates") if self.export_rates_available else {}))
+
+        cars = []
+        for device_id, device in self.intelligent_devices.items():
+            index_suffix = self._device_index_suffix(device_id)
+            record = {"device_id": "kraken:{}".format(device_id), "account_ids": {"intelligent_device_id": device_id}}
+            info = {key: device[key] for key in ("make", "model") if device.get(key)}
+            if info:
+                record["info"] = info
+            seen = self.discovery_entities(sensor("octopus_intelligent_slot", "intelligent_dispatch_" + index_suffix if index_suffix else "intelligent_dispatch", domain="binary_sensor"))
+            if seen:
+                record["entities"] = seen
+            cars.append(record)
+
+        programmes = []
+        if self.provider == "edf" and (self.flextras_bound or self.flextras_last_status == 200):
+            account_ids = {"account": self.account_id}
+            if self.flextras_property_id:
+                account_ids["programme_id"] = str(self.flextras_property_id)
+            record = {"device_id": "kraken:flextras:{}".format(self.account_id), "kind": "free_electricity", "meter": import_meter["device_id"], "account_ids": account_ids, "effects": ["rate_override"]}
+            seen = self.discovery_entities(sensor("octopus_free_electricity", "free_electricity"))
+            if seen:
+                record["entities"] = seen
+            programmes.append(record)
+
+        return {"automatic": True, "meters": meters, "cars": cars, "programmes": programmes}
 
     async def run(self, seconds, first):
         """Component run method — called by ComponentBase.start() every 60s.
@@ -1930,6 +2025,10 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             },
             app="kraken",
         )
+
+        # Filed every cycle, before the first-cycle failure return below, so a report that failed to file
+        # is retried. refresh_discovery() owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         # Persist to storage whenever we refreshed something, so the next restart restores it.
         # (Not every cycle — if the cache is lost it is simply re-fetched on the next due check.)

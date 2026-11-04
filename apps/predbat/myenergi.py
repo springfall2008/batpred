@@ -32,7 +32,7 @@ from typing import Optional
 
 import aiohttp
 
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session, writes
 from coordinator import charger_with_stub_car
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -331,9 +331,11 @@ class MyEnergiTransport(ABC):
     never touches publishing, auto-configuration or the controls.
     """
 
-    def __init__(self, log):
-        """Store the logging function and initialise the one-shot warning set."""
+    def __init__(self, log, session_factory=None):
+        """Store the logging function and session factory and initialise the one-shot warning set."""
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
         self._warned_stubs = set()
 
     @abstractmethod
@@ -399,9 +401,9 @@ class MyEnergiDirectTransport(MyEnergiTransport):
     whose X_MYENERGI-asn response header names the host to use from then on.
     """
 
-    def __init__(self, log, hub_serial, api_key):
+    def __init__(self, log, hub_serial, api_key, session_factory=None):
         """Store credentials and start with an unresolved active server."""
-        super().__init__(log)
+        super().__init__(log, session_factory)
         self.hub_serial = str(hub_serial)
         self.api_key = api_key
         self.base_url = None
@@ -412,7 +414,7 @@ class MyEnergiDirectTransport(MyEnergiTransport):
         if not digest_auth_available():
             raise MyEnergiApiError(AIOHTTP_DIGEST_REQUIRED.format(getattr(aiohttp, "__version__", "unknown")))
         digest = aiohttp.DigestAuthMiddleware(self.hub_serial, self.api_key)
-        return aiohttp.ClientSession(middlewares=(digest,), headers={"User-Agent": USER_AGENT})
+        return self._session_factory(middlewares=(digest,), headers={"User-Agent": USER_AGENT})
 
     def _update_asn(self, headers):
         """Follow the active server named by the X_MYENERGI-asn response header."""
@@ -599,9 +601,9 @@ class MyEnergiCloudTransport(MyEnergiTransport):
     performed by OAuthMixin on the component takes effect immediately.
     """
 
-    def __init__(self, log, access_token_getter):
+    def __init__(self, log, access_token_getter, session_factory=None):
         """Store the token accessor and initialise the device list cache."""
-        super().__init__(log)
+        super().__init__(log, session_factory)
         self.access_token_getter = access_token_getter
         self.device_meta = {}
         # Wall-clock stamp of the last GET /devices. A counter was tried first and never
@@ -621,7 +623,7 @@ class MyEnergiCloudTransport(MyEnergiTransport):
         """Perform one cloud API request and return the decoded JSON body."""
         url = MYENERGI_CLOUD_URL + path
         try:
-            async with aiohttp.ClientSession(headers=self._headers()) as session:
+            async with self._session_factory(headers=self._headers()) as session:
                 async with session.request(method, url, json=body, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
                     if response.status == 401:
                         record_api_call("myenergi", success=False, reason="auth_error")
@@ -805,7 +807,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             if not key and not token_hash:
                 self.log("Error: myenergi: auth_method is 'oauth' but neither myenergi_key nor myenergi_token_hash is set")
                 return
-            self.transport = MyEnergiCloudTransport(self.log, lambda: self.access_token)
+            self.transport = MyEnergiCloudTransport(self.log, lambda: self.access_token, self.http_session)
         else:
             self._init_oauth("api_key", None, None, "myenergi")
             self.auth_method_config = configured_auth_method
@@ -815,7 +817,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             if not digest_auth_available():
                 self.log("Error: myenergi: " + AIOHTTP_DIGEST_REQUIRED.format(getattr(aiohttp, "__version__", "unknown")))
                 return
-            self.transport = MyEnergiDirectTransport(self.log, hub_serial, api_key)
+            self.transport = MyEnergiDirectTransport(self.log, hub_serial, api_key, self.http_session)
 
     def entity_prefix(self, device):
         """Return the entity name prefix for a device, e.g. predbat_myenergi_zappi_12345678."""
@@ -831,11 +833,11 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         filtered to those Home Assistant has seen; car_charging_now is left out because it only re-binds
         the power sensor.
 
-        Never reported: the cloud alias (a user-chosen name) and the hub serial (the digest-auth
-        username). An install with no hub enters the Zappi's own serial as myenergi_hub_serial, so
-        there that serial is the login username too: it is then reported as an account id, which the
-        catalogue pseudonymises wherever it appears, rather than as a hardware serial. An Eddi is a
-        diverter, not a charger, and has no catalogue section.
+        Not reported: the cloud alias (a user-chosen name) and the hub serial, which nothing here
+        needs. A Zappi's serial is reported even on an install with no hub, where it doubles as the
+        digest-auth username: identifiers are not secret (maintainer decision, 2 Nov 2026), and the
+        API key, which is, never enters the record. An Eddi is a diverter, not a charger, and has no
+        catalogue section.
 
         Returns None when there is no Zappi to describe.
         """
@@ -853,11 +855,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 "car_charging_power": {"entity_id": "sensor.{}_power".format(prefix), "domain": "sensor", "access": "r"},
             }
             serial = str(device.serial)
-            is_login = bool(self.hub_serial) and str(self.hub_serial) == serial
             charger, car = charger_with_stub_car(
                 "myenergi:{}".format(serial),
-                hardware_ids=None if is_login else {"serial": serial},
-                account_ids={"hub_serial": serial} if is_login else None,
+                hardware_ids={"serial": serial},
                 info={"vendor": "myenergi", "model": DEVICE_KIND_ZAPPI},
                 entities=self.discovery_entities(descriptors),
             )
@@ -989,6 +989,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         """Has the Zappi been put in a different mode, e.g. from the myenergi app."""
         return device.mode != (ZAPPI_MODE_CHARGING if charge else ZAPPI_MODE_STOPPED)
 
+    @writes
     async def charger_control_send(self, device, charge, car_n):
         """Fast inside a planned window, Stopped outside one.
 
@@ -1041,6 +1042,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         else:
             await self.save_control_modes()
 
+    @writes
     async def charger_control_release_one(self, device, charge):
         """Hand a held Zappi back, restoring the mode it had before Predbat took over.
 
@@ -1060,6 +1062,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         if self.control_saved_modes.pop(device.device_id, None) is not None:
             await self.save_control_modes()
 
+    @writes
     async def charger_control_hand_to_octopus(self, device, charge):
         """Hand a Zappi to Octopus in the mode it had before Predbat took over, but never Fast.
 
@@ -1215,6 +1218,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             amount = max(BOOST_MINUTES_MIN, min(BOOST_MINUTES_MAX, amount))
         self.boost_amounts[device.device_id] = amount
 
+    @writes
     async def switch_event_handler(self, entity_id, service):
         """Send or cancel a boost in response to the boost switch.
 

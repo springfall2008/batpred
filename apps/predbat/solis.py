@@ -20,7 +20,7 @@ import threading
 import yaml
 from datetime import datetime, timedelta, UTC
 from predbat_metrics import record_api_call
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -1073,6 +1073,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             slot_data["charge_enable"] = 0
             slot_data["discharge_enable"] = 0
 
+    @writes
     async def resolve_discharge_soc_floor(self, inverter_sn, target_soc):
         """Return the lowest discharge slot cut-off SOC the inverter will actually accept.
 
@@ -1219,6 +1220,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.charge_slot_holding[inverter_sn] = holding
         return holding
 
+    @writes
     async def set_hold_storage_mode(self, inverter_sn):
         """Set the storage mode for a charge slot that is only holding the battery: Self-Use with no grid charging.
 
@@ -1400,6 +1402,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 return slot
         return None
 
+    @writes
     async def probe_slot_write(self, inverter_sn, cid, value, field_description):
         """Write one probe value and say whether the inverter kept it: True, False when it refused it, or None for no verdict.
 
@@ -1440,6 +1443,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self.log(f"Warn: Solis API: Probe of CID {cid} on {inverter_sn} got no answer: {e}")
             return None
 
+    @writes
     async def probe_slot_current_ceiling(self, inverter_sn, direction, slot, start, upper):
         """Find the most one direction's slot current may be set to, on a disabled slot, then restore it.
 
@@ -1505,6 +1509,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             if await self.probe_slot_write(inverter_sn, cid, original, f"restore {direction} slot {slot} current") is not True:
                 self.log(f"Warn: Solis API: Could not restore {direction} slot {slot} current on {inverter_sn} to {original} after probing it")
 
+    @writes
     async def ensure_slot_current_probed(self, inverter_sn):
         """Learn the most this inverter's slot currents may be set to, once, by probing a disabled slot (issue #5187).
 
@@ -1569,6 +1574,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.log(f"Solis API: Slot current ceiling on {inverter_sn} is charge {probed['charge']}A, discharge {probed['discharge']}A")
         await self.save_slot_current_probes()
 
+    @writes
     async def write_time_windows_if_changed(self, inverter_sn):
         """Write charge/discharge time windows, SOC, and current to inverter, only if values changed from cache.
         Automatically handles V1 vs V2 modes and only writes registers that have changed.
@@ -2017,6 +2023,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.schedules_loaded.add(inverter_sn)
         return result
 
+    @writes
     async def read_and_write_cid(self, inverter_sn, cid, value, field_description=None):
         """Read CID value then write with verification (required by Solis API).
         Automatically reads current value, writes with old_value verification,
@@ -2073,6 +2080,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 self.log(f"Warn: Solis API read_and_write_cid failed for CID {cid}: {e}")
             return False
 
+    @writes
     async def write_cid(self, inverter_sn, cid, value, old_value=None, field_description=None):
         """Write CID value with optional old value verification.
         Automatically updates cache on success and logs appropriate messages.
@@ -3873,6 +3881,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     # ==================== Control Methods ====================
 
+    @writes
     async def set_storage_mode_if_needed(self, inverter_sn, mode):
         """Set storage mode (as text) if it differs from cached value"""
         try:
@@ -3899,6 +3908,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         except Exception as e:
             self.log(f"Warn: Solis API set storage mode if needed failed for {inverter_sn}: {e}")
 
+    @writes
     async def set_storage_mode_value(self, inverter_sn, mode_value):
         """Set storage mode numerical value directly"""
         try:
@@ -3964,10 +3974,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
         else:
             self.queued_events.append((handler, entity_id, value))
 
+    @writes
     async def select_event(self, entity_id, value):
         """Handle a select change from Home Assistant."""
         await self.route_event(self.select_event_handler, entity_id, value)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a number change from Home Assistant."""
         self.show_soc_limit_now(entity_id, value)
@@ -4040,6 +4052,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             if isinstance(entity_id, str) and entity_id.endswith("_over_discharge_soc"):
                 self.log(f"Warn: Solis API: reserve is set to {entity_id} in apps.yaml - point it at the Battery Reserve SOC (the matching _reserve_soc number) instead, or Predbat will raise the over-discharge SOC to hold the battery")
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a switch service call from Home Assistant."""
         await self.route_event(self.switch_event_handler, entity_id, service)
@@ -4056,6 +4069,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.log(f"Warn: Solis API: Inverter {inverter_sn} reports no battery attached, ignoring {entity_id}")
         return True
 
+    @writes
     async def select_event_handler(self, entity_id, value):
         """Handle select entity changes"""
         try:
@@ -4150,6 +4164,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         except Exception as e:
             self.log(f"Error: Solis API select_event failed for {entity_id}: {e}")
 
+    @writes
     async def number_event_handler(self, entity_id, value):
         """Handle number entity changes"""
         try:
@@ -4331,6 +4346,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         except Exception as e:
             self.log(f"Error: Solis API number_event failed for {entity_id}: {e}")
 
+    @writes
     async def switch_event_handler(self, entity_id, service):
         """Handle switch entity changes"""
         try:
@@ -4635,6 +4651,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     # ==================== Component Lifecycle ====================
 
+    @writes
     async def startup_reset_registers(self, device_sn):
         """
         Reset the startup registers for the given device serial number.
@@ -4676,6 +4693,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self._schedule_control_lock = asyncio.Lock()
         return self._schedule_control_lock
 
+    @writes
     def request_read_only_reset(self, timeout=SOLIS_READ_ONLY_RESET_STEP_SECONDS, max_timeout=None):
         """Wait for verified schedule cleanup on the component loop during an explicit Demo reset.
 
@@ -4717,6 +4735,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         """Allow only the explicit transition reset, never a normal read-only cycle."""
         return self.control_enable and getattr(self.base, "inverter_needs_reset_force", "") == "set_read_only" and self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on"
 
+    @writes
     async def perform_read_only_reset(self):
         """Stop and verify schedules once, leaving a visible error if cleanup fails."""
         try:
@@ -4733,6 +4752,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self.log("Warn: " + self.read_only_reset_error)
             return False
 
+    @writes
     async def clear_read_only_schedules(self):
         """Disable timed charge/export using fresh registers, preserving battery protection limits."""
         async with self.schedule_control_lock():
@@ -4783,6 +4803,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # extends the executor's wait; see request_read_only_reset().
         self.read_only_reset_progress = time.monotonic()
 
+    @writes
     async def write_read_only_reset_cid(self, sn, cid, value):
         """Send only a cleanup write and require its physical register readback."""
         self.require_read_only_reset()
@@ -4806,7 +4827,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             # leak the previous one - which a spent API allowance makes a routine occurrence.
             if self.session is None:
                 timeout = aiohttp.ClientTimeout(total=SOLIS_REQUEST_TIMEOUT)
-                self.session = aiohttp.ClientSession(timeout=timeout)
+                self.session = self.http_session(timeout=timeout)
 
             # Discover inverters - always scan, filter by inverter_sn if specified
             try:

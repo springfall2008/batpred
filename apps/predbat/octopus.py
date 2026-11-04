@@ -51,7 +51,7 @@ from utils import (
     GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
     strptime_aware,
 )
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session
 from mock_base import MockBase as SharedMockBase
 import aiohttp
 import hashlib
@@ -520,12 +520,14 @@ class OctopusEnergyApiClient:
     dispatch queries, and saving session management.
     """
 
-    def __init__(self, api_key, log, timeout_in_seconds=20):
+    def __init__(self, api_key, log, timeout_in_seconds=20, session_factory=None):
         if api_key is None:
             raise Exception("OctopusAPI: API KEY is not set")
 
         self.api_key = api_key
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
         self.base_url = "https://api.octopus.energy"
         self.backend_url = "https://api.backend.octopus.energy"
 
@@ -543,7 +545,7 @@ class OctopusEnergyApiClient:
         if self.session is not None:
             return self.session
 
-        self.session = aiohttp.ClientSession(headers=self.default_headers, skip_auto_headers=["User-Agent"])
+        self.session = self._session_factory(headers=self.default_headers, skip_auto_headers=["User-Agent"])
         return self.session
 
 
@@ -738,7 +740,7 @@ class OctopusAPI(ComponentBase):
     def initialize(self, key, account_id, automatic):
         """Initialise the Octopus API component"""
         self.api_key = key
-        self.api = OctopusEnergyApiClient(key, self.log)
+        self.api = OctopusEnergyApiClient(key, self.log, session_factory=self.http_session)
         self.account_id = account_id
         self.graphql_token = None
         self.graphql_expiration = None
@@ -1710,9 +1712,9 @@ class OctopusAPI(ComponentBase):
         device_id. self.mpan is still the fallback for import alone, the one direction it is known
         to describe. mpan is only known for electricity (import/export); this component tracks no
         separate MPRN for gas, so a gas record's account_ids carries only the account id rather
-        than mislabelling it with the electricity MPAN. Both mpan and account genuinely identify the customer, so they go in
-        account_ids, the pseudonym container the redactor tokenises - see the module's docstring
-        and docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md. The tariff and product
+        than mislabelling it with the electricity MPAN. Both mpan and account identify the customer rather than a
+        product, so they go in account_ids, the container for account identifiers (published readable,
+        like every identifier - see docs/discovery-catalogue.md). The tariff and product
         codes describe a publicly listed Octopus product rather than the customer, so they go in
         the clear, in the nested `tariff` sub-record's info container, alongside flags built from
         this component's own existing classifiers (is_intelligent_go_tariff, has_six_hour_cap) plus
@@ -1731,10 +1733,8 @@ class OctopusAPI(ComponentBase):
         catalogue must not claim one exists that Home Assistant has never seen. Vehicle battery
         size and charge-point power are reported in ratings where Octopus's own vehicle/charger
         catalogue lookup found them. The Intelligent device id itself is carried in account_ids
-        (not left as a bare structural device_id) since it is a UUID unique to this account's
-        vehicle enrolment, not a public identifier - without a pseudonym container present, this
-        record's device_id would have nothing to mark it as identity-derived and would publish the
-        raw UUID verbatim (see coordinator.py's _has_pseudonym_container).
+        as well as in the device_id, labelling it as a UUID unique to this account's vehicle
+        enrolment rather than a public product identifier.
 
         Reporting is independent of self.automatic: it records what Octopus's own account
         describes, not whether this component wired Predbat's apps.yaml to it - that distinction is
@@ -1791,12 +1791,9 @@ class OctopusAPI(ComponentBase):
         for device_id in self.get_active_intelligent_device_ids():
             device = self.intelligent_devices.get(device_id, {})
             index_suffix = self.device_id_to_index_suffix(device_id)
-            # account_ids carries the Intelligent device id itself: it is a UUID assigned by
-            # Octopus to this specific account's vehicle enrolment, not a public identifier like a
-            # tariff or product code, so it belongs in the pseudonymised container on the same
-            # reasoning the meter records above apply to mpan/account - see _has_pseudonym_container.
-            # Without it the record's device_id ("octopus:{uuid}") has no pseudonym container
-            # anywhere in it and is never noted at all, publishing the raw UUID verbatim.
+            # account_ids carries the Intelligent device id itself: it is a UUID assigned by Octopus to
+            # this specific account's vehicle enrolment, not a public identifier like a tariff or
+            # product code, so it is labelled as an account identifier alongside mpan/account above
             record = {"device_id": "octopus:{}".format(device_id), "account_ids": {"intelligent_device_id": device_id}}
 
             ratings = {}
@@ -2189,7 +2186,7 @@ class OctopusAPI(ComponentBase):
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=20)
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}) as response:
                         if response.status not in [200, 201]:
                             self.failures_total += 1
