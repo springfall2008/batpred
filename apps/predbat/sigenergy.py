@@ -59,6 +59,7 @@ TODO:
 
 import argparse
 import asyncio
+import math
 import base64
 import json
 import math
@@ -728,7 +729,7 @@ class SigenergyAPI(ComponentBase):
                         if log_response or code != 0:
                             self.log("SigenergyAPI: Response from {} {}: {}".format(method, path, self.redact(body)))
 
-                        if code != 0:
+                        if type(code) is not int or code != 0:
                             self._last_api_code = code
                             self.log("Warn: SigenergyAPI: API error code={} msg={} for {}".format(code, body.get("msg", ""), path))
                             record_api_call("sigenergy", False, "server_error")
@@ -923,6 +924,27 @@ class SigenergyAPI(ComponentBase):
                 return device.get("serialNumber")
         return None
 
+    def _report_flow(self, system_id, data, fields, source, sample_time=None, fallback=False):
+        """Observe valid fields actually measured by this response, excluding held/default values."""
+        if self.telemetry_observer is None:
+            return
+        updated = set()
+        for field, keys in fields.items():
+            for key in keys:
+                if key in data:
+                    try:
+                        if not isinstance(data[key], bool) and math.isfinite(float(data[key])):
+                            updated.add(field)
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+                    break
+        if source == "mqtt_period" and {"batteryPower", "pvPower", "gridPower"} <= updated:
+            updated.add("loadPower")
+        # An AC-coupled energyFlow PV figure may depend on the energy balance.
+        if source == "energy_flow" and self._has_third_party_pv(system_id) and not {"loadPower", "evPower", "batteryPower", "gridPower"} <= updated:
+            updated.discard("pvPower")
+        self.report_telemetry(system_id, self.energy_flow[system_id], source=source, sample_time=sample_time, updated_fields=updated, fallback=fallback)
+
     async def fetch_inverter_realtime(self, system_id):
         """Fetch realtime data from the inverter realtimeInfo endpoint.
 
@@ -1013,6 +1035,7 @@ class SigenergyAPI(ComponentBase):
                 self._grid_load_unknown_warned.add(system_id)
                 self.log("Warn: SigenergyAPI: System {} has no grid/load reading yet (energyFlow and MQTT unavailable) - publishing 0 for both until one arrives".format(system_id))
         self.energy_flow[system_id] = flow
+        self._report_flow(system_id, rt, {"batterySoc": ("batSoc",), "batteryPower": ("batPower",), "pvPower": ("pVPower", "pvTotalPower", "pvPower")}, "inverter_realtime", fallback=True)
 
         # Update daily summary from pvEnergyDaily if present
         pv_daily = rt.get("pvEnergyDaily")
@@ -1092,6 +1115,7 @@ class SigenergyAPI(ComponentBase):
         }
         self.log("SigenergyAPI: System {} — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW grid {:.2f}kW".format(system_id, soc, battery_kw, pv_kw, grid_kw))
         self._grid_load_unknown_warned.discard(system_id)  # measured again - warn afresh if it is lost later
+        self._report_flow(system_id, data, {key: (key,) for key in self.energy_flow[system_id]}, "energy_flow")
         return True
 
     def _has_third_party_pv(self, system_id):
@@ -1911,7 +1935,7 @@ class SigenergyAPI(ComponentBase):
     # MQTT message handlers
     # -----------------------------------------------------------------------
 
-    def _handle_mqtt_period(self, system_id, value_dict):
+    def _handle_mqtt_period(self, system_id, value_dict, sample_time=None):
         """Handle a Sigenergy ``openapi/period`` MQTT message.
 
         The broker only includes fields that changed since the previous message,
@@ -1961,6 +1985,7 @@ class SigenergyAPI(ComponentBase):
         Args:
             system_id: Sigenergy system identifier extracted from the MQTT topic.
             value_dict: ``value`` sub-dict from the parsed MQTT payload (string→string).
+            sample_time: Aware vendor reading time, or None when unknown.
         """
         # The broker only sends fields that changed, so merge onto the last known
         # raw values rather than treating an absent field as 0.
@@ -2010,6 +2035,10 @@ class SigenergyAPI(ComponentBase):
         }
         self.energy_flow[system_id] = flow
         self.system_status[system_id] = flow_status
+        self._report_flow(system_id, value_dict, {
+            "batterySoc": ("storageSOC%",), "batteryPower": ("storageChargeDischargePowerW",),
+            "pvPower": ("PV power",), "gridPower": ("gridActivePowerW",), "inverterPower": ("inverterActivePowerW",),
+        }, "mqtt_period", sample_time=sample_time)
         if "operationalMode" in raw:
             self.current_mode[system_id] = int(_safe_float(raw["operationalMode"]))
         self.log(
@@ -2277,7 +2306,11 @@ class SigenergyAPI(ComponentBase):
                                         )
                                     )
                                     continue
-                                self._handle_mqtt_period(entry_sid, value_dict)
+                                try:
+                                    sample_time = datetime.fromtimestamp(statistics_time, tz=timezone.utc) if math.isfinite(statistics_time) and statistics_time > 0 else None
+                                except (ValueError, OverflowError, OSError):
+                                    sample_time = None
+                                self._handle_mqtt_period(entry_sid, value_dict, sample_time=sample_time)
                                 if self.api_started:
                                     await self.publish_system_entities(entry_sid)
                             elif msg_type == "change":

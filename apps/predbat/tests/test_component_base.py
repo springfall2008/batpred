@@ -1663,6 +1663,49 @@ def test_component_base_align_minute_defaults_off(my_predbat):
     return False
 
 
+def test_component_base_telemetry_observer(my_predbat):
+    """Observers are isolated, optional, detached and unable to change poll health."""
+    api = FoxAPI.__new__(FoxAPI)
+    events = []
+    api.base = SimpleNamespace(component_telemetry_observer=events.append)
+    api.log = MagicMock()
+    values = {"soc": {"value": 50}, "grid": 0}
+    api.report_telemetry("serial", values, source="test", updated_fields={"soc"})
+    event = events[0]
+    assert event["sample_time"] is None
+    assert event["received_at"].utcoffset() == timedelta(0)
+    assert event["updated_fields"] == {"soc"} and event["held_fields"] == {"grid"}
+    values["soc"]["value"] = 75
+    assert event["values"]["soc"]["value"] == 50
+    event["values"]["soc"]["value"] = 10
+    assert values["soc"]["value"] == 75
+    api.base.component_telemetry_observer = MagicMock(side_effect=RuntimeError("secret-token"))
+    api.report_telemetry("serial", values, source="test")
+    assert "secret-token" not in str(api.log.call_args)
+    assert "FoxAPI" in str(api.log.call_args)
+    for _ in range(100):
+        api.report_telemetry("serial", values, source="test")
+    assert api.log.call_count == 1
+    api.base.component_telemetry_observer.side_effect = TypeError("another-secret")
+    api.report_telemetry("serial", values, source="test")
+    assert api.log.call_count == 2 and "another-secret" not in str(api.log.call_args)
+    other_api = FoxAPI.__new__(FoxAPI)
+    other_api.base = api.base
+    other_api.component_name = "fox_other"
+    other_api.log = MagicMock()
+    other_api.report_telemetry("serial", values, source="test")
+    assert other_api.log.call_count == 1 and "fox_other" in str(other_api.log.call_args)
+    assert not hasattr(api.base, "had_errors")
+    api.base = MagicMock()
+    api.report_telemetry("serial", values, source="test")
+    assert not api.base.mock_calls
+    other = FoxAPI.__new__(FoxAPI)
+    other.base = SimpleNamespace()
+    other.report_telemetry("other", values, source="test")
+    assert len(events) == 1
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -1706,6 +1749,7 @@ def test_component_base_all(my_predbat):
         ("clock_unrelated", test_component_base_ignores_unrelated_clock_attribute, "a base with its own unrelated clock attribute is ignored and real time is used"),
         ("clock_isolated", test_component_base_clock_isolated_per_instance, "two instances' clocks are separate"),
         ("override_on_mock_base", test_component_base_override_on_mock_base, "an explicitly set override on a mock base is used, a made-up one is ignored"),
+        ("telemetry_observer", test_component_base_telemetry_observer, "accepted observations are detached, optional and failure isolated"),
         ("write_methods", test_component_base_write_methods, "@writes marks a method and write_methods lists exactly the marked ones"),
         ("write_methods_components", test_component_base_write_methods_components, "component writer methods are listed and readers are not"),
     ]

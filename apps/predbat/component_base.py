@@ -19,6 +19,7 @@ from this class.
 """
 
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from datetime import datetime, timezone
 from unittest.mock import NonCallableMock
 
@@ -155,6 +156,53 @@ class ComponentBase(ABC):
     # AttributeError escaping run() is exactly the degradation an observer is forbidden to cause.
     component_name = None
     _discovery_report = None
+
+    @property
+    def telemetry_observer(self):
+        """Return the optional per-instance observer, ignoring attributes invented by mocks."""
+        return _base_override(self, "component_telemetry_observer")
+
+    def report_telemetry(self, device_id, values, *, source, sample_time=None, updated_fields=(), fallback=False):
+        """Observe applied telemetry without changing component health or freshness policy.
+
+        An optional synchronous base.component_telemetry_observer receives one detached dict.
+        values uses component field names and units (vendor variables for Fox). updated_fields
+        identifies fields accepted from this response, never fields held from an earlier response
+        or defaults. Derived fields count only when all their inputs arrived in this response.
+        held_fields is the remainder, including unknown placeholders. sample_time is an aware
+        vendor datetime or None when unknown, never a timestamp inferred from changed values.
+        received_at (UTC) and received_monotonic describe receipt in this process, not device
+        freshness. Replays are reported too: value validation, ordering and age thresholds belong
+        to the observer, since accepted vendor fields can also carry categorical states.
+        No observer means no work. Its failure must not affect polling, publication or health.
+        """
+        try:
+            observer = self.telemetry_observer
+            if observer is None:
+                return
+            updated = set(updated_fields) & set(values)
+            observer(
+                {
+                    "component": self.component_name or type(self).__name__,
+                    "device_id": device_id,
+                    "source": source,
+                    "sample_time": sample_time,
+                    "received_at": datetime.fromtimestamp(self.wall_time(), timezone.utc),
+                    "received_monotonic": self.monotonic(),
+                    "values": deepcopy(values),
+                    "updated_fields": frozenset(updated),
+                    "held_fields": frozenset(set(values) - updated),
+                    "fallback": fallback,
+                }
+            )
+        except Exception as exc:
+            # Exception text may contain vendor data or credentials supplied by the observer.
+            # Warn once per component/error type, including instances built without __init__.
+            error_type = type(exc).__name__
+            warned = self.__dict__.setdefault("_telemetry_observer_warned", set())
+            if error_type not in warned:
+                warned.add(error_type)
+                self.log("Warn: Component {} telemetry observer failed ({})".format(self.component_name or type(self).__name__, error_type))
 
     def __init__(self, base, **kwargs):
         """

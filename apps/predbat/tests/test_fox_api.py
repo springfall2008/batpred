@@ -4224,8 +4224,8 @@ def test_request_get_func_real_json_decode_error(my_predbat):
         mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
-    # JSON decode error with status 200 returns empty dict (data=None -> data={})
-    assert result == {}
+    # An HTTP 200 with no decodable success envelope is not an accepted response.
+    assert result is None
     assert allow_retry is False
 
     return False
@@ -8138,6 +8138,51 @@ def test_fox_run_reports_discovery_when_automatic_config_fails(my_predbat):
     return 0
 
 
+def test_fox_telemetry_observations(my_predbat):
+    """Only fields in this response renew; aggregate SoC never hides held battery inputs."""
+    from types import SimpleNamespace
+    from datetime import datetime, timezone
+    from fox import _sample_time
+
+    fox = MockFoxAPIWithRequests()
+    events = []
+    fox.base = SimpleNamespace(component_telemetry_observer=events.append)
+    endpoint = "/op/v1/device/real/query"
+    stamp = "2025-09-14 18:43:09 BST+0100"
+    fox.set_mock_response(
+        endpoint,
+        [
+            {
+                "deviceSN": "TEST",
+                "time": stamp,
+                "datas": [
+                    {"name": "Battery one", "variable": "soc_1", "value": 40},
+                    {"name": "Battery two", "variable": "soc_2", "value": 60},
+                ],
+            }
+        ],
+    )
+    asyncio.run(fox.get_real_time_data("TEST"))
+    assert events[-1]["values"]["SoC"] == 50
+    assert "SoC" in events[-1]["updated_fields"]
+    assert events[-1]["sample_time"].astimezone(timezone.utc) == datetime(2025, 9, 14, 17, 43, 9, tzinfo=timezone.utc)
+    asyncio.run(fox.get_real_time_data("TEST"))
+    assert len(events) == 2 and events[0]["sample_time"] == events[1]["sample_time"]
+    fox.set_mock_response(endpoint, [{"deviceSN": "TEST", "datas": [{"name": "Battery one", "variable": "soc_1", "value": 80}]}])
+    asyncio.run(fox.get_real_time_data("TEST"))
+    assert events[-1]["values"]["SoC"] == 70
+    assert "SoC" in events[-1]["held_fields"]
+    assert events[-1]["sample_time"] is None
+    count = len(events)
+    for response in (None, {"errno": 1}, [{"deviceSN": "OTHER", "datas": [{"name": "SOC", "variable": "SoC", "value": 50}]}], [{"datas": [None, {}, {"variable": "SoC", "value": None}]}]):
+        fox.set_mock_response(endpoint, response)
+        asyncio.run(fox.get_real_time_data("TEST"))
+    assert len(events) == count
+    for invalid in ("2025-09-14 18:43:09", "2025-09-14 18:43:09 BST+1460", "bad", "2025-09-14 18:43:09 BST+1401"):
+        assert _sample_time(invalid) is None
+    return False
+
+
 def run_fox_api_tests(my_predbat):
     """
     Run all Fox API tests
@@ -8146,6 +8191,7 @@ def run_fox_api_tests(my_predbat):
 
     failed = False
     try:
+        failed |= test_fox_telemetry_observations(my_predbat)
         # schedules_are_equal tests
         failed |= test_schedules_are_equal_identical(my_predbat)
         failed |= test_schedules_are_equal_different_length(my_predbat)
