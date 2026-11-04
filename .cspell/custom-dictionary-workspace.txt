@@ -38,6 +38,7 @@ armhf
 armv
 ASHP
 asn
+asname
 astimezone
 asyncio
 atfork
