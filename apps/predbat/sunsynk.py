@@ -29,7 +29,7 @@ import time
 from datetime import datetime
 import aiohttp
 import yaml
-from component_base import ComponentBase, writes
+from component_base import ComponentBase, writes, telemetry_number
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -600,7 +600,25 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             if field in payload and payload[field] is not None:
                 energy[leaf] = self._as_float(payload[field])
         self.device_energy[sn] = energy
+        if self.telemetry_observer is not None:
+            self._observe_battery_response(sn, responses.get("battery"))
         return values
+
+    def _observe_battery_response(self, sn, battery):
+        """Report the SoC accepted from this poll's battery realtime response.
+
+        A failed read (_get's empty dict) emits nothing. The raw soc must be finite and within
+        0..100: _as_float would turn a missing or malformed value into 0, which must never be
+        observed as a measured empty battery. The response carries no sample time. Identical
+        readings on consecutive polls are still reported; deduplication belongs to the host.
+        """
+        if not isinstance(battery, dict) or not battery:
+            return
+        field = SUNSYNK_TELEMETRY["soc"][1]
+        soc = telemetry_number(battery.get(field))
+        if soc is None or soc < 0 or soc > 100:
+            return
+        self.report_telemetry(sn, {"soc": int(soc) if soc.is_integer() else soc}, source="battery", sample_time=None, updated_fields=("soc",))
 
     async def fetch_settings(self, sn):
         """Read the whole settings object: config, plus the baseline the write group is built from.

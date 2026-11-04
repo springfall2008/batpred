@@ -23,7 +23,7 @@ import asyncio
 import math
 import json
 import random
-from component_base import ComponentBase, writes
+from component_base import ComponentBase, writes, telemetry_number, telemetry_time
 from coordinator import charger_with_stub_car, inverter_record
 from mock_base import MockBase as SharedMockBase
 
@@ -3621,9 +3621,33 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # field under a new timestamp. The ordinary merged control cache stays
         # unchanged; the optional display adapter consumes only this raw sample.
         self.live_display_samples[serial.lower()] = result
+        if self.telemetry_observer is not None:
+            self._observe_inverter_status(serial, result)
         if result is None:
             return previous
         return merge_non_null(result, previous)
+
+    def _observe_inverter_status(self, serial, result):
+        """Report the battery percent accepted from this raw status response, before any merge.
+
+        Only result['battery']['percent'] from this response is observed; a value carried over by
+        merge_non_null from an earlier response never is. A missing, null, non-finite or
+        out-of-range percent emits nothing, so it can never read as a measured 0%. sample_time is
+        the response's own time, or None when it is absent or not an aware timestamp.
+        """
+        if not isinstance(result, dict):
+            return
+        battery = result.get("battery")
+        if not isinstance(battery, dict):
+            return
+        raw_percent = battery.get("percent")
+        if not isinstance(raw_percent, (int, float)) or isinstance(raw_percent, bool):
+            return
+        percent = telemetry_number(raw_percent)
+        if percent is None or percent < 0 or percent > 100:
+            return
+        stamp = result.get("time")
+        self.report_telemetry(str(serial).lower(), {"soc_percent": percent}, source="inverter_status", sample_time=telemetry_time(stamp), updated_fields=("soc_percent",))
 
     async def async_get_inverter_meter(self, serial, previous=None):
         """

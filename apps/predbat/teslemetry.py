@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 
 import aiohttp
 
-from component_base import ComponentBase, writes
+from component_base import ComponentBase, writes, telemetry_number, telemetry_time
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -473,7 +473,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         return int(round(min(nameplate_power, POWERWALL_CHARGE_PER_UNIT_W * (response.get("battery_count") or 1))))
 
     async def fetch_live_status(self):
-        """Fetch live power flows and SOC, publishing power sensors."""
+        """Fetch live power flows and SOC, publishing power sensors.
+
+        An optional telemetry observer receives the response's own percentage_charged, never the
+        last_soc fallback. Its sample_time is the response timestamp, which is Tesla server time,
+        not a Powerwall clock reading.
+        """
         data = await self._request("GET", "/api/1/energy_sites/{}/live_status".format(self.site_id))
         if not data:
             return False
@@ -496,7 +501,35 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.publish_sensor("load_power", response.get("load_power", 0), unit="W", friendly="Powerwall Load Power")
         self.publish_sensor("solar_power", response.get("solar_power", 0), unit="W", friendly="Powerwall Solar Power")
         self.update_success_timestamp()
+        if self.telemetry_observer is not None:
+            self._observe_live_status(data)
         return True
+
+    def _observe_live_status(self, data):
+        """Report the percentage_charged accepted from this live_status response.
+
+        Only the response's own percentage_charged is observed, never the last_soc fallback the
+        published sensor uses when the field is missing. A missing, null, non-finite or
+        out-of-range value emits nothing, and so does an error body. sample_time is the response's
+        timestamp, which is Tesla server time rather than a device clock, or None when absent.
+        Repeated identical samples are reported: ordering and deduplication belong to the host.
+        """
+        if not isinstance(data, dict) or data.get("error"):
+            return
+        response = data.get("response")
+        if not isinstance(response, dict):
+            return
+        raw_percent = response.get("percentage_charged")
+        if not isinstance(raw_percent, (int, float)) or isinstance(raw_percent, bool):
+            return
+        percent = telemetry_number(raw_percent)
+        if percent is None or percent < 0 or percent > 100:
+            return
+        stamp = response.get("timestamp")
+        fields = ("percentage_charged", "energy_left", "battery_power", "load_power", "grid_power", "solar_power")
+        values = {field: telemetry_number(response.get(field)) for field in fields}
+        values["percentage_charged"] = percent
+        self.report_telemetry(str(self.site_id), values, source="live_status", sample_time=telemetry_time(stamp), updated_fields={field for field in fields if values[field] is not None})
 
     async def fetch_site_info(self):
         """Fetch site info, publishing static config sensors and seeding control entity states.
