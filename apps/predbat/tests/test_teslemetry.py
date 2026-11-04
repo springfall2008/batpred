@@ -1346,7 +1346,6 @@ def test_teslemetry_sync_tariff_pushes_on_window_change():
     """Enabling a discharge window changes the tariff and triggers a second push."""
     api = MockTeslemetryAPI()
     api.base = _rate_base(import_p=28.0, export_p=15.0)
-    api.get_minutes_now = lambda: 17 * 60  # inside the window, so its boost band is due
     api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
     run_async(api.sync_tariff())
     api.schedule["discharge"] = {"start_time": "17:00:00", "end_time": "18:00:00", "soc": 30, "enable": 1}
