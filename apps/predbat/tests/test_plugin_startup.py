@@ -7,12 +7,14 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+import importlib.util
 import os
 import shutil
 import sys
 import tempfile
 from unittest.mock import MagicMock, patch
 from predbat import PredBat
+import plugin_system as plugin_system_module
 from plugin_system import PluginSystem
 
 
@@ -239,85 +241,199 @@ def test_plugin_discovery_fallback_skips_imported_base_class(my_predbat):
     return failed
 
 
+def _discover(files):
+    """
+    Write files into a temporary plugin directory, run discovery and return (plugin_system, base, log messages).
+
+    The directory is on sys.path while discovery runs, so a plugin can import a helper written next to it.
+    """
+    base = MagicMock()
+    base.log = MagicMock()
+    tmpdir = tempfile.mkdtemp()
+    sys.path.insert(0, tmpdir)
+    try:
+        for filename, content in files.items():
+            with open(os.path.join(tmpdir, filename), "w", encoding="utf-8") as fh:
+                fh.write(content)
+        plugin_system = PluginSystem(base)
+        plugin_system.discover_plugins([tmpdir])
+    finally:
+        sys.path.remove(tmpdir)
+        for filename in files:
+            sys.modules.pop(filename[:-3], None)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    return plugin_system, base, [str(c.args[0]) for c in base.log.call_args_list if c.args]
+
+
+def _loaded_class_names(plugin_system):
+    """Return the class name of every plugin that was loaded."""
+    return [type(plugin).__name__ for plugin in plugin_system.plugins.values()]
+
+
+BASE_IMPORT = "from plugin_system import PredBatPlugin\n\n\n"
+
+
 def test_plugin_discovery_does_not_retry_a_failed_class(my_predbat):
     """
     A plugin class that raises in __init__ must be constructed ONCE, not twice.
 
-    The class ends in "Plugin" and inherits PREDBAT_PLUGIN from the base, so it
-    matches both strategy 1 and strategy 2. Strategy 1 tries it and it raises;
-    unless strategy 2 skips classes strategy 1 already attempted, it constructs
-    the same class again, and any side effect before the raising line (a hook
-    registered, state written) happens twice.
+    The class matches on both its name and the inherited PREDBAT_PLUGIN marker. If
+    the two matches were tried separately, any side effect before the raising line
+    (a hook registered, state written) would happen twice.
     """
     print("*** Running test: Plugin discovery does not retry a class that failed")
+    plugin_system, base, _ = _discover({"zz_raises_plugin.py": BASE_IMPORT + "class ZzRaisesPlugin(PredBatPlugin):\n    def __init__(self, base):\n        base.note_constructed()\n        raise ValueError('bad config')\n"})
+
+    if base.note_constructed.call_count != 1:
+        print("ERROR: ZzRaisesPlugin was constructed {} times, expected 1".format(base.note_constructed.call_count))
+        return 1
+    if plugin_system.plugins:
+        print("ERROR: expected no plugin loaded, got {}".format(list(plugin_system.plugins)))
+        return 1
+    print("OK: the failing plugin class was constructed once and not retried")
+    return 0
+
+
+def test_plugin_discovery_loads_a_reexported_class(my_predbat):
+    """
+    A plugin class kept in a helper module and imported into the _plugin.py file must load, wherever it sorts against PredBatPlugin.
+    """
+    print("*** Running test: Plugin discovery loads a re-exported plugin class")
     failed = 0
-
-    base = MagicMock()
-    base.log = MagicMock()
-
-    tmpdir = tempfile.mkdtemp()
-    try:
-        with open(os.path.join(tmpdir, "zz_raises_plugin.py"), "w", encoding="utf-8") as fh:
-            fh.write("from plugin_system import PredBatPlugin\n\n\nclass ZzRaisesPlugin(PredBatPlugin):\n    def __init__(self, base):\n        raise ValueError('bad config')\n")
-
-        plugin_system = PluginSystem(base)
-        plugin_system.discover_plugins([tmpdir])
-        attempts = [c for c in base.log.call_args_list if "Initialising plugin class" in str(c) and "ZzRaisesPlugin" in str(c)]
-
-        if len(attempts) != 1:
-            print("ERROR: ZzRaisesPlugin was constructed {} times, expected 1".format(len(attempts)))
-            failed = 1
-        elif plugin_system.plugins:
-            print("ERROR: expected no plugin loaded, got {}".format(list(plugin_system.plugins)))
+    for class_name in ("AlphaReexportPlugin", "ZzReexportPlugin"):
+        plugin_system, _, _ = _discover(
+            {
+                "reexport_core.py": BASE_IMPORT + "class {}(PredBatPlugin):\n    pass\n".format(class_name),
+                "reexport_plugin.py": "from plugin_system import PredBatPlugin\nfrom reexport_core import {}\n".format(class_name),
+            }
+        )
+        if _loaded_class_names(plugin_system) != [class_name]:
+            print("ERROR: expected {} to load, got {}".format(class_name, _loaded_class_names(plugin_system)))
             failed = 1
         else:
-            print("OK: the failing plugin class was constructed once and not retried")
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-
+            print("OK: re-exported {} loaded".format(class_name))
     return failed
 
 
-def test_plugin_discovery_names_a_reexported_class(my_predbat):
+def test_plugin_discovery_skips_a_local_base_class(my_predbat):
     """
-    A plugin class imported into the _plugin.py file, rather than defined there, is
-    not loaded, and the log must say which class was skipped and where it came from.
-
-    Discovery only takes classes defined in the plugin file, so a layout that keeps
-    the class in a helper module and re-exports it does not load. Without naming
-    the skipped class, the only log line is "No plugin class ... found", which
-    points nowhere.
+    A plugin's own intermediate base class must not be chosen over the class derived from it, even though it sorts first.
     """
-    print("*** Running test: Plugin discovery names a re-exported plugin class")
-    failed = 0
+    print("*** Running test: Plugin discovery skips a local intermediate base class")
+    plugin_system, _, _ = _discover({"foo_plugin.py": BASE_IMPORT + "class BaseFooPlugin(PredBatPlugin):\n    pass\n\n\nclass FooPlugin(BaseFooPlugin):\n    pass\n"})
 
-    base = MagicMock()
-    base.log = MagicMock()
+    if _loaded_class_names(plugin_system) != ["FooPlugin"]:
+        print("ERROR: expected FooPlugin to load, got {}".format(_loaded_class_names(plugin_system)))
+        return 1
+    print("OK: the most-derived class loaded, not its local base")
+    return 0
 
-    tmpdir = tempfile.mkdtemp()
-    sys.path.insert(0, tmpdir)
+
+def test_plugin_discovery_names_an_import_skipped_for_a_local_class(my_predbat):
+    """
+    When a local helper class is chosen over a re-exported class, the log must name the class that was skipped, or the real plugin silently never runs.
+    """
+    print("*** Running test: Plugin discovery names an import skipped for a local class")
+    plugin_system, _, messages = _discover(
+        {
+            "real_core.py": BASE_IMPORT + "class ZzRealPlugin(PredBatPlugin):\n    pass\n",
+            "real_plugin.py": "from plugin_system import PredBatPlugin\nfrom real_core import ZzRealPlugin\n\n\nclass ConfigPlugin(PredBatPlugin):\n    pass\n",
+        }
+    )
+    expected = "Plugin classes in real_plugin that are imported, not defined there, are not loaded: ZzRealPlugin (from real_core)"
+
+    if _loaded_class_names(plugin_system) != ["ConfigPlugin"]:
+        print("ERROR: expected the local ConfigPlugin to load, got {}".format(_loaded_class_names(plugin_system)))
+        return 1
+    if expected not in messages:
+        print("ERROR: expected log line not found: {}".format(expected))
+        return 1
+    print("OK: the skipped import is named in the log")
+    return 0
+
+
+def test_plugin_discovery_reports_a_constructor_failure(my_predbat):
+    """
+    A class that was found but raised must be reported as that, not as "No plugin class found", which contradicts the failure logged just before it.
+    """
+    print("*** Running test: Plugin discovery reports a constructor failure")
+    _, _, messages = _discover({"zz_raises_plugin.py": BASE_IMPORT + "class ZzRaisesPlugin(PredBatPlugin):\n    def __init__(self, base):\n        raise ValueError('bad config')\n"})
+    expected = "Plugin zz_raises_plugin was found but could not be initialised, see the errors above"
+    wrong = "No plugin class or initialisation function found in zz_raises_plugin"
+
+    if expected not in messages:
+        print("ERROR: expected log line not found: {}".format(expected))
+        return 1
+    if wrong in messages:
+        print("ERROR: log still says: {}".format(wrong))
+        return 1
+    print("OK: the constructor failure is reported as a failure")
+    return 0
+
+
+def test_plugin_discovery_reports_nothing_found(my_predbat):
+    """
+    A plugin file offering only the imported base class has nothing to load, and the log must say so rather than constructing the base.
+    """
+    print("*** Running test: Plugin discovery reports nothing found")
+    plugin_system, _, messages = _discover({"empty_plugin.py": "from plugin_system import PredBatPlugin\n"})
+    expected = "No plugin class or initialisation function found in empty_plugin"
+
+    if plugin_system.plugins:
+        print("ERROR: expected no plugin loaded, got {}".format(_loaded_class_names(plugin_system)))
+        return 1
+    if expected not in messages:
+        print("ERROR: expected log line not found: {}".format(expected))
+        return 1
+    print("OK: nothing was loaded and the log says so")
+    return 0
+
+
+def test_plugin_discovery_keeps_import_out_after_local_failure(my_predbat):
+    """
+    When the class defined in the file raises, discovery must not fall through to an imported class: that would run something the author never asked to load.
+    """
+    print("*** Running test: Plugin discovery does not fall through to an import after a local failure")
+    plugin_system, base, _ = _discover(
+        {
+            "other_core.py": BASE_IMPORT + "class OtherPlugin(PredBatPlugin):\n    def __init__(self, base):\n        base.note_import_constructed()\n",
+            "mine_plugin.py": "from plugin_system import PredBatPlugin\nfrom other_core import OtherPlugin\n\n\nclass MinePlugin(PredBatPlugin):\n    def __init__(self, base):\n        raise ValueError('bad config')\n",
+        }
+    )
+
+    if base.note_import_constructed.call_count != 0:
+        print("ERROR: the imported class was constructed {} times, expected 0".format(base.note_import_constructed.call_count))
+        return 1
+    if plugin_system.plugins:
+        print("ERROR: expected no plugin loaded, got {}".format(_loaded_class_names(plugin_system)))
+        return 1
+    print("OK: the imported class was left alone")
+    return 0
+
+
+def test_plugin_discovery_handles_base_under_another_import_name(my_predbat):
+    """
+    If plugin_system is imported under a second name the plugin's PredBatPlugin is a different class object, which must still not be treated as a re-exported plugin class.
+
+    The local class raises so that discovery reports what it skipped: a working local class would hide the old behaviour.
+    """
+    print("*** Running test: Plugin discovery handles the base under another import name")
+    alias = "zz_alias_plugin_system"
+    spec = importlib.util.spec_from_file_location(alias, plugin_system_module.__file__)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sys.modules[alias] = module
     try:
-        with open(os.path.join(tmpdir, "zz_reexport_core.py"), "w", encoding="utf-8") as fh:
-            fh.write("from plugin_system import PredBatPlugin\n\n\nclass ZzReexportPlugin(PredBatPlugin):\n    pass\n")
-        with open(os.path.join(tmpdir, "zz_reexport_plugin.py"), "w", encoding="utf-8") as fh:
-            fh.write("from plugin_system import PredBatPlugin\nfrom zz_reexport_core import ZzReexportPlugin\n")
-
-        plugin_system = PluginSystem(base)
-        plugin_system.discover_plugins([tmpdir])
-        messages = [str(c.args[0]) for c in base.log.call_args_list if c.args]
-        expected = "Plugin classes in zz_reexport_plugin that are imported, not defined there, are not loaded: ZzReexportPlugin (from zz_reexport_core)"
-
-        if plugin_system.plugins:
-            print("ERROR: expected no plugin loaded, got {}".format(list(plugin_system.plugins)))
-            failed = 1
-        elif expected not in messages:
-            print("ERROR: expected log line not found: {}".format(expected))
-            failed = 1
-        else:
-            print("OK: the skipped re-exported class is named in the log")
+        _, _, messages = _discover({"alias_plugin.py": "from {} import PredBatPlugin\n\n\nclass AliasPlugin(PredBatPlugin):\n    def __init__(self, base):\n        raise ValueError('bad config')\n".format(alias)})
     finally:
-        sys.path.remove(tmpdir)
-        sys.modules.pop("zz_reexport_core", None)
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        sys.modules.pop(alias, None)
 
-    return failed
+    wrongly_skipped = [message for message in messages if "that are imported, not defined there" in message]
+    if wrongly_skipped:
+        print("ERROR: the base class was reported as a skipped import: {}".format(wrongly_skipped))
+        return 1
+    if "Failed to initialise plugin class AliasPlugin: bad config" not in messages:
+        print("ERROR: AliasPlugin was never tried, so this test did not reach its subject")
+        return 1
+    print("OK: the base class under another import name was not reported as an import")
+    return 0
