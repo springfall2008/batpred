@@ -146,6 +146,7 @@ SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used t
 SIGENERGY_RATED_ENERGY_AH_THRESHOLD = 100.0  # a ratedEnergy above this is Ah (e.g. 314), below it kWh (e.g. 9.04) - see _get_battery_capacity_kwh
 SIGENERGY_MQTT_PORT = 8883             # TLS MQTT port on the Sigenergy broker
 SIGENERGY_MQTT_RESUBSCRIBE_DELAY = 5   # seconds between cancelling and re-requesting the change push (see _mqtt_listener_loop)
+SIGENERGY_MQTT_RESTORE_TIMEOUT = 10  # maximum additional wait for interrupted subscription setup
 
 # MQTT topic patterns — format with app_key and system_id
 SIGENERGY_MQTT_TOPIC_CHANGE = "openapi/change/{app_key}/{system_id}"    # system data (device state)
@@ -2106,6 +2107,41 @@ class SigenergyAPI(ComponentBase):
         """
         self.log("Warn: SigenergyAPI: MQTT alarm for system {}: {}".format(system_id, payload_list))
 
+    async def _restore_change_subscription(self, client, payload, cancelled_at):
+        """Best-effort bounded recovery of this connection's cancelled change push before disconnecting."""
+        async def restore():
+            """Keep the broker's resubscribe pause, then restore with the original connection and payload."""
+            remaining = max(0, cancelled_at + SIGENERGY_MQTT_RESUBSCRIBE_DELAY - self.monotonic())
+            if remaining:
+                await self.sleep(remaining)
+            await client.publish("openapi/subscription/change", payload=payload, qos=1)
+
+        try:
+            await asyncio.wait_for(restore(), timeout=SIGENERGY_MQTT_RESUBSCRIBE_DELAY + SIGENERGY_MQTT_RESTORE_TIMEOUT)
+        except asyncio.CancelledError:
+            self.log("Warn: SigenergyAPI: Change subscription restoration cancelled")
+            raise
+        except Exception as error:
+            # Exception text can contain credentials or payloads; only its class is diagnostic.
+            self.log("Warn: SigenergyAPI: Change subscription restoration failed ({})".format(type(error).__name__))
+
+    async def _request_mqtt_subscriptions(self, client, payload):
+        """Reset subscriptions without leaving the shared change push cancelled if setup is interrupted."""
+        change_pending = True
+        cancelled_at = None
+        try:
+            # The request may have reached the broker even when publishing raises or is cancelled.
+            await client.publish(SIGENERGY_MQTT_TOPIC_UNSUBSCRIBE_CHANGE, payload=payload, qos=1)
+            cancelled_at = self.monotonic()
+            await self.sleep(SIGENERGY_MQTT_RESUBSCRIBE_DELAY)
+            for topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
+                await client.publish(topic, payload=payload, qos=1)
+                if topic == "openapi/subscription/change":
+                    change_pending = False
+        finally:
+            if change_pending:
+                await self._restore_change_subscription(client, payload, self.monotonic() if cancelled_at is None else cancelled_at)
+
     async def _mqtt_listener_loop(self):
         """Persistent MQTT listener coroutine.
 
@@ -2173,10 +2209,7 @@ class SigenergyAPI(ComponentBase):
                     # every connect a new registration, so the snapshot comes straight back. The two go on different
                     # topics, so their order isn't guaranteed - sent back to back, the cancel can land second and leave
                     # the system with no change subscription at all (seen on 2 of 29 live plants), hence the pause.
-                    await client.publish(SIGENERGY_MQTT_TOPIC_UNSUBSCRIBE_CHANGE, payload=sub_payload, qos=1)
-                    await self.sleep(SIGENERGY_MQTT_RESUBSCRIBE_DELAY)
-                    for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
-                        await client.publish(sub_topic, payload=sub_payload, qos=1)
+                    await self._request_mqtt_subscriptions(client, sub_payload)
                     self.log("SigenergyAPI: MQTT subscriptions published for {} system(s)".format(len(system_id_list)))
 
                     async for message in client.messages:
