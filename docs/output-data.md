@@ -269,6 +269,8 @@ If you toggle this switch in Home Assistant it will force Predbat to perform an 
 
 - **predbat.status** - Gives the current status & errors and logs any changes that Predbat makes to your inverter.
 The different Predbat status values and their meanings are detailed in [what does Predbat do](what-does-predbat-do.md#predbat-status).
+When a warning is reported during a plan update, the update ends by adding the state it carried out after the warning in square brackets, e.g. `Warn: ... [Exporting]`, so the status still starts with `Warn:` or `Error:`.
+An update that stopped before carrying anything out shows the warning or error on its own.
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e24914b8-93d9-4217-812a-ac25a569a52c)
 
@@ -278,6 +280,10 @@ predbat.status additionally has the following attributes that are automatically 
 - **Debug** - A set of arrays containing Predbat's planned charging and discharging time windows and battery limits (in kWh)
 - **Version** - version of Predbat that's running
 - **Error** - binary value true or false depending upon whether Predbat is in an error status or nor
+- **Run state** (`run_state`) - the status the last plan update carried out, such as `Exporting` or `Demand, Hold for car`, without any warning or error text.
+It stays the same while a warning is shown, and when an update stops before carrying anything out, as the inverter is still following the last one.
+It is empty after a restart until the first update completes.
+Use it in an automation that follows Predbat's status, e.g. `state_attr('predbat.status', 'run_state')`, rather than parsing the status text.
 
 ## Sensor data
 
@@ -412,8 +418,10 @@ They mirror input sensors fed into Predbat in `apps.yaml` and are used in the da
 
 - predbat.export_energy_h0 - Mirrors the export_today sensor configured in `apps.yaml` and gives today's total kWh of export energy
 - predbat.import_energy_h0 - Mirrors the import_today sensor configured in `apps.yaml` and gives today's total kWh of import energy
-- predbat.load_energy_h0 - Mirrors the load_today sensor configured in `apps.yaml` and gives today's total kWh of house load energy.
-Note that if you have configured [load scaling](customisation.md#scaling-and-weight-options) then load_energy_h0 will have been scaled by the scaling factor.
+- predbat.load_energy_h0 - Mirrors the load_today sensor configured in `apps.yaml` and gives today's total kWh of house load energy, as measured:
+it is not scaled by [load scaling](customisation.md#scaling-and-weight-options) and car charging and iBoost energy are not subtracted.
+The `source` attribute says where the figure came from: `load_today`, `ge_cloud`, or `load_forecast` when no load_today sensor is configured (in which case it is a forecast, not a measurement).
+Predbat uses this sensor's history to fill gaps in load_today, for example after you change to a different load sensor - see [load filtering](apps-yaml.md#load-filtering).
 - predbat.pv_energy_h0 - Mirrors the pv_today sensor configured in `apps.yaml` and gives today's total kWh of generated PV energy
 - predbat.soc_kw_h0 - Mirrors the soc_kwh sensor configured in `apps.yaml` and gives today's total kWh of battery state of charge (SoC).
 Note that if you have configured [battery scaling](apps-yaml.md#battery-size-scaling) then soc_kw_h0 will have been scaled by the configured scaling factor
@@ -646,6 +654,9 @@ because without Predbat the baseline assumes charging to 100% in the cheapest wi
 After each plan calculation Predbat runs a set of what-if simulations to determine the marginal cost (in pence per kWh) of consuming extra electricity at different
 levels and at different times in the upcoming forecast window. The results are published as a matrix sensor and a set of binary sensors.
 
+The cost is worked out against the current plan, so it includes any planned export the extra load would displace. Energy the battery would otherwise still hold at the end of the plan
+is valued the same way the planner values it, so extra load the battery covers is not shown as free.
+
 ### Main matrix sensor
 
 - **sensor.predbat_marginal_energy_costs** - The primary marginal cost sensor. State is the 1 kWh marginal cost for the current time window.
@@ -655,7 +666,7 @@ levels and at different times in the upcoming forecast window. The results are p
     - `grid_export` - Dict of actual grid export rate (p/kWh) at each time window label
     - `grid_import_now` - Current grid import rate (p/kWh)
     - `grid_export_now` - Current grid export rate (p/kWh)
-    - `baseline_metric` - Internal baseline cost used to compute deltas (standing charge excluded)
+    - `baseline_metric` - Internal baseline used to compute deltas: the plan's cost less the value of the energy left in the battery at the end (standing charge excluded), so it can be negative
     - `rate_now_low_consumption` - Marginal cost now for the 'low' (1 kWh) load level
     - `rate_now_med_consumption` - Marginal cost now for the 'medium' (2 kWh) load level
     - `rate_now_high_consumption` - Marginal cost now for the 'high' (4 kWh) load level
@@ -679,6 +690,9 @@ The cheap/moderate thresholds are computed relative to the current day's import 
 
 - **Cheap threshold** = `rate_min × 1.2`
 - **Moderate threshold** = `max(rate_max × 0.5, rate_min × 1.5)`
+
+`rate_min` and `rate_max` are the base tariff's lowest and highest import rates, the same values as the sensor's `rate_min`/`rate_max` attributes.
+Octopus free and saving sessions, Axle events and rate overrides are left out, so a free session does not drag the cheap threshold down to zero.
 
 These binary sensors are useful in Home Assistant automations, e.g. to start an EV charge or run a dishwasher only when energy is cheap.
 
@@ -722,6 +736,20 @@ These sensors can be ignored and excluded from the recorder history if you wish.
 ## Alert data
 
 - sensor.predbat_alertfeed_status - Gives you data on the currently active weather alert (if configured) and in the attributes a list of all active alerts with their details
+
+## Control failure data
+
+Predbat checks that the battery actually does what it was commanded during each Charging, Exporting (force export), Freeze charging and Freeze exporting slot.
+Five minutes after an inverter enters one of these modes, Predbat compares the measured battery power against the rate it asked that inverter for, allowing for the battery's charge curve, temperature and solar.
+If the battery stays well short of it (below 25% of that rate) or, in a freeze mode, flows the wrong way by more than 200W, for three readings in a row, the slot is counted as a control failure.
+Each failed slot logs one warning and is counted once, however long it lasts.
+Nothing is checked in read-only mode, while an inverter is calibrating, after the slot has ended, or when the inverter's battery power sensor cannot be read.
+
+- **predbat.control_failures** - the number of failed slots in the last 24 hours. The `events` attribute lists recent failures (inverter, mode, slot times, requested and measured power, and how many minutes the battery was not following the command) and `by_mode` breaks the count down by mode.
+- **predbat.control_failures_total** - the lifetime count of failed slots, suitable for Home Assistant long-term statistics.
+
+Common causes are an inverter app or schedule overriding Predbat's mode, a battery management system limiting the charge or discharge rate, a command that never reached the inverter, or a cloud integration that reports battery power several minutes late.
+The same data is shown in the Control Failures section of the [Metrics view](web-interface.md#metrics-view).
 
 ## Predbat Logfile
 

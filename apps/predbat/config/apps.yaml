@@ -319,6 +319,24 @@ pred_bat:
   # it explicitly to True/False to override that decision
   #ohme_automatic_octopus_intelligent: True
 
+  # Wallbox EV charger cloud direct integration
+  #wallbox_username: !secret wallbox_username
+  #wallbox_password: !secret wallbox_password
+  # Register the Wallbox chargers with Predbat as cars (on by default)
+  #wallbox_automatic: True
+  # Let Predbat pause and resume the chargers according to its own car charging plan.
+  # Requires wallbox_automatic
+  #wallbox_control: True
+
+  # Hypervolt EV charger cloud direct integration
+  #hypervolt_username: !secret hypervolt_username
+  #hypervolt_password: !secret hypervolt_password
+  # Register the Hypervolt chargers with Predbat as cars (on by default)
+  #hypervolt_automatic: True
+  # Let Predbat stop and start the chargers according to its own car charging plan.
+  # Requires hypervolt_automatic
+  #hypervolt_control: True
+
   # car_charging_energy defines a daily incrementing sensor which measures the charge added to your car and resets to zero at midnight
   # is used for car_charging_hold feature to filter out car charging from the previous load data
   # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
@@ -378,6 +396,10 @@ pred_bat:
   #  - 're:number.tsunami_charge_limit'
   #car_charging_soc:
   #  - 're:sensor.tsunami_battery'
+  # Optional: the car's own maximum charge rate in kW, one entry per car (a number or a sensor).
+  # The car is planned at the lower of this and its charging rate; a blank entry or 0 means no cap.
+  #car_charging_max_rate:
+  #  - 3.6
 
   # One per car, when true only one car can charge at once, when False multiple cars can charge at once
   #car_charging_exclusive:

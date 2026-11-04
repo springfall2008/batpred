@@ -20,6 +20,7 @@ from datetime import date, datetime, timedelta
 import pytz
 
 from annual_costs import build_costs, build_payback, resolve_costs
+from annual_store import DEFAULT_PANEL_WATTS
 from annual_interpolate import ANCHOR_MONTHS, FAST_MODE_MAX_RATE_CV, build_interpolated_rows, rate_variability
 from annual_load import build_load_forecast, OctopusConsumptionLoadProfile, SyntheticLoadProfile
 from annual_tariff import AnnualTariff
@@ -43,9 +44,6 @@ DEFAULT_HYBRID = True
 # domestic inverter, so an unset value behaves as "no extra restriction" rather
 # than silently clipping exports.
 DEFAULT_EXPORT_LIMIT_KW = 10.0
-
-# A typical domestic panel in 2026. Only used to turn a panel count into kWp.
-DEFAULT_PANEL_WATTS = 400.0
 
 # A kWp figure above this in the solar config is far more likely Watts typed by
 # mistake - "6000" meaning 6,000 Wp - than a real array; even a large domestic
@@ -633,26 +631,17 @@ def write_minimal_apps_yaml(work_dir, timezone):
 def create_headless_predbat(work_dir, timezone, log):
     """Construct a PredBat instance with no Home Assistant connection.
 
-    ``Hass.__init__`` is the only place that reads ``$PREDBAT_APPS_FILE``, and it does so
-    synchronously while ``PredBat()`` is constructed below, so the environment variable only
-    needs to be set for the duration of that one call. It is restored to whatever it held
-    before (unset if it was unset) in a ``finally`` block, so a later ``PredBat()`` in the
-    same process — including ``unit_test.py``'s own ``create_predbat()`` — never silently
-    picks up this work directory's apps.yaml. The predbat import is deliberately local to
-    this function so merely importing ``annual`` does not drag in the whole engine.
+    The work directory's apps.yaml is handed to ``PredBat(apps_file=...)`` directly rather
+    than through ``$PREDBAT_APPS_FILE``, so the process environment is never touched and a
+    later ``PredBat()`` in the same process (including ``unit_test.py``'s own
+    ``create_predbat()``) never picks up this work directory's apps.yaml. The predbat import
+    is deliberately local to this function so merely importing ``annual`` does not drag in
+    the whole engine.
     """
     path = write_minimal_apps_yaml(work_dir, timezone)
-    previous_apps_file = os.environ.get("PREDBAT_APPS_FILE")
-    os.environ["PREDBAT_APPS_FILE"] = path
-    try:
-        import predbat
+    import predbat
 
-        instance = predbat.PredBat()
-    finally:
-        if previous_apps_file is None:
-            os.environ.pop("PREDBAT_APPS_FILE", None)
-        else:
-            os.environ["PREDBAT_APPS_FILE"] = previous_apps_file
+    instance = predbat.PredBat(apps_file=path)
 
     instance.states = {}
     instance.log = log
@@ -788,6 +777,12 @@ def reset_sample_state(predbat):
     predbat.rate_min = 0
     predbat.rate_max = 0
     predbat.rate_average = 0
+    # set_rate_thresholds() reads these alongside the rates. _apply_rates() clears them too, since
+    # _run_scenarios() installs a second tariff without coming back through here.
+    predbat.rate_import_saving_minutes = set()
+    predbat.rate_export_saving_minutes = set()
+    predbat.rate_import_pre_saving = {}
+    predbat.rate_export_pre_saving = {}
 
     predbat.load_inday_adjustment = 1.0
     predbat.load_scaling_dynamic = None
@@ -1188,6 +1183,13 @@ def _apply_rates(predbat, rate_import, rate_export):
     predbat.rate_export = rate_export
     predbat.rate_low_threshold = 0
     predbat.rate_high_threshold = 0
+    # A prior live cycle's saving-session minutes are absolute offsets into that cycle's own rate
+    # tables - stale and meaningless against this simulated tariff, and set_rate_thresholds() would
+    # otherwise exclude whatever unrelated minutes happen to sit at the same positions here.
+    predbat.rate_import_saving_minutes = set()
+    predbat.rate_export_saving_minutes = set()
+    predbat.rate_import_pre_saving = {}
+    predbat.rate_export_pre_saving = {}
 
     if predbat.rate_import:
         predbat.rate_scan(predbat.rate_import, print=False)

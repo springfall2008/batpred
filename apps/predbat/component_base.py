@@ -63,6 +63,12 @@ class ComponentBase(ABC):
     # 10 for the GivEnergy types (GivTCP and GE Cloud override it). See coordinator.inverter_definition().
     WRITE_AND_POLL_SLEEP = 2
 
+    # How inverter.py retries a write that did not stick. None and False leave inverter.py's own
+    # defaults in place; a component whose INVERTER_DEF row sets write_max_retry/write_backoff (only
+    # GWMQTT) overrides these so its discovery record can rebuild the row.
+    WRITE_MAX_RETRY = None
+    WRITE_BACKOFF = False
+
     # Declared on the class, not only assigned in __init__, so they exist even on a component built
     # without it - the test harnesses construct components with Cls.__new__(Cls) to exercise one
     # method in isolation. refresh_discovery() must not be able to raise on such an instance: an
@@ -171,6 +177,12 @@ class ComponentBase(ABC):
         Retrieve a configuration argument from the base system.
         """
         return self.base.get_arg(arg, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index, domain=domain, can_override=can_override, required_unit=required_unit)
+
+    def car_rate_capped(self, car_n, rate):
+        """
+        Return rate (kW) limited to car car_n's own maximum charge rate (car_charging_max_rate), as Fetch caps it.
+        """
+        return self.base.car_rate_capped(car_n, rate)
 
     def update_success_timestamp(self):
         """Update the last success timestamp to the current time"""

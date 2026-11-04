@@ -59,11 +59,13 @@ from deye_const import (
     DEYE_TTL_CONFIG,
     DEYE_TTL_LIVE,
     DEYE_RESTORE_MAX_CONTROL,
+    DEYE_RESTORE_MAX_CONTROL_ACTIVE,
     DEYE_CACHE_STATIC,
     DEYE_CACHE_CONFIG,
     DEYE_CACHE_TOU,
     DEYE_CACHE_RATINGS,
     DEYE_CACHE_CONTROL,
+    DEYE_CACHE_APPLIED_PAYLOAD,
 )
 
 # How every DeyeCloud inverter behaves, as the INVERTER_DEF keys a discovery record may override
@@ -1442,17 +1444,14 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         return False
 
     async def save_control(self):
-        """Cache control state: what was last written, any order still in flight, and control_active.
+        """Cache control state: the payload itself, any pending order, and ownership.
 
-        Believed to be the same bug as batpred#5138 (Sunsynk), found by reading this file
-        alongside the Sunsynk fix rather than from a reported deye.py incident: without
-        control_active surviving a restart, _reconcile_control() stays gated off
-        for every inverter until a fresh write-button event happens to arrive - silently
-        skipping every automatic re-apply, including one meant to stop an export already in
-        progress, until something unrelated re-arms it. Fixed the same way as sunsynk.py and
-        alphaess.py, which already persist control_active for exactly this reason.
+        The payload is kept in a short-lived change-detection cache, while control_active is
+        stored separately so ownership survives longer for reconciliation after a restart.
         """
-        return await self.save_cache(DEYE_CACHE_CONTROL, {"applied_payload": self.applied_payload, "pending_orders": self.pending_orders, "order_poll_count": self.order_poll_count, "control_active": sorted(self.control_active)})
+        await self.save_cache(DEYE_CACHE_APPLIED_PAYLOAD, {"applied_payload": self.applied_payload})
+        await self.save_cache(DEYE_CACHE_CONTROL, {"pending_orders": self.pending_orders, "order_poll_count": self.order_poll_count, "control_active": sorted(self.control_active)})
+        return True
 
     async def restore_state(self):
         """Restore cached state at startup and seed each tier's refresh clock.
@@ -1504,20 +1503,33 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         # from caching it 1440 times a day. The live clock therefore starts unset and the
         # first tick polls immediately.
 
+        await self._restore_control_state()
+
+    async def _restore_control_state(self):
+        """Restore cached control orders, applied payload and ownership."""
         control, age = await self.load_cache(DEYE_CACHE_CONTROL)
         if isinstance(control, dict):
-            orders = control.get("pending_orders")
-            counts = control.get("order_poll_count")
-            # Orders restore unconditionally: an unpolled order is orphaned, and
-            # DEYE_ORDER_MAX_POLLS still bounds how long it can stay unconfirmed.
-            if isinstance(orders, dict):
-                self.pending_orders = orders
-                if orders:
-                    self.log(f"Info: DEYE resuming {len(orders)} pending control order(s) from cache")
-            if isinstance(counts, dict):
-                self.order_poll_count = counts
-            applied = control.get("applied_payload")
+            self._restore_pending_orders(control)
+
+            applied = None
             active = control.get("control_active")
+            if isinstance(control, dict) and "applied_payload" in control:
+                # legacy applied_payload was stored in the control cache, so if the payload cache is
+                # missing but the control cache has it, restore it from there.
+                legacy_applied = control.get("applied_payload")
+                if isinstance(legacy_applied, dict):
+                    applied = legacy_applied
+                    self.applied_payload = legacy_applied
+                active = control.get("control_active")
+
+            payload, payload_age = await self.load_cache(DEYE_CACHE_APPLIED_PAYLOAD)
+            if isinstance(payload, dict):
+                payload_applied = payload.get("applied_payload")
+                if isinstance(payload_applied, dict):
+                    applied = payload_applied
+            if isinstance(control, dict) and "applied_payload" in control and payload_age is None:
+                payload_age = age
+
             # Either half is enough to be worth restoring, and neither gates the other. An
             # emptied applied_payload is a normal state, not an absent cache: run() pops a
             # serial whose order stayed unconfirmed past DEYE_ORDER_MAX_POLLS and then calls
@@ -1526,35 +1538,44 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             # _reconcile_control gated off after a restart - the exact failure this fix is for,
             # on the one inverter that had just been told to re-write.
             if (isinstance(applied, dict) and applied) or (isinstance(active, list) and active):
-                if age is not None and age < DEYE_RESTORE_MAX_CONTROL:
+                if isinstance(active, list):
+                    self.control_active = set(active)
+
+                ownership_valid = age is None or age <= DEYE_RESTORE_MAX_CONTROL_ACTIVE
+                if payload_age is not None and payload_age < DEYE_RESTORE_MAX_CONTROL:
                     if isinstance(applied, dict):
                         self.applied_payload = applied
-                    # Restored alongside applied_payload, not just it: control_active is what
-                    # actually lets _reconcile_control() write at all, so restoring
-                    # applied_payload without it would still leave every inverter silently
-                    # unmanaged after a restart. Past the age bound both are dropped together,
-                    # so a stale cache still forces a fresh write-button press to recommit,
-                    # rather than trusting old control state indefinitely.
-                    if isinstance(active, list):
-                        self.control_active = set(active)
-                    elif isinstance(applied, dict):
-                        # A cache written before this key existed carries applied_payload alone.
-                        # Restoring that half on its own would preserve the very bug this fix is
-                        # for through the one restart that installs the fix, so infer the missing
-                        # half from applied_payload. Its keys are a safe lower bound and cannot arm
-                        # an inverter Predbat never drove: apply_dynamic_control is only reached
-                        # through apply_schedule()/apply_reserve_live(), which add to
-                        # control_active first, or through _reconcile_control(), which is
-                        # already gated on it. The reverse is not true - an apply that wrote
-                        # nothing leaves control_active set with no applied_payload entry - so this
-                        # restores a subset, never a superset.
-                        self.control_active = set(applied.keys())
+                    elif not isinstance(active, list):
+                        self.control_active = set()
                 else:
-                    # Deliberately discarded. This cache asserts the inverter still holds
-                    # what Predbat last wrote; after a long gap that may be false, and a
-                    # wrongly SKIPPED write leaves the battery diverging from the plan. A
-                    # redundant write is the cheaper mistake.
-                    self.log(f"Info: DEYE applied-payload cache is stale (age {self._age_text(age)}), the next apply will re-write to the inverter")
+                    # The last payload is unsafe to trust after a long gap, but the
+                    # ownership flag must survive so _reconcile_control() can immediately
+                    # re-apply the current schedule. Clearing only applied_payload makes the
+                    # next apply a real write instead of waiting for an unrelated button event.
+                    self.applied_payload = {}
+                    self.log(f"Info: DEYE applied-payload cache is stale (age {self._age_text(payload_age)}), retaining control ownership so the next cycle re-writes the inverter")
+
+                if ownership_valid and not isinstance(active, list) and isinstance(applied, dict):
+                    # A cache written before control_active existed carries applied_payload
+                    # alone. Its keys are a safe lower bound because every applied payload was
+                    # produced after the control path had marked that inverter active.
+                    self.control_active = set(applied.keys())
+                elif not ownership_valid:
+                    self.control_active = set()
+                    self.log(f"Info: DEYE control ownership cache is stale (age {self._age_text(age)}), requiring a fresh write")
+
+    def _restore_pending_orders(self, control):
+        """Restore pending control orders and their poll counts."""
+        orders = control.get("pending_orders")
+        counts = control.get("order_poll_count")
+        # Orders restore unconditionally: an unpolled order is orphaned, and
+        # DEYE_ORDER_MAX_POLLS still bounds how long it can stay unconfirmed.
+        if isinstance(orders, dict):
+            self.pending_orders = orders
+            if orders:
+                self.log(f"Info: DEYE resuming {len(orders)} pending control order(s) from cache")
+        if isinstance(counts, dict):
+            self.order_poll_count = counts
 
     async def refresh_static(self):
         """Re-run discovery and the per-model capability reads, then cache them."""

@@ -13,6 +13,8 @@ import asyncio
 import os
 import sys
 import time
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from annual_job import AnnualJob
 
@@ -29,8 +31,8 @@ async def run_to_completion(job, mode, timeout=20):
     started = await job.start(stub_command(mode))
     waited = 0.0
     while job.state == "running" and waited < timeout:
-        await asyncio.sleep(0.1)
-        waited += 0.1
+        await asyncio.sleep(0.02)
+        waited += 0.02
     return started
 
 
@@ -56,15 +58,15 @@ def test_annual_job(my_predbat):
         print("  ERROR: the results document should be parsed from stdout, got {}".format(job.results))
         failed = True
     elapsed_first = job.status().get("elapsed")
-    # elapsed is int()-truncated to whole seconds, so a sleep shorter than a second
-    # (0.2s, say) usually lands inside the same truncated second and would pass this
-    # assertion even if the freeze were removed and elapsed kept advancing with wall
-    # time - discriminating only by luck, on whichever side of a second boundary the
-    # first read happened to fall. Sleeping past a full second guarantees at least
-    # one more second has elapsed on the wall clock than before, so a still-advancing
-    # elapsed is caught deterministically rather than only sometimes.
-    time.sleep(1.1)
-    elapsed_second = job.status().get("elapsed")
+    # elapsed is int()-truncated to whole seconds, so a clock moved on by less than a
+    # second could land inside the same truncated second and pass this assertion even
+    # if the freeze were removed and elapsed kept advancing with wall time. Moving
+    # annual_job's clock five seconds on guarantees a still-advancing elapsed is
+    # caught deterministically, without sleeping for it. Only annual_job's reference
+    # to the time module is replaced, so nothing else in the process sees the jump.
+    later = time.time() + 5
+    with patch("annual_job.time", SimpleNamespace(time=lambda: later)):
+        elapsed_second = job.status().get("elapsed")
     if elapsed_first != elapsed_second:
         print("  ERROR: elapsed should freeze once a run is complete, got {} then {}".format(elapsed_first, elapsed_second))
         failed = True

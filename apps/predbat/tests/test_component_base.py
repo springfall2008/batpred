@@ -343,9 +343,13 @@ def test_component_base_first_cleared_when_run_presets_api_started(my_predbat):
 
             task = asyncio.create_task(component.start())
 
-            # Wait long enough (sped up 100x by fast_sleep → ~2s real) for the component
-            # loop to advance past simulated seconds=60 so a steady-state run can occur.
-            await asyncio.sleep(200)
+            # Wait for the component loop to advance past simulated seconds=60 so a steady-state
+            # run can occur - polled, so it ends as soon as one has (about 0.65s real via
+            # fast_sleep) instead of always sitting out the full 200 simulated seconds.
+            for _ in range(200):
+                if any(flag is False for flag in component.first_flags):
+                    break
+                await asyncio.sleep(1)
 
             assert component.api_started, "Component should be started"
 

@@ -41,6 +41,8 @@ class MockTemperatureAPI(TemperatureAPI):
         self.prefix = "predbat"
         self._last_updated_time = None
         self.state_storage = {}
+        # ComponentBase.__init__ is skipped, so set the base it would; None means no coordinator to report discovery to
+        self.base = None
         self.initialize(
             temperature_enable=True,
             temperature_latitude=temperature_latitude,
@@ -1314,6 +1316,11 @@ def test_temperature(my_predbat=None):
         ("run_no_save_failed", _test_run_no_save_on_failed_fetch, "failed fetch does not save to cache"),
         ("forecast_horizon", _test_temperature_forecast_horizon, "Forecast length, provider limit and cache refresh"),
         ("failed_refresh_cache", _test_run_failed_refresh_publishes_retained_cache, "Failed refresh publishes retained cache immediately"),
+        ("discovery_record", _test_temperature_discovery_record, "Temperature forecast record"),
+        ("discovery_before_first_fetch", _test_temperature_discovery_before_first_fetch, "Record before any forecast is held"),
+        ("discovery_none_when_disabled", _test_temperature_discovery_none_when_disabled, "No record when disabled"),
+        ("discovery_round_trip", _test_temperature_discovery_round_trip, "Record round-trips through the Coordinator"),
+        ("discovery_run_files_report", _test_temperature_discovery_run_files_report, "run() files the report every cycle"),
     ]
 
     print("\n" + "=" * 70)
@@ -1346,3 +1353,77 @@ def test_temperature(my_predbat=None):
     print("=" * 70)
 
     return failed
+
+
+DISCOVERY_URL = "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&current=temperature_2m&past_days=28"
+
+
+def _temperature_discovery_api(with_data=True):
+    """A TemperatureAPI holding a week of hourly Open-Meteo forecast from 2026-02-07T00:00, as fetched."""
+    api = MockTemperatureAPI(temperature_latitude=51.5074, temperature_longitude=-0.1278, temperature_url=DISCOVERY_URL)
+    if with_data:
+        start = datetime(2026, 2, 7, 0, 0)
+        api.temperature_data = {
+            "latitude": 51.5,
+            "longitude": -0.12,
+            "utc_offset_seconds": 0,
+            "current": {"time": "2026-02-07T00:00", "temperature_2m": 9.5},
+            "hourly": {"time": [(start + timedelta(hours=hour)).strftime("%Y-%m-%dT%H:%M") for hour in range(169)], "temperature_2m": [9.0] * 169},
+        }
+    return api
+
+
+def _test_temperature_discovery_record(my_predbat):
+    """The service is a temperature forecast for the Open-Meteo grid point it was given, hourly, as far ahead as the data runs."""
+    report = _temperature_discovery_api().build_discovery()
+    assert "automatic" not in report, "Temperature has no automatic configuration to report"
+    expected = {
+        "device_id": "temperature:open-meteo",
+        "kind": "temperature",
+        "info": {"vendor": "Open-Meteo"},
+        "coverage": {"horizon_hours": 168, "resolution_minutes": 60, "latitude": 51.5, "longitude": -0.12},
+    }
+    record = report["forecasts"][0]
+    assert record == expected, record
+    return 0
+
+
+def _test_temperature_discovery_before_first_fetch(my_predbat):
+    """Enabled but not yet fetched: the service is still described, with only what is known before the data arrives."""
+    record = _temperature_discovery_api(with_data=False).build_discovery()["forecasts"][0]
+    assert record == {"device_id": "temperature:open-meteo", "kind": "temperature", "info": {"vendor": "Open-Meteo"}, "coverage": {"resolution_minutes": 60}}, record
+    return 0
+
+
+def _test_temperature_discovery_none_when_disabled(my_predbat):
+    """With the temperature forecast switched off there is nothing to describe."""
+    api = _temperature_discovery_api()
+    api.temperature_enable = False
+    assert api.build_discovery() is None
+    return 0
+
+
+def _test_temperature_discovery_round_trip(my_predbat):
+    """Through the real Coordinator with no warnings: kind and coverage, the grid point included, survive."""
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("temperature", _temperature_discovery_api().build_discovery())
+    record = coordinator.catalogue()["forecasts"][0]
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    assert record["kind"] == "temperature" and record["coverage"]["latitude"] == 51.5 and record["coverage"]["horizon_hours"] == 168, record
+    return 0
+
+
+def _test_temperature_discovery_run_files_report(my_predbat):
+    """run() files the report on a cycle that does not fetch."""
+    api = _temperature_discovery_api()
+    api.last_updated_timestamp = datetime.now()
+    filed = []
+    api.report_discovery = filed.append
+    asyncio.run(api.run(60, False))
+    assert len(filed) == 1 and filed[0]["forecasts"][0]["kind"] == "temperature", filed
+    return 0

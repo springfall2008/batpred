@@ -44,7 +44,7 @@ CAR_BATTERY_KWH_OPTIONS = [40.0, 60.0, 77.0, 100.0]
 FEATURE_SEED_SALT = 0xFEA7        # keeps the feature draws off the main rng sequence
 IBOOST_PROBABILITY = 0.4          # fraction of scenarios running an immersion boost
 # Load scaling for the three simulated futures, again on its own rng stream. The template pinned
-# load_scaling 0.5 / load_scaling10 0.6 and left load_scaling90 at its 0.7 default, which the planner
+# load_scaling 0.5 / load_scaling10 0.6 and left load_scaling90 at its default (0.7 then), which the planner
 # detects as inverted and clamps back to 0.5 - so PV90 carried exactly the central case's load in
 # every scenario and the pv90 column could not measure anything the nominal column did not.
 LOAD_SCALING_SEED_SALT = 0x10AD5
