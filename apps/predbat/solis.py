@@ -20,7 +20,7 @@ import threading
 import yaml
 from datetime import datetime, timedelta, UTC
 from predbat_metrics import record_api_call
-from component_base import ComponentBase, writes
+from component_base import ComponentBase, writes, telemetry_number, telemetry_time
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -2170,7 +2170,14 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
             return data
 
-        return await self._with_retry(detail_operation)
+        detail = await self._with_retry(detail_operation)
+        if self.telemetry_observer is not None and isinstance(detail, dict) and str(detail.get("sn", inverter_sn)).lower() == str(inverter_sn).lower():
+            soc = telemetry_number(detail.get("batteryCapacitySoc"))
+            voltage = telemetry_number(detail.get("batteryVoltage"))
+            measured = soc is not None and 0 <= soc <= 100 and not (soc == 0 and voltage in (None, 0))
+            self.report_telemetry(inverter_sn, {"batteryCapacitySoc": soc}, source="inverter_detail", sample_time=telemetry_time(detail.get("dataTimestamp"), "milliseconds"),
+                                  updated_fields={"batteryCapacitySoc"} if measured else set())
+        return detail
 
     # ==================== Configuration and Polling ====================
 

@@ -27,7 +27,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from component_base import ComponentBase, writes
+from component_base import ComponentBase, writes, telemetry_number, telemetry_time
 from coordinator import inverter_record
 from const import EXPORT_LIMIT_FREEZE
 from mock_base import MockBase
@@ -1274,6 +1274,14 @@ class EnphaseAPI(ComponentBase):
             "batteries": batteries,
         }
         await self._save_cache("battery_status", self.battery_status)
+        if self.telemetry_observer is not None:
+            capacities = [telemetry_number(b.get("max_capacity")) for b in batteries]
+            available = [telemetry_number(b.get("available_energy")) for b in batteries]
+            measured = bool(batteries) and all(v is not None and v >= 0 for v in capacities + available) and sum(capacities) > 0 and 0 <= soc_percent <= 100
+            times = [telemetry_time(b.get("last_report")) for b in batteries]
+            # The aggregate is only as recent as its oldest contributing battery, not the newest.
+            sample_time = min(times) if times and all(t is not None for t in times) else None
+            self.report_telemetry(site_id, {"soc_percent": soc_percent}, source="battery_status", sample_time=sample_time, updated_fields={"soc_percent"} if measured else set())
         return self.battery_status[site_id]
 
     async def get_today(self, site_id):

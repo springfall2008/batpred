@@ -49,7 +49,7 @@ import statistics
 import time
 from datetime import datetime
 import aiohttp
-from component_base import ComponentBase, writes
+from component_base import ComponentBase, writes, telemetry_number
 from coordinator import inverter_record
 from hanchu_const import (
     HANCHU_ACK_MAP,
@@ -639,7 +639,24 @@ class HanchuAPI(ComponentBase):
             detail["has_generator"] = str(generator).strip().lower() in ("true", "1")
         self._apply_model(sn, payload.get(HANCHU_MODEL_FIELD))
         self._apply_device_status(sn, payload.get(HANCHU_DEVICE_STATUS_FIELD))
+        if self.telemetry_observer is not None:
+            self._observe_status_payload(sn, payload, values)
         return True
+
+    def _observe_status_payload(self, sn, payload, values):
+        """Report the SoC accepted from one applied getDeviceStatus payload.
+
+        Called only after the payload has been applied. The raw battery fraction must be finite
+        and within 0..1, so a malformed reading never becomes a measured 0%; the reported value is
+        the normalised soc this payload produced. A device the payload says is offline is serving
+        its last cached readings, so it emits nothing. The payload carries no sample time.
+        """
+        if telemetry_number(payload.get(HANCHU_DEVICE_STATUS_FIELD)) == HANCHU_DEVICE_STATUS_OFFLINE:
+            return
+        fraction = telemetry_number(payload.get(HANCHU_TELEMETRY["soc"]))
+        if fraction is None or fraction < 0 or fraction > 1 or "soc" not in values:
+            return
+        self.report_telemetry(sn, {"soc": values["soc"]}, source="device_status", sample_time=None, updated_fields=("soc",))
 
     def _apply_model(self, sn, code):
         """Record a device's devModel and its name, saying once what the ratings table makes of it.
