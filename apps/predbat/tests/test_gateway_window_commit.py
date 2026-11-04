@@ -157,7 +157,7 @@ def hub_cycle(**hub_kwargs):
     hub = SimulatedHub(gw, **hub_kwargs)
     base = HubBase(gw)
     gw.base = base
-    base.clock = DictClock(now, pause)
+    base.component_clock = DictClock(now, pause)
     yield make_inverter(base), gw, hub, base, now
 
 

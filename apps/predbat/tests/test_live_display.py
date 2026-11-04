@@ -105,11 +105,11 @@ def test_raw_capture_does_not_inherit_old_fields():
 @contextlib.contextmanager
 def clock_at(gw, now):
     """Give the gateway a clock reading now on its wall clock and, on a different scale, its monotonic clock for the block, then take it away."""
-    gw.base.clock = SimpleNamespace(time=lambda: now, monotonic=lambda: now - NOW + 5000.0, sleep=asyncio.sleep)
+    gw.base.component_clock = SimpleNamespace(time=lambda: now, monotonic=lambda: now - NOW + 5000.0, sleep=asyncio.sleep)
     try:
         yield
     finally:
-        del gw.base.clock
+        del gw.base.component_clock
 
 
 def published_gateway(enabled=True, parked=True):

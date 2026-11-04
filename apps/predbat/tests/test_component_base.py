@@ -1320,7 +1320,7 @@ def test_component_base_http_session_kraken_mixin(my_predbat):
 
 
 class FakeClock:
-    """base.clock stand-in with fixed readings and a recording, non-waiting sleep."""
+    """base.component_clock stand-in with fixed readings and a recording, non-waiting sleep."""
 
     def __init__(self, mono=12.5, wall=1234.5):
         """Start with the given readings and no recorded sleeps."""
@@ -1395,7 +1395,7 @@ def test_component_base_mqtt_client(my_predbat):
 
 def test_component_base_clock(my_predbat):
     """
-    monotonic, wall_time and sleep use base.clock when set and otherwise time.monotonic, time.time and
+    monotonic, wall_time and sleep use base.component_clock when set and otherwise time.monotonic, time.time and
     asyncio.sleep looked up at call time. An attribute a mock base only invents is never taken for a clock.
     """
     print("\n*** Test: clock methods lookup order and default ***")
@@ -1410,16 +1410,16 @@ def test_component_base_clock(my_predbat):
         real_sleep.assert_awaited_once_with(7)
 
     clock = FakeClock()
-    base.clock = clock
+    base.component_clock = clock
     with patch("time.monotonic", side_effect=AssertionError("time.monotonic must not be used")), patch("time.time", side_effect=AssertionError("time.time must not be used")):
-        assert component.monotonic() == 12.5, "monotonic should come from base.clock"
-        assert component.wall_time() == 1234.5, "wall_time should come from base.clock"
+        assert component.monotonic() == 12.5, "monotonic should come from base.component_clock"
+        assert component.wall_time() == 1234.5, "wall_time should come from base.component_clock"
     with patch("asyncio.sleep", side_effect=AssertionError("asyncio.sleep must not be used")):
         asyncio.run(component.sleep(3))
         asyncio.run(component.sleep(0.5))
-    assert clock.sleeps == [3, 0.5], "sleep should go to base.clock, got {}".format(clock.sleeps)
+    assert clock.sleeps == [3, 0.5], "sleep should go to base.component_clock, got {}".format(clock.sleeps)
 
-    del base.clock
+    del base.component_clock
     with patch("time.monotonic", return_value=5.0):
         assert component.monotonic() == 5.0, "removing the clock should restore the default"
 
@@ -1437,8 +1437,8 @@ def test_component_base_clock_isolated_per_instance(my_predbat):
     """Two components on separate bases with separate clocks only see their own clock."""
     print("\n*** Test: clocks are per instance ***")
     base_a, base_b = MockBase(), MockBase()
-    base_a.clock = FakeClock(mono=1.0, wall=100.0)
-    base_b.clock = FakeClock(mono=2.0, wall=200.0)
+    base_a.component_clock = FakeClock(mono=1.0, wall=100.0)
+    base_b.component_clock = FakeClock(mono=2.0, wall=200.0)
     comp_a, comp_b = TestComponent(base_a), TestComponent(base_b)
 
     async def both():
@@ -1447,8 +1447,24 @@ def test_component_base_clock_isolated_per_instance(my_predbat):
     asyncio.run(both())
     assert (comp_a.monotonic(), comp_a.wall_time()) == (1.0, 100.0), "instance A should read its own clock"
     assert (comp_b.monotonic(), comp_b.wall_time()) == (2.0, 200.0), "instance B should read its own clock"
-    assert base_a.clock.sleeps == [10] and base_b.clock.sleeps == [20], "each clock should only see its own instance's sleeps"
+    assert base_a.component_clock.sleeps == [10] and base_b.component_clock.sleeps == [20], "each clock should only see its own instance's sleeps"
     print("PASS: clocks are isolated per instance")
+    return False
+
+
+def test_component_base_ignores_unrelated_clock_attribute(my_predbat):
+    """A host base whose own `clock` attribute is a callable (not a component clock) must not be mistaken for one."""
+    print("\n*** Test: an unrelated base.clock is ignored ***")
+    base = MockBase()
+    base.clock = lambda: "2026-01-01 00:00:00"
+    component = TestComponent(base)
+    with patch("time.monotonic", return_value=31.0), patch("time.time", return_value=32.0):
+        assert component.monotonic() == 31.0, "monotonic should use real time, not base.clock"
+        assert component.wall_time() == 32.0, "wall_time should use real time, not base.clock"
+    with patch("asyncio.sleep", new_callable=AsyncMock) as real_sleep:
+        asyncio.run(component.sleep(6))
+        real_sleep.assert_awaited_once_with(6)
+    print("PASS: unrelated base.clock ignored")
     return False
 
 
@@ -1469,7 +1485,7 @@ def test_component_base_override_on_mock_base(my_predbat):
     explicit = _mock_base()
     explicit.http_session_factory = http_factory
     explicit.mqtt_client_factory = mqtt_factory
-    explicit.clock = clock
+    explicit.component_clock = clock
     component = TestComponent(explicit)
     assert component.http_session(timeout=1) == "http-from-mock", "an explicitly set MagicMock http factory should be used"
     http_factory.assert_called_once_with(timeout=1)
@@ -1491,7 +1507,7 @@ def test_component_base_override_on_mock_base(my_predbat):
         mqtt_client_factory = staticmethod(lambda **kwargs: "class-mqtt")
 
         @property
-        def clock(self):
+        def component_clock(self):
             return FakeClock(mono=7.0)
 
     real = TestComponent(RealBase())
@@ -1607,7 +1623,8 @@ def test_component_base_all(my_predbat):
         ("http_session_myenergi", test_component_base_http_session_myenergi_direct, "the myenergi direct transport session comes from the base factory"),
         ("http_session_kraken", test_component_base_http_session_kraken_mixin, "the Kraken token request session comes from the base factory"),
         ("mqtt_client", test_component_base_mqtt_client, "mqtt_client prefers the base factory, then aiomqtt.Client, an attribute a mock base only invents is ignored, one set explicitly is used"),
-        ("clock", test_component_base_clock, "monotonic, wall_time and sleep prefer base.clock, then the time module and asyncio, an attribute a mock base only invents is ignored, one set explicitly is used"),
+        ("clock", test_component_base_clock, "monotonic, wall_time and sleep prefer base.component_clock, then the time module and asyncio, an attribute a mock base only invents is ignored, one set explicitly is used"),
+        ("clock_unrelated", test_component_base_ignores_unrelated_clock_attribute, "a base with its own unrelated clock attribute is ignored and real time is used"),
         ("clock_isolated", test_component_base_clock_isolated_per_instance, "two instances' clocks are separate"),
         ("override_on_mock_base", test_component_base_override_on_mock_base, "an explicitly set override on a mock base is used, a made-up one is ignored"),
         ("write_methods", test_component_base_write_methods, "@writes marks a method and write_methods lists exactly the marked ones"),

@@ -54,7 +54,7 @@ def run_async(coro):
 
 
 class InstantClock:
-    """Clock for base.clock whose sleep returns at once, so a test never waits."""
+    """Clock for base.component_clock whose sleep returns at once, so a test never waits."""
 
     def __init__(self):
         """Start with no recorded sleeps."""
@@ -93,7 +93,7 @@ def _base_attr(api, name, value):
 
 def _api_clock(api, clock):
     """Make api use clock for sleep()."""
-    return _base_attr(api, "clock", clock)
+    return _base_attr(api, "component_clock", clock)
 
 
 def _api_mqtt_factory(api, factory):
@@ -2707,7 +2707,7 @@ def test_enphase_catalogue_filed_when_automatic_config_raises():
 
 
 # ---------------------------------------------------------------------------
-# Per-instance MQTT client factory and clock (base.mqtt_client_factory, base.clock)
+# Per-instance MQTT client factory and clock (base.mqtt_client_factory, base.component_clock)
 # ---------------------------------------------------------------------------
 
 

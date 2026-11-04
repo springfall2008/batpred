@@ -65,7 +65,7 @@ def _guarded_run(coro):
 
 
 class InstantClock:
-    """Clock for base.clock whose sleep returns at once, so a test never waits."""
+    """Clock for base.component_clock whose sleep returns at once, so a test never waits."""
 
     def __init__(self):
         """Start with no recorded sleeps."""
@@ -88,7 +88,7 @@ class InstantClock:
 
 
 class VirtualClock:
-    """Clock for base.clock with a monotonic and a wall-clock reading of its own.
+    """Clock for base.component_clock with a monotonic and a wall-clock reading of its own.
 
     sleep() advances both readings by the requested seconds and returns at once; jump_wall()
     moves only the wall clock, as an NTP step or a manual change would.
@@ -157,7 +157,7 @@ def _base_attr(gw, name, value):
 
 def _gw_clock(gw, clock):
     """Make gw use clock for monotonic(), wall_time() and sleep()."""
-    return _base_attr(gw, "clock", clock)
+    return _base_attr(gw, "component_clock", clock)
 
 
 def _gw_mqtt_factory(gw, factory):
@@ -6123,7 +6123,7 @@ class TestRunStartupWait:
 
             gw._mqtt_loop = fake_mqtt_loop
             clock = InstantClock()
-            gw.base = SimpleNamespace(clock=clock)
+            gw.base = SimpleNamespace(component_clock=clock)
             result = await gw.run(0, True)
             return result, len(clock.sleeps)
 
@@ -6149,7 +6149,7 @@ class TestRunStartupWait:
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            gw.base = SimpleNamespace(clock=_FnClock(fake_sleep))
+            gw.base = SimpleNamespace(component_clock=_FnClock(fake_sleep))
             result = await gw.run(0, True)
             return result
 
@@ -6172,7 +6172,7 @@ class TestRunStartupWait:
                 pass  # Never sets _first_connection_attempted
 
             gw._mqtt_loop = fake_mqtt_loop
-            gw.base = SimpleNamespace(clock=_FnClock(fast_sleep))
+            gw.base = SimpleNamespace(component_clock=_FnClock(fast_sleep))
             result = await gw.run(0, True)
             return result
 
@@ -6202,7 +6202,7 @@ class TestRunStartupWait:
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            gw.base = SimpleNamespace(clock=_FnClock(fake_sleep))
+            gw.base = SimpleNamespace(component_clock=_FnClock(fake_sleep))
             result = await gw.run(0, True)
             return result
 
@@ -6227,7 +6227,7 @@ class TestRunStartupWait:
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            gw.base = SimpleNamespace(clock=_FnClock(fast_sleep))
+            gw.base = SimpleNamespace(component_clock=_FnClock(fast_sleep))
             result = await gw.run(0, True)
             return result
 
@@ -6263,7 +6263,7 @@ class TestRunStartupWait:
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            gw.base = SimpleNamespace(clock=_FnClock(fake_sleep))
+            gw.base = SimpleNamespace(component_clock=_FnClock(fake_sleep))
             result = await gw.run(0, True)
             return result
 
@@ -6287,7 +6287,7 @@ class TestRunStartupWait:
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            gw.base = SimpleNamespace(clock=_FnClock(fast_sleep))
+            gw.base = SimpleNamespace(component_clock=_FnClock(fast_sleep))
             result = await gw.run(0, True)
             return result
 
@@ -9014,7 +9014,7 @@ class TestGatewayClockSeams:
             pass
 
         gw._mqtt_loop = fake_mqtt_loop
-        gw.base = SimpleNamespace(clock=clock)
+        gw.base = SimpleNamespace(component_clock=clock)
         result = _guarded_run(gw.run(0, True))
         assert result is True
         assert clock.sleeps == [0.5] * _STARTUP_WAIT_TICKS, "one half second sleep per tick, got {} sleeps".format(len(clock.sleeps))
@@ -9027,7 +9027,7 @@ class TestGatewayClockSeams:
         # The plan carries its build time
         plan_test = TestPlanRepublish()
         gw = plan_test._make_gateway()
-        gw.base = SimpleNamespace(clock=clock)
+        gw.base = SimpleNamespace(component_clock=clock)
         _guarded_run(gw.publish_plan(plan_test._entries(), "Europe/London"))
         plan = pb.ExecutionPlan()
         plan.ParseFromString(gw._published[0][1])
@@ -9047,14 +9047,14 @@ class TestGatewayClockSeams:
         # So does the live predbat_data payload
         data_test = TestPublishPredbatData()
         gw = data_test._make_gateway()
-        gw.base = SimpleNamespace(clock=clock)
+        gw.base = SimpleNamespace(component_clock=clock)
         _guarded_run(gw._publish_predbat_data())
         assert data_test._get_published_payload(gw)["timestamp"] == 1_700_000_123, "predbat_data timestamp is the injected wall clock"
 
         # So does the live display payload, which is stamped with it
         live_test = TestPublishPredbatData()
         gw = live_test._make_gateway()
-        gw.base = SimpleNamespace(clock=clock)
+        gw.base = SimpleNamespace(component_clock=clock)
         gw.gateway_display_only = True
         gw.gateway_live_display = True
         gw.gateway_device_id = "pbgw_0123456789ab"
@@ -9077,7 +9077,7 @@ class TestGatewayClockSeams:
         # The token is judged against it: an hour before expiry is the line
         for expires_in, expect_refresh in ((1800, True), (7200, False)):
             gw = self._make_gateway()
-            gw.base = SimpleNamespace(clock=clock)
+            gw.base = SimpleNamespace(component_clock=clock)
             gw.mqtt_token_expires_at = 1_700_000_123 + expires_in
             gw._do_token_refresh = _async_recorder()
             with patch("gateway.HAS_AIOHTTP", True):
@@ -9091,7 +9091,7 @@ class TestGatewayClockSeams:
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.base = MagicMock()
-        gw.base.clock = clock
+        gw.base.component_clock = clock
         gw.prefix = "predbat"
         gw.args = {}
         gw.log = MagicMock()
@@ -9103,7 +9103,7 @@ class TestGatewayClockSeams:
         clock = VirtualClock(wall=TestIntegratePower.BASE_TIME)
         test = TestIntegratePower()
         gw = test._make_gateway()
-        gw.base.clock = clock
+        gw.base.component_clock = clock
         test._feed(gw, test._status(0, grid_w=-2000))
         clock.advance(600)
         test._feed(gw, test._status(0, grid_w=-3000))

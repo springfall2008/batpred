@@ -304,7 +304,7 @@ class TestIndependentVisibility:
         asyncio.run(gw._publish_display_binding(force=True))
         gw._mqtt_client.publish.assert_not_awaited()
         gw._mqtt_connected = True
-        gw.base.clock = SimpleNamespace(monotonic=time.monotonic, time=lambda: 1800000000, sleep=asyncio.sleep)
+        gw.base.component_clock = SimpleNamespace(monotonic=time.monotonic, time=lambda: 1800000000, sleep=asyncio.sleep)
         asyncio.run(gw._publish_display_binding(force=True))
         call = gw._mqtt_client.publish.await_args
         assert call.args[0] == gw._topic_base + "/config"

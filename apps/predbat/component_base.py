@@ -217,13 +217,13 @@ class ComponentBase(ABC):
         return aiomqtt.Client(**kwargs)
 
     def _clock(self):
-        """Return base.clock when the owning base has one set, else None (an attribute a mock base only invents is ignored; one set explicitly is used)."""
-        return _base_override(self, "clock")
+        """Return base.component_clock when the owning base has one set, else None (an attribute a mock base only invents is ignored; one set explicitly is used)."""
+        return _base_override(self, "component_clock")
 
     def monotonic(self):
         """Return a monotonic time in seconds, for measuring intervals that must not follow wall-clock jumps.
 
-        Uses base.clock.monotonic() when the owning base has a clock set (an object with monotonic(),
+        Uses base.component_clock.monotonic() when the owning base has a clock set (an object with monotonic(),
         time() and an async sleep(seconds); a test uses a virtual one so no real waiting happens),
         else time.monotonic(), looked up when called.
         """
@@ -235,7 +235,7 @@ class ComponentBase(ABC):
     def wall_time(self):
         """Return the wall-clock time as seconds since the epoch (a float), for timestamps.
 
-        Uses base.clock.time() when the owning base has a clock set, else time.time(), looked up when called.
+        Uses base.component_clock.time() when the owning base has a clock set, else time.time(), looked up when called.
         """
         clock = self._clock()
         if clock is not None:
@@ -245,7 +245,7 @@ class ComponentBase(ABC):
     async def sleep(self, seconds):
         """Sleep for the given number of seconds.
 
-        Awaits base.clock.sleep(seconds) when the owning base has a clock set, else asyncio.sleep(seconds),
+        Awaits base.component_clock.sleep(seconds) when the owning base has a clock set, else asyncio.sleep(seconds),
         looked up when called so that code patching asyncio.sleep still takes effect.
         """
         clock = self._clock()

@@ -115,7 +115,7 @@ DICT_CLOCK_SLEEP_BUDGET = 10000
 
 
 class DictClock:
-    """A base.clock whose monotonic reading is now["now"], so a test moves time by assigning to the dict.
+    """A base.component_clock whose monotonic reading is now["now"], so a test moves time by assigning to the dict.
 
     sleep() calls the pause coroutine function when there is one (a simulated Hub answering), else moves
     the clock on by the requested seconds; with pause set to None and real_sleep True it really waits.
@@ -151,14 +151,14 @@ class DictClock:
 
 @contextlib.contextmanager
 def _clock_on(gw, clock_obj):
-    """Install clock_obj as gw.base.clock for the block, then remove it."""
+    """Install clock_obj as gw.base.component_clock for the block, then remove it."""
     if getattr(gw, "base", None) is None:
         gw.base = SimpleNamespace()
-    gw.base.clock = clock_obj
+    gw.base.component_clock = clock_obj
     try:
         yield
     finally:
-        del gw.base.clock
+        del gw.base.component_clock
 
 
 def clock(gw, pause=None):
@@ -323,7 +323,7 @@ class TestGatewayCommit:
         gw = make_gateway(**kwargs)
         now = {"now": 1000.0}
         hub = FakeHub(gw, now, responder)
-        gw.base.clock = DictClock(now, hub.pause)
+        gw.base.component_clock = DictClock(now, hub.pause)
         inject(gw, status or make_status())
         return gw, hub
 
@@ -734,7 +734,7 @@ class TestGatewayCommit:
         import time
 
         gw, hub = self.setup_hub(responder=lambda command, kwargs: None)
-        gw.base.clock = DictClock(hub.now, real_sleep=True)  # real ack waits on the gateway's own loop
+        gw.base.component_clock = DictClock(hub.now, real_sleep=True)  # real ack waits on the gateway's own loop
         # ...but polled faster than the real 0.5s, so the commit sees the ack without the test sitting out a whole tick
         poll_patch = patch("gateway._COMMIT_POLL_SECONDS", 0.01)
         poll_patch.start()

@@ -86,7 +86,7 @@ def run_async(coro):
 
 
 class InstantClock:
-    """Clock for base.clock whose sleep returns at once, so a test never waits."""
+    """Clock for base.component_clock whose sleep returns at once, so a test never waits."""
 
     def __init__(self):
         """Start with no recorded sleeps."""
@@ -109,7 +109,7 @@ class InstantClock:
 
 
 class VirtualClock:
-    """Clock for base.clock with a monotonic and a wall-clock reading of its own.
+    """Clock for base.component_clock with a monotonic and a wall-clock reading of its own.
 
     sleep() advances both readings by the requested seconds and returns at once; jump_wall()
     moves only the wall clock, as an NTP step or a manual change would.
@@ -169,7 +169,7 @@ def _api_mqtt_factory(api, factory):
 
 def _api_clock(api, clock):
     """Make api use clock for monotonic(), wall_time() and sleep()."""
-    return _base_attr(api, "clock", clock)
+    return _base_attr(api, "component_clock", clock)
 
 
 run_async_real = _base_run_async
@@ -265,7 +265,7 @@ class MockSigenergyAPI(SigenergyAPI):
         self.set_args = {}
         self.args = {}
         # The parts of PredBat that ComponentBase.set_arg_auto() reads: the apps.yaml snapshot and its one-time warning set
-        self.base = SimpleNamespace(args_from_apps_yaml={}, apps_yaml_override_warned=set(), clock=InstantClock())
+        self.base = SimpleNamespace(args_from_apps_yaml={}, apps_yaml_override_warned=set(), component_clock=InstantClock())
 
         # Now call the SigenergyAPI initialize directly
         self.initialize(
@@ -5274,7 +5274,7 @@ def test_sigenergy_round_trip_keeps_system_id(my_predbat):
 
 
 # ---------------------------------------------------------------------------
-# Per-instance MQTT client factory and clock (base.mqtt_client_factory, base.clock)
+# Per-instance MQTT client factory and clock (base.mqtt_client_factory, base.component_clock)
 # ---------------------------------------------------------------------------
 
 
