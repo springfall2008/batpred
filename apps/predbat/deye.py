@@ -23,7 +23,7 @@ import aiohttp
 import argparse
 import json
 import os
-from component_base import ComponentBase, writes
+from component_base import ComponentBase, writes, telemetry_number, telemetry_time
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -408,6 +408,15 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             # map, so say so loudly and name what the device did return.
             self.log(f"Warn: DEYE {sn} device/latest missing expected keys {missing} - telemetry will read zero. Available keys: {sorted(flat)}")
         self.device_values[sn] = result
+        if self.telemetry_observer is not None and data.get("success", True) is True and len(rows) == 1 and str(rows[0].get("deviceSn", "")).lower() == str(sn).lower():
+            updated = {name for name, key in DEYE_TELEMETRY_KEYS.items() if telemetry_number(flat.get(key)) is not None}
+            if sum(1 for item in rows[0].get("dataList") or [] if isinstance(item, dict) and item.get("key") == DEYE_TELEMETRY_KEYS["soc"]) != 1:
+                updated.discard("soc")
+            stamp = rows[0].get("collectionTime")
+            if isinstance(stamp, str) and stamp.isdigit():
+                stamp = int(stamp)
+            sample_time = telemetry_time(stamp, "auto") if type(stamp) is int else None
+            self.report_telemetry(sn, result, source="device_latest", sample_time=sample_time, updated_fields=updated)
         return result
 
     def nominal_pack_voltage(self, bms_charge_voltage):
