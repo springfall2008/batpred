@@ -174,7 +174,7 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch, local_
     happened in, and expanding that row shows the 5-minute slot it happened at.
 
     A row is headed by the newest slot of its half hour - the half-hour mark that ends it, or for the
-    newest row the newest slot reached - and expands to the slots before it within that half hour. Heading
+    newest row the newest record's own time - and expands to the slots before it within that half hour. Heading
     rows by their oldest slot hid the latest value under the top row and made an expanded table read
     17:30, 17:55, 17:50 ... rather than newest to oldest all the way down.
 
@@ -227,24 +227,28 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch, local_
         """Each selection's value at when, and what it did over (period_start, period_end]."""
         return [(history_value_at(records, stamps, when), history_period_kind(records, stamps, period_start, period_end)) for records, stamps in entity_records]
 
-    # A record shows from the first slot at or after it; the newest slot is the last one already reached
+    # A record shows from the first slot at or after it. The table ends on the newest record's own time rather
+    # than the slot before it: that record is normally the current state, and waiting for the next 5-minute
+    # mark left it off the table for up to 5 minutes.
     oldest = min(all_stamps)
+    newest = max(all_stamps)
     first_slot = floor_to_history_slot(oldest)
     if first_slot < oldest:
         first_slot += slot
-    newest_slot = floor_to_history_slot(max(all_stamps))
-    first_slot = min(first_slot, newest_slot)
+    first_slot = min(first_slot, newest)
 
     # Each row covers the half hour (row_end - row_length, row_end], the first being the one holding first_slot
     rows = []
     row_end = floor_to_local_half_hour(first_slot, local_tz)
     if row_end < first_slot:
         row_end += row_length
-    while row_end - row_length < newest_slot:
+    while row_end - row_length < newest:
         row_start = row_end - row_length
-        row_time = min(row_end, newest_slot)
+        row_time = min(row_end, newest)
         details = []
-        detail_time = row_time - slot
+        detail_time = floor_to_history_slot(row_time)
+        if detail_time == row_time:
+            detail_time -= slot
         while detail_time > row_start and detail_time >= first_slot:
             details.append({"time": detail_time.astimezone(local_tz), "cells": cells_for(detail_time, detail_time - slot, detail_time)})
             detail_time -= slot
@@ -5157,7 +5161,8 @@ chart.render();
         """
         Return the discovery catalogue as an HTML page
 
-        Redacted by default - what a debug dump would carry - with ?raw=1 for the unredacted view.
+        The published catalogue by default - what a debug dump would carry, email addresses scrubbed -
+        with ?raw=1 for the view with email addresses left in. Identifiers are published in both.
         Reads the coordinator directly rather than parsing sensor.predbat_discovery's attributes
         back out: that entity deliberately carries only a summary, and the coordinator is the
         better coupling anyway (see Coordinator.publish()).
@@ -5201,7 +5206,7 @@ chart.render();
         text += "</div>\n"
 
         if raw:
-            text += "<div class='discovery-warning'><strong>Raw view.</strong> Serial numbers, MPANs and account identifiers are shown unredacted - this view is <strong>not safe to share</strong>. Use the redacted view for anything you post in a bug report.</div>\n"
+            text += "<div class='discovery-warning'><strong>Raw view.</strong> Email addresses are shown unredacted - this view is <strong>not safe to share</strong>. Use the default view for anything you post in a bug report.</div>\n"
 
         conflicts = catalogue.get("observations", {}).get("conflicts", [])
         if conflicts:
