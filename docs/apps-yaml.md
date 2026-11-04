@@ -1831,6 +1831,11 @@ Some inverters have the Service API enabled, this allows the configuration to ca
 
 Services that are not configuration will not be called.
 
+For service templates, `repeat: true` reasserts the configured active or steady-state service on
+each Predbat cycle. When Predbat enters charging or exporting, the opposite-side stop service is
+used as a one-time prerequisite and is deduplicated after an accepted call; stop services used as
+the desired steady-state action continue to honour `repeat: true`.
+
 Example service is below:
 
 ```yaml

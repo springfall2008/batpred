@@ -3418,9 +3418,14 @@ class Inverter:
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
-    def call_service_template(self, service, data, domain="charge", extra_data=None):
+    def call_service_template(self, service, data, domain="charge", extra_data=None, repeat_override=None):
         """
-        Call a service template with data
+        Call a service template with data.
+
+        ``repeat_override=False`` is used for opposite-side stop services that are
+        prerequisites for entering a new active mode. It preserves the configured
+        repeat behaviour for the service itself when it represents the desired
+        steady state, while allowing the prerequisite call to be deduplicated.
         """
         if extra_data is None:
             extra_data = {}
@@ -3466,6 +3471,9 @@ class Inverter:
                         value = self.base.resolve_arg(service_template, value, indirect=False, index=use_index, default="", extra_args=full_data)
                         if value:
                             service_data[key] = value
+
+            if repeat_override is False:
+                service_always = False
 
             if service_name and service_repeat and not service_always:
                 self.log("Inverter {} Skipped service {} domain {} service_name {} as it was previously called.".format(self.id, service, domain, service_name))
@@ -3520,8 +3528,8 @@ class Inverter:
             }
 
             # Stop discharge
-            if not self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge"):
-                self.call_service_template("charge_stop_service", service_data_stop, domain="discharge")
+            if not self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge", repeat_override=False):
+                self.call_service_template("charge_stop_service", service_data_stop, domain="discharge", repeat_override=False)
 
             # Start charge or charge freeze
             if freeze:
@@ -3574,7 +3582,7 @@ class Inverter:
             }
 
             # Stop charge
-            self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
+            self.call_service_template("charge_stop_service", service_data_stop, domain="charge", repeat_override=False)
 
             # Start discharge or discharge freeze
             # Only the caller's explicit freeze request should invoke discharge_freeze_service -

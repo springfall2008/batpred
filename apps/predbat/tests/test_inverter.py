@@ -2496,6 +2496,128 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
     return failed
 
 
+def test_call_service_template_repeat_override(test_name, my_predbat, inv, dummy_items):
+    """Check the service order when changing between charging and exporting.
+
+    The first export cycle must stop charging before starting discharge. On later export cycles,
+    only the repeatable discharge-start service should run. Charging follows the same pattern in
+    reverse: stop discharge once, then repeat charge-start.
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    ha = my_predbat.ha_interface
+    ha.service_store_enable = True
+    saved_hash = my_predbat.last_service_hash
+    saved_values = {
+        "charge_start_service": my_predbat.args.get("charge_start_service"),
+        "charge_stop_service": my_predbat.args.get("charge_stop_service"),
+        "discharge_start_service": my_predbat.args.get("discharge_start_service"),
+        "discharge_stop_service": my_predbat.args.get("discharge_stop_service"),
+        "device_id": my_predbat.args.get("device_id"),
+        "charge_rate": my_predbat.args.get("charge_rate"),
+        "discharge_rate": my_predbat.args.get("discharge_rate"),
+    }
+    saved_dummy_rates = (dummy_items.get("number.charge_rate"), dummy_items.get("number.discharge_rate"))
+    saved_has_target_soc = inv.inv_has_target_soc
+    saved_soc_percent = inv.soc_percent
+
+    my_predbat.last_service_hash = {}
+    my_predbat.args["charge_start_service"] = [{"service": "charge_start", "repeat": True}]
+    my_predbat.args["charge_stop_service"] = [{"service": "charge_stop", "repeat": True}]
+    my_predbat.args["discharge_start_service"] = [{"service": "discharge_start", "repeat": True}]
+    my_predbat.args["discharge_stop_service"] = [{"service": "discharge_stop", "repeat": True}]
+    my_predbat.args["device_id"] = "DID0"
+    my_predbat.args["charge_rate"] = "number.charge_rate"
+    my_predbat.args["discharge_rate"] = "number.discharge_rate"
+    dummy_items["number.charge_rate"] = 1101
+    dummy_items["number.discharge_rate"] = 1802
+    inv.inv_has_target_soc = True
+    inv.soc_percent = 50
+
+    try:
+        # Entering export stops charging once, then starts export.
+        inv.adjust_export_immediate(40)
+        export_first = ha.get_service_store()
+        expected_export_first = [
+            ["charge_stop", {}],
+            ["discharge_start", {}],
+        ]
+        if export_first != expected_export_first:
+            print("ERROR: first export cycle should stop charge then start discharge, got {}".format(export_first))
+            failed = True
+
+        # Staying in export repeats only the active export command, not the charge stop.
+        inv.adjust_export_immediate(40)
+        export_repeat = ha.get_service_store()
+        expected_export_repeat = [["discharge_start", {}]]
+        if export_repeat != expected_export_repeat:
+            print("ERROR: repeated export cycle should only start discharge, got {}".format(export_repeat))
+            failed = True
+
+        # Leaving export for normal operation must send discharge_stop on every normal cycle.
+        inv.adjust_export_immediate(100)
+        export_normal_first = ha.get_service_store()
+        if export_normal_first != [["discharge_stop", {}]]:
+            print("ERROR: leaving export should stop discharge, got {}".format(export_normal_first))
+            failed = True
+
+        inv.adjust_export_immediate(100)
+        export_normal_repeat = ha.get_service_store()
+        if export_normal_repeat != [["discharge_stop", {}]]:
+            print("ERROR: normal export-stop state should repeat discharge stop, got {}".format(export_normal_repeat))
+            failed = True
+
+        # Start the charge scenario with a clean deduplication cache. This represents a separate
+        # mode transition after the export-to-normal scenario above.
+        my_predbat.last_service_hash = {}
+
+        # Entering charge stops discharge once, then starts charge.
+        inv.adjust_charge_immediate(60)
+        charge_first = ha.get_service_store()
+        expected_charge_first = [
+            ["discharge_stop", {}],
+            ["charge_start", {}],
+        ]
+        if charge_first != expected_charge_first:
+            print("ERROR: first charge cycle should stop discharge then start charge, got {}".format(charge_first))
+            failed = True
+
+        # Staying in charge repeats only the active charge command, not the discharge stop.
+        inv.adjust_charge_immediate(60)
+        charge_repeat = ha.get_service_store()
+        expected_charge_repeat = [["charge_start", {}]]
+        if charge_repeat != expected_charge_repeat:
+            print("ERROR: repeated charge cycle should only start charge, got {}".format(charge_repeat))
+            failed = True
+
+        # Leaving charge for normal operation must send charge_stop on every normal cycle.
+        inv.adjust_charge_immediate(0)
+        charge_normal_first = ha.get_service_store()
+        if charge_normal_first != [["charge_stop", {}]]:
+            print("ERROR: leaving charge should stop charge, got {}".format(charge_normal_first))
+            failed = True
+
+        inv.adjust_charge_immediate(0)
+        charge_normal_repeat = ha.get_service_store()
+        if charge_normal_repeat != [["charge_stop", {}]]:
+            print("ERROR: normal charge-stop state should repeat charge stop, got {}".format(charge_normal_repeat))
+            failed = True
+    finally:
+        ha.service_store_enable = False
+        my_predbat.last_service_hash = saved_hash
+        inv.inv_has_target_soc = saved_has_target_soc
+        inv.soc_percent = saved_soc_percent
+        for key, value in saved_values.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+        dummy_items["number.charge_rate"], dummy_items["number.discharge_rate"] = saved_dummy_rates
+
+    return failed
+
+
 def test_call_service_template_retry(test_name, my_predbat, inv):
     """A service call the HA layer rejects must be retried next cycle, not deduplicated away (#4876).
 
@@ -6227,6 +6349,7 @@ def run_inverter_tests(my_predbat_dummy):
         return failed
 
     failed |= test_call_service_template_retry("test_service_retry", my_predbat, inv)
+    failed |= test_call_service_template_repeat_override("test_service_repeat_override", my_predbat, inv, dummy_items)
     failed |= test_call_service_template("test_service_simple1", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"})
     failed |= test_call_service_template("test_service_simple2", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False, repeat=True)
     failed |= test_call_service_template("test_service_simple3", my_predbat, inv, service_name="test_service", domain="discharge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False)
