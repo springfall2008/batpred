@@ -5673,6 +5673,56 @@ def test_sigenergy_listener_cancel_while_sleeping(my_predbat):
     return failed
 
 
+def test_sigenergy_telemetry_observations(my_predbat):
+    """REST, fallback and MQTT distinguish measured fields from held values, defaults and replays."""
+    api = MockSigenergyAPI()
+    events = []
+    api.base.component_telemetry_observer = events.append
+    sid = "SIG001"
+    data = {"batterySoc": 50, "pvPower": 1, "batteryPower": 2, "loadPower": 3, "gridPower": 0, "evPower": 0}
+    api._request = AsyncMock(return_value=data)
+    run_async(api.fetch_energy_flow(sid))
+    run_async(api.fetch_energy_flow(sid))
+    assert len(events) == 2  # Identical values can be legitimate readings.
+    assert events[-1]["sample_time"] is None
+    assert events[-1]["updated_fields"] == set(data)
+    assert events[-1]["values"]["batteryPower"] == -2
+    api._request.return_value = {"batterySoc": "bad", "pvPower": None}
+    run_async(api.fetch_energy_flow(sid))
+    assert not events[-1]["updated_fields"]
+    api._request.return_value = None
+    run_async(api.fetch_energy_flow(sid))
+    assert len(events) == 3
+    api._get_inverter_serial = MagicMock(return_value="SERIAL")
+    api._request.return_value = {"realTimeInfo": {"batSoc": 60, "batPower": 2, "pVPower": 3}}
+    run_async(api.fetch_inverter_realtime(sid))
+    assert events[-1]["fallback"]
+    assert events[-1]["updated_fields"] == {"batterySoc", "batteryPower", "pvPower"}
+    assert {"gridPower", "loadPower"} <= events[-1]["held_fields"]
+    stamp = datetime(2026, 11, 4, tzinfo=timezone.utc)
+    api._handle_mqtt_period(sid, {"storageSOC%": "60"}, sample_time=stamp)
+    api._handle_mqtt_period(sid, {"PV power": "3000"}, sample_time=stamp)
+    assert events[-1]["sample_time"] == stamp
+    assert events[-1]["updated_fields"] == {"pvPower"}
+    assert "batterySoc" in events[-1]["held_fields"]
+    api._handle_mqtt_period(sid, {"storageSOC%": "nan"})
+    assert "batterySoc" not in events[-1]["updated_fields"]
+
+    api = MockSigenergyAPI()
+    api.base.component_telemetry_observer = events.append
+    api.access_token = "tok"
+    api.token_expires_at = 9_999_999_999
+    api.systems[sid] = {"systemName": "Test"}
+    api.api_stop = False
+    before = len(events)
+    now = int(time.time())
+    topic = "openapi/period/test_app_key/{}".format(sid)
+    _run_listener_with_messages(api, [(topic, _period_payload(sid, 20, now - 7000)), (topic, _period_payload(sid, 60, now)), (topic, _period_payload(sid, 60, now))])
+    assert len(events) == before + 2  # Rejected old samples emit nothing; accepted replays remain observable.
+    assert events[-1]["sample_time"] == datetime.fromtimestamp(now, timezone.utc)
+    return False
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -5846,6 +5896,7 @@ def run_sigenergy_tests(my_predbat):
         ("auth_retry_sleeps_on_the_clock", test_sigenergy_auth_retry_sleeps_on_the_clock),
         ("rate_limit_backoff_sleeps_on_the_clock", test_sigenergy_rate_limit_backoff_sleeps_on_the_clock),
         ("listener_cancel_while_sleeping", test_sigenergy_listener_cancel_while_sleeping),
+        ("telemetry_observations", test_sigenergy_telemetry_observations),
     ]
 
     for name, fn in tests:
