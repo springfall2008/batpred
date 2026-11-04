@@ -1663,6 +1663,105 @@ def test_component_base_align_minute_defaults_off(my_predbat):
     return False
 
 
+# Constructors that must only be called through ComponentBase.http_session() / mqtt_client(), so a
+# host or a test can inject the client for one component instance.
+CLIENT_CONSTRUCTORS = {("aiohttp", "ClientSession"): "self.http_session()", ("aiomqtt", "Client"): "self.mqtt_client()"}
+
+# Modules that may construct the clients directly, and why.
+CONSTRUCTION_ALLOWED = {
+    "component_base": "it holds the default factories the components fall back to",
+    # The web page imports the annual tool's config and validation, but runs the tool itself as a
+    # separate annual_cli.py process, so these fetches never run inside a component.
+    "annual_http": "annual tool fetch helper, runs in the annual_cli.py process",
+    "annual_load": "annual tool fetch helper, runs in the annual_cli.py process",
+}
+
+
+def component_module_closure(source_dir):
+    """Module names of every registered component plus every apps/predbat module they import, transitively."""
+    import ast
+    import os
+
+    from components import COMPONENT_LIST
+
+    def local_imports(name):
+        with open(os.path.join(source_dir, name + ".py")) as handle:
+            tree = ast.parse(handle.read())
+        found = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                found.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                found.add(node.module.split(".")[0])
+        return {module for module in found if os.path.isfile(os.path.join(source_dir, module + ".py"))}
+
+    pending = [entry["class"].split(".")[0] for entry in COMPONENT_LIST.values()]
+    seen = set()
+    while pending:
+        name = pending.pop()
+        if name not in seen:
+            seen.add(name)
+            pending.extend(local_imports(name) - seen)
+    return seen
+
+
+def direct_client_constructions(source):
+    """(line, constructor) for every direct aiohttp.ClientSession / aiomqtt.Client call in the source, however imported."""
+    import ast
+
+    tree = ast.parse(source)
+    module_alias = {}
+    name_alias = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ("aiohttp", "aiomqtt"):
+                    module_alias[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module in ("aiohttp", "aiomqtt"):
+            for alias in node.names:
+                if (node.module, alias.name) in CLIENT_CONSTRUCTORS:
+                    name_alias[alias.asname or alias.name] = (node.module, alias.name)
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        target = None
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in module_alias:
+            target = (module_alias[func.value.id], func.attr)
+        elif isinstance(func, ast.Name) and func.id in name_alias:
+            target = name_alias[func.id]
+        if target in CLIENT_CONSTRUCTORS:
+            found.append((node.lineno, "{}.{}".format(*target)))
+    return found
+
+
+def test_component_base_no_direct_client_construction(my_predbat):
+    """Components and the clients they own build HTTP sessions and MQTT clients only through the ComponentBase factories"""
+    import os
+
+    import component_base
+
+    source_dir = os.path.dirname(os.path.abspath(component_base.__file__))
+    modules = component_module_closure(source_dir)
+    assert len(modules) > 20, "the component closure looks wrong: {}".format(sorted(modules))
+    for name in ("fox", "sigenergy", "gateway", "octopus", "ohme"):
+        assert name in modules, "{} should be in the component closure".format(name)
+
+    offenders = []
+    for name in sorted(modules - set(CONSTRUCTION_ALLOWED)):
+        with open(os.path.join(source_dir, name + ".py")) as handle:
+            for line, constructor in direct_client_constructions(handle.read()):
+                offenders.append("{}.py:{} calls {} directly".format(name, line, constructor))
+    assert not offenders, "use {} instead:\n{}".format(" / ".join(CLIENT_CONSTRUCTORS.values()), "\n".join(offenders))
+
+    # The scanner itself must see every import style, or a clean result means nothing.
+    probe = "import aiohttp\nimport aiomqtt as mq\nfrom aiohttp import ClientSession as CS\nfrom aiomqtt import Client\n" "aiohttp.ClientSession()\nmq.Client(hostname='h')\nCS()\nClient(hostname='h')\naiohttp.ClientTimeout(total=1)\n"
+    assert [line for line, _ in direct_client_constructions(probe)] == [5, 6, 7, 8], direct_client_constructions(probe)
+    print("PASS: {} component modules build clients only through the factories".format(len(modules)))
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -1706,6 +1805,7 @@ def test_component_base_all(my_predbat):
         ("clock_unrelated", test_component_base_ignores_unrelated_clock_attribute, "a base with its own unrelated clock attribute is ignored and real time is used"),
         ("clock_isolated", test_component_base_clock_isolated_per_instance, "two instances' clocks are separate"),
         ("override_on_mock_base", test_component_base_override_on_mock_base, "an explicitly set override on a mock base is used, a made-up one is ignored"),
+        ("no_direct_clients", test_component_base_no_direct_client_construction, "components and their clients build HTTP sessions and MQTT clients only through the factories"),
         ("write_methods", test_component_base_write_methods, "@writes marks a method and write_methods lists exactly the marked ones"),
         ("write_methods_components", test_component_base_write_methods_components, "component writer methods are listed and readers are not"),
     ]
