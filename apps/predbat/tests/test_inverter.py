@@ -2496,7 +2496,7 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
     return failed
 
 
-def test_call_service_template_repeat_override(test_name, my_predbat, inv, dummy_items):
+def test_call_service_template_repeat_stops(test_name, my_predbat, inv, dummy_items):
     """Check the service order when changing between charging and exporting.
 
     The first export cycle must stop charging before starting discharge. On later export cycles,
@@ -2524,8 +2524,13 @@ def test_call_service_template_repeat_override(test_name, my_predbat, inv, dummy
 
     my_predbat.last_service_hash = {}
     my_predbat.args["charge_start_service"] = [{"service": "charge_start", "repeat": True}]
-    my_predbat.args["charge_stop_service"] = [{"service": "charge_stop", "repeat": True}]
     my_predbat.args["discharge_start_service"] = [{"service": "discharge_start", "repeat": True}]
+    if not inv.get_service_repeat_stops("charge_start_service") or not inv.get_service_repeat_stops("discharge_start_service"):
+        print("ERROR: repeat_stops should default to true")
+        failed = True
+    my_predbat.args["charge_start_service"] = [{"service": "charge_start", "repeat": True, "repeat_stops": False}]
+    my_predbat.args["charge_stop_service"] = [{"service": "charge_stop", "repeat": True}]
+    my_predbat.args["discharge_start_service"] = [{"service": "discharge_start", "repeat": True, "repeat_stops": False}]
     my_predbat.args["discharge_stop_service"] = [{"service": "discharge_stop", "repeat": True}]
     my_predbat.args["device_id"] = "DID0"
     my_predbat.args["charge_rate"] = "number.charge_rate"
@@ -6349,7 +6354,7 @@ def run_inverter_tests(my_predbat_dummy):
         return failed
 
     failed |= test_call_service_template_retry("test_service_retry", my_predbat, inv)
-    failed |= test_call_service_template_repeat_override("test_service_repeat_override", my_predbat, inv, dummy_items)
+    failed |= test_call_service_template_repeat_stops("test_service_repeat_stops", my_predbat, inv, dummy_items)
     failed |= test_call_service_template("test_service_simple1", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"})
     failed |= test_call_service_template("test_service_simple2", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False, repeat=True)
     failed |= test_call_service_template("test_service_simple3", my_predbat, inv, service_name="test_service", domain="discharge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False)

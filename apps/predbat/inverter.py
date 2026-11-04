@@ -3418,14 +3418,25 @@ class Inverter:
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
-    def call_service_template(self, service, data, domain="charge", extra_data=None, repeat_override=None):
+    def get_service_repeat_stops(self, service):
+        """Return whether a start-service template should repeat its prerequisite stops."""
+        service_list = self.base.args.get(service, "")
+        if not isinstance(service_list, list):
+            service_list = [service_list]
+
+        for service_template in service_list:
+            if isinstance(service_template, dict) and service_template.get("repeat_stops") is False:
+                return False
+        return True
+
+    def call_service_template(self, service, data, domain="charge", extra_data=None, repeat_stops=True):
         """
         Call a service template with data.
 
-        ``repeat_override=False`` is used for opposite-side stop services that are
-        prerequisites for entering a new active mode. It preserves the configured
-        repeat behaviour for the service itself when it represents the desired
-        steady state, while allowing the prerequisite call to be deduplicated.
+        ``repeat_stops=False`` is used for opposite-side stop services that are
+        prerequisites for entering a new active mode. It allows the prerequisite
+        call to be deduplicated while preserving repeat behaviour for steady-state
+        stop services.
         """
         if extra_data is None:
             extra_data = {}
@@ -3463,6 +3474,8 @@ class Inverter:
                         service_name = service_template[key]
                     elif key in ["always", "repeat"]:
                         service_always = service_template[key]
+                    elif key == "repeat_stops":
+                        pass
                     else:
                         value = service_template[key]
                         use_index = None
@@ -3472,7 +3485,7 @@ class Inverter:
                         if value:
                             service_data[key] = value
 
-            if repeat_override is False:
+            if not repeat_stops:
                 service_always = False
 
             if service_name and service_repeat and not service_always:
@@ -3527,9 +3540,13 @@ class Inverter:
                 "power": int(current_rate),
             }
 
+            repeat_stops = True
+            if not freeze and (self.inv_has_target_soc or target_soc >= self.soc_percent):
+                repeat_stops = self.get_service_repeat_stops("charge_start_service")
+
             # Stop discharge
-            if not self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge", repeat_override=False):
-                self.call_service_template("charge_stop_service", service_data_stop, domain="discharge", repeat_override=False)
+            if not self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge", repeat_stops=repeat_stops):
+                self.call_service_template("charge_stop_service", service_data_stop, domain="discharge", repeat_stops=repeat_stops)
 
             # Start charge or charge freeze
             if freeze:
@@ -3581,8 +3598,12 @@ class Inverter:
                 "power": int(self.get_current_discharge_rate()),
             }
 
+            repeat_stops = True
+            if not freeze and target_soc < self.soc_percent:
+                repeat_stops = self.get_service_repeat_stops("discharge_start_service")
+
             # Stop charge
-            self.call_service_template("charge_stop_service", service_data_stop, domain="charge", repeat_override=False)
+            self.call_service_template("charge_stop_service", service_data_stop, domain="charge", repeat_stops=repeat_stops)
 
             # Start discharge or discharge freeze
             # Only the caller's explicit freeze request should invoke discharge_freeze_service -

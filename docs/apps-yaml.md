@@ -1832,9 +1832,24 @@ Some inverters have the Service API enabled, this allows the configuration to ca
 Services that are not configuration will not be called.
 
 For service templates, `repeat: true` reasserts the configured active or steady-state service on
-each Predbat cycle. When Predbat enters charging or exporting, the opposite-side stop service is
-used as a one-time prerequisite and is deduplicated after an accepted call; stop services used as
-the desired steady-state action continue to honour `repeat: true`.
+each Predbat cycle. It defaults to `false` when omitted. The optional `repeat_stops` setting is
+valid only on `charge_start_service` and `discharge_start_service` definitions and defaults to
+`true`. Set it to `false` when the service changes a shared inverter mode and the opposite-side
+stop should be sent only as a transition prerequisite:
+
+```yaml
+  discharge_start_service:
+    service: select.select_option
+    entity_id: select.inverter_work_mode
+    option: "Selling first"
+    repeat: true
+    repeat_stops: false
+```
+
+With `repeat_stops: false`, Predbat deduplicates the opposite-side stop after the same call has
+been accepted, while continuing to repeat the start service itself. This setting does not affect
+stop services used as the desired normal or freeze state; those continue to honour their own
+`repeat` setting. It also does not apply to freeze-service transitions.
 
 Example service is below:
 
