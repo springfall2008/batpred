@@ -18,7 +18,7 @@ Arguments: `queue=<dir> limit=<n>`. Every `*.md` directly in that directory is o
 
 Read it end to end before touching anything. You need to know what is already covered — most candidates restate something the journal says, and the right outcome for those is to drop them, or to sharpen the existing entry rather than add a second one.
 
-Note its own "What belongs here" and "Adding to this file" sections: keep techniques and traps, one-line device or API facts, and short dated findings that explain a class of report; leave per-issue narrative (what was tried, the fix, rejected alternatives) to the PR and issue. Name the symbol rather than the line number, cite the issue number, keep it short.
+Note its own "What belongs here" and "Adding to this file" sections: keep techniques and traps, one-line device or API facts, and short dated findings that explain a class of report; leave per-issue narrative (what was tried, the fix, rejected alternatives) to the PR and issue. Each entry is a symptom (the log line verbatim, or what the reporter sees), the fact or mechanism behind it, and where to start (a function or config item), plus the issue number. No file paths or line numbers: the area heading names the module, and a citation that has drifted onto unrelated code misleads more than none. Strip any that a candidate carries when you fold it in.
 
 ## 2. Verify every candidate against current main
 
@@ -30,7 +30,7 @@ git fetch origin main && git log --oneline -1 origin/main
 
 For each candidate, check the claim still holds — grep the symbol it names, read the function, check whether a merge has since fixed or contradicted it. Then choose:
 
-- **Fold it in** — place it in the right table row or section, rewritten in the journal's voice. Say what was verified and how.
+- **Fold it in** — add it as one bullet under the right heading (the area's `###` heading under "Per-integration notes", or the topic heading under "Symptom → first place to look"), rewritten in the journal's voice. Prefer sharpening an existing bullet to adding one. Say what was verified and how.
 - **Rewrite it** — the observation is real but the explanation was wrong or has been overtaken.
 - **Drop it** — already covered, unverifiable, fixed since, or a per-issue narrative that belongs in the PR or issue rather than the journal. Dropping is a normal outcome; say so in the PR body with the reason.
 
@@ -46,7 +46,9 @@ git log --oneline --since="2 weeks ago" origin/main
 
 Look for merges touching areas the journal makes claims about. For each, ask whether an existing entry is now wrong: a bug it calls "still live" that has been fixed, a line citation that has drifted onto unrelated code, a `confirmed on main (checked ...)` that a later merge has invalidated. Correct those in the same PR, and say plainly in the body which entries changed and why.
 
-If a fix has landed, say so and keep the mechanism — "this was the bug, it was fixed in PR #N" is useful to a reader holding an older log. Cut the entry down to that rather than leaving the full story, and do not simply delete it. Where the code an entry describes has since changed, correct or delete the entry; do not leave it marked stale.
+If a fix has landed, say so and keep the mechanism — "this was the bug, it was fixed in PR #N" is useful to a reader holding an older log. Cut the entry down to that rather than leaving the full story, and do not simply delete it. Where the code an entry describes has since changed, correct or delete the entry; do not leave it marked stale. Once a fix is more than about six weeks old and nothing still trips over the mechanism, delete the bullet: old logs that need it are rare by then, and the issue and PR still hold the story.
+
+Keep the file compact, because every flow reads it end to end. One fact per bullet, a few hundred characters at most, and no line longer than the Read tool shows in full (2000 characters). The 730KB journal of November 2026 made this flow run out of turns just reading it. If the file has passed about 150KB, or an area's notes have grown past about 3KB, consolidate the largest areas in the same PR: merge overlapping bullets and retire old fixed-bug entries. Say in the body what you consolidated.
 
 ## 4. Spelling
 
