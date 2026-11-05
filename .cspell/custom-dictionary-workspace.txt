@@ -731,6 +731,7 @@ tmrw
 tojson
 topbar
 tottime
+touchstart
 trapezoidally
 trapz
 Trefor

@@ -2080,6 +2080,16 @@ var options = {
         text += "   ]\n"
         text += "  }\n"
         text += "}\n"
+        # ApexCharts binds drag-to-zoom to the whole chart SVG, title included, so a drag (or a touch-scroll on mobile)
+        # starting on the heading zooms the chart (#5979). Stop the drag-start events from the title in the capture
+        # phase on the container, before they reach the SVG; zooming from the plot area is unaffected.
+        text += "document.getElementById('{}').addEventListener('mousedown', predbatStopTitleZoom, true);\n".format(tagname)
+        text += "document.getElementById('{}').addEventListener('touchstart', predbatStopTitleZoom, {{capture: true, passive: true}});\n".format(tagname)
+        text += "function predbatStopTitleZoom(e) {\n"
+        text += "  if (e.target && e.target.closest && e.target.closest('.apexcharts-title-text, .apexcharts-subtitle-text')) {\n"
+        text += "    e.stopPropagation();\n"
+        text += "  }\n"
+        text += "}\n"
         # getElementById (not a '#id' CSS selector) - tagname can be unit-derived (e.g. "chart_%")
         # and '%' is not a valid unescaped CSS identifier character, which would throw in querySelector
         text += "var chart = new ApexCharts(document.getElementById('{}'), options);\n".format(tagname)

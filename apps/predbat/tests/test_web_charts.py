@@ -132,6 +132,27 @@ def run_web_charts_tests(my_predbat):
         failed += 1
 
     # -------------------------------------------------------------------------
+    # ApexCharts registers drag-to-zoom on the whole chart SVG, and the title is drawn inside it, so a
+    # drag or touch-scroll starting on the heading zoomed the chart (#5979). render_chart() must stop
+    # mousedown/touchstart from the title in the capture phase on the container, which runs before
+    # the SVG's bubble-phase zoom handlers, and must not preventDefault so page scrolling still works.
+    print("Test: render_chart() stops drag-to-zoom starting on the chart title")
+    for daily_chart in (True, False):
+        html = web.render_chart(series_data, "%", "SoC Chart", now_str, tagname="chart_%", daily_chart=daily_chart)
+        for event, capture in (("mousedown", "true"), ("touchstart", "{capture: true, passive: true}")):
+            listener = "document.getElementById('chart_%').addEventListener('{}', predbatStopTitleZoom, {});".format(event, capture)
+            if listener not in html:
+                print(f"  ERROR: render_chart(daily_chart={daily_chart}) does not intercept '{event}' in the capture phase on the chart container, so a drag on the title still zooms, expected: {listener}")
+                failed += 1
+        handler = html.split("function predbatStopTitleZoom(e) {", 1)[1].split("\n}\n", 1)[0] if "function predbatStopTitleZoom(e) {" in html else ""
+        if ".apexcharts-title-text" not in handler or "e.stopPropagation()" not in handler:
+            print(f"  ERROR: render_chart(daily_chart={daily_chart}) has no handler stopping propagation of events from '.apexcharts-title-text', got: {handler!r}")
+            failed += 1
+        if "preventDefault" in handler:
+            print("  ERROR: the title handler calls preventDefault, which would stop touch-scrolling the page from the chart heading")
+            failed += 1
+
+    # -------------------------------------------------------------------------
     print("Test: render_timeline_chart() targets a percent-unit tagname via getElementById, not a CSS id selector")
     timeline_data = [{"name": "Status", "entity_id": "sensor.x", "data": {"2026-07-23T10:00:00+00:00": "on"}}]
     html = web.render_timeline_chart(timeline_data, "chart_%", 7)
