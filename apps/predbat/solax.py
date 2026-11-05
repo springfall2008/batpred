@@ -23,7 +23,7 @@ import argparse
 import traceback
 from math import isfinite
 from datetime import datetime, timezone, timedelta
-from component_base import ComponentBase, writes
+from component_base import ComponentBase, writes, telemetry_number, telemetry_time
 from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
 
@@ -1918,7 +1918,9 @@ class SolaxAPI(ComponentBase):
         return result
 
     async def query_device_realtime_data_all(self, plant_id, business_type=None):
+        """Fetch devices and observe a plant aggregate only after every battery answered."""
         results = []
+        measured = set()
         for device_sn in self.device_info:
             device_type = self.device_info[device_sn].get("deviceType")
             real_sn = device_sn
@@ -1927,7 +1929,32 @@ class SolaxAPI(ComponentBase):
             result = await self.query_device_realtime_data(device_sn, device_type, business_type, real_sn=real_sn)
             if result is not None:
                 results.extend(result)
+                measured.add(device_sn)
+        if self.telemetry_observer is not None:
+            for plant, batteries in self.plant_batteries.items():
+                if batteries and set(batteries) <= measured:
+                    self._report_battery_telemetry(plant, batteries)
         return results
+
+    def _report_battery_telemetry(self, plant, batteries):
+        """Observe the applied multi-battery aggregate, never placeholders or held inputs."""
+        samples = [self.realtime_device_data.get(key, {}) for key in batteries]
+        for key, item in zip(batteries, samples):
+            if item.get("deviceSn") == key:
+                continue
+            inverter = self.device_info.get(key.removesuffix("_battery"), {}) if key.endswith("_battery") else {}
+            if not inverter.get("registerNo") or item.get("registerNo") != inverter["registerNo"]:
+                return
+        socs = [telemetry_number(item.get("batterySOC")) for item in samples]
+        remaining = [telemetry_number(item.get("batteryRemainings")) for item in samples]
+        if any(soc is None or not 0 <= soc <= 100 for soc in socs) or any(value is None or value < 0 for value in remaining):
+            return
+        if any(soc == 0 and energy == 0 and telemetry_number(item.get("batteryVoltage")) in (None, 0) for soc, energy, item in zip(socs, remaining, samples)):
+            return
+        times = [telemetry_time(item.get("dataTime")) for item in samples]
+        sample_time = min(times) if all(stamp is not None for stamp in times) else None
+        self.report_telemetry(plant, {"soc_percent": sum(socs) / len(socs), "batteryRemainings": sum(remaining)}, source="plant_battery", sample_time=sample_time,
+                              updated_fields={"soc_percent", "batteryRemainings"})
 
     async def query_plant_statistics_daily(self, plant_id, business_type=None):
 
