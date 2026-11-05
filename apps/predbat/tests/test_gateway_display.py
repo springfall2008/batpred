@@ -79,7 +79,7 @@ class TestGatewayDisplayOnly:
 
         async def exercise():
             await gw.publish_command("set_read_only", enable=False)
-            await gw._send_ev_command({"action": "RemoteStartTransaction"})
+            await gw._send_ev_command("cp1", {"action": "RemoteStartTransaction"})
             await gw.publish_plan([], "Europe/London")
 
         asyncio.run(exercise())
@@ -110,15 +110,15 @@ class TestGatewayDisplayOnly:
             method.assert_not_awaited()
 
     def test_display_startup_does_not_wait_for_auto_config(self):
-        """Display startup accepts zero-inverter telemetry, using the same bounded budget."""
+        """Display startup returns at once, without waiting for connection or auto-config."""
         gw = self._make_gateway()
-        gw.api_started = True
-        gw._first_connection_attempted = True
-        gw._startup_wait = AsyncMock(side_effect=lambda ticks, ready: ticks if ready() else 999)
+        gw._load_discovery = AsyncMock()
+        gw._startup_wait = AsyncMock(return_value=0)
         gw._mqtt_loop = AsyncMock()
         with patch("gateway.HAS_AIOMQTT", True):
             assert asyncio.run(gw.run(0, True))
-        assert all(call.args[1]() for call in gw._startup_wait.call_args_list)
+        gw._startup_wait.assert_not_awaited()
+        assert gw.api_started
         assert not gw._auto_configured
 
     def test_display_is_not_an_inverter_source(self):
@@ -209,6 +209,75 @@ class TestGatewayDisplayOnly:
         assert not comps.is_all_alive()
         assert asyncio.run(web.html_api_ping(None)).status == 500
 
+    def test_offline_display_startup_does_not_wait_or_fail_cloud_health(self):
+        """An optional display starts before its first successful MQTT connection."""
+        from component_base import ComponentBase
+        from components import Components
+        from predbat import PredBat
+        from web import WebInterface
+
+        gw = self._make_gateway()
+        gw._mqtt_connected = False
+        gw._load_discovery = AsyncMock()
+        gw._mqtt_loop = AsyncMock()
+        gw._startup_wait = AsyncMock(return_value=0)
+        gw.update_success_timestamp = lambda: ComponentBase.update_success_timestamp(gw)
+        comps = Components.__new__(Components)
+        comps.components = {"gateway": gw}
+        comps.component_tasks = {"gateway": SimpleNamespace(is_alive=lambda: True)}
+        comps.component_errors = {}
+        base = gw.base
+        base.components = comps
+        base.prefix = "predbat"
+        base.stop_thread = False
+        base.fatal_error = False
+        base.had_errors = False
+        base.get_state_wrapper.side_effect = lambda entity, attribute=None, default=None: False if attribute == "error" else datetime.datetime.now(datetime.timezone.utc).isoformat()
+        base.is_running.side_effect = lambda: PredBat.is_running(base)
+        web = WebInterface.__new__(WebInterface)
+        web.base = base
+        web.log = base.log
+
+        async def exercise():
+            try:
+                assert await gw.run(0, True)
+                assert gw.api_started
+                gw._startup_wait.assert_not_awaited()
+                assert comps.is_all_alive()
+                assert (await web.html_api_ping(None)).status == 200
+                PredBat.record_final_run_status(base, "Charging", "")
+                assert base.record_status.call_args.args[0] == "Charging"
+                assert not gw._auto_configured
+                assert gw._last_status is None
+                display_call = next(call for call in reversed(base.dashboard_item.call_args_list) if call.args[0] == "binary_sensor.predbat_gateway_display_online")
+                assert display_call.args[1] == "off"
+            finally:
+                gw._mqtt_task.cancel()
+                await asyncio.gather(gw._mqtt_task, return_exceptions=True)
+
+        with patch("gateway.HAS_AIOMQTT", True):
+            asyncio.run(exercise())
+
+    def test_control_startup_still_waits_for_connection_and_configuration(self):
+        """The optional-display fast path cannot relax real inverter startup."""
+        gw = self._make_gateway(False)
+        gw._load_discovery = AsyncMock()
+        gw._mqtt_loop = AsyncMock()
+        gw._startup_wait = AsyncMock(return_value=0)
+
+        async def exercise():
+            try:
+                assert await gw.run(0, True)
+                assert gw._startup_wait.await_count == 2
+                assert not gw.api_started
+                assert not gw._auto_configured
+            finally:
+                gw._mqtt_task.cancel()
+                await asyncio.gather(gw._mqtt_task, return_exceptions=True)
+
+        with patch("gateway.HAS_AIOMQTT", True):
+            asyncio.run(exercise())
+
     def test_control_transport_outage_still_fails_health(self):
         """Optional display health cannot relax the active controller's checks."""
         gw = self._make_gateway(False)
@@ -219,3 +288,66 @@ class TestGatewayDisplayOnly:
         gw._gateway_online = True
         gw._last_telemetry_time = time.time() - 121
         assert not gw.is_alive()
+
+
+class TestIndependentVisibility:
+    def test_hub_controls_visibility_off_is_metadata_only_and_retries(self):
+        """Actual publisher preserves controller mode and waits through disconnects."""
+        import json
+
+        gw = TestGatewayDisplayOnly()._make_gateway(False)
+        gw.gateway_device_id = "pbgw_0123456789ab"
+        gw._topic_base = "predbat/devices/" + gw.gateway_device_id
+        gw.gateway_display_enabled = False
+        gw.gateway_display_visibility = {"v": 1, "device_id": gw.gateway_device_id, "instance_id": "00000000-0000-4000-8000-000000000123", "revision": 42, "enabled": False}
+        gw._mqtt_connected = False
+        asyncio.run(gw._publish_display_binding(force=True))
+        gw._mqtt_client.publish.assert_not_awaited()
+        gw._mqtt_connected = True
+        with patch("gateway.time.time", return_value=1800000000):
+            asyncio.run(gw._publish_display_binding(force=True))
+        call = gw._mqtt_client.publish.await_args
+        assert call.args[0] == gw._topic_base + "/config"
+        assert call.kwargs == {"qos": 1, "retain": False}
+        assert json.loads(call.args[1]) == {"display_visibility": {**gw.gateway_display_visibility, "issued_at": 1800000000, "expires_at": 1800000120}}
+        assert not gw.gateway_display_only
+        assert gw.gateway_evc_control is False  # initialize's original explicit option
+
+    def test_cloud_off_run_publishes_no_data_or_mutations(self):
+        gw = TestGatewayDisplayOnly()._make_gateway()
+        gw.gateway_display_enabled = False
+        gw._mqtt_task = MagicMock()
+        gw._mqtt_task.done.return_value = False
+        gw._last_status = pb.GatewayStatus(device_id="pbgw_test")
+        gw._publish_display_binding = AsyncMock()
+        gw._publish_predbat_data = AsyncMock()
+        gw._check_token_refresh = AsyncMock()
+        gw._update_display_health = MagicMock()
+        asyncio.run(gw.run(60, False))
+        gw._publish_display_binding.assert_awaited_once()
+        gw._publish_predbat_data.assert_not_awaited()
+        gw._mqtt_client.publish.assert_not_awaited()
+
+    def test_explicit_cloud_off_final_raw_sink_cannot_publish_cached_data(self):
+        """With the display turned off, even the predbat_data raw sink publishes nothing."""
+        gw = TestGatewayDisplayOnly()._make_gateway()
+        gw.gateway_display_enabled = False
+        asyncio.run(gw._publish_raw(gw._topic_base + "/predbat_data", b"cached display", retain=True))
+        gw._mqtt_client.publish.assert_not_awaited()
+
+    def test_display_flags_reject_non_boolean_values(self):
+        """Integer or misspelt display flags fail loudly instead of silently picking a mode."""
+        for name in ("gateway_display_enabled", "gateway_live_display"):
+            for value in (0, 1, "typo"):
+                gw = GatewayMQTT.__new__(GatewayMQTT)
+                gw.base = MagicMock()
+                gw.prefix = "predbat"
+                gw.args = {}
+                gw.log = MagicMock()
+                try:
+                    gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.test", **{name: value})
+                except ValueError:
+                    continue
+                raise AssertionError(f"{name}={value!r} was accepted")
+        gw = TestGatewayDisplayOnly()._make_gateway()
+        assert gw.gateway_display_enabled is True and gw.gateway_live_display is False

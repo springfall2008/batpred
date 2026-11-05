@@ -370,16 +370,19 @@ If you've run out of API calls you will have to wait until midnight GMT for the 
 It's recommended that you don't include the Solcast forecast within your GivEnergy portal to avoid running out of API calls.
 - Check the [Solcast server API status](https://status.solcast.com/) is OK
 
-## Info: Cannot find battery charge curve
+## Warn: Cannot find battery charge curve
 
-If you get the message "Info: Cannot find battery charge curve, one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml" in the logfile
-then Predbat is trying to create a battery charge curve but does not have access to the required history information in Home Assistant.
+If you get one of these messages in the logfile then Predbat is trying to create a battery charge (or discharge) curve but does not have access to the required history information in Home Assistant:
+
+- "Warn: Inverter 0 Cannot find battery charge curve (settings missing), soc_kw, charge_rate not set in apps.yaml" - the settings listed are not configured in `apps.yaml`
+- "Warn: Inverter 0 Cannot find battery charge curve (missing history), no history found for battery_power (sensor.givtcp_xxxx_battery_power) - check the entity name in apps.yaml and that Home Assistant is recording its history" - the settings are configured,
+but the entities listed in brackets returned no history. It is followed by a "Sensor history record counts" line giving the number of history records found for each setting
 
 **Note:** The battery charge curve cannot be calculated if Predbat is in Read Only mode. Even though required history may be available, the log message will continue to appear until Predbat is out of read only mode and has calculated the curve.
 
 [Creating the battery charge curve](apps-yaml.md#battery-chargedischarge-curves) is described in the `apps.yaml` document.
 
-One cause of the above message appearing in the logfile is that you are controlling a GivEnergy inverter in REST mode
+One cause of the "settings missing" message appearing in the logfile is that you are controlling a GivEnergy inverter in REST mode
 but have not uncommented the following entities in `apps.yaml` that Predbat needs to obtain history from to create the battery charge curve:
 
 ```yaml
@@ -393,7 +396,8 @@ but have not uncommented the following entities in `apps.yaml` that Predbat need
     - sensor.givtcp_{geserial}_soc_kwh
 ```
 
-The other main cause of the above message appearing is that one or more of the entities that Predbat is trying to use to create the charge curve does not have suitable history.  You should check the history on the entities Predbat highlights that it is using, and that the charging/discharging goes to full/empty as described in the battery curve documentation.
+The "missing history" message means one or more of the entities that Predbat is trying to use to create the charge curve does not have any history - check the entity named in the message exists in Home Assistant and is not excluded from the recorder.
+Even with history present, you should check the history on the entities Predbat highlights that it is using, and that the charging/discharging goes to full/empty as described in the battery curve documentation.
 If the charging/discharging is not at near full rate, or doesn't go to near full/empty then Predbat will be unable to create the curves.
 
 ## WARN: Inverter is in calibration mode

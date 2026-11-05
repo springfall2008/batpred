@@ -369,6 +369,9 @@ RATE_STATS_KEYS = (
     "rate_export_min_minute",
     "rate_export_max_minute",
     "rate_export_max_forward",
+    "rate_export_min_base",
+    "rate_import_saving_minutes",
+    "rate_import_pre_saving",
 )
 
 
@@ -383,6 +386,11 @@ def test_rescan_rate_stats(my_predbat):
         export_rates = {minute: 20.0 if 240 <= minute < 300 else 5.0 for minute in range(3 * 24 * 60)}
         my_predbat.rate_import, my_predbat.rate_import_base = import_rates, dict(import_rates)
         my_predbat.rate_export, my_predbat.rate_export_base = export_rates, dict(export_rates)
+        # A 0p free session 10:00-11:00 on the 10p tariff: the forward minimum is what refilling costs, so it leaves it out
+        session = set(range(600, 660))
+        my_predbat.rate_import = {minute: 0.0 if minute in session else rate for minute, rate in import_rates.items()}
+        my_predbat.rate_import_saving_minutes = session
+        my_predbat.rate_import_pre_saving = {minute: 10.0 for minute in session}
         my_predbat.minutes_now = 0
         rescan_rate_stats(my_predbat)
         before = (my_predbat.rate_max, my_predbat.rate_max_base, my_predbat.rate_export_max, my_predbat.rate_export_max_forward[0])
@@ -400,7 +408,7 @@ def test_rescan_rate_stats(my_predbat):
         print("ERROR: before the peak the stats should include it: {}".format(before))
         return 1
     if after != (10.0, 10.0, 5.0, 5.0) or forward_min != 10.0:
-        print("ERROR: after the peak the stats should not include it: {} forward min {}".format(after, forward_min))
+        print("ERROR: after the peak the stats should not include it, nor the free session the forward min: {} forward min {}".format(after, forward_min))
         return 1
     return 0
 

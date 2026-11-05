@@ -2871,12 +2871,14 @@ def get_components_css():
 <style>
 .components-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    /* min() so the 400px column floor never exceeds a phone's width */
+    grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr));
     gap: 20px;
     margin: 20px 0;
 }
 
 .component-card {
+    min-width: 0;
     border: 2px solid #ddd;
     border-radius: 8px;
     padding: 20px;
@@ -3207,14 +3209,22 @@ body.dark-mode .edit-button:hover {
 
 /* Responsive design */
 @media (max-width: 768px) {
+    /* minmax(0, 1fr), not 1fr: a 1fr track grows to its widest content and pushed cards off screen */
     .components-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
     }
 
+    /* The name on its own line, then the status and buttons on one wrapping row beneath it */
     .component-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 5px;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 6px;
+    }
+
+    .component-header h3 {
+        flex-basis: 100%;
     }
 
     .args-table {
@@ -7337,7 +7347,7 @@ def get_plan_renderer_js():
 
                 // Total cost
                 const totalCostStr = totals.total_cost >= 0 ?
-                    `${jsonData.currency_symbols[0]}${totals.total_cost}` :
+                    `${jsonData.currency_symbols[0]}${totals.total_cost.toFixed(2)}` :
                     `-${jsonData.currency_symbols[0]}${Math.abs(totals.total_cost).toFixed(2)}`;
                 html += `<td bgcolor=#FFFFFF><b>${totalCostStr}</b></td>`;
 

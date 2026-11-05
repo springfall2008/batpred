@@ -39,7 +39,7 @@ from datetime import date, datetime, timedelta
 from const import PREDICT_STEP, EXPORT_MODE_TARGET
 from utils import MinuteArray, pack_export_limit, calc_percent_limit
 from prediction import Prediction
-from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models, rescan_rate_windows, apply_overrides
+from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models, rescan_rate_windows, apply_overrides, rebuild_battery_value_rates
 
 RUN_RE = re.compile(r"PredBat - update at (\S+ \S+) with clock skew .*minutes now (\d+)")
 # Inverter 0's SoC, power and percentage. Older versions wrote "SOC: 1.9kW 20% ... Current power -1134.0W"
@@ -898,7 +898,9 @@ def rescan_rate_stats(my_predbat):
 
     They are taken over the horizon from now, so they move as the clock does: a peak that has passed drops out
     of rate_max, which changes the charge/export thresholds and the battery value. The rates themselves are
-    the final ones the yaml holds, which is what fetch's last scan reads too.
+    the final ones the yaml holds, which is what fetch's last scan reads too. The battery value's tariff terms
+    (rate_min_forward, rate_export_max_forward, rate_export_min_base) leave out saving/free/Axle sessions, as
+    fetch builds them, so they come from rebuild_battery_value_rates() rather than the scans.
     """
     if my_predbat.rate_import:
         my_predbat.rate_scan(my_predbat.rate_import, print=True)
@@ -906,8 +908,7 @@ def rescan_rate_stats(my_predbat):
         my_predbat.rate_min_base, my_predbat.rate_max_base, _, _, _ = my_predbat.rate_minmax(my_predbat.rate_import_base)
     if my_predbat.rate_export:
         my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
-    if my_predbat.rate_export_base:
-        my_predbat.rate_export_max_forward = my_predbat.rate_export_max_forward_calc(my_predbat.rate_export_base)
+    rebuild_battery_value_rates(my_predbat)
 
 
 def refresh_load_forecast(my_predbat, run):

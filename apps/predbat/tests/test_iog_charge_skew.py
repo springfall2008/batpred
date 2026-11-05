@@ -207,6 +207,7 @@ def run_iog_skew_scenario(
     load_scaling=None,
     losses=(1.0, 1.0, 1.0),
     prepare=None,
+    kernel=False,
 ):
     """
     Run a single IOG scenario through optimise_all_windows and return charge_limit_best.
@@ -217,6 +218,8 @@ def run_iog_skew_scenario(
     PV90 scenario; by default every scenario sees load_amount and PV90 is the nominal one.
     losses: (inverter_loss, battery_loss, battery_loss_discharge), lossless by default.
     prepare: optional callable run once io_adjusted is set and before the Prediction is built.
+    kernel: optimise with the C++ prediction kernel instead of the Python engine (much faster; kernel_parity
+    pins the two engines to the same answer).
     """
     print("\n  -- scenario: {} --".format(name))
     end_record = my_predbat.forecast_minutes
@@ -233,7 +236,7 @@ def run_iog_skew_scenario(
     my_predbat.set_charge_freeze = True
     my_predbat.calculate_second_pass = False
     my_predbat.debug_enable = False
-    my_predbat.prediction_kernel_enable = False
+    my_predbat.prediction_kernel_enable = kernel
     my_predbat.rate_min_forward = {}
 
     my_predbat.battery_rate_max_charge = charge_rate_kw / 60.0

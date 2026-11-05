@@ -1,12 +1,15 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+ABCDEFGHJKLMNP
 acks
 activepower
 adata
 adbase
 afci
+afewyards
 agentic
+agilepredict
 AIO
 AIO's
 aiofiles
@@ -17,9 +20,11 @@ Alertfeed
 allclose
 alphaess
 am2
+anker
 annualform
 Anson
 antiphase
+antireflux
 apexcharts
 apikey
 appdaemon
@@ -43,6 +48,7 @@ autoflake
 automations
 autopep
 autoupdate
+ax1
 axisbelow
 axvline
 axvspan
@@ -73,6 +79,7 @@ byok
 cadata
 calcsize
 calib
+callees
 Cantarell
 cbat
 CDLL
@@ -91,6 +98,7 @@ chargelater
 chargelimit
 chargepower
 CHECKCODE
+chg
 Chrg
 citem
 cloudfront
@@ -167,8 +175,10 @@ dlimit
 dlopen
 dnoregion
 docstrings
+dschg
 dstamp
 dstart
+dtu
 dtype
 dwindow
 eauth
@@ -177,6 +187,8 @@ ECONNRESET
 ecosmart
 Eddi
 eddis
+edfenergy
+edfgb
 edgecolor
 efgh
 elif
@@ -207,15 +219,19 @@ enphaseenergy
 Enpower
 entityfilter
 entrez
+eonnext
 epod
 epvtoday
 errno
 ESSAPI
+etime
 ETIMEDOUT
+eto
 etoday
 etok
 euids
 EVAC
+evc
 EVDC
 evergen
 evilspringfall
@@ -233,6 +249,7 @@ figsize
 finaliser
 Fingerbot
 firstparty
+flextras
 fline
 FLOMASTA
 fontsize
@@ -261,6 +278,7 @@ geseriale
 getaffinity
 getall
 getattr
+getmembers
 getrusage
 Ginlong
 githubusercontent
@@ -269,6 +287,7 @@ giv
 GivEnergy
 givtcp
 gmtime
+gndean
 gnueabihf
 GOELEC
 goldens
@@ -280,6 +299,8 @@ gridspec
 Groq
 growatt
 growattsph
+guoxia
+guoxiatech
 GWMQTT
 HACS
 hadashboard
@@ -313,9 +334,12 @@ idag
 idef
 idetails
 idxs
+iess
 iflux
 importlimit
 inday
+Indevolt
+indra
 inteless
 INTELLI
 intelligentdevice
@@ -326,6 +350,7 @@ inva
 invb
 invbatpower
 invname
+iot
 IPPROTO
 isinstance
 isoformat
@@ -368,6 +393,7 @@ LIFEPO
 linebreak
 linestyle
 Liskov
+lmt
 loadml
 loadmlpower
 loadspower
@@ -380,6 +406,8 @@ lookback
 lpignore
 lstrip
 luxpower
+luxpowertek
+luxpython
 malloc
 mallopt
 markdownlint
@@ -389,6 +417,7 @@ maxrss
 maxsoc
 mbat
 mbuhansen
+mdi
 mdlrc
 measurand
 measurands
@@ -401,6 +430,7 @@ metricmid
 microinverters
 middlebox
 middleboxes
+milli
 minb
 minmax
 minsoc
@@ -463,6 +493,7 @@ OCPP
 octo
 octoplus
 octopoints
+oegb
 OFFPEAK
 Ofgem
 Ohme
@@ -487,10 +518,14 @@ oversizing
 overvoltage
 ownerapi
 pac
+packettypes
+paho
 parseable
 pbat
 pbgw
 pcharging
+pcpu
+pcsenmap
 pdata
 pdetails
 pendings
@@ -503,6 +538,7 @@ pitem
 pkwh
 plenticore
 pload
+plugncharge
 pmeter
 poinv
 popv
@@ -530,6 +566,7 @@ pseudonymised
 pseudonymises
 psum
 pthread
+puback
 pvbat
 pvenergytotal
 pvlib
@@ -538,6 +575,7 @@ PVONLY
 pvpower
 pvwatts
 pwindow
+pwr
 pyjwt
 pylint
 pymyenergi
@@ -554,6 +592,8 @@ rarr
 reactivepower
 readback
 readbacks
+reasoncodes
+rebooked
 recp
 redownload
 Referer
@@ -566,6 +606,7 @@ remainings
 remotecontrol
 renderable
 replayer
+repr
 resetmidnight
 resultid
 resultmid
@@ -615,6 +656,7 @@ slugified
 slugifies
 slugify
 slugifying
+smartflex
 snakeviz
 snprintf
 socb
@@ -633,6 +675,7 @@ solaxmodbus
 Solcast
 soliscloud
 solisx
+solix
 sourcery
 Southwell
 sparkline
@@ -650,6 +693,7 @@ Stromligning
 strptime
 strtod
 Strømligning
+suback
 subclassing
 submessage
 substep
@@ -706,8 +750,10 @@ tunables
 twinx
 typecode
 typecodes
+tzdata
 tzfile
 tzpath
+tzset
 unasserted
 uncalibrated
 uncompilable
@@ -736,8 +782,10 @@ untriaged
 urandom
 urlsafe
 uscapacity
+usegmt
 useid
 userinterface
+utcoffset
 Vallery
 varh
 venv
@@ -755,10 +803,13 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+workstream
+workstreams
 worktree
 writeonly
 wrongsha
 wwxxabcdefyyzz
+x1
 xaxis
 xaxistooltip
 xlabel
@@ -780,3 +831,4 @@ zappi
 zappis
 zcat
 zigbee
+zoneinfo

@@ -248,6 +248,22 @@ def test_find_charge_window(my_predbat):
         print("ERROR: path J no pv_light_dark: expected window to run uninterrupted to {}, got end={}".format(scan_end, e3))
         failed = 1
 
+    # Light -> dark is not dawn. calc_dawn latches each day light from dawn to midnight, then resets to
+    # dark, so an overnight cheap window (e.g. 23:30-05:30) sees a light -> dark step at 00:00. Splitting
+    # there cut the window in two in the dark, and an export slot covering the whole 23:30-00:00 piece
+    # was then allowed into the cheap period despite combine_charge_slots. Only the dark -> light step
+    # at dawn may split the window.
+    print("Test find_charge_window: light -> dark at the midnight latch reset does not split (Path J)")
+    pv_light_dark_mid = {}
+    for m in range(0, 60, 5):
+        pv_light_dark_mid[m] = 1  # previous day, latched light until midnight
+    for m in range(60, 120, 5):
+        pv_light_dark_mid[m] = 0  # after midnight, dark until dawn
+    for m in range(120, scan_end, 5):
+        pv_light_dark_mid[m] = 1  # dawn
+    s4, e4, _ = my_predbat.find_charge_window(rates_j, 0, thresh_lo, find_high=False, pv_light_dark=pv_light_dark_mid)
+    failed |= _assert_window("path J midnight reset (no split in the dark, split at dawn)", s4, e4, _, 0, 120)
+
     # -----------------------------------------------------------------------
     # Test: 24-hour export cap (Path E first condition)
     # find_high=True with high rates spanning >24h; window must cap at 24*60
