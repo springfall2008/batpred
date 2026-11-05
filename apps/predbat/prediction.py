@@ -847,6 +847,13 @@ class Prediction(PredictionBatch):
             import_rate = rate_import.get(minute_absolute, 0)
             dispatch_rate = import_rate
             dispatch_gone = io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30
+            dispatch_risk = 0
+            if dispatch_gone and io_confirmed_credit.get(minute_absolute, 0):
+                # The car is charging in this run (io_confirmed_credit_update()), so a dispatch that goes away is seen
+                # within a Predbat cycle: the dispatch is kept, and the house and battery pay RUN_EVERY minutes of each
+                # half hour at the worst-case rate (dispatch_risk, added to their import below)
+                dispatch_gone = False
+                dispatch_risk = (max(self.rate_max, import_rate) - import_rate) * RUN_EVERY / 30
             if dispatch_gone:
                 # Worst case the slot goes away: the tariff's highest rate, or the slot's own if an event makes it dearer
                 import_rate = max(self.rate_max, import_rate)
@@ -1542,6 +1549,9 @@ class Prediction(PredictionBatch):
                 # but it can't be more than we actually imported from the grid.
                 car_amount_premium = min(diff, car_amount_premium)
                 metric += import_rate * diff + car_rate_premium * car_amount_premium
+                if dispatch_risk:
+                    # Not on the car's share: the car stops with its dispatch
+                    metric += dispatch_risk * (diff - car_amount_premium)
                 if car_gone_kwh:
                     # The car's share of the import is paid at its own rate, not the worst-case rate
                     metric -= min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh)

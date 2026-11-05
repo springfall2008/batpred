@@ -24,7 +24,7 @@ import math
 import json
 import random
 from component_base import ComponentBase
-from coordinator import inverter_record
+from coordinator import charger_with_stub_car, inverter_record
 from mock_base import MockBase as SharedMockBase
 
 """
@@ -2164,9 +2164,43 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 )
             )
 
+        chargers, cars = self._discovery_evc_records()
+
         # Always empty - see _meter_cross_link for why a CT clamp does not become a
         # fabricated meters record.
-        return {"automatic": self.automatic and self.inverter_control, "inverters": inverters, "meters": []}
+        return {"automatic": self.automatic and self.inverter_control, "inverters": inverters, "meters": [], "chargers": chargers, "cars": cars}
+
+    def _discovery_evc_records(self):
+        """(chargers, cars) records for the GivEnergy EV chargers, in car order.
+
+        One charger per charger in controlled_evc_devices() - those that have answered with a serial,
+        in serial order, the order async_automatic_config_evc() wires cars in - keyed "gecloud:{serial}"
+        by the hardware serial. GE Cloud knows nothing about the vehicle, so each car is a stub. The
+        entities are the four async_automatic_config_evc() binds, named from the lower-cased serial as
+        published; the published but never-bound _evc_soc sensor is left out.
+
+        Never reported: the charger alias (user-chosen) and the GE Cloud uuid.
+        """
+        chargers = []
+        cars = []
+        for uuid in self.controlled_evc_devices():
+            serial = str(self.evc_device[uuid]["serial_number"])
+            stem = "{}_gecloud_{}".format(self.prefix, serial).lower()
+            descriptors = {
+                "car_charging_planned": {"entity_id": "binary_sensor." + stem + "_evc_car_connected", "domain": "binary_sensor", "access": "r"},
+                "car_charging_plugged": {"entity_id": "binary_sensor." + stem + "_evc_car_plugged", "domain": "binary_sensor", "access": "r"},
+                "car_charging_energy": {"entity_id": "sensor." + stem + "_evc_energy_active_import_register", "domain": "sensor", "access": "r"},
+                "car_charging_power": {"entity_id": "sensor." + stem + "_evc_power_active_import", "domain": "sensor", "access": "r"},
+            }
+            charger, car = charger_with_stub_car(
+                "gecloud:{}".format(serial),
+                hardware_ids={"serial": serial},
+                info={"vendor": "GivEnergy"},
+                entities=self.discovery_entities(descriptors),
+            )
+            chargers.append(charger)
+            cars.append(car)
+        return chargers, cars
 
     @property
     def inverter_source(self):

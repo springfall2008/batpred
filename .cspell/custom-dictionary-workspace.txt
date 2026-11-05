@@ -189,6 +189,7 @@ ecosmart
 Eddi
 eddis
 edfenergy
+edfgb
 efgh
 elif
 elinter
@@ -218,6 +219,7 @@ enphaseenergy
 Enpower
 entityfilter
 entrez
+eonnext
 epod
 epvtoday
 errno
@@ -492,6 +494,7 @@ OCPP
 octo
 octoplus
 octopoints
+oegb
 OFFPEAK
 Ofgem
 Ohme
@@ -592,6 +595,7 @@ readback
 readbacks
 reasoncodes
 rebasable
+rebooked
 recp
 redownload
 Referer

@@ -61,6 +61,7 @@ import argparse
 import asyncio
 import base64
 import json
+import math
 import ssl
 import tempfile
 import time
@@ -84,6 +85,7 @@ except ImportError:
 from datetime import datetime, timedelta, timezone
 from axle import fetch_axle_active
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 
@@ -130,6 +132,7 @@ SIGENERGY_CODE_ACCOUNT_SYSTEM_ERROR = 1601
 SIGENERGY_CODE_ACCOUNT_ALREADY_REGISTERED = 1602
 SIGENERGY_CODE_ACCOUNT_UNREVIEWED = 1603
 SIGENERGY_CODE_DEVELOPER_NOT_APPROVED = 1604
+SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP = 13001  # Top-level "station info not found", seen for a mistyped system ID (#5691)
 SIGENERGY_TOKEN_EXPIRY_BUFFER = 600   # refresh token 10 min before expiry
 SIGENERGY_MIN_REQUEST_INTERVAL = 6.0  # enforce ≥10 req/min API limit
 SIGENERGY_POLL_INTERVAL = 300         # realtime data poll every 5 minutes
@@ -206,6 +209,21 @@ SIGENERGY_ACTIVE_MODE_SELF_GRID = "selfConsumption-grid"
 # Device type strings returned by the device-list endpoint
 SIGENERGY_DEVICE_INVERTER = "Inverter"
 SIGENERGY_DEVICE_AIO = "AIO"
+
+# The SIGCLOUD INVERTER_DEF row's behaviour, stated in every discovery record so the record alone rebuilds
+# the row (coordinator.inverter_definition()).
+SIGENERGY_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": False,
+    "can_span_midnight": True,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": False,
+}
+
+# The format the inverter_time sensor publishes ("2026-11-01T21:30:00+00:00"), reported in discovery records
+SIGENERGY_DISCOVERY_CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 SIGENERGY_DEVICE_BATTERY = "Battery"
 SIGENERGY_DEVICE_GATEWAY = "Gateway"
 SIGENERGY_DEVICE_METER = "Meter"
@@ -1285,6 +1303,11 @@ class SigenergyAPI(ComponentBase):
             for sid in system_ids:
                 self.onboard_status[str(sid)] = "firmware_no_vpp"
             self.log("Warn: SigenergyAPI: Onboard failed — system {} firmware does not support VPP (code={})".format(system_ids, code))
+            return False
+        if code in (SIGENERGY_CODE_STATION_NOT_FOUND, SIGENERGY_CODE_STATION_INFO_NOT_FOUND, SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP):
+            for sid in system_ids:
+                self.onboard_status[str(sid)] = "invalid_system_id"
+            self.log("Warn: SigenergyAPI: System ID {} not recognised by Sigenergy, check the ID and region (code={})".format(system_ids, code))
             return False
         if code in (SIGENERGY_CODE_NO_PERMISSION_STATION, SIGENERGY_CODE_STATION_NOT_PERMITTED):
             for sid in system_ids:
@@ -2512,6 +2535,119 @@ class SigenergyAPI(ComponentBase):
     # Automatic configuration
     # -----------------------------------------------------------------------
 
+    def _discovery_entities(self, system_id):
+        """Every setting automatic_config() binds for one system, as discovery entity descriptors.
+
+        Entity ids use _system_slug() and the same format strings automatic_config() uses, so the two
+        cannot drift; tests/test_sigenergy.py checks they agree both ways. reserve is read-only: SIGCLOUD
+        has no reserve control, and the component overwrites the entity from the discharge cut-off.
+        inverter_time carries the ISO format the sensor really publishes. pv_today is this system's own
+        native PV lifetime; automatic_config() also binds its third-party PV lifetime into the same summed
+        list, which the record's third_party_gen flag stands for.
+        """
+        stem = "{}_sigenergy_{}".format(self.prefix, self._system_slug(system_id))
+
+        def sensor(leaf, unit=None, **fields):
+            """A read-only binding to one of the system's published sensors."""
+            descriptor = {"entity_id": "sensor.{}_{}".format(stem, leaf), "access": "r", **fields}
+            if unit:
+                descriptor["unit"] = unit
+            return descriptor
+
+        def control(domain, leaf, access="rw", **fields):
+            """A binding to one of the control entities Predbat writes."""
+            return {"entity_id": "{}.{}_{}".format(domain, stem, leaf), "access": access, "domain": domain, **fields}
+
+        return {
+            "soc_kw": sensor("battery_soc", "kWh"),
+            "soc_max": sensor("battery_capacity", "kWh"),
+            "battery_power": sensor("battery_power", "W"),
+            "battery_rate_max": sensor("battery_rate_max", "W"),
+            "inverter_limit": sensor("inverter_limit", "W"),
+            "export_limit": sensor("export_limit", "W"),
+            "battery_min_soc": sensor("battery_reserve_min", "%"),
+            "pv_power": sensor("pv_power", "W"),
+            "grid_power": sensor("grid_power", "W"),
+            "load_power": sensor("load_power", "W"),
+            "pv_today": sensor("pv_lifetime", "kWh"),
+            "load_today": sensor("load_lifetime", "kWh"),
+            "import_today": sensor("grid_import_lifetime", "kWh"),
+            "export_today": sensor("grid_export_lifetime", "kWh"),
+            "inverter_time": sensor("time", format=SIGENERGY_DISCOVERY_CLOCK_FORMAT),
+            "charge_start_time": control("select", "charge_start_time", format="HH:MM:SS"),
+            "charge_end_time": control("select", "charge_end_time", format="HH:MM:SS"),
+            "charge_limit": control("number", "charge_target_soc", unit="%"),
+            "scheduled_charge_enable": control("switch", "charge_enable"),
+            "charge_rate": control("number", "charge_rate", unit="W"),
+            "discharge_start_time": control("select", "export_start_time", format="HH:MM:SS"),
+            "discharge_end_time": control("select", "export_end_time", format="HH:MM:SS"),
+            "discharge_target_soc": control("number", "export_target_soc", unit="%"),
+            "scheduled_discharge_enable": control("switch", "export_enable"),
+            "discharge_rate": control("number", "export_rate", unit="W"),
+            "reserve": control("number", "reserve", access="r", unit="%"),
+        }
+
+    def _discovery_ratings(self, system_id):
+        """The figures the system reports, under Predbat's setting names (spec D14).
+
+        soc_max is the system's own batteryCapacity, never the module sum that may be converted from Ah.
+        battery_rate_max is left out: _get_battery_max_power_kw() caps it at the inverter rating, so it is
+        derived. export_limit is given only when the plant has reported one (not the 99999 sentinel).
+        """
+        ratings = {}
+        inverter_kw = self._get_inverter_max_power_kw(system_id)
+        if inverter_kw > 0:
+            ratings["inverter_limit"] = round(inverter_kw * 1000, 1)
+        capacity = _safe_float(self.systems.get(system_id, {}).get("batteryCapacity", 0))
+        if capacity > 0:
+            ratings["soc_max"] = capacity
+        export_limit = self._get_export_limit_w(system_id)
+        if export_limit != 99999:
+            ratings["export_limit"] = export_limit
+        backup = self.device_cutoffs.get(system_id, {}).get("backup")
+        if backup is not None:
+            ratings["battery_min_soc"] = _safe_float(backup)
+        return ratings
+
+    def build_discovery(self):
+        """
+        Describe the Sigenergy systems for the discovery catalogue.
+
+        One record per system, in automatic_config()'s order, keyed by the system's first inverter (or
+        AIO) serial with every inverter's serial in serials when there is more than one. The system id is
+        not secret, so it is reported in hardware_ids beside the serial and stays readable, as do the
+        entity ids built from it. A system detect_ac_coupled() has found to be AC coupled - third-party PV,
+        no native PV - is battery only; otherwise it is a hybrid with solar and battery.
+
+        Never reported: the system name and the API credentials.
+
+        Returns None when no system has been discovered.
+        """
+        if not self.systems:
+            return None
+        inverters = []
+        for system_id in self.systems:
+            serials = [str(device["serialNumber"]) for device in self.devices.get(system_id, []) if device.get("deviceType") in (SIGENERGY_DEVICE_INVERTER, SIGENERGY_DEVICE_AIO) and device.get("serialNumber")]
+            hardware_ids = {"system_id": str(system_id)}
+            if serials:
+                hardware_ids = {"serial": serials[0], "system_id": str(system_id)}
+            inverters.append(
+                inverter_record(
+                    "sigenergy:{}".format(serials[0]) if serials else "sigenergy:system:{}".format(system_id),
+                    inverter_type="SIGCLOUD",
+                    composition="direct",
+                    serials=serials if len(serials) > 1 else None,
+                    functions=["battery"] if self.detect_ac_coupled(system_id) is True else ["solar", "battery"],
+                    capabilities=dict(SIGENERGY_CAPABILITIES),
+                    flags=["third_party_gen"],
+                    hardware_ids=hardware_ids,
+                    info={"vendor": "Sigenergy"},
+                    ratings=self._discovery_ratings(system_id),
+                    entities=self._discovery_entities(system_id),
+                )
+            )
+        return {"automatic": self.automatic, "inverters": inverters}
+
     async def automatic_config(self):
         """Wire Predbat config args to the published Sigenergy entity IDs.
 
@@ -2907,8 +3043,11 @@ class SigenergyAPI(ComponentBase):
                 export_window = True
 
         # Determine desired mode (export takes priority)
+        # Durations round up: the device times the window's end from startTime (now), so rounding
+        # down would stop it short by the seconds the run lands past the minute. Our next run past
+        # the end reverts the mode, which bounds any overrun of the rounded-up command.
         if export_window and export_start_dt and export_end_dt:
-            duration_min = max(1, int((export_end_dt - now).total_seconds() / 60))
+            duration_min = max(1, math.ceil((export_end_dt - now).total_seconds() / 60))
             # The plant stops discharging at its backup cut-off as well as the discharge cut-off (the reserve)
             backup_soc = _safe_int(self.device_cutoffs.get(system_id, {}).get("backup", 0), 0)
             effective_target = max(export_target_soc, reserve_soc, backup_soc)
@@ -2922,7 +3061,7 @@ class SigenergyAPI(ComponentBase):
                 discharge_priority_type = "PV"
                 charge_power_kw = export_rate_w / 1000.0
         elif charge_window and charge_start_dt and charge_end_dt:
-            duration_min = max(1, int((charge_end_dt - now).total_seconds() / 60))
+            duration_min = max(1, math.ceil((charge_end_dt - now).total_seconds() / 60))
             effective_target = max(charge_target_soc, reserve_soc)
             if effective_target <= reserve_soc or abs(effective_target - battery_soc_pct) < 1:
                 # Freeze charge — stay at current SOC
@@ -3510,6 +3649,10 @@ class SigenergyAPI(ComponentBase):
         # Automatic configuration
         if first and self.automatic:
             await self.automatic_config()
+
+        # Filed every cycle that reaches here, outside the first-only block above, so a report that
+        # failed to file is retried. refresh_discovery() owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         # Apply controls
         # Treat an active Axle event as read-only: Axle is driving the battery, so Predbat
