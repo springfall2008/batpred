@@ -4856,10 +4856,12 @@ class Octopus:
         stripped until a dispatch has been seen again. Not under the window rule (dispatch_billing_window()),
         where the supplier bills a planned dispatch's half hours off-peak whether or not it ran.
 
-        The half hour in progress is left alone while any car reads charging, or with octopus_intelligent_dynamic
-        Off: a dispatch the car charged in is billed off-peak for the whole half hour (GH#5316), and only the
-        dispatch check's 15 second poll holds that half hour (octopus_held_update()) when the dispatch starts and
-        is withdrawn between two cycles.
+        Nothing is stripped while any car reads charging: Octopus answers an empty planned list for a few minutes
+        while it re-plans a running session, which looks just like a withdrawal, and the Octopus Energy integration
+        has no hold over it (see OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES). The half hour in progress is left alone with
+        octopus_intelligent_dynamic Off too: a dispatch the car charged in is billed off-peak for the whole half
+        hour (GH#5316), and only the dispatch check's 15 second poll holds that half hour (octopus_held_update())
+        when the dispatch starts and is withdrawn between two cycles.
 
         With save False (compare.py) the minutes are stripped but nothing is recorded or logged.
         """
@@ -4879,10 +4881,11 @@ class Octopus:
                     covered.add(self.midnight_utc + timedelta(minutes=period_minute))
 
         current_minute = (self.minutes_now // 30) * 30
-        keep_current = not self.octopus_intelligent_dynamic or any(self.car_charging_now)
+        keep_current = not self.octopus_intelligent_dynamic
+        candidates = [] if any(self.car_charging_now) else sorted(self.io_adjusted)
         stripped = 0
         stripped_periods = set()
-        for minute in sorted(self.io_adjusted):
+        for minute in candidates:
             if minute < self.minutes_now or not self.io_adjusted.get(minute, False) or self.in_iog_fixed_window(minute):
                 continue
             if keep_current and minute < current_minute + 30:

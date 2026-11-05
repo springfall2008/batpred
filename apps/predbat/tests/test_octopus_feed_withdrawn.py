@@ -207,13 +207,16 @@ def _run(my_predbat):
     failed |= _check("t10 half hour in progress kept", _low(rates, 1000, 1020), "rate {}".format(rates[1000]))
     failed |= _check("t10 next half hour at the day rate", _day(rates, 1020, 1050), "rate {}".format(rates[1020]))
 
-    print("Test 11: while a car reads charging, the half hour in progress is kept")
+    print("Test 11: while a car reads charging nothing is stripped, as Octopus re-planning a running session empties the list for minutes")
     _reset(my_predbat)
     _cycle(my_predbat, 995, [(990, 1050)], [_dispatch(my_predbat, 990, 1050)])
     my_predbat.car_charging_now = [True]
     rates = _cycle(my_predbat, 1000, [(1000, 1050)])
-    failed |= _check("t11 half hour in progress kept", _low(rates, 1000, 1020), "rate {}".format(rates[1000]))
-    failed |= _check("t11 next half hour at the day rate", _day(rates, 1020, 1050), "rate {}".format(rates[1020]))
+    failed |= _check("t11 all kept", _low(rates, 1000, 1050), "rates {} {}".format(rates[1000], rates[1020]))
+    # Once the car has stopped and the dispatch is still gone, it is stripped
+    my_predbat.car_charging_now = [False]
+    rates = _cycle(my_predbat, 1005, [(1005, 1050)])
+    failed |= _check("t11 stripped once the car has stopped", _day(rates, 1005, 1050), "rate {}".format(rates[1005]))
 
     print("Test 12: a half hour another car's dispatch still covers keeps the discount")
     _reset(my_predbat)
