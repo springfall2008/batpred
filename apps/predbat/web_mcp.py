@@ -23,7 +23,6 @@ from datetime import datetime, timezone, timedelta
 from aiohttp import web
 import secrets
 import jwt as pyjwt
-import hashlib
 from component_base import ComponentBase
 from agent_tools import (  # noqa: F401
     PredbatTools,
@@ -63,6 +62,11 @@ Example usage in VSCode with OAuth
 """
 
 
+MCP_STORAGE_MODULE = "mcp"
+MCP_SIGNING_KEY_FILE = "jwt_signing_key"
+MCP_SIGNING_KEY_BYTES = 32
+
+
 class PredbatMCPServer(ComponentBase):
     """
     Model Context Protocol (MCP) Server for Predbat with OAuth support
@@ -76,10 +80,9 @@ class PredbatMCPServer(ComponentBase):
         self.mcp_server = None
 
         # OAuth configuration
-        # Derive JWT signing key from mcp_secret (but don't use it directly)
-        # This keeps it stable across restarts but separate from the client secret
-
-        self.jwt_secret = hashlib.sha256(f"jwt_signing_key_{self.mcp_secret}".encode()).hexdigest()
+        # A random signing key, replaced by the saved one when the server starts (load_signing_key). It used to be
+        # derived from mcp_secret, which let anyone who knew the secret forge tokens offline (#5847).
+        self.jwt_secret = secrets.token_hex(MCP_SIGNING_KEY_BYTES)
         self.jwt_algorithm = "HS256"
         self.access_token_lifetime = timedelta(days=30)
         self.authorization_code_lifetime = timedelta(minutes=10)
@@ -131,6 +134,7 @@ class PredbatMCPServer(ComponentBase):
     async def start(self):
         """Start the MCP server if enabled"""
         if self.mcp_enable:
+            await self.load_signing_key()
             self.mcp_server = create_mcp_server(self.base, self.log)
             await self.mcp_server.start()
 
@@ -156,6 +160,27 @@ class PredbatMCPServer(ComponentBase):
 
             self.api_started = False
             print("MCP interface stopped")
+
+    async def load_signing_key(self):
+        """
+        Load the token signing key from storage, creating and saving one on first use
+
+        Saving it means access tokens survive a restart. Without storage the per-instance key from
+        initialize() is kept, so tokens last only until Predbat restarts.
+        """
+        storage = self.storage
+        if not storage:
+            self.log("Warn: MCP: No storage available, so access tokens will not survive a restart")
+            return
+        data = await storage.load(MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE)
+        key = data.get("key") if isinstance(data, dict) else None
+        if isinstance(key, str) and len(key) >= MCP_SIGNING_KEY_BYTES * 2:
+            self.jwt_secret = key
+            return
+        if not await storage.save(MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE, {"key": self.jwt_secret}):
+            self.log("Warn: MCP: Failed to save the token signing key, so access tokens will not survive a restart")
+            return
+        self.log("MCP: Created a new token signing key; clients authorised before this need to authorise again")
 
     def verify_oauth_client(self, client_id: str, client_secret: str) -> bool:
         """
