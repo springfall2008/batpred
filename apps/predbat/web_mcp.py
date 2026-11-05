@@ -333,7 +333,7 @@ class PredbatMCPServer(ComponentBase):
             "grant_types_supported": ["authorization_code", "client_credentials"],
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],  # Only S256, plain is deprecated
-            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+            "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
             "scopes_supported": ["mcp:read", "mcp:write", "mcp:control"],
         }
 
@@ -363,7 +363,7 @@ class PredbatMCPServer(ComponentBase):
             "grant_types_supported": ["authorization_code", "client_credentials"],
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],  # Only S256, plain is deprecated
-            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+            "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
             "scopes_supported": ["mcp:read", "mcp:write", "mcp:control"],
         }
 
@@ -654,25 +654,24 @@ class PredbatMCPServer(ComponentBase):
             # Extract client metadata (RFC 7591 Section 2)
             client_name = data.get("client_name", "Unnamed MCP Client")
             redirect_uris = data.get("redirect_uris", [])
-            grant_types = data.get("grant_types", ["authorization_code"])
             response_types = data.get("response_types", ["code"])
             scope = data.get("scope", "mcp:read mcp:write mcp:control")
 
-            # Generate client credentials
-            # For MCP, we use a shared secret model where all clients use the same secret
-            # In a more sophisticated implementation, you'd generate unique credentials per client
+            # Anyone who can reach the port can register, so a registered client is a public one (#5847): no
+            # client secret, and only the authorization code grant, where the user must enter mcp_secret on the
+            # authorise page. Handing out a secret here, shared or per client, would let any caller swap it for
+            # a token through the client credentials grant without ever knowing mcp_secret.
             client_id = f"mcp-client-{secrets.token_urlsafe(16)}"
 
             # Return registration response (RFC 7591 Section 3.2.1)
             response = {
                 "client_id": client_id,
-                "client_secret": self.mcp_secret,  # Shared secret model
                 "client_name": client_name,
                 "redirect_uris": redirect_uris,
-                "grant_types": grant_types,
+                "grant_types": ["authorization_code"],
                 "response_types": response_types,
                 "scope": scope,
-                "token_endpoint_auth_method": "client_secret_post",
+                "token_endpoint_auth_method": "none",
             }
 
             self.log(f"MCP OAuth: Dynamic client registration successful for {client_name} (client_id: {client_id})")
