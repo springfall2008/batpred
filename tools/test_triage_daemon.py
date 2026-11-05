@@ -1806,6 +1806,16 @@ class TriageTests(DaemonPathsTestCase):
         cmd = mock_run.call_args[0][0]
         self.assertNotIn("--max-budget-usd", cmd)
 
+    @patch("triage_daemon.subprocess.run")
+    def test_gets_a_turn_budget_matching_the_write_flows(self, mock_run):
+        """100 turns still failed 13 of 154 triage runs between mid-October and 2026-11-05,
+        and in Ollama mode --max-turns is the only cap left, so the number has to cover a hard
+        investigation - the run that finally finished #5889 took 94 tool calls."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "150")
+
 
 class CreatePrTests(DaemonPathsTestCase):
     """Tests for create_pr(), new in the bot PR flow."""
@@ -2278,6 +2288,14 @@ class TriageFollowupTests(DaemonPathsTestCase):
         self.assertIn("/issue-triage-followup 4720", cmd[2])
         self.assertIn(triage_daemon.ALLOWED_TOOLS, cmd)
         self.assertIn(triage_daemon.DISALLOWED_TOOLS, cmd)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_gets_a_turn_budget_for_rereading_the_original_triage(self, mock_run):
+        """#5955 and #5556 both died on "Reached max turns (60)" in early November 2026."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage_followup(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "100")
 
     @patch("triage_daemon.subprocess.run")
     def test_raises_on_a_non_zero_exit(self, mock_run):
@@ -3283,16 +3301,21 @@ class JournalFlushInvocationTests(DaemonPathsTestCase):
         self.assertEqual(cmd[cmd.index("--allowedTools") + 1], triage_daemon.ALLOWED_TOOLS_JOURNAL)
         self.assertEqual(cmd[cmd.index("--disallowedTools") + 1], triage_daemon.DISALLOWED_TOOLS_JOURNAL)
 
-    def test_the_flush_gets_a_turn_budget_matching_the_other_write_flows(self):
+    def test_the_flush_gets_a_larger_turn_budget_than_the_other_write_flows(self):
         """80 turns stopped being enough on 2026-09-13, and every run from then to 2026-09-19
         died on `Error: Reached max turns (80)`. The flush reads a journal that grew from 73KB
         to 130KB in a week and verifies every candidate against main, so it is not the cheap
-        flow the old budget assumed - issue-pr and pr-cleanup have had 150 all along."""
+        flow the old budget assumed - issue-pr and pr-cleanup have had 150 all along.
+
+        150 then ran out in turn: by 2026-11-05 the journal was 730KB, and four of the five
+        flushes from 2026-10-31 died on "Reached max turns (150)", one of them on the
+        pre-commit step just before it would have committed. So the flush now gets more than the
+        other write flows, not the same."""
         with patch("triage_daemon.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
             triage_daemon.flush_journal("2026-09-07")
             cmd = mock_run.call_args_list[0][0][0]
-        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "150")
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "250")
 
     def test_tells_the_skill_where_the_queue_is(self):
         """The queue lives outside the clone, so the path has to be passed in and added to the

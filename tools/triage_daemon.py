@@ -1353,8 +1353,12 @@ def flush_journal(today):
             # push. 80 was set when the journal was 30KB and the flush was a near-append;
             # it reads a 130KB file end to end and verifies every candidate against main,
             # and from 2026-09-13 every single run died on "Reached max turns (80)".
+            # 250 from 2026-11-05: the journal reached 730KB, and four of the five flushes
+            # from 2026-10-31 died on "Reached max turns (150)". The 2026-11-04 run spent 80 of
+            # its 201 tool calls reading the journal in pieces, and the 2026-11-05 run made every
+            # edit, then ran out on ./run_pre_commit before it could commit, so nothing was pushed.
             "--max-turns",
-            "150",
+            "250",
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
@@ -1423,9 +1427,12 @@ def triage(issue_number):
             # Raised from 60 on 2026-09-08: triage had the smallest budget of any flow while
             # doing the most open-ended work, and five separate issues have exhausted it
             # (#4899, #4900, #4984, #5003, #5004). A long issue body plus a debug-file replay
-            # spends turns quickly.
+            # spends turns quickly. Raised again to 150 on 2026-11-05: 13 of 154 triage runs in
+            # the previous three weeks still died on "Reached max turns (100)", and the run that
+            # finally finished #5889 took 94 tool calls. The failed runs were grep-heavy
+            # investigation, not loops.
             "--max-turns",
-            "100",
+            "150",
             # Client-side token-usage estimate, not a real spend cap under subscription
             # auth (see agent-sdk/cost-tracking) - just a circuit-breaker against a
             # runaway invocation, sized generously since one issue can need several
@@ -1472,8 +1479,11 @@ def triage_followup(issue_number):
             "--verbose",
             "--add-dir",
             str(SCRATCH_DIR),
+            # 100, in line with first-pass triage's old budget: a follow-up re-reads the
+            # original investigation as well as what was added since, and #5955 and #5556
+            # both died on "Reached max turns (60)" in the first week of November 2026.
             "--max-turns",
-            "60",
+            "100",
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
