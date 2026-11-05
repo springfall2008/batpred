@@ -20,7 +20,8 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import jwt as pyjwt
-from web_mcp import PredbatMCPServer, MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE
+from agent_tools import TOOL_DEFS
+from web_mcp import PredbatMCPServer, MCPServerWrapper, MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE
 
 TEST_SECRET = "a-test-secret-that-is-not-the-default"
 
@@ -216,10 +217,60 @@ def test_mcp_refuses_default_secret(my_predbat):
     return failed
 
 
+def test_mcp_scopes_enforced(my_predbat):
+    """A token's scopes decide which tools it may call: a read-only token cannot change Predbat (#5847)."""
+    failed = False
+    print("**** Testing MCP token scopes are enforced ****")
+    server = make_server(my_predbat)
+    server.mcp_server = MCPServerWrapper(my_predbat, log_func=my_predbat.log)
+    write_tools = [entry["name"] for entry in TOOL_DEFS if entry.get("writes")]
+    if not write_tools:
+        print("  ERROR: no write tools in TOOL_DEFS to test with")
+        return True
+
+    def call_tool(bearer, name):
+        """Call one tool over POST /mcp with the given bearer token; return (isError, error text)."""
+        request = FakeJsonRequest({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": {}}}, headers={"Content-Type": "application/json", "Authorization": "Bearer " + bearer})
+        status, data = call(server.html_mcp_post, request)
+        result = data.get("result", {})
+        text = result.get("content", [{}])[0].get("text", "")
+        return status, result.get("isError", False), text
+
+    read_token = server.generate_access_token("reader", scopes=["mcp:read"])
+    write_token = server.generate_access_token("writer", scopes=["mcp:write"])
+    for name in write_tools:
+        print("Test: a read-only token cannot call {}".format(name))
+        status, is_error, text = call_tool(read_token, name)
+        if status != 200 or not is_error or "scope" not in text:
+            print("  ERROR: {} with a read-only token gave {} {} {}".format(name, status, is_error, text[:200]))
+            failed = True
+        for label, bearer in (("an mcp:write token", write_token), ("the legacy bearer token", TEST_SECRET)):
+            print("Test: {} passes the scope check for {}".format(label, name))
+            status, is_error, text = call_tool(bearer, name)
+            if status != 200 or "scope" in text:
+                print("  ERROR: {} with {} gave {} {}".format(name, label, status, text[:200]))
+                failed = True
+
+    print("Test: a read-only token can still call a read tool")
+    status, is_error, text = call_tool(read_token, "get_status")
+    if status != 200 or "scope" in text:
+        print("  ERROR: get_status with a read-only token gave {} {}".format(status, text[:200]))
+        failed = True
+
+    print("Test: a token with no MCP scope cannot call a read tool")
+    none_token = server.generate_access_token("nobody", scopes=["other"])
+    status, is_error, text = call_tool(none_token, "get_status")
+    if not is_error or "scope" not in text:
+        print("  ERROR: get_status with no MCP scope gave {} {}".format(is_error, text[:200]))
+        failed = True
+    return failed
+
+
 def run_web_mcp_auth_tests(my_predbat):
     """Run every MCP OAuth/authorisation test, returning True if any of them failed."""
     failed = False
     failed |= test_mcp_register_returns_no_secret(my_predbat)
     failed |= test_mcp_signing_key(my_predbat)
     failed |= test_mcp_refuses_default_secret(my_predbat)
+    failed |= test_mcp_scopes_enforced(my_predbat)
     return failed

@@ -190,7 +190,11 @@ Clients that connect through OAuth instead of a fixed `Authorization` header, su
 - Discovery documents: `/.well-known/oauth-protected-resource` (also at `/.well-known/oauth-protected-resource/mcp`) and `/.well-known/oauth-authorization-server` (also at `/.well-known/oauth-authorization-server/mcp`)
 - Dynamic client registration at `/oauth/register`, authorization at `/oauth/authorize` and tokens at `/oauth/token`
 
-When the client opens the authorization page, enter your `mcp_secret` to approve it. A cloud-hosted client such as claude.ai connects from the internet rather than your home network, so read the security note above before you expose the port.
+When the client opens the authorization page, enter your `mcp_secret` to approve it. A client that registers itself is given no secret of its own, so it can only connect through that page.
+
+An OAuth token carries scopes. A token with only `mcp:read` can call the tools that read Predbat but not `set_config` or `set_plan_override`, which need `mcp:write` or `mcp:control`. A client that asks for no particular scope gets all three, as does the `Authorization: Bearer <your mcp_secret>` header.
+
+Tokens are signed with a random key that Predbat creates on first start and keeps in its cache, so they survive a restart. After upgrading from a version before this change, each OAuth client has to authorise once more. A cloud-hosted client such as claude.ai connects from the internet rather than your home network, so read the security note above before you expose the port.
 
 The discovery documents name the server's base URL (`http://<host>:<port>`) as the protected resource, not `<base>/mcp`. Clients that insist the two match, such as Codex, are tracked in [#4799](https://github.com/springfall2008/batpred/issues/4799).
 

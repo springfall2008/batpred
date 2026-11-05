@@ -64,6 +64,9 @@ Example usage in VSCode with OAuth
 
 # The default components.py gives mcp_secret. It is published in the source, so the server refuses to run with it.
 MCP_DEFAULT_SECRET = "predbat_mcp_secret"
+# A tool that changes Predbat needs mcp:write or mcp:control; any other tool needs any MCP scope, as writing implies reading
+MCP_READ_SCOPES = {"mcp:read", "mcp:write", "mcp:control"}
+MCP_WRITE_SCOPES = {"mcp:write", "mcp:control"}
 MCP_STORAGE_MODULE = "mcp"
 MCP_SIGNING_KEY_FILE = "jwt_signing_key"
 MCP_SIGNING_KEY_BYTES = 32
@@ -912,9 +915,11 @@ class PredbatMCPServer(ComponentBase):
 
         # Try OAuth token first (with audience validation)
         token_payload = self.verify_access_token(token, expected_audience=base_url)
+        scopes = None  # The legacy bearer token is mcp_secret itself, so it has every scope
         if token_payload:
             # Valid OAuth token
             client_id = token_payload.get("client_id", "unknown")
+            scopes = set(str(token_payload.get("scope", "")).split())
             self.log(f"MCP GET: Authenticated via OAuth token (client: {client_id})")
         elif token == self.mcp_secret:
             # Legacy direct secret authentication (backwards compatible)
@@ -926,7 +931,7 @@ class PredbatMCPServer(ComponentBase):
             return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Unauthorized: Invalid or expired token."}}, status=401, headers={"WWW-Authenticate": www_auth})
 
         try:
-            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
+            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server, scopes=scopes)
             return web.json_response(result)
         except Exception as e:
             self.log(f"Error in MCP GET endpoint: {e}")
@@ -959,9 +964,11 @@ class PredbatMCPServer(ComponentBase):
 
         # Try OAuth token first (with audience validation)
         token_payload = self.verify_access_token(token, expected_audience=base_url)
+        scopes = None  # The legacy bearer token is mcp_secret itself, so it has every scope
         if token_payload:
             # Valid OAuth token
             client_id = token_payload.get("client_id", "unknown")
+            scopes = set(str(token_payload.get("scope", "")).split())
             self.log(f"MCP POST: Authenticated via OAuth token (client: {client_id})")
         elif token == self.mcp_secret:
             # Legacy direct secret authentication (backwards compatible)
@@ -975,7 +982,7 @@ class PredbatMCPServer(ComponentBase):
             return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Unauthorized: Token verification failed."}}, status=401, headers={"WWW-Authenticate": www_auth})
 
         try:
-            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
+            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server, scopes=scopes)
             return web.json_response(result)
         except Exception as e:
             self.log(f"Error in MCP POST endpoint: {e}")
@@ -1018,13 +1025,14 @@ class MCPServerWrapper(PredbatTools):
         """
         return await self.handle_mcp_request(request, self)
 
-    async def handle_mcp_request(self, request, mcp_server):
+    async def handle_mcp_request(self, request, mcp_server, scopes=None):
         """
         Handle HTTP requests implementing the Model Context Protocol over HTTP
 
         Args:
             request: Web request object
             mcp_server: MCP server instance
+            scopes: The caller's token scopes, or None for no restriction
 
         Returns:
             JSON response following MCP/JSON-RPC 2.0 protocol
@@ -1049,7 +1057,7 @@ class MCPServerWrapper(PredbatTools):
                 elif method == "tools/list":
                     result = await self._handle_tools_list(params)
                 elif method == "tools/call":
-                    result = await self._handle_tools_call(params)
+                    result = await self._handle_tools_call(params, scopes=scopes)
                 elif method == "notifications/initialized":
                     # This is a notification - return empty success response
                     # Some clients expect a response even for notifications over HTTP
@@ -1076,8 +1084,16 @@ class MCPServerWrapper(PredbatTools):
         """Handle MCP tools/list request"""
         return {"tools": mcp_tool_list()}
 
-    async def _handle_tools_call(self, params):
-        """Handle MCP tools/call request"""
+    async def _handle_tools_call(self, params, scopes=None):
+        """Handle MCP tools/call request, refusing a tool the caller's token scopes do not cover"""
+        if scopes is not None:
+            name = params.get("name")
+            tool = next((entry for entry in TOOL_DEFS if entry["name"] == name), None)
+            if tool is not None:
+                needed = MCP_WRITE_SCOPES if tool.get("writes") else MCP_READ_SCOPES
+                if not scopes & needed:
+                    error = "Tool '{}' needs the {} scope, which this token was not granted".format(name, " or ".join(sorted(needed)))
+                    return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": error})}], "isError": True}
         try:
             result = await self.execute(params.get("name"), params.get("arguments", {}))
         except Exception as e:
