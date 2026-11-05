@@ -22,9 +22,12 @@ import json
 from typing import Any, Dict
 from datetime import datetime, timezone, timedelta
 from aiohttp import web
+import hmac
 import secrets
+from urllib.parse import urlencode
 import jwt as pyjwt
 from component_base import ComponentBase
+from const import MCP_DEFAULT_SECRET
 from agent_tools import (  # noqa: F401
     PredbatTools,
     TOOL_DEFS,
@@ -63,8 +66,6 @@ Example usage in VSCode with OAuth
 """
 
 
-# The default components.py gives mcp_secret. It is published in the source, so the server refuses to run with it.
-MCP_DEFAULT_SECRET = "predbat_mcp_secret"
 # A tool that changes Predbat needs mcp:write or mcp:control; any other tool needs any MCP scope, as writing implies reading
 MCP_ALL_SCOPES = ("mcp:read", "mcp:write", "mcp:control")
 MCP_READ_SCOPES = set(MCP_ALL_SCOPES)
@@ -148,7 +149,7 @@ class PredbatMCPServer(ComponentBase):
             # Report started, so Predbat's start-up does not wait for a server that will never run; is_alive() reports the error
             self.api_started = True
             while not self.api_stop:
-                await asyncio.sleep(5)
+                await asyncio.sleep(1)
             self.api_started = False
         elif self.mcp_enable:
             await self.load_signing_key()
@@ -200,12 +201,41 @@ class PredbatMCPServer(ComponentBase):
         data = await storage.load(MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE)
         key = data.get("key") if isinstance(data, dict) else None
         if isinstance(key, str) and len(key) >= MCP_SIGNING_KEY_BYTES * 2:
-            self.jwt_secret = key
-            return
-        if not await storage.save(MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE, {"key": self.jwt_secret}):
+            # The saved key is kept only while mcp_secret is unchanged, so changing the secret still revokes every token
+            if secrets.compare_digest(str(data.get("secret_check", "")), self.secret_check(key)):
+                self.jwt_secret = key
+                return
+            self.log("MCP: mcp_secret has changed, so a new token signing key is used and existing tokens are revoked")
+        if not await storage.save(MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE, {"key": self.jwt_secret, "secret_check": self.secret_check(self.jwt_secret)}):
             self.log("Warn: MCP: Failed to save the token signing key, so access tokens will not survive a restart")
             return
         self.log("MCP: Created a new token signing key; clients authorised before this need to authorise again")
+
+    def authenticate_bearer(self, token, base_url, verb):
+        """
+        Check a bearer token: an OAuth access token, or mcp_secret itself (the legacy form)
+
+        Returns:
+            (authenticated, scopes): scopes is the token's set of scopes, or None for mcp_secret, which has every scope
+        """
+        token_payload = self.verify_access_token(token, expected_audience=base_url)
+        if token_payload:
+            client_id = token_payload.get("client_id", "unknown")
+            self.log(f"MCP {verb}: Authenticated via OAuth token (client: {client_id})")
+            return True, set(str(token_payload.get("scope", "")).split())
+        if self.secret_matches(token):
+            self.log(f"MCP {verb}: Authenticated via legacy bearer token")
+            return True, None
+        return False, None
+
+    def redirect_with(self, uri, params):
+        """Add URL-encoded query parameters to a redirect URI, so a crafted state cannot add parameters of its own"""
+        separator = "&" if "?" in uri else "?"
+        return uri + separator + urlencode(params)
+
+    def secret_check(self, key):
+        """Return a check value tying a signing key to the current mcp_secret, without saving the secret itself"""
+        return hmac.new(key.encode(), str(self.mcp_secret).encode(), "sha256").hexdigest()
 
     def granted_scopes(self, scope_text):
         """
@@ -370,7 +400,7 @@ class PredbatMCPServer(ComponentBase):
         base_url = f"http://{request.host}"
         self.log(f"MCP: Protected Resource Metadata request from {request.remote}")
 
-        metadata = {"resource": base_url, "authorization_servers": [base_url], "scopes_supported": ["mcp:read", "mcp:write", "mcp:control"], "bearer_methods_supported": ["header"], "resource_documentation": f"{base_url}/docs"}
+        metadata = {"resource": base_url, "authorization_servers": [base_url], "scopes_supported": list(MCP_ALL_SCOPES), "bearer_methods_supported": ["header"], "resource_documentation": f"{base_url}/docs"}
 
         self.log(f"MCP: Protected Resource Metadata request from {request.remote}")
 
@@ -400,7 +430,7 @@ class PredbatMCPServer(ComponentBase):
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],  # Only S256, plain is deprecated
             "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
-            "scopes_supported": ["mcp:read", "mcp:write", "mcp:control"],
+            "scopes_supported": list(MCP_ALL_SCOPES),
         }
 
         # Add CORS headers for cross-origin requests (needed by ChatGPT, Claude, etc.)
@@ -430,7 +460,7 @@ class PredbatMCPServer(ComponentBase):
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],  # Only S256, plain is deprecated
             "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
-            "scopes_supported": ["mcp:read", "mcp:write", "mcp:control"],
+            "scopes_supported": list(MCP_ALL_SCOPES),
         }
 
         # Add CORS headers for cross-origin requests (needed by ChatGPT, Claude, etc.)
@@ -504,10 +534,10 @@ class PredbatMCPServer(ComponentBase):
                         self.log(f"MCP OAuth: Authorization code generated for {client_id} with state={state}")
 
                         # Redirect back with code and state
-                        separator = "&" if "?" in redirect_uri else "?"
-                        redirect_url = f"{redirect_uri}{separator}code={auth_code}"
+                        params = {"code": auth_code}
                         if state:
-                            redirect_url += f"&state={state}"
+                            params["state"] = state
+                        redirect_url = self.redirect_with(redirect_uri, params)
 
                         self.log(f"MCP OAuth: Redirecting to {redirect_url}")
                         return web.HTTPFound(redirect_url)
@@ -531,21 +561,21 @@ class PredbatMCPServer(ComponentBase):
                 # Validate required parameters
                 if not client_id or not redirect_uri or response_type != "code":
                     error_uri = redirect_uri if redirect_uri else "about:blank"
-                    return web.HTTPFound(f"{error_uri}?error=invalid_request&state={state}")
+                    return web.HTTPFound(self.redirect_with(error_uri, {"error": "invalid_request", "state": state}))
 
                 # PKCE is REQUIRED per OAuth 2.1 and MCP spec
                 if not code_challenge or not code_challenge_method:
                     error_uri = redirect_uri if redirect_uri else "about:blank"
                     error_desc = "PKCE required: code_challenge and code_challenge_method are required"
                     self.log(f"MCP OAuth: {error_desc}")
-                    return web.HTTPFound(f"{error_uri}?error=invalid_request&error_description={error_desc}&state={state}")
+                    return web.HTTPFound(self.redirect_with(error_uri, {"error": "invalid_request", "error_description": error_desc, "state": state}))
 
                 # Only S256 method is supported (plain is deprecated in OAuth 2.1)
                 if code_challenge_method != "S256":
                     error_uri = redirect_uri if redirect_uri else "about:blank"
                     error_desc = "code_challenge_method must be S256"
                     self.log(f"MCP OAuth: {error_desc}")
-                    return web.HTTPFound(f"{error_uri}?error=invalid_request&error_description={error_desc}&state={state}")
+                    return web.HTTPFound(self.redirect_with(error_uri, {"error": "invalid_request", "error_description": error_desc, "state": state}))
 
             # Show login page (GET request or failed POST)
             # Every value here comes from the request, so escape it, or a crafted link could run a script on this page and read the secret the user types
@@ -667,6 +697,7 @@ class PredbatMCPServer(ComponentBase):
         <div class="client-info">
             <p><strong>Application:</strong> {client_id}</p>
             <p><strong>Requesting access to:</strong> Battery prediction data</p>
+            <p><strong>You will be returned to:</strong> {redirect_uri}</p>
         </div>
 
         {'<div class="error">' + error_message + '</div>' if error_message else ''}
@@ -727,7 +758,7 @@ class PredbatMCPServer(ComponentBase):
             client_name = data.get("client_name", "Unnamed MCP Client")
             redirect_uris = data.get("redirect_uris", [])
             response_types = data.get("response_types", ["code"])
-            scope = data.get("scope", "mcp:read mcp:write mcp:control")
+            scope = data.get("scope", " ".join(MCP_ALL_SCOPES))
 
             # Anyone who can reach the port can register, so a registered client is a public one (#5847): no
             # client secret, and only the authorization code grant, where the user must enter mcp_secret on the
@@ -890,8 +921,10 @@ class PredbatMCPServer(ComponentBase):
         # Mark code as used
         code_data["used"] = True
 
-        # Generate access token with audience and scopes, using those asked for at authorisation unless the token request names its own
-        scopes = self.granted_scopes(scope or code_data.get("scope"))
+        # Generate access token with audience and scopes: those approved at authorisation, narrowed (never widened) by the token request
+        scopes = self.granted_scopes(code_data.get("scope"))
+        if scope:
+            scopes = [granted for granted in self.granted_scopes(scope) if granted in scopes] or scopes
         access_token = self.generate_access_token(client_id, resource=resource, scopes=scopes)
 
         # Clean up used code after a delay
@@ -919,7 +952,7 @@ class PredbatMCPServer(ComponentBase):
         if not auth_header or not auth_header.startswith("Bearer "):
             # REQUIRED: WWW-Authenticate header with resource_metadata (MCP spec)
             base_url = f"http://{request.host}"
-            www_auth = f'Bearer realm="{base_url}", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource", ' f'scope="mcp:read mcp:write mcp:control"'
+            www_auth = f'Bearer realm="{base_url}", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource", ' f'scope="{" ".join(MCP_ALL_SCOPES)}"'
 
             # Return JSON-RPC formatted error for compatibility
             return web.json_response(
@@ -929,18 +962,8 @@ class PredbatMCPServer(ComponentBase):
         token = auth_header.replace("Bearer ", "")
         base_url = f"http://{request.host}"
 
-        # Try OAuth token first (with audience validation)
-        token_payload = self.verify_access_token(token, expected_audience=base_url)
-        scopes = None  # The legacy bearer token is mcp_secret itself, so it has every scope
-        if token_payload:
-            # Valid OAuth token
-            client_id = token_payload.get("client_id", "unknown")
-            scopes = set(str(token_payload.get("scope", "")).split())
-            self.log(f"MCP GET: Authenticated via OAuth token (client: {client_id})")
-        elif self.secret_matches(token):
-            # Legacy direct secret authentication (backwards compatible)
-            self.log("MCP GET: Authenticated via legacy bearer token")
-        else:
+        authenticated, scopes = self.authenticate_bearer(token, base_url, "GET")
+        if not authenticated:
             # Invalid token - return JSON-RPC formatted error with WWW-Authenticate
             www_auth = f'Bearer realm="{base_url}", ' f'error="invalid_token", ' f'error_description="Invalid or expired token", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource"'
 
@@ -969,7 +992,7 @@ class PredbatMCPServer(ComponentBase):
 
             # REQUIRED: WWW-Authenticate header with resource_metadata (MCP spec)
             base_url = f"http://{request.host}"
-            www_auth = f'Bearer realm="{base_url}", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource", ' f'scope="mcp:read mcp:write mcp:control"'
+            www_auth = f'Bearer realm="{base_url}", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource", ' f'scope="{" ".join(MCP_ALL_SCOPES)}"'
 
             return web.json_response(
                 {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Unauthorized: Missing or invalid Authorization header. Use 'Authorization: Bearer <token>' header."}}, status=401, headers={"WWW-Authenticate": www_auth}
@@ -978,18 +1001,8 @@ class PredbatMCPServer(ComponentBase):
         token = auth_header.replace("Bearer ", "")
         base_url = f"http://{request.host}"
 
-        # Try OAuth token first (with audience validation)
-        token_payload = self.verify_access_token(token, expected_audience=base_url)
-        scopes = None  # The legacy bearer token is mcp_secret itself, so it has every scope
-        if token_payload:
-            # Valid OAuth token
-            client_id = token_payload.get("client_id", "unknown")
-            scopes = set(str(token_payload.get("scope", "")).split())
-            self.log(f"MCP POST: Authenticated via OAuth token (client: {client_id})")
-        elif self.secret_matches(token):
-            # Legacy direct secret authentication (backwards compatible)
-            self.log("MCP POST: Authenticated via legacy bearer token")
-        else:
+        authenticated, scopes = self.authenticate_bearer(token, base_url, "POST")
+        if not authenticated:
             # Invalid token
             self.log("MCP POST: Invalid token")
 
@@ -1106,7 +1119,8 @@ class MCPServerWrapper(PredbatTools):
             name = params.get("name")
             tool = next((entry for entry in TOOL_DEFS if entry["name"] == name), None)
             if tool is not None:
-                needed = MCP_WRITE_SCOPES if tool.get("writes") else MCP_READ_SCOPES
+                # A tool not marked writes: False is treated as a write, so one added without the flag is not open to a read-only token
+                needed = MCP_READ_SCOPES if tool.get("writes") is False else MCP_WRITE_SCOPES
                 if not scopes & needed:
                     error = "Tool '{}' needs the {} scope, which this token was not granted".format(name, " or ".join(sorted(needed)))
                     return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": error})}], "isError": True}

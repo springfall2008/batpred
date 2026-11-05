@@ -162,6 +162,16 @@ def test_mcp_signing_key(my_predbat):
         print("  ERROR: a restarted server did not load the saved key")
         failed = True
 
+    print("Test: changing mcp_secret replaces the saved key, so tokens issued under the old secret are revoked")
+    changed = make_server(my_predbat, secret="a-different-secret-entirely", storage=storage)
+    asyncio.run(changed.load_signing_key())
+    if changed.jwt_secret == first.jwt_secret or changed.verify_access_token(token):
+        print("  ERROR: a token issued under the old mcp_secret still verifies after the secret changed")
+        failed = True
+    if TEST_SECRET in json.dumps(storage.data[(MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE)]):
+        print("  ERROR: the saved key file contains mcp_secret")
+        failed = True
+
     print("Test: a short or malformed saved key is replaced")
     storage = FakeStorage()
     storage.data[(MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE)] = {"key": "short"}
@@ -253,6 +263,16 @@ def test_mcp_scopes_enforced(my_predbat):
                 print("  ERROR: {} with {} gave {} {}".format(name, label, status, text[:200]))
                 failed = True
 
+    print("Test: a tool with no writes flag is treated as a write")
+    TOOL_DEFS.append({"name": "test_unflagged_tool", "description": "test", "parameters": {"type": "object", "properties": {}, "required": []}})
+    try:
+        status, is_error, text = call_tool(read_token, "test_unflagged_tool")
+    finally:
+        TOOL_DEFS.pop()
+    if not is_error or "scope" not in text:
+        print("  ERROR: an unflagged tool was open to a read-only token: {} {}".format(is_error, text[:200]))
+        failed = True
+
     print("Test: a read-only token can still call a read tool")
     status, is_error, text = call_tool(read_token, "get_status")
     if status != 200 or "scope" in text:
@@ -302,6 +322,21 @@ def test_mcp_public_client_flow(my_predbat):
     payload = server.verify_access_token(token["access_token"])
     if not payload or payload.get("scope") != "mcp:read":
         print("  ERROR: the token does not carry the scope asked for at authorise: {}".format(payload))
+        failed = True
+
+    print("Test: the token request cannot widen the scope approved at authorise")
+    location = authorise(TEST_SECRET)
+    code = parse_qs(urlparse(location or "").query).get("code", [None])[0]
+    status, token = call(server.oauth_token, FakeJsonRequest({"grant_type": "authorization_code", "code": code, "client_id": client["client_id"], "redirect_uri": "https://example.com/cb", "code_verifier": verifier, "scope": "mcp:control mcp:write"}))
+    if status != 200 or token.get("scope") != "mcp:read":
+        print("  ERROR: asking for more at the token endpoint gave {} {}".format(status, token.get("scope")))
+        failed = True
+
+    print("Test: a crafted state cannot add parameters to the redirect")
+    response = asyncio.run(server.oauth_authorize(FakeJsonRequest(form=dict(form, secret=TEST_SECRET, state="x&code=attacker"))))
+    query = parse_qs(urlparse(response.headers.get("Location", "")).query)
+    if query.get("code", [None]) == ["attacker"] or len(query.get("code", [])) != 1 or query.get("state") != ["x&code=attacker"]:
+        print("  ERROR: the redirect query was {}".format(query))
         failed = True
 
     print("Test: a request naming no MCP scope gets all three, and unknown scopes are dropped")
