@@ -20,8 +20,10 @@ cd coverage
 - Without `--redo` you replay the dump's own rates, load model and Octopus slots. `--redo` recomputes them, and is the retry when an older dump crashes with `KeyError: 0` near `pv_forecast_minute` (GH#4766).
 - A replay cannot reproduce live ML-forecast choices, so a mismatch in marginal ~10p slots is inconclusive (GH#5213); grep the reporter's log for `Best export window` / `Best charge window`.
 - The triage bot may only run `tools/triage_test.sh <test>`: replay via a temporary `TEST_REGISTRY` entry calling `run_single_debug(..., redo=True)`, which also re-derives `set_rate_thresholds()`/`rate_scan_window()` (a dump stores end state, GH#5221).
-- `Replay input:` log lines (PR #5427, 2026-10-12) rebuild a cycle's inputs from the log alone (formats pinned in `tests/test_log_replay_inputs.py`). The external parser (PR #5363, open) makes `log_replay_*` a cross-repo contract; unknown lines are skipped silently. On main a repeated identical line means the value changed (open PR #5591 would change that).
+- `Replay input:` log lines (PR #5427, 2026-10-12) rebuild a cycle's inputs from the log alone (formats pinned in `tests/test_log_replay_inputs.py`). The forward replay's parser (`tests/replay_forward.py`, PR #5363) makes `log_replay_*` a contract; unknown lines are skipped silently. A repeated identical line means the value changed, or (PR #5591) the first run of a new day.
 - Reading a dump directly (GH#5509): rates and windows use absolute minutes of the dump day, `predict_*_best` minutes from now. `export_window_best[].target` is not the `export_limits_best[]` level; decode with `export_mode_of()`/`export_target_of()`.
+- **Forward replay** (PR #5363): `./run_all --debug_file X.yaml --replay_log predbat.log` steps through the log's later runs, re-planning where live did and comparing plans (flags in `docs/developing.md`). For a plan that went wrong after the yaml was taken (GH#5423) or kept changing (GH#4865); `--override name=value` for what-ifs. Needs a log running past the yaml, and a yaml after any restart or `apps.yaml` change; concatenate rotated logs oldest first.
+- **Forward replay modes.** Exact (default) takes the logged SoC each run, and with `Replay input:` lines matched live plans line for line over whole days (Oct 2026); `--replay_simulate` steps the battery itself, to try a fix. The summary counts export windows only: use `--replay_chart`, and diff `predict base/best` lines against the replay's own `predbat.log` for costs.
 
 Loader failures before Predbat code runs:
 
@@ -787,6 +789,9 @@ What a report or log shows, and where to start. Where a symptom belongs to one i
 - **`self.predict_soc` after a trial run holds the nominal scenario** (nominal runs last in `run_prediction_metric()`); its keys stop at `forecast_minutes − 5` (PR #5735).
 - **Ad-hoc replay under the triage permission mode.** Env-var prefixes break the allowlist: add a temporary probe to `run_debug_cases()`, gated on a marker file, and revert it. Plan pass lines go to `coverage/predbat.log`, not the test log (GH#5633).
 - **Golden plans move with load scaling.** Regenerate `coverage/cases/*.expected.json` from `*.actual.json` and `random_results.json` via `./run_random`; `debug_cases` stops at the first failing case. First prove the shift by restoring the old behaviour.
+- **A forward replay drifts from live** on logs without `Replay input:` lines (forecasts stay as the yaml had them), and where a restart or a mid-run car plug-in made live re-plan twice in one run. Multi-inverter SoC is the sum of each inverter's SoC line (GH#5423).
+- **Simulated SoC RMS cannot tune battery settings**: a changed loss or rate changes the plan too. Measure efficiency from the log instead.
+- **`Will recompute the plan as it is invalid` is logged on every recompute**; only `Recompute, previous plan is invalid...` means it was. A recomputing run's first `Best export window` is the fresh list, not the plan in force; the 8-hourly config refresh adds an extra run.
 
 ### Tests and the C++ kernel
 

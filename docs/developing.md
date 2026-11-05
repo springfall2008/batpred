@@ -806,6 +806,57 @@ Example dumps are kept in `coverage/cases/*.yaml`, and they are replayed as regr
 The dumps are recorded data: the saved settings are loaded back in, but not the display attributes of config items (such as their icons).
 There is no need to update them when you change how entities are presented.
 
+### Replaying a log forwards from a debug yaml
+
+A debug yaml is one moment in time. When a bug report also attaches the log from the following hours, the replay can step through that log from the yaml and re-plan wherever the real Predbat did:
+
+```bash
+cd coverage
+./run_all --debug_file <predbat_debug.yaml> --replay_log <predbat.log> [--replay_until HH:MM]
+```
+
+For each Predbat run in the log it sets the clock, SoC, the load/PV/import/export history and the inverter's programmed export window from the log, then re-plans on the runs where the log shows a re-plan. It prints the first export window the log recorded next to the one it computed, and a summary of how many re-plans matched. The PV forecast is the one in the yaml, because the log records only its total.
+
+Newer Predbat versions also log `Replay input:` lines, and the replay uses them wherever a run has them. They carry the load and PV forecasts, the values each plan starts from (SoC, in-day adjustment, cost so far, the day counters, the charge and discharge rates in force and the battery temperature) at full precision, the exact load divergence, and, whenever they change, the rates, the car state and the inverter's programmed state. Without them, the replay drifts from the live plans as the day goes on.
+
+There are two modes:
+
+- **Exact replay** (the default) takes the battery SoC from the log at every run, so each re-plan starts from exactly what the live system saw. Use it to check the replay reproduces the live plans before changing anything.
+- **Simulated** (`--replay_simulate`) steps the battery forward itself under the replayed plan, using the actual PV and load from the log and Predbat's own battery and inverter model (rate curves, losses, reserve, the inverter and export limits). Use it once the code is changed: the SoC then follows the changed plan instead of being pinned to what the unchanged code did.
+
+`--override name=value` (repeatable) changes a setting after the yaml is restored, for what-if replays - for example `--override pv_metric90_weight=0.25`. It works for a plain `--debug_file` replay as well.
+
+`--replay_json <file.json>` writes the comparison as one JSON document, one element per line, for a script or an AI to read: `meta` (what was replayed and how), then `summary`, then `runs` with one record per live run. A run that matches is one short record (time, whether it re-planned, SoC). A run that differs also gives the live and replayed plans that differ (`adopted`, `candidate`, `charge`), the plan's prediction summaries that differ (`base`, `best` and their PV10/PV90 scenarios), and `first_difference`, the first optimiser line where the two logs part. The summary counts the matches and groups the differing runs into `clusters`, each with its first difference, so the place to start looking is the summary at the top.
+
+`--replay_chart <file.png>` draws the actual SoC (and the simulated SoC, when simulating) against the export targets of the live and replayed plans, and a timeline of what each plan says at every run in the web plan's terms (Chrg, HoldChrg, FrzChrg, Exp, HoldExp, FrzExp, car), with a lane for the car's planned charging.
+
+In simulated mode the replay also prints the RMS difference between its simulated SoC and the logged SoC, a single number for how faithfully it is tracking the real battery.
+
+The replay carries on across midnight, so a yaml from late evening can be replayed through the whole of the next day. At midnight it moves everything held as minutes from midnight (rates, forecasts, plan windows) back a day, and the start-of-day re-plan happens as it does live. Rates the live system fetched after the yaml was written, such as the next day-ahead prices, are not in the yaml. The replay takes them from the log's `Replay input: rates changed` lines; a log without those lines plans on rates that run out early. `--replay_until HH:MM` stops at the first such time after the yaml.
+
+Where the replay matches the log it can be used for what-if experiments; where it does not, the first run that diverges shows what the log carries that the yaml did not. The log should come from a similar Predbat version; a version change part way through is marked, and the plans after it are counted separately.
+
+### The dummy inverter
+
+For a demo, or to run Predbat end to end without real hardware, the `dummy_inverter` component simulates a hybrid inverter and battery. Add a block to `apps.yaml` and it publishes its own sensors and controls and points Predbat's inverter settings at them:
+
+```yaml
+dummy_inverter:
+  battery_size: 10          # kWh usable
+  battery_rate_max: 3600    # W, charge and discharge
+  inverter_limit: 5000      # W, AC output shared by PV and battery
+  export_limit: 5000        # W
+  battery_loss: 0.96
+  battery_loss_discharge: 0.96
+  inverter_loss: 0.96
+  reserve: 4                # %
+  soc_initial: 50           # %
+  pv_peak: 4.0              # kW, clear-sky curve used when there is no PV forecast
+  load: 0.4                 # kW, or a list of 24 hourly values
+```
+
+Every setting is optional. The model steps once a minute: the battery charges and discharges within its rate and losses, PV and battery share the inverter limit with PV first, export is capped at the export limit, and PV with nowhere to go is clipped (published as `sensor.predbat_dummy_clipped_power` and `_clipped_lifetime`). Predbat's charge and export windows are obeyed, a zero-rate window freezes the battery, and outside a window it runs self-consumption. PV comes from Predbat's forecast when one is configured. The simulation state is not saved, so a restart starts again from `soc_initial`.
+
 ### Random scenario benchmarking
 
 Predbat can generate reproducible random scenarios, run them through the optimiser, and compare two runs. This is useful to check that a change to the optimiser
