@@ -61,6 +61,7 @@ import argparse
 import asyncio
 import base64
 import json
+import math
 import ssl
 import tempfile
 import time
@@ -3042,8 +3043,11 @@ class SigenergyAPI(ComponentBase):
                 export_window = True
 
         # Determine desired mode (export takes priority)
+        # Durations round up: the device times the window's end from startTime (now), so rounding
+        # down would stop it short by the seconds the run lands past the minute. Our next run past
+        # the end reverts the mode, which bounds any overrun of the rounded-up command.
         if export_window and export_start_dt and export_end_dt:
-            duration_min = max(1, int((export_end_dt - now).total_seconds() / 60))
+            duration_min = max(1, math.ceil((export_end_dt - now).total_seconds() / 60))
             # The plant stops discharging at its backup cut-off as well as the discharge cut-off (the reserve)
             backup_soc = _safe_int(self.device_cutoffs.get(system_id, {}).get("backup", 0), 0)
             effective_target = max(export_target_soc, reserve_soc, backup_soc)
@@ -3057,7 +3061,7 @@ class SigenergyAPI(ComponentBase):
                 discharge_priority_type = "PV"
                 charge_power_kw = export_rate_w / 1000.0
         elif charge_window and charge_start_dt and charge_end_dt:
-            duration_min = max(1, int((charge_end_dt - now).total_seconds() / 60))
+            duration_min = max(1, math.ceil((charge_end_dt - now).total_seconds() / 60))
             effective_target = max(charge_target_soc, reserve_soc)
             if effective_target <= reserve_soc or abs(effective_target - battery_soc_pct) < 1:
                 # Freeze charge — stay at current SOC
