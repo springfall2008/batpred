@@ -777,6 +777,9 @@ Once your car is charging in the dispatch (see **Charging the battery while the 
 Instead the house and battery pay the peak rate for 5 minutes of each half hour of it, and the car's own charging pays none of that, as the car stops with its dispatch.
 This applies whether the dispatches come from the Octopus Energy integration or from Predbat's own Octopus connection.
 
+- When a dispatch is withdrawn, the Octopus Energy integration's import rate sensor can keep showing its cheap rate for a while. Predbat puts those minutes back to your normal rate once no dispatch covers them, as long as it saw a dispatch covering them before.
+The half hour in progress is left alone while a car is charging, or when **switch.predbat_octopus_intelligent_dynamic** is Off, as the car may have charged in it before the dispatch was withdrawn.
+
 - Let the Octopus app control when your car charges.
 
 #### Checking Intelligent dispatches against the car
