@@ -19,7 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id
+from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -49,7 +49,6 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import ast
 import copy
-
 
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
@@ -1637,7 +1636,7 @@ class Fetch:
                 self.log("Octopus Intelligent: dispatch minutes no car needs changed to {}".format(len(self.octopus_surplus)))
                 octopus_surplus_changed = True
             import_rates = self.dynamic_load_car_strip_feed_rates(import_rates)
-            import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True)
+            import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True, use_future=True)
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
                 import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
@@ -1648,6 +1647,10 @@ class Fetch:
             # legitimate IOG discount wherever a session and a dispatch slot overlap, and the automatic
             # threshold scan could then miss a genuinely cheap slot.
             self.rate_import_pre_saving = import_rates.copy()
+            # rate_min_forward is what replacing a stored kWh costs (battery_value_rate), so it is built here from
+            # the tariff before any saving/free/Axle session - a one-off free hour tomorrow is not what refilling
+            # the battery costs
+            self.rate_min_forward = self.rate_min_forward_calc(import_rates)
             self.load_saving_slot(self.octopus_saving_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             load_axle_slot(self, self.axle_sessions, import_rates, export=False, rate_replicate=self.rate_import_replicated)
@@ -1676,11 +1679,13 @@ class Fetch:
         # Replicate and scan export rates
         if export_rates:
             self.rate_scan_export(export_rates, print=False)
-            export_rates, self.rate_export_replicated = self.rate_replicate(export_rates, is_import=False)
+            export_rates, self.rate_export_replicated = self.rate_replicate(export_rates, is_import=False, use_future=True)
             self.rate_export_base = export_rates.copy()
             # Built here, from the base rates, so the saving session and overrides applied below stay
             # out of it - battery_value_rate needs the tariff's own export price, not an event price
             self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
+            # Likewise the export floor in battery_value_rate: the lowest price the tariff itself pays
+            self.rate_export_min_base = self.rate_minmax(self.rate_export_base)[0]
             # Export has no IOG overlay, so the pre-saving tariff matches rate_export_base - copied
             # rather than aliased so the two can never be corrupted together by a future in-place
             # mutation of either.
@@ -1938,18 +1943,20 @@ class Fetch:
         days = min(self.max_days_previous, minutes // (24 * 60) + 1)
         return self.minute_data_import_export(days, self.now_utc, entities[car_n], scale=self.car_charging_energy_scale, required_unit="kWh") or None
 
-    def car_manual_soc_energy_since(self, car_n, since):
+    def car_manual_soc_energy_since(self, car_n, since, history):
         """
         kWh the car's charger energy sensor recorded between since and now, or None when it has no history.
 
         The history's cumulative series already counts on through the sensor resetting at midnight or at
         the start of a session. Before the history starts it reads zero, which is right - no energy was
         recorded then - but past its end it has no value, so a time older than that is taken as its start.
+
+        history is the series car_manual_soc_energy_history() returned for a window covering since, so one
+        read serves every window in a cycle.
         """
         minutes = int((self.now_utc - since).total_seconds() / 60)
         if minutes <= 0:
             return 0.0
-        history = self.car_manual_soc_energy_history(car_n, minutes)
         if not history:
             return None
         oldest = len(history) - 1 if isinstance(history, MinuteArray) else max(history.keys())
@@ -2015,7 +2022,8 @@ class Fetch:
         Update the manual SoC of each manually tracked car for what has happened since the last cycle.
 
         Each car has a record in car_manual_soc_state: the value Predbat last saw or wrote, the time charger energy
-        has been counted up to, the plugged-in sensor's last reading and when the car was last active. It is published as
+        is counted from and how much of it since then has been added already, the plugged-in sensor's last reading and
+        when the car was last active. It is published as
         sensor.predbat_car_manual_soc_tracked[_N] (see car_manual_soc_publish()), which a restart reads back, so
         tracking picks up where it left off. The entities' own change times are not used - Home Assistant only
         moves them when the state changes, while Predbat's own database moves them on every write.
@@ -2024,6 +2032,12 @@ class Fetch:
           again from now, so no energy is added on top of it.
         - Otherwise the energy the car_charging_energy sensor recorded since the record's time is added, less
           charging losses - but no more than the car could have taken at car_charging_rate (car_manual_soc_energy_cap()).
+          The history reaches Predbat up to a couple of minutes late and is smoothed back over those minutes when it does, so
+          the time is not moved to now while energy is coming in: each cycle adds what the history now shows since that
+          time less what is already counted. The cap therefore covers the whole charge so far until it bites. With nothing
+          new the time moves up to CAR_MANUAL_SOC_LATE_MINUTES ago, if that is later, and the counted energy is worked out
+          again for it from the same read. A read that is missing, or shows less than is already counted, leaves both
+          alone. When the cap bites, counting starts again from now, so a counter glitch cannot keep feeding the window.
           The value kept is not limited to the battery size: that is not known until Octopus Intelligent has reported
           its own, later in the cycle, and the plan reads it clamped anyway (car_manual_soc_kwh()).
         - A car whose car_charging_plugged sensor has gone from plugged in to unplugged, and stayed unplugged for
@@ -2051,6 +2065,7 @@ class Fetch:
             since = self.car_manual_soc_time(record.get("since")) if isinstance(record, dict) else None
             unplugged_since = None
             active = self.now_utc
+            counted = 0.0
             if since is None:
                 record = None
 
@@ -2063,21 +2078,42 @@ class Fetch:
                 if not (car_n < len(self.car_charging_now) and self.car_charging_now[car_n]):
                     active = self.car_manual_soc_time(record.get("active")) or self.now_utc
                 if car_n < len(self.car_charging_manual_soc_energy) and self.car_charging_manual_soc_energy[car_n]:
-                    energy_added = self.car_manual_soc_energy_since(car_n, since)
-                    if energy_added:
-                        energy_added = self.car_manual_soc_energy_cap(car_n, since, energy_added)
+                    # The time stays put while energy comes in, and only what is new since the last cycle is added: history
+                    # arrives late and is smoothed back over the minutes before it, so restarting from now each cycle lost that
+                    counted = record.get("counted") or 0.0
+                    # One read of the history serves the total and, with nothing new, the window the time moves up to
+                    minutes = int((self.now_utc - since).total_seconds() / 60)
+                    history = (self.car_manual_soc_energy_history(car_n, minutes) or {}) if minutes > 0 else {}
+                    energy_total = self.car_manual_soc_energy_since(car_n, since, history)
+                    capped = False
+                    if energy_total:
+                        energy_capped = self.car_manual_soc_energy_cap(car_n, since, energy_total)
+                        capped = energy_capped < energy_total
+                        energy_total = energy_capped
+                    energy_added = (energy_total or 0.0) - counted
+                    if energy_added >= 0.001:
                         soc_new = soc_new + energy_added * self.car_charging_loss
-                        self.log("Car {} manual SoC {} kWh plus {} kWh charged since {} is {} kWh".format(car_n, dp3(soc), dp3(energy_added), since.strftime(TIME_FORMAT), dp3(soc_new)))
-                        since = self.now_utc
+                        self.log("Car {} manual SoC {} kWh plus {} kWh charged is {} kWh ({} kWh since {})".format(car_n, dp3(soc), dp3(energy_added), dp3(soc_new), dp3(energy_total), since.strftime(TIME_FORMAT)))
+                        counted = energy_total
                         active = self.now_utc
-                    else:
-                        # Kept back a little, for energy the history records late - but not so far that every cycle reads days of it
-                        since = max(since, self.now_utc - timedelta(minutes=CAR_MANUAL_SOC_LATE_MINUTES))
+                        if capped:
+                            # A counter glitch would stay in the window and keep the cap biting, so count on from now
+                            since = self.now_utc
+                            counted = 0.0
+                    elif not counted or (energy_total is not None and energy_total >= counted - 0.001):
+                        # Kept back a little, for energy the history records late - but not so far that every cycle reads days of it.
+                        # A read that is missing or shows less than is already counted says nothing about it, so then both wait
+                        late = self.now_utc - timedelta(minutes=CAR_MANUAL_SOC_LATE_MINUTES)
+                        if late > since:
+                            since = late
+                            rebased = self.car_manual_soc_energy_since(car_n, since, history)
+                            counted = self.car_manual_soc_energy_cap(car_n, since, rebased) if rebased else 0.0
                 if plug_arg is None and soc_new > 0 and (self.now_utc - active).total_seconds() / 60 >= CAR_MANUAL_SOC_IDLE_MINUTES:
                     # Nothing says when the car is unplugged, so a car left idle this long is taken to have been driven since
                     self.log("Car {} has been idle since {}, resetting its manual SoC from {} kWh to 0".format(car_n, active.strftime(TIME_FORMAT), dp3(soc_new)))
                     soc_new = 0.0
                     since = self.now_utc
+                    counted = 0.0
                     active = self.now_utc
                 if record.get("plugged") is True and plugged is False:
                     # An unplug only counts once it has lasted: a charger reconnecting can read unplugged for a few minutes
@@ -2090,6 +2126,7 @@ class Fetch:
                         self.log("Car {} has been unplugged, resetting its manual SoC from {} kWh to 0".format(car_n, dp3(soc_new)))
                         soc_new = 0.0
                         since = self.now_utc
+                        counted = 0.0
                         unplugged_since = None
                     else:
                         # Still plugged in, until the unplug has lasted
@@ -2103,11 +2140,12 @@ class Fetch:
                 self.expose_config(name, soc_new)
             if plugged is None and record is not None:
                 plugged = record.get("plugged")
-            record_new = {"soc": soc_new, "since": since.isoformat(), "plugged": plugged, "unplugged_since": unplugged_since, "active": active.isoformat()}
-            # Published when the SoC or the plug changes. A time that only moved on is kept in memory: it moved with nothing
-            # charged, so after a restart the published, older time gives the same SoC. The active time moves with the SoC,
+            record_new = {"soc": soc_new, "since": since.isoformat(), "counted": dp3(counted), "plugged": plugged, "unplugged_since": unplugged_since, "active": active.isoformat()}
+            # Published when the SoC, the counted energy or the plug changes. A time that moved on with the counted energy unchanged is
+            # kept in memory, as after a restart the published, older pair gives the same SoC. The counted energy is published as it
+            # changes, so a restart never pairs it with a time the history has since moved past. The active time moves with the SoC,
             # except while car_charging_now reads charging, where a restart only brings an idle reset forward
-            publish = record is None or record.get("soc") != soc_new or record.get("plugged") != plugged or record.get("unplugged_since") != unplugged_since
+            publish = record is None or record.get("soc") != soc_new or record.get("counted") != record_new["counted"] or record.get("plugged") != plugged or record.get("unplugged_since") != unplugged_since
             self.car_manual_soc_state[car_n] = record_new
             if publish:
                 self.car_manual_soc_publish(car_n)
@@ -2133,7 +2171,7 @@ class Fetch:
 
     def car_manual_soc_publish(self, car_n):
         """
-        Publish car_n's tracking record: the SoC as the state, with the time energy is counted from, the last plug reading,
+        Publish car_n's tracking record: the SoC as the state, with the time energy is counted from, the kWh already counted since then, the last plug reading,
         when a pending unplug was first read and when the car was last active as attributes.
         """
         record = self.car_manual_soc_state.get(car_n, {})
@@ -2142,6 +2180,7 @@ class Fetch:
             state=record.get("soc"),
             attributes={
                 "since": record.get("since"),
+                "counted": record.get("counted"),
                 "plugged": record.get("plugged"),
                 "unplugged_since": record.get("unplugged_since"),
                 "active": record.get("active"),
@@ -2161,6 +2200,7 @@ class Fetch:
         except (ValueError, TypeError):
             return None
         since = self.get_state_wrapper(entity_id=entity_id, attribute="since", default=None)
+        counted = self.get_state_wrapper(entity_id=entity_id, attribute="counted", default=None)
         plugged = self.get_state_wrapper(entity_id=entity_id, attribute="plugged", default=None)
         unplugged_since = self.get_state_wrapper(entity_id=entity_id, attribute="unplugged_since", default=None)
         active = self.get_state_wrapper(entity_id=entity_id, attribute="active", default=None)
@@ -2169,6 +2209,7 @@ class Fetch:
         return {
             "soc": dp3(soc),
             "since": since,
+            "counted": float(counted) if isinstance(counted, (int, float)) and not isinstance(counted, bool) and counted >= 0 else 0.0,
             "plugged": plugged if isinstance(plugged, bool) else None,
             "unplugged_since": unplugged_since if isinstance(unplugged_since, str) and unplugged_since else None,
             "active": active if isinstance(active, str) and active else None,
@@ -2329,6 +2370,8 @@ class Fetch:
                     # gives the charger more than one power, the component passes on the lowest (catalogue_value(), #5438)
                     self.log("Car {} rate from Octopus is {}kW and configured rate {}".format(car_n, rate, self.car_charging_rate[car_n]))
                     self.car_charging_rate[car_n] = max(rate, self.car_charging_rate[car_n])
+                    # ...but it must not raise it past the car's own maximum (car_charging_max_rate)
+                    self.car_charging_rate[car_n] = self.car_rate_capped(car_n, self.car_charging_rate[car_n])
 
                 # Get car charging limit again from car based on new battery size
                 self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
@@ -2370,8 +2413,28 @@ class Fetch:
                         except (ValueError, TypeError):
                             self.log("Warn: octopus_charge_limit is set to a bad value {} for car {} in apps.yaml, must be a number".format(octopus_limit, car_n))
                             octopus_limit = None
+                    # With the charger linked rather than the car, Octopus's target is a percentage to add, not a
+                    # SoC to reach (#3034), so it counts from the SoC the car had when it was plugged in. The plug
+                    # sensor decides where there is one - car_charging_planned can turn off at the end of a charge
+                    # with the car still plugged in. Without one, planned dispatches only say the car is plugged in
+                    # when they are dropped for an unplugged car
+                    plug_arg = self.car_plug_arg(car_n)
+                    plugged = self.car_plugged_in_now(car_n, plug_arg) if plug_arg else None
+                    if plugged is None:
+                        plugged = bool(self.car_charging_planned[car_n] or self.car_charging_now[car_n] or (planned and not self.octopus_intelligent_ignore_unplugged))
+                    base_soc = self.octopus_charge_target_base_soc(car_n, plugged, save)
                     if octopus_limit:
                         octopus_limit = dp3(float(octopus_limit) * self.car_charging_battery_size[car_n] / 100.0)
+                        added = self.octopus_charge_target_is_added(entity_id, car_n)
+                        # Said when it changes, not on every cycle. While unplugged the base follows the SoC, so it
+                        # is not a plug-in SoC yet and is left out
+                        logged_key = (added, base_soc if plugged else None)
+                        if save and logged_key != self.octopus_charge_target_logged.get(car_n):
+                            self.octopus_charge_target_logged[car_n] = logged_key
+                            if added and plugged:
+                                self.log("Car {} Octopus is linked to the charger, so its target adds {}kWh to the {}kWh the car had when plugged in".format(car_n, octopus_limit, base_soc))
+                        if added:
+                            octopus_limit = dp3(base_soc + octopus_limit)
                         self.car_charging_limit[car_n] = min(self.car_charging_limit[car_n], octopus_limit)
                     if octopus_ready_time:
                         self.car_charging_plan_time[car_n] = octopus_ready_time
@@ -2433,6 +2496,47 @@ class Fetch:
         # Live plan only, as for car_manual_soc_track() - a compare.py re-run must not publish anything
         if save:
             self.car_manual_soc_mirror()
+
+    def octopus_charge_target_is_added(self, entity_id, car_n=0):
+        """
+        Is the Octopus Intelligent charge target for this dispatch sensor a percentage to add, rather than a SoC to reach?
+
+        Octopus takes a percentage to add when the charger is linked, and a SoC to reach when the car is (#3034).
+        Which device is linked is decided by intelligent_device_is_charger(), from the dispatch sensor and the
+        car's octopus_charge_limit entity when that is an entity rather than a number. None when nothing says,
+        which keeps the target read as a SoC to reach, as it always was - and for car 0 when another charger
+        component (Ohme) has claimed its charge limit, which is then that charger's own SoC target.
+        """
+        if car_n == 0 and self.car_slot_owner not in (None, "octopus"):
+            # Another charger component (Ohme) has wired octopus_charge_limit to its own target, a SoC to reach
+            return None
+        target = self.get_arg("octopus_charge_limit", None, indirect=False, index=car_n)
+        target_attribute = None
+        if is_entity_id(target):
+            target_attribute = lambda name: self.get_state_wrapper(entity_id=target, attribute=name)
+        return intelligent_device_is_charger(lambda name: self.get_state_wrapper(entity_id=entity_id, attribute=name), target_attribute)
+
+    def octopus_charge_target_base_soc(self, car_n, plugged, save):
+        """
+        The car's SoC (kWh) when it was plugged in, which a charger-linked Octopus target adds to.
+
+        While the car is unplugged this follows its SoC; once it is plugged in it is held at the last reading from
+        before, so a stale or partial low reading while it charges cannot drag the base, and with it the limit,
+        down. A SoC of 0 is a sensor that could not be read, so it never replaces a base. Not saved: after a
+        restart part way through a charge it starts again from the SoC then, which can only put the limit
+        higher, not lower. Only the live fetch records it - compare.py's re-runs (save=False) take the live
+        fetch's as it is, since car_charging_planned there is no longer the plug sensor's reading.
+        """
+        soc = self.car_charging_soc[car_n]
+        base = self.octopus_charge_target_base.get(car_n)
+        if not save:
+            return soc if base is None else base
+        if soc > 0 and (not plugged or not base):
+            base = soc
+        if base is None:
+            return soc
+        self.octopus_charge_target_base[car_n] = base
+        return base
 
     def fetch_pv_forecast(self):
         """
@@ -2607,9 +2711,13 @@ class Fetch:
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
 
-    def rate_replicate(self, rates, rate_io=None, is_import=True, is_gas=False):
+    def rate_replicate(self, rates, rate_io=None, is_import=True, is_gas=False, use_future=False):
         """
         We don't get enough hours of data for Octopus, so lets assume it repeats until told others
+
+        use_future fills missing minutes from the predicted future rates (futurerate). Those are
+        predictions for the live import/export tariff only, so other rates replicated through here
+        (gas, and the tariffs compare and annual replay) must leave it off.
         """
         if rate_io is None:
             rate_io = {}
@@ -2643,19 +2751,23 @@ class Fetch:
                     rate_offset = rate_last
                     using_last = True
 
-                # Only offset once not every day
                 futurerate_adjust_import = self.get_arg("futurerate_adjust_import", False)
                 futurerate_adjust_export = self.get_arg("futurerate_adjust_export", False)
-                if minute_mod not in adjusted_rates:
-                    if is_import and futurerate_adjust_import and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
-                        rate_offset = self.future_energy_rates_import[minute]
-                        adjust_type = "future"
-                        using_last = False
-                    elif (not is_import) and (not is_gas) and futurerate_adjust_export and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
-                        rate_offset = max(self.future_energy_rates_export[minute], 0)
-                        adjust_type = "future"
-                        using_last = False
-                    elif is_import:
+                # A predicted future rate is an absolute price for this minute, so use it whenever there
+                # is one - even where the minute being copied was itself filled, or has no prediction
+                if use_future and is_import and futurerate_adjust_import and (minute in self.future_energy_rates_import):
+                    rate_offset = self.future_energy_rates_import[minute]
+                    adjust_type = "future"
+                    using_last = False
+                    adjusted_rates[minute] = True
+                elif use_future and (not is_import) and (not is_gas) and futurerate_adjust_export and (minute in self.future_energy_rates_export):
+                    rate_offset = max(self.future_energy_rates_export[minute], 0)
+                    adjust_type = "future"
+                    using_last = False
+                    adjusted_rates[minute] = True
+                # Only offset once not every day
+                elif minute_mod not in adjusted_rates:
+                    if is_import:
                         rate_offset = rate_offset + self.metric_future_rate_offset_import
                         if self.metric_future_rate_offset_import:
                             adjust_type = "offset"
@@ -3240,7 +3352,7 @@ class Fetch:
         the tariff's real off-peak price. Mirrors how rate_export_base is already built downstream of
         rate_replicate() on the export side.
         """
-        rate_base, _ = self.rate_replicate(rates.copy(), {}, is_import=True)
+        rate_base, _ = self.rate_replicate(rates.copy(), {}, is_import=True, use_future=True)
         rate_min_base, rate_max_base, _, _, _ = self.rate_minmax(rate_base)
         return rate_base, rate_min_base, rate_max_base
 
@@ -3484,12 +3596,8 @@ class Fetch:
         curr = self.currency_symbols[1]
 
         if print:
-            # Calculate minimum forward rates only once rate replicate has run (when print is True).
-            # Use the `rates` argument, not self.rate_import: during fetch's atomic rebuild self.rate_import
-            # still holds the PREVIOUS cycle's data (publish is deferred to the end of the block), so
-            # reading it here would make rate_min_forward - which drives plan.py charge/discharge economics
-            # - a cycle stale. `rates` is the freshly-built current-cycle dict being scanned.
-            self.rate_min_forward = self.rate_min_forward_calc(rates)
+            # rate_min_forward is not built here: fetch_sensor_data() builds it from the tariff before the
+            # saving/free/Axle sessions are added, which the rates scanned here already include
             self.log("Import rates: min {}{}, max {}{}, average {}{}".format(self.rate_min, curr, self.rate_max, curr, self.rate_average, curr))
 
     def rate_export_max_forward_calc(self, rates):
@@ -3606,6 +3714,7 @@ class Fetch:
         self.car_charging_battery_size = [100.0 for c in range(self.num_cars)]
         self.car_charging_limit = [100.0 for c in range(self.num_cars)]
         self.car_charging_rate = [7.4 for c in range(max(self.num_cars, 1))]
+        self.car_charging_max_rate = [0.0 for c in range(max(self.num_cars, 1))]
         self.car_charging_slots = [[] for c in range(self.num_cars)]
         self.car_charging_exclusive = [False for c in range(self.num_cars)]
 
@@ -3628,8 +3737,12 @@ class Fetch:
             self.car_charging_battery_size[car_n] = dp2(float(self.get_arg("car_charging_battery_size", 100.0, index=car_n)))
             car_postfix = "" if car_n == 0 else "_" + str(car_n)
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate" + car_postfix))
+            self.car_charging_max_rate[car_n] = self.car_max_rate_cap(car_n)
+            self.car_max_rate_log_change(car_n, self.car_charging_max_rate[car_n])
+            self.car_charging_rate[car_n] = self.car_rate_capped(car_n, self.car_charging_rate[car_n])
             self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
             self.car_charging_exclusive[car_n] = self.get_arg("car_charging_exclusive", False, index=car_n)
+        self.car_max_rate_save()
 
         if self.num_cars > 0:
             car_charging_limit_percent = [dp1(limit / size * 100) if size else 0 for limit, size in zip(self.car_charging_limit, self.car_charging_battery_size)]
@@ -3650,6 +3763,135 @@ class Fetch:
                     self.car_charging_exclusive,
                 )
             )
+
+    def car_max_rate_entry(self, car_n):
+        """
+        Return car car_n's raw car_charging_max_rate entry (a number, an entity id, or None).
+
+        A list is one entry per car, and a list shorter than num_cars is normal (the cars past its end
+        are not capped), so only entries that exist are read - get_arg's index lookup would log an
+        "Out of range index" warning every cycle for them. A single value, not a list, applies to
+        every car.
+        """
+        entries = self.get_arg("car_charging_max_rate", None, indirect=False)
+        if isinstance(entries, list):
+            return entries[car_n] if car_n < len(entries) else None
+        return entries
+
+    def car_max_rate_cap(self, car_n):
+        """
+        Return car car_n's own maximum charge rate in kW from car_charging_max_rate, or 0.0 for no cap.
+
+        Each entry is a number or an entity pointer. Absent, blank, 0, negative or a non-numeric fixed
+        value means no cap. A pointed-to entity whose state is not a usable number - unknown,
+        unavailable, none, blank (the states apps.yaml validation lets through) or any other text -
+        holds the last usable cap for that car, so a sensor drop-out can not briefly put the car back
+        on the charger's rate; text other than those states is warned about once per car. A pointer
+        to an entity that does not exist is warned about once (again if it comes back and then goes
+        away) and means no cap.
+        """
+        value = self.car_max_rate_entry(car_n)
+        entity_id = value if is_entity_id(value) else None
+        if entity_id:
+            value = self.get_state_wrapper(entity_id, required_unit="kW")
+            if value is None:
+                if entity_id not in self.car_charging_max_rate_warned:
+                    self.car_charging_max_rate_warned.add(entity_id)
+                    self.log("Warn: car_charging_max_rate for car {} points to {} which does not exist, so the car's charge rate is not capped".format(car_n, entity_id))
+                self.car_charging_max_rate_held.pop(car_n, None)
+                return 0.0
+            self.car_charging_max_rate_warned.discard(entity_id)
+        try:
+            cap = None if isinstance(value, bool) else float(value)
+        except (ValueError, TypeError):
+            cap = None
+        if entity_id:
+            if cap is None:
+                # unknown/unavailable/none/blank is a normal drop-out; any other text is warned about once
+                if str(value).strip().lower() not in ("unknown", "unavailable", "none", "") and car_n not in self.car_charging_max_rate_bad_warned:
+                    self.car_charging_max_rate_bad_warned.add(car_n)
+                    self.log("Warn: car_charging_max_rate for car {} reads {} = {}, which is not a number in kW, so the last cap is kept".format(car_n, entity_id, value))
+                return self.car_charging_max_rate_held.get(car_n, 0.0)
+            self.car_charging_max_rate_bad_warned.discard(car_n)
+        if cap is None or cap != cap or cap <= 0:  # not a number, NaN or non-positive
+            self.car_charging_max_rate_held.pop(car_n, None)
+            return 0.0
+        self.car_charging_max_rate_held[car_n] = cap
+        return cap
+
+    def car_max_rate_log_change(self, car_n, cap):
+        """
+        Log car car_n's car_charging_max_rate cap when it changes, rather than on every cycle.
+        """
+        if cap == self.car_charging_max_rate_logged.get(car_n, 0.0):
+            return
+        self.car_charging_max_rate_logged[car_n] = cap
+        if cap > 0:
+            self.log("Car {} maximum charge rate is {}kW (car_charging_max_rate); it plans at the lower of this and the charger rate".format(car_n, cap))
+        else:
+            self.log("Car {} charge rate no longer capped by car_charging_max_rate".format(car_n))
+
+    def car_rate_capped(self, car_n, rate):
+        """
+        Return rate (kW) limited to car car_n's own maximum charge rate (car_charging_max_rate[car_n]).
+
+        The charger's rate is only what the charger can deliver; a car's on-board charger can take
+        less (e.g. a 3.6 kW plug-in hybrid on a 7.4 kW wallbox). A cap of 0 means no cap.
+        """
+        cap = self.car_charging_max_rate[car_n] if car_n < len(self.car_charging_max_rate) else 0.0
+        if cap > 0 and rate > cap:
+            return cap
+        return rate
+
+    def car_max_rate_save(self):
+        """
+        Save the held caps (car_charging_max_rate_held) to storage when they have changed since the last save,
+        so a car whose cap sensor is not reporting yet after a restart keeps its last cap. Called every cycle,
+        so it costs nothing when nothing has changed.
+        """
+        held = {str(car_n): cap for car_n, cap in self.car_charging_max_rate_held.items()}
+        if held == self.car_charging_max_rate_saved:
+            return
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        from ha import run_async
+
+        # Recorded whether or not the write works: a store that is failing is not retried every cycle
+        self.car_charging_max_rate_saved = held
+        try:
+            if not run_async(storage.save("predbat", "car_max_rate", {"held": held}, format="json")):
+                self.log("Warn: car_charging_max_rate: failed to save the held caps")
+        except Exception as e:
+            self.log("Warn: car_charging_max_rate: failed to save the held caps: {}".format(e))
+
+    def car_max_rate_startup(self):
+        """
+        At start up, before the components start: restore the held caps saved by car_max_rate_save(), then
+        work out each car's cap, so the first plan and Load ML's first fetch (a phase 2 component) both see them.
+        """
+        storage = self.components.get_component("storage") if self.components else None
+        if storage:
+            from ha import run_async
+
+            try:
+                data = run_async(storage.load("predbat", "car_max_rate"))
+            except Exception as e:
+                self.log("Warn: car_charging_max_rate: failed to load the held caps: {}".format(e))
+                data = None
+            held = data.get("held") if isinstance(data, dict) else None
+            if not isinstance(held, dict):
+                held = {}
+            for key, cap in held.items():
+                try:
+                    car_n, cap = int(key), float(cap)
+                except (ValueError, TypeError):
+                    continue
+                if cap > 0:
+                    self.car_charging_max_rate_held[car_n] = cap
+            self.car_charging_max_rate_saved = {str(car_n): cap for car_n, cap in self.car_charging_max_rate_held.items()}
+        num_cars = min(self.get_arg("num_cars", 1), PREDBAT_MAX_CARS)
+        self.car_charging_max_rate = [self.car_max_rate_cap(car_n) for car_n in range(max(num_cars, 1))]
 
     def fetch_ml_load_forecast(self, now_utc, save=True):
         """
@@ -4139,7 +4381,9 @@ class Fetch:
         """
         reason = None
         if self.export_more_solar:
-            if not self.calculate_best_export:
+            if not self.battery_export_permitted:
+                reason = "the inverter is not permitted to export battery energy, so export slots are not planned. Turn export_more_solar off."
+            elif not self.calculate_best_export:
                 reason = "Predbat mode is not Control charge & discharge, so export slots are not planned. Change the mode, or turn export_more_solar off."
             elif not self.set_export_freeze:
                 # Ask the inverter rather than the switch: an unsupported inverter forces set_export_freeze off

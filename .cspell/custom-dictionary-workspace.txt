@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+ABCDEFGHJKLMNP
 acks
 activepower
 adata
@@ -8,6 +9,7 @@ adbase
 afci
 afewyards
 agentic
+agilepredict
 AIO
 AIO's
 aiofiles
@@ -76,6 +78,7 @@ byok
 cadata
 calcsize
 calib
+callees
 Cantarell
 cbat
 CDLL
@@ -183,6 +186,8 @@ ECONNRESET
 ecosmart
 Eddi
 eddis
+edfenergy
+edfgb
 efgh
 elif
 elinter
@@ -213,10 +218,12 @@ enphaseenergy
 Enpower
 entityfilter
 entrez
+eonnext
 epod
 epvtoday
 errno
 ESSAPI
+etime
 ETIMEDOUT
 eto
 etoday
@@ -240,6 +247,7 @@ figsize
 finaliser
 Fingerbot
 firstparty
+flextras
 fline
 FLOMASTA
 fontsize
@@ -267,6 +275,7 @@ geseriale
 getaffinity
 getall
 getattr
+getmembers
 getrusage
 Ginlong
 githubusercontent
@@ -275,6 +284,7 @@ giv
 GivEnergy
 givtcp
 gmtime
+gndean
 gnueabihf
 GOELEC
 goldens
@@ -325,6 +335,7 @@ iess
 iflux
 importlimit
 inday
+Indevolt
 indra
 inteless
 INTELLI
@@ -403,6 +414,7 @@ maxrss
 maxsoc
 mbat
 mbuhansen
+mdi
 mdlrc
 measurand
 measurands
@@ -415,6 +427,7 @@ metricmid
 microinverters
 middlebox
 middleboxes
+milli
 minb
 minmax
 minsoc
@@ -477,6 +490,7 @@ OCPP
 octo
 octoplus
 octopoints
+oegb
 OFFPEAK
 Ofgem
 Ohme
@@ -507,6 +521,7 @@ parseable
 pbat
 pbgw
 pcharging
+pcpu
 pcsenmap
 pdata
 pdetails
@@ -520,6 +535,7 @@ pitem
 pkwh
 plenticore
 pload
+plugncharge
 pmeter
 poinv
 popv
@@ -574,6 +590,7 @@ reactivepower
 readback
 readbacks
 reasoncodes
+rebooked
 recp
 redownload
 Referer
@@ -586,6 +603,7 @@ remainings
 remotecontrol
 renderable
 replayer
+repr
 resetmidnight
 resultid
 resultmid
@@ -727,8 +745,10 @@ tunables
 twinx
 typecode
 typecodes
+tzdata
 tzfile
 tzpath
+tzset
 unasserted
 uncalibrated
 uncompilable
@@ -757,8 +777,10 @@ untriaged
 urandom
 urlsafe
 uscapacity
+usegmt
 useid
 userinterface
+utcoffset
 Vallery
 varh
 venv
@@ -776,6 +798,8 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+workstream
+workstreams
 worktree
 writeonly
 wrongsha

@@ -24,7 +24,7 @@ import math
 import json
 import random
 from component_base import ComponentBase
-from coordinator import inverter_record
+from coordinator import charger_with_stub_car, inverter_record
 from mock_base import MockBase as SharedMockBase
 
 """
@@ -355,6 +355,11 @@ def classify_ge_failure(data, endpoint=None):
     return {"code": code, "message": ge_code_message(data, code), "reason": reason, "retry": retry}
 
 
+def format_ge_endpoint(endpoint, serial="", setting_id="", uuid="", meter_ids="", start_time="", end_time="", command=""):
+    """Fill an endpoint template's placeholders, giving the request path that is sent and logged (#5777)."""
+    return endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
+
+
 class EVCCommandFailed(Exception):
     """An EV charger command GivEnergy Cloud refused or never confirmed.
 
@@ -614,10 +619,20 @@ class GECloudDirect(ComponentBase, CarChargerControl):
     # GivEnergy's cloud applies a write some seconds after accepting it; the GEC and GEE rows wait 10
     WRITE_AND_POLL_SLEEP = 10
 
-    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=False):
+    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=False, inverter_control=True, evc_direct=False):
         """Initialise the GE Cloud Direct component"""
         self.api_key = api_key
         self.automatic = automatic
+        # Each role has a monitor switch and a control switch, so neither has to know about the other.
+        # Inverter: ge_cloud_direct monitors it, ge_cloud_inverter_control also lets Predbat control it -
+        # wire it up with ge_cloud_automatic and write its default settings. Off, a change the user makes
+        # to one of its entities is still sent; Predbat just adds no write of its own.
+        # EV charger: ge_cloud_direct or ge_cloud_evc_direct monitors it, ge_cloud_evc_control drives it.
+        # ge_cloud_evc_direct alone is for a site whose inverter is run by something else (GivTCP, the
+        # GivEnergy app): the inverters are then never read, written or reported.
+        self.inverter_monitor = bool(ge_cloud_direct)
+        self.inverter_control = bool(inverter_control) and self.inverter_monitor
+        # evc_direct needs nothing further here: it is one of the settings that start this component at all
         # Kept apart from automatic, which existing users already have on: wiring the
         # chargers into the car planning registers a car and moves num_cars, so it has to
         # be something a user turns on rather than something an upgrade does to them.
@@ -629,6 +644,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.register_list = {}
         self.settings = {}
         self.status = {}
+        self.live_display_samples = {}  # unmerged measured samples, never sensor defaults
         self.meter = {}
         self.info = {}
         self.register_entity_map = {}
@@ -842,7 +858,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         Uses the live read only attribute, not just the switch, because an active Axle VPP event
         forces read only through the attribute alone and the gate must be left to Axle then.
         """
-        if self.read_only_now() or not self.force_charge_is_charge_control(device):
+        if not self.inverter_control or self.read_only_now() or not self.force_charge_is_charge_control(device):
             return False
         registers = self.settings.get(device, {})
         changed = False
@@ -2148,9 +2164,59 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 )
             )
 
+        chargers, cars = self._discovery_evc_records()
+
         # Always empty - see _meter_cross_link for why a CT clamp does not become a
         # fabricated meters record.
-        return {"automatic": self.automatic, "inverters": inverters, "meters": []}
+        return {"automatic": self.automatic and self.inverter_control, "inverters": inverters, "meters": [], "chargers": chargers, "cars": cars}
+
+    def _discovery_evc_records(self):
+        """(chargers, cars) records for the GivEnergy EV chargers, in car order.
+
+        One charger per charger in controlled_evc_devices() - those that have answered with a serial,
+        in serial order, the order async_automatic_config_evc() wires cars in - keyed "gecloud:{serial}"
+        by the hardware serial. GE Cloud knows nothing about the vehicle, so each car is a stub. The
+        entities are the four async_automatic_config_evc() binds, named from the lower-cased serial as
+        published; the published but never-bound _evc_soc sensor is left out.
+
+        Never reported: the charger alias (user-chosen) and the GE Cloud uuid.
+        """
+        chargers = []
+        cars = []
+        for uuid in self.controlled_evc_devices():
+            serial = str(self.evc_device[uuid]["serial_number"])
+            stem = "{}_gecloud_{}".format(self.prefix, serial).lower()
+            descriptors = {
+                "car_charging_planned": {"entity_id": "binary_sensor." + stem + "_evc_car_connected", "domain": "binary_sensor", "access": "r"},
+                "car_charging_plugged": {"entity_id": "binary_sensor." + stem + "_evc_car_plugged", "domain": "binary_sensor", "access": "r"},
+                "car_charging_energy": {"entity_id": "sensor." + stem + "_evc_energy_active_import_register", "domain": "sensor", "access": "r"},
+                "car_charging_power": {"entity_id": "sensor." + stem + "_evc_power_active_import", "domain": "sensor", "access": "r"},
+            }
+            charger, car = charger_with_stub_car(
+                "gecloud:{}".format(serial),
+                hardware_ids={"serial": serial},
+                info={"vendor": "GivEnergy"},
+                entities=self.discovery_entities(descriptors),
+            )
+            chargers.append(charger)
+            cars.append(car)
+        return chargers, cars
+
+    @property
+    def inverter_source(self):
+        """Whether this component supplies inverter state, for Components.inverter_source_active() - not when it only serves the EV charger"""
+        return self.inverter_monitor
+
+    async def async_get_inverter_devices(self):
+        """
+        The inverter device list, or an empty one without asking the API when ge_cloud_direct is not set.
+
+        Every inverter poll, write and report works from the list this returns, so leaving it empty is
+        what keeps an EV charger only setup off the inverters entirely.
+        """
+        if not self.inverter_monitor:
+            return {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": [], "site_ids": {}}
+        return await self.async_get_devices()
 
     def evc_control_enable(self):
         """Decide whether Predbat-led charger control should run, and say why when it will not.
@@ -2366,7 +2432,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         plant with no batteries, so the configuration would still name the removed ones. The warning
         says to restart in that case.
         """
-        devices = await self.async_get_devices()
+        devices = await self.async_get_inverter_devices()
         evc_devices = await self.async_get_evc_devices(previous=self.evc_devices_dict)
         if not self.device_serials(devices) or (self.devices_dict.get("battery") and not devices["battery"]):
             if self.device_list:
@@ -2404,7 +2470,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         new_devices = []
 
         if first:
-            devices = await self.async_get_devices()
+            devices = await self.async_get_inverter_devices()
             evc_devices = await self.async_get_evc_devices()
             self.apply_devices(devices, evc_devices)
             self.log("GECloud: Starting up, found devices {}, evc_devices {}".format(self.device_list, self.evc_device_list))
@@ -2414,9 +2480,16 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             # for a cycle and then hand it over again
             await self.charger_control_load_enabled()
             self.evc_control_enable()
+            if self.automatic and not self.inverter_monitor:
+                self.log("GECloud: Warn: ge_cloud_automatic is ignored because ge_cloud_direct is not set, Predbat will not read or write to the inverter")
+            elif self.automatic and not self.inverter_control:
+                self.log("GECloud: Warn: ge_cloud_automatic is ignored because ge_cloud_inverter_control is false, Predbat will not wire up the inverter's controls or write its default settings")
 
             if not self.device_list and not self.evc_device_list:
-                self.log("GECloud: Error: No devices found, check your GE Cloud credentials")
+                if self.inverter_monitor:
+                    self.log("GECloud: Error: No devices found, check your GE Cloud credentials")
+                else:
+                    self.log("GECloud: Error: No EV chargers found, check your GE Cloud credentials (ge_cloud_direct is not set, so inverters are not looked for)")
                 self.api_fatal = True
                 return False
 
@@ -2442,8 +2515,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 new_devices = refreshed
                 self.pending_default_options.update(refreshed)
 
-        # The site details change rarely, so they are cached in storage and only re-fetched every 12 hours
-        await self.update_site(first)
+        # The site details change rarely, so they are cached in storage and only re-fetched every 12 hours.
+        # They describe the inverters, so are not wanted when the inverters are not monitored.
+        if self.inverter_monitor:
+            await self.update_site(first)
 
         if first or devices_changed or (seconds % 120 == 0):
             inverter_auth_denied = False
@@ -2492,13 +2567,15 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     app="gecloud",
                 )
                 self.charger_control_publish_guest("gecloud")
-                try:
-                    await self.charger_control_tick(self.now_utc_exact)
-                except EVCCommandFailed as exc:
-                    # Already logged as an error by async_send_evc_command; nothing is recorded as
-                    # done, so the next cycle tries again - for a release, that is what stops a
-                    # stopped car being stranded
-                    self.log("GECloud: Warn: EV charger control failed, will retry: {}".format(exc))
+            try:
+                # Every cycle, whether or not control is on: with ge_cloud_evc_control since turned off,
+                # a charger an earlier session stopped is still released (#5788)
+                await self.charger_control_tick(self.now_utc_exact)
+            except EVCCommandFailed as exc:
+                # Already logged as an error by async_send_evc_command; nothing is recorded as
+                # done, so the next cycle tries again - for a release, that is what stops a
+                # stopped car being stranded
+                self.log("GECloud: Warn: EV charger control failed, will retry: {}".format(exc))
 
         if first or devices_changed or (seconds % (10 * 60) == 0):
             # Get All registers every now and again in case user changes them
@@ -2523,7 +2600,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
 
             # Run at startup, and again whenever the periodic device check finds the hardware has changed
             if first or devices_changed:
-                if self.automatic:
+                if self.automatic and self.inverter_control:
                     await self.async_automatic_config(self.devices_dict)
                 if self.automatic_evc:
                     await self.async_automatic_config_evc()
@@ -2541,7 +2618,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)
             # read_only_now() rather than the switch alone, so an active Axle event (which forces read only
             # through the attribute) defers the pass instead of writing over Axle's control (GH#5269)
-            if not self.read_only_now():
+            if self.inverter_control and not self.read_only_now():
                 if options_due:
                     self.default_options_stamp = now_utc
                     option_devices = self.device_list
@@ -3226,6 +3303,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         if previous is None:
             previous = {}
         result = await self.async_get_inverter_data_retry(GE_API_INVERTER_STATUS, serial)
+        # Display provenance must retain neither missing fields nor an old
+        # field under a new timestamp. The ordinary merged control cache stays
+        # unchanged; the optional display adapter consumes only this raw sample.
+        self.live_display_samples[serial.lower()] = result
         if result is None:
             return previous
         return merge_non_null(result, previous)
@@ -3254,17 +3335,18 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         Retry API call
         """
         data = None
+        path = format_ge_endpoint(endpoint, serial, setting_id, uuid, meter_ids, start_time, end_time, command)
         for retry in range(RETRIES):
             try:
                 data = await self.async_get_inverter_data(endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time=start_time, end_time=end_time, command=command, measurands=measurands)
             except GECloudTerminalError as e:
-                self.log("GECloud: Warn: Request to {} was rejected: {} (code {}), not retrying".format(endpoint, e.message, e.code))
+                self.log("GECloud: Warn: Request to {} was rejected: {} (code {}), not retrying".format(path, e.message, e.code))
                 return None
             if data is not None:
                 break
             await asyncio.sleep(RETRY_FACTOR * (retry + 1))
         if data is None:
-            self.log("GECloud: Warn: Failed to get data from {}".format(endpoint))
+            self.log("GECloud: Warn: Failed to get data from {}".format(path))
         return data
 
     async def async_get_inverter_data(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command="", measurands=""):
@@ -3274,7 +3356,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # Increment request counter
         self.requests_total += 1
 
-        url = GE_API_URL + endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
+        path = format_ge_endpoint(endpoint, serial, setting_id, uuid, meter_ids, start_time, end_time, command)
+        url = GE_API_URL + path
 
         # Add measurands parameters if provided (for EV charger endpoints)
         if measurands:
@@ -3342,7 +3425,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             if failure:
                 self.failures_total += 1
                 record_api_call("givenergy", False, failure["reason"])
-                self.log("GECloud: Warn: Request to {} was rejected: {} (code {})".format(endpoint, failure["message"], failure["code"]))
+                self.log("GECloud: Warn: Request to {} was rejected: {} (code {})".format(path, failure["message"], failure["code"]))
                 if not failure["retry"]:
                     # Terminal: raise so the caller aborts rather than retrying
                     raise GECloudTerminalError(failure["code"], failure["message"], failure["reason"])
@@ -3357,12 +3440,12 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             # covers accounts without an active GivEnergy Premium subscription, which (since
             # May 2026) is required for cloud API access.
             self.failures_total += 1
-            self.log("GECloud: Warn: API access denied from {}, response code {} — check your GivEnergy API key; a GivEnergy Premium subscription may now be required for API access".format(endpoint, status))
+            self.log("GECloud: Warn: API access denied from {}, response code {} — check your GivEnergy API key; a GivEnergy Premium subscription may now be required for API access".format(path, status))
             record_api_call("givenergy", False, "auth_error")
             return {}
         elif status in [404, 422]:
             self.failures_total += 1
-            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(endpoint, status))
+            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(path, status))
             record_api_call("givenergy", False, "client_error")
             return {}
         elif status == 429:
@@ -3373,7 +3456,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             return None
         else:
             self.failures_total += 1
-            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(endpoint, status))
+            self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(path, status))
             record_api_call("givenergy", False, "server_error")
         return None
 

@@ -25,6 +25,8 @@ from ohme import (
     CHARGER_DISCOVERY_ENTITY_SPEC,
     ENERGY_TODAY_ENTITY,
     MAX_ENERGY_GAP_SECONDS,
+    OHME_CONTROL_STATE,
+    OHME_STORAGE_MODULE,
     POWER_WATTS_ENTITY,
     ApiException,
     OhmeAPI,
@@ -302,6 +304,7 @@ def test_ohme(my_predbat=None):
         ("run_tariff_control", _test_ohme_run_tariff_change_with_control, "OhmeAPI run moves ohme_control with the tariff"),
         ("run_wiring_retry", _test_ohme_run_wiring_retried_after_failed_poll, "OhmeAPI run still wires the slots after a failed poll"),
         ("run_release_retry", _test_ohme_run_release_retried_after_failure, "OhmeAPI run retries a failed charger hand-back"),
+        ("control_off_releases_held", _test_ohme_control_off_releases_held, "OhmeAPI releases a charger an earlier session held once ohme_control is off"),
         ("connected_sensor", _test_ohme_connected_sensor, "connected binary sensor tracks plug state"),
         ("plugged_sensor", _test_ohme_plugged_sensor, "plugged binary sensor stays on after a finished charge"),
         ("control_enable", _test_ohme_control_enable_rules, "ohme_control enable rules"),
@@ -344,6 +347,7 @@ def test_ohme(my_predbat=None):
         ("switch_approve_wrong_status", _test_ohme_switch_event_handler_approve_charge_wrong_status, "switch_event_handler approve wrong status"),
         ("discovery_split", _test_ohme_build_discovery_charger_and_car_split, "build_discovery produces cross-linked charger and car records"),
         ("discovery_stub_car", _test_ohme_build_discovery_stub_car_when_no_vehicle, "build_discovery stubs the car when no vehicle is known"),
+        ("discovery_stub_car_validation", _test_ohme_stub_car_round_trips_validation, "a stub car keeps its stub flag through the real Coordinator"),
         ("discovery_known_vehicle", _test_ohme_build_discovery_known_vehicle, "build_discovery reports a genuine car identity when a vehicle is known"),
         ("discovery_vehicle_real_parse", _test_ohme_build_discovery_vehicle_from_real_client_parse, "the non-stub car path works against the real client parsing pipeline"),
         ("discovery_entity_split", _test_ohme_build_discovery_entities_split_by_record, "charger and car entities land in the correct record"),
@@ -1627,6 +1631,8 @@ class MockOhmeBase:
         self.api = api
         self.car_slot_owner = None
         self.components = MockComponents()
+        # As reset() leaves it: no Axle VPP event is forcing read only
+        self.set_read_only_axle = False
 
     def load_previous_value_from_ha(self, entity, attribute=None):
         """Return whatever the test staged for this entity/attribute"""
@@ -1647,7 +1653,7 @@ class MockOhmeAPI(OhmeAPI):
         self.ohme_automatic = False
         self.ohme_automatic_octopus_intelligent = None
         self.ohme_control = False
-        self.charger_control_setup("Ohme API", "charger", switch_prefix="ohme")
+        self.charger_control_setup("Ohme API", "charger", OHME_STORAGE_MODULE, OHME_CONTROL_STATE, "control_enabled", switch_prefix="ohme")
         self.octopus_intelligent = None
         self.octopus_other_device = False
         self.octopus_drives_ohme = False
@@ -1721,7 +1727,7 @@ def _ohme_control_api(windows=None, now=None, read_only=False):
     api.ohme_automatic = True
     api.ohme_control = True
     api.charger_control_active = True
-    api.base.set_read_only = read_only
+    api.args["set_read_only"] = read_only
     api._now_override = now or datetime.datetime(2026, 8, 22, 23, 0, 0, tzinfo=datetime.timezone.utc).astimezone(api.local_tz)
     if windows is not None:
         api.states[("binary_sensor.predbat_car_charging_slot", "planned")] = windows
@@ -1983,7 +1989,7 @@ def _test_ohme_control_read_only_release(my_predbat=None):
     assert _ohme_held(api) is True, "Expected Predbat to be holding the charger"
 
     # Read only - hand it back to Ohme's own schedule
-    api.base.set_read_only = True
+    api.args["set_read_only"] = True
     run_async(api.charger_control_tick(api.now_utc_exact))
     assert any("Releasing the charger back to Ohme" in msg for msg in api.log_messages), f"Expected a release log, got {api.log_messages}"
     assert "enabled=false" in api.client.request_log[-1]["url"], f"Expected max charge cleared, got {api.client.request_log[-1]['url']}"
@@ -1996,7 +2002,7 @@ def _test_ohme_control_read_only_release(my_predbat=None):
     assert len(api.client.request_log) == count, f"Expected no further commands while read only, got {api.client.request_log}"
 
     # Clearing read only resumes control
-    api.base.set_read_only = False
+    api.args["set_read_only"] = False
     run_async(api.charger_control_tick(api.now_utc_exact))
     assert len(api.client.request_log) == count + 1, f"Expected control to resume, got {api.client.request_log}"
     assert "enabled=true" in api.client.request_log[-1]["url"], f"Expected max charge re-applied, got {api.client.request_log[-1]['url']}"
@@ -2078,7 +2084,7 @@ def _test_ohme_control_restores_target(my_predbat=None):
     assert "enabled=true" in api.client.request_log[0]["url"], f"Expected max charge, got {api.client.request_log[0]['url']}"
 
     # Releasing puts the user's target back so Ohme's own schedule is left correct
-    api.base.set_read_only = True
+    api.args["set_read_only"] = True
     run_async(api.charger_control_tick(api.now_utc_exact))
 
     restore_requests = [request for request in api.client.request_log if request["method"] == "PATCH"]
@@ -2087,7 +2093,7 @@ def _test_ohme_control_restores_target(my_predbat=None):
     assert any("Restored the charger target to 70%" in msg for msg in api.log_messages), f"Expected a restore log, got {api.log_messages}"
 
     # Taking control again snapshots afresh rather than reusing the old value
-    api.base.set_read_only = False
+    api.args["set_read_only"] = False
     api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}, "appliedRule": {"targetPercent": 90, "targetTime": 25200}}
     run_async(api.charger_control_tick(api.now_utc_exact))
     assert api.control_saved_target == 90, f"Expected a fresh snapshot, got {api.control_saved_target}"
@@ -2110,7 +2116,7 @@ def _test_ohme_control_failed_release_retries(my_predbat=None):
     assert _ohme_held(api) is False, "Expected Predbat to be holding the charger paused"
 
     # Read only, and Ohme refuses the resume - the car was unplugged since it was paused, say
-    api.base.set_read_only = True
+    api.args["set_read_only"] = True
     resume_calls = []
 
     async def refuse_resume():
@@ -2136,20 +2142,22 @@ def _test_ohme_control_failed_release_retries(my_predbat=None):
 
 
 def _test_ohme_control_read_only_effective(my_predbat=None):
-    """Test read only follows the effective state, not just the config switch"""
+    """Test read only is the setting or Axle's flag, not the base attribute that reset() leaves True"""
     print("**** Running test_ohme_control_read_only_effective ****")
 
-    # axle_control forces read only via the attribute without touching the arg
+    # reset() leaves the attribute True until the first update_pred(), so it alone is not read only
     api = MockOhmeAPI()
     api.base.set_read_only = True
     api.args["set_read_only"] = False
-    assert api.charger_control_read_only_now() is True, "Expected the attribute to win over the arg"
+    assert api.charger_control_read_only_now() is False, "Expected a restart not to read as read only"
 
-    # Before the attribute is first set, fall back to the configured value
+    # axle_control forces read only by setting the attribute and its own flag, not the arg
+    api.base.set_read_only_axle = True
+    assert api.charger_control_read_only_now() is True, "Expected Axle's read only to count"
+
     api = MockOhmeAPI()
-    api.base.set_read_only = None
     api.args["set_read_only"] = True
-    assert api.charger_control_read_only_now() is True, "Expected the arg to be used as a fallback"
+    assert api.charger_control_read_only_now() is True, "Expected the setting to count"
 
     api.args["set_read_only"] = False
     assert api.charger_control_read_only_now() is False, "Expected control to run when not read only"
@@ -3996,6 +4004,59 @@ def _test_ohme_run_release_retried_after_failure(my_predbat=None):
     return 0
 
 
+def _test_ohme_control_off_releases_held(my_predbat=None):
+    """#5788: with ohme_control turned off and a restart, a charger an earlier session held paused is
+    released on the first poll, with the target the user had before put back"""
+    print("**** Running test_ohme_control_off_releases_held ****")
+
+    api = _ohme_api_with_octopus("E-1R-COSY-22-12-08-A")
+    api.ohme_automatic = True
+    api.ohme_control = False
+    # The serial _ohme_run_poll() gives the charger, which keys what Predbat holds
+    key = "TEST-SERIAL-123"
+    saved = {(OHME_STORAGE_MODULE, OHME_CONTROL_STATE): {"control_enabled": True, "held": {key: False}, "saved_target": 70, "max_charge_started": True}}
+
+    class _Storage:
+        """In-memory stand-in for the Storage component."""
+
+        async def save(self, module, filename, data, **kwargs):
+            """Record a save."""
+            saved[(module, filename)] = data
+
+        async def load(self, module, filename):
+            """Return what was saved."""
+            return saved.get((module, filename))
+
+    api.base.components.components["storage"] = _Storage()
+    calls = []
+
+    async def mock_resume():
+        calls.append("resume")
+
+    async def mock_max_charge(state=True):
+        calls.append(("max_charge", state))
+
+    async def mock_set_target(target_percent=None):
+        calls.append(("target", target_percent))
+
+    api.client.async_resume_charge = mock_resume
+    api.client.async_max_charge = mock_max_charge
+    api.client.async_set_target = mock_set_target
+
+    _ohme_run_poll(api, first=True)
+    assert api.charger_control_active is False, "Expected control off"
+    assert calls == ["resume", ("max_charge", False), ("target", 70)], f"Expected the held charger released with its target put back, got {calls}"
+    assert not api.charger_control_state and saved[(OHME_STORAGE_MODULE, OHME_CONTROL_STATE)]["held"] == {}, f"Expected the release saved, got {saved}"
+    assert saved[(OHME_STORAGE_MODULE, OHME_CONTROL_STATE)]["saved_target"] is None
+
+    del calls[:]
+    _ohme_run_poll(api, seconds=120)
+    assert calls == [], f"Expected no further hand-back, got {calls}"
+
+    print("PASS: control turned off in config still releases a held charger")
+    return 0
+
+
 # ============================================================================
 # Event Handler Tests
 # ============================================================================
@@ -4392,7 +4453,7 @@ def _test_ohme_build_discovery_charger_and_car_split(my_predbat=None):
 
 
 def _test_ohme_build_discovery_stub_car_when_no_vehicle(my_predbat=None):
-    """With no vehicle known the car record is a stub - device_id "ohme:{serial}:car", info.stub true"""
+    """With no vehicle known the car record is a stub - device_id "ohme:{serial}:car", flags ["stub"]"""
     print("**** Running test_ohme_build_discovery_stub_car_when_no_vehicle ****")
 
     api = MockOhmeAPI()
@@ -4404,9 +4465,40 @@ def _test_ohme_build_discovery_stub_car_when_no_vehicle(my_predbat=None):
 
     car = report["cars"][0]
     assert car["device_id"] == "ohme:TEST-SERIAL-123:car", f"Unexpected stub device_id: {car['device_id']}"
-    assert car["info"].get("stub") is True, f"Expected info.stub True for a stub car, got {car.get('info')}"
+    assert car.get("flags") == ["stub"], f"Expected flags ['stub'] for a stub car, got {car.get('flags')}"
+    assert "info" not in car, f"Expected no info for a stub car, got {car.get('info')}"
 
-    print("PASS: with no vehicle known, build_discovery stubs the car with info.stub True")
+    print("PASS: with no vehicle known, build_discovery stubs the car with flags ['stub']")
+    return 0
+
+
+def _test_ohme_stub_car_round_trips_validation(my_predbat=None):
+    """A stub car keeps its stub flag through the real Coordinator, with nothing logged (GH#5849).
+
+    The marker used to be info.stub True; info only holds strings, so validation dropped it and logged
+    a warning on every report filed, while the build-level test above still passed.
+    """
+    print("**** Running test_ohme_stub_car_round_trips_validation ****")
+
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    api = MockOhmeAPI()
+    api.client.serial = "TEST-SERIAL-123"
+    api.client._cars = []
+    _stage_all_discovery_entities(api)
+
+    base = SharedMockBase()
+    logs = []
+    coordinator = Coordinator(base)
+    coordinator.log = logs.append
+    coordinator.report("ohme", api.build_discovery())
+
+    car = coordinator.reports["ohme"]["cars"][0]
+    assert car.get("flags") == ["stub"], f"stub flag lost in validation: {car}"
+    assert not [line for line in logs if line.startswith("Warn")], f"validation warned about the Ohme report: {logs}"
+
+    print("PASS: a stub car keeps its stub flag through the real Coordinator")
     return 0
 
 

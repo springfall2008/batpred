@@ -21,6 +21,7 @@ is never installed and the update is aborted instead.
 """
 
 import os
+import re
 import requests
 import yaml
 import hashlib
@@ -28,6 +29,14 @@ import tarfile
 import tempfile
 
 DEFAULT_PREDBAT_REPOSITORY = "springfall2008/batpred"
+# The update drop-down can offer branches to install, as "branch: <name>", from the predbat_branch apps.yaml setting.
+# The name is used as the version being installed and as the git ref in the download URLs. Branch names commonly contain
+# a "/" (fix/xxx, feat/xxx) which is fine in the URLs, but the version is also the suffix of the staged file names, where
+# staged_suffix() replaces it. Spaces and other characters that are unsafe in URLs or in the install command are not accepted.
+PREDBAT_BRANCH_OPTION_PREFIX = "branch:"
+PREDBAT_BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
+# At most this many branches are offered, leaving room in the update drop-down (25 entries in total including "main") for the releases
+MAX_PREDBAT_BRANCH_OPTIONS = 10
 
 # Number of attempts made for a download that fails integrity verification
 DOWNLOAD_MAX_ATTEMPTS = 3
@@ -38,6 +47,31 @@ MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
 
 # Chunk size used when streaming the release archive to disk
 ARCHIVE_CHUNK_BYTES = 256 * 1024
+
+
+def is_valid_predbat_branch(branch):
+    """Check a branch name only contains characters that are safe to use in a download URL and the install command."""
+    if not isinstance(branch, str) or not PREDBAT_BRANCH_PATTERN.match(branch):
+        return False
+    # Git does not allow these in a branch name, so they can only be a typo
+    return not (branch.startswith("/") or branch.endswith("/") or "//" in branch)
+
+
+def staged_suffix(tag):
+    """Return the version in a form that is safe to use as a file name suffix, a branch such as fix/xxx has its "/" replaced."""
+    return tag.replace("/", "_")
+
+
+def predbat_branch_option(branch):
+    """Return the update drop-down entry for a branch, e.g. 'branch: my-feature'."""
+    return "{} {}".format(PREDBAT_BRANCH_OPTION_PREFIX, branch)
+
+
+def parse_predbat_branch_option(version):
+    """Return the branch name if *version* is a 'branch: <name>' drop-down entry, otherwise None."""
+    if isinstance(version, str) and version.startswith(PREDBAT_BRANCH_OPTION_PREFIX):
+        return version[len(PREDBAT_BRANCH_OPTION_PREFIX) :].strip()
+    return None
 
 
 def resolve_predbat_repository(repository=None):
@@ -67,7 +101,7 @@ def get_github_directory_listing(tag, repository=None):
     Get the list of files in the apps/predbat directory from GitHub.
 
     Args:
-        tag (str): The tag to query (e.g. v1.0.0).
+        tag (str): The git ref to query, a release tag (e.g. v1.0.0), "main" or a branch (e.g. fix/my-feature).
         repository (str, optional): GitHub repository override in "owner/repo"
             format (e.g. "springfall2008/batpred"). If not provided, the
             value is resolved via ``resolve_predbat_repository()``.
@@ -192,7 +226,7 @@ def remove_staged_files(this_path, files, tag):
         tag (str): The version tag used as the staged filename suffix
     """
     for filename in files:
-        remove_file_quietly(os.path.join(this_path, filename + "." + tag))
+        remove_file_quietly(os.path.join(this_path, filename + "." + staged_suffix(tag)))
 
 
 def download_predbat_file_from_github(tag, filename, new_filename, repository=None, expected_sha=None, attempts=DOWNLOAD_MAX_ATTEMPTS):
@@ -204,7 +238,11 @@ def download_predbat_file_from_github(tag, filename, new_filename, repository=No
     mismatch is retried up to *attempts* times before the download is abandoned.
 
     Args:
-        tag (str): The tag to download from (e.g. v1.0.0).
+        tag (str): The git ref to download from, a release tag (e.g. v1.0.0), "main" or a branch
+            (e.g. fix/my-feature) - the update drop-down's "branch: <name>" entries pass the branch name.
+            It is used as it stands in the raw.githubusercontent.com path, where GitHub resolves a
+            "/" in a branch name, so the name is not encoded or changed here. The caller must only
+            pass a name accepted by ``is_valid_predbat_branch()``, as it becomes part of the URL.
         filename (str): The filename to download (e.g. predbat.py).
         new_filename (str): The local path to save the downloaded file.
         repository (str, optional): GitHub repository override in "owner/repo"
@@ -270,7 +308,12 @@ def download_predbat_release_archive(tag, repository=None, target_dir=None):
     with space for the update has space for the archive.
 
     Args:
-        tag (str): The tag to download (e.g. v1.0.0).
+        tag (str): The git ref to download, a release tag (e.g. v1.0.0), "main" or a branch
+            (e.g. fix/my-feature). It is used as it stands in the archive URL, so a "/" in a branch
+            name is not encoded. GitHub names the top-level folder inside the archive
+            "<repo>-<ref>" with any "/" in the ref replaced by "-", which is fine as
+            ``match_archive_member()`` only looks at the path below that folder. If the archive
+            cannot be fetched the caller falls back to downloading the files one by one.
         repository (str, optional): GitHub repository override in "owner/repo" format.
             If not provided, the value is resolved via ``resolve_predbat_repository()``.
         target_dir (str, optional): Directory to write the temporary file into. Defaults
@@ -405,7 +448,7 @@ def extract_predbat_files_from_archive(archive_path, tag, file_list, this_path):
                     if actual_sha != expected_sha:
                         raise ValueError("Checksum mismatch for {}: expected {}, got {}".format(filename, expected_sha, actual_sha))
 
-                with open(os.path.join(this_path, filename + "." + tag), "wb") as staged:
+                with open(os.path.join(this_path, filename + "." + staged_suffix(tag)), "wb") as staged:
                     staged.write(data)
                 staged_files.append(filename)
 
@@ -477,7 +520,7 @@ def download_predbat_files_individually(tag, file_list, this_path, repository=No
         filename = file_info["name"]
         expected_sha = file_info.get("sha")
         local_filepath = os.path.join(this_path, filename)
-        download_filepath = os.path.join(this_path, filename + "." + tag)
+        download_filepath = os.path.join(this_path, filename + "." + staged_suffix(tag))
 
         # Check if local file exists and has matching SHA
         skip_download = False
@@ -532,7 +575,7 @@ def verify_staged_files(this_path, files, tag):
     Returns:
         bool: True if every staged file is present and matches, False otherwise
     """
-    manifest_file = os.path.join(this_path, "manifest.yaml." + tag)
+    manifest_file = os.path.join(this_path, "manifest.yaml." + staged_suffix(tag))
     if not os.path.exists(manifest_file):
         print("Warn: Staged manifest {} is missing, unable to verify the staged files".format(manifest_file))
         return True
@@ -555,7 +598,7 @@ def verify_staged_files(this_path, files, tag):
 
     verified = True
     for filename in files:
-        staged_path = os.path.join(this_path, filename + "." + tag)
+        staged_path = os.path.join(this_path, filename + "." + staged_suffix(tag))
         if not os.path.exists(staged_path):
             print("Error: Staged file {} is missing".format(staged_path))
             verified = False
@@ -605,7 +648,7 @@ def predbat_update_move(version, files):
 
         cmd = ""
         for file in files:
-            cmd += "mv -f {} {} && ".format(os.path.join(this_path, file + "." + tag), os.path.join(this_path, file))
+            cmd += "mv -f {} {} && ".format(os.path.join(this_path, file + "." + staged_suffix(tag)), os.path.join(this_path, file))
         cmd += "echo 'Update complete'"
         clear_deploy_git_version(this_path)
         result = os.system(cmd)
@@ -762,7 +805,7 @@ def predbat_update_download(version, repository=None):
 
         # Generate manifest.yaml (the sorted file list the downloaded files were verified
         # against, so the pre-install check uses the same checksums)
-        manifest_filename = os.path.join(this_path, "manifest.yaml." + tag)
+        manifest_filename = os.path.join(this_path, "manifest.yaml." + staged_suffix(tag))
         try:
             with open(manifest_filename, "w") as f:
                 yaml.dump(file_list_sorted, f, default_flow_style=False, sort_keys=False)

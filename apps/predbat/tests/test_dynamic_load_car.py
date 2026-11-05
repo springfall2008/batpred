@@ -29,6 +29,7 @@ from tests.test_infra import run_async, MockStorageComponents, make_test_storage
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 SENSOR = "binary_sensor.car_charging_now_test"
+SENSOR_1 = "binary_sensor.car_charging_now_test_1"
 LOAD_POWER = ["sensor.load_power_test_0", "sensor.load_power_test_1"]
 LOAD_POWER_EXTRA = "sensor.load_power_test_bypass"
 
@@ -378,13 +379,69 @@ def _run(my_predbat):
         failed |= _run_confirmed_half_hour(my_predbat)
         failed |= _run_short_dispatch(my_predbat)
         failed |= _run_persistence(my_predbat)
+        failed |= _run_any_car(my_predbat)
     finally:
         if had_sensor:
             my_predbat.args["car_charging_now"] = saved_sensor
         else:
             my_predbat.args.pop("car_charging_now", None)
         my_predbat.ha_interface.dummy_items.pop(SENSOR, None)
+        my_predbat.ha_interface.dummy_items.pop(SENSOR_1, None)
 
+    return failed
+
+
+def _sensors(my_predbat, state_0, state_1):
+    """
+    Two cars, each with its own car_charging_now entity reporting the given state.
+    """
+    my_predbat.num_cars = 2
+    my_predbat.args["car_charging_now"] = [SENSOR, SENSOR_1]
+    my_predbat.ha_interface.dummy_items[SENSOR] = state_0
+    my_predbat.ha_interface.dummy_items[SENSOR_1] = state_1
+    my_predbat.dynamic_load_car_refresh_sensors()
+
+
+def _run_any_car(my_predbat):
+    """
+    Any car charging confirms an Octopus car's dispatch. Octopus links the dispatch to one car, but with
+    two chargers Predbat cannot tell which one that car is plugged into - automatic charger set-up
+    numbers them by serial - so the car it calls 0 can read idle while the dispatch's car charges on
+    the charger it calls 1 (#5726).
+    """
+    failed = False
+
+    print("Test 70: another car charging keeps an Octopus car's dispatch")
+    _reset(my_predbat)
+    _sensors(my_predbat, "off", "on")
+    _cycle(my_predbat, 840, 10)
+    changed = _cycle(my_predbat, 845)
+    failed |= _check("t70 not cancelled", (not changed) and _kwh(my_predbat) == [3.5, 3.5] and not my_predbat.dynamic_load_car_cancelled.get(0, False), "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+    failed |= _check("t70 no grace clock", my_predbat.dynamic_load_car_since.get(0) is None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+    # The half hour is confirmed as the car's own sensor would confirm it, keeping the house's cheap rate to its end
+    expected = my_predbat.midnight_utc + timedelta(minutes=870)
+    failed |= _check("t70 half hour confirmed", my_predbat.dynamic_load_car_confirmed.get(0) == expected, "confirmed {}".format(my_predbat.dynamic_load_car_confirmed.get(0)))
+
+    print("Test 71: another car charging resumes a cancelled dispatch")
+    _reset(my_predbat)
+    _sensors(my_predbat, "off", "off")
+    _cycle(my_predbat, 840, 10)
+    _cycle(my_predbat, 845)
+    failed |= _check("t71 cancelled while both idle", _kwh(my_predbat) == [0, 0], "kwh {}".format(_kwh(my_predbat)))
+    my_predbat.ha_interface.dummy_items[SENSOR_1] = "on"
+    changed = _cycle(my_predbat, 850)
+    failed |= _check("t71 resumed", changed and _kwh(my_predbat) == [3.5, 3.5] and not my_predbat.dynamic_load_car_cancelled.get(0, False), "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+
+    print("Test 72: another car charging confirms a car with no sensor of its own")
+    _reset(my_predbat)
+    _sensors(my_predbat, "off", "on")
+    my_predbat.args["car_charging_now"] = ["off", SENSOR_1]
+    my_predbat.dynamic_load_car_refresh_sensors()
+    my_predbat.octopus_intelligent_trust_slots = False
+    changed = _cycle(my_predbat, 840, 10)
+    failed |= _check("t72 trusted", not my_predbat.dynamic_load_car_cancelled.get(0, True) and _kwh(my_predbat) == [3.5, 3.5], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+
+    my_predbat.num_cars = 1
     return failed
 
 
