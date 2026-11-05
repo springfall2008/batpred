@@ -126,6 +126,9 @@ import traceback
 from pathlib import Path
 
 REPO = "springfall2008/batpred"
+# Bounds the best-effort gh calls that link a bot PR to its requester, so a stalled call
+# can't hang the single-threaded poll loop.
+GH_LINK_TIMEOUT_SECONDS = 120
 BASE_DIR = Path.home() / "predbat-triage-bot"
 CLONE_DIR = BASE_DIR / "batpred"
 SCRATCH_DIR = BASE_DIR / "scratch"
@@ -407,8 +410,8 @@ _ALLOWED_GH_PR_READ = [
     "Bash(gh issue list*)",
     "Bash(gh search*)",
 ]
-# /code-review posts findings as inline PR comments, which needs gh api against the
-# PR-comments endpoint - scoped to this repo only. No write/push/commit access, and
+# /pr-review posts findings as a PR review, which needs gh api against the PR-reviews
+# endpoint - scoped to this repo only. No write/push/commit access, and
 # deliberately no "gh pr review*" either: that would also allow --approve/
 # --request-changes, a governance action beyond "post a comment."
 _REVIEW_REMOVED_DENIALS = {"Bash(gh api*)"}
@@ -482,6 +485,11 @@ DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if 
 # /code-review's own instructions live in a skill we don't own, so this prompt is the only
 # lever available for it; /pr-cleanup's SKILL.md already asks for disclosure directly, and
 # this is the belt-and-braces backup for it, same reasoning as the endpoint-first steer.
+# Correction, found on PR #5304 (2026-09-29): none of the above ever reached /code-review.
+# It reviews in a forked subagent, and --append-system-prompt only reaches the main session
+# (checked with a codeword: the main session saw it, the fork did not) - no review comment
+# ever carried the disclosure line. The review flow now runs /pr-review, which does the
+# review itself in the main session and posts from there, where this prompt does apply.
 # The daily journal flush. This is the only flow that can edit a file AND push, so its edit
 # scope is the narrowest of any: the journal itself, the cspell dictionary (a new vendor term
 # in an entry fails the pre-commit hook without it), and the queue it consumes. It gets no
@@ -517,13 +525,15 @@ DISALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _DISALLOWED_TOOLS_BASE if 
 
 # Appended to every flow's system prompt. Until this existed no skill asked for a journal
 # finding at all, so upkeep was self-motivated and happened in maybe one run in ten - and
-# /code-review is a built-in skill whose SKILL.md this repo does not own, so an appended
-# system prompt is the only lever that reaches all five flows.
+# a SKILL.md cannot carry it for every flow at once. It reaches the review flow too, now
+# that /pr-review reviews in the main session rather than in a forked /code-review.
 JOURNAL_CAPTURE_PROMPT = (
     "Before you finish, consider whether this investigation turned up something a future triage run would have wanted to know "
     "- a config item that explains a whole class of report, an API or firmware quirk, a symptom that maps to a module, a trap "
     "that wasted your time, or an existing debug-journal entry you found to be out of date. "
     "Keep it to what would save time on a different issue - not the story of this ticket (what you tried, the fix, the alternatives), which belongs in the issue or PR. "
+    "Write it as the symptom (the log line or what the reporter sees), the fact or mechanism behind it, and the function or config item to start from. "
+    "No file paths or line numbers: they drift as the code moves, and the journal's area headings already name the module. "
     f"If so, write it as a single markdown file in {QUEUE_DIR} named <issue-or-pr-number>-<short-slug>.md. "
     "Record only what you actually verified, and say how you verified it (read the symbol, ran the test, replayed the debug "
     "file, probed the live API) - separate that from anything you merely suspect, and name the issue or PR number so the next "
@@ -690,17 +700,20 @@ def is_actionable(issue_number):
     return bool(label_names & {"bug", "enhancement"})
 
 
-def flag_pr_for_review(pr_number, cleanup=False):
-    """Add BOT_REVIEW to a PR, so the next poll cycle runs /code-review against it - and
+def flag_pr_for_review(pr_number, cleanup=False, opened_by_bot=False):
+    """Add BOT_REVIEW to a PR, so the next poll cycle runs /pr-review against it - and
     with cleanup, BOT_CLEANUP too, so /pr-cleanup then acts on what the review found.
     Both go in one edit: a cycle that saw BOT_CLEANUP alone would run the cleanup before
     the review existed. Idempotent - adding a label the PR already carries is a no-op.
+
+    opened_by_bot adds BOT_PR_OPENED to the PR as well (not just the issue), so PRs the
+    BOT_PR flow opened can be listed by label - their author is always the bot's credential.
     """
-    labels = ["--add-label", "BOT_REVIEW"] + (["--add-label", "BOT_CLEANUP"] if cleanup else [])
+    labels = ["--add-label", "BOT_REVIEW"] + (["--add-label", "BOT_CLEANUP"] if cleanup else []) + (["--add-label", "BOT_PR_OPENED"] if opened_by_bot else [])
     subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO] + labels, check=True)
 
 
-def mark_pr_opened(issue_number, cleanup=False):
+def mark_pr_opened(issue_number, cleanup=False, opened_by_bot=False):
     """Swap BOT_PR for BOT_PR_OPENED once the draft PR has been confirmed open, and
     flag the PR itself with BOT_REVIEW so a code review runs against it automatically -
     /issue-pr's own quality gate (step 4 of its SKILL.md) is pre-commit and a targeted
@@ -709,6 +722,9 @@ def mark_pr_opened(issue_number, cleanup=False):
     cleanup also queues BOT_CLEANUP. Only process_bot_pr_issue() passes it, and only for a
     PR its own create_pr() just opened: a PR found already open on entry may be someone's
     own branch, and BOT_CLEANUP is the label that commits and pushes to it.
+
+    opened_by_bot, passed under the same condition, labels the PR as the bot's and assigns
+    it to whoever added BOT_PR (assign_bot_pr_requester()).
     """
     subprocess.run(
         ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_PR", "--add-label", "BOT_PR_OPENED"],
@@ -716,7 +732,52 @@ def mark_pr_opened(issue_number, cleanup=False):
     )
     pr_number = find_pr_number_for_issue(issue_number)
     if pr_number is not None:
-        flag_pr_for_review(pr_number, cleanup=cleanup)
+        flag_pr_for_review(pr_number, cleanup=cleanup, opened_by_bot=opened_by_bot)
+        if opened_by_bot:
+            assign_bot_pr_requester(pr_number, issue_number)
+
+
+def find_bot_pr_requester(issue_number):
+    """Return the login of whoever last added BOT_PR to the issue, or None if it can't be found.
+
+    The PR is always authored by the bot's credential, so the issue's label event is the only
+    record of who asked for it. Read after mark_pr_opened() has swapped BOT_PR off: the
+    labeled event stays in the issue's history either way. Events come oldest first and
+    --paginate walks the pages in order, so the last line is the latest request.
+    """
+    result = subprocess.run(
+        ["gh", "api", "--paginate", f"repos/{REPO}/issues/{issue_number}/events", "--jq", '.[] | select(.event == "labeled" and .label.name == "BOT_PR" and .actor != null) | .actor.login'],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=GH_LINK_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        # Said why, so a failed lookup (auth expiry, rate limit) is not mistaken for an issue nobody asked on
+        print(f"[pr] issue #{issue_number}: BOT_PR requester lookup failed: {(result.stderr or '').strip() or 'exit ' + str(result.returncode)}", flush=True)
+        return None
+    logins = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    return logins[-1] if logins else None
+
+
+def assign_bot_pr_requester(pr_number, issue_number):
+    """Assign a PR the BOT_PR flow just opened to whoever added BOT_PR to its issue.
+
+    The PR's author is always the bot's credential, so this is what makes it show up under
+    the requester's assigned PRs. Best effort: the PR is already open and labelled, so any
+    failure - no requester found, an unassignable login, gh erroring or hanging - is logged
+    and must not fail the flow.
+    """
+    try:
+        requester = find_bot_pr_requester(issue_number)
+        if requester is None:
+            print(f"[pr] PR #{pr_number}: no BOT_PR requester found on issue #{issue_number}, not assigning", flush=True)
+            return
+        assign = subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--add-assignee", requester], capture_output=True, text=True, check=False, timeout=GH_LINK_TIMEOUT_SECONDS)
+        if assign.returncode != 0:
+            print(f"[pr] PR #{pr_number}: could not assign requester {requester}: {(assign.stderr or '').strip()}", flush=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[pr] PR #{pr_number}: assigning the BOT_PR requester failed: {exc}", flush=True)
 
 
 class FlowFailed(subprocess.CalledProcessError):
@@ -1294,8 +1355,12 @@ def flush_journal(today):
             # push. 80 was set when the journal was 30KB and the flush was a near-append;
             # it reads a 130KB file end to end and verifies every candidate against main,
             # and from 2026-09-13 every single run died on "Reached max turns (80)".
+            # 250 from 2026-11-05: the journal reached 730KB, and four of the five flushes
+            # from 2026-10-31 died on "Reached max turns (150)". The 2026-11-04 run spent 80 of
+            # its 201 tool calls reading the journal in pieces, and the 2026-11-05 run made every
+            # edit, then ran out on ./run_pre_commit before it could commit, so nothing was pushed.
             "--max-turns",
-            "150",
+            "250",
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
@@ -1364,9 +1429,12 @@ def triage(issue_number):
             # Raised from 60 on 2026-09-08: triage had the smallest budget of any flow while
             # doing the most open-ended work, and five separate issues have exhausted it
             # (#4899, #4900, #4984, #5003, #5004). A long issue body plus a debug-file replay
-            # spends turns quickly.
+            # spends turns quickly. Raised again to 150 on 2026-11-05: 13 of 154 triage runs in
+            # the previous three weeks still died on "Reached max turns (100)", and the run that
+            # finally finished #5889 took 94 tool calls. The failed runs were grep-heavy
+            # investigation, not loops.
             "--max-turns",
-            "100",
+            "150",
             # Client-side token-usage estimate, not a real spend cap under subscription
             # auth (see agent-sdk/cost-tracking) - just a circuit-breaker against a
             # runaway invocation, sized generously since one issue can need several
@@ -1413,8 +1481,11 @@ def triage_followup(issue_number):
             "--verbose",
             "--add-dir",
             str(SCRATCH_DIR),
+            # 100, in line with first-pass triage's old budget: a follow-up re-reads the
+            # original investigation as well as what was added since, and #5955 and #5556
+            # both died on "Reached max turns (60)" in the first week of November 2026.
             "--max-turns",
-            "60",
+            "100",
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
@@ -1498,7 +1569,7 @@ def process_bot_pr_issue(issue):
         return
     create_pr(issue_number)
     if has_existing_pr(issue_number):
-        mark_pr_opened(issue_number, cleanup=True)
+        mark_pr_opened(issue_number, cleanup=True, opened_by_bot=True)
     else:
         mark_pr_failed(issue_number)
 
@@ -1911,14 +1982,21 @@ def process_bot_review_issue(issue):
 
 
 def review_pr(pr_number):
-    """Run /code-review against a PR at the "high" effort level, posting findings as
-    inline PR comments. Read-only otherwise: no code changes, no push, no PR actions.
+    """Run the /pr-review skill against a PR: it reviews the PR's head in this session and
+    posts the findings as one review. Read-only otherwise: no code changes, no push, no PR
+    actions.
+
+    Not the built-in /code-review: it reviews in a forked subagent, which sees neither a
+    SKILL.md we own nor the appended system prompt below, so it posted with whatever gh api
+    spelling it chose - PR #5304's run passed `-f body="$(cat ...)"`, #5574's an inline body
+    holding backticks, and every call was denied. /pr-review does the whole review in the
+    main session, where both do reach it.
     """
     cmd = (
         [
             "claude",
             "-p",
-            f"/code-review {pr_number} high --comment",
+            f"/pr-review {pr_number} scratch={SCRATCH_DIR}",
         ]
         + append_system_prompt(GH_API_ENDPOINT_FIRST_PROMPT, JOURNAL_CAPTURE_PROMPT)
         + [
@@ -1966,7 +2044,7 @@ def pr_review_activity_count(pr_number):
 
 
 def process_bot_review_pr(pr):
-    """Run the BOT_REVIEW flow for one PR: /code-review posts findings as comments,
+    """Run the BOT_REVIEW flow for one PR: /pr-review posts findings as a review,
     nothing here ever touches the PR's code. On success, remove BOT_REVIEW - the
     posted review is the artifact, there's no separate "done" state to track. A
     failed invocation swaps to BOT_FAILED instead, with an explanatory comment, as

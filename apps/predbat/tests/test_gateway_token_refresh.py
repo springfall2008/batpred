@@ -7,7 +7,7 @@ so PredBat lost all gateway control until the pod/config was rebuilt. The fix
 makes the reconnect loop force a token refresh when the broker rejects auth.
 """
 import asyncio
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 
 
 def _bare_gateway():
@@ -115,3 +115,78 @@ class TestMaybeRefreshOnAuthError:
 
         gw._do_token_refresh.assert_not_awaited()
         assert result is False
+
+
+class TestTokenRefreshProvider:
+    """_do_token_refresh() uses the host's oauth_refresh_provider when set, else the edge function."""
+
+    def _gateway(self, provider):
+        gw = _bare_gateway()
+        gw.base = MagicMock()
+        gw.base.oauth_refresh_provider = provider
+        gw.args = {"user_id": "test-instance-id-1234"}
+        gw._refresh_in_progress = False
+        gw.mqtt_token = "old.jwt.token"
+        gw.mqtt_token_expires_at = 1.0
+        return gw
+
+    def _refresh_without_env_or_http(self, gw):
+        """Run _do_token_refresh with no SUPABASE env and any HTTP call failing the test."""
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("aiohttp.ClientSession", side_effect=AssertionError("no HTTP call expected")):
+                return asyncio.run(gw._do_token_refresh())
+
+    def test_default_without_env_is_skipped(self):
+        gw = self._gateway(None)
+
+        ok = self._refresh_without_env_or_http(gw)
+
+        assert ok is False
+        assert gw.mqtt_token == "old.jwt.token"
+        assert any("skipped" in str(call) for call in gw.log.call_args_list)
+
+    def test_provider_success_updates_token_without_http(self):
+        provider = AsyncMock(return_value={"success": True, "access_token": "new.jwt.token", "expires_at": 1781700000})
+        gw = self._gateway(provider)
+
+        ok = self._refresh_without_env_or_http(gw)
+
+        assert ok is True
+        provider.assert_awaited_once_with("test-instance-id-1234", "predbat_gateway", "")
+        assert gw.mqtt_token == "new.jwt.token"
+        assert gw.mqtt_token_expires_at == 1781700000.0
+        assert gw._refresh_in_progress is False
+
+    def test_provider_no_answer_keeps_token(self):
+        provider = AsyncMock(return_value=None)
+        gw = self._gateway(provider)
+
+        ok = self._refresh_without_env_or_http(gw)
+
+        assert ok is False
+        provider.assert_awaited_once_with("test-instance-id-1234", "predbat_gateway", "")
+        assert gw.mqtt_token == "old.jwt.token"
+        # A fallback would take the empty-env "skipped" branch with the same result, so pin the path by its log
+        assert any("no answer" in str(call) for call in gw.log.call_args_list)
+        assert not any("skipped" in str(call) for call in gw.log.call_args_list)
+
+    def test_provider_failure_reply_keeps_token(self):
+        provider = AsyncMock(return_value={"success": False, "error": "needs_reauth"})
+        gw = self._gateway(provider)
+
+        ok = self._refresh_without_env_or_http(gw)
+
+        assert ok is False
+        provider.assert_awaited_once_with("test-instance-id-1234", "predbat_gateway", "")
+        assert gw.mqtt_token == "old.jwt.token"
+
+    def test_provider_error_is_caught(self):
+        provider = AsyncMock(side_effect=RuntimeError("host refresh failed"))
+        gw = self._gateway(provider)
+
+        ok = self._refresh_without_env_or_http(gw)
+
+        assert ok is False
+        provider.assert_awaited_once_with("test-instance-id-1234", "predbat_gateway", "")
+        assert gw.mqtt_token == "old.jwt.token"
+        assert gw._refresh_in_progress is False

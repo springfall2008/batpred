@@ -30,6 +30,11 @@ to tell "a source is configured but has not answered yet" - transient, retry nex
 apart from "no source is configured at all", which is a setup gap that will never resolve.
 Before the tag existed that question was asked as "givtcp_rest or ge_cloud_direct", which
 was simply the two sources that happened to have been wired up when the check was written.
+
+Set "align_minute": True on an entry whose run() acts on minute-resolution schedule edges, so its
+loop runs just after each wall-clock minute boundary instead of every 60 seconds from process start
+(see ComponentBase.start()). Leave it off otherwise: the free-running loops spread components across
+the minute, where aligning them all would put every API call and its processing in the same second.
 """
 
 import importlib
@@ -39,6 +44,16 @@ import asyncio
 import os
 
 from coordinator import Coordinator
+
+
+def serves_inverter(component):
+    """
+    Whether a component tagged "inverter" is supplying inverter state in this configuration.
+
+    The tag says a component can; a gateway in display only mode, or a GE Cloud Direct set up for
+    the EV charger alone (inverter_source False), does not, so must not make the engine wait for it.
+    """
+    return getattr(component, "gateway_display_only", False) is not True and getattr(component, "inverter_source", True) is not False
 
 
 def load_component_class(component_info):
@@ -146,8 +161,14 @@ COMPONENT_LIST = {
         "event_filter": "predbat_gecloud_",
         "args": {
             "ge_cloud_direct": {
-                "required_true": True,
+                "required": False,
+                "default": False,
                 "config": "ge_cloud_direct",
+            },
+            "evc_direct": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_evc_direct",
             },
             "api_key": {
                 "required": True,
@@ -169,7 +190,14 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "ge_cloud_evc_control",
             },
+            "inverter_control": {
+                "required": False,
+                "default": True,
+                "config": "ge_cloud_inverter_control",
+            },
         },
+        # ge_cloud_direct monitors the inverter (and EV charger), ge_cloud_evc_direct the EV charger alone
+        "required_or": ["ge_cloud_direct", "evc_direct"],
         "phase": 1,
     },
     "gecloud_data": {
@@ -299,6 +327,19 @@ COMPONENT_LIST = {
             "automatic": {"required": False, "config": "wallbox_automatic", "default": True},
             "wallbox_control": {"required": False, "config": "wallbox_control", "default": False},
             "poll_seconds": {"required": False, "config": "wallbox_poll_seconds", "default": 120},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
+    "hypervolt": {
+        "class": "hypervolt.HypervoltAPI",
+        "name": "Hypervolt Charger",
+        "event_filter": "predbat_hypervolt_",
+        "args": {
+            "username": {"required": True, "secret": True, "config": "hypervolt_username"},
+            "password": {"required": True, "secret": True, "config": "hypervolt_password"},
+            "automatic": {"required": False, "config": "hypervolt_automatic", "default": True},
+            "hypervolt_control": {"required": False, "config": "hypervolt_control", "default": False},
         },
         "phase": 1,
         "can_restart": True,
@@ -470,6 +511,47 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "hanchu": {
+        "class": "hanchu.HanchuAPI",
+        "name": "Hanchu ESS Cloud API",
+        "inverter": True,
+        "event_filter": "predbat_hanchu_",
+        "args": {
+            # The e-mail address and password the user signs into the Hanchu phone app with. There
+            # is no developer portal and no API key: the app account IS the credential.
+            "account": {"required": False, "secret": True, "config": "hanchu_account"},
+            "password": {"required": False, "secret": True, "config": "hanchu_password"},
+            "inverter_sn": {"required": False, "config": "hanchu_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "hanchu_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "hanchu_automatic_ignore_pv"},
+            # On by default, matching alphaess_control_enable and sunsynk_control_enable: an
+            # inverter component that does not drive the inverter is not what a user configuring it
+            # expects. Set false for monitoring only. switch.predbat_set_read_only still gates
+            # every write.
+            "control_enable": {"required": False, "default": True, "config": "hanchu_control_enable"},
+            # The escape hatch for the one genuinely inferred behaviour in this component: nothing
+            # documents which work mode honours the timed slots, so "User-defined" is a deduction.
+            # Set false to write the windows and leave the mode exactly as the user set it.
+            "work_mode_control": {"required": False, "default": True, "config": "hanchu_work_mode_control"},
+            # The API reports no battery power limit directly - it is taken from the charge power
+            # setting's own upper bound. This is the escape hatch for a user who knows their pack's
+            # real limit.
+            "battery_rate_max": {"required": False, "config": "hanchu_battery_rate_max"},
+            # Same idea for the inverter's AC rating, which is taken from the discharge power
+            # setting's upper bound. Hanchu units come in 3.68, 5, 6 and 10 kW.
+            "inverter_limit": {"required": False, "config": "hanchu_inverter_limit"},
+            "api_delay": {"required": False, "default": 1.0, "config": "hanchu_api_delay"},
+            "min_write_interval": {"required": False, "default": 60, "config": "hanchu_min_write_interval"},
+            # Logs every API request and response. Off by default: on, it writes thousands of long
+            # lines a day per device. For a tester proving what hanchu_const.py marks INFERRED.
+            "api_debug": {"required": False, "default": True, "config": "hanchu_api_debug"},
+        },
+        # Gate activation on having an account. Without this the component would start for every
+        # instance, since all individual args are optional.
+        "required_or": ["account"],
+        "phase": 1,
+        "can_restart": True,
+    },
     "enphase": {
         "class": "enphase.EnphaseAPI",
         "name": "Enphase API",
@@ -638,6 +720,9 @@ COMPONENT_LIST = {
         },
         "phase": 1,
         "can_restart": True,
+        # Each export/charge command starts on the first run inside the window, and carries a
+        # duration to the window's end, so an unaligned loop starts every window up to a minute late.
+        "align_minute": True,
     },
     "teslemetry": {
         "class": "teslemetry.TeslemetryAPI",
@@ -652,12 +737,17 @@ COMPONENT_LIST = {
             "tbc_control": {"required": False, "default": True, "config": "teslemetry_tbc_control"},
             # No default: unset must reach the component as None ("decide from the Powerwall model"), not False
             "hybrid": {"required": False, "config": "teslemetry_hybrid"},
+            # No default either: unset means "decide from site_info's net_meter_mode" (GH#5710)
+            "battery_export": {"required": False, "config": "teslemetry_battery_export"},
             "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
             "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
             "token_hash": {"required": False, "secret": True, "config": "teslemetry_token_hash"},
         },
         "phase": 1,
         "can_restart": True,
+        # The signal tariff's export band is pushed on the first run inside its window (GH#5960), so
+        # an unaligned loop starts every export up to a minute late, more as run() durations drift it.
+        "align_minute": True,
     },
     "solax": {
         "class": "solax.SolaxAPI",
@@ -678,6 +768,9 @@ COMPONENT_LIST = {
         },
         "phase": 1,
         "can_restart": True,
+        # Remote-control commands carry no duration: a window starts on the first run inside it and
+        # ends on the first run after it, so an unaligned loop is late on both edges.
+        "align_minute": True,
     },
     "solis": {
         "class": "solis.SolisAPI",
@@ -730,7 +823,11 @@ COMPONENT_LIST = {
             "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
             "mqtt_token": {"required": True, "secret": True, "config": "gateway_mqtt_token"},
             "gateway_inverter_serial": {"required": False, "config": "gateway_inverter_serial", "default": None},
+            "gateway_display_enabled": {"required": False, "config": "gateway_display_enabled", "default": True},
+            "gateway_display_visibility": {"required": False, "config": "gateway_display_visibility", "default": None},
             "gateway_display_only": {"required": False, "config": "gateway_display_only", "default": False},
+            "gateway_live_display": {"required": False, "config": "gateway_live_display", "default": False},
+            "gateway_live_display_binding": {"required": False, "config": "gateway_live_display_binding", "default": None},
             "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
             "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
             "gateway_shared_ct": {"required": False, "config": "gateway_shared_ct", "default": True},
@@ -778,9 +875,9 @@ class Components:
 
         The coordinator lives here - never as a PredBat attribute - because create_debug_yaml()
         dumps every non-excluded member of PredBat.__dict__, and the coordinator holds the raw
-        unredacted reports plus the pseudonym salt. "components" is in DEBUG_EXCLUDE_LIST (as is
-        "coordinator", defensively), so nothing under self.components is dumped automatically at
-        all; create_debug_yaml() instead adds a plain redacted dict via coordinator.catalogue().
+        raw reports. "components" is in DEBUG_EXCLUDE_LIST (as is "coordinator", defensively),
+        so nothing under self.components is dumped automatically at all; create_debug_yaml() instead
+        adds a plain dict via coordinator.catalogue(), which scrubs email addresses.
         """
         self.components = {}
         self.component_tasks = {}
@@ -850,6 +947,7 @@ class Components:
                     # Overrides the class-name fallback ComponentBase.__init__ set, with the
                     # registry key report_discovery() should file this component's reports under.
                     self.components[component_name].component_name = component_name
+                    self.components[component_name].align_minute = component_info.get("align_minute", False)
                 except Exception as e:
                     # A component that will not import (a missing package, a syntax error) or
                     # construct must not take Predbat down with it: record why, leave it inactive
@@ -1043,11 +1141,11 @@ class Components:
         question rather than a per-inverter one: a component serves whichever inverters it
         discovered, and Inverter only needs to know whether to keep waiting.
         """
-        return any(COMPONENT_LIST.get(name, {}).get("inverter", False) and component and getattr(component, "gateway_display_only", False) is not True for name, component in self.components.items())
+        return any(COMPONENT_LIST.get(name, {}).get("inverter", False) and component and serves_inverter(component) for name, component in self.components.items())
 
     def inverter_source_names(self):
         """The display names of every active inverter component, for user-facing messages."""
-        return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False) and getattr(component, "gateway_display_only", False) is not True]
+        return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False) and serves_inverter(component)]
 
     def inverter_source_status(self):
         """
@@ -1080,7 +1178,7 @@ class Components:
                 continue
             load_error = self.load_error(name)
             component = self.components.get(name, None)
-            if component and getattr(component, "gateway_display_only", False) is True:
+            if component and not serves_inverter(component):
                 continue
             if load_error is not None:
                 state = "failed to start: {}".format(load_error)

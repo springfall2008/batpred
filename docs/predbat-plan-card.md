@@ -234,3 +234,18 @@ The same author of the Predbat Table Card has produced a nice visualisation for 
 ![image](images/pv-card-preview.png)
 
 See the [PV Card Preview repository](https://github.com/pacemaker82/PV-Card-Preview)
+
+## Predbat Card
+
+[Predbat Card](https://github.com/mimikm/Predbat-Card) is an independent community card that gives an at-a-glance overview of Predbat on your dashboard:
+
+- Status header with Predbat status, mode and last update
+- Overview tiles for battery SoC, what the battery is doing now, cost today, predicted saving today, and the next charge and export windows
+- Battery forecast chart (Predbat plan vs baseline), grid import & export chart and energy rates chart
+- Colour-coded plan timeline, upcoming actions and an expandable plan table
+- Visual editor with all Predbat entities prefilled
+- Six visual styles, light/dark override and adjustable text size
+
+![image](https://github.com/mimikm/Predbat-Card/blob/main/images/styles-light.png?raw=true)
+
+Install through HACS as a custom repository (Dashboard): `https://github.com/mimikm/Predbat-Card`

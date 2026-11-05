@@ -14,7 +14,7 @@ from config import INVERTER_DEF, APPS_SCHEMA
 from components import COMPONENT_LIST
 from coordinator import validate_report
 from sunsynk_const import SUNSYNK_TTL_STATIC
-from sunsynk import SunsynkAPI, load_apps_yaml_credentials, _tou_test_window
+from sunsynk import SunsynkAPI, load_apps_yaml_credentials, apply_oauth_refresh_settings, _tou_test_window
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_sunsynk_api import MockSunsynk
 from tests.test_sunsynk_publish import PublishingSunsynk
@@ -1214,6 +1214,29 @@ def test_apps_yaml_credentials_loader():
         expected = {"auth_method": "oauth", "key": "token-abc", "token_hash": "hash-abc", "inverter_sn": ["2211093089"], "token_expires_at": "2026-09-19T22:11:54.287+00:00"}
         if credentials != expected:
             print(f"ERROR: oauth config loaded as {credentials}, expected {expected}")
+            failed = True
+
+        # The oauth refresh settings ride along, so the CLI can refresh an expired token: without
+        # them OAuthMixin skips the refresh ("SUPABASE_URL or SUPABASE_KEY not set") and every call 401s.
+        refreshing = write(
+            folder, "refresh.yaml", {"pred_bat": {"sunsynk_auth_method": "oauth", "sunsynk_key": "token-abc", "sunsynk_inverter_sn": ["2211093089"], "supabase_url": "https://example.supabase.co", "supabase_key": "anon-key", "user_id": "instance-1"}}
+        )
+        refresh = load_apps_yaml_credentials(refreshing).get("oauth_refresh")
+        if refresh != {"supabase_url": "https://example.supabase.co", "supabase_key": "anon-key", "user_id": "instance-1"}:
+            print(f"ERROR: oauth refresh settings not loaded, got {refresh}")
+            failed = True
+        from mock_base import MockBase
+
+        base = MockBase()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SUPABASE_URL", None)
+            os.environ.pop("SUPABASE_KEY", None)
+            apply_oauth_refresh_settings(base, refresh)
+            if os.environ.get("SUPABASE_URL") != "https://example.supabase.co" or os.environ.get("SUPABASE_KEY") != "anon-key":
+                print("ERROR: the Supabase settings must be exported where OAuthMixin reads them")
+                failed = True
+        if base.args.get("user_id") != "instance-1":
+            print(f"ERROR: user_id must be set on base.args, got {base.args.get('user_id')}")
             failed = True
 
         # A YAML-parsed timestamp must come back as the string _parse_expiry wants, not a

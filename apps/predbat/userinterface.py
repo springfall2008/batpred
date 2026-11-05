@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate
 import functools
 import io
 import itertools
@@ -27,6 +27,7 @@ import json
 import yaml
 import re
 import copy
+import sys
 from const import (
     TIME_FORMAT,
     PREDBAT_MODE_OPTIONS,
@@ -34,16 +35,58 @@ from const import (
     DEBUG_SCHEMA_VERSION,
     MANUAL_RATE_MAX_MINUTES,
     MANUAL_TIME_MAX_MINUTES,
+    REPEAT_FULL_LOG_SECONDS,
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
+
 # A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
 # most of a replay's wall-clock on it - about 6s for a 5MB dump. CLoader pairs libyaml's C parser
 # with the very same (unsafe) Constructor that yaml.unsafe_load uses, so the Python-object tags
-# these dumps carry still load and the result is identical, roughly 6x faster. PyYAML is not
-# always built with libyaml, so fall back to the pure-Python loader when the C one is absent.
-DEBUG_YAML_LOADER = getattr(yaml, "CLoader", yaml.UnsafeLoader)
+# these dumps carry still load, roughly 6x faster. PyYAML is not always built with libyaml, so
+# fall back to the pure-Python loader when the C one is absent. The one difference from
+# yaml.unsafe_load is the RepeatLogGate constructor added below.
+class DebugYamlLoader(getattr(yaml, "CLoader", yaml.UnsafeLoader)):
+    """The loader read_debug_yaml() replays a debug dump with; see construct_empty_log_gate()."""
+
+
+def construct_empty_log_gate(loader, node):
+    """
+    Load any RepeatLogGate in a debug dump as a new, empty gate, without constructing what was dumped.
+
+    From v9.3.8 until #5569, io_slot_log_gate went into every dump that had logged an Intelligent slot
+    list. Its history is keyed by tuples, which the dump wrote as YAML sequences, and a
+    sequence cannot be a dict key on the way back in ("found unhashable key"), so those dumps would
+    not load at all. A replay has no use for which log lines were already written, and that gate
+    always used REPEAT_FULL_LOG_SECONDS, so nothing under the node is read.
+    """
+    return RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
+
+
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object:utils.RepeatLogGate", construct_empty_log_gate)
+
+
+def construct_numpy_dtype(loader, node):
+    """
+    Build a numpy dtype from a debug dump, handing it its state as the tuple it was dumped from.
+
+    Until numpy values were written as plain numbers, the Load ML forecast put numpy scalars into every
+    dump, and DebugYamlDumper writes a tuple as a list, so each scalar's dtype state was written as one.
+    A fresh dtype refuses a list ("SystemError: bad argument to internal function"), which stopped those
+    dumps loading anywhere.
+    """
+    value = loader.construct_mapping(node, deep=True)
+    dtype = loader.find_python_name("numpy.dtype", node.start_mark)
+    instance = dtype(*value.get("args", []))
+    state = value.get("state")
+    if state is not None:
+        instance.__setstate__(tuple(state))
+    return instance
+
+
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:numpy.dtype", construct_numpy_dtype)
+DEBUG_YAML_LOADER = DebugYamlLoader
 
 
 class DebugYamlDumper(yaml.Dumper):
@@ -70,9 +113,31 @@ class DebugYamlDumper(yaml.Dumper):
 
 # An export limit is a (mode, target, power) tuple, and PyYAML tags a tuple as !!python/tuple,
 # which yaml.safe_load refuses - the debug dump is an artefact people attach to bug reports and has
-# to load with plain YAML tooling. Written as an ordinary sequence instead. Nothing else in a dump
-# is a tuple today, and a sequence is what a reader wants from one anyway.
+# to load with plain YAML tooling. Written as an ordinary sequence instead, which is what a reader
+# wants from one anyway. That includes a tuple used as a dict key, and a sequence cannot be a dict
+# key on the way back in ("found unhashable key"), so a tuple-keyed dict must be kept out of the
+# dump - io_slot_log_gate was one (#5569) and is in DEBUG_EXCLUDE_LIST for that reason.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
+
+
+def represent_numpy_as_plain(dumper, value):
+    """
+    Write a numpy scalar or array as the plain number or list it holds, and any other object as PyYAML would.
+
+    PyYAML pickles a numpy scalar through its dtype, whose state is a tuple that the representer above
+    turns into a list, and a fresh dtype refuses a list, so the dump would not load. numpy is looked up
+    rather than imported, as it is only loaded once a component that uses it is, and until then no numpy
+    value can exist.
+    """
+    numpy = sys.modules.get("numpy")
+    if numpy is not None and isinstance(value, (numpy.generic, numpy.ndarray)):
+        return dumper.represent_data(value.tolist())
+    return dumper.represent_object(value)
+
+
+# A numpy float64 subclasses float, but PyYAML only matches an exact type in its plain representers, so
+# every numpy value reaches the object fallback, which this replaces
+DebugYamlDumper.add_multi_representer(object, represent_numpy_as_plain)
 
 
 def dump_debug_yaml(debug, stream):
@@ -98,6 +163,14 @@ class UserInterface:
     PredBat and Home Assistant. Creates entities for switches, input_numbers,
     and selects. Routes HA events to appropriate handlers.
     """
+
+    # Optional host hook consulted by load_previous_value_from_ha before Home Assistant:
+    # callable(entity, attribute) returning the value, or None to fall back to the HA read.
+    previous_value_provider = None
+
+    # Optional host hook consulted by OAuth token refresh instead of the oauth-refresh edge function:
+    # async callable(instance_id, provider, token_hash) returning the edge function's JSON reply, or None for a failed refresh.
+    oauth_refresh_provider = None
 
     def call_notify(self, message):
         """
@@ -142,7 +215,8 @@ class UserInterface:
             if combine:
                 final = 0
                 for item in value:
-                    got = self.resolve_arg(arg, item, default=default, indirect=True)
+                    # Convert each entry before summing: one sensor in kW among values in W would otherwise be added as W
+                    got = self.resolve_arg(arg, item, default=default, indirect=True, required_unit=required_unit)
                     try:
                         final += float(got)
                     except (ValueError, TypeError):
@@ -654,20 +728,20 @@ class UserInterface:
         """
         Update list of current Predbat settings
         """
-        global PREDBAT_SAVE_RESTORE
         self.save_restore_dir = self.config_root + "/predbat_save"
 
         if not os.path.exists(self.save_restore_dir):
             os.mkdir(self.save_restore_dir)
 
-        PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
+        # Build a list local to this engine, so several engines in one process do not share it
+        save_restore_options = ["save current", "restore default"]
         for root, _dirs, files in os.walk(self.save_restore_dir):
             for name in files:
                 filepath = os.path.join(root, name)
                 if filepath.endswith(".yaml") and not name.startswith("."):
-                    PREDBAT_SAVE_RESTORE.append(name)
+                    save_restore_options.append(name)
         item = self.config_index.get("saverestore", None)
-        item["options"] = PREDBAT_SAVE_RESTORE
+        item["options"] = save_restore_options
         self.expose_config("saverestore", None)
 
     async def async_restore_settings_yaml(self, filename):
@@ -968,7 +1042,14 @@ class UserInterface:
     def load_previous_value_from_ha(self, entity, attribute=None):
         """
         Load HA value either from state or from history if there is any
+
+        If previous_value_provider is set it is asked first; a None result falls back to HA.
         """
+        if self.previous_value_provider is not None:
+            provided = self.previous_value_provider(entity, attribute)
+            if provided is not None:
+                return provided
+
         if attribute:
             ha_value = self.get_state_wrapper(entity, attribute=attribute)
             if ha_value is not None and ha_value not in ("unavailable", "unknown"):
@@ -1815,7 +1896,13 @@ class UserInterface:
         self.log("Update event {} {} {}".format(event, data, kwargs))
         if data and data.get("service", "") == "install":
             service_data = data.get("service_data", {})
-            if service_data.get("entity_id", "") == "update.predbat_version":
+            entities = service_data.get("entity_id", [])
+
+            # Can be a string or an array, the HA update card sends an array
+            if isinstance(entities, str):
+                entities = [entities]
+
+            if "update.predbat_version" in entities:
                 latest = self.releases.get("latest", None)
                 if latest:
                     self.log("Requested install of latest Predbat version {}".format(latest))
