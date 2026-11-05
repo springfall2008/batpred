@@ -1708,6 +1708,272 @@ class TestPlanRepublish:
         assert gw._last_published_plan == entries
 
 
+class TestDiscovery:
+    """GatewayMQTT.build_discovery(): one record per inverter automatic_config() drives (#5917)."""
+
+    @staticmethod
+    def _contract():
+        """The discovery contract helpers, imported after predbat (circular-import guard)."""
+        import predbat  # noqa: F401
+        import tests.discovery_contract as contract
+
+        return contract
+
+    def _configured(self, status, **attrs):
+        """A gateway holding *status*, configured by automatic_config(); returns (gateway, captured args)."""
+        gw = TestAutomaticConfig()._make_gateway()
+        for name, value in attrs.items():
+            setattr(gw, name, value)
+        gw._last_status = status
+        captured = self._contract().capture_automatic_config(gw)
+        return gw, captured
+
+    @staticmethod
+    def _unit(status, serial, inv_type=pb.INVERTER_TYPE_GIVENERGY, primary=False, battery=False, pv_w=0, pv_today_wh=0):
+        """Add one unit to *status* as current hub firmware reports it."""
+        inv = status.inverters.add()
+        inv.type = inv_type
+        inv.serial = serial
+        inv.primary = primary
+        inv.connected = True
+        inv.active = True
+        if battery:
+            inv.battery.soc_percent = 50
+            inv.battery.capacity_wh = 9500
+            inv.battery.rate_max_w = 3000
+            inv.inverter.rate_max_w = 5000
+        if pv_w:
+            inv.pv.power_w = pv_w
+        if pv_today_wh:
+            inv.energy.pv_today_wh = pv_today_wh
+        return inv
+
+    @staticmethod
+    def _agree_at(record, captured, index):
+        """Agreement both ways for driven unit `index`; a list shorter than the fleet binds nothing for later units."""
+        contract = TestDiscovery._contract()
+        entities = record.get("entities") or {}
+        per_device = {}
+        for setting, value in captured.items():
+            if isinstance(value, list) and index >= len(value):
+                assert setting not in entities, "{} is bound for {} units only, so unit {} must not carry it".format(setting, len(value), index)
+            elif isinstance(value, list) and value[index] is None:
+                assert setting not in entities, "{} is bound to nothing for unit {}".format(setting, index)
+            else:
+                per_device[setting] = value
+        contract.assert_record_agrees(record, per_device, index=index)
+        contract.assert_record_binds_nothing_extra(record, captured, index=index)
+
+    def _single(self):
+        """One GivEnergy AIO, configured."""
+        return self._configured(TestAutomaticConfig()._basic_status(serial="CE123456789"))
+
+    def test_none_before_auto_config(self):
+        """Nothing is reported until automatic_config() has chosen the units it drives."""
+        gw = TestAutomaticConfig()._make_gateway()
+        gw._last_status = TestAutomaticConfig()._basic_status()
+        assert gw.build_discovery() is None
+
+    def test_single_aio_record(self):
+        """A single AIO is a direct record keyed by its own serial, the same serial GivTCP and GE Cloud report."""
+        gw, _ = self._single()
+        report = gw.build_discovery()
+        record = report["inverters"][0]
+        assert report["automatic"] is True and report["chargers"] == [] and report["cars"] == []
+        assert record["device_id"] == "gateway:CE123456789"
+        assert record["inverter_type"] == "GWMQTT" and record["composition"] == "direct"
+        assert record["hardware_ids"] == {"serial": "CE123456789"}
+        assert record["functions"] == ["solar", "battery"]
+        assert record["info"] == {"vendor": "GivEnergy"}, record["info"]
+        assert record["entities"]["charge_rate"]["step_percent_of_capacity"] == 1
+        assert record["entities"]["inverter_time"]["format"] == "%Y-%m-%dT%H:%M:%S%z"
+        assert record["ratings"] == {"soc_max": 9.5, "battery_rate_max": 5000}, record["ratings"]
+
+    def test_single_aio_rebuilds_row(self):
+        """The record alone rebuilds the GWMQTT row; the clock and rate step are the entity attributes inverter.py applies at runtime."""
+        from gateway import GatewayMQTT
+
+        contract = self._contract()
+        gw, _ = self._single()
+        record = contract.validated_inverters(gw.build_discovery())[0]
+        contract.assert_definition_complete(
+            record,
+            GatewayMQTT.WRITE_AND_POLL_SLEEP,
+            except_fields=("clock_time_format", "rate_step_percent_of_capacity"),
+            write_max_retry=GatewayMQTT.WRITE_MAX_RETRY,
+            write_backoff=GatewayMQTT.WRITE_BACKOFF,
+        )
+
+    def test_single_aio_agrees(self):
+        """The record binds exactly what automatic_config() binds."""
+        contract = self._contract()
+        gw, captured = self._single()
+        record = contract.validated_inverters(gw.build_discovery())[0]
+        contract.assert_record_agrees(record, captured)
+        contract.assert_record_binds_nothing_extra(record, captured)
+
+    def test_shared_ct_two_aios(self):
+        """Two AIOs on one CT: the second reads grid and load as a fixed 0 and carries no site totals."""
+        status = TestAutomaticConfig()._basic_status(serial="CE123456789")
+        TestAutomaticConfig()._make_inverter(status, serial="CE987654321")
+        gw, captured = self._configured(status)
+        records = self._contract().validated_inverters(gw.build_discovery())
+        assert [record["device_id"] for record in records] == ["gateway:CE123456789", "gateway:CE987654321"]
+        for index, record in enumerate(records):
+            self._agree_at(record, captured, index)
+        second = records[1]["entities"]
+        assert second["grid_power"] == {"value": 0, "access": "r"} and second["load_power"] == {"value": 0, "access": "r"}
+        assert "import_today" not in second and "battery_temperature_history" not in second
+        assert "battery_temperature_history" in records[0]["entities"]
+
+    def test_gateway_composition_fronts_aios(self):
+        """Two or more AIOs behind a GivEnergy Gateway: one record for the Gateway, listing the AIOs it fronts."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_gateway"
+        status.timestamp = 1741789200
+        self._unit(status, "GW00000001", inv_type=pb.INVERTER_TYPE_GIVENERGY_GATEWAY, primary=True)
+        self._unit(status, "CE00000002", primary=True, battery=True)
+        self._unit(status, "CE00000003", primary=True, battery=True)
+        gw, captured = self._configured(status)
+        records = self._contract().validated_inverters(gw.build_discovery())
+        assert len(records) == 1
+        assert records[0]["composition"] == "gateway" and records[0]["serials"] == ["CE00000002", "CE00000003"], records[0]
+        self._agree_at(records[0], captured, 0)
+
+    def test_ems_record(self):
+        """A Plant EMS is the single control point: an "ems" record whose same-day-only slots cannot span midnight."""
+        from gateway import GatewayMQTT
+
+        contract = self._contract()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_ems"
+        status.timestamp = 1741789200
+        self._unit(status, "EM00000001", inv_type=pb.INVERTER_TYPE_GIVENERGY_EMS, primary=True)
+        self._unit(status, "CE00000002", battery=True)
+        self._unit(status, "CE00000003", battery=True)
+        gw, captured = self._configured(status)
+        record = contract.validated_inverters(gw.build_discovery())[0]
+        assert record["composition"] == "ems" and record["serials"] == ["CE00000002", "CE00000003"], record
+        assert record["capabilities"]["can_span_midnight"] is False
+        contract.assert_definition_complete(
+            record,
+            GatewayMQTT.WRITE_AND_POLL_SLEEP,
+            except_fields=("clock_time_format", "rate_step_percent_of_capacity", "can_span_midnight"),
+            write_max_retry=GatewayMQTT.WRITE_MAX_RETRY,
+            write_backoff=GatewayMQTT.WRITE_BACKOFF,
+        )
+        self._agree_at(record, captured, 0)
+
+    def test_pv_only_unit_record(self):
+        """A battery-less PV inverter gets a solar-only record carrying its generation, with no inverter type (spec D12)."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_hybrid_pv"
+        status.timestamp = 1741789200
+        self._unit(status, "FA0000A001", primary=True, battery=True, pv_w=1400, pv_today_wh=5000)
+        self._unit(status, "PD0000A002", pv_w=900, pv_today_wh=2000)
+        gw, _ = self._configured(status)
+        assert gw._pv_only_serials == ("PD0000A002",)
+        report = gw.build_discovery()
+        pv = next(record for record in report["inverters"] if record["device_id"] == "gateway:PD0000A002")
+        assert pv["functions"] == ["solar"] and "inverter_type" not in pv and "capabilities" not in pv, pv
+        assert pv["entities"] == {"pv_power": {"entity_id": "sensor.predbat_gateway_00a002_pv_power", "access": "r", "unit": "W"}}, "only its pv_power is counted without a serial list"
+
+    def test_run_refreshes_discovery_every_cycle(self):
+        """run() files the report after every cycle, whatever that cycle returned."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        gw = TestAutomaticConfig()._make_gateway()
+        for outcome in (True, False):
+            gw._run_cycle = AsyncMock(return_value=outcome)
+            gw.refresh_discovery = MagicMock()
+            assert asyncio.run(gw.run(0, True)) is outcome
+            gw.refresh_discovery.assert_called_once_with()
+
+    def _with_ev(self, charge_point_id="CP1", **attrs):
+        """One configured AIO plus an OCPP EV charger."""
+        status = TestAutomaticConfig()._basic_status(serial="CE123456789")
+        ev = status.ev_chargers.add()
+        ev.connected = True
+        ev.charge_point_id = charge_point_id
+        ev.max_current_a = 32
+        return self._configured(status, **attrs)
+
+    def test_ev_charger_record(self):
+        """The EV charger the hub drives is a charger with a stub car, keyed by its OCPP charge point id."""
+        gw, _ = self._with_ev()
+        report = gw.build_discovery()
+        charger, car = report["chargers"][0], report["cars"][0]
+        assert charger["device_id"] == "gateway:evc:CP1"
+        assert charger["hardware_ids"] == {"serial": "CP1"}
+        assert charger["serves_cars"] == ["gateway:evc:CP1:car"]
+        assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_now", "car_charging_energy", "car_charging_power"}, charger["entities"]
+        assert car == {"device_id": "gateway:evc:CP1:car", "charged_by": "gateway:evc:CP1", "flags": ["stub"]}
+
+    def test_ev_charger_entities_match_register_ev_car(self):
+        """Each charger entity is the one _register_ev_car() binds under the same Predbat name."""
+        gw, captured = self._with_ev(gateway_evc_automatic=True)
+        gw.base.expose_config = lambda *args, **kwargs: None
+        entities = gw.build_discovery()["chargers"][0]["entities"]
+        for setting, descriptor in entities.items():
+            bound = captured[setting]
+            bound = bound[0] if isinstance(bound, list) else bound
+            assert descriptor["entity_id"] == bound, (setting, descriptor, bound)
+
+    def test_ev_charger_reported_without_evc_automatic(self):
+        """The charger is hardware the hub found, so it is described whether or not Predbat wires it."""
+        gw, captured = self._with_ev(gateway_evc_automatic=False)
+        assert "car_charging_planned" not in captured
+        assert len(gw.build_discovery()["chargers"]) == 1
+
+    def test_no_ev_charger_no_records(self):
+        """No charger in the status, no charger or car records."""
+        gw, _ = self._single()
+        report = gw.build_discovery()
+        assert report["chargers"] == [] and report["cars"] == []
+
+    def test_ev_round_trip(self):
+        """Through the real Coordinator: the stub flag and every charger entity survive."""
+        from coordinator import Coordinator
+        from mock_base import MockBase
+
+        gw, _ = self._with_ev()
+        logs = []
+        coordinator = Coordinator(MockBase())
+        coordinator.log = logs.append
+        coordinator.report("gateway", gw.build_discovery())
+        cleaned = coordinator.reports["gateway"]
+        assert cleaned["cars"][0]["flags"] == ["stub"]
+        assert len(cleaned["chargers"][0]["entities"]) == 5
+        assert not [line for line in logs if line.startswith("Warn")], logs
+
+    def test_ev_serial_shaped_charge_point_id_stays_readable(self):
+        """A charger whose OCPP id is its serial keeps it readable everywhere, with no redaction warnings (charger ids are not secret)."""
+        from coordinator import Coordinator
+        from mock_base import MockBase
+
+        gw, _ = self._with_ev(charge_point_id="GL1T-2300123456")
+        report = gw.build_discovery()
+        assert report["chargers"][0]["hardware_ids"] == {"serial": "GL1T-2300123456"}, report["chargers"][0]
+        logs = []
+        coordinator = Coordinator(MockBase())
+        coordinator.log = logs.append
+        coordinator.report("gateway", report)
+        catalogue = coordinator.catalogue()
+        assert catalogue["chargers"][0]["device_id"] == "gateway:evc:GL1T-2300123456", catalogue["chargers"][0]
+        assert catalogue["cars"][0]["charged_by"] == "gateway:evc:GL1T-2300123456"
+        assert not [line for line in logs if line.startswith("Warn")], logs
+
+    def test_no_credentials_in_report(self):
+        """The hub's MQTT username and token and the inverter's network details never reach the report."""
+        gw, _ = self._single()
+        gw.gateway_device_id = "pbgw_secret_user"
+        gw.mqtt_token = "eyJhbGciOiJIUzI1NiJ9.secret"
+        gw._last_status.inverters[0].ip = "192.168.1.50"
+        text = str(gw.build_discovery())
+        for secret in ("pbgw_secret_user", "eyJhbGciOiJIUzI1NiJ9", "192.168.1.50", "pbgw_test"):
+            assert secret not in text, secret
+
+
 class TestAutomaticConfig:
     """Tests for GatewayMQTT.automatic_config() entity-to-arg mapping."""
 
@@ -4558,15 +4824,263 @@ class TestGatewayUnitControlBinding:
         assert self._errors(gw) == []
         gw.non_fatal_error_occurred.assert_not_called()
 
-    def test_unlisted_pv_only_inverter_is_left_out_as_before(self):
-        """With no serial list a PV-only inverter is not configured at all, as before."""
+    # ------------------------------------------------------------------
+    # No serial list: a battery-less inverter with no coordinator is PV only.
+    # The topologies below are the ones seen on real hubs.
+    # ------------------------------------------------------------------
+
+    def _unit(self, status, serial, inv_type=pb.INVERTER_TYPE_GIVENERGY, primary=False, battery=False, pv_w=0, pv_today_wh=0, connected=True):
+        """Add one unit to *status* as current hub firmware reports it."""
+        inv = status.inverters.add()
+        inv.type = inv_type
+        inv.serial = serial
+        inv.primary = primary
+        inv.connected = connected
+        inv.active = connected
+        if battery:
+            inv.battery.soc_percent = 50
+            inv.battery.capacity_wh = 9500
+            inv.battery.rate_max_w = 3000
+        if pv_w:
+            inv.pv.power_w = pv_w
+        if pv_today_wh:
+            inv.energy.pv_today_wh = pv_today_wh
+        return inv
+
+    def _hybrid_and_pv_status(self, pv_connected=True, pv_w=900):
+        """A battery hybrid plus a battery-less PV inverter the hub does not elect primary."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_hybrid_pv"
+        status.firmware = "1.0.39"
+        status.schema_version = 1
+        self._unit(status, "FA0000A001", primary=True, battery=True, pv_w=1400, pv_today_wh=5000)
+        if pv_connected:
+            self._unit(status, "PD0000A002", pv_w=pv_w, pv_today_wh=2000)
+        else:
+            self._unit(status, "PD0000A002", connected=False)
+        return status
+
+    def test_unlisted_pv_only_inverter_counts_its_pv_power_only(self):
+        """No serial list, no coordinator: a battery-less inverter is PV only; its pv_power counts, its pv_today does not."""
         gw = self._listed_gateway([])
 
-        gw._process_telemetry(self._pv_and_battery_status().SerializeToString())
+        gw._process_telemetry(self._hybrid_and_pv_status().SerializeToString())
 
         assert gw._args["num_inverters"] == 1
+        assert gw._inverter_slot_serials == ["FA0000A001"]
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._args["pv_power"] == ["sensor.predbat_gateway_00a001_pv_power", "sensor.predbat_gateway_00a002_pv_power"]
+        # The hybrid's own counter can already include the PV inverter's generation
+        assert gw._args["pv_today"] == ["sensor.predbat_gateway_00a001_pv_today"]
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 900
+        assert "00a002" not in gw._suffix_to_serial
+        for arg in ("soc_percent", "charge_rate", "discharge_rate", "reserve", "charge_limit", "charge_start_time", "scheduled_charge_enable", "load_power", "grid_power", "pv_today"):
+            assert len(gw._args[arg]) == 1 and "00a002" not in str(gw._args[arg][0]), arg
+        assert self._errors(gw) == []
+
+    def test_unlisted_pv_only_inverter_dark_at_startup_is_added_when_it_wakes(self):
+        """A PV inverter that is off at night when Predbat starts is added, without a restart, once the hub reads it."""
+        gw = self._listed_gateway([])
+
+        gw._process_telemetry(self._hybrid_and_pv_status(pv_connected=False).SerializeToString())
         assert gw._pv_only_serials == ()
-        assert gw._args["pv_power"] == ["sensor.predbat_gateway_00b002_pv_power"]
+        assert gw._args["pv_power"] == ["sensor.predbat_gateway_00a001_pv_power"]
+
+        gw._process_telemetry(self._hybrid_and_pv_status(pv_connected=True).SerializeToString())
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._args["pv_power"][-1] == "sensor.predbat_gateway_00a002_pv_power"
+        assert gw._args["num_inverters"] == 1
+
+        # Sunset: it stops reporting, and stays configured rather than thrashing auto-config
+        reruns = gw._configured_inverter_serials
+        gw._process_telemetry(self._hybrid_and_pv_status(pv_connected=False).SerializeToString())
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._configured_inverter_serials == reruns
+
+    def test_disconnected_pv_only_inverter_reads_no_generation(self):
+        """The hub repeats a disconnected unit's last readings; a PV-only inverter's frozen generation is zeroed."""
+        gw = self._listed_gateway([])
+        gw._process_telemetry(self._hybrid_and_pv_status().SerializeToString())
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 900
+
+        frozen = self._hybrid_and_pv_status()
+        frozen.inverters[1].connected = False  # still carrying its 900 W from before
+        gw._process_telemetry(frozen.SerializeToString())
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 0
+        assert gw._pv_only_serials == ("PD0000A002",)
+
+    def test_pv_only_inverter_disconnected_at_startup_reads_no_generation(self):
+        """Started at night with the hub repeating the PV inverter's afternoon reading: its first publish is already zero."""
+        gw = self._listed_gateway([])
+        status = self._hybrid_and_pv_status()
+        status.inverters[1].connected = False  # frozen at 900 W
+        status.inverters[1].active = False
+
+        gw._process_telemetry(status.SerializeToString())
+
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 0
+
+        # Firmware that flags every unit primary: it is published before auto-config, then zeroed
+        gw = self._listed_gateway([])
+        status.inverters[1].primary = True
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._pv_only_serials == ("PD0000A002",)
+        assert gw._states["sensor.predbat_gateway_00a002_pv_power"] == 0
+
+    def test_unlisted_pv_only_inverter_is_not_counted_in_integrated_load(self):
+        """Its pv_today is not added to an integrated load: the hybrid's counter may already hold it."""
+        gw = self._listed_gateway([])
+        gw._process_telemetry(self._hybrid_and_pv_status().SerializeToString())
+        assert gw._pv_only_counters == ()
+
+    def test_unlisted_battery_less_aios_behind_a_gateway_stay_out(self):
+        """A Gateway with one battery AIO and battery-less AIOs behind it: auto-config runs, and nothing is PV only."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_gateway_four"
+        status.firmware = "1.1.0"
+        status.schema_version = 1
+        self._unit(status, "GW0000A010", inv_type=pb.INVERTER_TYPE_GIVENERGY_GATEWAY, primary=True, battery=True, pv_w=34, pv_today_wh=200)
+        self._unit(status, "CH0000A011", primary=True, battery=True, pv_w=500)
+        for serial in ("CH0000A012", "CH0000A013", "CH0000A014"):
+            self._unit(status, serial, pv_w=1)
+        gw = self._listed_gateway([])
+
+        gw._process_telemetry(status.SerializeToString())
+
+        assert gw._auto_configured
+        assert gw._pv_only_serials == ()
+        assert not any(s in e for e in gw._args["pv_power"] for s in ("00a012", "00a013", "00a014"))
+
+    def test_coordinator_missing_from_one_status_changes_nothing(self):
+        """A status that leaves the Gateway or Plant EMS out (a hub rescan) does not re-run auto-config or move control."""
+        for coordinator in (pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY):
+
+            def site(with_coordinator):
+                status = pb.GatewayStatus()
+                status.device_id = "pbgw_coord"
+                status.firmware = "1.0.39"
+                status.schema_version = 1
+                if with_coordinator:
+                    self._unit(status, "EM0000G001", inv_type=coordinator, primary=True, battery=True)
+                self._unit(status, "CH0000G002", battery=True, pv_w=500)
+                self._unit(status, "CH0000G003", battery=True, pv_w=500)
+                self._unit(status, "CH0000G004", pv_w=300)
+                return status.SerializeToString()
+
+            gw = self._listed_gateway([])
+            gw._process_telemetry(site(True))
+            assert gw._inverter_slot_serials == ["EM0000G001"], coordinator
+
+            runs = []
+            real_config = gw.automatic_config
+
+            def counted_config():
+                runs.append(1)
+                return real_config()
+
+            gw.automatic_config = counted_config
+            gw._process_telemetry(site(False))
+            gw._process_telemetry(site(True))
+            assert runs == [], coordinator
+            assert gw._inverter_slot_serials == ["EM0000G001"], coordinator
+            assert gw._pv_only_serials == (), coordinator
+
+            # After a restart the stored discovery record still marks the site as coordinated
+            fresh = self._listed_gateway([])
+            fresh._discovery = dict(gw._discovery)
+            fresh._process_telemetry(site(False))
+            assert fresh._pv_only_serials == (), coordinator
+
+    def test_unlisted_ems_and_gateway_sites_are_unchanged(self):
+        """Real topologies with a coordinator keep exactly the configuration they had."""
+        for coordinator in (pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY):
+            status = pb.GatewayStatus()
+            status.device_id = "pbgw_coord"
+            status.firmware = "1.0.39"
+            status.schema_version = 1
+            self._unit(status, "EM0000G001", inv_type=coordinator, primary=True, battery=True)
+            self._unit(status, "CH0000G002", battery=True, pv_w=500)
+            self._unit(status, "CH0000G003", battery=True, pv_w=500)
+            self._unit(status, "CH0000G004", pv_w=300)  # battery-less unit behind the coordinator
+            gw = self._listed_gateway([])
+
+            gw._process_telemetry(status.SerializeToString())
+
+            assert gw._pv_only_serials == (), coordinator
+            assert gw._inverter_slot_serials == ["EM0000G001"], coordinator
+
+    def test_unlisted_single_and_twin_battery_sites_are_unchanged(self):
+        """The common real topologies (one battery inverter; two) gain no PV-only inverter."""
+        for count in (1, 2):
+            status = pb.GatewayStatus()
+            status.device_id = "pbgw_plain"
+            status.firmware = "1.0.39"
+            status.schema_version = 1
+            serials = ["CE0000G800", "CE0000G400"][:count]
+            for serial in serials:
+                self._unit(status, serial, primary=True, battery=True, pv_w=1000)
+            gw = self._listed_gateway([])
+
+            gw._process_telemetry(status.SerializeToString())
+
+            assert gw._pv_only_serials == (), count
+            assert gw._inverter_slot_serials == sorted(serials), count
+            assert len(gw._args["pv_power"]) == count and len(gw._args["pv_today"]) == count
+
+    def test_unlisted_inverter_whose_battery_is_late_is_not_taken_for_pv_only(self):
+        """An inverter with no readings yet has no record, so it is not PV only; once it reports a battery it gets a slot."""
+        gw = self._listed_gateway([])
+        status = self._hybrid_and_pv_status(pv_connected=False)
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._pv_only_serials == ()
+
+        status = self._hybrid_and_pv_status()
+        status.inverters[1].primary = True
+        status.inverters[1].battery.soc_percent = 40
+        status.inverters[1].battery.capacity_wh = 5000
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._pv_only_serials == ()
+        assert gw._args["num_inverters"] == 2
+
+    def test_unlisted_pv_only_inverter_that_gains_a_battery_gets_a_slot(self):
+        """Once PV only, an inverter that later reports a battery is moved to a slot."""
+        gw = self._listed_gateway([])
+        gw._process_telemetry(self._hybrid_and_pv_status().SerializeToString())
+        assert gw._pv_only_serials == ("PD0000A002",)
+
+        status = self._hybrid_and_pv_status()
+        status.inverters[1].primary = True
+        status.inverters[1].battery.soc_percent = 40
+        status.inverters[1].battery.capacity_wh = 5000
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._pv_only_serials == ()
+        assert gw._args["num_inverters"] == 2
+
+    def test_listed_pv_only_inverter_still_counts_its_pv_today(self):
+        """The listed path (#5471) is unchanged: a listed PV-only inverter's counter is still counted."""
+        gw = self._listed_gateway(["FD0000P001", "CH0000B002"])
+        gw._process_telemetry(self._pv_and_battery_status().SerializeToString())
+        assert gw._pv_only_counters == ("FD0000P001",)
+
+    def test_listed_pv_only_inverter_disconnected_reads_no_generation(self):
+        """Listed path: a disconnected PV-only inverter's frozen power is zeroed, while its counter stays in pv_today."""
+        gw = self._listed_gateway(["FD0000P001", "CH0000B002"])
+        live = self._pv_and_battery_status()
+        live.inverters[0].energy.pv_today_wh = 3000
+        gw._process_telemetry(live.SerializeToString())
+        assert gw._states["sensor.predbat_gateway_00p001_pv_power"] == 1200
+        counted = gw._states["sensor.predbat_gateway_00p001_pv_today"]
+
+        frozen = self._pv_and_battery_status()
+        frozen.inverters[0].energy.pv_today_wh = 3000
+        frozen.inverters[0].connected = False  # the hub repeats its last 1200 W
+        gw._process_telemetry(frozen.SerializeToString())
+
+        assert gw._states["sensor.predbat_gateway_00p001_pv_power"] == 0
+        assert gw._states["sensor.predbat_gateway_00p001_pv_today"] == counted
+        assert gw._pv_only_counters == ("FD0000P001",)
+        assert gw._args["pv_today"] == ["sensor.predbat_gateway_00b002_pv_today", "sensor.predbat_gateway_00p001_pv_today"]
 
     def test_pv_only_inverter_that_reports_a_battery_later_gets_a_slot(self):
         """Having a battery is learned when the hub reports it, and re-runs auto-config; it is never unlearned."""
@@ -8263,6 +8777,7 @@ def run_gateway_tests(my_predbat=None):
         TestInjectEntities,
         TestDebugLogging,
         TestAutomaticConfig,
+        TestDiscovery,
         TestIntegratePower,
         TestBoundEntitiesAreWritten,
         TestGatewayUnitControlBinding,

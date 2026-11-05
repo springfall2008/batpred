@@ -36,7 +36,8 @@ from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in
 # ABI 11: the car slot cancel table follows car_rate_flat in PkContext.
 KERNEL_ABI_VERSION = 12
 # Parity 19: an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted.
-KERNEL_PARITY_REVISION = 20
+# Parity 21: merges that (parity 20 on its branch) with main's parity 19, the PV10 dispatch hedge softened in a confirmed run.
+KERNEL_PARITY_REVISION = 21
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS

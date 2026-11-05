@@ -23,6 +23,9 @@ from sigenergy import (
     SIGENERGY_ACTIVE_MODE_SELF,
     SIGENERGY_ACTIVE_MODE_SELF_GRID,
     SIGENERGY_CODE_IN_OTHER_VPP,
+    SIGENERGY_CODE_STATION_INFO_NOT_FOUND,
+    SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP,
+    SIGENERGY_CODE_STATION_NOT_FOUND,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
     SIGENERGY_LOG_REDACT_KEYS,
     SIGENERGY_MODE_MSC,
@@ -1718,6 +1721,49 @@ def test_sigenergy_apply_controls_export_mode(my_predbat):
     assert len(bat_cmds) >= 1, "send_battery_command called for export"
     assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_DISCHARGE, "discharge mode sent for export"
     assert bat_cmds[0][4] == 3.0, "configured export rate (3000W) sent as charging_power_kw, got {}".format(bat_cmds[0][4])
+
+    return failed
+
+
+def test_sigenergy_apply_controls_duration_rounds_up(my_predbat):
+    """A command sent seconds past the minute still runs to the window's end.
+
+    The device times the end from startTime (now), so rounding the remaining time down cut every
+    window short by the seconds the run landed past the minute - a run at 16:00:01 into a 16:00-16:30
+    window asked for 29 minutes and stopped at 16:29:01.
+    """
+    failed = False
+    fixed_now = datetime(2026, 11, 5, 16, 0, 1, tzinfo=timezone.utc)
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now.astimezone(tz) if tz else fixed_now
+
+    for window, soc, expected_mode in (("export", 80.0, SIGENERGY_ACTIVE_MODE_DISCHARGE), ("charge", 50.0, SIGENERGY_ACTIVE_MODE_CHARGE)):
+        api = MockSigenergyAPI()
+        system_id = "SIG001"
+        api.systems[system_id] = {"systemName": "Home", "batteryCapacity": 10.0}
+        api.devices[system_id] = [{"deviceType": "Battery", "attrMap": {"ratedChargePower": 3.0}}]
+        api.energy_flow[system_id] = {"batterySoc": soc}
+        api.controls[system_id] = {
+            "charge": {"enable": window == "charge", "start_time": "16:00:00", "end_time": "16:30:00", "target_soc": 90, "rate": 3000},
+            "export": {"enable": window == "export", "start_time": "16:00:00", "end_time": "16:30:00", "target_soc": 10, "rate": 3000},
+            "reserve": 10,
+        }
+
+        commands_sent = []
+
+        async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None, **kwargs):
+            commands_sent.append((active_mode, duration_min))
+            return True
+
+        api.send_battery_command = mock_send_battery_command
+
+        with patch("sigenergy.datetime", _FixedDatetime):
+            ok = run_async(api.apply_controls(system_id))
+        assert ok is True, "apply_controls {} returned True".format(window)
+        assert commands_sent == [(expected_mode, 30)], "{} window 16:00-16:30 at 16:00:01 must ask for 30 minutes, got {}".format(window, commands_sent)
 
     return failed
 
@@ -3740,6 +3786,26 @@ def test_sigenergy_onboard_status(my_predbat):
     assert result2 is False, "in-other-vpp returns False"
     assert api2.onboard_status["sys-2"] == "in_other_vpp", "in_other_vpp status set"
 
+    # A mistyped system ID (top-level 13001, or the documented 1106/1108) → invalid_system_id, returns False (#5691)
+    for code in (SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP, SIGENERGY_CODE_STATION_NOT_FOUND, SIGENERGY_CODE_STATION_INFO_NOT_FOUND):
+        api3 = MockSigenergyAPI()
+        api3._request = _api_error(api3, code)
+        result3 = run_async(api3.onboard_systems("sys-3"))
+        assert result3 is False, "station not found ({}) returns False".format(code)
+        assert api3.onboard_status["sys-3"] == "invalid_system_id", "invalid_system_id status set for code {}".format(code)
+
+    # The same code can come per system in data[].codeList rather than at the top level
+    api4 = MockSigenergyAPI()
+
+    async def _per_item(*args, **kwargs):
+        """A _request stand-in returning a per-system failure, as the real onboard endpoint does."""
+        return [{"systemId": "sys-4", "result": False, "codeList": [SIGENERGY_CODE_STATION_NOT_FOUND]}]
+
+    api4._request = _per_item
+    result4 = run_async(api4.onboard_systems("sys-4"))
+    assert result4 is False, "per-item station not found returns False"
+    assert api4.onboard_status["sys-4"] == "invalid_system_id", "invalid_system_id status set for a per-item code"
+
     return failed
 
 
@@ -5024,6 +5090,105 @@ def test_sigenergy_realtime_fallback_unknown_grid_load(my_predbat):
     return failed
 
 
+# Discovery catalogue reporter
+
+# The component's own documented example id: its 12-character slug "ta1700000000" holds a 10-digit run,
+# which the identifier shape guard the catalogue no longer has used to mistake for a misfiled identifier
+DISCOVERY_SYSTEM = "TESTA1700000000"
+
+
+def _discovery_sigenergy(systems=1):
+    """A SigenergyAPI holding `systems` discovered systems, each with one inverter, one battery and MQTT-reported limits."""
+    api = MockSigenergyAPI()
+    api.automatic = True
+    for index in range(systems):
+        sid = DISCOVERY_SYSTEM[:-1] + str(index)
+        api.systems[sid] = {"systemName": "Jane's Cottage", "batteryCapacity": 9.04, "pvCapacity": 6.0}
+        api.devices[sid] = [
+            {"deviceType": "Inverter", "serialNumber": "110A0001{}".format(index), "status": "Normal", "attrMap": {"ratedActivePower": 5.0}},
+            {"deviceType": "Battery", "serialNumber": "BAT0001{}".format(index), "status": "Normal", "attrMap": {"ratedEnergy": 9.04, "ratedChargePower": 4.4}},
+        ]
+        api.device_cutoffs[sid] = {"backup": 16.0, "discharge": 20.0}
+        api.grid_export[sid] = {"antiReflux": "on", "gridMaxBackfeedPowerW": 3680.0}
+    return api
+
+
+def test_sigenergy_catalogue_none_before_discovery(my_predbat):
+    """Nothing is reported before a system has been discovered."""
+    assert MockSigenergyAPI().build_discovery() is None
+    return False
+
+
+def test_sigenergy_record_shape(my_predbat):
+    """One record per system: inverter serial, readable system id, read-only reserve, third-party PV flag, reported ratings."""
+    report = _discovery_sigenergy().build_discovery()
+    record = report["inverters"][0]
+    sid = DISCOVERY_SYSTEM[:-1] + "0"
+    assert report["automatic"] is True
+    assert record["device_id"] == "sigenergy:110A00010", record
+    assert record["inverter_type"] == "SIGCLOUD" and record["composition"] == "direct"
+    assert record["hardware_ids"] == {"serial": "110A00010", "system_id": sid}, record["hardware_ids"]
+    assert "account_ids" not in record
+    assert record["flags"] == ["third_party_gen"]
+    assert record["entities"]["reserve"]["access"] == "r", "SIGCLOUD has no reserve control"
+    assert record["entities"]["soc_kw"]["unit"] == "kWh"
+    assert record["ratings"] == {"inverter_limit": 5000.0, "soc_max": 9.04, "export_limit": 3680, "battery_min_soc": 16.0}, record["ratings"]
+    assert "Jane" not in str(report), "the system name is never reported"
+    return False
+
+
+def test_sigenergy_export_limit_only_when_reported(my_predbat):
+    """The 99999 'no limit known' sentinel is not a rating."""
+    api = _discovery_sigenergy()
+    api.grid_export = {}
+    assert "export_limit" not in api.build_discovery()["inverters"][0]["ratings"]
+    return False
+
+
+def test_sigenergy_record_rebuilds_its_inverter_def_row(my_predbat):
+    """The record alone rebuilds the SIGCLOUD row; the clock is described as the ISO format the sensor really publishes."""
+    import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
+    from tests.discovery_contract import assert_definition_complete, validated_inverters
+
+    record = validated_inverters(_discovery_sigenergy().build_discovery())[0]
+    assert_definition_complete(record, SigenergyAPI.WRITE_AND_POLL_SLEEP, except_fields=("clock_time_format",))
+    return False
+
+
+def test_sigenergy_record_agrees_with_automatic_config(my_predbat):
+    """Each system's record binds exactly what automatic_config() binds at its index, for one and for two systems."""
+    import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
+    from tests.discovery_contract import assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
+
+    for systems in (1, 2):
+        api = _discovery_sigenergy(systems)
+        records = validated_inverters(api.build_discovery())
+        assert len(records) == systems
+        captured = capture_automatic_config(api)
+        for index, record in enumerate(records):
+            assert_record_agrees(record, captured, index=index)
+            assert_record_binds_nothing_extra(record, captured, index=index)
+    return False
+
+
+def test_sigenergy_round_trip_keeps_system_id(my_predbat):
+    """Through the real Coordinator: the system id and the entity ids stay readable, with nothing pseudonymised."""
+    from coordinator import Coordinator
+    from mock_base import MockBase
+
+    logs = []
+    coordinator = Coordinator(MockBase())
+    coordinator.log = logs.append
+    coordinator.report("sigenergy", _discovery_sigenergy().build_discovery())
+    catalogue = coordinator.catalogue()
+    sid = DISCOVERY_SYSTEM[:-1] + "0"
+    assert sid in str(catalogue), "the system id is not secret"
+    entity = catalogue["inverters"][0]["entities"]["soc_kw"]["entity_id"]
+    assert entity == "sensor.predbat_sigenergy_{}_battery_soc".format(sid[-12:].lower()), entity
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    return False
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -5087,6 +5252,7 @@ def run_sigenergy_tests(my_predbat):
         ("apply_controls_eco_mode", test_sigenergy_apply_controls_eco_mode),
         ("apply_controls_deduplication", test_sigenergy_apply_controls_deduplication),
         ("apply_controls_export_mode", test_sigenergy_apply_controls_export_mode),
+        ("apply_controls_duration_rounds_up", test_sigenergy_apply_controls_duration_rounds_up),
         ("apply_controls_freeze_export_no_window", test_sigenergy_apply_controls_freeze_export_no_window),
         ("publish_mqtt_success", test_sigenergy_publish_mqtt_success),
         ("redact", test_sigenergy_redact),
@@ -5182,6 +5348,12 @@ def run_sigenergy_tests(my_predbat):
         ("system_status_from_inverter_device", test_sigenergy_system_status_from_inverter_device),
         ("fetch_system_list_does_not_log_other_systems", test_sigenergy_fetch_system_list_does_not_log_other_systems),
         ("rate_limit_last_attempt_does_not_claim_to_wait", test_sigenergy_rate_limit_last_attempt_does_not_claim_to_wait),
+        ("catalogue_none_before_discovery", test_sigenergy_catalogue_none_before_discovery),
+        ("record_shape", test_sigenergy_record_shape),
+        ("export_limit_only_when_reported", test_sigenergy_export_limit_only_when_reported),
+        ("record_rebuilds_its_inverter_def_row", test_sigenergy_record_rebuilds_its_inverter_def_row),
+        ("record_agrees_with_automatic_config", test_sigenergy_record_agrees_with_automatic_config),
+        ("round_trip_keeps_system_id", test_sigenergy_round_trip_keeps_system_id),
     ]
 
     for name, fn in tests:

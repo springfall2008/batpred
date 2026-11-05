@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import copy
 import math
 import json
 import os
@@ -1448,6 +1449,59 @@ def run_random_scenario_tests(my_predbat):
         print("ERROR: plans differ from {}. If the change is intended, regenerate with ./run_random".format(RANDOM_BASELINE))
     else:
         print("All {} scenarios match the baseline across {} compared fields".format(len(baseline), compared_fields))
+    return failed
+
+
+def run_random_scenario_reapply_tests(my_predbat):
+    """Running a scenario must not change it, so running it again gives the same plan.
+
+    apply_scenario_to_predbat copies each car's slot list but not the slot dicts inside it, and the
+    plan writes back into those dicts, so the second run of the same scenario object starts from the
+    first run's car slots. The committed benchmark applies each scenario once and never sees this, but
+    anything that replays a scenario - a profiler, a bench comparing two planners on identical inputs -
+    silently plans a different household the second time.
+
+    my_predbat is unused for the same reason as run_random_scenario_tests: a fresh instance per run.
+    """
+    print("**** Running random scenario re-apply test ****")
+
+    from unit_test import create_predbat
+
+    scenario_predbat = create_predbat()
+    reset_inverter(scenario_predbat)
+    scenario_predbat.read_debug_yaml(RANDOM_TEMPLATE)
+    scenario_predbat.config_root = "./"
+    scenario_predbat.save_restore_dir = "./"
+    scenario_predbat.load_user_config()
+
+    # Only scenarios with a car - the car slots are what the plan writes back into
+    scenarios = [s for s in load_scenarios(RANDOM_SCENARIOS) if s["params"].get("cars", {}).get("num_cars")]
+    if not scenarios:
+        print("ERROR: no scenario in {} has a car, so the re-apply test exercises nothing".format(RANDOM_SCENARIOS))
+        return True
+
+    failed = False
+    for scenario in scenarios:
+        pristine = copy.deepcopy(scenario)
+        first = run_scenario(scenario_predbat, scenario)
+        if scenario != pristine:
+            print("ERROR: scenario {} was modified by running it".format(scenario["id"]))
+            failed = True
+        if first["failed"]:
+            print("ERROR: scenario {} failed to run, so its repeatability is untested".format(scenario["id"]))
+            failed = True
+            continue
+        second = run_scenario(scenario_predbat, scenario)
+        # Whole result, not just the metric - a leak can move parts that net out in the aggregate
+        for field in first:
+            if field in RANDOM_IGNORED_FIELDS:
+                continue
+            if first[field] != second.get(field):
+                print("ERROR: scenario {} planned differently on the second run: {} {} -> {}".format(scenario["id"], field, first[field], second.get(field)))
+                failed = True
+
+    if not failed:
+        print("All {} car scenarios unchanged by running and repeatable".format(len(scenarios)))
     return failed
 
 

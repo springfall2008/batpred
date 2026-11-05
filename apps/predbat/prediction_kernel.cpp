@@ -72,9 +72,12 @@
 // rate, without saving session or Axle rewards) and the slot's own rate (#5163).
 // Parity 18: energy a charge window stores in a confirmed Intelligent dispatch run (io_credit) earns a score
 // only credit off metric_keep.
-// Parity 19: an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted.
-// Parity 20: a cancelled step is charged the buy-back penalty on at least the car's full charge rate (cancel_floor_kw).
-#define PK_PARITY_REVISION 20
+// Parity 19 (main): in PV10, a dispatch minute of a confirmed run (io_credit set) is no longer assumed gone: the
+// dispatch is kept and the non-car import pays PK_RUN_EVERY minutes of each half hour at the worst-case rate.
+// Parity 19 (car cancel branch): an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted.
+// Parity 20 (car cancel branch): a cancelled step is charged the buy-back penalty on at least the car's full charge rate (cancel_floor_kw).
+// Parity 21: both of the above together; a cancelled step is not a confirmed run's dispatch, so it carries no dispatch_risk.
+#define PK_PARITY_REVISION 21
 #define PK_MAX_CARS 8
 #define PK_CANCEL_MAX_SLOTS 64 // Must equal car_cancel.py CAR_CANCEL_MAX_SLOTS (it sizes PkContext's cancel arrays), so a change to either needs an ABI bump - the cancelled set is a 64-bit mask
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
@@ -892,6 +895,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double import_rate = c->rate_import[k];
         double dispatch_rate = import_rate;
         bool dispatch_gone = c->io_flag[k] && is_pv10 && minute > 30;
+        double dispatch_risk = 0.0;
         // car_cancel.step_reverted(): the step can revert, nothing trusted covers it, and every dispatch covering it is cancelled
         const bool cancel_reverted = car_cancel && c->cancel_revert_rate[k] >= 0 && !c->cancel_trusted[k] && c->cancel_need_mask[k] != 0 && (c->cancel_need_mask[k] & ~cancel_mask) == 0;
         if (cancel_reverted) {
@@ -899,6 +903,13 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             import_rate = c->cancel_revert_rate[k];
             dispatch_rate = import_rate;
             dispatch_gone = false;
+        }
+        if (dispatch_gone && c->io_credit[k] != 0.0) {
+            // The car is charging in this run, so a dispatch that goes away is seen within a Predbat cycle: the
+            // dispatch is kept, and the house and battery pay PK_RUN_EVERY minutes of each half hour at the
+            // worst-case rate - prediction.py dispatch_risk
+            dispatch_gone = false;
+            dispatch_risk = (std::max(c->rate_max, import_rate) - import_rate) * PK_RUN_EVERY / 30.0;
         }
         if (dispatch_gone) {
             // Worst case the slot goes away: the tariff's highest rate, or the slot's own if an event makes it dearer
@@ -1520,6 +1531,10 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             // Premium for car charging capped at the actual grid import - prediction.py:1119-1122
             car_amount_premium = std::min(diff, car_amount_premium);
             metric += import_rate * diff + car_rate_premium * car_amount_premium;
+            if (dispatch_risk != 0.0) {
+                // Not on the car's share: the car stops with its dispatch
+                metric += dispatch_risk * (diff - car_amount_premium);
+            }
             if (car_gone_kwh != 0) {
                 // The car's share of the import is paid at its own rate, not the worst-case rate
                 metric -= std::min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh);
