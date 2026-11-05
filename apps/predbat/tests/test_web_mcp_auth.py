@@ -15,8 +15,10 @@ cannot turn a registration into an access token.
 """
 
 import asyncio
+import base64
 import hashlib
 import json
+from urllib.parse import parse_qs, urlparse
 from datetime import datetime, timedelta, timezone
 
 import jwt as pyjwt
@@ -29,15 +31,15 @@ TEST_SECRET = "a-test-secret-that-is-not-the-default"
 class FakeJsonRequest:
     """A minimal aiohttp-request stand-in for the OAuth and MCP handlers."""
 
-    def __init__(self, body=None, form=None, headers=None, method="POST"):
-        """Store the JSON body, form data and headers a handler will read."""
+    def __init__(self, body=None, form=None, headers=None, method="POST", query=None):
+        """Store the JSON body, form data, query string and headers a handler will read."""
         self.body = body or {}
         self.form = form
         self.headers = headers or {"Content-Type": "application/json"}
         self.method = method
         self.remote = "192.0.2.1"
         self.host = "predbat.example:8199"
-        self.query = {}
+        self.query = query or {}
 
     async def json(self):
         """Return the JSON body."""
@@ -195,7 +197,7 @@ def test_mcp_refuses_default_secret(my_predbat):
         await asyncio.wait_for(task, timeout=10)
         return state
 
-    for secret in ("predbat_mcp_secret", "", None):
+    for secret in ("predbat_mcp_secret", "", "   ", None):
         print("Test: mcp_secret {!r} is refused".format(secret))
         server = make_server(my_predbat, secret=secret, storage=FakeStorage())
         started, alive, message, mcp_server = asyncio.run(run_briefly(server))
@@ -266,6 +268,66 @@ def test_mcp_scopes_enforced(my_predbat):
     return failed
 
 
+def test_mcp_public_client_flow(my_predbat):
+    """A registered public client gets a working token through authorise + PKCE, with no client secret, and the scope it asked for at authorise is kept"""
+    failed = False
+    print("**** Testing MCP public client authorisation code flow ****")
+    server = make_server(my_predbat)
+    server.mcp_server = MCPServerWrapper(my_predbat, log_func=my_predbat.log)
+    _, client = call(server.oauth_register, FakeJsonRequest({"client_name": "connector", "redirect_uris": ["https://example.com/cb"]}))
+    verifier = "a-pkce-code-verifier-that-is-long-enough-for-the-test-0123456789"
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    form = {"client_id": client["client_id"], "redirect_uri": "https://example.com/cb", "response_type": "code", "state": "s1", "code_challenge": challenge, "code_challenge_method": "S256", "scope": "mcp:read"}
+
+    def authorise(secret):
+        """Submit the authorise form with a secret; return the redirect location, or None."""
+        response = asyncio.run(server.oauth_authorize(FakeJsonRequest(form=dict(form, secret=secret))))
+        return response.headers.get("Location") if response.status in (302, 303) else None
+
+    print("Test: the wrong secret on the authorise page gives no code")
+    if authorise("wrong") is not None:
+        print("  ERROR: authorise redirected with the wrong secret")
+        failed = True
+
+    print("Test: the right secret gives a code, and the code a read-only token with no client secret")
+    location = authorise(TEST_SECRET)
+    code = parse_qs(urlparse(location or "").query).get("code", [None])[0]
+    if not code:
+        print("  ERROR: no code in the authorise redirect {}".format(location))
+        return True
+    status, token = call(server.oauth_token, FakeJsonRequest({"grant_type": "authorization_code", "code": code, "client_id": client["client_id"], "redirect_uri": "https://example.com/cb", "code_verifier": verifier}))
+    if status != 200 or token.get("scope") != "mcp:read":
+        print("  ERROR: token exchange gave {} {}".format(status, token))
+        return True
+    payload = server.verify_access_token(token["access_token"])
+    if not payload or payload.get("scope") != "mcp:read":
+        print("  ERROR: the token does not carry the scope asked for at authorise: {}".format(payload))
+        failed = True
+
+    print("Test: a request naming no MCP scope gets all three, and unknown scopes are dropped")
+    if server.granted_scopes("openid profile") != ["mcp:read", "mcp:write", "mcp:control"] or server.granted_scopes("openid mcp:read") != ["mcp:read"] or server.granted_scopes(None) != ["mcp:read", "mcp:write", "mcp:control"]:
+        print("  ERROR: granted_scopes gave {} / {}".format(server.granted_scopes("openid profile"), server.granted_scopes("openid mcp:read")))
+        failed = True
+    return failed
+
+
+def test_mcp_authorise_page_escapes(my_predbat):
+    """Values from the request are escaped on the authorise page, so a crafted link cannot run a script that reads the secret"""
+    failed = False
+    print("**** Testing MCP authorise page escapes request values ****")
+    server = make_server(my_predbat)
+    payload = "<script>alert(1)</script>"
+    query = {"client_id": payload, "redirect_uri": 'https://example.com/cb"><script>x</script>', "response_type": "code", "state": payload, "code_challenge": "abc", "code_challenge_method": "S256", "scope": payload}
+    response = asyncio.run(server.oauth_authorize(FakeJsonRequest(method="GET", query=query)))
+    if "<script>alert(1)</script>" in response.text or '"><script>' in response.text:
+        print("  ERROR: the authorise page contains an unescaped value")
+        failed = True
+    if "&lt;script&gt;alert(1)&lt;/script&gt;" not in response.text:
+        print("  ERROR: the escaped client_id is missing from the page")
+        failed = True
+    return failed
+
+
 def run_web_mcp_auth_tests(my_predbat):
     """Run every MCP OAuth/authorisation test, returning True if any of them failed."""
     failed = False
@@ -273,4 +335,6 @@ def run_web_mcp_auth_tests(my_predbat):
     failed |= test_mcp_signing_key(my_predbat)
     failed |= test_mcp_refuses_default_secret(my_predbat)
     failed |= test_mcp_scopes_enforced(my_predbat)
+    failed |= test_mcp_public_client_flow(my_predbat)
+    failed |= test_mcp_authorise_page_escapes(my_predbat)
     return failed

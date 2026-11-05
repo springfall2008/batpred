@@ -17,6 +17,7 @@ to expose battery prediction data and plan information via the MCP protocol.
 """
 
 import asyncio
+import html
 import json
 from typing import Any, Dict
 from datetime import datetime, timezone, timedelta
@@ -65,7 +66,8 @@ Example usage in VSCode with OAuth
 # The default components.py gives mcp_secret. It is published in the source, so the server refuses to run with it.
 MCP_DEFAULT_SECRET = "predbat_mcp_secret"
 # A tool that changes Predbat needs mcp:write or mcp:control; any other tool needs any MCP scope, as writing implies reading
-MCP_READ_SCOPES = {"mcp:read", "mcp:write", "mcp:control"}
+MCP_ALL_SCOPES = ("mcp:read", "mcp:write", "mcp:control")
+MCP_READ_SCOPES = set(MCP_ALL_SCOPES)
 MCP_WRITE_SCOPES = {"mcp:write", "mcp:control"}
 MCP_STORAGE_MODULE = "mcp"
 MCP_SIGNING_KEY_FILE = "jwt_signing_key"
@@ -139,7 +141,7 @@ class PredbatMCPServer(ComponentBase):
 
     async def start(self):
         """Start the MCP server if enabled"""
-        if self.mcp_enable and (not self.mcp_secret or self.mcp_secret == MCP_DEFAULT_SECRET):
+        if self.mcp_enable and (not str(self.mcp_secret or "").strip() or self.mcp_secret == MCP_DEFAULT_SECRET):
             # The default secret is published, so anyone could use it to control Predbat (#5847)
             self.refused_reason = "mcp_secret is not set, or is still the default, so the MCP server has not started - set your own mcp_secret in apps.yaml"
             self.log("Error: MCP: " + self.refused_reason)
@@ -205,6 +207,22 @@ class PredbatMCPServer(ComponentBase):
             return
         self.log("MCP: Created a new token signing key; clients authorised before this need to authorise again")
 
+    def granted_scopes(self, scope_text):
+        """
+        Return the MCP scopes to grant for a space-separated scope request
+
+        Scopes this server doesn't know (such as openid) are dropped. A request naming no MCP scope gets
+        all three, as one with no scope at all always has, so such a client keeps working.
+        """
+        scopes = [scope for scope in str(scope_text or "").split() if scope in MCP_ALL_SCOPES]
+        return scopes if scopes else list(MCP_ALL_SCOPES)
+
+    def secret_matches(self, value) -> bool:
+        """Compare a submitted value with mcp_secret in constant time, so the comparison doesn't leak how much of it matched"""
+        if not isinstance(value, str) or not value or not self.mcp_secret:
+            return False
+        return secrets.compare_digest(value.encode(), str(self.mcp_secret).encode())
+
     def verify_oauth_client(self, client_id: str, client_secret: str) -> bool:
         """
         Verify OAuth client credentials against configured secret
@@ -216,7 +234,7 @@ class PredbatMCPServer(ComponentBase):
         Returns:
             True if credentials are valid, False otherwise
         """
-        return client_secret == self.mcp_secret
+        return self.secret_matches(client_secret)
 
     def get_canonical_server_uri(self, host: str = None) -> str:
         """
@@ -249,7 +267,7 @@ class PredbatMCPServer(ComponentBase):
 
         # Default scopes if not specified
         if scopes is None:
-            scopes = ["mcp:read", "mcp:write", "mcp:control"]
+            scopes = list(MCP_ALL_SCOPES)
 
         # Default audience if not specified
         if resource is None:
@@ -457,6 +475,7 @@ class PredbatMCPServer(ComponentBase):
                 state = data.get("state", "")
                 code_challenge = data.get("code_challenge", "")
                 code_challenge_method = data.get("code_challenge_method", "")
+                scope = data.get("scope", "")
                 submitted_secret = data.get("secret", "")
 
                 self.log(f"MCP OAuth: POST authorization request from client_id: {client_id}")
@@ -466,7 +485,7 @@ class PredbatMCPServer(ComponentBase):
                     error_message = "Missing required OAuth parameters"
                     self.log(f"MCP OAuth: {error_message}")
                 else:
-                    if submitted_secret == self.mcp_secret:
+                    if self.secret_matches(submitted_secret):
                         self.log(f"MCP OAuth: User authenticated successfully")
 
                         # Generate authorization code
@@ -477,6 +496,7 @@ class PredbatMCPServer(ComponentBase):
                             "code_challenge": code_challenge if code_challenge else None,
                             "code_challenge_method": code_challenge_method if code_challenge_method else None,
                             "state": state,
+                            "scope": scope,
                             "expires": datetime.now(timezone.utc) + self.authorization_code_lifetime,
                             "used": False,
                         }
@@ -503,6 +523,7 @@ class PredbatMCPServer(ComponentBase):
                 state = request.query.get("state", "")
                 code_challenge = request.query.get("code_challenge")
                 code_challenge_method = request.query.get("code_challenge_method")
+                scope = request.query.get("scope", "")
                 error_message = ""
 
                 self.log(f"MCP OAuth: GET authorization request from client_id: {client_id}")
@@ -527,6 +548,8 @@ class PredbatMCPServer(ComponentBase):
                     return web.HTTPFound(f"{error_uri}?error=invalid_request&error_description={error_desc}&state={state}")
 
             # Show login page (GET request or failed POST)
+            # Every value here comes from the request, so escape it, or a crafted link could run a script on this page and read the secret the user types
+            client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method, scope = (html.escape(str(value or "")) for value in (client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method, scope))
             login_html = f"""
 <!DOCTYPE html>
 <html>
@@ -658,6 +681,7 @@ class PredbatMCPServer(ComponentBase):
             <input type="hidden" name="state" value="{state}">
             <input type="hidden" name="code_challenge" value="{code_challenge or ''}">
             <input type="hidden" name="code_challenge_method" value="{code_challenge_method or ''}">
+            <input type="hidden" name="scope" value="{scope}">
             <button type="submit">Sign In & Authorize</button>
         </form>
 
@@ -788,17 +812,13 @@ class PredbatMCPServer(ComponentBase):
             self.log(f"MCP OAuth: Invalid credentials for client_id: {client_id}")
             return web.json_response({"error": "invalid_client", "error_description": "Invalid client credentials"}, status=401)
 
-        # Parse scopes if provided
-        scopes = None
-        if scope:
-            scopes = scope.split()
-
         # Generate access token with audience and scopes
+        scopes = self.granted_scopes(scope)
         access_token = self.generate_access_token(client_id, resource=resource, scopes=scopes)
 
         self.log(f"MCP OAuth: Access token issued for client: {client_id} (client_credentials), resource: {resource}")
 
-        return web.json_response({"access_token": access_token, "token_type": "Bearer", "expires_in": int(self.access_token_lifetime.total_seconds()), "scope": scope if scope else "mcp:read mcp:write mcp:control"}, status=200)
+        return web.json_response({"access_token": access_token, "token_type": "Bearer", "expires_in": int(self.access_token_lifetime.total_seconds()), "scope": " ".join(scopes)}, status=200)
 
     async def _handle_authorization_code(self, data: dict):
         """Handle authorization_code grant type"""
@@ -870,12 +890,8 @@ class PredbatMCPServer(ComponentBase):
         # Mark code as used
         code_data["used"] = True
 
-        # Parse scopes if provided
-        scopes = None
-        if scope:
-            scopes = scope.split()
-
-        # Generate access token with audience and scopes
+        # Generate access token with audience and scopes, using those asked for at authorisation unless the token request names its own
+        scopes = self.granted_scopes(scope or code_data.get("scope"))
         access_token = self.generate_access_token(client_id, resource=resource, scopes=scopes)
 
         # Clean up used code after a delay
@@ -887,7 +903,7 @@ class PredbatMCPServer(ComponentBase):
 
         self.log(f"MCP OAuth: Access token issued (authorization_code), resource: {resource}")
 
-        return web.json_response({"access_token": access_token, "token_type": "Bearer", "expires_in": int(self.access_token_lifetime.total_seconds()), "scope": scope if scope else "mcp:read mcp:write mcp:control"}, status=200)
+        return web.json_response({"access_token": access_token, "token_type": "Bearer", "expires_in": int(self.access_token_lifetime.total_seconds()), "scope": " ".join(scopes)}, status=200)
 
     async def html_mcp_get(self, request):
         """
@@ -921,7 +937,7 @@ class PredbatMCPServer(ComponentBase):
             client_id = token_payload.get("client_id", "unknown")
             scopes = set(str(token_payload.get("scope", "")).split())
             self.log(f"MCP GET: Authenticated via OAuth token (client: {client_id})")
-        elif token == self.mcp_secret:
+        elif self.secret_matches(token):
             # Legacy direct secret authentication (backwards compatible)
             self.log("MCP GET: Authenticated via legacy bearer token")
         else:
@@ -970,7 +986,7 @@ class PredbatMCPServer(ComponentBase):
             client_id = token_payload.get("client_id", "unknown")
             scopes = set(str(token_payload.get("scope", "")).split())
             self.log(f"MCP POST: Authenticated via OAuth token (client: {client_id})")
-        elif token == self.mcp_secret:
+        elif self.secret_matches(token):
             # Legacy direct secret authentication (backwards compatible)
             self.log("MCP POST: Authenticated via legacy bearer token")
         else:
