@@ -1559,6 +1559,22 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         """Return (start_min, end_min) for the committed discharge window when enabled, else None."""
         return self._committed_window("discharge")
 
+    @staticmethod
+    def _export_window_active(window, minutes_now):
+        """Return the export window while it is running, else None, so its boost band is only pushed once it starts (GH#5960).
+
+        Pushed any earlier, Tesla's optimiser sees an upcoming sale worth more than covering house load
+        and holds the battery through the run-up, so the house imports while Predbat's plan has the
+        battery serving it. The device acts on a tariff push within a couple of minutes, so starting
+        the band at the window start costs only that much of the export. Midnight wrap is supported.
+        """
+        if not window:
+            return None
+        start, end = window
+        if (minutes_now - start) % 1440 < (end - start) % 1440:
+            return window
+        return None
+
     def _charge_window(self):
         """Return (start_min, end_min) for the committed charge window when enabled, else None."""
         return self._committed_window("charge")
@@ -1710,13 +1726,20 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         Cheap to call every cycle: set_tariff only reaches the API when the serialised tariff changes,
         i.e. on a genuine rate-band, discharge-window or day-of-week change. Gated on read-only mode.
 
-        With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one; it
-        depends only on the committed windows, so it re-pushes strictly less often.
+        With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one. Its
+        discharge window only reaches the tariff while it is running (see _export_window_active), so it
+        depends on the committed windows and on whether the export window is live, which costs up to
+        two extra pushes per export window: one as the band appears and one as it is withdrawn.
+
+        The real-rate path keeps the whole committed window: it also uses it to keep the export slots
+        out of the band quantisation, and outside the window the device is in self_consumption, which
+        does not act on the tariff, so it has no run-up hold to avoid.
         """
         if self._is_read_only():
             return True
         if getattr(self, "tbc_control", self.DEFAULT_TBC_CONTROL):
-            tariff = self.build_signal_tariff(self._charge_window(), self._discharge_window())
+            export_window = self._export_window_active(self._discharge_window(), self.get_minutes_now())
+            tariff = self.build_signal_tariff(self._charge_window(), export_window)
         else:
             tariff = self.build_tariff(self._discharge_window())
         return await self.set_tariff(tariff)
