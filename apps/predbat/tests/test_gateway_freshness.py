@@ -124,15 +124,17 @@ class TestGatewayFreshness:
         gw = fresh_gateway()
         gw._last_status.timestamp = int(time.time()) - 3600
         base = SimpleNamespace(components=SimpleNamespace(get_component=lambda name: gw), plan_valid=True, record_status=MagicMock())
-        for name in ("reset_run_status", "update_time", "save_current_config", "expose_config", "fetch_config_options", "fetch_sensor_data", "calculate_plan", "execute_plan"):
+        for name in ("reset_run_status", "update_time", "save_current_config", "expose_config", "fetch_config_options", "fetch_sensor_data", "calculate_plan", "execute_once", "execute_plan"):
             setattr(base, name, MagicMock())
         base.get_arg = lambda name, default=None: "test" if name == "user_id" else default
         base.is_template_mode = lambda: False
         base.check_inverter_data_freshness = MethodType(Execute.check_inverter_data_freshness, base)
+        base.plan_once = MethodType(PredBat.plan_once, base)
         PredBat.update_pred(base)
         assert not base.plan_valid
         base.fetch_sensor_data.assert_not_called()
         base.calculate_plan.assert_not_called()
+        base.execute_once.assert_not_called()
         base.execute_plan.assert_not_called()
         assert "source timestamp" in base.record_status.call_args.args[0]
 

@@ -352,7 +352,7 @@ class LabelSwapTests(unittest.TestCase):
     def test_mark_pr_opened_with_cleanup_flags_review_and_cleanup_together(self, mock_run):
         """A PR this run just opened gets BOT_REVIEW and BOT_CLEANUP in one edit, so the
         review's findings are acted on without anyone relabelling it by hand."""
-        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742}]))
+        mock_run.side_effect = self._bot_pr_gh()
         triage_daemon.mark_pr_opened(4720, cleanup=True)
         calls = [call.args[0] for call in mock_run.call_args_list]
         self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW", "--add-label", "BOT_CLEANUP"], calls)
@@ -375,6 +375,92 @@ class LabelSwapTests(unittest.TestCase):
         triage_daemon.mark_pr_opened(4720)  # must not raise
         calls = [call.args[0] for call in mock_run.call_args_list]
         self.assertFalse(any(call[:3] == ["gh", "pr", "edit"] for call in calls))
+
+    @staticmethod
+    def _bot_pr_gh(requester_stdout="latest-requester\n", requester_rc=0):
+        """A subprocess.run stand-in: the PR search finds #4742, the events lookup prints
+        requester_stdout, and every other gh call succeeds."""
+
+        def fake_run(cmd, *args, **kwargs):
+            """Answer one gh call by its leading words."""
+            if cmd[:3] == ["gh", "pr", "list"]:
+                return MagicMock(stdout=json.dumps([{"number": 4742}]), returncode=0)
+            if cmd[:2] == ["gh", "api"]:
+                return MagicMock(stdout=requester_stdout, returncode=requester_rc, stderr="")
+            return MagicMock(stdout="", returncode=0, stderr="")
+
+        return fake_run
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_by_bot_labels_and_assigns_the_requester(self, mock_run):
+        """A PR the bot just opened gets BOT_PR_OPENED in the same edit as its review labels, and
+        is assigned to whoever added BOT_PR, since its author is always the bot's credential."""
+        mock_run.side_effect = self._bot_pr_gh()
+        triage_daemon.mark_pr_opened(4720, cleanup=True, opened_by_bot=True)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW", "--add-label", "BOT_CLEANUP", "--add-label", "BOT_PR_OPENED"], calls)
+        self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-assignee", "latest-requester"], calls)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_not_by_bot_does_not_claim_the_pr(self, mock_run):
+        """A PR found already open may be a person's own - it is neither labelled as the bot's
+        nor reassigned."""
+        mock_run.side_effect = self._bot_pr_gh()
+        triage_daemon.mark_pr_opened(4720)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any(call[:3] == ["gh", "pr", "edit"] and ("BOT_PR_OPENED" in call or "--add-assignee" in call) for call in calls))
+        self.assertFalse(any(call[:2] == ["gh", "api"] for call in calls))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_assign_bot_pr_requester_skips_when_lookup_fails(self, mock_run):
+        """A failed events lookup skips the assignee and does not raise."""
+        mock_run.side_effect = self._bot_pr_gh(requester_stdout="", requester_rc=1)
+        triage_daemon.assign_bot_pr_requester(4742, 4720)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any("--add-assignee" in call for call in calls))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_assign_bot_pr_requester_swallows_a_hung_gh(self, mock_run):
+        """The PR is already open and labelled, so a gh call that times out is logged, not raised."""
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="gh", timeout=120)
+        triage_daemon.assign_bot_pr_requester(4742, 4720)  # must not raise
+
+    @patch("triage_daemon.subprocess.run")
+    def test_assign_bot_pr_requester_failed_edit_does_not_raise(self, mock_run):
+        """An unassignable login makes the edit fail; that is logged and the flow carries on."""
+        fake = self._bot_pr_gh()
+
+        def failing_edit(cmd, *args, **kwargs):
+            """Fail the assignee edit, answer everything else as normal."""
+            if "--add-assignee" in cmd:
+                return MagicMock(stdout="", returncode=1, stderr="not a collaborator")
+            return fake(cmd, *args, **kwargs)
+
+        mock_run.side_effect = failing_edit
+        triage_daemon.assign_bot_pr_requester(4742, 4720)  # must not raise
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertTrue(any("--add-assignee" in call for call in calls))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_find_bot_pr_requester_reports_why_a_lookup_failed(self, mock_run):
+        """A lookup that errors says why, rather than reading like an issue with no requester."""
+        mock_run.return_value = MagicMock(stdout="", returncode=1, stderr="HTTP 401: Bad credentials")
+        with patch("builtins.print") as mock_print:
+            self.assertIsNone(triage_daemon.find_bot_pr_requester(4720))
+        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("lookup failed", printed)
+        self.assertIn("Bad credentials", printed)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_find_bot_pr_requester_takes_the_latest_label_event(self, mock_run):
+        """BOT_PR re-added after a failure has several labeled events, one line each across
+        pages; the most recent one is the person who asked this time. Null actors are
+        filtered in the query, so 'null' is never taken for a login."""
+        mock_run.side_effect = self._bot_pr_gh(requester_stdout="earlier-requester\n\nlatest-requester\n")
+        self.assertEqual(triage_daemon.find_bot_pr_requester(4720), "latest-requester")
+        cmd = mock_run.call_args_list[0].args[0]
+        self.assertEqual(cmd[:4], ["gh", "api", "--paginate", "repos/springfall2008/batpred/issues/4720/events"])
+        self.assertIn(".actor != null", cmd[-1])
 
     @patch("triage_daemon.subprocess.run")
     def test_mark_pr_failed_swaps_labels(self, mock_run):
@@ -1720,6 +1806,16 @@ class TriageTests(DaemonPathsTestCase):
         cmd = mock_run.call_args[0][0]
         self.assertNotIn("--max-budget-usd", cmd)
 
+    @patch("triage_daemon.subprocess.run")
+    def test_gets_a_turn_budget_matching_the_write_flows(self, mock_run):
+        """100 turns still failed 13 of 154 triage runs between mid-October and 2026-11-05,
+        and in Ollama mode --max-turns is the only cap left, so the number has to cover a hard
+        investigation - the run that finally finished #5889 took 94 tool calls."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "150")
+
 
 class CreatePrTests(DaemonPathsTestCase):
     """Tests for create_pr(), new in the bot PR flow."""
@@ -1847,11 +1943,12 @@ class ProcessBotPrIssueTests(unittest.TestCase):
 
     def test_marks_opened_when_a_pr_exists_afterwards(self):
         """If a PR references the issue after create_pr() runs, swap to BOT_PR_OPENED - and
-        since this run opened it, queue the cleanup that acts on its review as well."""
+        since this run opened it, queue the cleanup that acts on its review as well, and claim
+        the PR as the bot's for its requester."""
         self.patches["has_existing_pr"].side_effect = [False, True]
         self.patches["ensure_triaged"].return_value = True
         triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
-        self.patches["mark_pr_opened"].assert_called_once_with(4720, cleanup=True)
+        self.patches["mark_pr_opened"].assert_called_once_with(4720, cleanup=True, opened_by_bot=True)
         self.patches["mark_pr_failed"].assert_not_called()
 
     def test_marks_failed_when_no_pr_exists_afterwards(self):
@@ -2191,6 +2288,14 @@ class TriageFollowupTests(DaemonPathsTestCase):
         self.assertIn("/issue-triage-followup 4720", cmd[2])
         self.assertIn(triage_daemon.ALLOWED_TOOLS, cmd)
         self.assertIn(triage_daemon.DISALLOWED_TOOLS, cmd)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_gets_a_turn_budget_for_rereading_the_original_triage(self, mock_run):
+        """#5955 and #5556 both died on "Reached max turns (60)" in early November 2026."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage_followup(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "100")
 
     @patch("triage_daemon.subprocess.run")
     def test_raises_on_a_non_zero_exit(self, mock_run):
@@ -3028,6 +3133,14 @@ class JournalCapturePromptTests(unittest.TestCase):
         anyway, and the daily PR fills with restatements of what the journal already says."""
         self.assertIn("nothing", triage_daemon.JOURNAL_CAPTURE_PROMPT.lower())
 
+    def test_asks_for_symptoms_and_facts_not_file_paths_or_line_numbers(self):
+        """The journal reached 730KB largely on per-issue detail: file:line citations that
+        drifted, and long stories behind each fix. Candidates arrive in whatever shape this
+        prompt asks for, so it has to ask for the symptom and the fact behind it."""
+        prompt = triage_daemon.JOURNAL_CAPTURE_PROMPT.lower()
+        self.assertIn("symptom", prompt)
+        self.assertIn("no file paths or line numbers", prompt)
+
 
 class JournalCaptureReachesEveryFlowTests(DaemonPathsTestCase):
     """Every claude-invoking flow must carry the capture instruction."""
@@ -3196,16 +3309,21 @@ class JournalFlushInvocationTests(DaemonPathsTestCase):
         self.assertEqual(cmd[cmd.index("--allowedTools") + 1], triage_daemon.ALLOWED_TOOLS_JOURNAL)
         self.assertEqual(cmd[cmd.index("--disallowedTools") + 1], triage_daemon.DISALLOWED_TOOLS_JOURNAL)
 
-    def test_the_flush_gets_a_turn_budget_matching_the_other_write_flows(self):
+    def test_the_flush_gets_a_larger_turn_budget_than_the_other_write_flows(self):
         """80 turns stopped being enough on 2026-09-13, and every run from then to 2026-09-19
         died on `Error: Reached max turns (80)`. The flush reads a journal that grew from 73KB
         to 130KB in a week and verifies every candidate against main, so it is not the cheap
-        flow the old budget assumed - issue-pr and pr-cleanup have had 150 all along."""
+        flow the old budget assumed - issue-pr and pr-cleanup have had 150 all along.
+
+        150 then ran out in turn: by 2026-11-05 the journal was 730KB, and four of the five
+        flushes from 2026-10-31 died on "Reached max turns (150)", one of them on the
+        pre-commit step just before it would have committed. So the flush now gets more than the
+        other write flows, not the same."""
         with patch("triage_daemon.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
             triage_daemon.flush_journal("2026-09-07")
             cmd = mock_run.call_args_list[0][0][0]
-        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "150")
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "250")
 
     def test_tells_the_skill_where_the_queue_is(self):
         """The queue lives outside the clone, so the path has to be passed in and added to the

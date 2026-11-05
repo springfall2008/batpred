@@ -334,7 +334,7 @@ def test_annual_bootstrap(my_predbat):
             print("  ERROR: create_headless_predbat left {} as {}, expected {} (the headless apps.yaml has no 'mode' key, so fetch_config_options() defaults to Monitor mode, which sets all four False)".format(name, actual, expected))
             failed = True
 
-    print("Test: create_headless_predbat restores PREDBAT_APPS_FILE afterwards, even if it was previously unset")
+    print("Test: create_headless_predbat never touches PREDBAT_APPS_FILE, whether it was set or unset beforehand")
     saved_env = os.environ.get("PREDBAT_APPS_FILE")
     try:
         os.environ["PREDBAT_APPS_FILE"] = "/tmp/should-not-leak-annual-bootstrap-test.yaml"
