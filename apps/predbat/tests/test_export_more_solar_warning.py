@@ -23,7 +23,7 @@ enabled"), so this is purely about telling a user who has not read them.
 """
 
 
-SAVED_ATTRS = ("export_more_solar", "calculate_best_export", "set_export_freeze", "export_more_solar_warned_reason", "inverters")
+SAVED_ATTRS = ("export_more_solar", "calculate_best_export", "set_export_freeze", "export_more_solar_warned_reason", "inverters", "battery_export_permitted")
 
 
 class _StubInverter:
@@ -59,13 +59,16 @@ class _Harness:
             setattr(my_predbat, attr, value)
         return False
 
-    def run(self, export_more_solar=True, calculate_best_export=True, set_export_freeze=True, inverter_supports_freeze=True):
+    def run(self, export_more_solar=True, calculate_best_export=True, set_export_freeze=True, inverter_supports_freeze=True, second_inverter_supports_freeze=None, battery_export_permitted=True):
         """Set the effective state, run one check, and return the warnings it logged."""
         my_predbat = self.my_predbat
         my_predbat.export_more_solar = export_more_solar
         my_predbat.calculate_best_export = calculate_best_export
         my_predbat.set_export_freeze = set_export_freeze
+        my_predbat.battery_export_permitted = battery_export_permitted
         my_predbat.inverters = [_StubInverter(inverter_supports_freeze)]
+        if second_inverter_supports_freeze is not None:
+            my_predbat.inverters.append(_StubInverter(second_inverter_supports_freeze))
         self.logged.clear()
         my_predbat.check_export_more_solar_effective()
         return [message for message in self.logged if "export_more_solar" in message and "no effect" in message]
@@ -141,6 +144,11 @@ def test_warns_with_the_actual_reason(my_predbat):
         ("mode", dict(calculate_best_export=False), "mode"),
         ("user switch off", dict(set_export_freeze=False), "Enable set_export_freeze"),
         ("inverter unsupported", dict(set_export_freeze=False, inverter_supports_freeze=False), "does not support Freeze Export"),
+        # Any inverter without it forces the freeze off for the fleet, not only the first (#5082)
+        ("second inverter unsupported", dict(set_export_freeze=False, second_inverter_supports_freeze=False), "does not support Freeze Export"),
+        ("both inverters supported", dict(set_export_freeze=False, second_inverter_supports_freeze=True), "Enable set_export_freeze"),
+        # fetch_inverter_data() turns calculate_best_export off for it, so the mode is not the cause to name (GH#5710)
+        ("battery export not permitted", dict(calculate_best_export=False, battery_export_permitted=False), "not permitted to export battery energy"),
     )
     with _Harness(my_predbat) as harness:
         for name, state, expected in cases:

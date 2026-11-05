@@ -343,9 +343,13 @@ def test_component_base_first_cleared_when_run_presets_api_started(my_predbat):
 
             task = asyncio.create_task(component.start())
 
-            # Wait long enough (sped up 100x by fast_sleep → ~2s real) for the component
-            # loop to advance past simulated seconds=60 so a steady-state run can occur.
-            await asyncio.sleep(200)
+            # Wait for the component loop to advance past simulated seconds=60 so a steady-state
+            # run can occur - polled, so it ends as soon as one has (about 0.65s real via
+            # fast_sleep) instead of always sitting out the full 200 simulated seconds.
+            for _ in range(200):
+                if any(flag is False for flag in component.first_flags):
+                    break
+                await asyncio.sleep(1)
 
             assert component.api_started, "Component should be started"
 
@@ -837,6 +841,83 @@ def test_component_base_request_replan(my_predbat):
     return False
 
 
+class _FakeClock:
+    """One clock behind time.time(), time.monotonic() and asyncio.sleep(), so a test can see which wall-clock second each run() lands on."""
+
+    def __init__(self, now):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+    def monotonic(self):
+        return self.now
+
+    async def sleep(self, delay, result=None):
+        """Advance the clock by the whole delay at once, then yield to the event loop."""
+        self.now += max(delay, 0)
+        await _original_sleep(0)
+        return result
+
+
+def test_component_base_align_minute(my_predbat):
+    """A component whose registry entry sets align_minute runs just after each wall-clock minute boundary.
+
+    The default loop counts 5 second sleeps from process start, so its runs fall wherever the pod's start
+    put them and slip by each run()'s own duration. A component acting on minute-resolution windows (the
+    Teslemetry signal tariff) wants its run in the first second or so of the minute instead. A slow run()
+    must not drift the later runs off the boundary, and run()'s seconds must step in whole minutes so the
+    interval checks inside run() (e.g. a 120 second poll) keep their period.
+    """
+    print("\n*** Test: ComponentBase align_minute runs on the minute boundary ***")
+    base_epoch = 1800000000  # a whole minute
+    clock = _FakeClock(base_epoch + 37.5)
+    runs = []
+
+    class AlignedComponent(ComponentBase):
+        def initialize(self, **kwargs):
+            pass
+
+        async def run(self, seconds, first):
+            runs.append((clock.now - base_epoch, seconds, first))
+            # Each run costs 7 seconds of API calls, except the third, which overruns the next boundary
+            clock.now += 70 if len(runs) == 3 else 7
+            return True
+
+    async def run_test():
+        with patch("asyncio.sleep", side_effect=clock.sleep), patch("component_base.time", SimpleNamespace(time=clock.time, monotonic=clock.monotonic)):
+            component = AlignedComponent(MockBase())
+            component.align_minute = True
+            task = asyncio.create_task(component.start())
+            for _ in range(10000):
+                if len(runs) >= 5:
+                    break
+                await _original_sleep(0)
+            await component.stop()
+            await task
+
+    asyncio.run(run_test())
+
+    assert len(runs) >= 5, "Expected at least 5 runs, got {}".format(runs)
+    times = [run[0] for run in runs[:5]]
+    seconds = [run[1] for run in runs[:5]]
+    firsts = [run[2] for run in runs[:5]]
+    assert firsts == [True, False, False, False, False], firsts
+    # The startup run is immediate; every later one is 1 second past a boundary, and the 70 second
+    # third run skips the boundary it overran rather than running late at 191.
+    assert times == [37.5, 61, 121, 241, 301], times
+    assert seconds == [0, 60, 120, 240, 300], seconds
+    print("PASS: aligned runs land at :01 and seconds step in whole minutes")
+    return False
+
+
+def test_component_base_align_minute_defaults_off(my_predbat):
+    """A component built without the registry (the standalone CLI harnesses) keeps the default free-running loop."""
+    component = TestComponent(MockBase())
+    assert component.align_minute is False, component.align_minute
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -847,6 +928,8 @@ def test_component_base_all(my_predbat):
         ("normal_operation", test_component_base_normal_operation_after_start, "Component runs every 60s after start"),
         ("exception_handling", test_component_base_exception_handling, "Component handles exceptions with backoff"),
         ("run_timeout", test_component_base_run_timeout, "Hung run() triggers timeout, stack trace, and error count"),
+        ("align_minute", test_component_base_align_minute, "align_minute runs just after each minute boundary without drift"),
+        ("align_minute_default_off", test_component_base_align_minute_defaults_off, "align_minute is off unless the registry sets it"),
         ("first_cleared_preset", test_component_base_first_cleared_when_run_presets_api_started, "first flag clears even when run() pre-sets api_started"),
         ("set_arg_auto", test_component_base_set_arg_auto, "set_arg_auto warns once on an apps.yaml override, silent otherwise"),
         ("set_arg_auto_keep", test_component_base_set_arg_auto_keeps_user_setting, "set_arg_auto(overwrite=False) keeps an explicit apps.yaml setting"),

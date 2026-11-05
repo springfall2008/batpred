@@ -115,7 +115,7 @@ This is shown explicitly rather than the headline status just reflecting whichev
 If inverters only disagree on sub-state within the same side (e.g. one still actively Charging while another has reached Hold charging), the most active sub-state is shown instead, since Cross-charging specifically means disagreement across the charge/export divide, not within one side.
 
 - **Hold for car** and **Demand, Hold for car** - A car is charging (either Predbat-led or Octopus-led), the battery is in Demand mode,
-but is set to prevent discharging into the car (requires **switch.predbat_car_charging_from_battery** to be set to On).
+but is set to prevent discharging into the car (requires **switch.predbat_car_charging_from_battery** to be Off, the default).
 
 - **Hold for iBoost** and **Demand, Hold for iBoost** - iBoost is active, the battery is in Demand mode, but is set to prevent discharging into the iBoost (requires **switch.predbat_iboost_prevent_discharge** to be set to On).
 
@@ -131,3 +131,7 @@ so that the voltage levels associated with empty and full SoC can be determined.
 Predbat will pause executing the plan until the calibration automatically finishes - see [Calibration FAQ](faq.md#warn-inverter-is-in-calibration-mode).
 
 - **Error** - If there is a configuration error or other problem, you should check the [Predbat log file](output-data.md#predbat-logfile) for more details.
+
+- **Warn: ... [Exporting]** - A warning or error that was reported while Predbat carried out its plan, followed in square brackets by the status above that the plan update ended in - for example `Warn: Return bad float value unavailable from car_charging_soc [Exporting]`.
+Predbat still carried out that status; the warning says something else needs attention, so check the [Predbat log file](output-data.md#predbat-logfile).
+A warning or error with nothing in square brackets after it was either reported part way through a plan update, before its status was known, or came from an update that stopped before carrying anything out.
