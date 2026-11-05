@@ -701,7 +701,8 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     # Every per-car attribute predbat indexes by car_n has to be sized to num_cars, not just the ones
     # this scenario varies - set_rate_thresholds takes max(car_charging_plan_max_price[:num_cars]) and
     # raises on an empty slice, and the prediction indexes the rest per car per minute.
-    my_predbat.car_charging_slots = [[dict(slot) for slot in slots] for slots in cars["slots"]] + [[] for _ in range(8 - num_cars)]
+    # calculate_plan() publishes the car plan, which reads every slot's average and cost
+    my_predbat.car_charging_slots = [[dict({"average": 0.0, "cost": 0.0}, **slot) for slot in slots] for slots in cars["slots"]] + [[] for _ in range(8 - num_cars)]
     my_predbat.car_charging_battery_size = list(cars["battery_kwh"]) or [100.0]
     my_predbat.car_charging_limit = [size for size in cars["battery_kwh"]] or [100.0]
     my_predbat.car_charging_soc = [0.0 for _ in range(num_cars)]

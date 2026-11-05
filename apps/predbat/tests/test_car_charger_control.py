@@ -14,6 +14,7 @@ import pytz
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.test_infra import run_async
+from component_base import ComponentBase
 from car_charger_control import CarChargerControl, ChargerControlDeferred, GUEST_CHARGING_MAX_HOURS, OCTOPUS_DISCOVERY_WAIT_MINUTES, parse_control_setting, parse_dispatch_time
 
 LONDON = pytz.timezone("Europe/London")
@@ -1486,6 +1487,46 @@ def test_force_hold_sets_and_clears_base_hold_until():
     assert component.base.car_force_hold_until == {}, component.base.car_force_hold_until
 
 
+class _StoppingBase(FakeBase):
+    """FakeBase with what ComponentBase.__init__ reads."""
+
+    def __init__(self):
+        """A base with a log and the planner's holdable cars."""
+        super().__init__()
+        self.local_tz = LONDON
+        self.prefix = "predbat"
+        self.args = {}
+        self.logs = []
+        self.car_force_holdable = {}
+
+    def log(self, message):
+        """Record a log line."""
+        self.logs.append(message)
+
+
+class _StoppingComponent(ComponentBase, CarChargerControl):
+    """A real ComponentBase with the mixin, in the order the charger components inherit them."""
+
+    def initialize(self, **kwargs):
+        """Set up the shared control state."""
+        self.charger_control_setup("Fake", "charger")
+
+
+def test_stop_withdraws_holdable():
+    """A component that stops tells the planner it can no longer hold its cars, leaving another component's alone."""
+    base = _StoppingBase()
+    component = _StoppingComponent(base)
+    base.car_force_holdable = {0: "Fake", 1: "Other", 2: "Fake"}
+    run_async(component.stop())
+    assert base.car_force_holdable == {1: "Other"}, base.car_force_holdable
+    # A base that never heard of holdable cars is left without them
+    base = _StoppingBase()
+    del base.car_force_holdable
+    component = _StoppingComponent(base)
+    run_async(component.stop())
+    assert getattr(base, "car_force_holdable", {}) == {}
+
+
 def test_force_hold_busy():
     """Busy while a hold exists or a cancelled slot is near - never with the switch off and no hold."""
     component = _held_component()
@@ -1657,6 +1698,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_force_held_charger_is_not_driven_by_the_plan()
     test_force_hold_runs_with_control_off()
     test_force_hold_sets_and_clears_base_hold_until()
+    test_stop_withdraws_holdable()
     test_force_hold_busy()
     test_end_force_hold_drops_without_a_resume()
     test_drop_force_hold_tolerates_a_hold_already_gone()
