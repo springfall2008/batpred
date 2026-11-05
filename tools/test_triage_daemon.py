@@ -3133,6 +3133,14 @@ class JournalCapturePromptTests(unittest.TestCase):
         anyway, and the daily PR fills with restatements of what the journal already says."""
         self.assertIn("nothing", triage_daemon.JOURNAL_CAPTURE_PROMPT.lower())
 
+    def test_asks_for_symptoms_and_facts_not_file_paths_or_line_numbers(self):
+        """The journal reached 730KB largely on per-issue detail: file:line citations that
+        drifted, and long stories behind each fix. Candidates arrive in whatever shape this
+        prompt asks for, so it has to ask for the symptom and the fact behind it."""
+        prompt = triage_daemon.JOURNAL_CAPTURE_PROMPT.lower()
+        self.assertIn("symptom", prompt)
+        self.assertIn("no file paths or line numbers", prompt)
+
 
 class JournalCaptureReachesEveryFlowTests(DaemonPathsTestCase):
     """Every claude-invoking flow must carry the capture instruction."""
