@@ -298,8 +298,9 @@ def test_registry_align_minute_reaches_the_component(my_predbat):
     """The registry's "align_minute" is what puts a component's loop on the minute boundary.
 
     It is a registry property rather than something each class sets, so the registry alone says which
-    components run aligned. Only Teslemetry asks for it: aligning every component would have them all
-    hit their APIs, and the machine, in the same second.
+    components run aligned. Only the inverters whose run() times a window's edges ask for it (Teslemetry,
+    SolaX, Sigenergy): aligning every component would have them all hit their APIs, and the machine, in
+    the same second.
     """
 
     class _Stub(ComponentBase):
@@ -321,10 +322,12 @@ def test_registry_align_minute_reaches_the_component(my_predbat):
     _with_import_module(lambda _name: _FakeModule(), lambda: comps.initialize(only="storage", phase=0))
 
     assert COMPONENT_LIST["teslemetry"].get("align_minute") is True, "Teslemetry's signal-tariff edges need the minute-aligned loop"
+    assert COMPONENT_LIST["solax"].get("align_minute") is True, "SolaX's remote-control windows start and end on our loop"
+    assert COMPONENT_LIST["sigenergy"].get("align_minute") is True, "Sigenergy's VPP commands start on our loop"
     assert comps.components["teslemetry"].align_minute is True, "the registry flag must reach the component"
     assert comps.components["storage"].align_minute is False, "an entry without the flag keeps the free-running loop"
     aligned = sorted(name for name, info in COMPONENT_LIST.items() if info.get("align_minute"))
-    assert aligned == ["teslemetry"], "aligning a component spends machine headroom - add it here deliberately: {}".format(aligned)
+    assert aligned == ["sigenergy", "solax", "teslemetry"], "aligning a component spends machine headroom - add it here deliberately: {}".format(aligned)
     return False
 
 

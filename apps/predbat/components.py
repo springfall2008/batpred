@@ -717,6 +717,9 @@ COMPONENT_LIST = {
         },
         "phase": 1,
         "can_restart": True,
+        # Each export/charge command starts on the first run inside the window, and carries a
+        # duration to the window's end, so an unaligned loop starts every window up to a minute late.
+        "align_minute": True,
     },
     "teslemetry": {
         "class": "teslemetry.TeslemetryAPI",
@@ -762,6 +765,9 @@ COMPONENT_LIST = {
         },
         "phase": 1,
         "can_restart": True,
+        # Remote-control commands carry no duration: a window starts on the first run inside it and
+        # ends on the first run after it, so an unaligned loop is late on both edges.
+        "align_minute": True,
     },
     "solis": {
         "class": "solis.SolisAPI",
