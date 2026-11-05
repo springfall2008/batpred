@@ -723,6 +723,8 @@ class Execute:
                                         disabled_charge_window = True
                                         discharging_to_target = True
                                         # Leave the rates as demand would, or the crosscharge balancer treats this inverter as charging
+                                        # The balancer still holds this discharge on cycles where another inverter is charging with balance_inverters_enable
+                                        # on, as it does any demand-mode discharger beside a planned charge, so the target is then reached more slowly
                                         charge_rate = None
                                         discharge_rate = None
                                         rate_owner = "demand"
