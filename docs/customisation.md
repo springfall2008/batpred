@@ -93,7 +93,7 @@ hidden option is pinned to its default and cannot be overridden from `apps.yaml`
 Currently behind this toggle:
 
 - **switch.predbat_calculate_second_pass** - the full second-pass optimisation
-- **switch.predbat_calculate_pv90_plan** - the PV90% upside scenario
+- **switch.predbat_calculate_pv90_plan** - the optimistic (PV90%) scenario
 
 ## Performance related
 
@@ -106,7 +106,7 @@ E.g. a value of 10 or 15 minutes should also give good results.
 If you have performance problems, turn On **switch.predbat_performance_tweaks** to reveal the two switches that cost the most planning time. Both are On by
 default because both improve the plan; turn them Off to buy the time back:
 
-- **switch.predbat_calculate_pv90_plan** - simulating the third (sunny) scenario is the larger of the two costs
+- **switch.predbat_calculate_pv90_plan** - simulating the third (optimistic) scenario is the larger of the two costs
 - **switch.predbat_calculate_second_pass** - re-optimises every window in the plan rather than just the near-term ones
 
 As a rough guide, on a 20-scenario benchmark of one-day plans, turning both Off returns planning time to about three quarters of what it takes with them On.
@@ -186,6 +186,30 @@ This setting will not impact the real calculated costs and is only used for plan
 
 ## Scaling and weight options
 
+### Expected, pessimistic and optimistic scenarios
+
+Predbat doesn't plan against a single forecast. It simulates three futures and scores each candidate plan on a weighted blend of them:
+
+| Scenario | Solar forecast | Household load | Weight |
+|---|---|---|---|
+| **Expected** (central) | the median (PV50) forecast | `load_scaling` | whatever the other two leave |
+| **Pessimistic** | the 10% (PV10) forecast | `load_scaling10` | `pv_metric10_weight` (default 0.15) |
+| **Optimistic** | the 90% (PV90) forecast | `load_scaling90` | `pv_metric90_weight` (default 0.15) |
+
+The pessimistic scenario also charges the battery more slowly (`charge_scaling10`). The setting names keep the `10` and `90` they were introduced with,
+after the solar percentiles, but each scenario covers load as well as solar: the pessimistic one is a cloudier day with a busier house, the optimistic one
+a sunnier day with a quieter house. **After dark the solar forecasts are all zero, so the optimistic scenario differs from the expected one only in its load** -
+overnight it simply means "the house uses less". The pessimistic scenario keeps two further differences after dark: it still charges more slowly, and its
+forced exports are assumed to stop where the expected plan's exports end, rather than at the export target being tried.
+
+The three load scalings are each applied to your historical load directly; they do not multiply each other. So if you raise `load_scaling` above its default,
+consider raising `load_scaling90` (and `load_scaling10`) with it, to keep the gap between the scenarios about what the defaults give. With the defaults the
+optimistic load is about 86% of the expected one (0.9 against 1.05). With `load_scaling` at 1.2 the same ratio means a `load_scaling90` of about 1.03, whereas
+leaving it at 0.9, or the 0.7 it used to default to, makes the optimistic evening far quieter than the expected one. At 15% weight that can be enough for
+the plan to export in the evening on the strength of the optimistic case, and then import at the peak rate in the expected one (issues #5566, #5943).
+
+### Scaling options
+
 **switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
 If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
 If the load remains high for two checks in a row, this prediction is extended into the following slot too, so the plan stays up to date across the slot boundary.
@@ -205,10 +229,10 @@ The default is 1.0, i.e. no scaling.
 You can try [computing your discharge curve](apps-yaml.md#battery-chargedischarge-curves) and check recommendations for changing this figure in the logfile.
 The default is 1.05, i.e. battery discharges at 5% more power than the inverter reports.
 
-**input_number.predbat_charge_scaling10** (_expert mode_) is a percentage factor applied to the battery charge rate specifically for the PV10% pessimistic scenario.
-This allows the PV10% prediction to model a slower battery charge rate to account for worst-case conditions (e.g. cold weather, battery degradation).
-For example, a value of 0.8 (the default) means the PV10% scenario assumes the battery will only charge at 80% of its normal rate.
-This setting only affects the PV10% scenario calculations and does not change the actual charge rate commands sent to your inverter.
+**input_number.predbat_charge_scaling10** (_expert mode_) is a percentage factor applied to the battery charge rate specifically for the pessimistic (PV10%) scenario.
+This allows the pessimistic prediction to model a slower battery charge rate to account for worst-case conditions (e.g. cold weather, battery degradation).
+For example, a value of 0.8 (the default) means the pessimistic scenario assumes the battery will only charge at 80% of its normal rate.
+This setting only affects the pessimistic scenario calculations and does not change the actual charge rate commands sent to your inverter.
 Use a lower value to be more pessimistic about charging capability in the worst-case scenario. The valid range is 0.1 to 1.0.
 
 **switch.predbat_battery_capacity_nominal** - When set to On, Predbat uses the reported battery size from the GivTCP 'Battery Nominal Capacity' field rather than from the normal GivTCP reported 'Battery Capacity kWh' size.
@@ -218,14 +242,16 @@ If your battery size is reported wrongly maybe try turning this on and see if it
 Use 1.0 to use exactly the previous load data. A value of 1.1 for example would add 10% to the historical load. The default value is 1.05 to add 5% scaling.
 The output data entity predbat.load_energy_h0 is not scaled; it reports today's load as measured.
 
-**input_number.predbat_load_scaling10** is a percentage Scaling factor applied to historical load only for the PV10% scenario (this is in addition to load_scaling above).
-This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central scenario unchanged.
-The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
+**input_number.predbat_load_scaling10** is a percentage Scaling factor applied to historical load only for the pessimistic (PV10%) scenario.
+Like `load_scaling90` below it is applied to the historical load directly, in place of `load_scaling` rather than on top of it.
+This can be used to make the pessimistic scenario take into account extra load usage while leaving the expected scenario unchanged.
+The default is 1.1, meaning the pessimistic scenario uses 110% of your historical load. This will only have an impact if the PV 10% weighting is non-zero.
 
-**input_number.predbat_load_scaling90** (_expert mode_) is a percentage Scaling factor applied to historical load only for the PV90% upside scenario, exactly
+**input_number.predbat_load_scaling90** (_expert mode_) is a percentage Scaling factor applied to historical load only for the optimistic (PV90%) scenario, exactly
 like `load_scaling10` above but discounting the load instead of adding to it. It is an absolute multiplier of the historical load - it does not compose with
-`load_scaling`. The default is 0.9, meaning the PV90% scenario uses 90% of your raw historical load regardless of what `load_scaling` itself is set to.
-Overnight there is no solar, so the PV90% scenario differs from the central one only in this lower load. A deeper discount (the default used to be 0.7)
+`load_scaling`. The default is 0.9, meaning the optimistic scenario uses 90% of your raw historical load regardless of what `load_scaling` itself is set to.
+Overnight there is no solar, so the optimistic scenario differs from the expected one only in this lower load (see
+[Expected, pessimistic and optimistic scenarios](#expected-pessimistic-and-optimistic-scenarios) for keeping it in step with `load_scaling`). A deeper discount (the default used to be 0.7)
 made the plan sell the battery too early in the evening and then buy back at the peak rate before the off-peak period started (issue #5566).
 Predbat stores this setting's value whenever expert mode is on and keeps a stored value over a new default, so an install that has had expert mode on
 at any time before this change stays at 0.7 until you set it to 0.9 yourself.
@@ -251,7 +277,7 @@ See also [PV configuration options in apps.yaml](apps-yaml.md#solcast-solar-fore
 **input_number.predbat_pv_scaling** is a percentage scaling factor applied to PV data, decrease this if you want to be more pessimistic on PV production vs Solcast.<BR>
 Use 1.0 to accurately apply the Solcast forecast generation data. A value of 0.9, for instance, would reduce 10% from the Solcast generation forecast.
 
-**input_number.predbat_pv_metric10_weight** is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the Solcast 10% PV scenario in calculating solar generation.
+**input_number.predbat_pv_metric10_weight** is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the pessimistic scenario, which uses the Solcast 10% PV forecast.
 Use 0.0 to disable using the PV 10% in Predbat's forecast of solar generation.
 A value of 0.1 assumes that 1 in every 10 times we will get the Solcast 10% scenario, and 9 in every 10 times we will get the 'median' Solcast forecast.<BR>
 Predbat estimates solar generation for each half-hour slot to be a pv_metric10_weight weighting of the Solcast 10% PV forecast to the Solcast Median forecast.<BR>
@@ -263,14 +289,14 @@ This matches what really happens: if the battery is lower than planned when the 
 shortens it. It lets Predbat keep some battery back from an evening export to cover a higher-load evening, where the central forecast alone would
 have exported it all. The PV90% scenario is not limited this way, as on a sunnier day a replan would export more rather than less.
 
-**switch.predbat_calculate_pv90_plan** (_performance tweaks_) enables the PV90% upside scenario described below - it is **On by default**.
+**switch.predbat_calculate_pv90_plan** (_performance tweaks_) enables the optimistic (PV90%) scenario described below - it is **On by default**.
 Turn it Off (after turning on **switch.predbat_performance_tweaks** to reveal it) and the PV90% scenario is not simulated at all, saving that
 planning time, regardless of what `pv_metric90_weight` is set to.
 The two settings that tune it (`pv_metric90_weight` and `load_scaling90`) remain expert-mode only, so everyone running the PV90% scenario without expert
 mode (and without setting them in `apps.yaml`) is using the shipped defaults and their results are comparable.
 
-**input_number.predbat_pv_metric90_weight** (_expert mode_) is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the Solcast 90% PV scenario in calculating solar generation.
-It is the upside mirror of `pv_metric10_weight` above: where the PV10% scenario models a cloudier, higher-load day, the PV90% scenario models a sunnier day
+**input_number.predbat_pv_metric90_weight** (_expert mode_) is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the optimistic scenario, which uses the Solcast 90% PV forecast.
+It is the mirror of `pv_metric10_weight` above: where the pessimistic scenario models a cloudier, higher-load day, the optimistic scenario models a sunnier day
 (the 90% PV forecast) combined with a lower household load (see `load_scaling90` above).
 Predbat blends the three simulated futures into one metric, so a value of 0.1 assumes that 1 in every 10 times we will get the Solcast 90% scenario.
 
