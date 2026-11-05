@@ -12,6 +12,7 @@
 from carbon import CarbonAPI
 import aiohttp
 from unittest.mock import patch
+import asyncio
 from datetime import datetime, timezone, timedelta
 from const import TIME_FORMAT_HA
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
@@ -112,6 +113,11 @@ def test_carbon(my_predbat=None):
         ("replicate_no_data", _test_carbon_replicate_no_data, "Replicate with no data at all"),
         ("replicate_full", _test_carbon_replicate_full_coverage, "Replicate with full coverage"),
         ("replicate_gap", _test_carbon_replicate_gap, "Replicate fills a gap in the forecast"),
+        ("discovery_record", _test_carbon_discovery_record, "Carbon forecast record and its binding"),
+        ("discovery_entity_only_when_published", _test_carbon_discovery_entity_only_when_published, "Binding claimed only once published"),
+        ("discovery_none_without_postcode", _test_carbon_discovery_none_without_postcode, "No record without a postcode"),
+        ("discovery_round_trip", _test_carbon_discovery_round_trip, "Record round-trips through the Coordinator"),
+        ("discovery_run_files_report", _test_carbon_discovery_run_files_report, "run() files the report every cycle"),
     ]
 
     print("\n" + "=" * 70)
@@ -993,4 +999,72 @@ def _test_carbon_replicate_gap(my_predbat=None):
         my_predbat.forecast_minutes = saved_forecast_minutes
 
     print("  ✓ Gap filled correctly")
+    return 0
+
+
+def _carbon_discovery_api(published=True):
+    """A CarbonAPI whose state lookup reads back what it published, with its intensity sensor published if asked."""
+    api = MockCarbonAPI()
+    api.automatic = True
+    api.get_state_wrapper = lambda entity_id=None, default=None, **kwargs: api.dashboard_items.get(entity_id, {}).get("state", default)
+    if published:
+        api.publish_carbon_data()
+    return api
+
+
+def _test_carbon_discovery_record(my_predbat=None):
+    """The service is a carbon forecast for the postcode district it queries, 48 hours at 30-minute resolution, bound to carbon_intensity."""
+    report = _carbon_discovery_api().build_discovery()
+    assert report["automatic"] is True
+    record = report["forecasts"][0]
+    expected = {
+        "device_id": "carbon:BS16",
+        "kind": "carbon",
+        "info": {"vendor": "Carbon Intensity API", "postcode_district": "BS16"},
+        "coverage": {"horizon_hours": 48, "resolution_minutes": 30},
+        "entities": {"carbon_intensity": {"entity_id": "sensor.predbat_carbon_intensity", "domain": "sensor", "access": "r", "unit": "gCO2/kWh"}},
+    }
+    assert record == expected, record
+    return 0
+
+
+def _test_carbon_discovery_entity_only_when_published(my_predbat=None):
+    """Before the intensity sensor has been published, the binding is not claimed."""
+    record = _carbon_discovery_api(published=False).build_discovery()["forecasts"][0]
+    assert "entities" not in record, record
+    return 0
+
+
+def _test_carbon_discovery_none_without_postcode(my_predbat=None):
+    """With no postcode there is nothing to query, so no record."""
+    api = _carbon_discovery_api()
+    api.postcode = None
+    assert api.build_discovery() is None
+    return 0
+
+
+def _test_carbon_discovery_round_trip(my_predbat=None):
+    """Through the real Coordinator with no warnings: kind, coverage and the binding survive."""
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("carbon", _carbon_discovery_api().build_discovery())
+    record = coordinator.catalogue()["forecasts"][0]
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    assert record["kind"] == "carbon" and record["coverage"] == {"horizon_hours": 48, "resolution_minutes": 30}, record
+    assert record["entities"]["carbon_intensity"]["entity_id"] == "sensor.predbat_carbon_intensity", record
+    return 0
+
+
+def _test_carbon_discovery_run_files_report(my_predbat=None):
+    """run() files the report on a cycle that does not fetch."""
+    api = _carbon_discovery_api()
+    api.last_updated_timestamp = datetime.now(timezone.utc)
+    filed = []
+    api.report_discovery = filed.append
+    asyncio.run(api.run(60, False))
+    assert len(filed) == 1 and filed[0]["forecasts"][0]["kind"] == "carbon", filed
     return 0
