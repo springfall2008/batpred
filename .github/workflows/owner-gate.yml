@@ -1,7 +1,14 @@
 name: owner gate
-# A required check standing in for "only the repository owner merges": main's ruleset requires the
-# owner-gate job. GitHub's auto-merge never uses an admin bypass, so restricting updates to the owner
+# A required check standing in for "only the repository owner merges": main's ruleset requires a check
+# named owner-gate. GitHub's auto-merge never uses an admin bypass, so restricting updates to the owner
 # would also block the owner's own auto-merge; this gate keeps both.
+#
+# The job never fails just because the owner has not approved yet. It records its verdict as an
+# owner-gate check run through the Checks API instead: in progress ("waiting for the owner") until the
+# go-ahead, then success. GitHub emails whoever triggered a FAILED workflow run, so a failing job sent
+# every contributor a "run failed" email on every PR - the pending check blocks the merge just as well
+# without one. The job is named differently from the check so its own green tick cannot satisfy the
+# requirement. The newest owner-gate check on the head commit is the one that counts.
 #
 # It passes only when the owner has given this PR an explicit go-ahead, whoever authored it:
 # - the owner applied the owner-approved label (the most recent time that label was applied, the
@@ -18,8 +25,9 @@ name: owner gate
 #
 # pull_request_target so the job runs this file as it is on main and gets a token that can remove the
 # label and switch auto-merge off. GitHub has no _target variant of pull_request_review, so a review
-# runs the copy of this file in the PR's merge ref instead - main's copy unless the PR edits it; the
-# review path only reads. Neither path checks out or runs the PR's code.
+# runs the copy of this file in the PR's merge ref instead - main's copy unless the PR edits it. On a
+# PR from a fork that run gets a read-only token and cannot record the check, so for fork PRs the owner
+# uses the label or auto-merge instead of a review. Neither path checks out or runs the PR's code.
 on:
   pull_request_target:
     types:
@@ -36,11 +44,14 @@ on:
       - dismissed
 
 permissions:
+  checks: write
   issues: write
   pull-requests: write
 
 jobs:
-  owner-gate:
+  evaluate:
+    # Not "owner-gate": this job's own check must not be the one the ruleset requires
+    name: owner gate evaluator
     runs-on: ubuntu-latest
     steps:
       - name: Check the owner approved this PR or enabled auto-merge on it
@@ -62,6 +73,21 @@ jobs:
           auto_merge_by=$(jq -r '.autoMergeRequest.enabledBy.login // ""' <<< "$state")
           has_label=$(jq -r --arg label "$LABEL" '[.labels.nodes[].name] | index($label) != null' <<< "$state")
           owner_approved_head=$(jq -r --arg owner "$owner" '.headRefOid as $head | [.latestOpinionatedReviews.nodes[] | select(.author.login == $owner and .state == "APPROVED" and .commit.oid == $head)] | length > 0' <<< "$state")
+          head_sha=$(jq -r '.headRefOid' <<< "$state")
+
+          # Record the verdict as the owner-gate check on the head commit: "pass" completes it as a
+          # success, "wait" leaves it in progress, which blocks the merge without failing this job
+          record() {
+            if [ "$1" = "pass" ]; then
+              verdict=(-f status=completed -f conclusion=success)
+            else
+              verdict=(-f status=in_progress)
+            fi
+            echo "$2"
+            gh api -X POST "repos/$GH_REPO/check-runs" -f name=owner-gate -f head_sha="$head_sha" "${verdict[@]}" \
+              -f "output[title]=$2" -f "output[summary]=$2" > /dev/null \
+              || echo "::warning::Could not record the owner-gate check - a review on a fork PR has a read-only token, so apply $LABEL or enable auto-merge instead"
+          }
 
           # New commits from anyone but the owner (or the CI bots) revoke an earlier go-ahead
           if [ "$ACTION" = "synchronize" ] && [ "$SENDER" != "$owner" ] && [ "$SENDER" != "pre-commit-ci[bot]" ] && [ "$SENDER" != "github-actions[bot]" ]; then
@@ -71,29 +97,28 @@ jobs:
             if [ -n "$auto_merge_by" ]; then
               gh api graphql -F id="$pr_id" -f query='mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }' > /dev/null
             fi
-            echo "::error::$SENDER pushed new commits, so any approval was revoked - $owner must apply $LABEL, enable auto-merge or approve the new commits"
-            exit 1
+            record wait "$SENDER pushed new commits, so any approval was revoked - waiting for $owner to apply $LABEL, enable auto-merge or approve the new commits"
+            exit 0
           fi
 
           if [ "$auto_merge_by" = "$owner" ]; then
-            echo "$owner enabled auto-merge - passes"
+            record pass "$owner enabled auto-merge"
             exit 0
           fi
           if [ "$has_label" = "true" ]; then
             applied_by=$(gh api --paginate "repos/$GH_REPO/issues/$PR_NUMBER/events" \
               --jq ".[] | select(.event == \"labeled\" and .label.name == \"$LABEL\") | .actor.login" | tail -n 1)
             if [ "$applied_by" = "$owner" ]; then
-              echo "$owner approved this PR with $LABEL - passes"
+              record pass "$owner approved this PR with $LABEL"
               exit 0
             fi
             echo "$LABEL was applied by ${applied_by:-nobody}, not $owner, so it does not count"
           fi
           if [ "$owner_approved_head" = "true" ]; then
-            echo "$owner approved the current head commit in a review - passes"
+            record pass "$owner approved the current head commit in a review"
             exit 0
           fi
-          echo "::error::Waiting for $owner to apply the $LABEL label, enable auto-merge or approve the PR"
-          exit 1
+          record wait "Waiting for $owner to apply the $LABEL label, enable auto-merge or approve the PR"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
