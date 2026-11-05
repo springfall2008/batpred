@@ -510,6 +510,16 @@ def test_component_discovery_explains_a_silent_component(my_predbat):
         if "failed to load" not in body:
             print("  ERROR: expected a load_error component to say it failed to load")
             failed = True
+
+        # A component that failed to load is in the status map whether or not it ever had a
+        # reporter (there is no instance left to ask), so storage - which never reports - gets the
+        # pop-up too. Nothing it says may claim the component was expected to report.
+        catalogue["components"]["storage"] = {"status": "load_error", "reported_at": None}
+        for name in ("fox", "solis", "storage"):
+            body = _render_component_discovery(my_predbat, _StubCoordinator(catalogue), name).text.lower()
+            if "expected to report" in body or "has not reported anything" in body:
+                print(f"  ERROR: the {name} pop-up claims the component was expected to report, or repeats itself: {body[:200]!r}")
+                failed = True
     finally:
         my_predbat.components = saved
 

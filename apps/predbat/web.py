@@ -125,8 +125,16 @@ HISTORY_TABLE_SLOT_MINUTES = 5
 DISCOVERY_GLANCE_CONTAINERS = ("hardware_ids", "account_ids", "info", "ratings", "coverage", "tariff", "capabilities")
 DISCOVERY_FOLDED_CONTAINERS = ("entities",)
 
-# Status-map entries (Coordinator._component_status) for a component with nothing to show, in words
+# Status-map entries (Coordinator._component_status) for a component with nothing to show, in words:
+# the short form for a card's Discovery line, and a sentence for the pop-up. A load_error entry is filed
+# whether or not the component ever had a reporter - there is no instance left to ask - so its sentence
+# must not claim one was expected (storage, web and db can fail to load too).
 DISCOVERY_STATUS_TEXT = {"no_report": "has not reported yet", "not_started": "not started", "load_error": "failed to load"}
+DISCOVERY_STATUS_SENTENCE = {
+    "no_report": "This component has not reported yet.",
+    "not_started": "This component has not started, so it has not reported yet.",
+    "load_error": "This component failed to load.",
+}
 
 
 def history_value_at(records, stamps, when):
@@ -5370,7 +5378,8 @@ chart.render();
             meta.append(self._discovery_status_text(status))
             text += "<div class='discovery-meta'>{}</div>\n".format(html_module.escape(" · ".join(meta)))
         else:
-            text += "<div class='discovery-meta'>This component {} - it is expected to report but has not reported anything.</div>\n".format(html_module.escape(self._discovery_status_text(status)))
+            sentence = DISCOVERY_STATUS_SENTENCE.get(status.get("status"), "This component's discovery status is {}.".format(status.get("status")))
+            text += "<div class='discovery-meta'>{}</div>\n".format(html_module.escape(sentence))
 
         meta_keys = ("schema_version", "generated", "components", "observations")
         for section, records in catalogue.items():
