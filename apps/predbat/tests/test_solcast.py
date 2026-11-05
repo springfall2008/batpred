@@ -4877,10 +4877,10 @@ def test_fetch_pv_forecast_solcast_band_follows_calibration(my_predbat):
             stored = {}
             real_pack_and_store = solar.pack_and_store_forecast
 
-            def spy_pack_and_store(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, _stored=stored, _real=real_pack_and_store):
+            def spy_pack_and_store(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90=None, *args, **kwargs):
                 """Record the series handed to the planner, then store them as normal."""
-                _stored["series"] = (dict(pv_forecast_minute), dict(pv_forecast_minute10), dict(pv_forecast_minute90))
-                return _real(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90)
+                stored["series"] = (dict(pv_forecast_minute), dict(pv_forecast_minute10), dict(pv_forecast_minute90 if pv_forecast_minute90 is not None else {}))
+                return real_pack_and_store(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, *args, **kwargs)
 
             solar.pack_and_store_forecast = spy_pack_and_store
 
