@@ -4812,6 +4812,157 @@ def test_fetch_pv_forecast_open_meteo_uses_ensemble_band(my_predbat):
     return failed
 
 
+def test_fetch_pv_forecast_solcast_band_follows_calibration(my_predbat):
+    """
+    Solcast's own P10 and P90 must move with the calibrated P50, as Open-Meteo's ensemble band does.
+
+    Solcast supplies its own band, so pv_calibration is told not to create one. It also has to be
+    told to keep that band and scale it with P50 (calibrate_band), or calibration moves only P50 and
+    the band stays on Solcast's raw curve. In #5969 calibration took P50 down to 0.77x while P90
+    stayed raw, so the PV90 scenario was 4.8x the P50 it was planned against instead of Solcast's 3.7x.
+
+    Three past days generated 0.5 kW in the 13:00-14:00 window against a recorded 1 kW forecast,
+    so calibration halves today's 1 kW forecast there. Solcast's band is 0.5x / 1.6x of its P50, and
+    the planner's series and the published forecast must both keep those ratios to the calibrated
+    P50. Run for the direct API and for the Solcast integration's HA sensors.
+    """
+    print("  - test_fetch_pv_forecast_solcast_band_follows_calibration")
+    failed = False
+    window_start = 13 * 60
+    window_length = 60
+    p10_ratio, p90_ratio = 0.5, 1.6
+
+    for source in ("solcast_api", "ha_sensors"):
+        test_api = create_test_solar_api()
+        try:
+            solar = test_api.solar
+            base = test_api.mock_base
+            minutes_now = base.minutes_now
+
+            # Cumulative pv_today kWh keyed by minutes-ago: 0.5 kW across the window on each of three days
+            hist = {}
+            for day_idx in range(3):
+                midnight_ago = (day_idx + 1) * 1440 + minutes_now
+                for step in range(0, 24 * 60, 5):
+                    if midnight_ago - step >= 0:
+                        hist[midnight_ago - step] = 0.5 * min(max(step - window_start, 0), window_length) / 60.0
+            # Recorded forecast history of 1 kW across the same window on each of those days
+            pv_forecast_hist = {}
+            for day_num in range(1, 4):
+                for m_of_day in range(window_start, window_start + window_length):
+                    pv_forecast_hist[day_num * 1440 + (minutes_now - m_of_day)] = 1.0
+
+            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+                """Return the synthetic pv_today history."""
+                return dict(_hist) if key == "pv_today" else {}
+
+            base.minute_data_import_export = mock_minute_import_export
+            solar.get_history_wrapper = lambda entity_id, days, required=False: []
+            solar.forecast_solar = None
+
+            # 1 kW in each 30-minute slot of the window, in kW as both Solcast routes report it
+            if source == "solcast_api":
+                solar.solcast_host = "https://api.solcast.com.au"
+                solar.solcast_api_key = "test_key"
+                solar.solcast_sites = ["site123"]
+                forecasts = [{"period_end": end, "period": "PT30M", "pv_estimate": 1.0, "pv_estimate10": p10_ratio, "pv_estimate90": p90_ratio} for end in ("2025-06-15T13:30:00.0000000Z", "2025-06-15T14:00:00.0000000Z")]
+                test_api.set_mock_response("forecasts", {"forecasts": forecasts}, 200)
+            else:
+                solar.solcast_host = None
+                solar.solcast_api_key = None
+                solar.pv_forecast_today = "sensor.solcast_pv_forecast_today"
+                detailed = [{"period_start": start, "pv_estimate": 1.0, "pv_estimate10": p10_ratio, "pv_estimate90": p90_ratio} for start in ("2025-06-15T13:00:00+0000", "2025-06-15T13:30:00+0000")]
+                test_api.set_mock_ha_state("sensor.solcast_pv_forecast_today", {"state": "1.0", "detailedForecast": detailed})
+
+            stored = {}
+            real_pack_and_store = solar.pack_and_store_forecast
+
+            def spy_pack_and_store(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, _stored=stored, _real=real_pack_and_store):
+                """Record the series handed to the planner, then store them as normal."""
+                _stored["series"] = (dict(pv_forecast_minute), dict(pv_forecast_minute10), dict(pv_forecast_minute90))
+                return _real(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90)
+
+            solar.pack_and_store_forecast = spy_pack_and_store
+
+            def create_mock_session(*args, _api=test_api, **kwargs):
+                """Create a mock aiohttp session."""
+                return _api.mock_aiohttp_session()
+
+            with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, 3)):
+                with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+                    run_async(solar.fetch_pv_forecast())
+
+            if "series" not in stored:
+                print("ERROR: {}: no forecast reached the planner".format(source))
+                failed = True
+                continue
+
+            # The planner's series, minute by minute across the window
+            m50, m10, m90 = stored["series"]
+            raw_minute = 1.0 / 60.0
+            for minute in range(window_start, window_start + window_length, 10):
+                if m50.get(minute, 0) > 0.8 * raw_minute:
+                    print("ERROR: {}: P50 at minute {} is {}, calibration should have taken it well below the raw {}".format(source, minute, m50.get(minute), raw_minute))
+                    failed = True
+                    continue
+                for label, series, ratio in (("P10", m10, p10_ratio), ("P90", m90, p90_ratio)):
+                    expected = m50[minute] * ratio
+                    if abs(series.get(minute, 0) - expected) > max(0.02 * expected, 0.0002):
+                        print("ERROR: {}: planner {} at minute {} is {}, expected Solcast's {}x of the calibrated P50 {} = {}".format(source, label, minute, series.get(minute), ratio, m50[minute], expected))
+                        failed = True
+
+            # The published forecast must agree with what the planner was given
+            forecast = test_api.dashboard_items.get("sensor.predbat_pv_today", {}).get("attributes", {}).get("detailedForecast", [])
+            checked = 0
+            for entry in forecast:
+                if entry.get("pv_estimateCL", 0) > 0:
+                    checked += 1
+                    got = (entry["pv_estimate10"] / entry["pv_estimateCL"], entry["pv_estimate90"] / entry["pv_estimateCL"])
+                    if abs(got[0] - p10_ratio) > 0.05 or abs(got[1] - p90_ratio) > 0.05:
+                        print("ERROR: {}: published band at {} is {:.2f}x / {:.2f}x of the calibrated P50, expected {}x / {}x".format(source, entry["period_start"], got[0], got[1], p10_ratio, p90_ratio))
+                        failed = True
+            if not checked:
+                print("ERROR: {}: no published forecast slots to check".format(source))
+                failed = True
+        finally:
+            test_api.cleanup()
+
+    # A forecast sensor with no band of its own has nothing to calibrate: its published 10%/90%
+    # figures keep falling back to P50 rather than reading 0
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.solcast_host = None
+        solar.solcast_api_key = None
+        solar.forecast_solar = None
+        solar.pv_forecast_today = "sensor.solcast_pv_forecast_today"
+        detailed = [{"period_start": start, "pv_estimate": 1.0} for start in ("2025-06-15T13:00:00+0000", "2025-06-15T13:30:00+0000")]
+        test_api.set_mock_ha_state("sensor.solcast_pv_forecast_today", {"state": "1.0", "detailedForecast": detailed})
+
+        def create_mock_session(*args, _api=test_api, **kwargs):
+            """Create a mock aiohttp session."""
+            return _api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(solar.fetch_pv_forecast())
+
+        forecast = test_api.dashboard_items.get("sensor.predbat_pv_today", {}).get("attributes", {}).get("detailedForecast", [])
+        checked = 0
+        for entry in forecast:
+            if entry.get("pv_estimate", 0) > 0:
+                checked += 1
+                if entry["pv_estimate10"] != entry["pv_estimate"] or entry["pv_estimate90"] != entry["pv_estimate"]:
+                    print("ERROR: no band: published band at {} is {} / {}, expected both to fall back to P50 {}".format(entry["period_start"], entry["pv_estimate10"], entry["pv_estimate90"], entry["pv_estimate"]))
+                    failed = True
+        if not checked:
+            print("ERROR: no band: no published forecast slots to check")
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 def test_pv_calibration_no_history_not_zeroed(my_predbat):
     """
     Regression test: when there is no valid historical data (e.g. all days excluded as
@@ -6929,6 +7080,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_off_band_built_from_raw(my_predbat)
     failed |= test_pv_calibration_keeps_provider_band(my_predbat)
     failed |= test_fetch_pv_forecast_open_meteo_uses_ensemble_band(my_predbat)
+    failed |= test_fetch_pv_forecast_solcast_band_follows_calibration(my_predbat)
     failed |= test_pv_calibration_no_history_not_zeroed(my_predbat)
     failed |= test_pv_calibration_no_history_ceiling_clips_raw(my_predbat)
     failed |= test_pv_calibration_raw_exceeds_ceiling_warns(my_predbat)
