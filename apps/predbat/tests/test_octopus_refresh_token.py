@@ -5,10 +5,10 @@ Tests for Octopus async_refresh_token function
 import asyncio
 import base64
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 from octopus import OctopusAPI
-from utils import TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
+from utils import TOKEN_MINT_BACKOFF_BASE_SECONDS, TOKEN_MINT_BACKOFF_MAX_SECONDS, BACKOFF_LOG_INTERVAL_SECONDS
 
 
 def test_octopus_refresh_token_wrapper(my_predbat):
@@ -298,11 +298,11 @@ async def test_octopus_refresh_token(my_predbat):
     if result is not None:
         print(f"ERROR: Expected None for an edge-blocked mint, got {result}")
         failed = True
-    elif api.token_mint_blocked_until is None or api.token_mint_blocked_until <= datetime.now():
-        print(f"ERROR: Expected a future mint backoff deadline, got {api.token_mint_blocked_until}")
+    elif api.token_mint_backoff.until is None or api.token_mint_backoff.until <= datetime.now(timezone.utc):
+        print(f"ERROR: Expected a future mint backoff deadline, got {api.token_mint_backoff.until}")
         failed = True
-    elif api.token_mint_block_count != 1:
-        print(f"ERROR: Expected block count 1, got {api.token_mint_block_count}")
+    elif api.token_mint_backoff.count != 1:
+        print(f"ERROR: Expected block count 1, got {api.token_mint_backoff.count}")
         failed = True
     elif api.async_read_response_retry.call_count != 0:
         print("ERROR: An edge block should short-circuit before the generic response reader")
@@ -322,8 +322,8 @@ async def test_octopus_refresh_token(my_predbat):
     elif api.api.async_create_client_session.call_count != 0:
         print(f"ERROR: Expected no mint attempt while backing off, got {api.api.async_create_client_session.call_count}")
         failed = True
-    elif api.token_mint_block_count != 1:
-        print(f"ERROR: A suppressed attempt must not grow the backoff, got {api.token_mint_block_count}")
+    elif api.token_mint_backoff.count != 1:
+        print(f"ERROR: A suppressed attempt must not grow the backoff, got {api.token_mint_backoff.count}")
         failed = True
     else:
         print("PASS: No mint request is made while the backoff is active")
@@ -337,11 +337,11 @@ async def test_octopus_refresh_token(my_predbat):
 
     delays = []
     for _ in range(8):
-        api.token_mint_blocked_until = None  # let each attempt through to measure its own delay
+        api.token_mint_backoff.until = None  # let each attempt through to measure its own delay
         api.api.async_create_client_session = AsyncMock(return_value=create_mock_session(403, cloudfront_body))
-        before = datetime.now()
+        before = datetime.now(timezone.utc)
         await api.async_refresh_token()
-        delays.append((api.token_mint_blocked_until - before).total_seconds())
+        delays.append((api.token_mint_backoff.until - before).total_seconds())
 
     # Assert the exact schedule, not just "it grows" - a 1, 2, 2, 2... implementation would
     # satisfy a monotonicity check while backing off far too little to stop the hammering.
@@ -353,7 +353,7 @@ async def test_octopus_refresh_token(my_predbat):
     else:
         # A successful mint must clear the backoff so the next expiry refreshes normally
         good_token = create_mock_jwt_token(datetime.now() + timedelta(hours=1))
-        api.token_mint_blocked_until = None
+        api.token_mint_backoff.until = None
         api.api.async_create_client_session = AsyncMock(return_value=create_mock_session(200, "{}"))
         api.async_read_response_retry = AsyncMock(return_value={"data": {"obtainKrakenToken": {"token": good_token}}})
 
@@ -362,8 +362,8 @@ async def test_octopus_refresh_token(my_predbat):
         if result != good_token:
             print(f"ERROR: Expected the mint to succeed after the block cleared, got {result}")
             failed = True
-        elif api.token_mint_blocked_until is not None or api.token_mint_block_count != 0:
-            print(f"ERROR: A successful mint must clear the backoff, got {api.token_mint_blocked_until} / {api.token_mint_block_count}")
+        elif api.token_mint_backoff.until is not None or api.token_mint_backoff.count != 0:
+            print(f"ERROR: A successful mint must clear the backoff, got {api.token_mint_backoff.until} / {api.token_mint_backoff.count}")
             failed = True
         else:
             print(f"PASS: Backoff grows {delays[:3]}... capped at {TOKEN_MINT_BACKOFF_MAX_SECONDS}s and clears on success")
@@ -382,7 +382,7 @@ async def test_octopus_refresh_token(my_predbat):
     if result is not None:
         print(f"ERROR: Expected None for a forbidden mint, got {result}")
         failed = True
-    elif api.token_mint_blocked_until is not None:
+    elif api.token_mint_backoff.until is not None:
         print("ERROR: A JSON 403 is a credential problem, not an edge block - it must not start a backoff")
         failed = True
     elif api.async_read_response_retry.call_count != 1:
@@ -405,11 +405,11 @@ async def test_octopus_refresh_token(my_predbat):
     api.async_read_response_retry = AsyncMock(return_value=None)
     await api.async_refresh_token()
 
-    if api.token_mint_blocked_until is None:
+    if api.token_mint_backoff.until is None:
         print("ERROR: Expected a backoff deadline to be set before the elapse test")
         failed = True
     else:
-        api.token_mint_blocked_until = datetime.now() - timedelta(seconds=1)
+        api.token_mint_backoff.until = datetime.now(timezone.utc) - timedelta(seconds=1)
         recovered_token = create_mock_jwt_token(datetime.now() + timedelta(hours=1))
         api.api.async_create_client_session = AsyncMock(return_value=create_mock_session(200, "{}"))
         api.async_read_response_retry = AsyncMock(return_value={"data": {"obtainKrakenToken": {"token": recovered_token}}})
@@ -422,8 +422,8 @@ async def test_octopus_refresh_token(my_predbat):
         elif result != recovered_token:
             print(f"ERROR: Expected the mint to succeed after the deadline passed, got {result}")
             failed = True
-        elif api.token_mint_blocked_until is not None or api.token_mint_block_count != 0:
-            print(f"ERROR: Recovery must clear the backoff, got {api.token_mint_blocked_until} / {api.token_mint_block_count}")
+        elif api.token_mint_backoff.until is not None or api.token_mint_backoff.count != 0:
+            print(f"ERROR: Recovery must clear the backoff, got {api.token_mint_backoff.until} / {api.token_mint_backoff.count}")
             failed = True
         else:
             print("PASS: An elapsed deadline reopens the mint and recovery clears the backoff")
@@ -447,7 +447,7 @@ async def test_octopus_refresh_token(my_predbat):
     if result != near_expiry:
         print(f"ERROR: Expected the still-valid token from the call that hit the block, got {result}")
         failed = True
-    elif api.token_mint_blocked_until is None:
+    elif api.token_mint_backoff.until is None:
         print("ERROR: Expected a backoff to be started by the refused mint")
         failed = True
     else:
@@ -503,7 +503,7 @@ async def test_octopus_refresh_token(my_predbat):
         failed = True
     else:
         # Pretend the throttle interval has elapsed; the reason should be restated exactly once
-        api.token_mint_backoff_logged_at = datetime.now() - timedelta(seconds=TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS + 1)
+        api.token_mint_backoff.logged_at = datetime.now(timezone.utc) - timedelta(seconds=BACKOFF_LOG_INTERVAL_SECONDS + 1)
         await api.async_refresh_token()
         await api.async_refresh_token()
 

@@ -20,7 +20,7 @@ from predbat import PredBat
 from inverter import Inverter, within_fuzzy
 from givtcp_rest import GivTCPRest
 from config import INVERTER_DEF
-from const import MINUTE_WATT, TIME_FORMAT_SECONDS
+from const import INVERTER_MAX_RETRY, MINUTE_WATT, TIME_FORMAT_SECONDS
 
 
 def test_foxess_support_discharge_freeze_matches_foxcloud():
@@ -745,6 +745,63 @@ def test_reserve_literal_value(test_name, my_predbat, ha, inverter_type, reserve
         my_predbat.args.update(saved_args)
         my_predbat.set_reserve_enable = saved_reserve_enable
         ha.dummy_items["number.reserve"] = saved_reserve_item
+
+    return failed
+
+
+def test_reserve_dummy_percent(test_name, my_predbat, ha, stale_state=None):
+    """
+    Test
+       Inverter.__init__ seeds the dummy reserve entity of a type with no reserve register in percent.
+
+    It was seeded with the kWh reserve while labelled %, and the next refresh read that back as
+    reserve_percent_current - the value balance_inverters() checks a peer's SoC against (#5850).
+    battery_min_soc is set low because its floor on that read otherwise hides the kWh number, and
+    stale_state pre-loads an existing kWh-seeded dummy, which create_entity() alone never overwrites;
+    reserve_percent_current must be the corrected value in the same pass that corrects it.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_reserve_min = my_predbat.get_arg("set_reserve_min")
+    saved_items = dict(ha.dummy_items)
+    entity_id = "sensor.{}_HU_0_reserve".format(my_predbat.prefix)
+    try:
+        my_predbat.args["inverter_type"] = ["HU"]
+        my_predbat.args["battery_min_soc"] = 3
+        my_predbat.expose_config("set_reserve_min", 50)
+        ha.dummy_items.pop(entity_id, None)
+        if stale_state is not None:
+            ha.dummy_items[entity_id] = {"state": stale_state, "unit_of_measurement": "%"}
+
+        inv = Inverter(my_predbat, 0)
+        # The pass that corrects a stale dummy reports the corrected value too, not the stale one a cycle late.
+        # A fresh dummy is never rewritten, so its construction pass still reports the arg it replaced (GH#5003)
+        if stale_state is not None and inv.reserve_percent_current != 50:
+            print("ERROR: reserve_percent_current should be 50 on construction got {}".format(inv.reserve_percent_current))
+            failed = True
+        inv.refresh_config()
+        if inv.reserve_percent != 50:
+            print("ERROR: reserve_percent should be 50 got {}".format(inv.reserve_percent))
+            failed = True
+        if my_predbat.args["reserve"][0] != entity_id:
+            print("ERROR: reserve should be the dummy {} got {}".format(entity_id, my_predbat.args["reserve"][0]))
+            failed = True
+        state = ha.get_state(entity_id)
+        unit = ha.get_state(entity_id, attribute="unit_of_measurement")
+        if state != 50 or unit != "%":
+            print("ERROR: dummy reserve should be 50 % got {} {} (reserve is {}kWh)".format(state, unit, inv.reserve))
+            failed = True
+        if inv.reserve_percent_current != 50:
+            print("ERROR: reserve_percent_current should be 50 got {}".format(inv.reserve_percent_current))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.expose_config("set_reserve_min", saved_reserve_min)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
 
     return failed
 
@@ -3806,6 +3863,73 @@ def test_button_press_and_poll_counts_as_register_write(test_name, ha, inv):
     return failed
 
 
+def test_button_press_and_poll_clock_skew(test_name, ha, inv):
+    """
+    Regression test for issue #5694: _press_single_button_and_poll compared the press time with
+    timedelta.seconds, which is never negative, so a last_updated a few seconds ahead of Predbat's
+    clock read as ~86395s stale (pressed 10 times, then reported failed) and one a whole number of
+    days plus a few seconds old read as fresh.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    entity_id = "button.charge_discharge_update"
+    unset = object()
+    saved_item = ha.dummy_items.get(entity_id, unset)
+    saved_sleep = inv.sleep
+    saved_call_service = inv.base.call_service_wrapper
+    had_record_status = "record_status" in inv.base.__dict__
+    saved_record_status = inv.base.record_status
+    presses = []
+    before_writes = inv.count_register_writes
+    try:
+        inv.sleep = lambda seconds: None
+        inv.base.record_status = lambda *args, **kwargs: None
+
+        def counting_call_service(service, **kwargs):
+            """Count button presses, then pass through to the mock HA."""
+            if service == "button/press":
+                presses.append(kwargs.get("entity_id"))
+            return saved_call_service(service, **kwargs)
+
+        inv.base.call_service_wrapper = counting_call_service
+        local_tz = pytz.timezone(inv.base.get_arg("timezone", "Europe/London"))
+
+        for label, offset, expect_ok in [
+            ("5s ahead of the clock", timedelta(seconds=5), True),
+            ("3 days and 5s old", -timedelta(days=3, seconds=5), False),
+        ]:
+            presses.clear()
+            inv.count_register_writes = before_writes
+            ha.dummy_items[entity_id] = (datetime.now(local_tz) + offset).strftime(TIME_FORMAT_SECONDS)
+            result = inv._press_single_button_and_poll(entity_id)
+            if result != expect_ok:
+                print(f"ERROR: {test_name}: press with last_updated {label} should return {expect_ok}, got {result}")
+                failed = True
+            expected_presses = 1 if expect_ok else INVERTER_MAX_RETRY
+            if len(presses) != expected_presses:
+                print(f"ERROR: {test_name}: press with last_updated {label} should press {expected_presses} time(s), pressed {len(presses)}")
+                failed = True
+            expected_writes = before_writes + (1 if expect_ok else 0)
+            if inv.count_register_writes != expected_writes:
+                print(f"ERROR: {test_name}: press with last_updated {label} should leave count_register_writes {expected_writes}, got {inv.count_register_writes}")
+                failed = True
+    finally:
+        inv.sleep = saved_sleep
+        inv.base.call_service_wrapper = saved_call_service
+        if had_record_status:
+            inv.base.record_status = saved_record_status
+        else:
+            del inv.base.record_status
+        if saved_item is unset:
+            ha.dummy_items.pop(entity_id, None)
+        else:
+            ha.dummy_items[entity_id] = saved_item
+        inv.count_register_writes = before_writes
+
+    return failed
+
+
 def test_force_export_stable_window_presses_button_once(test_name, ha, inv):
     """
     Regression test for issue #4709: a stable export window must commit to the inverter once, not on
@@ -4366,6 +4490,26 @@ def test_battery_scaling_invalid_value_clamped(test_name, my_predbat):
         if inv.battery_scaling != 0.72:
             print("ERROR: battery_scaling should retain last known-good value 0.72 when source reads {}, got {}".format(bad_scaling, inv.battery_scaling))
             failed = True
+
+    # A source that keeps reading invalid warns once, then logs at Info, until a valid read (#5368)
+    log_messages = []
+    orig_log = my_predbat.log
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        my_predbat.args["battery_scaling"] = [0.0]
+        inv = Inverter(my_predbat, 0)  # __init__ runs the first refresh_config
+        inv.refresh_config(quiet=True)
+        inv.refresh_config(quiet=True)
+        my_predbat.args["battery_scaling"] = [0.8]
+        inv.refresh_config(quiet=True)
+        my_predbat.args["battery_scaling"] = [0.0]
+        inv.refresh_config(quiet=True)
+    finally:
+        my_predbat.log = orig_log
+    levels = [message.split(":")[0] for message in log_messages if "not a valid scaling factor" in message]
+    if levels != ["Warn", "Info", "Info", "Warn"]:
+        print("ERROR: invalid battery_scaling should warn once, then Info, and warn again after a valid read; got levels {}".format(levels))
+        failed = True
 
     del my_predbat.args["battery_scaling"]
     del my_predbat.args["battery_scaling_last_known"]
@@ -5960,6 +6104,13 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
+    # GH#5850: the dummy reserve of a type with no reserve register holds a percent, both when it is
+    # first created and when an earlier version already seeded it with the kWh reserve
+    failed |= test_reserve_dummy_percent("reserve_dummy_seeded_percent", my_predbat, ha)
+    failed |= test_reserve_dummy_percent("reserve_dummy_kwh_seed_corrected", my_predbat, ha, stale_state=5.0)
+    if failed:
+        return failed
+
     # GH#5003: the same fixed value must be a warning rather than a crash wherever it reaches a read
     # or a write, not only on the reserve path that reported it
     failed |= test_state_wrapper_non_entity("state_wrapper_non_entity", my_predbat)
@@ -6438,6 +6589,7 @@ charge_start_service:
     failed |= test_export_commit_guard_latches_across_fetches("export_commit_guard_latches_across_fetches", my_predbat)
     failed |= test_button_press_counts_as_register_write("button_press_counts_as_register_write", ha, inv)
     failed |= test_button_press_and_poll_counts_as_register_write("button_press_and_poll_counts_as_register_write", ha, inv)
+    failed |= test_button_press_and_poll_clock_skew("button_press_and_poll_clock_skew", ha, inv)
     if failed:
         return failed
 
