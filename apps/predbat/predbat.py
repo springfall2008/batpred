@@ -36,7 +36,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.6.3"
+THIS_VERSION = "v9.6.5"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
@@ -116,6 +116,12 @@ from github import GitHub
 from ha import run_async
 from control_ledger import ControlLedger
 from control_monitor import ControlMonitor
+
+# Unchanged execution flags are re-saved this often, so their saved_at tracks the last time they were seen to hold
+EXECUTION_STATE_RECONFIRM_MINUTES = 10
+# Saved flags older than this are not believed on load, and one dated further than the clock skew allowance ahead is not either
+EXECUTION_STATE_MAX_AGE_MINUTES = 30
+EXECUTION_STATE_MAX_FUTURE_MINUTES = 5
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
@@ -654,6 +660,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.isCharging_Target = 0
         self.isExporting = False
         self.isExporting_Target = 0
+        self.execution_state_saved = None
+        self.execution_state_saved_at = None
         self.savings_today_predbat = 0.0
         self.savings_today_predbat_soc = 0.0
         self.savings_today_pvbat = 0.0
@@ -973,8 +981,93 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.save_plan()
         return True
 
+    def execution_state_values(self):
+        """The four execution flags as a comparable tuple."""
+        return (bool(self.isCharging), self.isCharging_Target, bool(self.isExporting), self.isExporting_Target)
+
+    def save_execution_state(self):
+        """
+        Save whether the inverter is currently charging or exporting, apart from the plan.
+
+        Kept in its own storage item so that a change of flags is never mistaken for a change of plan:
+        it does not touch plan_version, plan_version_content or the saved plan. Only written when the
+        values differ from the last ones saved or loaded. Returns True when something was written.
+        """
+        values = self.execution_state_values()
+        now = datetime.now(timezone.utc)
+        # Unchanged values are re-confirmed now and then, so saved_at tracks the last time they were seen to hold
+        if values == self.execution_state_saved and self.execution_state_saved_at is not None and (now - self.execution_state_saved_at) < timedelta(minutes=EXECUTION_STATE_RECONFIRM_MINUTES):
+            return False
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return False
+        state = {
+            "is_charging": values[0],
+            "is_charging_target": values[1],
+            "is_exporting": values[2],
+            "is_exporting_target": values[3],
+            "saved_at": now.isoformat(),
+        }
+        try:
+            # Real clock for the expiry, as the storage layer compares against it
+            saved = run_async(storage.save("predbat", "execution_state", state, format="json", expiry=now + timedelta(hours=8)))
+        except Exception as e:
+            self.log("Warning: Failed to save execution state: {}".format(e))
+            return False
+        if saved is False:
+            # Storage reports failure by returning False rather than raising; nothing is marked saved, so the next run retries
+            self.log("Warning: Failed to save execution state: storage reported failure")
+            return False
+        self.execution_state_saved = values
+        self.execution_state_saved_at = now
+        return True
+
+    def load_execution_state(self):
+        """Restore the saved execution flags. A missing, expired or malformed item leaves the defaults."""
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        try:
+            state = run_async(storage.load("predbat", "execution_state"))
+        except Exception as e:
+            self.log("Warning: Failed to load execution state: {}".format(e))
+            return
+        if not isinstance(state, dict):
+            return
+        # Flags describe the inverter right now, so only a recent save is believed
+        max_age = timedelta(minutes=EXECUTION_STATE_MAX_AGE_MINUTES)
+        try:
+            saved_at = datetime.fromisoformat(state.get("saved_at"))
+        except (ValueError, TypeError):
+            self.log("Execution state has no valid timestamp, ignoring")
+            return
+        if saved_at.tzinfo is None:
+            self.log("Execution state timestamp has no timezone, ignoring")
+            return
+        now = datetime.now(timezone.utc)
+        age = now - saved_at
+        if age < -timedelta(minutes=EXECUTION_STATE_MAX_FUTURE_MINUTES):
+            self.log("Execution state is dated {:.0f} minutes in the future, ignoring".format(-age.total_seconds() / 60))
+            return
+        if age > max_age:
+            self.log("Execution state is {:.0f} minutes old, too old to trust, ignoring".format(age.total_seconds() / 60))
+            return
+        restored = False
+        for key, attr, kind in (("is_charging", "isCharging", bool), ("is_charging_target", "isCharging_Target", (int, float)), ("is_exporting", "isExporting", bool), ("is_exporting_target", "isExporting_Target", (int, float))):
+            value = state.get(key)
+            if isinstance(value, kind) and (kind is bool or not isinstance(value, bool)):
+                setattr(self, attr, value)
+                restored = True
+        if not restored:
+            return
+        self.execution_state_saved = self.execution_state_values()
+        self.execution_state_saved_at = min(saved_at, now)
+        self.log("Restored execution state: charging={} (target {}) exporting={} (target {})".format(self.isCharging, self.isCharging_Target, self.isExporting, self.isExporting_Target))
+
     def load_plan(self):
         """Restore the previously saved plan from storage, however old it is."""
+        # The execution flags are stored apart from the plan, so they come back even when there is no plan to restore
+        self.load_execution_state()
         storage = self.components.get_component("storage") if self.components else None
         if not storage:
             self.log("Warning: Storage component unavailable, cannot load plan")
@@ -1397,15 +1490,29 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 self.log("Error: Failed to fetch inverter data, not able to execute the plan")
                 self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
                 return None
-        return self.execute_plan()
+        result = self.execute_plan()
+        # The flags are only copied across at the end of a run that completed, so save only then. Saved apart from the plan,
+        # so a change here is never a new plan version
+        try:
+            self.save_execution_state()
+        except Exception as e:
+            self.log("Warning: Failed to save execution state: {}".format(e))
+        return result
 
-    def update_pred(self, scheduled=True):
+    def update_pred(self, scheduled=True, plan_at=None):
         """
         Update the prediction state, everything is called from here right now
+
+        plan_at, when given, is passed to plan_once and follows its rules (timezone-aware, at or
+        behind the wall clock, naive raises ValueError). plan_at sets the planning clock (now_utc,
+        midnight_utc, minutes_now) for the cycle, including the late recompute of an ageing plan
+        below. Wall-clock bookkeeping (control ledger pruning, inverter fetch timestamps, latency
+        monitors) stays on the real clock. The late-recompute check assumes the next call comes
+        about RUN_EVERY minutes later. The default None uses the wall clock.
         """
         status_extra = ""
 
-        plan = self.plan_once(scheduled=scheduled)
+        plan = self.plan_once(scheduled=scheduled, plan_at=plan_at)
         if plan is None:
             return
         recompute = plan["recomputed"]
@@ -2093,8 +2200,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 if spec.get("modify", False):
                                     prefix = sensor.split(".")[0]
                                     if prefix not in ["switch", "select", "input_number", "number", "time", "input_number", "input_datetime"]:
-                                        if sensor.startswith("sensor.predbat_"):
-                                            # We can ignore predbat generated sensors as they are control placeholders
+                                        if sensor.startswith(("sensor.predbat_", "sensor.{}_".format(self.prefix))):
+                                            # We can ignore predbat generated sensors as they are control placeholders,
+                                            # named with this instance's prefix (#5242)
                                             pass
                                         else:
                                             self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} which cannot be modified".format(name, sensor))

@@ -149,7 +149,6 @@ class GitHub:
         """
         Download release data
         """
-        global PREDBAT_UPDATE_OPTIONS
         auto_update = self.get_arg("auto_update")
         repository = DEFAULT_PREDBAT_REPOSITORY
         url = "https://api.github.com/repos/{}/releases".format(repository)
@@ -182,7 +181,7 @@ class GitHub:
                     found_latest_beta = True
 
             self.log("Predbat {} repository {} version {} currently running, latest version is {}, latest beta is {}".format(__file__, repository, THIS_VERSION_DISPLAY, self.releases["latest"], self.releases["latest_beta"]))
-            PREDBAT_UPDATE_OPTIONS = ["main"]
+            update_options = ["main"]
 
             # Offer the branches from apps.yaml (predbat_branch) as extra choices, installed from predbat_repository
             branch_count = 0
@@ -194,7 +193,7 @@ class GitHub:
                 elif branch_count >= MAX_PREDBAT_BRANCH_OPTIONS:
                     self.warn_predbat_branch_once(("limit", branch), "Warn: predbat_branch '{}' is not offered as an update option, at most {} branches are shown".format(branch, MAX_PREDBAT_BRANCH_OPTIONS))
                 else:
-                    PREDBAT_UPDATE_OPTIONS.append(predbat_branch_option(branch))
+                    update_options.append(predbat_branch_option(branch))
                     branch_count += 1
 
             this_tag = THIS_VERSION
@@ -209,22 +208,22 @@ class GitHub:
                         full_name = tag + " (beta) " + release.get("name", "")
                     else:
                         full_name = tag + " " + release.get("name", "")
-                    PREDBAT_UPDATE_OPTIONS.append(full_name)
+                    update_options.append(full_name)
                     if this_tag == tag:
                         this_tag = full_name
-                if len(PREDBAT_UPDATE_OPTIONS) >= 25:
+                if len(update_options) >= 25:
                     break
 
             # Update the drop down menu
             item = self.config_index.get("update", None)
             if item:
-                item["options"] = PREDBAT_UPDATE_OPTIONS
+                item["options"] = update_options
                 item["value"] = None
 
             # See what version we are on and auto-update
-            if this_tag not in PREDBAT_UPDATE_OPTIONS:
+            if this_tag not in update_options:
                 this_tag = this_tag + " (?)"
-                PREDBAT_UPDATE_OPTIONS.append(this_tag)
+                update_options.append(this_tag)
                 self.log("Autoupdate: Currently on unknown version {}".format(this_tag))
             else:
                 if self.releases["this"] == self.releases["latest"]:

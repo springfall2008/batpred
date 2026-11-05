@@ -882,6 +882,17 @@ For each plant (replace `{plant_id}` with your actual plant ID), the component c
 - Battery temperature (°C)
 - Battery max power (W)
 
+Battery max power uses the battery's reported rated power when available. Otherwise it estimates
+the limit from inverter ratings, excluding the residential X1-Boost/Air/Mini, X1-Boost-G4,
+X1-Mini-G4, X1-MINI-G4 PLUS, X1-SMART-G2, X3-MIC/PRO-G2 and SolaX micro inverter PV-only
+families. Missing or unrecognised model metadata retains the inverter fallback and can still
+overestimate a mixed plant's battery capability. Use
+`inverter_limit_charge` and `inverter_limit_discharge` to set known limits in that case. These can
+only lower the estimate, not raise it. A fixed `battery_rate_max` in `apps.yaml` only takes effect
+with `solax_automatic` off, as automatic configuration binds it to this sensor. This is
+a rated-power estimate, not a measurement of the battery's DC limit. The inverter max power sensor
+continues to include every inverter on the plant.
+
 **System Sensors:**
 
 - Inverter max power (W)
