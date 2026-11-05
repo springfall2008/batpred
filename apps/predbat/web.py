@@ -5443,7 +5443,7 @@ chart.render();
                 disabled_components.append(component_name)
 
         # Add heading with checkbox and totals on the same line
-        text += "<div style='display: flex; align-items: center; margin-bottom: 15px;'>\n"
+        text += "<div style='display: flex; flex-wrap: wrap; align-items: center; gap: 8px 0; margin-bottom: 15px;'>\n"
         text += "<h2 style='margin: 0; margin-right: 20px;'>Component Status</h2>\n"
         text += "<label style='cursor: pointer; margin-right: 20px; white-space: nowrap;'>\n"
         text += "<input type='checkbox' id='showDisabledCheckbox' onclick='toggleDisabledComponents()' style='margin-right: 8px;'>\n"
