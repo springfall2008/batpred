@@ -179,9 +179,47 @@ def test_mcp_signing_key(my_predbat):
     return failed
 
 
+def test_mcp_refuses_default_secret(my_predbat):
+    """The server will not run with an empty or default mcp_secret, and reports why without stalling start-up (#5847)."""
+    failed = False
+    print("**** Testing MCP refuses the default secret ****")
+
+    async def run_briefly(server):
+        """Start the server, look at its state while it runs, then stop it."""
+        server.api_stop = False
+        task = asyncio.create_task(server.start())
+        await asyncio.sleep(0.05)
+        state = (server.api_started, server.is_alive(), server.health_message(), server.mcp_server)
+        server.api_stop = True
+        await asyncio.wait_for(task, timeout=10)
+        return state
+
+    for secret in ("predbat_mcp_secret", "", None):
+        print("Test: mcp_secret {!r} is refused".format(secret))
+        server = make_server(my_predbat, secret=secret, storage=FakeStorage())
+        started, alive, message, mcp_server = asyncio.run(run_briefly(server))
+        if not started:
+            print("  ERROR: api_started stayed False, so start-up would wait for the server")
+            failed = True
+        if alive:
+            print("  ERROR: a refused server reported itself healthy")
+            failed = True
+        if not message or "mcp_secret" not in message:
+            print("  ERROR: no health message saying why: {!r}".format(message))
+            failed = True
+        if mcp_server is not None:
+            print("  ERROR: the MCP server was created despite the default secret")
+            failed = True
+        if server.api_started:
+            print("  ERROR: api_started still True after stopping")
+            failed = True
+    return failed
+
+
 def run_web_mcp_auth_tests(my_predbat):
     """Run every MCP OAuth/authorisation test, returning True if any of them failed."""
     failed = False
     failed |= test_mcp_register_returns_no_secret(my_predbat)
     failed |= test_mcp_signing_key(my_predbat)
+    failed |= test_mcp_refuses_default_secret(my_predbat)
     return failed

@@ -150,7 +150,7 @@ Provides a programmatic API that allows AI assistants (like ChatGPT, Claude, or 
 
 #### Security note (mcp)
 
-The MCP server requires a secret key for authentication. Keep this secret secure and don't share it publicly.
+The MCP server requires a secret key for authentication. Keep this secret secure and don't share it publicly. The server will not start until you set your own `mcp_secret`: with it unset, or left at the published default `predbat_mcp_secret`, Predbat logs an error and reports the MCP component as failed.
 
 ***CAUTION*** Predbat WebUI does not support https currently, so exposing this MCP port externally to your home network would be unwise.
 
@@ -159,7 +159,7 @@ The MCP server requires a secret key for authentication. Keep this secret secure
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `mcp_enable` | Boolean | Yes | false | `mcp_enable` | Set to `true` to enable the MCP server |
-| `mcp_secret` | String | No | `predbat_mcp_secret` | `mcp_secret` | Secret key for authentication - change this! |
+| `mcp_secret` | String | No | `predbat_mcp_secret` | `mcp_secret` | Secret key for authentication. The server will not start with the default, so set your own |
 | `mcp_port` | Integer | No | 8199 | `mcp_port` | Port number for the MCP server |
 
 #### How to configure your MCP client (mcp)
@@ -175,7 +175,7 @@ Example usage in VSCode
    "type": "http",
    "description": "Predbat Model Context Protocol Server",
    "headers": {
-    "Authorization" : "Bearer predbat_mcp_secret",
+    "Authorization" : "Bearer <your mcp_secret>",
    },
   }
  },

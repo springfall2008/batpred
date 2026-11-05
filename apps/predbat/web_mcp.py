@@ -62,6 +62,8 @@ Example usage in VSCode with OAuth
 """
 
 
+# The default components.py gives mcp_secret. It is published in the source, so the server refuses to run with it.
+MCP_DEFAULT_SECRET = "predbat_mcp_secret"
 MCP_STORAGE_MODULE = "mcp"
 MCP_SIGNING_KEY_FILE = "jwt_signing_key"
 MCP_SIGNING_KEY_BYTES = 32
@@ -78,6 +80,7 @@ class PredbatMCPServer(ComponentBase):
         self.mcp_secret = mcp_secret
         self.mcp_port = mcp_port
         self.mcp_server = None
+        self.refused_reason = None
 
         # OAuth configuration
         # A random signing key, replaced by the saved one when the server starts (load_signing_key). It used to be
@@ -133,7 +136,16 @@ class PredbatMCPServer(ComponentBase):
 
     async def start(self):
         """Start the MCP server if enabled"""
-        if self.mcp_enable:
+        if self.mcp_enable and (not self.mcp_secret or self.mcp_secret == MCP_DEFAULT_SECRET):
+            # The default secret is published, so anyone could use it to control Predbat (#5847)
+            self.refused_reason = "mcp_secret is not set, or is still the default, so the MCP server has not started - set your own mcp_secret in apps.yaml"
+            self.log("Error: MCP: " + self.refused_reason)
+            # Report started, so Predbat's start-up does not wait for a server that will never run; is_alive() reports the error
+            self.api_started = True
+            while not self.api_stop:
+                await asyncio.sleep(5)
+            self.api_started = False
+        elif self.mcp_enable:
             await self.load_signing_key()
             self.mcp_server = create_mcp_server(self.base, self.log)
             await self.mcp_server.start()
@@ -160,6 +172,14 @@ class PredbatMCPServer(ComponentBase):
 
             self.api_started = False
             print("MCP interface stopped")
+
+    def is_alive(self):
+        """Report the component as unhealthy while it refuses to run with the default secret"""
+        return self.api_started and not self.refused_reason
+
+    def health_message(self):
+        """Say why the MCP server is not running, if it refused to start"""
+        return self.refused_reason
 
     async def load_signing_key(self):
         """
