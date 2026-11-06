@@ -436,6 +436,7 @@ metricmid
 microinverters
 middlebox
 middleboxes
+middot
 milli
 minb
 minmax
@@ -459,6 +460,7 @@ monokai
 Mosquitto
 mousedown
 mpan
+mpans
 mppt
 mprn
 mpxn

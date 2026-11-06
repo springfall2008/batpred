@@ -2094,6 +2094,35 @@ def run_execute_tests(my_predbat):
     my_predbat.holiday_days_left = 0
 
     failed |= run_execute_test(my_predbat, "no_charge", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, assert_reserve=-1)
+
+    # Control SOC only: the inverter runs its own charge window and Predbat only sets the target. While that window is
+    # running with a target above the reserve the battery is charging, and Predbat says so - but still programs nothing
+    # beyond the target, so no immediate charge is sent (#5991)
+    soc_only_window = {"inverter_charge_time_minutes_start": my_predbat.minutes_now - 30, "inverter_charge_time_minutes_end": my_predbat.minutes_now + 60}
+    failed |= run_execute_test(my_predbat, "soc_only_charge_running", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, soc_kw=5, assert_reserve=-1, assert_status="Charging", **soc_only_window)
+    failed |= run_execute_test(my_predbat, "soc_only_charge_held", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best2, soc_kw=6, assert_reserve=-1, assert_soc_target=50, assert_status="Hold charging", **soc_only_window)
+    # A target at the reserve charges nothing
+    failed |= run_execute_test(my_predbat, "soc_only_target_at_reserve", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best_frz, soc_kw=5, assert_reserve=-1, assert_status="Demand", **soc_only_window)
+    # The inverter's window has finished, so nothing is charging even though the plan's window covers now
+    failed |= run_execute_test(
+        my_predbat,
+        "soc_only_inverter_window_over",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        soc_kw=5,
+        assert_reserve=-1,
+        assert_status="Demand",
+        inverter_charge_time_minutes_start=my_predbat.minutes_now - 60,
+        inverter_charge_time_minutes_end=my_predbat.minutes_now,
+    )
+    # Freezing export in Demand mode pauses charging, so it must leave the inverter's own charge alone
+    my_predbat.set_freeze_export_during_demand = True
+    try:
+        failed |= run_execute_test(
+            my_predbat, "soc_only_charge_running_freeze_demand", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, soc_kw=5, assert_reserve=-1, assert_status="Charging", assert_pause_charge=False, **soc_only_window
+        )
+    finally:
+        my_predbat.set_freeze_export_during_demand = False
     failed |= run_execute_test(my_predbat, "no_charge2", set_charge_window=True, set_export_window=True, set_discharge_during_charge=False)
     failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True, set_discharge_during_charge=False, has_timed_pause=False)
     failed |= run_execute_test(my_predbat, "no_charge_future", set_charge_window=True, set_export_window=True, charge_window_best=charge_window_best4, charge_limit_best=charge_limit_best)
@@ -4387,6 +4416,36 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
+
+    # An export already under way keeps the start the inverter holds, rather than rewriting it to "now" every
+    # cycle (one register write per cycle on a cloud inverter). Only a charge window it really overlaps moves it on:
+    # an empty charge window (start == end), or one that starts exactly as the export ends, is not an overlap.
+    for name, charge_start, charge_end, export_end, want_start, want_end in (
+        ("export_running_keeps_start_empty_charge_window", 1440, 1440, 1440, 1250, 1439),
+        ("export_running_keeps_start_touching_charge_window", 1380, 1440, 1380, 1250, 1380),
+        ("export_running_moves_start_overlapping_charge_window", 1300, 1400, 1380, 1260, 1380),
+    ):
+        failed |= run_execute_test(
+            my_predbat,
+            name,
+            export_window_best=[{"start": 1250, "end": export_end, "average": 1}],
+            export_limits_best=export_limits_best,
+            set_charge_window=True,
+            set_export_window=True,
+            soc_kw=10,
+            minutes_now=1260,
+            inverter_charge_time_minutes_start=charge_start,
+            inverter_charge_time_minutes_end=charge_end,
+            inverter_discharge_time_minutes_start=1250,
+            inverter_discharge_time_minutes_end=export_end,
+            assert_force_export=True,
+            assert_status="Exporting",
+            assert_immediate_soc_target=0,
+            assert_discharge_start_time_minutes=want_start,
+            assert_discharge_end_time_minutes=want_end,
+        )
+        if failed:
+            return failed
 
     failed |= run_execute_test(
         my_predbat,

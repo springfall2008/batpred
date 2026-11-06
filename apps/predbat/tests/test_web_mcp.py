@@ -1621,7 +1621,7 @@ def test_mcp_authorize_html_escaping(my_predbat):
     server.initialize(True, "dummy-private-secret", 8199)
     server.log = lambda message: None
     marker = '"><script>audit_marker</script><input name="audit_injected" value="'
-    values = {"client_id": marker, "redirect_uri": "https://client.invalid/" + marker, "response_type": "code", "state": marker, "code_challenge": marker, "code_challenge_method": "S256"}
+    values = {"client_id": marker, "redirect_uri": "https://client.invalid/" + marker, "response_type": "code", "state": marker, "code_challenge": marker, "code_challenge_method": "S256", "scope": marker}
 
     async def check():
         """Check both initial GET and failed POST login responses."""
@@ -1637,7 +1637,7 @@ def test_mcp_authorize_html_escaping(my_predbat):
             parser = LoginParser()
             parser.feed(response.text)
             assert "script" not in parser.tags and "audit_injected" not in parser.inputs
-            assert len(parser.inputs) == 7
+            assert len(parser.inputs) == 8
             for key, value in values.items():
                 assert parser.inputs[key] == value
 

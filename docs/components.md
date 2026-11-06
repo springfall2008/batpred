@@ -150,7 +150,7 @@ Provides a programmatic API that allows AI assistants (like ChatGPT, Claude, or 
 
 #### Security note (mcp)
 
-The MCP server requires a secret key for authentication. Keep this secret secure and don't share it publicly.
+The MCP server requires a secret key for authentication. Keep this secret secure and don't share it publicly. The server will not start until you set your own `mcp_secret`: with it unset, or left at the published default `predbat_mcp_secret`, Predbat logs an error and reports the MCP component as failed.
 
 ***CAUTION*** Predbat WebUI does not support https currently, so exposing this MCP port externally to your home network would be unwise.
 
@@ -159,7 +159,7 @@ The MCP server requires a secret key for authentication. Keep this secret secure
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `mcp_enable` | Boolean | Yes | false | `mcp_enable` | Set to `true` to enable the MCP server |
-| `mcp_secret` | String | No | `predbat_mcp_secret` | `mcp_secret` | Secret key for authentication - change this! |
+| `mcp_secret` | String | No | `predbat_mcp_secret` | `mcp_secret` | Secret key for authentication. The server will not start with the default, so set your own |
 | `mcp_port` | Integer | No | 8199 | `mcp_port` | Port number for the MCP server |
 
 #### How to configure your MCP client (mcp)
@@ -175,7 +175,7 @@ Example usage in VSCode
    "type": "http",
    "description": "Predbat Model Context Protocol Server",
    "headers": {
-    "Authorization" : "Bearer predbat_mcp_secret",
+    "Authorization" : "Bearer <your mcp_secret>",
    },
   }
  },
@@ -190,7 +190,11 @@ Clients that connect through OAuth instead of a fixed `Authorization` header, su
 - Discovery documents: `/.well-known/oauth-protected-resource` (also at `/.well-known/oauth-protected-resource/mcp`) and `/.well-known/oauth-authorization-server` (also at `/.well-known/oauth-authorization-server/mcp`)
 - Dynamic client registration at `/oauth/register`, authorization at `/oauth/authorize` and tokens at `/oauth/token`
 
-When the client opens the authorization page, enter your `mcp_secret` to approve it. A cloud-hosted client such as claude.ai connects from the internet rather than your home network, so read the security note above before you expose the port.
+When the client opens the authorization page, enter your `mcp_secret` to approve it. A client that registers itself is given no secret of its own, so it can only connect through that page.
+
+An OAuth token carries scopes. A token with only `mcp:read` can call the tools that read Predbat but not `set_config` or `set_plan_override`, which need `mcp:write` or `mcp:control`. The scopes are the ones the client asks for when it opens the authorization page. When it fetches the token it can narrow them, but it cannot add a scope it did not ask for there. A client that asks for none of the three gets all three, as does the `Authorization: Bearer <your mcp_secret>` header.
+
+Tokens are signed with a random key that Predbat creates on first start and keeps in its cache, so they survive a restart. Changing `mcp_secret` replaces the key, which revokes every token issued so far. After upgrading from a version before this change, each OAuth client has to authorise once more. A cloud-hosted client such as claude.ai connects from the internet rather than your home network, so read the security note above before you expose the port.
 
 The discovery documents name the server's base URL (`http://<host>:<port>`) as the protected resource, not `<base>/mcp`. Clients that insist the two match, such as Codex, are tracked in [#4799](https://github.com/springfall2008/batpred/issues/4799).
 
@@ -528,10 +532,38 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `automatic_evc` | Boolean | No | false | `ge_cloud_automatic_evc` | Set to `true` to wire your GivEnergy EV chargers into `car_charging_energy`, `car_charging_planned`, `car_charging_plugged` and `num_cars` — see [EV chargers](#ev-chargers-gecloud). Separate from `ge_cloud_automatic` because it registers a car |
 | `evc_control` | Boolean | No | false | `ge_cloud_evc_control` | Set to `true` to let Predbat start and stop your EV charger from its car charging plan — see [Charger control](#charger-control-gecloud). Needs `ge_cloud_automatic_evc` |
 | `inverter_control` | Boolean | No | true | `ge_cloud_inverter_control` | Set to `false` to monitor the inverter without Predbat controlling it — see [Monitoring and control](#monitoring-and-control-gecloud). Predbat writes no default settings and `ge_cloud_automatic` is ignored; changes you make to the `_gecloud_` entities are still sent |
+| `poll_settings` | Boolean | No | false | `ge_cloud_poll_settings` | Set to `true` to read every inverter register every 10 minutes. Off, the registers Predbat controls are read at startup and every 12 hours (and again on leaving read only mode, or after a control failure at most every 4 hours), and the rest only when there is no stored copy from the last 7 days — see [Register reads](#register-reads-gecloud) |
 | `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
+
+#### Register reads (gecloud)
+
+GivEnergy limits how many API calls an account can make each month, and the GE Cloud API reads an inverter's settings one
+register at a time, so reading them all every 10 minutes used to be most of Predbat's calls. Predbat now reads them by what
+they are for, for every device including an EMS or Gateway:
+
+- **Control registers** — the ones Predbat drives, named in `apps.yaml` by `ge_cloud_automatic` or by hand, plus the AC
+  charge gate it turns back on while force charging and, under an EMS, the battery inverters' slot 1 windows it watches.
+  These are read at startup and every 12 hours.
+- **All other registers** — read only when there is no full read in storage from the last 7 days, and straight away for
+  a device the hourly device check has just found.
+- **Straight away** — the control registers are read again when Predbat leaves read only mode, and when a
+  [control failure](output-data.md#control-failure-data) shows the inverter is not doing what Predbat asked (at most once every 4 hours).
+
+Predbat keeps its copy of each register up to date when it writes one, so its own changes need no re-read. A change made
+elsewhere, such as in the GivEnergy app, can take up to 12 hours to be seen (7 days for a register Predbat does not control).
+Set `ge_cloud_poll_settings: true` to go back to reading every register every 10 minutes.
+
+Eco mode is left on during a force export for an inverter GE Cloud reports as discharging at full power in eco mode (its
+`full-power-discharge-in-eco-mode` flag): `ge_cloud_automatic` gives it no `inverter_mode`, so Predbat never turns eco off and
+an export costs no eco writes. Predbat turns eco back on if it finds it off, at startup, once a day and on leaving read only mode.
+Other inverters still have eco turned off for an export.
+
+The live data is budgeted the same way: the inverter status (power flows, SoC), meter totals and EV charger data are polled
+every 5 minutes, in step with Predbat's 5 minute plan, and the device info (battery size, charge rate, model and battery
+health) at startup, whenever the hardware changes, and otherwise once a day.
 
 #### Site export limits (gecloud)
 
@@ -1532,7 +1564,7 @@ Supports real-time monitoring (SOC, power flows, operational mode) and full char
 - On first startup Sigenergy sends an **onboarding approval email** — you must click the approval link before live MQTT data starts flowing
 - MQTT certificates (CA, client cert, client key) are required for TLS-authenticated connections to the broker
 - With `automatic: true` Predbat models your grid export limit from `sensor.predbat_sigenergy_<system>_export_limit`: the plant's grid max backfeed power while export limiting (`antiReflux`) is on, including 0 W for zero export, and 99999 W (no limit) while it is off. Sigenergy only reports these when the plant's configuration changes, so the last reported values are cached across restarts; a plant that has never reported reads 99999 W and exports are capped by the inverter limit alone. An `export_limit` you set yourself in `apps.yaml` is kept rather than replaced
-- With `automatic: true` Predbat takes the battery's minimum state of charge (`battery_min_soc`) from `sensor.predbat_sigenergy_<system>_battery_reserve_min`, the plant's backup cut-off SoC, its hard low limit. A plant set to 0% can therefore be planned down to 0% rather than Predbat's 4% default. As with the export limit it is only reported when the plant's configuration changes and is cached across restarts; until a plant has reported it the sensor is absent and the 4% default applies. A `battery_min_soc` you set yourself in `apps.yaml` is kept rather than replaced. Predbat raises `set_reserve_min` to match when the backup cut-off goes up, but never lowers it: if you later lower the Backup SOC on the plant, lower `set_reserve_min` as well or Predbat keeps planning to the old floor
+- With `automatic: true` Predbat takes the battery's minimum state of charge (`battery_min_soc`) from `sensor.predbat_sigenergy_<system>_battery_reserve_min`, the plant's backup cut-off SoC, its hard low limit. A plant set to 0% can therefore be planned down to 0% rather than Predbat's 4% default. As with the export limit it is only reported when the plant's configuration changes and is cached across restarts; until a plant has reported it the sensor is absent and the 4% default applies. A `battery_min_soc` you set yourself in `apps.yaml` is kept rather than replaced. Predbat raises `set_reserve_min` to match when the backup cut-off goes up, but never lowers it: if you later lower the Backup SOC on the plant, lower `set_reserve_min` as well or Predbat keeps planning to the old floor. The lowest value the `set_reserve_min` slider offers does follow the backup cut-off down, so you can lower it to the new cut-off
 - `number.predbat_sigenergy_<system>_reserve` shows the plant's discharge cut-off SoC, the floor for discharging to the grid. It is read-only: Predbat does not write the reserve on Sigenergy, and the value comes from the plant. Forced exports stop at the higher of Predbat's export target, the discharge cut-off and the backup cut-off
 - With `automatic: true` Predbat turns `switch.predbat_inverter_hybrid` off when every system is AC-coupled: its lifetime totals show PV from a third-party inverter (for example a SolarEdge array beside the battery) and no PV on the Sigenergy inverter's own strings. A system with any native PV keeps the default (on), even if a third-party inverter is fitted as well, and a system with no PV history yet is left alone. The check runs at startup; if you turn the switch back on by hand it is turned off again on the next restart
 - The Sigenergy REST energy-flow reading leaves out third-party PV, although its grid and load figures include it. On a system with a third-party inverter, Predbat works the PV power out from the balance of load, EV charger, battery and grid instead, so `sensor.predbat_sigenergy_<system>_pv_power` no longer drops to 0 between MQTT updates
@@ -1660,6 +1692,7 @@ Integrates with Sunsynk (DEYE-family) hybrid inverters via the Sunsynk Connect c
 - There is a single whole-object settings endpoint, so every write is a read-modify-write of the entire settings object rather than a partial update. Predbat re-reads the settings immediately before every write to keep the race window as small as possible, and logs when a field it does not own has changed since the last read
 - Using the Sunsynk phone app while Predbat is running can overwrite Predbat's settings, and vice versa - there is one whole-object write endpoint, so the last writer wins
 - A write reaching the cloud does not mean the inverter has applied it: the dongle collects new settings on its next poll, typically one to five minutes later. Predbat tolerates a few cycles of divergence before warning
+- **Battery size is measured, not taken from the inverter.** Sunsynk reports capacity as the inverter's *Batt Capacity* setting (Ah), which is typed in at commissioning and is often wrong - for example a ~280Ah bank left set to 150Ah. Predbat therefore does not bind it to `soc_max`. It is bound to `soc_max_fallback` instead (as `sensor.predbat_sunsynk_<serial>_battery_capacity`), which Predbat plans with only until it has estimated the real size from charge history (see [battery_scaling_auto](apps-yaml.md#battery-size-scaling)), usually after the first night's charge. The estimate is made from the battery management system's own power (`sensor.predbat_sunsynk_<serial>_battery_power_bms`, bound as `battery_size_power`) rather than the inverter's battery power, whose current reads several percent high. To use a known size straight away, set `soc_max` in `apps.yaml` - it always wins. The estimate is published as `sensor.predbat_soc_max_calculated`; if it is far from the `battery_capacity` sensor, the Batt Capacity setting on your inverter is likely wrong
 - **Parallel inverters (master + slaves on one shared battery)** are detected from the Sunsynk inverter list and modelled as **one** Predbat inverter, driven through the master. Predbat writes only to the master (it passes its settings on to the slaves), takes the battery SoC, capacity and limits from the master once, reads battery power for the whole bank from the master's battery-management link, and adds up the grid, PV and load power and daily energy of every unit in the group. Configuring just the master's serial in `sunsynk_inverter_sn` is enough - its slaves are polled automatically. Each slave's own readings are still published as `sensor.predbat_sunsynk_<serial>_*` for diagnosis, but nothing is bound to them. A slave that reports its own battery-management link is treated as a separate inverter with its own battery
 
 #### Configuration Options (sunsynk)
@@ -2098,6 +2131,16 @@ Click the Pencil icon next to a component to change the component configuration,
 ![image](images/web-interface-component-configuration.png)
 
 Once you save the component configuration the changes will be written to `apps.yaml` and Predbat and all components will be restarted.
+
+### Viewing what a component discovered
+
+Components that report to the [discovery catalogue](discovery-catalogue.md) show a teal ⓘ button next to the Pencil icon, and a **Discovery** line summarising what they found (for example "1 inverter" or "2 meters, 1 car"). Click either to see that component's devices:
+
+- An at-a-glance summary for each device: its serial and other identifiers, model, firmware, ratings such as battery size, what it is (solar, battery), its capabilities (struck through when it lacks one), and which settings Predbat controls on it
+- The full record, entities included, folded beneath it
+- A link to the full Discovery page
+
+A component that should report but has not says so instead, for example "has not reported yet" or "failed to load". The pop-up shows the same view as a bug report: identifiers are readable and email addresses are removed.
 
 ### Component Health
 

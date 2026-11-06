@@ -595,6 +595,43 @@ def run_web_charts_tests(my_predbat):
         failed += 1
 
     # -------------------------------------------------------------------------
+    # ApexCharts registers drag-to-zoom on the whole chart SVG, and an ApexCharts title is drawn inside it,
+    # so a drag or touch-scroll starting anywhere in the title band - the text or the gap beside it up to
+    # the toolbar - zoomed the chart (#5979). render_chart() must not give ApexCharts a title at all, and
+    # must put the chart name in an HTML heading inserted before the chart container instead.
+    print("Test: render_chart() puts the chart title in an HTML heading outside the chart SVG, where a drag cannot zoom")
+    for daily_chart in (True, False):
+        html = web.render_chart(series_data, "%", "SoC Chart", now_str, tagname="chart_%", daily_chart=daily_chart)
+        options = html.split("var options = {", 1)[1].split("\n}\n", 1)[0] if "var options = {" in html else ""
+        if not options:
+            print(f"  ERROR: test setup assumption wrong - render_chart(daily_chart={daily_chart}) no longer emits 'var options = {{', got: {html}")
+            failed += 1
+        if "\n  title: {" in options:
+            print(f"  ERROR: render_chart(daily_chart={daily_chart}) still passes ApexCharts a chart title, which is drawn inside the SVG where a drag on it zooms the chart, got: {options}")
+            failed += 1
+        for line in ("  var container = document.getElementById('chart_%');\n", "  var heading = document.createElement('h2');\n", '  heading.textContent = "SoC Chart";\n', "  container.parentNode.insertBefore(wrapper, container);\n"):
+            if line not in html:
+                print(f"  ERROR: render_chart(daily_chart={daily_chart}) does not insert the title as an h2 heading before the chart container, missing: {line!r}")
+                failed += 1
+        if html.find("insertBefore(wrapper, container)") > html.find("new ApexCharts("):
+            print(f"  ERROR: render_chart(daily_chart={daily_chart}) inserts the heading after the chart is created, got: {html}")
+            failed += 1
+
+    # A friendly name is free text in HA. Interpolated raw into a JS string literal, an apostrophe broke the whole
+    # chart script, and as HTML a name with markup in it would be injected into the page.
+    print("Test: render_chart() emits a chart title containing a quote or markup as a safe JS string")
+    html = web.render_chart(series_data, "%", "Dave's </script><b>Battery</b>", now_str, tagname="chart_q")
+    if 'heading.textContent = "Dave\'s \\u003c/script>\\u003cb>Battery\\u003c/b>";\n' not in html:
+        print(f"  ERROR: render_chart() did not JSON-encode the chart title with '<' escaped, got: {html}")
+        failed += 1
+    if "</script><b>" in html:
+        print("  ERROR: render_chart() emitted the raw title markup, which closes the chart's <script> element early")
+        failed += 1
+    if "innerHTML" in html:
+        print("  ERROR: render_chart() sets the heading via innerHTML, which would parse a friendly name as markup")
+        failed += 1
+
+    # -------------------------------------------------------------------------
     print("Test: render_timeline_chart() targets a percent-unit tagname via getElementById, not a CSS id selector")
     timeline_data = [{"name": "Status", "entity_id": "sensor.x", "data": {"2026-07-23T10:00:00+00:00": "on"}}]
     html = web.render_timeline_chart(timeline_data, "chart_%", 7)
