@@ -36,7 +36,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.6.5"
+THIS_VERSION = "v9.7.0"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
@@ -533,6 +533,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.io_confirmed_active = False
         # One replan may take a same-cost plan once a run becomes boosted (should_replace_plan)
         self.io_confirmed_tiebreak = False
+        # Target % of the charge running when the planner started, kept by optimise_charge_limit (calculate_plan)
+        self.charge_keep_target = None
         # Repeated Intelligent slot lists are logged briefly between full logs (rate_add_io_slots)
         self.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
         self.current_charge_limit = 0.0

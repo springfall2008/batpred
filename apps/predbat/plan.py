@@ -2090,6 +2090,11 @@ class Plan:
 
         plan_start_time = time.time()
 
+        # The target % of the charge running now (the executor's isCharging, which includes a charge the inverter runs
+        # in its own window in Control SOC only mode). It does not change while the plan is worked out, so
+        # optimise_charge_limit() reads it from here rather than every call working it out
+        self.charge_keep_target = calc_percent_limit(self.isCharging_Target, self.soc_max) if self.isCharging else None
+
         # Re-compute plan due to time wrap
         if self.plan_last_updated_minutes > self.minutes_now:
             self.log("Force recompute due to start of day")
@@ -2700,6 +2705,11 @@ class Plan:
         if all_n:
             window_n = all_n[0]
 
+        # The running charge's target is fixed for the whole planner run (calculate_plan); only whether this window is it varies
+        keep_charge_target = None
+        if not all_n and self.charge_keep_target is not None and charge_window[window_n]["start"] <= self.minutes_now < charge_window[window_n]["end"]:
+            keep_charge_target = self.charge_keep_target
+
         min_improvement_scaled = self.metric_min_improvement
         if not all_n:
             start = charge_window[window_n]["start"]
@@ -2954,10 +2964,9 @@ class Plan:
 
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SoC target by forcing to keep the current % during a charge period
-            # if changing it has little impact
-            if not all_n and self.isCharging and (window_n == self.in_charge_window(charge_window, self.minutes_now)):
-                if calc_percent_limit(self.isCharging_Target, self.soc_max) == calc_percent_limit(try_soc, self.soc_max):
-                    metric -= max(0.1, self.metric_min_improvement)
+            # if changing it has little impact - the same weighting a running export gets
+            if keep_charge_target is not None and keep_charge_target == calc_percent_limit(try_soc, self.soc_max):
+                metric -= max(0.5, self.metric_min_improvement)
 
             if try_soc == best_soc_min_setting:
                 # Minor weighting to 0%
