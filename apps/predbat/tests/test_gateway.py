@@ -1489,7 +1489,7 @@ class TestPlanHookConversion:
         """The fractional part of the export limit sets the export power (rate_scale = 1 - frac)."""
         gw = self._make_gateway()
 
-        # limit 5.3 -> rate_scale 0.7 -> 2500 * 0.7 = 1750W, target 5%
+        # limit 5.3 -> rate_scale 0.7 -> 2500 * 0.7 = 1750W, target 5% (reserve 4% sits below it)
         gw._on_plan_executed(
             charge_windows=[],
             charge_limits=[],
@@ -1498,7 +1498,7 @@ class TestPlanHookConversion:
             charge_rate_w=3000,
             discharge_rate_w=2500,
             soc_max=10,
-            reserve=1,
+            reserve=0.4,
             timezone="Europe/London",
         )
 
@@ -1506,6 +1506,26 @@ class TestPlanHookConversion:
         assert entry["mode"] == 2
         assert entry["power_w"] == 1750  # round(2500 * (1 - 0.3))
         assert entry["target_soc"] == 5
+
+    def test_export_target_below_reserve_clamped_to_reserve(self):
+        """An export target below the reserve is sent as the reserve, so the Hub never drains past the user's minimum."""
+        gw = self._make_gateway()
+
+        # soc_max=10kWh, reserve=1kWh -> reserve_percent=10%; the planner's 0 means "as far as allowed"
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}, {"start": 1200, "end": 1260}],
+            export_limits=[0, 3.5],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        assert [(e["power_w"], e["target_soc"]) for e in entries] == [(2500, 10), (1250, 10)]
 
     def test_exact_float_99_export_is_freeze(self):
         """An export limit of 99.0 (float) is still treated as freeze export."""

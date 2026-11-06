@@ -626,7 +626,10 @@ class GatewayMQTT(ComponentBase):
                 # Low-power export: the planner encodes the chosen export rate in the limit and
                 # execute applies the same scaling (see plan.py / execute.py). With low power off
                 # there is no fraction, so this is full rate.
-                target_soc = export_target_of(limit)
+                # The planner uses 0 to mean "as far as allowed", so clamp to the reserve: the
+                # gateway applies this target as the device's own stop SoC and would otherwise
+                # drain below the user's minimum (execute.py clamps the same way for other inverters).
+                target_soc = max(export_target_of(limit), reserve_percent)
                 export_power_w = round(discharge_rate_w * export_power_of(limit))
             start_minutes = window.get("start", 0)
             end_minutes = window.get("end", 0)
