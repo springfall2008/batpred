@@ -68,7 +68,7 @@ async def test_octopus_rate_limit(my_predbat):
         }
         response = create_mock_response(200, json.dumps(rate_limit_error))
 
-        result = await api.async_read_response(response, "https://api.octopus.energy/v1/graphql/", ignore_errors=False)
+        result = await api.async_read_response(response, "https://api.oegb-kraken.energy/v1/graphql/", ignore_errors=False)
 
         if result is not None:
             print(f"ERROR: Expected None for rate limit error, got {result}")
@@ -136,7 +136,7 @@ async def test_octopus_rate_limit(my_predbat):
         }
         response = create_mock_response(200, json.dumps(rate_limit_error_v2))
 
-        result = await api.async_read_response(response, "https://api.octopus.energy/v1/graphql/")
+        result = await api.async_read_response(response, "https://api.oegb-kraken.energy/v1/graphql/")
 
         if result is not None:
             print(f"ERROR: Expected None for rate limit error, got {result}")

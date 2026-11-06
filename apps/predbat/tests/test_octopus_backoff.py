@@ -277,7 +277,7 @@ async def test_octopus_backoff(my_predbat):
     api, session = _make_api(my_predbat, _make_response(500, "Internal Server Error"))
     api.failures_total = 0
     with patch("octopus.asyncio.sleep", new=AsyncMock()) as sleep:
-        result = await api.async_read_response_retry(_make_response(500, "Internal Server Error"), "https://api.octopus.energy/v1/graphql/")
+        result = await api.async_read_response_retry(_make_response(500, "Internal Server Error"), "https://api.oegb-kraken.energy/v1/graphql/")
     check(result is None, "a 500 should return None")
     check(sleep.call_count == 0, "a failed read slept {} times".format(sleep.call_count))
     check(sum("Internal Server Error" in line for line in api.logged) == 1, "a failed read should log once, got {}".format(api.logged))

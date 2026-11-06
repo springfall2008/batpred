@@ -49,7 +49,7 @@ async def test_octopus_read_response_retry(my_predbat):
 
     successful_data = {"data": {"result": "success"}}
     response = create_mock_response(200, json.dumps(successful_data))
-    url = "https://api.octopus.energy/v1/test"
+    url = "https://api.oegb-kraken.energy/v1/test"
 
     # Mock async_read_response to succeed on first call
     api.async_read_response = AsyncMock(return_value=successful_data)
@@ -101,7 +101,7 @@ async def test_octopus_read_response_retry(my_predbat):
     logged = []
     api.log = lambda message, *args, **kwargs: logged.append(message)
     response = create_mock_response(429, "Too Many Requests")
-    result = await api.async_read_response_retry(response, "https://api.octopus.energy/v1/graphql/")
+    result = await api.async_read_response_retry(response, "https://api.oegb-kraken.energy/v1/graphql/")
 
     if result is not None or not api.last_read_rate_limited:
         print(f"ERROR: Expected None with last_read_rate_limited set, got {result} / {api.last_read_rate_limited}")
@@ -163,7 +163,7 @@ async def test_octopus_read_response_retry(my_predbat):
         ]
     }
     response = create_mock_response(200, json.dumps(rate_limit_error))
-    graphql_url = "https://api.octopus.energy/v1/graphql/"
+    graphql_url = "https://api.oegb-kraken.energy/v1/graphql/"
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         result = await api.async_read_response_retry(response, graphql_url, ignore_errors=True)
