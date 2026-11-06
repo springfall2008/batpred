@@ -271,6 +271,14 @@ def test_automatic_config_binds_bms_power_for_size_estimate():
     if "battery_size_power" in no_link.args_set:
         print(f"ERROR: without a BMS link battery_size_power must be left to fall back to battery_power, got {no_link.args_set['battery_size_power']}")
         failed = True
+    # automatic_config() runs once a session, so a skipped binding must say so rather than leave the
+    # estimator silently on the biased battery_power
+    if not any("BMS current" in str(m) for m in no_link.log_messages):
+        print(f"ERROR: skipping battery_size_power must log a warning, got {no_link.log_messages}")
+        failed = True
+    if any("BMS current" in str(m) for m in s.log_messages):
+        print("ERROR: no BMS warning expected when battery_size_power is bound")
+        failed = True
     assert not failed, "test_automatic_config_binds_bms_power_for_size_estimate"
 
 

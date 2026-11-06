@@ -1869,6 +1869,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         # because the estimator reads this sensor's history.
         if all(self.battery_power_bms(sn) is not None for sn in driven):
             self.set_arg_auto("battery_size_power", [self._sensor_name(sn, "battery_power_bms") for sn in devices], overwrite=False)
+        else:
+            self.log("Warn: Sunsynk not every inverter reports BMS current and voltage, so the battery size is estimated from battery_power, which can read several percent high - set soc_max manually in apps.yaml to use a known size")
         if all(self.battery_rate_max(sn) > 0 for sn in driven):
             self.set_arg_auto("battery_rate_max", [self._sensor_name(sn, "battery_rate_max") for sn in devices])
         else:
