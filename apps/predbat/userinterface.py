@@ -27,6 +27,7 @@ import json
 import yaml
 import re
 import copy
+import sys
 from const import (
     TIME_FORMAT,
     PREDBAT_MODE_OPTIONS,
@@ -64,6 +65,27 @@ def construct_empty_log_gate(loader, node):
 
 
 DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object:utils.RepeatLogGate", construct_empty_log_gate)
+
+
+def construct_numpy_dtype(loader, node):
+    """
+    Build a numpy dtype from a debug dump, handing it its state as the tuple it was dumped from.
+
+    Until numpy values were written as plain numbers, the Load ML forecast put numpy scalars into every
+    dump, and DebugYamlDumper writes a tuple as a list, so each scalar's dtype state was written as one.
+    A fresh dtype refuses a list ("SystemError: bad argument to internal function"), which stopped those
+    dumps loading anywhere.
+    """
+    value = loader.construct_mapping(node, deep=True)
+    dtype = loader.find_python_name("numpy.dtype", node.start_mark)
+    instance = dtype(*value.get("args", []))
+    state = value.get("state")
+    if state is not None:
+        instance.__setstate__(tuple(state))
+    return instance
+
+
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:numpy.dtype", construct_numpy_dtype)
 DEBUG_YAML_LOADER = DebugYamlLoader
 
 
@@ -96,6 +118,26 @@ class DebugYamlDumper(yaml.Dumper):
 # key on the way back in ("found unhashable key"), so a tuple-keyed dict must be kept out of the
 # dump - io_slot_log_gate was one (#5569) and is in DEBUG_EXCLUDE_LIST for that reason.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
+
+
+def represent_numpy_as_plain(dumper, value):
+    """
+    Write a numpy scalar or array as the plain number or list it holds, and any other object as PyYAML would.
+
+    PyYAML pickles a numpy scalar through its dtype, whose state is a tuple that the representer above
+    turns into a list, and a fresh dtype refuses a list, so the dump would not load. numpy is looked up
+    rather than imported, as it is only loaded once a component that uses it is, and until then no numpy
+    value can exist.
+    """
+    numpy = sys.modules.get("numpy")
+    if numpy is not None and isinstance(value, (numpy.generic, numpy.ndarray)):
+        return dumper.represent_data(value.tolist())
+    return dumper.represent_object(value)
+
+
+# A numpy float64 subclasses float, but PyYAML only matches an exact type in its plain representers, so
+# every numpy value reaches the object fallback, which this replaces
+DebugYamlDumper.add_multi_representer(object, represent_numpy_as_plain)
 
 
 def dump_debug_yaml(debug, stream):
@@ -654,6 +696,27 @@ class UserInterface:
                                 "supported_features": 1,
                             },
                         )
+
+    def expose_config_min(self, name, floor):
+        """
+        Raise the min an input_number config item publishes to a runtime floor, or put back its declared min once the floor drops below it.
+
+        The min goes onto the item itself, so the HA entity's attributes and the web /config slider both
+        follow it, and load_user_config() clamps to it. The value is left alone: raising it is the caller's
+        decision. Republished only when the min actually changes (GH#5995).
+        """
+        item = self.config_index.get(name, None)
+        if not item or item.get("type") != "input_number":
+            return
+        declared_min = item.setdefault("declared_min", item["min"])
+        new_min = min(max(declared_min, floor or 0), item["max"])
+        if isinstance(new_min, float) and new_min == int(new_min):
+            new_min = int(new_min)
+        if new_min == item["min"]:
+            return
+        item["min"] = new_min
+        if item.get("value", None) is not None:
+            self.expose_config(name, item["value"], force_ha=True)
 
     def user_config_item_enabled(self, item):
         """

@@ -785,6 +785,12 @@ class Inverter:
         else:
             register_bounds = ", register accepts {} to {}".format("{}%".format(device_min) if device_min is not None else "any", "{}%".format(device_max) if device_max is not None else "any")
         self.base.log("Inverter {} Reserve min: {}%, battery_min: {}%{}".format(self.id, self.reserve_min, dp0(battery_min_soc), register_bounds))
+
+        # Publish the floor as set_reserve_min's min too, so a UI driven by the entity's attributes stops
+        # offering values the raise above reverts a cycle later (GH#5995). Unlike that raise it follows the
+        # floor back down. Only a bound battery_min_soc counts here, as the default above is derived from reserve_min.
+        reserve_floor = max(self.base.get_arg("battery_min_soc", default=0, index=self.id), device_min or 0)
+        self.base.expose_config_min("set_reserve_min" + reserve_min_postfix, reserve_floor)
         if (self.base.set_reserve_enable and self.inv_has_reserve_soc) or not self.inv_has_reserve_soc:
             self.reserve_percent = self.reserve_min
         else:
@@ -847,8 +853,21 @@ class Inverter:
             self.base.args["scheduled_discharge_enable"][self.id] = self.create_entity("scheduled_discharge_enable", "on")
 
         if not self.inv_has_reserve_soc:
-            self.create_missing_arg("reserve", self.reserve)
-            self.base.args["reserve"][self.id] = self.create_entity("reserve", self.reserve, device_class=None, uom="%", icon="mdi:battery-lock")
+            # The dummy is a percentage, read back above as reserve_percent_current, so it is seeded with
+            # reserve_percent - seeding it with the kWh self.reserve fed kWh to the balancer as a percent (#5850)
+            self.create_missing_arg("reserve", self.reserve_percent)
+            reserve_entity = self.create_entity("reserve", self.reserve_percent, device_class=None, uom="%", icon="mdi:battery-lock")
+            self.base.args["reserve"][self.id] = reserve_entity
+            # create_entity() keeps a state that already exists, so a dummy an earlier version seeded in kWh
+            # would never be corrected. There is no device-side reserve to preserve: Predbat owns this value,
+            # and the only writes it makes here (adjust_reserve(0), clamped up to reserve_percent) are this number
+            if self.base.get_arg("reserve", default=None, index=self.id, required_unit="%") != self.reserve_percent:
+                self.base.set_state_wrapper(reserve_entity, state=self.reserve_percent, attributes=self.created_attributes[reserve_entity])
+                # The read near the top of this pass took the stale value, so take it again rather than report it
+                # for a whole cycle. Only on a write: with a literal reserve (GH#5003) the new dummy already reads back
+                # equal, so the literal still stands as the current reserve
+                self.reserve_percent_current = max(self.base.get_arg("reserve", default=battery_min_soc, index=self.id, required_unit="%"), battery_min_soc)
+                self.reserve_current = dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         if not self.inv_has_target_soc:
             self.create_missing_arg("charge_limit", 100)
@@ -968,8 +987,20 @@ class Inverter:
 
         # Final fallback if soc_max is still not determined
         if not self.soc_max or self.soc_max <= 0:
-            self.log("Warn: Inverter {} unable to determine battery size, using 8 kWh default for this cycle, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
-            self.soc_max = 8.0
+            # A driver that knows a likely size but not a trustworthy one (Sunsynk's installer-entered
+            # Batt Capacity) binds soc_max_fallback rather than soc_max, so it is planned with only
+            # until find_battery_size() has a figure, and never becomes the nominal whose plausibility
+            # band would reject the very charges that show it is wrong.
+            try:
+                soc_max_fallback = float(self.base.get_arg("soc_max_fallback", default=0.0, index=self.id))
+            except (ValueError, TypeError):
+                soc_max_fallback = 0.0
+            if soc_max_fallback > 0 and math.isfinite(soc_max_fallback):
+                self.soc_max = dp3(soc_max_fallback * self.battery_scaling)
+                self.log("Info: Inverter {} battery size not yet estimated from charge history, using soc_max_fallback {:.2f} kWh for this cycle".format(self.id, self.soc_max))
+            else:
+                self.log("Warn: Inverter {} unable to determine battery size, using 8 kWh default for this cycle, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
+                self.soc_max = 8.0
             self.nominal_capacity = self.soc_max
             # Intentionally do NOT persist the fallback into the soc_max / soc_max_nominal args:
             # caching 8.0 would override a configured (but momentarily unavailable) source and pin
@@ -1059,7 +1090,10 @@ class Inverter:
         """
         soc_percent_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
         soc_kw_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
-        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
+        # battery_size_power, when a driver or the user sets it, is a battery-side power reading
+        # better suited to measuring capacity than battery_power (e.g. Sunsynk's BMS power, which
+        # counts against the same current the BMS's SoC does). Same sign convention and invert flag.
+        battery_power_sensor = self.base.get_arg("battery_size_power", indirect=False, index=self.id) or self.base.get_arg("battery_power", indirect=False, index=self.id)
         battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
 
         if (soc_percent_sensor or soc_kw_sensor) and battery_power_sensor:

@@ -1139,11 +1139,14 @@ class LoadMLComponent(ComponentBase):
         power_today_now = 0
         power_today_h1 = 0
         power_today_h8 = 0
-        load_minutes_now = self._load_baseline_now()
+        # The predictor's values are numpy, and round() keeps them numpy: publish plain floats, as a numpy
+        # scalar in an attribute reaches the debug yaml as a pickled object
+        load_minutes_now = float(self._load_baseline_now())
         # Future predictions
         if self.current_predictions:
             prev_value = 0
             for minute, value in self.current_predictions.items():
+                value = float(value)
                 timestamp = self.midnight_utc + timedelta(minutes=minute + self.minutes_now)
                 timestamp_str = timestamp.strftime(TIME_FORMAT)
                 # Reset at midnight
@@ -1166,7 +1169,7 @@ class LoadMLComponent(ComponentBase):
         model_age_hours = self.predictor.get_model_age_hours() if self.predictor else None
 
         # Calculate total predicted load
-        total_kwh = max(self.current_predictions.values()) if self.current_predictions else 0
+        total_kwh = float(max(self.current_predictions.values())) if self.current_predictions else 0
 
         self.dashboard_item(
             "sensor." + self.prefix + "_load_ml_forecast",

@@ -662,6 +662,9 @@ because without Predbat the baseline assumes charging to 100% in the cheapest wi
 After each plan calculation Predbat runs a set of what-if simulations to determine the marginal cost (in pence per kWh) of consuming extra electricity at different
 levels and at different times in the upcoming forecast window. The results are published as a matrix sensor and a set of binary sensors.
 
+The cost is worked out against the current plan, so it includes any planned export the extra load would displace. Energy the battery would otherwise still hold at the end of the plan
+is valued the same way the planner values it, so extra load the battery covers is not shown as free.
+
 ### Main matrix sensor
 
 - **sensor.predbat_marginal_energy_costs** - The primary marginal cost sensor. State is the 1 kWh marginal cost for the current time window.
@@ -671,7 +674,7 @@ levels and at different times in the upcoming forecast window. The results are p
     - `grid_export` - Dict of actual grid export rate (p/kWh) at each time window label
     - `grid_import_now` - Current grid import rate (p/kWh)
     - `grid_export_now` - Current grid export rate (p/kWh)
-    - `baseline_metric` - Internal baseline cost used to compute deltas (standing charge excluded)
+    - `baseline_metric` - Internal baseline used to compute deltas: the plan's cost less the value of the energy left in the battery at the end (standing charge excluded), so it can be negative
     - `rate_now_low_consumption` - Marginal cost now for the 'low' (1 kWh) load level
     - `rate_now_med_consumption` - Marginal cost now for the 'medium' (2 kWh) load level
     - `rate_now_high_consumption` - Marginal cost now for the 'high' (4 kWh) load level
@@ -695,6 +698,9 @@ The cheap/moderate thresholds are computed relative to the current day's import 
 
 - **Cheap threshold** = `rate_min × 1.2`
 - **Moderate threshold** = `max(rate_max × 0.5, rate_min × 1.5)`
+
+`rate_min` and `rate_max` are the base tariff's lowest and highest import rates, the same values as the sensor's `rate_min`/`rate_max` attributes.
+Octopus free and saving sessions, Axle events and rate overrides are left out, so a free session does not drag the cheap threshold down to zero.
 
 These binary sensors are useful in Home Assistant automations, e.g. to start an EV charge or run a dishwasher only when energy is cheap.
 
