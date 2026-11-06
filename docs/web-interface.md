@@ -96,6 +96,18 @@ This means the starting SoC shown in the 'Yesterday without Predbat' view can di
 
 A time slot in the 'History' view where Predbat reported a warning or error is marked with 🚩 next to its state - the state shown is still the one Predbat carried out, and hovering over it names the problem.
 
+A row of day buttons under the view buttons lets you look back over the last week as well as the default 'Yesterday + today' view. The older days are rebuilt once a day from what was recorded (and again when new billing arrives), and only as far back as Home Assistant's history (and your `days_previous` load history) reaches.
+
+If Predbat reads your rates directly from Octopus or a Kraken supplier (EDF, E.ON Next), the 'History' view also shows what you were actually billed:
+
+- A **Billed** column shows what your supplier billed for each slot. Hover over it to see the rate buckets the bill was split into - on Intelligent Octopus Go, for example, Home Low/Standard Rate and EV Low/Standard Rate. A dash means the supplier hasn't published that half hour yet; billing usually appears one to two days later.
+- A **Diff** column shows the billed amount less Predbat's own Cost for the slot (left blank where Predbat recorded nothing for it, for example while it wasn't running): red when you were billed more than Predbat recorded, green when less. The standing charge is left out of both and shown separately.
+- A summary above the table gives the day's Predbat cost, billed cost and the difference, the import and export kWh Predbat recorded against the meter's, and both standing charges. It says how far the billing reaches and how many half hours before that are still missing (shown as a dash in the table), and only compares the slots that have been billed.
+- A slot with an Octopus saving session, free electricity session, Axle event or a rate you overrode (a manual rate, or a rate override in apps.yaml) is marked with it, and a day that had one gets a dot on its day button - the bill won't show it the way Predbat priced it, so a difference there is expected. These are read from the recorded history of the saving session, free electricity and Axle event entities and of `binary_sensor.predbat_rate_override_import` / `_export`, so every day in the picker is marked. Rate overrides on older days are only marked from when those two sensors started recording.
+- If you have no export meter Predbat reads billing for, the comparison is made on import only (against Predbat's import cost) and the summary says so. If you do and its billing hasn't arrived or couldn't be read, those slots show no billing rather than an import-only figure.
+
+Billing comes from your supplier's half-hourly cost estimate (the same data behind the usage graphs in their app), not the final bill, so expect it to differ from your statement by the odd penny. Predbat's Cost comes from your inverter's readings, so a big difference usually means a meter or reading mismatch - for example a car charger outside the inverter's CT clamp. Users who only get Octopus rates through the Home Assistant Octopus Energy integration, without `octopus_api_key` set in Predbat, don't get billing.
+
 The 'History' view also shows a **Debug** column with a download link on any time slot that has an automatically-captured [debug history snapshot](customisation.md#debug-history) from around that time - useful for grabbing the real Predbat state from the moment something looked wrong, without needing to have had debug mode switched on in advance.
 
 You can easily change Predbat's planned activity for a slot by clicking on the slot time, then selecting Manual Demand, Manual Charge, Manual Export, Manual Freeze Charge or Manual Freeze Export to set the activity.

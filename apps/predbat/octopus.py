@@ -52,6 +52,7 @@ from utils import (
     strptime_aware,
 )
 from component_base import ComponentBase, new_http_session
+from billing import BillingReader
 from mock_base import MockBase as SharedMockBase
 import aiohttp
 import hashlib
@@ -742,6 +743,8 @@ class OctopusAPI(ComponentBase):
         self.api_key = key
         self.api = OctopusEnergyApiClient(key, self.log, session_factory=self.http_session)
         self.account_id = account_id
+        # What Octopus actually billed, half-hour by half-hour, published as sensor.predbat_billing
+        self.billing = BillingReader(self, "octopus_user", "billing")
         self.graphql_token = None
         self.graphql_expiration = None
         self.consecutive_edge_blocks = 0
@@ -851,6 +854,7 @@ class OctopusAPI(ComponentBase):
         if first:
             # Load cached data (restores tariff_fetched_at / device_fetched_at timestamps)
             await self.load_octopus_cache()
+            await self.billing.load()
             self.log("OctopusAPI: Started")
 
         # Process any queued commands
@@ -894,6 +898,8 @@ class OctopusAPI(ComponentBase):
             self.sensor_updated_at = datetime.now()
             await self.async_update_intelligent_devices(self.account_id)
             await self.async_intelligent_update_sensor(self.account_id)
+
+        await self.async_update_billing(first)
 
         if tariff_due or device_due:
             # Don't save cache every 2 minutes, if we lose it then we re-fresh it anyhow
@@ -952,6 +958,26 @@ class OctopusAPI(ComponentBase):
         self.refresh_discovery()
 
         return True
+
+    async def async_update_billing(self, first):
+        """Read the half-hourly billing for the modelled import/export MPANs when due, and publish sensor.predbat_billing.
+
+        Only the MPANs Predbat takes its rates from are read, so another meter on the account can't
+        inflate the bill or hide a day. The first run publishes the restored cache without reading anything.
+        """
+        import_mpan = (self.tariffs.get("import") or {}).get("mpan")
+        if not import_mpan:
+            return
+        now_utc = datetime.now(timezone.utc)
+        refreshed = False
+        # The first run only publishes what was cached, keeping a restart free of API calls; the read follows a cycle later
+        if not first and self.billing.due(now_utc):
+            export_mpan = (self.tariffs.get("export") or {}).get("mpan")
+            mpans = {"import": (self.account_id, import_mpan), "export": (self.account_id, export_mpan) if export_mpan else None}
+            await self.billing.refresh(self.async_graphql_query, mpans, now_utc)
+            refreshed = True
+        if refreshed or first:
+            self.billing.publish("octopus", now_utc, app="octopus")
 
     async def final(self):
         """

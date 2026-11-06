@@ -532,6 +532,8 @@ JOURNAL_CAPTURE_PROMPT = (
     "- a config item that explains a whole class of report, an API or firmware quirk, a symptom that maps to a module, a trap "
     "that wasted your time, or an existing debug-journal entry you found to be out of date. "
     "Keep it to what would save time on a different issue - not the story of this ticket (what you tried, the fix, the alternatives), which belongs in the issue or PR. "
+    "Write it as the symptom (the log line or what the reporter sees), the fact or mechanism behind it, and the function or config item to start from. "
+    "No file paths or line numbers: they drift as the code moves, and the journal's area headings already name the module. "
     f"If so, write it as a single markdown file in {QUEUE_DIR} named <issue-or-pr-number>-<short-slug>.md. "
     "Record only what you actually verified, and say how you verified it (read the symbol, ran the test, replayed the debug "
     "file, probed the live API) - separate that from anything you merely suspect, and name the issue or PR number so the next "
@@ -614,6 +616,18 @@ def fetch_bot_pr_issues():
 TRIAGE_DISCLOSURE_MARKER = "automated first-pass triage"
 
 
+def has_disclosure(body, markers):
+    """Return True if a comment body carries any of the given disclosure markers, ignoring case.
+
+    The skills word their own opening line, so the case varies: 46 of 62 sampled triage comments
+    open "Automated first-pass triage". A case-sensitive match missed them, and an issue whose
+    BOT_TRIAGED label a maintainer swapped for BOT_PR or BOT_REVIEW was triaged all over again
+    (#5964, #5741). The markers are lower case, so only the body needs folding.
+    """
+    folded = (body or "").casefold()
+    return any(marker in folded for marker in markers)
+
+
 def is_already_triaged(labels):
     """Return True if BOT_TRIAGED is present in a gh --json labels list."""
     return any(label["name"] == "BOT_TRIAGED" for label in labels)
@@ -628,7 +642,7 @@ def find_triage_comment(issue_number):
         check=True,
     )
     comments = json.loads(result.stdout).get("comments", [])
-    return any(TRIAGE_DISCLOSURE_MARKER in comment.get("body", "") for comment in comments)
+    return any(has_disclosure(comment.get("body"), (TRIAGE_DISCLOSURE_MARKER,)) for comment in comments)
 
 
 def backfill_triaged_label(issue_number):
@@ -1353,8 +1367,12 @@ def flush_journal(today):
             # push. 80 was set when the journal was 30KB and the flush was a near-append;
             # it reads a 130KB file end to end and verifies every candidate against main,
             # and from 2026-09-13 every single run died on "Reached max turns (80)".
+            # 250 from 2026-11-05: the journal reached 730KB, and four of the five flushes
+            # from 2026-10-31 died on "Reached max turns (150)". The 2026-11-04 run spent 80 of
+            # its 201 tool calls reading the journal in pieces, and the 2026-11-05 run made every
+            # edit, then ran out on ./run_pre_commit before it could commit, so nothing was pushed.
             "--max-turns",
-            "150",
+            "250",
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
@@ -1423,9 +1441,12 @@ def triage(issue_number):
             # Raised from 60 on 2026-09-08: triage had the smallest budget of any flow while
             # doing the most open-ended work, and five separate issues have exhausted it
             # (#4899, #4900, #4984, #5003, #5004). A long issue body plus a debug-file replay
-            # spends turns quickly.
+            # spends turns quickly. Raised again to 150 on 2026-11-05: 13 of 154 triage runs in
+            # the previous three weeks still died on "Reached max turns (100)", and the run that
+            # finally finished #5889 took 94 tool calls. The failed runs were grep-heavy
+            # investigation, not loops.
             "--max-turns",
-            "100",
+            "150",
             # Client-side token-usage estimate, not a real spend cap under subscription
             # auth (see agent-sdk/cost-tracking) - just a circuit-breaker against a
             # runaway invocation, sized generously since one issue can need several
@@ -1472,8 +1493,11 @@ def triage_followup(issue_number):
             "--verbose",
             "--add-dir",
             str(SCRATCH_DIR),
+            # 100, in line with first-pass triage's old budget: a follow-up re-reads the
+            # original investigation as well as what was added since, and #5955 and #5556
+            # both died on "Reached max turns (60)" in the first week of November 2026.
             "--max-turns",
-            "60",
+            "100",
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
@@ -1611,7 +1635,7 @@ def reporter_replied_since_bot(issue_number, reporter):
     )
     comments = json.loads(result.stdout).get("comments", [])
     markers = (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER)
-    last_bot = max((index for index, comment in enumerate(comments) if any(marker in comment.get("body", "") for marker in markers)), default=None)
+    last_bot = max((index for index, comment in enumerate(comments) if has_disclosure(comment.get("body"), markers)), default=None)
     if last_bot is None:
         return False
     return any((comment.get("author") or {}).get("login") == reporter for comment in comments[last_bot + 1 :])
@@ -1662,8 +1686,7 @@ ME_TOO_WATERMARK_MARGIN_SECONDS = 600
 
 def is_bot_comment(comment):
     """Return True if a comment was posted by one of the bot's own flows, judged by its disclosure line."""
-    body = comment.get("body", "")
-    return any(marker in body for marker in (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER, ME_TOO_DISCLOSURE_MARKER))
+    return has_disclosure(comment.get("body"), (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER, ME_TOO_DISCLOSURE_MARKER))
 
 
 def looks_like_a_report(body):
