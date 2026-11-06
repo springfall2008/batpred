@@ -40,7 +40,7 @@ from const import (
 )
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
 from prediction import Prediction
-from billing import attach_billing, BILLING_DAYS, BILLING_EVENT_LABELS
+from billing import attach_billing, billing_entity_id, BILLING_DAYS, BILLING_EVENT_LABELS
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
 # rendered client-side (web_helper.py) by substituting {placeholder} names against the row's
@@ -4136,8 +4136,8 @@ class Output:
         return plan_html, plan_json
 
     def history_billing(self):
-        """The predbat.billing attributes the History view needs, or None when there is no billing to show."""
-        entity = self.prefix + ".billing"
+        """The sensor.predbat_billing attributes the History view needs, or None when there is no billing to show."""
+        entity = billing_entity_id(self.prefix)
         slots = self.get_state_wrapper(entity_id=entity, attribute="slots", default=None)
         if not isinstance(slots, dict) or not slots.get("import"):
             return None

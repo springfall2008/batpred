@@ -741,7 +741,7 @@ class OctopusAPI(ComponentBase):
         self.api_key = key
         self.api = OctopusEnergyApiClient(key, self.log)
         self.account_id = account_id
-        # What Octopus actually billed, half-hour by half-hour, published as predbat.billing
+        # What Octopus actually billed, half-hour by half-hour, published as sensor.predbat_billing
         self.billing = BillingReader(self, "octopus_user", "billing")
         self.graphql_token = None
         self.graphql_expiration = None
@@ -958,7 +958,7 @@ class OctopusAPI(ComponentBase):
         return True
 
     async def async_update_billing(self, first):
-        """Read the half-hourly billing for the modelled import/export MPANs when due, and publish predbat.billing.
+        """Read the half-hourly billing for the modelled import/export MPANs when due, and publish sensor.predbat_billing.
 
         Only the MPANs Predbat takes its rates from are read, so another meter on the account can't
         inflate the bill or hide a day. The first run publishes the restored cache without reading anything.

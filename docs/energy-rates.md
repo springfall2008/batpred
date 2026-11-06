@@ -54,7 +54,7 @@ Put the account number in `apps.yaml` and the API key in `secrets.yaml`, referen
 
 The API key can read and change your Octopus account, so keep it out of `apps.yaml`, which is more likely to be shared or attached to a bug report - see [Storing secrets](apps-yaml.md#storing-secrets).
 
-Predbat also reads your half-hourly billing from Octopus every few hours, for your import meter and your export meter if you have one, and shows it next to its own costs on the [History view](web-interface.md#plan-view) and in `predbat.billing` (see [Cost saving data](output-data.md#cost-saving-data)).
+Predbat also reads your half-hourly billing from Octopus every few hours, for your import meter and your export meter if you have one, and shows it next to its own costs on the [History view](web-interface.md#plan-view) and in `sensor.predbat_billing` (see [Cost saving data](output-data.md#cost-saving-data)).
 
 ### Octopus Free energy sessions
 
@@ -320,7 +320,7 @@ The following entries are required for the Kraken component in `apps.yaml`:
 
 Full details of what to configure are given in the [component documentation](components.md#kraken-energy-kraken)
 
-As with Octopus, Predbat reads your half-hourly billing every few hours and shows it on the [History view](web-interface.md#plan-view) and in `predbat.billing`.
+As with Octopus, Predbat reads your half-hourly billing every few hours and shows it on the [History view](web-interface.md#plan-view) and in `sensor.predbat_billing`.
 E.ON Next publishes each half hour as a single charge rather than split into rate buckets.
 
 If you have an EV on a smart-charging tariff with Eon.Next (such as Next Drive Smart), Eon bills every half hour of a planned charging dispatch at the cheap rate whether or not the car charged in it, unlike Octopus Intelligent.

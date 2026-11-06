@@ -639,7 +639,7 @@ and only charging at the lowest import rate in the 24 hour period
 - predbat.savings_yesterday_pvbat - A sensor which tells you how much money you saved from using Predbat
 vs not having a PV and battery system at all and all house load being met from grid import
 
-- predbat.billing - What your supplier actually billed, published when Predbat reads your rates directly from Octopus or a Kraken supplier (EDF, E.ON Next).
+- sensor.predbat_billing - What your supplier actually billed, published when Predbat reads your rates directly from Octopus or a Kraken supplier (EDF, E.ON Next).
 The state is the most recent complete day's billed energy cost in pence (import less export, standing charge excluded); with an export meter a day only counts as complete once its export billing has been read too.
 Attributes: `supplier`, `legs` (whether import and export billing were read: true, false if the last read failed, or null if not configured), `complete_until` (the end of the last billed half hour, UTC),
 `days` (a summary per day: billed import and export cost and kWh, standing charge and the cost and kWh in each rate bucket) and `slots` (every billed half hour of the last week, with its rate buckets).

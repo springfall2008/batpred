@@ -11,7 +11,7 @@
 The Kraken GraphQL ``measurements`` query returns every half-hour's metered kWh with a breakdown
 into the supplier's rate buckets (on Intelligent Octopus Go: Home Standard/Low Rate and EV
 Standard/Low Rate) and the standing charge apportioned across the day. This module turns that into
-a 7-day cache of slots, published as ``predbat.billing`` so the Plan page's History view can show
+a 7-day cache of slots, published as ``sensor.predbat_billing`` so the Plan page's History view can show
 the real bill next to Predbat's own cost.
 
 Bucket labels have changed on live accounts before, so they are never matched by name: whatever
@@ -82,6 +82,11 @@ BILLING_UNRECORDED_KWH = 0.05
 
 # How far a half-hour's bucket kWh may stray from its metered kWh before it is not trusted.
 BUCKET_KWH_TOLERANCE = 0.01
+
+
+def billing_entity_id(prefix):
+    """The billing sensor's entity id for a Predbat prefix: sensor.predbat_billing by default."""
+    return "sensor." + prefix + "_" + BILLING_ENTITY_SUFFIX
 
 
 def _to_float(value):
@@ -249,7 +254,7 @@ def _day_summary(cache, legs, day, tz):
 
 
 def build_billing_sensor(cache, legs, supplier, now_utc, tz):
-    """Build the predbat.billing state and attributes from the cache.
+    """Build the sensor.predbat_billing state and attributes from the cache.
 
     The state is the most recent complete day's net energy cost in pence (import less export,
     standing charge excluded), or None when no day is complete. legs records which directions are
@@ -397,15 +402,15 @@ class BillingReader:
         return changed
 
     def sensor(self, supplier, now_utc):
-        """Return (state, attributes) for predbat.billing from the cache."""
+        """Return (state, attributes) for sensor.predbat_billing from the cache."""
         return build_billing_sensor(self.cache, self.legs, supplier, now_utc, _zone(self.owner.local_tz))
 
     def publish(self, supplier, now_utc, app):
-        """Publish predbat.billing, unless there is no import billing to show yet."""
+        """Publish sensor.predbat_billing, unless there is no import billing to show yet."""
         if not self.cache.get("import"):
             return
         state, attributes = self.sensor(supplier, now_utc)
-        self.owner.dashboard_item(self.owner.prefix + "." + BILLING_ENTITY_SUFFIX, state=state, attributes=attributes, app=app)
+        self.owner.dashboard_item(billing_entity_id(self.owner.prefix), state=state, attributes=attributes, app=app)
 
 
 # Rate tags Predbat puts on a minute (fetch.py/octopus.py/axle.py rate_replicate) that mean the
@@ -444,7 +449,7 @@ def _row_event(events, slot_minute, plan_interval_minutes):
 def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes, predbat_slot_cost, standing_pence, events, import_only, predbat_import_kwh, predbat_export_kwh):
     """Add the billed cost, Diff and a day summary to a History view's plan JSON, in place.
 
-    billing is the predbat.billing attributes dict. predbat_slot_cost maps each row's slot_minute
+    billing is the sensor.predbat_billing attributes dict. predbat_slot_cost maps each row's slot_minute
     to Predbat's own cost for it in pence, already without the standing charge (net, or import-only when
     import_only), and
     predbat_import_kwh / predbat_export_kwh map it to Predbat's recorded grid kWh (or are None), so the

@@ -341,7 +341,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.flextras_property_id = None
         self.flextras_sessions = []
         self.flextras_fetched_at = None
-        # What the supplier actually billed, half-hour by half-hour, published as predbat.billing
+        # What the supplier actually billed, half-hour by half-hour, published as sensor.predbat_billing
         self.billing = BillingReader(self, "kraken", f"billing_{account_id}")
         self.flextras_last_status = None
         # Whether this process has bound octopus_free_electricity to the Flextras sensor - what the discovery
@@ -2053,7 +2053,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         return True
 
     async def async_update_billing(self, first):
-        """Read the half-hourly billing for the modelled import/export MPANs when due, and publish predbat.billing.
+        """Read the half-hourly billing for the modelled import/export MPANs when due, and publish sensor.predbat_billing.
 
         Export is read on the export account when it differs from the import one. KrakenAPI's GraphQL
         query already returns None for any response carrying errors, so a partial error is a failed read.

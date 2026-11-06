@@ -294,6 +294,9 @@ def test_billing_constants():
     if billing.BILLING_DAYS != 7 or billing.BILLING_REFRESH_MINUTES != 180 or billing.BILLING_ENTITY_SUFFIX != "billing":
         print("ERROR: unexpected billing constants")
         return True
+    if billing.billing_entity_id("predbat") != "sensor.predbat_billing" or billing.billing_entity_id("predbat2") != "sensor.predbat2_billing":
+        print("ERROR: the billing sensor should be sensor.<prefix>_billing, got {}".format(billing.billing_entity_id("predbat")))
+        return True
     return False
 
 
@@ -468,7 +471,7 @@ def test_octopus_partial_errors_is_failure(my_predbat):
 
 
 def test_octopus_run_publishes_billing(my_predbat):
-    """OctopusAPI.run() reads billing for the modelled import MPAN only and publishes predbat.billing."""
+    """OctopusAPI.run() reads billing for the modelled import MPAN only and publishes sensor.predbat_billing."""
     import asyncio
     from unittest.mock import AsyncMock
 
@@ -502,10 +505,10 @@ def test_octopus_run_publishes_billing(my_predbat):
     if mpans != {"1111111111111", "2222222222222"}:
         print("ERROR: billing should query exactly the modelled import and export MPANs, got {}".format(mpans))
         return True
-    state = my_predbat.get_state_wrapper("predbat.billing")
-    legs = my_predbat.get_state_wrapper("predbat.billing", attribute="legs")
+    state = my_predbat.get_state_wrapper("sensor.predbat_billing")
+    legs = my_predbat.get_state_wrapper("sensor.predbat_billing", attribute="legs")
     if state is None or legs != {"import": True, "export": True}:
-        print("ERROR: predbat.billing should be published with both legs, got state {} legs {}".format(state, legs))
+        print("ERROR: sensor.predbat_billing should be published with both legs, got state {} legs {}".format(state, legs))
         return True
     return False
 
@@ -538,12 +541,12 @@ def _kraken_api_for_billing(**kwargs):
 
 
 def _billing_publishes(api):
-    """The predbat.billing calls a mocked dashboard_item received."""
-    return [call for call in api.dashboard_item.call_args_list if call.args and call.args[0] == "predbat.billing"]
+    """The sensor.predbat_billing calls a mocked dashboard_item received."""
+    return [call for call in api.dashboard_item.call_args_list if call.args and call.args[0] == "sensor.predbat_billing"]
 
 
 def test_kraken_run_publishes_billing():
-    """KrakenAPI.run() reads the import MPAN's billing and publishes predbat.billing for the supplier."""
+    """KrakenAPI.run() reads the import MPAN's billing and publishes sensor.predbat_billing for the supplier."""
     import asyncio
 
     api = _kraken_api_for_billing(provider="eon")
@@ -551,7 +554,7 @@ def test_kraken_run_publishes_billing():
     asyncio.run(api.run(60, False))
     calls = _billing_publishes(api)
     if not calls:
-        print("ERROR: KrakenAPI.run() should publish predbat.billing")
+        print("ERROR: KrakenAPI.run() should publish sensor.predbat_billing")
         return True
     attributes = calls[-1].kwargs.get("attributes") or {}
     if attributes.get("supplier") != "eon" or calls[-1].kwargs.get("app") != "kraken":
@@ -596,7 +599,7 @@ def test_kraken_no_mpan_skips():
 
 
 def _billing_attrs(import_slots, export_slots=None, legs=None, supplier="octopus"):
-    """A predbat.billing attributes dict holding the given slots."""
+    """A sensor.predbat_billing attributes dict holding the given slots."""
     slots = {"import": import_slots}
     if export_slots is not None:
         slots["export"] = export_slots

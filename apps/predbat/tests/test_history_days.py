@@ -147,14 +147,14 @@ def _test_history_days_rebuild_on_new_billing(my_predbat, failed):
     now_utc, calls, original_run_pred = _prepare_history_days(my_predbat)
     try:
         my_predbat.dashboard_item(
-            my_predbat.prefix + ".billing",
+            "sensor." + my_predbat.prefix + "_billing",
             state=1.0,
             attributes={"complete_until": "2024-10-02T00:00:00Z", "slots": {"import": {"2024-10-01T10:00:00Z": {"kwh": 1.0, "cost": 1.0, "standing": 0.0, "buckets": {}}}}, "legs": {"import": True, "export": None}, "supplier": "octopus"},
         )
         my_predbat.calculate_history_days()
         first = len(calls)
         my_predbat.dashboard_item(
-            my_predbat.prefix + ".billing",
+            "sensor." + my_predbat.prefix + "_billing",
             state=1.0,
             attributes={
                 "complete_until": "2024-10-03T00:00:00Z",
@@ -167,7 +167,7 @@ def _test_history_days_rebuild_on_new_billing(my_predbat, failed):
         second = len(calls) - first
     finally:
         _cleanup_history_days(my_predbat, original_run_pred)
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
     if first != 6 or second != 6:
         print("ERROR: new billing should rebuild the older days, got {} then {}".format(first, second))
         failed = True
@@ -217,9 +217,9 @@ def _test_history_days_rates_from_history(my_predbat, failed):
 
 
 def _yesterday_billing(my_predbat, legs):
-    """Publish a predbat.billing covering yesterday 10:00-10:30 UTC (the _setup_base day)."""
+    """Publish a sensor.predbat_billing covering yesterday 10:00-10:30 UTC (the _setup_base day)."""
     slot = {"kwh": 1.0, "cost": 10.0, "standing": 1.0, "buckets": {"Home Low Rate": {"kwh": 1.0, "cost": 10.0}}}
-    my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=10.0, attributes={"complete_until": "2024-10-03T10:30:00Z", "slots": {"import": {"2024-10-03T10:00:00Z": slot}}, "legs": legs, "supplier": "octopus"})
+    my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=10.0, attributes={"complete_until": "2024-10-03T10:30:00Z", "slots": {"import": {"2024-10-03T10:00:00Z": slot}}, "legs": legs, "supplier": "octopus"})
 
 
 def _run_yesterday_with_rows(my_predbat, missing=(), events=None):
@@ -246,7 +246,7 @@ def _test_yesterday_json_has_billing(my_predbat, failed):
     try:
         plan = _run_yesterday_with_rows(my_predbat)
     finally:
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
     row = (plan.get("rows") or [{}])[0]
     if "billing_summary" not in plan or row.get("billed") != 0.1 or row.get("billing_event") != "Saving event":
         print("ERROR: yesterday's 10:00 row should be billed 0.1 and labelled Saving event, got {} / {}".format(row, plan.get("billing_summary")))
@@ -262,7 +262,7 @@ def _test_import_only_when_export_leg_missing(my_predbat, failed):
         plan = _run_yesterday_with_rows(my_predbat)
         plan_without = _run_yesterday_with_rows(my_predbat, missing=(".cost_today_import",))
     finally:
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
     if "billing_summary" in plan:
         print("ERROR: with an export meter whose billing failed to read, rows without export billing should show none, got {}".format(plan.get("billing_summary")))
         failed = True
@@ -289,14 +289,14 @@ def _test_history_days_real_replay(my_predbat, failed):
     day_start = my_predbat.local_tz.localize(datetime(2024, 10, 2)).astimezone(timezone.utc)
     slot = {"kwh": 0.4, "cost": 10.0, "standing": 1.0, "buckets": {"Home Low Rate": {"kwh": 0.4, "cost": 10.0}}}
     slots = {(day_start + timedelta(minutes=30 * n)).strftime("%Y-%m-%dT%H:%M:%SZ"): dict(slot) for n in range(48)}
-    my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=0.0, attributes={"complete_until": "2024-10-03T00:00:00Z", "slots": {"import": slots}, "legs": {"import": True, "export": None}, "supplier": "octopus"})
+    my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=0.0, attributes={"complete_until": "2024-10-03T00:00:00Z", "slots": {"import": slots}, "legs": {"import": True, "export": None}, "supplier": "octopus"})
     try:
         my_predbat.calculate_history_days()
         days = my_predbat.get_state_wrapper(my_predbat.prefix + ".plan_history", attribute="days") or {}
     finally:
         del my_predbat.step_data_history
         del my_predbat.get_history_wrapper
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
     if len(days) != 6 or any(len(day.get("rows") or []) != 48 for day in days.values()):
         print("ERROR: expected 6 older days of 48 rows, got {}".format({name: len(day.get("rows") or []) for name, day in days.items()}))
         failed = True
@@ -415,14 +415,14 @@ def _older_clock_change_day(my_predbat, local_now, day, expected_rows):
     my_predbat.history_days_billing_mark = None
     day_start = my_predbat.local_midnight_utc(day).astimezone(timezone.utc)
     day_end = my_predbat.local_midnight_utc(day + timedelta(days=1)).astimezone(timezone.utc)
-    my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=0.0, attributes=_matching_billing(my_predbat, day_start, day_end))
+    my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=0.0, attributes=_matching_billing(my_predbat, day_start, day_end))
     try:
         my_predbat.calculate_history_days()
         days = my_predbat.get_state_wrapper(my_predbat.prefix + ".plan_history", attribute="days") or {}
     finally:
         del my_predbat.step_data_history
         del my_predbat.get_history_wrapper
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
     rows = (days.get(day.isoformat()) or {}).get("rows") or []
     if len(rows) != expected_rows:
         print("ERROR: {} should have {} rows, got {}".format(day, expected_rows, len(rows)))
@@ -468,14 +468,14 @@ def _test_clock_change_yesterday_view(my_predbat, failed):
     view_minutes = 24 * 60 + my_predbat.minutes_now
     my_predbat.publish_html_plan = lambda *a, **kw: ("", {"rows": [{"slot_minute": minute, "cost_change": 0.0} for minute in range(0, view_minutes, 30)]})
     view_start = (my_predbat.midnight_utc - timedelta(days=1)).astimezone(timezone.utc)
-    my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=0.0, attributes=_matching_billing(my_predbat, view_start, now_utc - timedelta(hours=1)))
+    my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=0.0, attributes=_matching_billing(my_predbat, view_start, now_utc - timedelta(hours=1)))
     try:
         my_predbat.calculate_yesterday()
         plan = my_predbat.get_state_wrapper(my_predbat.prefix + ".cost_yesterday", attribute="json") or {}
     finally:
         _restore_methods(my_predbat, original_run_pred)
         my_predbat.savings_last_updated = None
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
     billed = [row for row in plan.get("rows") or [] if row.get("billed") is not None]
     bad = [(row["slot_minute"], row.get("billing_diff")) for row in billed if row.get("billing_diff") is None or abs(row["billing_diff"]) > 0.01]
     if len(billed) < 40 or bad:
@@ -491,7 +491,7 @@ def _test_import_only_when_export_not_read(my_predbat, failed):
     try:
         plan = _run_yesterday_with_rows(my_predbat)
     finally:
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
     if (plan.get("billing_summary") or {}).get("import_only") is not True:
         print("ERROR: export not read should compare import only, got {}".format(plan.get("billing_summary")))
         failed = True
@@ -561,12 +561,14 @@ def _test_rebuild_on_filled_gap(my_predbat, failed):
     slot = {"kwh": 1.0, "cost": 1.0, "standing": 0.0, "buckets": {}}
     try:
         my_predbat.dashboard_item(
-            my_predbat.prefix + ".billing", state=1.0, attributes={"complete_until": "2024-10-01T10:00:00Z", "slots": {"import": {"2024-10-01T09:30:00Z": slot, "2024-10-01T11:00:00Z": slot}}, "legs": {"import": True, "export": None}, "supplier": "octopus"}
+            "sensor." + my_predbat.prefix + "_billing",
+            state=1.0,
+            attributes={"complete_until": "2024-10-01T10:00:00Z", "slots": {"import": {"2024-10-01T09:30:00Z": slot, "2024-10-01T11:00:00Z": slot}}, "legs": {"import": True, "export": None}, "supplier": "octopus"},
         )
         my_predbat.calculate_history_days()
         first = len(calls)
         my_predbat.dashboard_item(
-            my_predbat.prefix + ".billing",
+            "sensor." + my_predbat.prefix + "_billing",
             state=1.0,
             attributes={"complete_until": "2024-10-01T10:00:00Z", "slots": {"import": {"2024-10-01T09:30:00Z": slot, "2024-10-01T10:30:00Z": slot, "2024-10-01T11:00:00Z": slot}}, "legs": {"import": True, "export": None}, "supplier": "octopus"},
         )
@@ -574,7 +576,7 @@ def _test_rebuild_on_filled_gap(my_predbat, failed):
         second = len(calls) - first
     finally:
         _cleanup_history_days(my_predbat, original_run_pred)
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
     if first != 6 or second != 6:
         print("ERROR: a filled gap should rebuild the older days, got {} then {}".format(first, second))
         failed = True
@@ -622,7 +624,7 @@ def _test_older_days_mark_recorded_events(my_predbat, failed):
     my_predbat.metric_standing_charge = 55.52
     my_predbat.history_days_built_for = None
     my_predbat.history_days_billing_mark = None
-    my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=0.0, attributes=_matching_billing(my_predbat, datetime(2026, 10, 29, tzinfo=utc), datetime(2026, 11, 1, tzinfo=utc)))
+    my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=0.0, attributes=_matching_billing(my_predbat, datetime(2026, 10, 29, tzinfo=utc), datetime(2026, 11, 1, tzinfo=utc)))
     try:
         my_predbat.calculate_history_days()
         days = my_predbat.get_state_wrapper(my_predbat.prefix + ".plan_history", attribute="days") or {}
@@ -634,7 +636,7 @@ def _test_older_days_mark_recorded_events(my_predbat, failed):
                 my_predbat.args.pop(name, None)
             else:
                 my_predbat.args[name] = value
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
 
     def _marked(day):
         """The local times of the rows marked with an event on day, with their labels."""
@@ -671,7 +673,7 @@ def _test_yesterday_marks_recorded_events(my_predbat, failed):
             my_predbat.args.pop("axle_session", None)
         else:
             my_predbat.args["axle_session"] = saved
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
     row = (plan.get("rows") or [{}])[0]
     if row.get("billing_event") != "Axle event" or plan.get("history_events") != ["Axle event"]:
         print("ERROR: yesterday's 10:00 row should be marked with the recorded Axle event, got {} / {}".format(row.get("billing_event"), plan.get("history_events")))
@@ -727,14 +729,14 @@ def _test_older_days_mark_rate_overrides(my_predbat, failed):
     my_predbat.metric_standing_charge = 55.52
     my_predbat.history_days_built_for = None
     my_predbat.history_days_billing_mark = None
-    my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=0.0, attributes=_matching_billing(my_predbat, datetime(2026, 10, 31, tzinfo=utc), datetime(2026, 11, 1, tzinfo=utc)))
+    my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=0.0, attributes=_matching_billing(my_predbat, datetime(2026, 10, 31, tzinfo=utc), datetime(2026, 11, 1, tzinfo=utc)))
     try:
         my_predbat.calculate_history_days()
         days = my_predbat.get_state_wrapper(my_predbat.prefix + ".plan_history", attribute="days") or {}
     finally:
         del my_predbat.step_data_history
         del my_predbat.get_history_wrapper
-        my_predbat.dashboard_item(my_predbat.prefix + ".billing", state=None, attributes={})
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
     day = days.get("2026-10-31") or {}
     marked = [(str(row["time"])[11:16], row.get("billing_event")) for row in day.get("rows") or [] if row.get("billing_event")]
     want = [("09:00", "Manual rate"), ("15:00", "Rate adjustment"), ("15:30", "Rate adjustment")]
