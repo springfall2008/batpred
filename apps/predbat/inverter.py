@@ -572,7 +572,8 @@ class Inverter:
             self.log("Note: Inverter {}: Using inverter type {} - not all features are available on all Inverter types".format(self.id, self.inverter_type))
 
         # Load inverter brand definitions
-        self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
+        # One value for every inverter (as documented) or a per-inverter list (#5369, single_value_ok)
+        self.reserve_max = self.base.get_arg("inverter_reserve_max", 100, index=self.id)
         self.inv_has_mqtt_api = INVERTER_DEF[self.inverter_type]["has_mqtt_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
@@ -709,6 +710,7 @@ class Inverter:
         self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_raw) / MINUTE_WATT
         inverter_limit_export = self.base.get_arg("inverter_limit_export", inverter_limit_discharge, index=self.id, required_unit="W")
         self.battery_rate_max_export = min(inverter_limit_export, self.battery_rate_max_raw) / MINUTE_WATT
+        # One value for every inverter (as documented) or a per-inverter list (#5369, single_value_ok)
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
 
         # Track and update battery size (if automatic)

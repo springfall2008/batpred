@@ -2630,9 +2630,18 @@ Default value 1.0. Used to scale the import & export kWh data from GivTCP if the
   inverter_battery_rate_min: watts
 ```
 
-One per inverter (optional), set in Watts, when set models a "bug" in the inverter firmware
+Optional, set in Watts, when set models a "bug" in the inverter firmware
 in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge.
 The recommended setting is 200 for Gen 1 hybrids with this issue.
+
+The value is per inverter, and Predbat adds them up across inverters. A single value applies to each inverter. With more than one
+inverter you can instead give one value per inverter as a list, which must have an entry for each inverter:
+
+```yaml
+  inverter_battery_rate_min:
+    - 200
+    - 100
+```
 
 ### Inverter reserve maximum
 
@@ -2642,6 +2651,15 @@ The recommended setting is 200 for Gen 1 hybrids with this issue.
 
 Global, sets the maximum reserve % that may be set to the inverter, the default is 98, as some Gen 2 & Gen 3 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set it to 100 if your inverter allows setting it to 100%.
+
+A single value applies to every inverter. With more than one inverter you can instead give one value per inverter as a list,
+which must have an entry for each inverter:
+
+```yaml
+  inverter_reserve_max:
+    - 100
+    - 98
+```
 
 ### Savings Max Charge Slots
 
