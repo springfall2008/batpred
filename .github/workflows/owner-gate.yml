@@ -8,7 +8,9 @@ name: owner gate
 # go-ahead, then success. GitHub emails whoever triggered a FAILED workflow run, so a failing job sent
 # every contributor a "run failed" email on every PR - the pending check blocks the merge just as well
 # without one. The job is named differently from the check so its own green tick cannot satisfy the
-# requirement. The newest owner-gate check on the head commit is the one that counts.
+# requirement. The newest owner-gate check on the head commit is the one that counts. A check still in
+# progress is updated in place rather than joined by another, so a commit carries at most one waiting
+# check; a completed one is never reopened, a new check is added instead.
 #
 # It passes only when the owner has given this PR an explicit go-ahead, whoever authored it:
 # - the owner applied the owner-approved label (the most recent time that label was applied, the
@@ -22,6 +24,12 @@ name: owner gate
 # New commits pushed by anyone other than the owner revoke the go-ahead - the label is removed and
 # auto-merge is switched off - so an approval only ever covers code the owner saw (the same idea as
 # dismissing a stale review). The CI bots that push fixes to PR branches are exempt.
+#
+# Events often arrive seconds apart (a push, a review, a label change), each starting its own run, and
+# the runs can finish in any order, so a run that read the PR before a later event could record its
+# stale verdict last. Each run therefore re-reads the PR after recording and corrects the check until
+# its verdict holds. There is deliberately no concurrency group: GitHub keeps only the newest pending
+# run in a group, and dropping a pending run of a non-owner's push would drop its revocation.
 #
 # pull_request_target so the job runs this file as it is on main and gets a token that can remove the
 # label and switch auto-merge off. GitHub has no _target variant of pull_request_review, so a review
@@ -57,37 +65,73 @@ jobs:
       - name: Check the owner approved this PR or enabled auto-merge on it
         run: |
           owner="${GITHUB_REPOSITORY_OWNER}"
-          state=$(gh api graphql -F owner="$owner" -F repo="${GH_REPO#*/}" -F number="$PR_NUMBER" -f query='
-            query($owner: String!, $repo: String!, $number: Int!) {
-              repository(owner: $owner, name: $repo) {
-                pullRequest(number: $number) {
-                  id
-                  headRefOid
-                  autoMergeRequest { enabledBy { login } }
-                  labels(first: 100) { nodes { name } }
-                  latestOpinionatedReviews(first: 100) { nodes { author { login } state commit { oid } } }
+
+          # Read the PR and decide: sets head_sha, pr_id, auto_merge_by, has_label, verdict ("pass" or
+          # "wait") and message
+          evaluate() {
+            state=$(gh api graphql -F owner="$owner" -F repo="${GH_REPO#*/}" -F number="$PR_NUMBER" -f query='
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    id
+                    headRefOid
+                    autoMergeRequest { enabledBy { login } }
+                    labels(first: 100) { nodes { name } }
+                    latestOpinionatedReviews(first: 100) { nodes { author { login } state commit { oid } } }
+                  }
                 }
-              }
-            }' --jq '.data.repository.pullRequest')
-          pr_id=$(jq -r '.id' <<< "$state")
-          auto_merge_by=$(jq -r '.autoMergeRequest.enabledBy.login // ""' <<< "$state")
-          has_label=$(jq -r --arg label "$LABEL" '[.labels.nodes[].name] | index($label) != null' <<< "$state")
-          owner_approved_head=$(jq -r --arg owner "$owner" '.headRefOid as $head | [.latestOpinionatedReviews.nodes[] | select(.author.login == $owner and .state == "APPROVED" and .commit.oid == $head)] | length > 0' <<< "$state")
-          head_sha=$(jq -r '.headRefOid' <<< "$state")
+              }' --jq '.data.repository.pullRequest')
+            pr_id=$(jq -r '.id' <<< "$state")
+            auto_merge_by=$(jq -r '.autoMergeRequest.enabledBy.login // ""' <<< "$state")
+            has_label=$(jq -r --arg label "$LABEL" '[.labels.nodes[].name] | index($label) != null' <<< "$state")
+            owner_approved_head=$(jq -r --arg owner "$owner" '.headRefOid as $head | [.latestOpinionatedReviews.nodes[] | select(.author.login == $owner and .state == "APPROVED" and .commit.oid == $head)] | length > 0' <<< "$state")
+            head_sha=$(jq -r '.headRefOid' <<< "$state")
+
+            verdict=pass
+            if [ "$auto_merge_by" = "$owner" ]; then
+              message="$owner enabled auto-merge"
+              return
+            fi
+            if [ "$has_label" = "true" ]; then
+              applied_by=$(gh api --paginate "repos/$GH_REPO/issues/$PR_NUMBER/events" \
+                --jq ".[] | select(.event == \"labeled\" and .label.name == \"$LABEL\") | .actor.login" | tail -n 1)
+              if [ "$applied_by" = "$owner" ]; then
+                message="$owner approved this PR with $LABEL"
+                return
+              fi
+              echo "$LABEL was applied by ${applied_by:-nobody}, not $owner, so it does not count"
+            fi
+            if [ "$owner_approved_head" = "true" ]; then
+              message="$owner approved the current head commit in a review"
+              return
+            fi
+            verdict=wait
+            message="Waiting for $owner to apply the $LABEL label, enable auto-merge or approve the PR"
+          }
 
           # Record the verdict as the owner-gate check on the head commit: "pass" completes it as a
           # success, "wait" leaves it in progress, which blocks the merge without failing this job
           record() {
             if [ "$1" = "pass" ]; then
-              verdict=(-f status=completed -f conclusion=success)
+              verdict_fields=(-f status=completed -f conclusion=success)
             else
-              verdict=(-f status=in_progress)
+              verdict_fields=(-f status=in_progress)
             fi
             echo "$2"
-            gh api -X POST "repos/$GH_REPO/check-runs" -f name=owner-gate -f head_sha="$head_sha" "${verdict[@]}" \
-              -f "output[title]=$2" -f "output[summary]=$2" > /dev/null \
-              || echo "::warning::Could not record the owner-gate check - a review on a fork PR has a read-only token, so apply $LABEL or enable auto-merge instead"
+            check_id=$(gh api "repos/$GH_REPO/commits/$head_sha/check-runs?check_name=owner-gate&filter=all&per_page=100" \
+              --jq '[.check_runs[] | select(.app.slug == "github-actions")] | max_by(.id) | select(.status != "completed") | .id // empty') || check_id=""
+            if [ -n "$check_id" ]; then
+              gh api -X PATCH "repos/$GH_REPO/check-runs/$check_id" "${verdict_fields[@]}" \
+                -f "output[title]=$2" -f "output[summary]=$2" > /dev/null \
+                || echo "::warning::Could not record the owner-gate check - a review on a fork PR has a read-only token, so apply $LABEL or enable auto-merge instead"
+            else
+              gh api -X POST "repos/$GH_REPO/check-runs" -f name=owner-gate -f head_sha="$head_sha" "${verdict_fields[@]}" \
+                -f "output[title]=$2" -f "output[summary]=$2" > /dev/null \
+                || echo "::warning::Could not record the owner-gate check - a review on a fork PR has a read-only token, so apply $LABEL or enable auto-merge instead"
+            fi
           }
+
+          evaluate
 
           # New commits from anyone but the owner (or the CI bots) revoke an earlier go-ahead
           if [ "$ACTION" = "synchronize" ] && [ "$SENDER" != "$owner" ] && [ "$SENDER" != "pre-commit-ci[bot]" ] && [ "$SENDER" != "github-actions[bot]" ]; then
@@ -101,24 +145,21 @@ jobs:
             exit 0
           fi
 
-          if [ "$auto_merge_by" = "$owner" ]; then
-            record pass "$owner enabled auto-merge"
-            exit 0
-          fi
-          if [ "$has_label" = "true" ]; then
-            applied_by=$(gh api --paginate "repos/$GH_REPO/issues/$PR_NUMBER/events" \
-              --jq ".[] | select(.event == \"labeled\" and .label.name == \"$LABEL\") | .actor.login" | tail -n 1)
-            if [ "$applied_by" = "$owner" ]; then
-              record pass "$owner approved this PR with $LABEL"
+          # Record, then re-read the PR to catch an event that landed while this run was working (its own
+          # run may have recorded first). The pause lets the API catch up with another run's label or
+          # auto-merge change. A new head commit has its own run, so this one stops there
+          for attempt in 1 2 3; do
+            record "$verdict" "$message"
+            recorded_verdict="$verdict"
+            recorded_head="$head_sha"
+            sleep 5
+            evaluate
+            if [ "$head_sha" != "$recorded_head" ] || [ "$verdict" = "$recorded_verdict" ]; then
               exit 0
             fi
-            echo "$LABEL was applied by ${applied_by:-nobody}, not $owner, so it does not count"
-          fi
-          if [ "$owner_approved_head" = "true" ]; then
-            record pass "$owner approved the current head commit in a review"
-            exit 0
-          fi
-          record wait "Waiting for $owner to apply the $LABEL label, enable auto-merge or approve the PR"
+            echo "The PR changed while this run was recording its verdict (attempt $attempt) - recording again"
+          done
+          echo "::warning::The PR kept changing while this run recorded its verdict - the owner-gate check follows the next event's run"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
