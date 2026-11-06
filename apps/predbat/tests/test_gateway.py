@@ -1591,6 +1591,7 @@ class TestPlanRepublish:
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None if gw._mqtt_connected else "Broker offline"
         gw.log = MagicMock()
         gw._debug = False
         gw._mqtt_connected = True
@@ -5302,20 +5303,19 @@ class TestCheckInverterResets:
     def _make_gateway(self, read_only=False, alive=True, auto_configured=True):
         """Build a minimal GatewayMQTT stub for _check_inverter_resets() tests.
 
-        Sets _mqtt_connected and _gateway_online so is_alive() returns *alive*
-        without needing to mock the method itself.  When alive=True the gateway
-        is connected to the broker but its LWT reports offline — is_alive()
-        returns True in that state without requiring fresh telemetry.
+        The transport/telemetry guard is stubbed here; real freshness and offline
+        behaviour are covered in TestGatewayFreshness.
         """
         from gateway import GatewayMQTT
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None if gw._mqtt_connected else "Broker offline"
         gw.log = MagicMock()
         gw._suffix_to_serial = {}
         gw._inverter_reset_done = set()
         gw._mqtt_connected = alive
-        gw._gateway_online = False  # broker-connected but LWT-offline → is_alive() True when _mqtt_connected
+        gw._gateway_online = True
         gw._last_telemetry_time = 0
         gw._auto_configured = auto_configured
         gw._published = []
@@ -5473,6 +5473,7 @@ class TestCheckCommandedSerials:
         import time as time_mod
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None if gw._mqtt_connected else "Broker offline"
         gw.log = MagicMock()
         gw.base = MagicMock()
         gw.base.inverters = []
@@ -5652,6 +5653,7 @@ class TestCheckRateCaps:
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None if gw._mqtt_connected else "Broker offline"
         gw.log = MagicMock()
         gw.base = MagicMock()
         gw.base.inverters = []
@@ -5856,6 +5858,7 @@ class TestCheckReadOnlyState:
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None
         gw.log = MagicMock()
         gw._mqtt_connected = connected
         gw._last_read_only = None
@@ -6191,6 +6194,7 @@ class TestSetChargeSlotPayload:
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None
         gw.log = MagicMock()
         gw.prefix = "predbat"
         gw._suffix_to_serial = {"30g499": "CH2330G499"}
@@ -8123,6 +8127,7 @@ class TestCommandAck:
         from unittest.mock import MagicMock
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.inverter_data_error = lambda: None
         gw.log = MagicMock()
         gw._mqtt_connected = True
         gw._command_id = 7
@@ -8631,7 +8636,18 @@ class TestGatewayOnlineTopic:
         gw._mqtt_connected = True
         gw._gateway_online = False
         gw._last_telemetry_time = time_mod.time()
+        self._fresh_battery(gw)
         return gw
+
+    def _fresh_battery(self, gw):
+        """Give the stub a fresh status with one connected battery, so inverter_data_error() can pass."""
+        import time as time_mod
+
+        gw._last_status = pb.GatewayStatus(device_id="pbgw_test", timestamp=int(time_mod.time()))
+        inv = gw._last_status.inverters.add(serial="BATTERY", type=pb.INVERTER_TYPE_GIVENERGY, connected=True, primary=True)
+        inv.battery.soc_percent = 50
+        gw._inverter_slot_serials = ["BATTERY"]
+        gw._discovery = {"BATTERY": {"serial": "BATTERY", "battery": True, "type": pb.INVERTER_TYPE_GIVENERGY}}
 
     def _online(self, gw, payload):
         """Deliver one message on the online topic."""
@@ -8714,16 +8730,21 @@ class TestGatewayOnlineTopic:
 
         gw._gateway_online = False
         gw._last_telemetry_time = time_mod.time() - 7200
-        gw.last_success_timestamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
+        last_success = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
+        gw.last_success_timestamp = last_success
         with patch("gateway.HAS_AIOMQTT", True):
             assert asyncio.run(gw.run(60, False))
 
-        # Connected to the broker with the hub offline is a known state for the component itself...
-        assert gw.is_alive() is True
-        # ...but nothing has been read for two hours, so the site must not report healthy
+        # Housekeeping did not record a success, so the components' last-success check still sees two hours of silence
+        assert gw.last_success_timestamp == last_success
+        # An offline hub has no fresh battery data, so the component itself is not alive either (#5620)
+        assert gw.is_alive() is False
         assert comps.is_alive("gateway") is False
 
-        # Telemetry arriving is what makes it healthy again
+        # Fresh telemetry arriving is what makes it healthy again
+        self._online(gw, b"online")
+        self._fresh_battery(gw)
+        gw._last_telemetry_time = time_mod.time()
         gw.update_success_timestamp()
         assert comps.is_alive("gateway") is True
 
@@ -8750,6 +8771,7 @@ class TestGatewayOnlineTopic:
 
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
+    from tests.test_gateway_freshness import TestGatewayFreshness
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError, TestTokenRefreshProvider
     from tests.test_gateway_window_commit import TestHubWindowCommit
     from tests.test_gateway_commit import TestGatewayStaging, TestGatewayCommit
@@ -8765,6 +8787,7 @@ def run_gateway_tests(my_predbat=None):
         return True
 
     test_classes = [
+        TestGatewayFreshness,
         TestGatewayStaging,
         TestGatewayCommit,
         TestHubWindowCommit,

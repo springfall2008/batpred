@@ -193,6 +193,7 @@ def test_executor_handover():
         status_published = []
         executor.set_charge_export_status = lambda *args: status_published.append(args)
         executor.solis_read_only_component = MethodType(Execute.solis_read_only_component, executor)
+        executor.check_inverter_data_freshness = MethodType(Execute.check_inverter_data_freshness, executor)
         Execute.reset_inverter(executor)
         assert calls[0] == "set_read_only"
         assert not executor.inverter_needs_reset and executor.inverter_needs_reset_force == ""

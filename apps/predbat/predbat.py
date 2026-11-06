@@ -1418,6 +1418,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         self.expose_config("active", True)
         self.fetch_config_options()
+        if not self.check_inverter_data_freshness():
+            return None
         sensor_force_replan = self.fetch_sensor_data()
 
         # Check if any sensor changes require a replan
