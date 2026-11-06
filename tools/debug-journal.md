@@ -223,12 +223,14 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - GIV-3HY has no eco/mode register, yet `GEC` sets `has_ge_eco_toggle: True`, so `No entity_id for ECO Toggle` every cycle (GH#4909, open).
 - On GIV-3HY `charge_power_rate` limits only grid charging. Since d70125a2 (2026-10-13, GH#5082) a `grid_charge_only` attribute on the rate entity disables freeze export fleet-wide; check it first on "freeze planned but battery charged".
 - 3-phase "Charging but imports nothing": an external writer clearing `enable_ac_charge`; fixed in PR #5270 (2026-09-27, `ensure_ac_charge_gate`).
-- EMS sites need slot 1 at 00:00–23:59 (#3781). Settings are re-read hourly and `check_ems_inverter_slots()` warns (PR #5109); a settings cache under 10 minutes old skips the startup read.
+- EMS sites need slot 1 at 00:00–23:59 (#3781); `check_ems_inverter_slots()` warns (PR #5109). Since PR #6005 those slot 1 windows are read with the control registers every 12 h, not hourly.
+- Registers are read by purpose since PR #6005 (2026-11-06): `control_register_keys()` (entities named in apps.yaml, the AC charge gate, EMS slot 1) at startup and every 12 h, the rest only when the stored `settings_read` full stamp is over 7 days old. Log: `Reading N control registers for <serial> (<reason>)`. A change made in the GivEnergy app can stay unseen for 12 h; `ge_cloud_poll_settings: true` restores the 10-minute sweep.
+- API call counts: `./run_all --test gecloud_api_budget` replays a simulated day and logs every call, with its reason, to `coverage/gecloud_api_budget_log.jsonl` (PR #6005).
 - An option label containing `(` crash-looped the component (`too many values to unpack`): fixed in PR #5218 (2026-09-26).
 - `refresh_discovery()` only rebuilds the catalogue; `refresh_devices()` calls the API hourly, skipping devices silent over 5 days.
 - `enable_default_options()` writes unused slots 2–10 as `00:00`, but on GIV-3HY `00:00-00:00` is live for a minute, so a forced midnight charge fires them; it also overwrites user-set spare slots (GH#5371, open).
 - Two retry layers (GH#5777): a 200 carrying a device code (-1/-2/-5/-6) is data to `async_get_inverter_data_retry()`, which retries only `None`; the settings functions retry codes, then log `Device <serial> Failed to read inverter setting id ...`.
-- `-1` is a server-side device timeout (rate limiting is HTTP 429); EMS settings are read every block, so `code -1` bursts are normal. -3/-4/-7 never succeed on retry.
+- `-1` is a server-side device timeout (rate limiting is HTTP 429); `code -1` bursts were normal while EMS settings were read every 10 minutes (before PR #6005). -3/-4/-7 never succeed on retry.
 - Literal `{setting_id}` braces in logs are Predbat output from before PR #5800 (2026-10-28).
 - Tests: `./run_all --test ge_cloud`
 
@@ -714,6 +716,7 @@ What a report or log shows, and where to start. Where a symptom belongs to one i
 
 ### Inverter control and writes
 
+- **Export start time rewritten to "now" every cycle of a running export** (`Adjust force export to True, change times from 20:55:00 - ... to 21:00:00 - ...`) — the overlap guard after `Include original export start` in `execute_plan()` counted an empty charge window, or one starting as the export ends, as an overlap. Fixed in PR #6005 (2026-11-06), verified with the GE Cloud budget harness.
 - **Inverter setting not applied** — follow `execute.py` into the component's reconcile loop, and check `read_only`.
 - **Battery charges to 100% at start, on a mode change or on `set_read_only` (Victron `SK`, any `has_charge_enable_time: False` profile)** — `reset_inverter()` writes `adjust_battery_target(100.0, False)`, a real order where that register is a floor, on any `reset_inverter: True` config change including startup, even in Read-Only.
 - **`Note: Inverter does not support charge/discharge freeze - disabled` despite the flag; `has_service_api`/`has_rest_api` changes nothing** — capability flags are `INVERTER_DEF` values in the `inverter:` block (a custom type copies `GE`); `has_service_api` does not exist and `has_rest_api` is never read. Services come from the six `*_service` keys. (GH#1406, GH#5066, GH#5203)

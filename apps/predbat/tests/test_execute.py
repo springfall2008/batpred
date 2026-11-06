@@ -4386,6 +4386,36 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # An export already under way keeps the start the inverter holds, rather than rewriting it to "now" every
+    # cycle (one register write per cycle on a cloud inverter). Only a charge window it really overlaps moves it on:
+    # an empty charge window (start == end), or one that starts exactly as the export ends, is not an overlap.
+    for name, charge_start, charge_end, export_end, want_start, want_end in (
+        ("export_running_keeps_start_empty_charge_window", 1440, 1440, 1440, 1250, 1439),
+        ("export_running_keeps_start_touching_charge_window", 1380, 1440, 1380, 1250, 1380),
+        ("export_running_moves_start_overlapping_charge_window", 1300, 1400, 1380, 1260, 1380),
+    ):
+        failed |= run_execute_test(
+            my_predbat,
+            name,
+            export_window_best=[{"start": 1250, "end": export_end, "average": 1}],
+            export_limits_best=export_limits_best,
+            set_charge_window=True,
+            set_export_window=True,
+            soc_kw=10,
+            minutes_now=1260,
+            inverter_charge_time_minutes_start=charge_start,
+            inverter_charge_time_minutes_end=charge_end,
+            inverter_discharge_time_minutes_start=1250,
+            inverter_discharge_time_minutes_end=export_end,
+            assert_force_export=True,
+            assert_status="Exporting",
+            assert_immediate_soc_target=0,
+            assert_discharge_start_time_minutes=want_start,
+            assert_discharge_end_time_minutes=want_end,
+        )
+        if failed:
+            return failed
+
     failed |= run_execute_test(
         my_predbat,
         "discharge_midnight2",

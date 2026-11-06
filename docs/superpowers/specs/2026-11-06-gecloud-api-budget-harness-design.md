@@ -338,3 +338,25 @@ None of the scenarios has one.
    slowly, so they could be polled less often.
 3. **The hourly device and EV charger list refresh.** This is 48 a day, including 24 for an account with no
    charger.
+
+## After: export start time kept while an export runs
+
+The third change in the PR is a generic `execute.py` fix. While an export is running, execute keeps the start time
+the inverter already holds. Its overlap guard counted two cases as overlapping a charge window when they don't:
+
+- an empty charge window (start == end);
+- a charge window that starts exactly when the export ends.
+
+In either case it rewrote the start to "now" on every cycle. The guard now needs a charge window that is set and
+really overlaps.
+
+| Scenario | Writes/day before | Writes/day after | Calls/day |
+| -------- | ----------------: | ---------------: | --------: |
+| 0 | 34 | 34 | 694 |
+| 5 | 40 | 38 | 698 |
+| 9 | 141 | 106 | 766 |
+| 17 | 70 | 70 | 730 |
+| 19 | 84 | 84 | 744 |
+
+In scenario 9, `DC Discharge 1 Start Time` writes fall from 50 to 15. The 15 left each set up an upcoming window.
+The day is now 694–766 calls, 20,820–22,980 a month.
