@@ -1374,7 +1374,7 @@ class Output:
                 if start <= minute and rowspan > 1 and (charge_window_n < 0):
                     in_span = True
                     start_span = True
-                    minute_relative_end = self.export_window_best[export_window_n]["end"] - minute_now_align
+                    minute_relative_end = export_end_minute - self.minutes_now
                     rate_text_export = self.rate_range_text(self.rate_export, minute_start, export_end_minute, rate_value_export)
                 else:
                     rowspan = 0

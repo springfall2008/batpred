@@ -948,6 +948,33 @@ def run_test_plan_why_reason(my_predbat):
     my_predbat.export_window_best = []
     my_predbat.export_limits_best = []
 
+    # Part way through a slot, a span's label must not look past the window's end at what follows it
+    aligned = minutes_now
+    my_predbat.minutes_now = aligned + 10
+    after_window = 3 * interval - 10  # the window's end, relative to the new minutes_now
+    my_predbat.charge_window_best = [{"start": aligned, "end": aligned + 3 * interval, "average": 10.0}]
+    my_predbat.predict_soc_best = {minute: 10.0 if minute <= after_window else 9.0 for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    row = _get_row(raw_plan, aligned)
+    if row is None or row["state"] != "HoldChrg" or row["rowspan_state"] != 3:
+        print("ERROR: a charge window held to its end should be one HoldChrg span of 3 mid-slot, got {}".format(row and (row["state"], row["rowspan_state"])))
+        failed = True
+
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.export_window_best = [{"start": aligned, "end": aligned + 3 * interval, "average": 30.0}]
+    my_predbat.export_limits_best = [50.0]
+    # Below the 50% export target for the whole window, then charged above it straight after
+    my_predbat.predict_soc_best = {minute: 4.0 if minute <= after_window else 9.0 for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    row = _get_row(raw_plan, aligned)
+    if row is None or row["state"] != "HoldExp" or row["rowspan_state"] != 3:
+        print("ERROR: an export window that never reaches its target should be one HoldExp span of 3 mid-slot, got {}".format(row and (row["state"], row["rowspan_state"])))
+        failed = True
+    my_predbat.minutes_now = aligned
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+
     if not failed:
         print("All plan why-reason tests passed")
     return failed
