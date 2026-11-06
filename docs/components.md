@@ -150,7 +150,7 @@ Provides a programmatic API that allows AI assistants (like ChatGPT, Claude, or 
 
 #### Security note (mcp)
 
-The MCP server requires a secret key for authentication. Keep this secret secure and don't share it publicly.
+The MCP server requires a secret key for authentication. Keep this secret secure and don't share it publicly. The server will not start until you set your own `mcp_secret`: with it unset, or left at the published default `predbat_mcp_secret`, Predbat logs an error and reports the MCP component as failed.
 
 ***CAUTION*** Predbat WebUI does not support https currently, so exposing this MCP port externally to your home network would be unwise.
 
@@ -159,7 +159,7 @@ The MCP server requires a secret key for authentication. Keep this secret secure
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `mcp_enable` | Boolean | Yes | false | `mcp_enable` | Set to `true` to enable the MCP server |
-| `mcp_secret` | String | No | `predbat_mcp_secret` | `mcp_secret` | Secret key for authentication - change this! |
+| `mcp_secret` | String | No | `predbat_mcp_secret` | `mcp_secret` | Secret key for authentication. The server will not start with the default, so set your own |
 | `mcp_port` | Integer | No | 8199 | `mcp_port` | Port number for the MCP server |
 
 #### How to configure your MCP client (mcp)
@@ -175,7 +175,7 @@ Example usage in VSCode
    "type": "http",
    "description": "Predbat Model Context Protocol Server",
    "headers": {
-    "Authorization" : "Bearer predbat_mcp_secret",
+    "Authorization" : "Bearer <your mcp_secret>",
    },
   }
  },
@@ -190,7 +190,11 @@ Clients that connect through OAuth instead of a fixed `Authorization` header, su
 - Discovery documents: `/.well-known/oauth-protected-resource` (also at `/.well-known/oauth-protected-resource/mcp`) and `/.well-known/oauth-authorization-server` (also at `/.well-known/oauth-authorization-server/mcp`)
 - Dynamic client registration at `/oauth/register`, authorization at `/oauth/authorize` and tokens at `/oauth/token`
 
-When the client opens the authorization page, enter your `mcp_secret` to approve it. A cloud-hosted client such as claude.ai connects from the internet rather than your home network, so read the security note above before you expose the port.
+When the client opens the authorization page, enter your `mcp_secret` to approve it. A client that registers itself is given no secret of its own, so it can only connect through that page.
+
+An OAuth token carries scopes. A token with only `mcp:read` can call the tools that read Predbat but not `set_config` or `set_plan_override`, which need `mcp:write` or `mcp:control`. The scopes are the ones the client asks for when it opens the authorization page. When it fetches the token it can narrow them, but it cannot add a scope it did not ask for there. A client that asks for none of the three gets all three, as does the `Authorization: Bearer <your mcp_secret>` header.
+
+Tokens are signed with a random key that Predbat creates on first start and keeps in its cache, so they survive a restart. Changing `mcp_secret` replaces the key, which revokes every token issued so far. After upgrading from a version before this change, each OAuth client has to authorise once more. A cloud-hosted client such as claude.ai connects from the internet rather than your home network, so read the security note above before you expose the port.
 
 The discovery documents name the server's base URL (`http://<host>:<port>`) as the protected resource, not `<base>/mcp`. Clients that insist the two match, such as Codex, are tracked in [#4799](https://github.com/springfall2008/batpred/issues/4799).
 
