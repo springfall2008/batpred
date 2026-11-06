@@ -39,6 +39,13 @@ repos:
     entry: python tools/test_triage_daemon.py
     files: ^tools/(triage_daemon\.py|test_triage_daemon\.py)$
     pass_filenames: false
+  - id: owner-gate-tests
+    name: owner gate workflow tests
+    language: python
+    additional_dependencies: [pyyaml]
+    entry: python tools/test_owner_gate.py
+    files: ^(\.github/workflows/owner-gate\.yml|tools/test_owner_gate\.py)$
+    pass_filenames: false
 - repo: https://gitlab.com/bmares/check-json5
   rev: v1.0.0
   hooks:
