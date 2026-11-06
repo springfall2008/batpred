@@ -785,6 +785,12 @@ class Inverter:
         else:
             register_bounds = ", register accepts {} to {}".format("{}%".format(device_min) if device_min is not None else "any", "{}%".format(device_max) if device_max is not None else "any")
         self.base.log("Inverter {} Reserve min: {}%, battery_min: {}%{}".format(self.id, self.reserve_min, dp0(battery_min_soc), register_bounds))
+
+        # Publish the floor as set_reserve_min's min too, so a UI driven by the entity's attributes stops
+        # offering values the raise above reverts a cycle later (GH#5995). Unlike that raise it follows the
+        # floor back down. Only a bound battery_min_soc counts here, as the default above is derived from reserve_min.
+        reserve_floor = max(self.base.get_arg("battery_min_soc", default=0, index=self.id), device_min or 0)
+        self.base.expose_config_min("set_reserve_min" + reserve_min_postfix, reserve_floor)
         if (self.base.set_reserve_enable and self.inv_has_reserve_soc) or not self.inv_has_reserve_soc:
             self.reserve_percent = self.reserve_min
         else:
