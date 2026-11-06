@@ -334,7 +334,7 @@ class GECloudBudgetHarness:
         my_predbat = create_predbat()
         ha_interface = HarnessHAInterface()
         ha_interface.dummy_items = my_predbat.ha_interface.dummy_items
-        ha_interface.history = getattr(my_predbat.ha_interface, "history", None)
+        ha_interface.history = my_predbat.ha_interface.history
         ha_interface.base = my_predbat
         my_predbat.ha_interface = ha_interface
         reset_inverter(my_predbat)
