@@ -2274,6 +2274,7 @@ class Plan:
                 (load_minutes_step, load_minutes_step10, load_minutes_step90),
                 (pv_forecast_minute_step, pv_forecast_minute10_step, pv_forecast_minute90_step),
                 evaluate=recompute and publish,
+                refresh_inputs=publish,
             )
         elif publish and getattr(self, "joint_heating_plan", {}).get("state") not in (None, "disabled"):
             clear_joint_heating_shadow(self, "disabled")

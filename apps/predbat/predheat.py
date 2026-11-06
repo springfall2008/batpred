@@ -398,7 +398,8 @@ class PredHeat:
             heat_output=self.heat_output,
             heat_volume=self.heat_volume,
             heat_max_power=self.heat_max_power,
-            heat_min_power=self.heat_min_power,
+            # The legacy simulator clamps minimum output to the configured maximum.
+            heat_min_power=min(self.heat_min_power, self.heat_max_power),
             heat_cop=self.heat_cop,
             hysteresis_on=self.hysteresis_on,
             hysteresis_off=self.hysteresis_off,
@@ -534,14 +535,16 @@ class PredHeat:
             self.record_status("Warn: Predheat: smart_thermostat_max_minutes {} is not a finite number".format(max_minutes), had_errors=True)
             return None
 
-    def update_pred(self, scheduled):
+    def update_pred(self, scheduled, plan_at=None):
         """
-        Update the heat prediction
+        Update the heat prediction, optionally aligned to an aware host planning instant.
         """
         self.had_errors = False
 
         local_tz = pytz.timezone(self.get_arg("timezone", "Europe/London"))
-        now_utc = datetime.now(local_tz)
+        if plan_at is not None and (plan_at.tzinfo is None or plan_at.utcoffset() is None):
+            raise ValueError("PredHeat plan_at must be timezone-aware")
+        now_utc = plan_at.astimezone(local_tz) if plan_at is not None else datetime.now(local_tz)
         self.forecast_days = self.get_arg("forecast_days", 2, domain="predheat")
         self.forecast_minutes = self.forecast_days * 60 * 24
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)

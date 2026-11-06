@@ -44,6 +44,7 @@ def _engine(base, pv=False, export_price=5.0):
     base.minutes_now = 0
     base.midnight_utc = datetime(2026, 11, 6, tzinfo=timezone.utc)
     base.now_utc = base.midnight_utc
+    base.now_utc_real = base.now_utc
     base.forecast_minutes = 24 * 60
     base.soc_max = 5.0
     base.soc_kw = 1.0
@@ -275,8 +276,9 @@ class _HeatingSnapshot:
         """Expose an enabled heating input source at the adapter boundary."""
         return True
 
-    def update_pred(self, scheduled=False):
+    def update_pred(self, scheduled=False, plan_at=None):
         """Record one refresh without publishing or replacing the thermal or battery models."""
+        assert plan_at == self.base.now_utc
         self.updates.append(scheduled)
         if self.refresh_error is not None:
             raise self.refresh_error
@@ -467,9 +469,26 @@ def _runtime_full_plan(base):
         assert adapter.updates == [False]
         assert base.joint_heating_plan == summary
         assert base.ha_interface.dummy_items[adapter.prefix + ".joint_plan"] == published
+        # Five minutes later a live cycle may reuse the battery schedule, but
+        # heating inputs must be refreshed rather than replayed at the old origin.
+        base.minutes_now += 5
+        base.now_utc += timedelta(minutes=5)
+        adapter.model_input = replace(adapter.model_input, initial_state=replace(adapter.model_input.initial_state, room_temperature_c=20.8))
+        expected = simulate_heating(adapter.model_input)
+        with patch("predheat_shadow.datetime", wraps=datetime) as live_clock:
+            live_clock.now.return_value = base.now_utc
+            assert base.calculate_plan(recompute=False, publish=True) is False
+        assert adapter.updates == [False, False]
+        assert adapter.model_input_updated_at == base.now_utc
+        assert base.plan_valid is True
+        assert base.joint_heating_plan == summary
+        assert base.ha_interface.dummy_items[adapter.prefix + ".joint_plan"] == published
+        for index, row in enumerate(expected.intervals):
+            for field in ("load_minutes_step", "load_minutes_step10", "load_minutes_step90"):
+                assert isclose(getattr(base, field)[index * 5], row.electrical_kwh, abs_tol=1e-12)
         base.args["predheat"]["joint_planning"] = False
         base.calculate_plan(recompute=True, publish=True)
-        assert adapter.updates == [False]
+        assert adapter.updates == [False, False]
         assert base.joint_heating_plan["state"] == "disabled"
         assert "metric" not in base.joint_heating_plan
         assert "results" not in base.joint_heating_plan
@@ -526,7 +545,7 @@ def _runtime_live_clock(base):
             try:
                 prepare_joint_heating_shadow(base, loads, solar)
             except ValueError as error:
-                assert "current planning instant" in str(error)
+                assert "cycle started within 30 minutes" in str(error)
             else:
                 raise AssertionError("historical replay triggered live refresh")
         assert adapter.updates == updates
@@ -561,11 +580,95 @@ def _joint_deadline(base):
     _unchanged(base, before)
 
 
+def _legacy_power_clamp(base):
+    """Existing PredHeat users retain the old output clamp when minimum exceeds maximum."""
+    from predheat_model import simulate_heating
+    from tests.test_predheat import _make_simulation, BASE_TEMP
+
+    adapted = _make_simulation(base, [], smart_thermostat=False)
+    adapted.heat_min_power = 7000
+    adapted.heat_max_power = 5000
+    adapted.heat_pump_efficiency = {5: 1.0}
+    adapted.heat_pump_efficiency_max = 1.0
+    adapted.run_simulation(BASE_TEMP, True, save="none")
+    assert adapted.heat_min_power == 7000
+    observed = simulate_heating(adapted.model_input)
+    # The original max(minimum, output), then min(maximum, output) order
+    # gives exactly 5 kW on the first interval, regardless of the higher minimum.
+    assert isclose(observed.intervals[0].heat_generated_kwh, 5000 / 12000)
+    assert isclose(observed.intervals[0].electrical_kwh, 5000 / 12000 / adapted.heat_cop)
+    assert all(row.heat_generated_kwh <= 5000 / 12000 + 1e-9 for row in observed.intervals)
+
+
+def _runtime_planning_clock(base):
+    """Native history, weather and physics share the host clock despite skew or a boundary crossing."""
+    from predheat import PredHeat
+    from predheat_shadow import prepare_joint_heating_shadow
+
+    base = _engine(base)
+    loads, solar = _runtime_series(base)
+    with _runtime_source(base):
+        base.args["clock_skew"] = -2
+        adapter = PredHeat(base)
+        adapter.reset()
+        adapter.is_enabled = lambda: True
+        base.predheat = adapter
+        reads = []
+
+        def history(now, key, **kwargs):
+            """Supply sensor history at the requested origin, recording every lookup clock."""
+            reads.append(now)
+            return ({}, 0) if key == "heating_energy" else ({0: 20.0, 7 * 1440: 20.0}, 7)
+
+        adapter.minute_data_entity = history
+        adapter.temperatures = {}
+        adapter.get_weather_data = lambda now: reads.append(now)
+        adapter.today_cost = lambda history: 0
+        with patch("predheat_shadow.datetime", wraps=datetime) as live_clock, patch("predheat.datetime", wraps=datetime) as separate_clock:
+            live_clock.now.return_value = base.now_utc + timedelta(minutes=2, seconds=5)
+            separate_clock.now.return_value = base.now_utc + timedelta(minutes=5)
+            combined = prepare_joint_heating_shadow(base, loads, solar, evaluate=False, refresh_inputs=True)
+            separate_clock.now.assert_not_called()
+        assert reads and all(now == base.now_utc for now in reads)
+        assert adapter.model_input_updated_at == base.now_utc
+        assert len(combined[0]) == base.forecast_minutes // 5
+        # Slow fetches and a second calculation in one cycle must not fail
+        # just because more than one five-minute slot has elapsed.
+        with patch("predheat_shadow.datetime", wraps=datetime) as delayed_clock:
+            delayed_clock.now.return_value = base.now_utc_real + timedelta(minutes=12)
+            prepare_joint_heating_shadow(base, loads, solar, evaluate=False, refresh_inputs=True)
+        # A normal cycle's planning clock includes skew, but qualification must
+        # use its real origin rather than rejecting the shifted planning time.
+        base.now_utc = base.now_utc_real + timedelta(minutes=60)
+        base.minutes_now += 60
+        with patch("predheat_shadow.datetime", wraps=datetime) as skew_clock:
+            skew_clock.now.return_value = base.now_utc_real
+            prepare_joint_heating_shadow(base, loads, solar, evaluate=False, refresh_inputs=True)
+        assert adapter.model_input_updated_at == base.now_utc
+        base.now_utc = base.now_utc_real
+        base.minutes_now -= 60
+        # plan_once(plan_at=...) ignores configured skew. The bridge must too:
+        # live-cycle qualification uses the origin without skew, not args.clock_skew.
+        base.args["clock_skew"] = 60
+        with patch("predheat_shadow.datetime", wraps=datetime) as explicit_clock:
+            explicit_clock.now.return_value = base.now_utc_real
+            prepare_joint_heating_shadow(base, loads, solar, evaluate=False, refresh_inputs=True)
+        reads.clear()
+        try:
+            adapter.update_pred(scheduled=False, plan_at=base.now_utc.replace(tzinfo=None))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("naive explicit planning origin was accepted")
+        assert not reads
+
+
 def run_joint_heat_tests(my_predbat):
     """Run public engine integration scenarios using the runner's real PredBat fixture."""
     failed = False
     for name, scenario in (
         ("accounting", lambda: _accounting()),
+        ("legacy_power_clamp", lambda: _legacy_power_clamp(my_predbat)),
         ("battery_re-optimises", lambda: _battery_reoptimises(my_predbat)),
         ("cheap_deadline", lambda: _cheap_deadline(my_predbat)),
         ("pv_export", lambda: _pv_export(my_predbat)),
@@ -576,6 +679,7 @@ def run_joint_heat_tests(my_predbat):
         ("runtime_full_plan", lambda: _runtime_full_plan(my_predbat)),
         ("runtime_invalidation", lambda: _runtime_invalidation(my_predbat)),
         ("runtime_live_clock", lambda: _runtime_live_clock(my_predbat)),
+        ("runtime_planning_clock", lambda: _runtime_planning_clock(my_predbat)),
         ("joint_deadline", lambda: _joint_deadline(my_predbat)),
     ):
         try:

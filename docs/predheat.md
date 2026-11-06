@@ -260,8 +260,13 @@ the time budget. The defaults are 32 trials and a 30-second soft budget, with
 configuration limits of 256 trials and 300 seconds. Site-wide import capacity
 and equipment-specific compressor constraints are not added by this preview.
 
-The native adapter refreshes once at the current planning instant. It rejects
-historical live refreshes and snapshots whose forecast origin does not match the
+The native adapter refreshes once at the current planning instant on every live
+cycle, including cycles that reuse the battery schedule. Only recomputes run the
+joint search. History, weather and the simulation use the explicit host planning
+instant, including its configured clock skew. Comparison calculations reuse the
+matching snapshot without sensor reads or preview publication. Live refresh requires an unrounded cycle origin
+within 30 minutes of the wall clock, allowing fetch/search delays while rejecting
+historical replay and snapshots whose forecast origin does not match the
 battery clock. This alignment check does not establish sensor observation
 freshness: adapters remain responsible for qualifying their source data.
 

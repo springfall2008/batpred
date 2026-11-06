@@ -18,17 +18,21 @@ def clear_joint_heating_shadow(base, reason):
     base.set_state_wrapper(prefix + ".joint_plan", state=summary["state"], attributes=summary)
 
 
-def prepare_joint_heating_shadow(base, loads, pv_steps, evaluate=True):
-    """Prepare a preview, invalidating stale published results if input preparation fails."""
+def prepare_joint_heating_shadow(base, loads, pv_steps, evaluate=True, refresh_inputs=None):
+    """Prepare a preview, invalidating published results if live input preparation fails.
+
+    ``refresh_inputs`` defaults to ``evaluate``. Native live cycles explicitly
+    refresh even when reusing battery windows; comparison calls do neither.
+    """
     try:
-        return _prepare_joint_heating_shadow(base, loads, pv_steps, evaluate)
+        return _prepare_joint_heating_shadow(base, loads, pv_steps, evaluate, evaluate if refresh_inputs is None else refresh_inputs)
     except Exception:
-        if evaluate:
+        if evaluate or refresh_inputs:
             clear_joint_heating_shadow(base, "input_or_evaluation_error")
         raise
 
 
-def _prepare_joint_heating_shadow(base, loads, pv_steps, evaluate=True):
+def _prepare_joint_heating_shadow(base, loads, pv_steps, evaluate=True, refresh_inputs=True):
     """Evaluate a joint preview and return the native baseline household load scenarios.
 
     This boundary is deliberately explicit: the configured household forecast must
@@ -44,12 +48,17 @@ def _prepare_joint_heating_shadow(base, loads, pv_steps, evaluate=True):
     predheat = getattr(base, "predheat", None)
     if predheat is None or not predheat.is_enabled():
         raise ValueError("PredHeat must be configured and enabled for joint planning")
-    # Refresh the standard PredHeat adapter once, never once per trial. The pure
-    # API is independent of this adapter for headless hosts and replay callers.
-    if evaluate:
-        if base.now_utc.tzinfo is None or abs((datetime.now(timezone.utc) - base.now_utc).total_seconds()) > 300:
-            raise ValueError("Live PredHeat refresh requires a current planning instant; replay callers must supply explicit HeatingInput")
-        predheat.update_pred(scheduled=False)
+    # Live cycles refresh even when reusing the battery plan. Never move an old
+    # relative forecast onto a new planning instant. Refresh once, not per trial.
+    # The pure API is independent of this adapter for headless and replay hosts.
+    if refresh_inputs:
+        # now_utc_real is the unrounded cycle origin, without configured clock
+        # skew (or the explicit plan_once instant). Allow normal fetch/search
+        # delays within a live cycle without treating them as historical replay.
+        cycle_origin = getattr(base, "now_utc_real", base.now_utc)
+        if cycle_origin.tzinfo is None or abs((datetime.now(timezone.utc) - cycle_origin).total_seconds()) > 1800:
+            raise ValueError("Live PredHeat refresh requires a cycle started within 30 minutes; replay callers must supply explicit HeatingInput")
+        predheat.update_pred(scheduled=False, plan_at=base.now_utc)
     updated_at = getattr(predheat, "model_input_updated_at", None)
     if updated_at is None or updated_at.tzinfo is None or abs((base.now_utc - updated_at).total_seconds()) > 60:
         raise ValueError("PredHeat snapshot must match the battery planning instant")
