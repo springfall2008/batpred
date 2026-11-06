@@ -90,6 +90,7 @@ from tests.test_trim_export import run_trim_export_tests
 from tests.test_plan_tiebreak import run_plan_tiebreak_tests
 from tests.test_plan_preclip import run_plan_preclip_tests
 from tests.test_plan_version_replace import run_plan_version_replace_tests
+from tests.test_plan_charge_keep import run_plan_charge_keep_tests
 from tests.test_pv_calibration_clipping import run_pv_calibration_clipping_tests
 from tests.test_pv_calibration_day_scaling import run_pv_calibration_day_scaling_tests
 from tests.test_export_commitment import run_export_commitment_tests
@@ -858,6 +859,7 @@ def main():
         ("plan_tiebreak", run_plan_tiebreak_tests, "Plan fragmentation near-tie tie-break tests", False),
         ("plan_preclip", run_plan_preclip_tests, "Plan selection scores the pre-clip plan", True),
         ("plan_version_replace", run_plan_version_replace_tests, "A plan made by another Predbat version is always replaced", False),
+        ("plan_charge_keep", run_plan_charge_keep_tests, "calculate_plan works out the running charge once for optimise_charge_limit to keep", False),
         ("pv_calibration_clipping", run_pv_calibration_clipping_tests, "PV calibration does not learn inverter clipping as forecast error", False),
         ("pv_calibration_day_scaling", run_pv_calibration_day_scaling_tests, "PV calibration per-day scaling keeps dull days at raw x adjustment", False),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
