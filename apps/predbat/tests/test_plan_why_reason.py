@@ -990,6 +990,28 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: the slot held after the dip should be HoldChrg, got {}".format(hold_row and (hold_row["state"], hold_row["skip_state_cell"])))
         failed = True
 
+    # Starting at the target, dipping below it and recovering is held only from the recovery
+    my_predbat.predict_soc_best = {minute: 9.5 if 0 < minute < interval else 10.0 for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    charge_row = _get_row(raw_plan, minutes_now)
+    hold_row = _get_row(raw_plan, minutes_now + interval)
+    if charge_row is None or charge_row["state"] != "Chrg" or charge_row["rowspan_state"] != 0:
+        print("ERROR: the slot that dips below the target should be a single Chrg row, got {}".format(charge_row and (charge_row["state"], charge_row["rowspan_state"])))
+        failed = True
+    elif hold_row is None or hold_row["state"] != "HoldChrg" or hold_row["rowspan_state"] != 3:
+        print("ERROR: the recovered part should be a HoldChrg span of 3, got {}".format(hold_row and (hold_row["state"], hold_row["rowspan_state"])))
+        failed = True
+
+    # A window ending part way through a row is labelled on its whole rows; the part row is drawn and labelled on its own
+    my_predbat.charge_window_best = [{"start": minutes_now, "end": minutes_now + 2 * interval + 15, "average": 10.0}]
+    my_predbat.predict_soc_best = {minute: 9.0 if 2 * interval < minute <= 2 * interval + 15 else 10.0 for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or row["state"] != "HoldChrg" or row["rowspan_state"] != 2:
+        print("ERROR: a held window ending mid-row should be a HoldChrg span of 2, got {}".format(row and (row["state"], row["rowspan_state"])))
+        failed = True
+    my_predbat.charge_window_best = [{"start": minutes_now, "end": minutes_now + 4 * interval, "average": 10.0}]
+
     # A span cut short by the end of the plan is labelled on the part drawn, not on SoC past the table
     my_predbat.predict_soc_best = {minute: 10.0 if minute <= 2 * interval else 9.0 for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
     end_record = my_predbat.end_record
