@@ -421,6 +421,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.predict_iboost_best = {}
+        self.predict_clipped_best = {}
+        self.predict_carbon_best = {}
         self.predict_car_hold_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0
@@ -667,6 +669,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.savings_today_pvbat = 0.0
         self.savings_today_actual = 0.0
         self.savings_last_updated = None
+        self.history_days_built_for = None
+        self.history_days_billing_mark = None
+        self.history_days_retry_at = None
         self.cost_yesterday_car = 0.0
         self.cost_total_car = 0.0
         self.carbon_yesterday = 0.0
@@ -1468,6 +1473,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Publish rate data
         self.publish_rate_and_threshold()
+        self.publish_rate_overrides()
 
         return {
             "recomputed": recompute,
