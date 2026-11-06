@@ -52,6 +52,12 @@ FAKE_GH = textwrap.dedent(
             endpoint = a
             i += 1
     st["calls"].append(method + " " + endpoint)
+    # Fail the next N calls of a kind, standing in for an API error
+    kind = "lookup" if "/check-runs?" in endpoint else "mutation" if "mutation" in fields.get("query", "") else method
+    if st["fail"].get(kind, 0) > 0:
+        st["fail"][kind] -= 1
+        json.dump(st, open(path, "w"))
+        sys.exit("fake gh: HTTP 502 for " + kind)
     out = {}
     if endpoint == "graphql":
         if "mutation" in fields["query"]:
@@ -137,10 +143,10 @@ class OwnerGateTests(unittest.TestCase):
         """Remove the temporary directory."""
         cls.tmp.cleanup()
 
-    def run_gate(self, pr, checks=(), events=(), changes=(), action="labeled", sender=OWNER):
+    def run_gate(self, pr, checks=(), events=(), changes=(), fail=None, action="labeled", sender=OWNER):
         """Run the script once for an event and return the resulting state."""
         path = Path(self.tmp.name) / "state.json"
-        state = {"pr": pr, "checks": list(checks), "events": list(events), "changes": list(changes), "calls": [], "reads": 0, "next_id": 100}
+        state = {"pr": pr, "checks": list(checks), "events": list(events), "changes": list(changes), "fail": fail or {}, "calls": [], "reads": 0, "next_id": 100}
         path.write_text(json.dumps(state))
         env = dict(
             os.environ,
@@ -183,12 +189,38 @@ class OwnerGateTests(unittest.TestCase):
         self.assertEqual(len(state["checks"]), 1)
         self.assertEqual((self.gate(state)["status"], self.gate(state)["conclusion"]), ("completed", "success"))
 
-    def test_newest_of_several_waiting_checks_is_completed(self):
-        """A commit carrying several waiting checks from before has its newest one completed."""
+    def test_go_ahead_completes_every_waiting_check(self):
+        """A commit carrying several waiting checks from before has all of them completed by one go-ahead."""
         checks = [make_check(5, "in_progress"), make_check(6, "in_progress"), make_check(7, "in_progress")]
         state = self.run_gate(make_pr(auto_merge_by=OWNER), checks=checks, action="auto_merge_enabled")
-        self.assertEqual(self.gate(state)["id"], 7)
-        self.assertEqual(self.gate(state)["conclusion"], "success")
+        self.assertEqual([(c["id"], c["conclusion"]) for c in state["checks"]], [(5, "success"), (6, "success"), (7, "success")])
+
+    def test_go_ahead_behind_a_completed_check_adds_a_newer_success(self):
+        """When the newest check is already completed, older waiting checks are completed and a new success becomes the newest."""
+        checks = [make_check(5, "in_progress"), make_check(6, "completed", "failure")]
+        state = self.run_gate(make_pr(auto_merge_by=OWNER), checks=checks, action="auto_merge_enabled")
+        self.assertEqual(state["checks"][0]["conclusion"], "success")
+        self.assertEqual(state["checks"][1]["conclusion"], "failure")
+        self.assertEqual((self.gate(state)["id"], self.gate(state)["conclusion"]), (101, "success"))
+
+    def test_failed_lookup_is_retried(self):
+        """A single failed lookup is retried, so the waiting check is still updated rather than duplicated."""
+        state = self.run_gate(make_pr(), checks=[make_check(5, "in_progress")], fail={"lookup": 1})
+        self.assertEqual([c["id"] for c in state["checks"]], [5])
+
+    def test_lookup_failing_twice_posts_a_waiting_check(self):
+        """If the lookup fails twice a new waiting check is posted, which blocks rather than passes."""
+        state = self.run_gate(make_pr(), checks=[make_check(5, "in_progress")], fail={"lookup": 2})
+        self.assertEqual(len(state["checks"]), 2)
+        self.assertEqual(self.gate(state)["status"], "in_progress")
+
+    def test_failed_revocation_still_records_waiting(self):
+        """A revocation that fails still records a waiting check, warns, and does not fail the run."""
+        pr = make_pr(auto_merge_by=OWNER, labels=[LABEL])
+        state = self.run_gate(pr, events=[labelled_by(OWNER)], fail={"DELETE": 1, "mutation": 1}, action="synchronize", sender="collaborator")
+        self.assertEqual(self.gate(state)["status"], "in_progress")
+        self.assertIn("the owner-approved label and auto-merge could not be removed", self.gate(state)["title"])
+        self.assertIn("::warning::Could not remove the owner-approved label and auto-merge", state["output"])
 
     def test_completed_check_is_never_reopened(self):
         """Withdrawing the go-ahead adds a newer waiting check and leaves the completed one alone."""

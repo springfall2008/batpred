@@ -8,9 +8,11 @@ name: owner gate
 # go-ahead, then success. GitHub emails whoever triggered a FAILED workflow run, so a failing job sent
 # every contributor a "run failed" email on every PR - the pending check blocks the merge just as well
 # without one. The job is named differently from the check so its own green tick cannot satisfy the
-# requirement. The newest owner-gate check on the head commit is the one that counts. A check still in
-# progress is updated in place rather than joined by another, so a commit carries at most one waiting
-# check; a completed one is never reopened, a new check is added instead.
+# requirement. The newest owner-gate check on the head commit is the one that counts. A waiting verdict
+# updates the newest check in place while it is still in progress rather than adding another, so a
+# commit normally carries one waiting check - though a lookup failing twice, or two runs racing, can
+# still add a second. A go-ahead completes every waiting check on the commit, so leftovers from older
+# runs cannot linger. A completed check is never reopened; a new check is added instead.
 #
 # It passes only when the owner has given this PR an explicit go-ahead, whoever authored it:
 # - the owner applied the owner-approved label (the most recent time that label was applied, the
@@ -112,34 +114,64 @@ jobs:
           # Record the verdict as the owner-gate check on the head commit: "pass" completes it as a
           # success, "wait" leaves it in progress, which blocks the merge without failing this job
           record() {
+            echo "$2"
+            # One retry, so a passing API error does not add a second waiting check; if both fail a new
+            # check is posted, which blocks rather than passes
+            checks=$(list_checks || { sleep 2; list_checks; }) || checks="[]"
+            newest_waiting=$(jq -r 'max_by(.id) | select(. != null and .status != "completed") | .id' <<< "$checks")
+            if [ "$1" = "pass" ]; then
+              for check_id in $(jq -r '.[] | select(.status != "completed") | .id' <<< "$checks"); do
+                write_check pass "$2" "$check_id"
+              done
+              # The newest check must be the success, so add one unless the newest was a waiting check just completed
+              if [ -z "$newest_waiting" ]; then
+                write_check pass "$2" ""
+              fi
+            else
+              write_check wait "$2" "$newest_waiting"
+            fi
+          }
+
+          # This commit's owner-gate checks from GitHub Actions, as a JSON array
+          list_checks() {
+            gh api "repos/$GH_REPO/commits/$head_sha/check-runs?check_name=owner-gate&filter=all&per_page=100" \
+              --jq '[.check_runs[] | select(.app.slug == "github-actions")]'
+          }
+
+          # Write verdict $1 with message $2 to check $3, or to a new check when $3 is empty
+          write_check() {
             if [ "$1" = "pass" ]; then
               verdict_fields=(-f status=completed -f conclusion=success)
             else
               verdict_fields=(-f status=in_progress)
             fi
-            echo "$2"
-            check_id=$(gh api "repos/$GH_REPO/commits/$head_sha/check-runs?check_name=owner-gate&filter=all&per_page=100" \
-              --jq '[.check_runs[] | select(.app.slug == "github-actions")] | max_by(.id) | select(.status != "completed") | .id // empty') || check_id=""
-            if [ -n "$check_id" ]; then
-              gh api -X PATCH "repos/$GH_REPO/check-runs/$check_id" "${verdict_fields[@]}" \
-                -f "output[title]=$2" -f "output[summary]=$2" > /dev/null \
-                || echo "::warning::Could not record the owner-gate check - a review on a fork PR has a read-only token, so apply $LABEL or enable auto-merge instead"
+            if [ -n "$3" ]; then
+              target=(-X PATCH "repos/$GH_REPO/check-runs/$3")
             else
-              gh api -X POST "repos/$GH_REPO/check-runs" -f name=owner-gate -f head_sha="$head_sha" "${verdict_fields[@]}" \
-                -f "output[title]=$2" -f "output[summary]=$2" > /dev/null \
-                || echo "::warning::Could not record the owner-gate check - a review on a fork PR has a read-only token, so apply $LABEL or enable auto-merge instead"
+              target=(-X POST "repos/$GH_REPO/check-runs" -f name=owner-gate -f head_sha="$head_sha")
             fi
+            gh api "${target[@]}" "${verdict_fields[@]}" -f "output[title]=$2" -f "output[summary]=$2" > /dev/null \
+              || echo "::warning::Could not record the owner-gate check - a review on a fork PR has a read-only token, so apply $LABEL or enable auto-merge instead"
           }
 
           evaluate
 
-          # New commits from anyone but the owner (or the CI bots) revoke an earlier go-ahead
+          # New commits from anyone but the owner (or the CI bots) revoke an earlier go-ahead. A failed
+          # revocation must not end the run before the waiting check is recorded: that would leave the new
+          # commit with no owner-gate check and send its pusher a "run failed" email
           if [ "$ACTION" = "synchronize" ] && [ "$SENDER" != "$owner" ] && [ "$SENDER" != "pre-commit-ci[bot]" ] && [ "$SENDER" != "github-actions[bot]" ]; then
+            not_revoked=""
             if [ "$has_label" = "true" ]; then
-              gh api -X DELETE "repos/$GH_REPO/issues/$PR_NUMBER/labels/$LABEL" > /dev/null
+              gh api -X DELETE "repos/$GH_REPO/issues/$PR_NUMBER/labels/$LABEL" > /dev/null || not_revoked="the $LABEL label"
             fi
             if [ -n "$auto_merge_by" ]; then
-              gh api graphql -F id="$pr_id" -f query='mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }' > /dev/null
+              gh api graphql -F id="$pr_id" -f query='mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }' > /dev/null \
+                || not_revoked="${not_revoked:+$not_revoked and }auto-merge"
+            fi
+            if [ -n "$not_revoked" ]; then
+              echo "::warning::Could not remove $not_revoked after $SENDER pushed - remove it by hand, or the next event's run will pass the new commits"
+              record wait "$SENDER pushed new commits but $not_revoked could not be removed - $owner must remove it by hand before any further event, or the new commits will pass"
+              exit 0
             fi
             record wait "$SENDER pushed new commits, so any approval was revoked - waiting for $owner to apply $LABEL, enable auto-merge or approve the new commits"
             exit 0
