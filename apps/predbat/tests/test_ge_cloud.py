@@ -380,6 +380,7 @@ def test_ge_cloud(my_predbat=None):
         ("ac_charge_gate_on_settings_refresh", _test_ac_charge_gate_on_settings_refresh, "Settings refresh re-enables a cleared AC charge gate while force charging"),
         ("control_registers_include_ac_charge_gate", _test_control_registers_include_ac_charge_gate, "Control registers include the AC charge gate Predbat re-asserts"),
         ("gateway_not_swept_every_cycle", _test_gateway_not_swept_every_cycle, "A Gateway follows the same register read rules as any device"),
+        ("automatic_config_full_power_discharge_eco", _test_automatic_config_full_power_discharge_eco, "Automatic config sets inverter_full_power_discharge_eco from the device flag"),
         ("inverter_control_setting", _test_inverter_control_setting, "ge_cloud_inverter_control defaults to on"),
         ("inverter_control_off_run", _test_inverter_control_off_run, "Inverter control off skips inverter config and default options"),
         ("inverter_control_off_user_writes", _test_inverter_control_off_user_writes, "Inverter control off still sends the user's writes, but not Predbat's"),
@@ -3706,6 +3707,34 @@ def _test_settings_cache_drops_departed_devices(my_predbat):
             return 1
         if "gone999" in ge_cloud.settings or "inv001" not in ge_cloud.settings:
             print("ERROR: the cache should keep only the devices found at startup, got {}".format(list(ge_cloud.settings)))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_automatic_config_full_power_discharge_eco(my_predbat):
+    """Automatic config tells each inverter whether it exports at full power in eco mode, from GE Cloud's device flag"""
+
+    async def test():
+        devices = {"ems": None, "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}}
+        ge = MockGECloudDirect()
+        ge.settings = {"battery001": {}, "battery002": {}}
+        ge.info = {"battery001": {"flags": ["full-power-discharge-in-eco-mode"]}, "battery002": {"flags": []}}
+        await ge.async_automatic_config(devices)
+        if ge.config_args.get("inverter_full_power_discharge_eco") != [True, False]:
+            print("ERROR: expected [True, False] from the device flags, got {}".format(ge.config_args.get("inverter_full_power_discharge_eco")))
+            return 1
+
+        # A value written in apps.yaml wins over the flag
+        ge = MockGECloudDirect()
+        ge.settings = {"battery001": {}, "battery002": {}}
+        ge.info = {"battery001": {"flags": ["full-power-discharge-in-eco-mode"]}, "battery002": {"flags": ["full-power-discharge-in-eco-mode"]}}
+        ge.config_args["inverter_full_power_discharge_eco"] = [False, False]
+        ge.base.args_from_apps_yaml = {"inverter_full_power_discharge_eco": [False, False]}
+        await ge.async_automatic_config(devices)
+        if ge.config_args.get("inverter_full_power_discharge_eco") != [False, False]:
+            print("ERROR: an apps.yaml value should be kept, got {}".format(ge.config_args.get("inverter_full_power_discharge_eco")))
             return 1
         return 0
 

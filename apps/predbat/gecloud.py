@@ -1697,6 +1697,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
         self.set_arg("num_inverters", num_inverters)
         self.set_arg_auto("inverter_mode", build_entities("switch", ["enable_eco_mode"]), overwrite=False)
+        # An inverter GE Cloud flags as discharging at full power in eco mode exports with eco left on, so an export
+        # costs no eco writes (inverter.py adjust_inverter_mode); one without the flag needs eco off to export
+        self.set_arg_auto("inverter_full_power_discharge_eco", [self.full_power_discharge_eco(device) for device in batteries], overwrite=False)
         if not self.get_arg("ge_cloud_load_today_ignore", default=False):
             self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{device}_consumption_total" for device in batteries])
         self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_total" for device in batteries])
@@ -2027,6 +2030,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     sensor(setting, ems, suffix)
                 else:
                     entities[setting] = {"value": 0, "access": "r"}
+
+        # A fact about the inverter rather than an entity: whether it exports at full power with eco mode on
+        entities["inverter_full_power_discharge_eco"] = {"value": self.full_power_discharge_eco(device), "access": "r"}
 
         for setting in GE_CLOUD_DUMMIED_SETTINGS[inverter_type]:
             entities.pop(setting, None)
@@ -2820,6 +2826,11 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         await self.storage.save("gecloud", "settings", self.settings, format="json", expiry=None)
         stamps = {device: {kind: stamp.isoformat() for kind, stamp in device_stamps.items()} for device, device_stamps in self.settings_read_stamps.items() if device in self.settings}
         await self.storage.save("gecloud", "settings_read", stamps, format="json", expiry=None)
+
+    def full_power_discharge_eco(self, device):
+        """Does GE Cloud flag this inverter as discharging at full power in eco mode (full-power-discharge-in-eco-mode)"""
+        flags = (self.info.get(device, {}) or {}).get("flags", []) or []
+        return "full-power-discharge-in-eco-mode" in flags
 
     def device_info_due(self, device):
         """Is this device's info more than DEVICE_INFO_REFRESH_SECONDS old, or never fetched successfully"""

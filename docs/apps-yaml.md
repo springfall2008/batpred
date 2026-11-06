@@ -1524,6 +1524,18 @@ For Freeze Export specifically, this means that during a solar surplus the batte
 
 Freeze Export recapture also depends on your inverter type, not just this setting. Most inverters implement Freeze Export by simply disabling charging, so PV beyond the export limit really is clipped and lost; only inverters with a genuine "Feed-in First" mode - which prioritises house load, then export, then the battery - recapture it. Today that means FoxESS, plus the five cloud integrations that switch the inverter into an export-first work mode for the freeze: FoxCloud ("Feedin", written into the scheduler slots Predbat already programmes), SolisCloud ("Feed-in priority"), SolaxCloud ("Feed-in"), SunsynkCloud and DeyeCloud (both "Selling First"). Predbat knows which is which from your inverter type and models the two differently, so setting `inverter_can_charge_during_export` to `true` will not make a non-Feed-in-First inverter charge during Freeze Export. Force Export is unaffected and is still controlled by this setting alone.
 
+### **inverter_full_power_discharge_eco**
+
+Per-inverter list, defaults to `false`. GivEnergy Cloud (`GEC`) inverters only.
+
+Some GivEnergy inverters export at full power with Eco mode left on; GE Cloud reports this for each inverter as the
+`full-power-discharge-in-eco-mode` flag, and **ge_cloud_automatic** sets this setting from it. When it is `true` Predbat keeps
+Eco mode on during a force export instead of turning it off and back on again, which saves two writes (two GivEnergy API calls)
+every time an export starts or stops. When it is `false` Eco mode is turned off for a force export, as before.
+
+You only need to set it yourself to override what GE Cloud reports, for example `inverter_full_power_discharge_eco: [false]`
+if your inverter does not export at full power with Eco mode on.
+
 ### **inverter_freeze_export_discharge_rate**
 
 Global setting, defaults to `0` (disabled).

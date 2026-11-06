@@ -209,11 +209,13 @@ class FakeResponse:
 class FakeGECloud:
     """A single GivEnergy hybrid inverter on one site, behind a fake GE Cloud API that records every call."""
 
-    def __init__(self, battery_kwh, rate_w, clock, registers=None, model="GIV-HY5.0", rate_discharge_w=None):
+    def __init__(self, battery_kwh, rate_w, clock, registers=None, model="GIV-HY5.0", rate_discharge_w=None, flags=None):
         """battery_kwh, rate_w (charge) and rate_discharge_w (defaults to rate_w) describe the battery; clock returns the simulated time for each record."""
         self.battery_kwh = battery_kwh
         self.rate_w = rate_w
         self.rate_discharge_w = rate_w if rate_discharge_w is None else rate_discharge_w
+        # Every GivEnergy device seen in captures and samples reports full power discharge in eco mode
+        self.flags = ["full-power-discharge-in-eco-mode"] if flags is None else list(flags)
         self.clock = clock
         self.model = model
         self.registers = registers if registers is not None else CAPTURED_REGISTERS
@@ -391,7 +393,7 @@ class FakeGECloud:
                 "warranty": {"type": "Standard", "expiry_date": "2034-01-01T00:00:00Z"},
                 "firmware_version": {"ARM": 616, "DSP": 616},
                 "connections": {"batteries": [{"module_number": 1, "serial": "BA0000H001", "firmware_version": 1, "capacity": {"full": capacity_ah, "design": capacity_ah}, "cell_count": 16, "has_usb": True, "nominal_voltage": 51.2}], "meters": []},
-                "flags": [],
+                "flags": list(self.flags),
             },
             "site_id": HARNESS_SITE_ID,
         }

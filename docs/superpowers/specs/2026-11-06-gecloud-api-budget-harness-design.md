@@ -360,3 +360,26 @@ really overlaps.
 
 In scenario 9, `DC Discharge 1 Start Time` writes fall from 50 to 15. The 15 left each set up an upcoming window.
 The day is now 694–766 calls, 20,820–22,980 a month.
+
+## After: Eco mode left on for inverters that export at full power in Eco
+
+GE Cloud reports a `full-power-discharge-in-eco-mode` flag in each inverter's device info. So far every
+GivEnergy device seen reports it, and the fake now does too. `ge_cloud_automatic` copies the flag into the new
+per-inverter setting `inverter_full_power_discharge_eco`, without overriding a value written in apps.yaml.
+
+When the setting is true, `adjust_inverter_mode()` keeps Eco mode on during a force export instead of turning
+it off and back on. It still turns Eco back on if something left it off. Inverters without the flag are
+unchanged, and so is GivTCP's mode select.
+
+| Scenario | Writes/day before | Writes/day after | Calls/day |
+| -------- | ----------------: | ---------------: | --------: |
+| 0 | 34 | 28 | 688 |
+| 5 | 38 | 33 | 693 |
+| 9 | 106 | 74 | 734 |
+| 17 | 70 | 54 | 714 |
+| 19 | 84 | 70 | 730 |
+
+That is 20,640–22,020 calls a month.
+
+The largest remaining write pattern is `Enable DC Discharge` (32 writes a day in scenario 9). Export starts,
+reaches its target, stops, and solar lifts SOC back above the target, so export starts again.
