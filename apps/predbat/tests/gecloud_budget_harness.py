@@ -30,7 +30,7 @@ from gecloud import GECloudDirect
 from inverter import Inverter
 from tests.gecloud_fake_cloud import CALL_CONTEXT, FakeGECloud
 from tests.test_infra import TestHAInterface, reset_inverter, run_async
-from tests.test_random_scenarios import RANDOM_TEMPLATE, apply_scenario_to_predbat
+from tests.test_random_scenarios import RANDOM_TEMPLATE, apply_scenario_to_predbat, expand_load_minutes, expand_pv_forecast
 
 # Inverter entity args the GivTCP template carries. async_automatic_config sets most of them again, but
 # any it leaves alone would point execute at a mock entity whose writes never reach the fake cloud.
@@ -103,6 +103,24 @@ class HarnessGECloud(GECloudDirect):
     def now_utc_exact(self):
         """The simulated time, in place of the wall clock."""
         return self.sim_now
+
+    def sweep_reason(self, serial):
+        """Which of run()'s conditions makes it sweep this device's registers - polling_mode is checked first there, so it is named first here."""
+        if self.polling_mode:
+            return "polling_mode (no EMS), every 10 min"
+        if serial == self.ems_device:
+            return "EMS device, every 10 min"
+        if serial == self.gateway_device:
+            return "gateway device, every 10 min"
+        return "first run, new device or hourly slow refresh"
+
+    async def async_get_inverter_settings(self, serial, first=False, previous=None):
+        """The real sweep, with the reason it ran added to CALL_CONTEXT - the per-register reads run in tasks, which inherit it."""
+        token = CALL_CONTEXT.set("{} | sweep: {}".format(CALL_CONTEXT.get(), self.sweep_reason(serial)))
+        try:
+            return await super().async_get_inverter_settings(serial, first=first, previous=previous)
+        finally:
+            CALL_CONTEXT.reset(token)
 
 
 class HarnessHAInterface(TestHAInterface):
@@ -212,6 +230,26 @@ class GECloudBudgetHarness:
             counters["grid"]["import"] += load_kwh
             counters["solar"] += pv_kwh
 
+    def apply_scenario_state(self, minute):
+        """
+        After each fetch: keep the plan modelling the scenario's system, with its load history and PV running from now.
+
+        fetch_inverter_data() rebuilds the inverter limits from what gecloud publishes, which knows nothing of the
+        scenario's export or inverter limits, and the load history the scenario was expanded with is "minutes ago"
+        from midnight. Without this the advanced plan would predict for a different system and for the 00:00 load.
+        """
+        my_predbat = self.my_predbat
+        params = self.scenario["params"]
+        data = self.scenario["data"]
+        my_predbat.battery_rate_max_charge = params["battery"]["rate_max_charge_kw"] / 60.0
+        my_predbat.battery_rate_max_discharge = params["battery"]["rate_max_discharge_kw"] / 60.0
+        my_predbat.inverter_hybrid = params["inverter"]["hybrid"]
+        my_predbat.inverter_limit = params["inverter"]["inverter_limit_kw"] / 60.0
+        my_predbat.export_limit = params["inverter"]["export_limit_kw"] / 60.0
+        my_predbat.inverter_support_feedin_first = params["inverter"].get("support_feedin_first", False)
+        my_predbat.load_minutes = expand_load_minutes(data["load_day_kwh"], minutes_now=minute)
+        my_predbat.pv_forecast_minute, my_predbat.pv_forecast_minute10, my_predbat.pv_forecast_minute90 = expand_pv_forecast(data["pv_day_kw"], my_predbat.forecast_minutes, minutes_now=minute)
+
     def run_labelled(self, context, function, *args):
         """Call function(*args) with CALL_CONTEXT set, so any API call it makes carries the label."""
         token = CALL_CONTEXT.set(context)
@@ -220,28 +258,40 @@ class GECloudBudgetHarness:
         finally:
             CALL_CONTEXT.reset(token)
 
+    def poll(self, first_minute, last_minute):
+        """gecloud's own loop once per simulated minute, as component_base runs it every 60 seconds."""
+        for loop_minute in range(first_minute, last_minute + 1):
+            self.gecloud.sim_now = self.sim_time(loop_minute)
+            self.run_labelled("poll seconds={}".format(60 * loop_minute), lambda seconds: run_async(self.gecloud.run(seconds, False)), 60 * loop_minute)
+
     def step(self, minute):
         """One 5-minute Predbat cycle ending at minute: gecloud's loop each minute, then fetch, advance the plan, execute."""
         self.fake.soc_percent = self.next_soc_percent()
         self.advance_meter()
-        for loop_minute in range(minute - 4, minute + 1):
-            self.gecloud.sim_now = self.sim_time(loop_minute)
-            self.run_labelled("poll seconds={}".format(60 * loop_minute), lambda seconds: run_async(self.gecloud.run(seconds, False)), 60 * loop_minute)
+        self.poll(minute - 4, minute)
         my_predbat = self.my_predbat
         my_predbat.update_time(print=False, now=self.sim_time(minute))
         self.run_labelled("fetch", my_predbat.fetch_inverter_data)
+        self.apply_scenario_state(minute)
         # recompute=False drops charge/export windows that have ended, as a real cycle that does not re-plan does
         self.run_labelled("plan advance", my_predbat.calculate_plan, False)
         self.record_plan()
         self.run_labelled("execute {}".format(self.sim_time(minute).strftime("%H:%M")), my_predbat.execute_plan)
         self.steps += 1
 
-    def simulate_day(self, last_minute=STEPS_PER_DAY * 5 - 5):
-        """Start up at midnight, then step every 5 minutes up to last_minute (23:55 by default)."""
+    def simulate_day(self, last_minute=STEPS_PER_DAY * 5 - 5, poll_until=STEPS_PER_DAY * 5):
+        """
+        Start up at midnight, then step every 5 minutes up to last_minute (23:55 by default).
+
+        gecloud's own loop carries on alone to poll_until (24:00 by default), so the day counts a whole 24
+        hours of polling - including the midnight sweep, site and account refresh - while the plan itself
+        never crosses midnight.
+        """
         self.startup()
         with self.patched():
             for minute in range(5, last_minute + 1, 5):
                 self.step(minute)
+            self.poll(last_minute + 1, poll_until)
         return DayResult(
             scenario_id=self.scenario["id"],
             startup_calls=self.startup_calls,
@@ -283,7 +333,11 @@ class GECloudBudgetHarness:
         my_predbat.update_time(print=False, now=self.midnight)
 
         battery = self.scenario["params"]["battery"]
-        self.fake = FakeGECloud(battery_kwh=battery["soc_max_kwh"], rate_w=int(battery["rate_max_charge_kw"] * 1000), clock=lambda: self.gecloud.sim_now)
+        # One symmetric rate, as real GivEnergy hardware reports (max_charge_rate == max_discharge_rate): execute writes the
+        # discharge rate from the charge-rate sensor, so a narrower discharge register would clamp every write and retry it
+        # ten times a cycle. The plan still models the scenario's own charge and discharge rates - see apply_scenario_state().
+        rate_w = int(max(battery["rate_max_charge_kw"], battery["rate_max_discharge_kw"]) * 1000)
+        self.fake = FakeGECloud(battery_kwh=battery["soc_max_kwh"], rate_w=rate_w, clock=lambda: self.gecloud.sim_now)
         self.fake.scenario_id = self.scenario["id"]
         self.fake.soc_percent = battery["initial_soc_percent"]
         self.gecloud = HarnessGECloud(my_predbat, ge_cloud_direct=True, api_key="harness-key", automatic=True)

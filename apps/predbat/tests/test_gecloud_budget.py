@@ -115,6 +115,21 @@ def test_read_returns_written_value():
     return failed
 
 
+def test_written_value_reads_back_typed():
+    """Reads return a register's own type after a write, as GE Cloud does - gecloud compares numbers numerically."""
+    failed = False
+    fake = _fake()
+    reserve_id = [index + 1 for index, (name, _kind, _value) in enumerate(CAPTURED_REGISTERS) if name == "Battery Reserve % Limit"][0]
+    eco_id = [index + 1 for index, (name, _kind, _value) in enumerate(CAPTURED_REGISTERS) if name == "Enable Eco Mode"][0]
+    _request(fake, "POST", "inverter/{}/settings/{}/write".format(HARNESS_SERIAL, reserve_id), body={"value": "55.0", "context": "predbat"})
+    _request(fake, "POST", "inverter/{}/settings/{}/write".format(HARNESS_SERIAL, eco_id), body={"value": "False", "context": "predbat"})
+    _status, body = _request(fake, "POST", "inverter/{}/settings/{}/read".format(HARNESS_SERIAL, reserve_id))
+    failed |= _expect(body["data"]["value"] == 55 and not isinstance(body["data"]["value"], str), "reserve read back as {!r}".format(body["data"]["value"]))
+    _status, body = _request(fake, "POST", "inverter/{}/settings/{}/read".format(HARNESS_SERIAL, eco_id))
+    failed |= _expect(body["data"]["value"] is False, "eco mode read back as {!r}".format(body["data"]["value"]))
+    return failed
+
+
 def test_device_list_shape():
     """One battery inverter on one site, stamped with the real time so gecloud does not skip it as stale."""
     failed = False
@@ -170,7 +185,7 @@ def test_startup_finds_device(harness):
     categories = {call.category for call in harness.startup_calls}
     for wanted in ("account", "device_list", "register_list", "register_read"):
         failed |= _expect(wanted in categories, "start-up made no {} call, made {}".format(wanted, sorted(categories)))
-    failed |= _expect(all(call.context == "startup" for call in harness.startup_calls), "a start-up call is not labelled startup")
+    failed |= _expect(all(call.context.startswith("startup") for call in harness.startup_calls), "a start-up call is not labelled startup")
     return failed
 
 
@@ -291,6 +306,54 @@ def test_call_log_round_trip(day):
     return failed
 
 
+def test_scenario_state_follows_clock(day, harness):
+    """After an hour the plan still models the scenario's system, and its load history and PV run from the current time."""
+    failed = False
+    my_predbat = harness.my_predbat
+    params = harness.scenario["params"]
+    data = harness.scenario["data"]
+    for attribute, wanted in (
+        ("export_limit", params["inverter"]["export_limit_kw"] / 60.0),
+        ("inverter_limit", params["inverter"]["inverter_limit_kw"] / 60.0),
+        ("battery_rate_max_discharge", params["battery"]["rate_max_discharge_kw"] / 60.0),
+        ("battery_rate_max_charge", params["battery"]["rate_max_charge_kw"] / 60.0),
+    ):
+        got = getattr(my_predbat, attribute)
+        failed |= _expect(abs(got - wanted) < 1e-6, "{} drifted to {} from the scenario's {}".format(attribute, got, wanted))
+    minute = my_predbat.minutes_now
+    last_five = my_predbat.load_minutes[0] - my_predbat.load_minutes[5]
+    wanted_load = sum(data["load_day_kwh"][(minute - offset) % 1440] for offset in range(5))
+    failed |= _expect(abs(last_five - wanted_load) < 1e-6, "load history at minute {} gives {} for the last 5 minutes, scenario says {}".format(minute, last_five, wanted_load))
+    failed |= _expect((minute + my_predbat.forecast_minutes) in my_predbat.pv_forecast_minute, "PV forecast does not reach minute {}".format(minute + my_predbat.forecast_minutes))
+    return failed
+
+
+def test_sweep_reason_names_branch(day):
+    """Each register sweep read says which condition in gecloud's loop fired the sweep, not just the poll time."""
+    reads = [call for call in day.day_calls if call.category == "register_read"]
+    unlabelled = [call.context for call in reads if "sweep: polling_mode" not in call.context]
+    return _expect(reads and not unlabelled, "{} of {} sweep reads lack the sweep reason, e.g. {}".format(len(unlabelled), len(reads), unlabelled[:2]))
+
+
+def test_no_write_retry_loop(day):
+    """No register is written more than twice in one cycle - a repeat means execute's write-and-poll is retrying a write the inverter refused."""
+    per_cycle = {}
+    for call in day.day_calls:
+        if call.category == "register_write":
+            key = (call.sim_time.strftime("%H:%M"), call.setting_name)
+            per_cycle[key] = per_cycle.get(key, 0) + 1
+    loops = {key: count for key, count in per_cycle.items() if count > 2}
+    return _expect(not loops, "write-and-poll retry loops: {}".format(sorted(loops.items())[:5]))
+
+
+def test_day_tail_polls(tail_day):
+    """Polling continues for the 5 minutes after the last execute, so a full run covers a whole 24 hours of gecloud's loop."""
+    counts = {}
+    for call in tail_day.day_calls:
+        counts[call.category] = counts.get(call.category, 0) + 1
+    return _expect(counts.get("status", 0) == 32 and tail_day.steps == 13, "expected 32 status polls to minute 65 with 13 executes, got {} and {}".format(counts.get("status", 0), tail_day.steps))
+
+
 def run_gecloud_budget_harness_tests(my_predbat):
     """Unit tests for the GE Cloud API budget harness. Returns True on failure."""
     print("**** Running GE Cloud API budget harness tests ****")
@@ -299,6 +362,7 @@ def run_gecloud_budget_harness_tests(my_predbat):
         test_register_fixture,
         test_routes_status_and_meter,
         test_read_returns_written_value,
+        test_written_value_reads_back_typed,
         test_device_list_shape,
         test_unmatched_request_raises,
         test_context_recorded,
@@ -326,13 +390,19 @@ def run_gecloud_budget_harness_tests(my_predbat):
 
     # The first simulated hour, on a fresh harness
     short = GECloudBudgetHarness(scenario)
-    day = short.simulate_day(last_minute=60)
-    for test in (test_short_day_cadence, test_fetch_makes_no_calls, test_call_log_round_trip):
+    day = short.simulate_day(last_minute=60, poll_until=60)
+    for test in (test_short_day_cadence, test_fetch_makes_no_calls, test_call_log_round_trip, test_sweep_reason_names_branch, test_no_write_retry_loop):
         if test(day):
             print("ERROR: {} failed".format(test.__name__))
             failed = True
-    if test_short_day_never_recomputes(day, short):
-        print("ERROR: test_short_day_never_recomputes failed")
+    for test in (test_short_day_never_recomputes, test_scenario_state_follows_clock):
+        if test(day, short):
+            print("ERROR: {} failed".format(test.__name__))
+            failed = True
+
+    tail_day = GECloudBudgetHarness(scenario).simulate_day(last_minute=60, poll_until=65)
+    if test_day_tail_polls(tail_day):
+        print("ERROR: test_day_tail_polls failed")
         failed = True
     return failed
 

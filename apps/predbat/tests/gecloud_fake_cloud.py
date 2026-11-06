@@ -136,15 +136,21 @@ class CallRecord:
         return data
 
 
-def build_register_list(registers, rate_w):
+def build_register_list(registers, rate_w, rate_discharge_w=None):
     """The inverter/{serial}/settings response body: one entry per register, with ids 1..N in order."""
+    rate_discharge_w = rate_w if rate_discharge_w is None else rate_discharge_w
     result = []
     for index, (name, kind, _value) in enumerate(registers):
         validation = ""
         if kind == "time":
             rules = ["date_format:H:i"]
         elif kind == "number":
-            rules = ["between:0,{}".format(rate_w)] if name in ("Battery Charge Power", "Battery Discharge Power") else ["between:0,100"]
+            if name == "Battery Charge Power":
+                rules = ["between:0,{}".format(rate_w)]
+            elif name == "Battery Discharge Power":
+                rules = ["between:0,{}".format(rate_discharge_w)]
+            else:
+                rules = ["between:0,100"]
         elif kind == "switch":
             rules = ["boolean"]
         elif kind == "option":
@@ -203,14 +209,15 @@ class FakeResponse:
 class FakeGECloud:
     """A single GivEnergy hybrid inverter on one site, behind a fake GE Cloud API that records every call."""
 
-    def __init__(self, battery_kwh, rate_w, clock, registers=None, model="GIV-HY5.0"):
-        """battery_kwh and rate_w describe the battery; clock returns the simulated time for each record."""
+    def __init__(self, battery_kwh, rate_w, clock, registers=None, model="GIV-HY5.0", rate_discharge_w=None):
+        """battery_kwh, rate_w (charge) and rate_discharge_w (defaults to rate_w) describe the battery; clock returns the simulated time for each record."""
         self.battery_kwh = battery_kwh
         self.rate_w = rate_w
+        self.rate_discharge_w = rate_w if rate_discharge_w is None else rate_discharge_w
         self.clock = clock
         self.model = model
         self.registers = registers if registers is not None else CAPTURED_REGISTERS
-        self.register_list = build_register_list(self.registers, rate_w)
+        self.register_list = build_register_list(self.registers, rate_w, self.rate_discharge_w)
         self.register_names = {entry["id"]: entry["name"] for entry in self.register_list}
         self.register_values = {index + 1: value for index, (_name, _kind, value) in enumerate(self.registers)}
         self.soc_percent = 50.0
@@ -315,8 +322,9 @@ class FakeGECloud:
         if endpoint == GE_API_INVERTER_READ_SETTING:
             return 200, {"value": self.register_values[int(params["setting_id"])]}
         if endpoint == GE_API_INVERTER_WRITE_SETTING:
-            value = body.get("value") if body else None
-            self.register_values[int(params["setting_id"])] = value
+            setting_id = int(params["setting_id"])
+            value = self.typed_value(setting_id, body.get("value") if body else None)
+            self.register_values[setting_id] = value
             return 200, {"value": value, "success": True}
         if endpoint == GE_API_INVERTER_SETTINGS:
             return 200, self.register_list
@@ -331,6 +339,16 @@ class FakeGECloud:
         if endpoint == GE_API_ACCOUNT:
             return 200, {"id": HARNESS_ACCOUNT_ID, "first_name": "Harness", "surname": "User", "timezone": "GMT", "standard_timezone": "Europe/London", "flags": []}
         return 200, []
+
+    def typed_value(self, setting_id, value):
+        """A written value in its register's own type: gecloud sends every value as a string, but GE Cloud reads numbers and switches back typed."""
+        kind = self.registers[setting_id - 1][1]
+        if kind == "number":
+            number = float(value)
+            return int(number) if number.is_integer() else number
+        if kind in ("switch", "writeonly"):
+            return str(value).lower() in ("true", "on", "1")
+        return value
 
     def iso_now(self):
         """The simulated time in GE Cloud's ISO form."""
@@ -368,7 +386,7 @@ class FakeGECloud:
                     "battery": {"nominal_capacity": capacity_ah, "nominal_voltage": 51.2, "depth_of_discharge": 1},
                     "model": self.model,
                     "max_charge_rate": self.rate_w,
-                    "max_discharge_rate": self.rate_w,
+                    "max_discharge_rate": self.rate_discharge_w,
                 },
                 "warranty": {"type": "Standard", "expiry_date": "2034-01-01T00:00:00Z"},
                 "firmware_version": {"ARM": 616, "DSP": 616},
