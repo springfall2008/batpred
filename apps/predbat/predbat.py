@@ -625,6 +625,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dynamic_load_car_stripped = 0
         self.octopus_feed_covered = set()
         self.octopus_feed_stripped = set()
+        self.octopus_feed_covered_saved = []  # the half hours last written to storage, so a write only happens on a change
         self.predbat_branch_warned = set()
         self.octopus_surplus = set()
         self.octopus_slots_planned = {}
@@ -2496,6 +2497,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.dynamic_load_car_load()
             # And the half hours Octopus Intelligent dispatches ran in, so they keep the dispatch rate
             self.octopus_held_load()
+            # And the half hours a dispatch was seen covering, so a stale rate feed is still checked after a restart
+            self.octopus_feed_load()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))

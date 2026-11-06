@@ -12,10 +12,15 @@ Removing the discount the Octopus Energy integration's rate feed keeps for a wit
 
 The feed lowers the price of dispatch minutes and marks them is_intelligent_adjusted, and was seen to keep doing
 so for half an hour after Octopus withdrew the dispatch. A minute whose half hour a dispatch covered at an earlier
-cycle, and none covers now, goes back to the day rate; one no dispatch has ever covered is left alone.
+cycle, and none covers now, goes back to the day rate; one no dispatch has ever covered is left alone. The half
+hours seen covered are saved to storage, so a restart while the feed is still stale does not bring the discount back.
 """
 import copy
+import shutil
+import tempfile
 from datetime import timedelta
+
+from tests.test_infra import MockStorageComponents, make_test_storage, run_async
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 RATE_LOW = 7.6
@@ -31,6 +36,8 @@ STATE_FIELDS = (
     "octopus_slots",
     "octopus_feed_covered",
     "octopus_feed_stripped",
+    "octopus_feed_covered_saved",
+    "now_utc",
     "octopus_intelligent_dynamic",
     "car_charging_now",
 )
@@ -69,6 +76,8 @@ def _reset(my_predbat):
     my_predbat.octopus_slots = [[]]
     my_predbat.octopus_feed_covered = set()
     my_predbat.octopus_feed_stripped = set()
+    my_predbat.octopus_feed_covered_saved = []
+    my_predbat.components = MockStorageComponents(None)
     my_predbat.octopus_intelligent_dynamic = True
     my_predbat.car_charging_now = [False]
     my_predbat.args.pop("intelligent_dispatch_billing", None)
@@ -80,6 +89,7 @@ def _cycle(my_predbat, minute, feed, slots=None, save=True, car_slots=None):
     dispatches are slots, or each car's are car_slots. Returns the rates after the strip.
     """
     my_predbat.minutes_now = minute
+    my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=minute)
     my_predbat.octopus_slots = [list(car) for car in car_slots] if car_slots is not None else [list(slots or [])]
     rates = {m: RATE_DAY for m in range(-24 * 60, 2 * 24 * 60)}
     my_predbat.io_adjusted = {}
@@ -166,7 +176,7 @@ def _run(my_predbat):
     failed |= _check("t7 nothing recorded by a compare run", _low(rates, 1000, 1020), "rate {}".format(rates[1000]))
     _reset(my_predbat)
     rates = _cycle(my_predbat, 1000, [(1000, 1020)])
-    failed |= _check("t7 nothing stripped after a restart", _low(rates, 1000, 1020), "rate {}".format(rates[1000]))
+    failed |= _check("t7 nothing stripped after a restart with no storage", _low(rates, 1000, 1020), "rate {}".format(rates[1000]))
 
     print("Test 8: half hours seen covered are kept by absolute time across midnight, and dropped once past")
     _reset(my_predbat)
@@ -230,16 +240,196 @@ def _run(my_predbat):
     return failed
 
 
+def _restart(my_predbat):
+    """
+    Lose the half hours seen covered, as a restart does, then restore them from storage.
+    """
+    my_predbat.octopus_feed_covered = set()
+    my_predbat.octopus_feed_stripped = set()
+    my_predbat.octopus_feed_covered_saved = []
+    my_predbat.octopus_feed_load()
+
+
+def _run_persistence(my_predbat):
+    """
+    The half hours seen covered are saved whenever they change and restored after a restart.
+    """
+    failed = False
+    tmpdir = tempfile.mkdtemp()
+    try:
+        storage = make_test_storage(my_predbat, tmpdir)
+        saves = []
+        backend_save = storage.backend.save
+
+        async def counting_save(module, filename, data, **kwargs):
+            """Count the writes, then make them."""
+            saves.append(filename)
+            return await backend_save(module, filename, data, **kwargs)
+
+        storage.backend.save = counting_save
+
+        print("Test 13: a restart while the feed is still stale strips the withdrawn dispatch (the #5663 report)")
+        _reset(my_predbat)
+        my_predbat.components = MockStorageComponents(storage)
+        _cycle(my_predbat, 995, [(990, 1020)], [_dispatch(my_predbat, 990, 1020)])
+        failed |= _check("t13 saved once", saves == ["octopus_feed_covered"], "saves {}".format(saves))
+        _cycle(my_predbat, 995, [(990, 1020)], [_dispatch(my_predbat, 990, 1020)])
+        failed |= _check("t13 not saved again when unchanged", saves == ["octopus_feed_covered"], "saves {}".format(saves))
+        my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=1000)
+        _restart(my_predbat)
+        rates = _cycle(my_predbat, 1000, [(1000, 1020)])
+        failed |= _check("t13 day rate after the restart", _day(rates, 1000, 1020), "rate {}".format(rates[1000]))
+
+        print("Test 14: a half hour that is over is not restored")
+        my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=1020)
+        _restart(my_predbat)
+        failed |= _check("t14 nothing restored", not my_predbat.octopus_feed_covered, "covered {}".format(my_predbat.octopus_feed_covered))
+
+        print("Test 15: a corrupt store is ignored")
+        run_async(backend_save("predbat", "octopus_feed_covered", {"periods": ["bad", 5, None]}, format="json"))
+        my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=1000)
+        _restart(my_predbat)
+        failed |= _check("t15 nothing restored from bad entries", not my_predbat.octopus_feed_covered, "covered {}".format(my_predbat.octopus_feed_covered))
+        run_async(backend_save("predbat", "octopus_feed_covered", ["not", "a", "dict"], format="json"))
+        _restart(my_predbat)
+        failed |= _check("t15 nothing restored from a bad shape", not my_predbat.octopus_feed_covered, "covered {}".format(my_predbat.octopus_feed_covered))
+
+        print("Test 16: a failed write is retried next cycle even though nothing has changed since")
+        _reset(my_predbat)
+        my_predbat.components = MockStorageComponents(storage)
+        fail_next = [True]
+
+        async def failing_once_save(module, filename, data, **kwargs):
+            """Fail the first write, then count and make the rest."""
+            if fail_next[0]:
+                fail_next[0] = False
+                return False
+            return await counting_save(module, filename, data, **kwargs)
+
+        storage.backend.save = failing_once_save
+        saves.clear()
+        _cycle(my_predbat, 995, [(990, 1020)], [_dispatch(my_predbat, 990, 1020)])
+        failed |= _check("t16 first write failed", saves == [], "saves {}".format(saves))
+        _cycle(my_predbat, 995, [(990, 1020)], [_dispatch(my_predbat, 990, 1020)])
+        failed |= _check("t16 retried once the store works", saves == ["octopus_feed_covered"], "saves {}".format(saves))
+        storage.backend.save = counting_save
+
+        print("Test 17: a compare run (save False) writes nothing")
+        _reset(my_predbat)
+        my_predbat.components = MockStorageComponents(storage)
+        saves.clear()
+        _cycle(my_predbat, 995, [(990, 1020)], [_dispatch(my_predbat, 990, 1020)], save=False)
+        failed |= _check("t17 nothing written", saves == [], "saves {}".format(saves))
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    return failed
+
+
+class _StopFetch(Exception):
+    """Raised by the test's hook to stop fetch_sensor_data() once it has handed the import rates on."""
+
+
+def _free_half_hour(my_predbat):
+    """
+    The first half hour after the one in progress that, with the one after it, lies outside the fixed window.
+    """
+    period = (my_predbat.minutes_now // 30 + 1) * 30
+    while my_predbat.in_iog_fixed_window(period) or my_predbat.in_iog_fixed_window(period + 30):
+        period += 30
+    return period
+
+
+def _run_fetch(my_predbat):
+    """
+    The real fetch_sensor_data() strips the withdrawn discount after the car's dispatches are merged and before
+    rate_replicate() reads the io_adjusted markers.
+    """
+    failed = False
+    print("Test 18: fetch_sensor_data() strips a withdrawn dispatch's discount and keeps one still listed")
+    feed_id = "sensor.test_feed_withdrawn_rates"
+    slot_id = "binary_sensor.test_feed_withdrawn_dispatching"
+    # fetch_sensor_data() is stopped part way, so put back everything it touched before returning
+    saved_state = dict(my_predbat.__dict__)
+    saved_args = copy.deepcopy(my_predbat.args)
+    dummy_items = my_predbat.ha_interface.dummy_items
+    saved_items = {entity_id: dummy_items.get(entity_id) for entity_id in (feed_id, slot_id)}
+    seen = {}
+    original_replicate = my_predbat.rate_replicate
+
+    def hook(rates, rate_io=None, is_import=True, is_gas=False, use_future=False):
+        """Record the import rates and markers as rate_replicate() is handed them, then stop the fetch."""
+        # Only the import replication is handed the live markers; rate_base_min_max() replicates a copy first
+        if rate_io is not my_predbat.io_adjusted:
+            return original_replicate(rates, rate_io, is_import=is_import, is_gas=is_gas, use_future=use_future)
+        seen["rates"] = dict(rates)
+        seen["io_adjusted"] = dict(rate_io)
+        raise _StopFetch()
+
+    try:
+        _reset(my_predbat)
+        withdrawn = _free_half_hour(my_predbat)
+        listed = withdrawn + 30
+        feed = []
+        for period in range(0, 3 * 24 * 60, 30):
+            discounted = period in (withdrawn, listed)
+            feed.append(
+                {
+                    "value_inc_vat": RATE_LOW if discounted else RATE_DAY,
+                    "valid_from": (my_predbat.midnight_utc + timedelta(minutes=period)).strftime(TIME_FORMAT),
+                    "valid_to": (my_predbat.midnight_utc + timedelta(minutes=period + 30)).strftime(TIME_FORMAT),
+                    "is_intelligent_adjusted": discounted,
+                }
+            )
+        dummy_items[feed_id] = {"state": str(RATE_DAY), "rates": feed}
+        dummy_items[slot_id] = {"state": "off", "planned_dispatches": [_dispatch(my_predbat, listed, listed + 30)], "completed_dispatches": []}
+        my_predbat.args["metric_octopus_import"] = feed_id
+        my_predbat.args["octopus_intelligent_slot"] = slot_id
+        my_predbat.octopus_intelligent_ignore_unplugged = False
+        # Both half hours were seen covered at an earlier cycle; only the later one is still listed
+        my_predbat.octopus_feed_covered = {my_predbat.midnight_utc + timedelta(minutes=withdrawn), my_predbat.midnight_utc + timedelta(minutes=listed)}
+        my_predbat.rate_replicate = hook
+        # The shared fixture's sensor history can't feed the load and energy reads ahead of the rates, and they
+        # play no part in them
+        my_predbat.minute_data_load = lambda *args, **kwargs: ({}, 0)
+        my_predbat.minute_data_import_export = lambda *args, **kwargs: {}
+        try:
+            my_predbat.fetch_sensor_data(save=False)
+            failed |= _check("t18 fetch reached rate_replicate()", False, "returned without importing rates")
+        except _StopFetch:
+            rates = seen["rates"]
+            io_adjusted = seen["io_adjusted"]
+            failed |= _check("t18 withdrawn half hour at the day rate", _day(rates, withdrawn, withdrawn + 30), "rate {}".format(rates.get(withdrawn)))
+            failed |= _check("t18 withdrawn markers gone before rate_replicate()", not any(io_adjusted.get(m) for m in range(withdrawn, withdrawn + 30)), "io_adjusted {}".format(io_adjusted.get(withdrawn)))
+            failed |= _check("t18 listed half hour keeps the discount", _low(rates, listed, listed + 30), "rate {}".format(rates.get(listed)))
+            failed |= _check("t18 listed markers kept", all(io_adjusted.get(m) for m in range(listed, listed + 30)), "io_adjusted {}".format(io_adjusted.get(listed)))
+    finally:
+        for name in [name for name in my_predbat.__dict__ if name not in saved_state]:
+            delattr(my_predbat, name)
+        my_predbat.__dict__.update(saved_state)
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        for entity_id, item in saved_items.items():
+            if item is None:
+                dummy_items.pop(entity_id, None)
+            else:
+                dummy_items[entity_id] = item
+    return failed
+
+
 def test_octopus_feed_withdrawn(my_predbat):
     """
     The rate feed's discount for a withdrawn Octopus Intelligent dispatch goes back to the day rate.
     """
     print("*** Running test: Octopus feed discount for a withdrawn dispatch")
     saved_state = {field: copy.deepcopy(getattr(my_predbat, field, None)) for field in STATE_FIELDS}
+    saved_components = my_predbat.components
     saved_args = {key: my_predbat.args.get(key) for key in ("intelligent_dispatch_billing",)}
     try:
         failed = _run(my_predbat)
+        failed |= _run_persistence(my_predbat)
+        failed |= _run_fetch(my_predbat)
     finally:
+        my_predbat.components = saved_components
         for key, value in saved_args.items():
             if value is None:
                 my_predbat.args.pop(key, None)

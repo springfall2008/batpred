@@ -4852,8 +4852,8 @@ class Octopus:
         outside the fixed 23:30-05:30 window, and its half hour is not covered by any car's dispatch now -
         planned, completed or held (see octopus_held_dispatches()) - but was at an earlier cycle. A discount no
         dispatch has ever covered is left alone: the feed may be ahead of the dispatching sensor, or no sensor
-        may be set up at all. The half hours seen covered are kept in memory only, so after a restart nothing is
-        stripped until a dispatch has been seen again. Not under the window rule (dispatch_billing_window()),
+        may be set up at all. The half hours seen covered are saved to storage (octopus_feed_save()), so a restart
+        while the feed is still stale does not bring the discount back. Not under the window rule (dispatch_billing_window()),
         where the supplier bills a planned dispatch's half hours off-peak whether or not it ran.
 
         Nothing is stripped while any car reads charging: Octopus answers an empty planned list for a few minutes
@@ -4869,6 +4869,7 @@ class Octopus:
             if save:
                 self.octopus_feed_covered = set()
                 self.octopus_feed_stripped = set()
+                self.octopus_feed_save()
             return rates
         covered = set()
         for car_n in range(min(self.num_cars, len(self.octopus_slots))):
@@ -4902,12 +4903,76 @@ class Octopus:
             return rates
         current = self.midnight_utc + timedelta(minutes=current_minute)
         self.octopus_feed_covered = {period for period in self.octopus_feed_covered | covered if period >= current}
+        self.octopus_feed_save()
         # The feed is re-read every cycle, so the same half hours are stripped again each time, and fewer of their
         # minutes as time passes - log only when a half hour is newly stripped
         if stripped_periods - self.octopus_feed_stripped:
             self.log("Octopus Intelligent: removed the dispatch rate the rate feed still carries from {} minutes, as their dispatch has been withdrawn".format(stripped))
         self.octopus_feed_stripped = stripped_periods
         return rates
+
+    def octopus_feed_state(self):
+        """
+        The half hours seen covered by a dispatch (octopus_strip_withdrawn_feed_rates()) in a form storage can hold:
+        the absolute start of each, oldest first.
+        """
+        return [period.isoformat() for period in sorted(self.octopus_feed_covered)]
+
+    def octopus_feed_save(self):
+        """
+        Save the half hours seen covered by a dispatch to storage when they have changed since the last save, so a
+        restart while the rate feed still carries a withdrawn dispatch's discount does not keep it (GH#5663).
+        Recorded as saved only once a write works, so a failed write is retried next cycle, as octopus_held_save()
+        does. An install that never sees a dispatch never writes.
+        """
+        state = self.octopus_feed_state()
+        if state == self.octopus_feed_covered_saved:
+            return
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+
+        try:
+            # Expiry is on the real clock, as storage.load() checks it. It only tidies up: octopus_feed_load()
+            # drops the half hours that have passed, and no dispatch is listed further ahead than the plan's 48 hours
+            expiry = datetime.now(timezone.utc) + timedelta(hours=48)
+            if run_async(storage.save("predbat", "octopus_feed_covered", {"periods": state}, format="json", expiry=expiry)):
+                self.octopus_feed_covered_saved = state
+            else:
+                self.log("Warn: Octopus Intelligent: failed to save the half hours seen covered by a dispatch")
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to save the half hours seen covered by a dispatch: {}".format(e))
+
+    def octopus_feed_load(self):
+        """
+        Restore the half hours saved by octopus_feed_save(), at start up, taking only those not yet over.
+        """
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage or self.now_utc is None:
+            return
+
+        try:
+            data = run_async(storage.load("predbat", "octopus_feed_covered"))
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to load the half hours seen covered by a dispatch: {}".format(e))
+            return
+        periods = data.get("periods") if isinstance(data, dict) else None
+        if not isinstance(periods, list):
+            return
+
+        restored = 0
+        for period in periods:
+            try:
+                period = datetime.fromisoformat(period)
+                current = period + timedelta(minutes=30) > self.now_utc
+            except (ValueError, TypeError):
+                continue
+            if current:
+                self.octopus_feed_covered.add(period)
+                restored += 1
+        self.octopus_feed_covered_saved = self.octopus_feed_state()
+        if restored:
+            self.log("Octopus Intelligent: restored {} half hour(s) seen covered by a dispatch from storage".format(restored))
 
     def dynamic_load_car_strip_feed_rates(self, rates):
         """
