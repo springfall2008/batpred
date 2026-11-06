@@ -380,7 +380,8 @@ def test_ge_cloud(my_predbat=None):
         ("ac_charge_gate_on_settings_refresh", _test_ac_charge_gate_on_settings_refresh, "Settings refresh re-enables a cleared AC charge gate while force charging"),
         ("control_registers_include_ac_charge_gate", _test_control_registers_include_ac_charge_gate, "Control registers include the AC charge gate Predbat re-asserts"),
         ("gateway_not_swept_every_cycle", _test_gateway_not_swept_every_cycle, "A Gateway follows the same register read rules as any device"),
-        ("automatic_config_full_power_discharge_eco", _test_automatic_config_full_power_discharge_eco, "Automatic config sets inverter_full_power_discharge_eco from the device flag"),
+        ("automatic_config_full_power_discharge_eco", _test_automatic_config_full_power_discharge_eco, "A full power eco inverter gets no inverter_mode"),
+        ("default_options_restore_full_power_eco", _test_default_options_restore_full_power_eco, "Default options turn eco back on for a full power eco inverter"),
         ("inverter_control_setting", _test_inverter_control_setting, "ge_cloud_inverter_control defaults to on"),
         ("inverter_control_off_run", _test_inverter_control_off_run, "Inverter control off skips inverter config and default options"),
         ("inverter_control_off_user_writes", _test_inverter_control_off_user_writes, "Inverter control off still sends the user's writes, but not Predbat's"),
@@ -3714,29 +3715,49 @@ def _test_settings_cache_drops_departed_devices(my_predbat):
 
 
 def _test_automatic_config_full_power_discharge_eco(my_predbat):
-    """Automatic config tells each inverter whether it exports at full power in eco mode, from GE Cloud's device flag"""
+    """An inverter GE Cloud flags as exporting at full power in eco mode gets no inverter_mode, so Predbat never turns eco off to export"""
 
     async def test():
         devices = {"ems": None, "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}}
         ge = MockGECloudDirect()
-        ge.settings = {"battery001": {}, "battery002": {}}
+        eco = {"name": "Enable Eco Mode", "value": True, "validation_rules": ["boolean"]}
+        ge.settings = {"battery001": {"1": dict(eco)}, "battery002": {"1": dict(eco)}}
         ge.info = {"battery001": {"flags": ["full-power-discharge-in-eco-mode"]}, "battery002": {"flags": []}}
         await ge.async_automatic_config(devices)
-        if ge.config_args.get("inverter_full_power_discharge_eco") != [True, False]:
-            print("ERROR: expected [True, False] from the device flags, got {}".format(ge.config_args.get("inverter_full_power_discharge_eco")))
-            return 1
-
-        # A value written in apps.yaml wins over the flag
-        ge = MockGECloudDirect()
-        ge.settings = {"battery001": {}, "battery002": {}}
-        ge.info = {"battery001": {"flags": ["full-power-discharge-in-eco-mode"]}, "battery002": {"flags": ["full-power-discharge-in-eco-mode"]}}
-        ge.config_args["inverter_full_power_discharge_eco"] = [False, False]
-        ge.base.args_from_apps_yaml = {"inverter_full_power_discharge_eco": [False, False]}
-        await ge.async_automatic_config(devices)
-        if ge.config_args.get("inverter_full_power_discharge_eco") != [False, False]:
-            print("ERROR: an apps.yaml value should be kept, got {}".format(ge.config_args.get("inverter_full_power_discharge_eco")))
+        if ge.config_args.get("inverter_mode") != [None, "switch.predbat_gecloud_battery002_enable_eco_mode"]:
+            print("ERROR: the flagged inverter should have no inverter_mode and the other its eco switch, got {}".format(ge.config_args.get("inverter_mode")))
             return 1
         return 0
+
+    return run_async(test())
+
+
+def _test_default_options_restore_full_power_eco(my_predbat):
+    """The default options pass turns eco back on for an inverter that exports at full power in eco mode, and leaves others alone"""
+
+    async def test():
+        failed = 0
+        for flags, expect_write in ((["full-power-discharge-in-eco-mode"], True), ([], False)):
+            ge = MockGECloudDirect()
+            registers = {"1": {"name": "Enable Eco Mode", "value": False, "validation_rules": ["boolean"]}}
+            ge.settings = {"inv001": registers}
+            ge.info = {"inv001": {"flags": flags}}
+            writes = []
+
+            async def mock_write(serial, setting_id, value):
+                writes.append((serial, setting_id, value))
+                return {"value": value}
+
+            async def mock_publish(*args, **kwargs):
+                pass
+
+            ge.async_write_inverter_setting = mock_write
+            ge.publish_registers = mock_publish
+            await ge.enable_default_options("inv001", registers)
+            if (writes == [("inv001", "1", True)]) != expect_write or (not expect_write and writes):
+                print("ERROR: flags {} should {}write eco on, got {}".format(flags, "" if expect_write else "not ", writes))
+                failed = 1
+        return failed
 
     return run_async(test())
 

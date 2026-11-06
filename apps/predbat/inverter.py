@@ -2922,11 +2922,8 @@ class Inverter:
         old_inverter_mode = self.base.get_arg("inverter_mode", index=self.id)
 
         if self.inv_has_ge_eco_toggle:
-            # GE has an eco toggle rather than a mode, so exporting means eco off - unless the inverter reports it
-            # discharges at full power in eco mode (GE Cloud's full-power-discharge-in-eco-mode flag), when eco stays on
-            # and an export costs no eco writes
-            full_power_eco = self.base.get_arg("inverter_full_power_discharge_eco", False, index=self.id)
-            if force_export and not full_power_eco:
+            # GE has an eco toggle rather than a mode, so exporting means eco off
+            if force_export:
                 new_inverter_mode = "off"
             else:
                 new_inverter_mode = "on"

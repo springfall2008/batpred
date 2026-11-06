@@ -364,12 +364,14 @@ The day is now 694–766 calls, 20,820–22,980 a month.
 ## After: Eco mode left on for inverters that export at full power in Eco
 
 GE Cloud reports a `full-power-discharge-in-eco-mode` flag in each inverter's device info. So far every
-GivEnergy device seen reports it, and the fake now does too. `ge_cloud_automatic` copies the flag into the new
-per-inverter setting `inverter_full_power_discharge_eco`, without overriding a value written in apps.yaml.
+GivEnergy device seen reports it, and the fake now does too. The change is entirely in `gecloud.py`:
 
-When the setting is true, `adjust_inverter_mode()` keeps Eco mode on during a force export instead of turning
-it off and back on. It still turns Eco back on if something left it off. Inverters without the flag are
-unchanged, and so is GivTCP's mode select.
+- `async_automatic_config` gives a flagged inverter no `inverter_mode` (`None` for that inverter), so
+  `adjust_inverter_mode()` takes its existing quiet path and never turns eco off to export.
+- `ensure_full_power_eco()` turns eco back on if it finds it off. It runs with the default options (start-up,
+  new device, daily) and after the control re-read on leaving read only, where the eco register is now one of
+  the flagged inverter's control registers.
+- Inverters without the flag still have eco turned off for an export. GivTCP is unchanged.
 
 | Scenario | Writes/day before | Writes/day after | Calls/day |
 | -------- | ----------------: | ---------------: | --------: |

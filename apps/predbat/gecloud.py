@@ -1519,6 +1519,39 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     changed = True
                 else:
                     self.log("GECloud: Warn: Failed to enable real-time control for {}".format(device))
+        changed |= await self.ensure_full_power_eco(device)
+        return changed
+
+    def full_power_eco_keys(self, device):
+        """The Enable Eco Mode register keys of an inverter GE Cloud flags as exporting at full power in eco mode (none otherwise)"""
+        if not self.full_power_discharge_eco(device):
+            return []
+        registers = self.settings.get(device, {})
+        return [key for key in registers if regname_to_ha(registers[key].get("name", "") or "") == "enable_eco_mode"]
+
+    async def ensure_full_power_eco(self, device):
+        """
+        Turn eco mode back on for an inverter that exports at full power in eco mode, if something turned it off.
+
+        Such an inverter has no inverter_mode (see async_automatic_config), so Predbat never turns its eco off itself;
+        this puts it back after anything else did - run with the default options and on leaving read only. Reads the
+        cached settings, so costs no API call when eco is already on. Returns True if a write was made.
+        """
+        if not self.inverter_control or self.read_only_now():
+            return False
+        registers = self.settings.get(device, {})
+        changed = False
+        for key in self.full_power_eco_keys(device):
+            if register_switch_on(registers[key].get("value", None)):
+                continue
+            self.log("GECloud: Turning eco mode back on for {}, which exports at full power in eco mode".format(device))
+            result = await self.async_write_inverter_setting(device, key, True)
+            if result and ("value" in result):
+                registers[key]["value"] = result["value"]
+                await self.publish_registers(device, registers, select_key=key)
+                changed = True
+            else:
+                self.log("GECloud: Warn: Failed to turn eco mode back on for {}".format(device))
         return changed
 
     async def publish_registers(self, device, registers, select_key=None):
@@ -1696,10 +1729,13 @@ class GECloudDirect(ComponentBase, CarChargerControl):
 
         self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
         self.set_arg("num_inverters", num_inverters)
-        self.set_arg_auto("inverter_mode", build_entities("switch", ["enable_eco_mode"]), overwrite=False)
-        # An inverter GE Cloud flags as discharging at full power in eco mode exports with eco left on, so an export
-        # costs no eco writes (inverter.py adjust_inverter_mode); one without the flag needs eco off to export
-        self.set_arg_auto("inverter_full_power_discharge_eco", [self.full_power_discharge_eco(device) for device in batteries], overwrite=False)
+        # An inverter GE Cloud flags as discharging at full power in eco mode exports with eco left on, so it gets no
+        # inverter_mode: adjust_inverter_mode() then has nothing to turn off, and an export costs no eco writes. Eco is
+        # held on for it by ensure_full_power_eco() instead. One without the flag needs eco off to export.
+        eco_entities = build_entities("switch", ["enable_eco_mode"])
+        if eco_entities is not None:
+            eco_entities = [None if self.full_power_discharge_eco(device) else entity for device, entity in zip(batteries, eco_entities)]
+        self.set_arg_auto("inverter_mode", eco_entities, overwrite=False)
         if not self.get_arg("ge_cloud_load_today_ignore", default=False):
             self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{device}_consumption_total" for device in batteries])
         self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_total" for device in batteries])
@@ -1963,7 +1999,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             if name is not None:
                 control(setting, platform, device, name, **fields)
 
-        register("inverter_mode", "switch", ["enable_eco_mode"], domain="switch")
+        # As async_automatic_config: no inverter_mode for an inverter that exports at full power in eco mode
+        if not self.full_power_discharge_eco(device):
+            register("inverter_mode", "switch", ["enable_eco_mode"], domain="switch")
         sensor("load_today", device, "consumption_total")
         sensor("import_today", device, "grid_import_total")
         sensor("export_today", device, "grid_export_total")
@@ -2030,9 +2068,6 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     sensor(setting, ems, suffix)
                 else:
                     entities[setting] = {"value": 0, "access": "r"}
-
-        # A fact about the inverter rather than an entity: whether it exports at full power with eco mode on
-        entities["inverter_full_power_discharge_eco"] = {"value": self.full_power_discharge_eco(device), "access": "r"}
 
         for setting in GE_CLOUD_DUMMIED_SETTINGS[inverter_type]:
             entities.pop(setting, None)
@@ -2644,6 +2679,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     self.check_ems_inverter_slots(device, self.settings[device])
                 self.settings_read_stamps.setdefault(device, {})["control"] = settings_now
                 settings_updated = True
+                if reason == "left read only":
+                    # Eco may have been turned off while Predbat was not in control
+                    await self.ensure_full_power_eco(device)
             self.control_reread_reason = None
 
             if settings_updated and self.storage:
@@ -2902,6 +2940,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     entities.add(item.lower())
         keys = {entry["key"] for entity_id, entry in self.register_entity_map.items() if entry.get("device") == device and entity_id in entities}
         keys.update(self.ac_charge_gate_keys(device))
+        keys.update(self.full_power_eco_keys(device))
         if self.ems_device and device != self.ems_device and device in self.devices_dict.get("battery", []):
             for key, register in self.settings.get(device, {}).items():
                 ha_name = regname_to_ha(register.get("name", None) or "")

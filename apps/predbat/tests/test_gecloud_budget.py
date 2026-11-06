@@ -497,6 +497,23 @@ def test_leaving_read_only_rereads_controls(scenario):
     return failed
 
 
+def test_leaving_read_only_restores_eco(scenario):
+    """An inverter that exports at full power in eco mode has eco put back on when Predbat leaves read only, in case it was turned off meanwhile."""
+    failed = False
+    harness = _started(scenario)
+    eco_id = [index + 1 for index, (name, _kind, _value) in enumerate(CAPTURED_REGISTERS) if name == "Enable Eco Mode"][0]
+    _polled(harness, 1, 1)
+    harness.my_predbat.set_read_only = True
+    harness.fake.register_values[eco_id] = False
+    _polled(harness, 2, 5)
+    harness.my_predbat.set_read_only = False
+    calls = _polled(harness, 6, 6)
+    failed |= _expect("Enable Eco Mode" in _reads(calls), "leaving read only did not re-read Enable Eco Mode")
+    writes = [call for call in calls if call.category == "register_write" and call.setting_name == "Enable Eco Mode"]
+    failed |= _expect(len(writes) == 1 and harness.fake.register_values[eco_id] is True, "eco should be written back on once, got {} writes, value {}".format(len(writes), harness.fake.register_values[eco_id]))
+    return failed
+
+
 def test_poll_settings_opt_in(scenario):
     """ge_cloud_poll_settings brings back the full sweep every 10 minutes."""
     harness = _started(scenario, args={"ge_cloud_poll_settings": True})
@@ -565,6 +582,7 @@ def run_gecloud_budget_harness_tests(my_predbat):
         test_full_read_after_7_days_running,
         test_control_failure_rereads_once_per_4_hours,
         test_leaving_read_only_rereads_controls,
+        test_leaving_read_only_restores_eco,
         test_poll_settings_opt_in,
     ):
         if test(scenario):

@@ -1590,13 +1590,12 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
     return failed
 
 
-def test_adjust_ge_eco_toggle(test_name, ha, inv, prev_eco_state, force_export, expect_eco_state=None, full_power_eco=None):
+def test_adjust_ge_eco_toggle(test_name, ha, inv, prev_eco_state, force_export, expect_eco_state=None):
     """
     Test adjust_inverter_mode with inv_has_ge_eco_toggle=True (e.g. GivEnergy Cloud / GEC inverter type).
 
     The eco toggle is a switch entity. When force_export=True the switch is turned off (eco disabled),
-    when force_export=False the switch is turned on (eco enabled). With inverter_full_power_discharge_eco
-    (full_power_eco) set the inverter exports at full power in eco mode, so eco is kept on throughout.
+    when force_export=False the switch is turned on (eco enabled).
     """
     failed = False
     if expect_eco_state is None:
@@ -1608,10 +1607,6 @@ def test_adjust_ge_eco_toggle(test_name, ha, inv, prev_eco_state, force_export, 
     orig_has_ge_eco_toggle = inv.inv_has_ge_eco_toggle
     orig_has_ge_inverter_mode = inv.inv_has_ge_inverter_mode
     orig_inverter_mode_arg = inv.base.args.get("inverter_mode")
-    if full_power_eco is None:
-        inv.base.args.pop("inverter_full_power_discharge_eco", None)
-    else:
-        inv.base.args["inverter_full_power_discharge_eco"] = [full_power_eco]
 
     # Configure inverter for GEC-style eco toggle
     inv.inv_has_ge_eco_toggle = True
@@ -1634,7 +1629,6 @@ def test_adjust_ge_eco_toggle(test_name, ha, inv, prev_eco_state, force_export, 
     inv.inv_has_ge_eco_toggle = orig_has_ge_eco_toggle
     inv.inv_has_ge_inverter_mode = orig_has_ge_inverter_mode
     inv.base.args["inverter_mode"] = orig_inverter_mode_arg
-    inv.base.args.pop("inverter_full_power_discharge_eco", None)
 
     return failed
 
@@ -5993,10 +5987,6 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_ge_eco_toggle("eco_toggle_force_export", ha, inv, "on", True, "off")
     failed |= test_adjust_ge_eco_toggle("eco_toggle_no_change_eco", ha, inv, "on", False, "on")
     failed |= test_adjust_ge_eco_toggle("eco_toggle_no_change_export", ha, inv, "off", True, "off")
-    # An inverter that exports at full power in eco mode keeps eco on through an export, and still has it put back on
-    failed |= test_adjust_ge_eco_toggle("eco_toggle_full_power_export_keeps_eco", ha, inv, "on", True, "on", full_power_eco=True)
-    failed |= test_adjust_ge_eco_toggle("eco_toggle_full_power_export_restores_eco", ha, inv, "off", True, "on", full_power_eco=True)
-    failed |= test_adjust_ge_eco_toggle("eco_toggle_not_full_power_export_turns_eco_off", ha, inv, "on", True, "off", full_power_eco=False)
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_unset_enable", inv, False, "unset", True)
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_unset_export", inv, True, "unset", True)
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_enable", inv, False, None, False)
