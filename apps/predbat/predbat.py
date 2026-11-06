@@ -421,6 +421,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.predict_iboost_best = {}
+        self.predict_clipped_best = {}
+        self.predict_carbon_best = {}
         self.predict_car_hold_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0

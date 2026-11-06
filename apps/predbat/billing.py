@@ -28,6 +28,11 @@ BILLING_REFRESH_MINUTES = 180
 BILLING_ENTITY_SUFFIX = "billing"
 BILLING_SLOT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 BILLING_LEGS = ("import", "export")
+# A past day is read again each refresh until it is complete, but once it is this many days old one more read settles it:
+# suppliers publish within a day or two, so a half-hour still missing by then (or a meter that publishes nothing) is not coming
+BILLING_SETTLE_DAYS = 3
+# The measurements query asks for Europe/London days, and the supplier spreads each London day's standing charge over its half-hours
+BILLING_TZ = ZoneInfo("Europe/London")
 
 # The statistic type that carries the standing charge; every other type is a rate bucket.
 STANDING_CHARGE_TYPE = "STANDING_CHARGE_COST"
@@ -121,8 +126,9 @@ def _parse_node(node):
     buckets = {}
     for label, bucket_kwh, cost in rows:
         if bucket_kwh is None:
-            # Export's GENERATION_VALUE row carries no kWh of its own; it is the node's, but only
-            # when it is the sole bucket - otherwise there is no telling how the kWh split.
+            # Export's GENERATION_VALUE row, and EDF's TOU_BUCKET_COST import rows (one per half-hour, verified live
+            # 6 Nov 2026), carry no kWh of their own; it is the node's, but only when it is the sole bucket - otherwise
+            # there is no telling how the kWh split.
             if len(rows) != 1:
                 return None
             bucket_kwh = kwh
@@ -190,10 +196,10 @@ def merge_slots(cache, leg, new_slots, now_utc, tz):
     return merged
 
 
-def days_to_fetch(cache, leg, now_utc, tz):
-    """Return the local dates in the window that are not yet complete for leg."""
+def days_to_fetch(cache, leg, now_utc, tz, settled=()):
+    """Return the local dates in the window that are not yet complete for leg, leaving out settled ones (YYYY-MM-DD)."""
     slots = (cache or {}).get(leg) or {}
-    return [day for day in _window_days(now_utc, tz) if not _day_complete(slots, day, tz)]
+    return [day for day in _window_days(now_utc, tz) if day.isoformat() not in settled and not _day_complete(slots, day, tz)]
 
 
 def _complete_until(slots):
@@ -298,6 +304,8 @@ class BillingReader:
         self.fetched_at = None
         # The meters the cache was read from; a different meter (or account) starts the cache afresh
         self.mpans = None
+        # Per leg, the days (YYYY-MM-DD) read when already BILLING_SETTLE_DAYS old, which are not read again
+        self.settled = {leg: [] for leg in BILLING_LEGS}
 
     async def load(self):
         """Restore the cache, legs and last fetch time from storage, if any were saved."""
@@ -308,6 +316,8 @@ class BillingReader:
         self.cache = data.get("slots") or {}
         self.legs = data.get("legs") or self.legs
         self.mpans = data.get("mpans")
+        settled = data.get("settled") or {}
+        self.settled = {leg: list(settled.get(leg) or []) for leg in BILLING_LEGS}
         fetched_at = data.get("fetched_at")
         if isinstance(fetched_at, str):
             try:
@@ -322,7 +332,7 @@ class BillingReader:
         storage = self.owner.storage
         if not storage:
             return
-        blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
+        blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "settled": self.settled, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
         await storage.save(self.storage_app, self.storage_name, blob, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=BILLING_DAYS * 2))
 
     def due(self, now_utc):
@@ -336,23 +346,29 @@ class BillingReader:
 
         mpans maps "import"/"export" to (account_id, mpan), or None when that leg isn't configured.
         query_fn(query, context) returns the GraphQL data, or None for a failed read; a failed read
-        marks the leg False and leaves what was cached alone. Returns True when new slots arrived.
+        marks the leg False and leaves what was cached alone. A day read once it is BILLING_SETTLE_DAYS old
+        is settled and not read again, however much of it arrived. Returns True when new slots arrived.
         """
         tz = _zone(self.owner.local_tz)
         changed = False
+        window = [day.isoformat() for day in _window_days(now_utc, tz)]
+        settle_by = (now_utc.astimezone(tz).date() - timedelta(days=BILLING_SETTLE_DAYS)).isoformat()
         meters = {leg: (mpans.get(leg) or (None, None))[1] for leg in BILLING_LEGS}
         if self.mpans is not None and self.mpans != meters:
             self.owner.log("Billing: meters changed, discarding the billing read for the previous meters")
             self.cache = {}
+            self.settled = {leg: [] for leg in BILLING_LEGS}
         self.mpans = meters
         for leg in BILLING_LEGS:
+            settled = [name for name in self.settled.get(leg) or [] if name in window]
             target = mpans.get(leg)
             if not target:
                 self.legs[leg] = None
+                self.settled[leg] = settled
                 continue
             account_id, mpan = target
             ok = True
-            for day in days_to_fetch(self.cache, leg, now_utc, tz):
+            for day in days_to_fetch(self.cache, leg, now_utc, tz, settled):
                 starts = day_slot_starts(day, tz)
                 query = BILLING_MEASUREMENTS_QUERY.format(
                     account_id=account_id,
@@ -367,6 +383,11 @@ class BillingReader:
                     break
                 changed = changed or bool(slots)
                 self.cache = merge_slots(self.cache, leg, slots, now_utc, tz)
+                if day.isoformat() <= settle_by:
+                    settled.append(day.isoformat())
+                    if not _day_complete(self.cache.get(leg) or {}, day, tz):
+                        self.owner.log("Warn: Billing: the {} billing for {} on MPAN ...{} is still incomplete after {} days, so it won't be read again".format(leg, day.isoformat(), str(mpan)[-4:], BILLING_SETTLE_DAYS))
+            self.settled[leg] = settled
             self.legs[leg] = ok
             if not ok:
                 self.owner.log("Warn: Billing: could not read the {} billing for MPAN ...{}, keeping what was already read".format(leg, str(mpan)[-4:]))
@@ -403,6 +424,14 @@ def _row_slot_keys(view_midnight_utc, slot_minute, plan_interval_minutes):
     return [(start + timedelta(minutes=offset)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT) for offset in range(0, max(plan_interval_minutes, 30), 30)]
 
 
+def _half_hours_in_day(key, counts):
+    """How many half-hours the London day holding slot key has (48, or 46/50 on a clock change); counts caches it per day."""
+    day = datetime.strptime(key, BILLING_SLOT_FORMAT).replace(tzinfo=timezone.utc).astimezone(BILLING_TZ).date()
+    if day not in counts:
+        counts[day] = len(day_slot_starts(day, BILLING_TZ))
+    return counts[day]
+
+
 def _row_event(events, slot_minute, plan_interval_minutes):
     """The display label for the first known event inside a row, or None."""
     for minute in range(slot_minute, slot_minute + plan_interval_minutes):
@@ -433,6 +462,7 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     # An export meter whose billing hasn't arrived (or failed to read) means no net bill for that row yet
     export_required = not import_only and ((billing.get("legs") or {}).get("export") is not None)
     events = events or {}
+    day_half_hours = {}
     updates = []
     totals = {"predbat": 0.0, "billed": 0.0, "standing_predbat": 0.0, "standing_billed": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "predbat_import_kwh": 0.0, "predbat_export_kwh": 0.0, "rate_cost": 0.0, "rate_kwh": 0.0, "predbat_rate_cost": 0.0}
     for row in plan_json.get("rows") or []:
@@ -448,8 +478,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
             for key in keys:
                 billed_pence += imports[key]["cost"] - (exports[key]["cost"] if key in exports else 0.0)
                 totals["standing_billed"] += imports[key]["standing"]
-                # Predbat's daily standing charge, counted for the billed half-hours only, so a part-billed day compares like with like
-                totals["standing_predbat"] += standing_pence / 48.0
+                # Predbat's daily standing charge, counted for the billed half-hours only, so a part-billed day compares like with like,
+                # and spread over the day's real half-hours as the supplier does, so a 23 or 25 hour day still adds up to one charge
+                totals["standing_predbat"] += standing_pence / _half_hours_in_day(key, day_half_hours)
                 if row.get("import_rate") is not None:
                     totals["rate_cost"] += imports[key]["cost"]
                     totals["rate_kwh"] += imports[key]["kwh"]

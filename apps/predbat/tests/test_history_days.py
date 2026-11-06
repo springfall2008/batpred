@@ -373,12 +373,20 @@ def _realistic_histories(my_predbat, now_utc, days=10):
 
 
 def _matching_billing(my_predbat, start_utc, end_utc):
-    """Billing that matches the realistic cost_today exactly: 0.4 kWh per half-hour at the IOG rate."""
+    """Billing that matches the realistic cost_today exactly: 0.4 kWh per half-hour at the IOG rate.
+
+    The standing charge is spread over each London day's real half-hours, as Octopus does (1.11047p a slot on 25 Oct's 50).
+    """
+    from billing import _half_hours_in_day
+
     slots = {}
+    day_half_hours = {}
     when = start_utc
     while when < end_utc:
         rate = _iog_rate(my_predbat, when)
-        slots[when.strftime("%Y-%m-%dT%H:%M:%SZ")] = {"kwh": 0.4, "cost": round(0.4 * rate, 4), "standing": 1.15674, "buckets": {"Rate": {"kwh": 0.4, "cost": round(0.4 * rate, 4)}}}
+        key = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+        standing = round(55.52 / _half_hours_in_day(key, day_half_hours), 5)
+        slots[key] = {"kwh": 0.4, "cost": round(0.4 * rate, 4), "standing": standing, "buckets": {"Rate": {"kwh": 0.4, "cost": round(0.4 * rate, 4)}}}
         when += timedelta(minutes=30)
     return {"complete_until": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), "slots": {"import": slots}, "legs": {"import": True, "export": None}, "supplier": "octopus"}
 

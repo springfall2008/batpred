@@ -96,9 +96,10 @@ This means the starting SoC shown in the 'Yesterday without Predbat' view can di
 
 A time slot in the 'History' view where Predbat reported a warning or error is marked with 🚩 next to its state - the state shown is still the one Predbat carried out, and hovering over it names the problem.
 
+A row of day buttons under the view buttons lets you look back over the last week as well as the default 'Yesterday + today' view. The older days are rebuilt once a day from what was recorded (and again when new billing arrives), and only as far back as Home Assistant's history (and your `days_previous` load history) reaches.
+
 If Predbat reads your rates directly from Octopus or a Kraken supplier (EDF, E.ON Next), the 'History' view also shows what you were actually billed:
 
-- A row of day buttons under the view buttons lets you look back over the last week as well as the default 'Yesterday + today' view. The older days are rebuilt once a day from what was recorded, and only as far back as Home Assistant's history (and your `days_previous` load history) reaches.
 - A **Billed** column shows what your supplier billed for each slot. Hover over it to see the rate buckets the bill was split into - on Intelligent Octopus Go, for example, Home Low/Standard Rate and EV Low/Standard Rate. A dash means the supplier hasn't published that half hour yet; billing usually appears one to two days later.
 - A **Diff** column shows the billed amount less Predbat's own Cost for the slot (left blank where Predbat recorded nothing for it, for example while it wasn't running): red when you were billed more than Predbat recorded, green when less. The standing charge is left out of both and shown separately.
 - A summary above the table gives the day's Predbat cost, billed cost and the difference, the import and export kWh Predbat recorded against the meter's, and both standing charges. It says how far the billing reaches and how many half hours before that are still missing (shown as a dash in the table), and only compares the slots that have been billed.

@@ -957,10 +957,6 @@ class OctopusAPI(ComponentBase):
 
         return True
 
-    async def billing_query(self, query, request_context):
-        """Run a billing measurements query; a response carrying any GraphQL errors is a failed read (None)."""
-        return await self.async_graphql_query(query, request_context)
-
     async def async_update_billing(self, first):
         """Read the half-hourly billing for the modelled import/export MPANs when due, and publish predbat.billing.
 
@@ -976,7 +972,7 @@ class OctopusAPI(ComponentBase):
         if not first and self.billing.due(now_utc):
             export_mpan = (self.tariffs.get("export") or {}).get("mpan")
             mpans = {"import": (self.account_id, import_mpan), "export": (self.account_id, export_mpan) if export_mpan else None}
-            await self.billing.refresh(self.billing_query, mpans, now_utc)
+            await self.billing.refresh(self.async_graphql_query, mpans, now_utc)
             refreshed = True
         if refreshed or first:
             self.billing.publish("octopus", now_utc, app="octopus")

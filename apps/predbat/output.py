@@ -4127,7 +4127,6 @@ class Output:
             status_warnings=status_warnings,
         )
         plan_json["refresh_minutes"] = self.history_refresh_minutes()
-        plan_json["refresh_minutes"] = self.history_refresh_minutes()
 
         self.charge_limit_best = previous_charge_limit_best
         self.charge_window_best = previous_charge_window_best
@@ -4378,7 +4377,7 @@ class Output:
         import_cost_data = self.history_minute_data(".cost_today_import", history_days) if billing and (billing.get("legs") or {}).get("export") is None else None
         event_spans = self.history_recorded_events(history_days)
 
-        saved = {name: getattr(self, name) for name in HISTORY_DAY_FAKED_STATE if hasattr(self, name)}
+        saved = {name: getattr(self, name) for name in HISTORY_DAY_FAKED_STATE}
         saved["car_charging_slots"] = copy.deepcopy(self.car_charging_slots)
         now_utc = self.now_utc
         minutes_now = self.minutes_now
@@ -4448,10 +4447,7 @@ class Output:
                 days[day.isoformat()] = plan_json
         finally:
             for name in HISTORY_DAY_FAKED_STATE:
-                if name in saved:
-                    setattr(self, name, saved[name])
-                elif name in self.__dict__:
-                    delattr(self, name)
+                setattr(self, name, saved[name])
             self.car_charging_slots = saved["car_charging_slots"]
         return days
 

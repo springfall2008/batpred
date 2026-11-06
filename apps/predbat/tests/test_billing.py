@@ -125,6 +125,34 @@ def test_parse_export_generation():
     return failed
 
 
+def test_parse_edf_tou_bucket():
+    """EDF import half-hours carry one TOU_BUCKET_COST row with a label but no kWh (shape seen live on an EDF GoElectric account, 6 Nov 2026)."""
+
+    def tou(label, cost):
+        """One EDF time-of-use bucket row: a label and a cost, no kWh."""
+        return {"type": "TOU_BUCKET_COST", "label": label, "value": None, "costInclTax": {"estimatedAmount": str(cost), "costCurrency": "GBP"}}
+
+    standing = {"type": "STANDING_CHARGE_COST", "label": None, "value": None, "costInclTax": {"estimatedAmount": "1.13", "costCurrency": "GBP"}}
+    nodes = [
+        _node("2026-11-02T02:00:00+00:00", 3.25, [standing, tou("OFF_PEAK", 21.65)]),
+        _node("2026-11-02T17:00:00+00:00", 0.5, [standing, tou("STANDARD_RATE", 13.63)]),
+        _node("2026-11-02T18:00:00+00:00", 0.4, [standing, tou("OFF_PEAK", 2.66), tou("STANDARD_RATE", 5.45)]),
+    ]
+    slots = parse_measurements(_response(nodes)) or {}
+    night = slots.get("2026-11-02T02:00:00Z")
+    peak = slots.get("2026-11-02T17:00:00Z")
+    if not night or night["buckets"] != {"OFF_PEAK": {"kwh": 3.25, "cost": 21.65}} or not _close(night["standing"], 1.13):
+        print("ERROR: an EDF off-peak half-hour should be one OFF_PEAK bucket holding the node's 3.25 kWh, got {}".format(night))
+        return True
+    if not peak or peak["buckets"] != {"STANDARD_RATE": {"kwh": 0.5, "cost": 13.63}}:
+        print("ERROR: an EDF peak half-hour should be one STANDARD_RATE bucket holding the node's 0.5 kWh, got {}".format(peak))
+        return True
+    if "2026-11-02T18:00:00Z" in slots:
+        print("ERROR: two kWh-less buckets in one half-hour can't be split, so the half-hour should be dropped")
+        return True
+    return False
+
+
 def test_parse_unknown_labels():
     """Bucket labels are taken as they come, never matched by name."""
     nodes = [_node("2026-11-01T10:00:00+00:00", 1.5, [_stat("CONSUMPTION_COST", "Zebra", 1.0, 10.0), _stat("CONSUMPTION_COST", "Yak", 0.5, 2.5), _stat("STANDING_CHARGE_COST", "SC", None, 1.2)])]
@@ -432,7 +460,7 @@ def test_octopus_partial_errors_is_failure(my_predbat):
     api.graphql_token = "token"
     api.async_refresh_token = AsyncMock(return_value="token")
     api.log = lambda message: None
-    data = asyncio.run(api.billing_query("query { a }", "billing-import"))
+    data = asyncio.run(api.async_graphql_query("query { a }", "billing-import"))
     if parse_measurements(data) is not None:
         print("ERROR: a partial-error response should be a failed read (None), got {}".format(data))
         return True
@@ -752,6 +780,14 @@ def test_attach_standing_pro_rata():
     if summary["standing_predbat"] != summary["standing_billed"] or summary["standing_billed"] != 0.28:
         print("ERROR: half a day billed should show £0.28 standing on both sides, got {} vs {}".format(summary["standing_predbat"], summary["standing_billed"]))
         return True
+    # 25 Oct has 50 half-hours and Octopus spreads one day's charge over them (1.11047p each in the live fixture), so a 1/48 share would show £0.58 against £0.56
+    midnight = datetime(2026, 10, 25, 0, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    billing = _billing_attrs({_key(m, midnight): _slot(1.0, 10.0, standing=1.11047) for m in range(0, 1500, 30)})
+    plan = attach_billing(_plan(list(range(0, 1500, 30))), billing, midnight, 30, {m: 10.0 for m in range(0, 1500, 30)}, 55.52, {}, False, None, None)
+    summary = plan["billing_summary"]
+    if summary["standing_predbat"] != summary["standing_billed"] or summary["standing_billed"] != 0.56:
+        print("ERROR: a whole 25-hour day billed should show £0.56 standing on both sides, got {} vs {}".format(summary["standing_predbat"], summary["standing_billed"]))
+        return True
     return False
 
 
@@ -821,6 +857,61 @@ def test_reader_cache_tied_to_meter():
     return False
 
 
+def test_reader_settles_old_days():
+    """A day that never completes (here an export meter that publishes nothing) is read once it is BILLING_SETTLE_DAYS old and then left alone, across a restart too."""
+    import asyncio
+    from billing import BillingReader, BILLING_SETTLE_DAYS
+
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    storage = _FakeStorage()
+    owner = _Owner(storage)
+    reader = BillingReader(owner, "octopus_user", "billing")
+    mpans = {"import": ("A-1", "IMP"), "export": ("A-1", "EXP1234")}
+    asked = []
+
+    async def query_fn(query, context):
+        """Import publishes every half-hour; export publishes nothing at all."""
+        if "GENERATION" in query:
+            asked.append(_query_day(query))
+            return _response([])
+        return _day_response(_query_day(query))
+
+    def warnings():
+        """The export days logged as given up on."""
+        return [line for line in owner.logged if "won't be read again" in line and "export" in line]
+
+    asyncio.run(reader.refresh(query_fn, mpans, now_utc))
+    settle_by = date(2026, 11, 2) - timedelta(days=BILLING_SETTLE_DAYS)
+    if sorted(asked) != [date(2026, 10, 26) + timedelta(days=offset) for offset in range(8)] or len(warnings()) != 5:
+        print("ERROR: the first refresh should ask for every export day and give up on the 5 up to {}, asked {} warned {}".format(settle_by, sorted(asked), warnings()))
+        return True
+    if reader.settled["export"] != ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30"] or reader.legs["export"] is not True:
+        print("ERROR: 26-30 Oct should be settled with the export leg still read OK, got {} {}".format(reader.settled, reader.legs))
+        return True
+
+    asked.clear()
+    asyncio.run(reader.refresh(query_fn, mpans, now_utc + timedelta(hours=3)))
+    if sorted(asked) != [date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 2)] or len(warnings()) != 5:
+        print("ERROR: a later refresh should only re-read the export days not yet settled, asked {}".format(sorted(asked)))
+        return True
+
+    restarted_owner = _Owner(storage)
+    restarted = BillingReader(restarted_owner, "octopus_user", "billing")
+    asyncio.run(restarted.load())
+    asked.clear()
+    asyncio.run(restarted.refresh(query_fn, mpans, datetime(2026, 11, 3, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)))
+    if sorted(asked) != [date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 2), date(2026, 11, 3)]:
+        print("ERROR: after a restart the settled days should stay settled, and 31 Oct is read once more on 3 Nov, asked {}".format(sorted(asked)))
+        return True
+    if restarted.settled["export"] != ["2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31"]:
+        print("ERROR: 26 Oct should leave the settled list with the window and 31 Oct join it, got {}".format(restarted.settled["export"]))
+        return True
+    if any("import" in line and "won't be read again" in line for line in owner.logged + restarted_owner.logged):
+        print("ERROR: complete import days are settled quietly")
+        return True
+    return False
+
+
 def test_sensor_needs_export_when_configured():
     """With an export meter whose read failed, a day isn't complete on import alone, so the state never quietly becomes import-only."""
     now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
@@ -853,6 +944,7 @@ def run_billing_tests(my_predbat):
         test_billing_constants,
         test_parse_iog_buckets,
         test_parse_export_generation,
+        test_parse_edf_tou_bucket,
         test_parse_unknown_labels,
         test_parse_bucket_mismatch_drops_slot,
         test_parse_none_vs_empty,
@@ -887,6 +979,7 @@ def run_billing_tests(my_predbat):
         test_attach_hides_diff_when_predbat_saw_nothing,
         test_attach_implausible_rate_hidden,
         test_reader_cache_tied_to_meter,
+        test_reader_settles_old_days,
         test_sensor_needs_export_when_configured,
         test_attach_shows_gaps,
     ):
