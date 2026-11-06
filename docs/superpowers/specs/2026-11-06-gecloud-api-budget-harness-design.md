@@ -197,3 +197,48 @@ EMS and no Gateway. That is the commonest install and the one where `polling_mod
 10 minutes. Note that a Gateway site also sweeps every 10 minutes (the gateway device is always swept), so the baseline
 applies to it too. A single hybrid's real register list may be a little shorter than the Gateway's 81; the summary
 should state the register count it ran with so the sweep cost can be rescaled.
+
+## Baseline results (main @ e5f424be)
+
+Measured with `./run_all --test gecloud_api_budget`: one GE Cloud inverter, no EMS, default settings,
+80 readable registers (81 captured, one write-only). The day runs 00:00–23:55 with SOC following the
+plan exactly, so the write counts are a **floor**. The per-call log is written to
+`coverage/gecloud_api_budget_log.jsonl`.
+
+| Scenario | Plan shape | Calls/day | Writes/day | Month (×30) | vs 10k | vs 20k |
+| -------- | ---------- | --------: | ---------: | ----------: | -----: | -----: |
+| 0 | IOG, negative half-hourly import | 13,666 | 28 | 409,980 | 4,100% | 2,050% |
+| 5 | two cars, dual rate, 13.5 kWh | 13,675 | 37 | 410,250 | 4,103% | 2,051% |
+| 9 | IOG, heavy export | 13,803 | 165 | 414,090 | 4,141% | 2,070% |
+| 17 | car + IOG, Agile-like, heavy export | 13,738 | 100 | 412,140 | 4,121% | 2,061% |
+| 19 | negative half-hourly, 20 kWh, heavy charge | 13,713 | 75 | 411,390 | 4,114% | 2,057% |
+
+The steady-state day is the same in every scenario apart from writes:
+
+| Category | Calls/day | Where it comes from |
+| -------- | --------: | ------------------- |
+| register_read | 11,440 | the full register sweep, 80 registers × 143 sweeps (every 10 min, because `polling_mode` is on for a non-EMS site) |
+| status | 717 | every 2 min |
+| meter | 717 | every 2 min |
+| device_info | 717 | every 2 min (`communication-device`, which returns every device on the account) |
+| device_list | 23 | hourly device refresh |
+| evc | 23 | hourly device refresh (EV charger list, even with no charger) |
+| site | 1 | 12-hourly |
+| register_write | 28–165 | execute |
+
+Start-up costs 88 calls each restart: one full sweep (80) plus account, device list, EV charger list,
+site, register list, status, meter and device info.
+
+**Writes.** Execute's writes are 0.2–1.2% of the day. The heaviest pattern (scenario 9, 08:25–10:30) is
+`Enable DC Discharge` and `Enable Eco Mode` toggling on and off every 5 minutes during an export window.
+Export reaches its target, stops, solar lifts the SOC back above the target, and export starts again.
+That is 2 writes per cycle, so about 24 writes an hour while it lasts. It is worth a closer look in the
+optimisation work: part of it may come from the ideal SOC model.
+
+**Against the direction already chosen** (estimated from this baseline, not yet measured): status and
+meter every 5 min is 576/day. A twice-daily read of the registers Predbat uses is about 50/day (assuming
+about 25 registers). Device info daily, site, and the hourly device and EV charger list refresh come to
+about 48/day. That is about 674/day before writes, and 700–840/day with this baseline's 28–165 writes:
+21,000–25,200 a month. That is around the 20k target and well over 10k. After the sweep, the biggest
+remaining levers are the status/meter interval and the hourly device and EV charger refresh (46/day for
+an account with no charger).

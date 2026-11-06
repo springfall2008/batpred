@@ -30,6 +30,16 @@ from tests.test_random_scenarios import RANDOM_SCENARIOS, load_scenarios
 
 GECLOUD_ENTITY_STEM = "predbat_gecloud_{}".format(HARNESS_SERIAL.lower())
 
+# The scenarios the baseline runs (ids in coverage/cases/random_scenarios.yaml), chosen to spread plan shapes:
+#   0  - IOG dispatch run, negative-price half-hourly import, overnight charge plus some export
+#   5  - two cars, dual-rate import and export, 13.5 kWh battery, ~10 kWh export
+#   9  - IOG dispatch run, dual-rate import, heavy export (~22 kWh) and charge
+#   17 - one car plus IOG, half-hourly (Agile-like) import, heavy export and charge
+#   19 - negative-price half-hourly import, 20 kWh battery, the heaviest charging day
+DEFAULT_SCENARIO_IDS = (0, 5, 9, 17, 19)
+# Written into coverage/, where the tests run; git-ignored
+BUDGET_LOG_PATH = "gecloud_api_budget_log.jsonl"
+
 
 def _fake(soc_percent=50.0):
     """Build a fake cloud on a fixed simulated clock."""
@@ -325,3 +335,22 @@ def run_gecloud_budget_harness_tests(my_predbat):
         print("ERROR: test_short_day_never_recomputes failed")
         failed = True
     return failed
+
+
+def run_gecloud_api_budget(my_predbat):
+    """
+    Slow: simulate a full day for each default scenario and report the GE Cloud API calls it cost (the baseline).
+
+    Deliberately asserts no budget - current main would fail any sensible one. Returns True only if a
+    simulation raised, so the run itself is checked but the numbers are reported, not judged.
+    """
+    print("**** Running GE Cloud API budget baseline ****")
+    scenarios = {item["id"]: item for item in load_scenarios(RANDOM_SCENARIOS)}
+    results = []
+    for scenario_id in DEFAULT_SCENARIO_IDS:
+        print("Simulating scenario {}".format(scenario_id))
+        results.append(GECloudBudgetHarness(scenarios[scenario_id]).simulate_day())
+    print(summarise(results))
+    write_call_log(results, BUDGET_LOG_PATH)
+    print("Per-call log written to {}".format(BUDGET_LOG_PATH))
+    return False

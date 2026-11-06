@@ -313,7 +313,7 @@ from tests.test_find_charge_window import test_find_charge_window
 from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
 from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests, run_random_scenario_reapply_tests
-from tests.test_gecloud_budget import run_gecloud_budget_harness_tests
+from tests.test_gecloud_budget import run_gecloud_budget_harness_tests, run_gecloud_api_budget
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
 from tests.test_plan_persistence import test_plan_persistence
@@ -909,6 +909,7 @@ def main():
         ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),
         ("random_reapply", run_random_scenario_reapply_tests, "Running a random scenario leaves it unchanged, so a re-run plans identically", False),
         ("gecloud_budget_harness", run_gecloud_budget_harness_tests, "GE Cloud API budget harness unit tests", False),
+        ("gecloud_api_budget", run_gecloud_api_budget, "GE Cloud API calls over a simulated day (baseline measurement)", True),
         ("debug_history", test_debug_history, "Rolling debug-history snapshot buffer tests", False),
         ("debug_history_capture", test_debug_history_capture, "Debug history capture throttle/force-capture tests", False),
         ("debug_history_capture_alignment", test_debug_history_capture_slot_alignment, "Debug history capture timestamp is floored to the plan slot grid", False),
