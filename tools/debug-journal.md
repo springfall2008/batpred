@@ -855,6 +855,7 @@ What a report or log shows, and where to start. Where a symptom belongs to one i
 - **jq on `--json comments`.** Use `--jq '.comments | length'`; plain `length` counts the wrapper's keys (GH#5349).
 - **Triage permission-mode routes.** Read a branch doc with `git fetch` plus `git show <branch>:<path>` (GH#5291). For another repo use WebFetch, after checking its default branch (GH#5417).
 - **Kraken (EDF/E.ON) issues have no component label.** Do not guess `Octopus`.
+- **Merge box shows `owner-gate` "Expected — Waiting for status to be reported" though the API says it passed.** Seen on PR #6001 (2026-11-06): auto-merge on, every required check green in `gh pr checks` and the GraphQL rollup, `mergeStateStatus` `BLOCKED`, no rule-suite merge attempt. Toggling auto-merge, re-running the evaluator and the ruleset's unattributed-changes setting did not clear it; a new head commit (`git rebase --force-rebase` and push) did. Cause unconfirmed; the suspect was a commit carrying several never-completed `owner-gate` check runs, which the owner gate no longer leaves. An admin merge is the quick way out.
 
 ## What belongs here, and what does not
 
