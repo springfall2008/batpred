@@ -181,6 +181,7 @@ def test_executor_handover():
 
         component.request_read_only_reset = request
         executor = SimpleNamespace(
+            args={},
             set_read_only=True,
             inverter_needs_reset=True,
             inverter_needs_reset_force="set_read_only",

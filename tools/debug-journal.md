@@ -526,6 +526,18 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - Multi-charger index: myenergi sorts Zappis by serial, the Octopus component sorts Intelligent devices by device_id, never joined, so per-car `car_charging_planned`/`_now`/`_energy`/`_plugged` can read the wrong charger (GH#5726, open).
 - Tests: `./run_all -k octopus_`, `./run_all -k car_`
 
+### EV/battery joint planning (`car_charging_plan.py`, `car_charging_execute.py`, other `car_charging_*` modules)
+
+- Opt-in (`docs/car-battery-planning.md`). Flat args are translated by `car_charging_config.py`; the plan travels in the existing car-slot attributes with `source: predbat`. One external executor is the sole relay writer, and its lease expires independently (300 s; 600 s plan-age ceiling). Neither offline migration (`tools/migrate_car_planning.py`) nor a replay proves physical delivery. (PR #5498)
+- Executor template variables evaluate in order, and an order-only edit compares equal, so an incremental reload can keep the old order: check the running trace config, not the config API readback. Offline matrix: `tools/test_car_charging_executor.py`. (PR #5498)
+- `TypeError` from `yesterday_reconstruct_car_slots()` mid-recalculation, then the executor withdraws: a lease's seconds-precision bounds give fractional minutes, which `range()` rejects. Integrate overlap per `PREDICT_STEP` bucket. (PR #5498)
+- Vehicle status codes are configuration, with no vendor defaults: `car_charging_warning_states` (tolerated, log-only) and `car_charging_state_validity` (quality attribute). Unknown/unavailable still revoke. (PR #5498)
+- A false meter contradiction latches when a 5-minute cumulative EV meter batch is checked against the 15 s revalidation interval, or when a brief `unavailable` is treated as an unplug and resets the anchor. Bound rates by consecutive meter publications; keep the anchor across a complete cached transition chain. (PR #5498)
+- DeyeSolarman: the lease is revoked on every fetch because `fetch_config_options()` restores `set_charge_freeze` and `fetch_inverter_data()` forces it off, with `publish_car_plan()` in between. Fingerprint the effective capability. (PR #5498)
+- Relay cut at a domestic target boundary, then a 10-minute cooldown: only a 30 s non-rolling overlap is allowed, and only when the next validated step keeps the EV on. (PR #5498)
+- After a restart, a tracker re-publishing `home` looks like a fresh arrival; stop recovery checks Recorder history from the home anchor instead of asking for new consent. (PR #5498)
+- Deye with peak shaving: load above the grid setting defers grid charging and draws the deficit from the battery, even below the ToU SoC target, so a "charge" slot can discharge. The plan table's candidate rows are its own native replay, labelled non-editable, never the executable plan. (PR #5498)
+
 ### Excluded load (`fetch.py`, `web.py`)
 
 - `car_charging_energy` is a generic excluded-load list (any incrementing kWh sensor, heat pumps too), subtracted from load history and gated on `car_charging_hold`; `car_energy_reported_load` is the CT-clamp flag. "Double-counted load" needs these, not a new mechanism (GH#5445).
@@ -683,7 +695,7 @@ What a report or log shows, and where to start. Where a symptom belongs to one i
 - **The low-power rate changes several times within one window** — by design: `find_charge_rate()` re-runs every cycle, filtered only by `rate_tolerances()`' 5%. (GH#5536, GH#2628)
 - **Two charge windows meet at 00:00 inside one continuous cheap period** — `calc_dawn()`'s light latch resets at midnight; since PR #5709 (2026-10-23) `find_charge_window()` splits only at dawn. (GH#5205)
 - **Turning `debug_enable` on changes the plan** — deliberate: `kernel_supported()` refuses under `debug_enable`, and Python honours the coarse `enable_fast_mode_levels` step while the kernel runs at 5 minutes, so near-ties can flip. (GH#5408, GH#4453)
-- **Predbat exceeded the site's import ceiling** — the planner has no import clamp: `import_limit` is only a discovery rating (sunsynk/fox/deye). Draft PR #5486 (diagnostics) open. (GH#5490)
+- **Predbat exceeded the site's import ceiling** — the planner has no import clamp: discovery `import_limit` ratings (sunsynk/fox/deye) are never read by the plan, and the whole-site `import_limit` setting from PR #5486/#5498 is diagnostics only. Neither it nor an accepted EV/battery candidate is an electrical clamp; compare native plan, candidate, lease and measured power, and keep actual violations in the report. (GH#5490)
 
 ### Plan: exporting
 
