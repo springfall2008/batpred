@@ -585,6 +585,10 @@ you can increase set_reserve_min to a higher value, and then change it back afte
 
 **input_number.predbat_set_reserve_min_1** defines the same minimum battery reserve percentage for inverter 2. Likewise predbat_set_reserve_min_2 and set_reserve_min_3 are the reserve minimums for inverter 3 and 4.
 
+The lowest value each of these entities offers (its `min`) follows that inverter's floor: the higher of `battery_min_soc` (from `apps.yaml` or set automatically by an integration) and the lowest value the inverter's own reserve register accepts.
+The `min` moves back down when the floor is lowered, but Predbat never lowers the value itself: a value below the floor is raised to it, and stays there until you change it.
+With no `battery_min_soc` set and no minimum on the reserve register, the `min` stays at 0, although Predbat still raises a value below 4 to 4.
+
 Note that the **input_number.predbat_set_reserve_min**'s are used by Predbat to stop the battery SoC dropping below the specified level but are not used in planning battery charging.
 i.e. if you change a reserve min to a level higher than the current battery SoC then Predbat will not plan charging activity to increase the SoC to that level; you should set [manual charges](#manual-control) to increase the SoC level.
 
