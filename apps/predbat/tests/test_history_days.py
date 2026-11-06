@@ -255,7 +255,7 @@ def _test_yesterday_json_has_billing(my_predbat, failed):
 
 
 def _test_import_only_when_export_leg_missing(my_predbat, failed):
-    """With an export meter whose billing can't be read, the read counts as failed: no billing is shown rather than an import-only comparison."""
+    """With an export meter whose billing can't be read, no net comparison is made: the row shows its import flagged as waiting for export, with no Diff or summary."""
     print("history_days: import-only when the export leg failed")
     _yesterday_billing(my_predbat, {"import": True, "export": False})
     try:

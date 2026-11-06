@@ -944,6 +944,12 @@ def test_attach_export_pending():
     if summary["billed_cost"] != 0.03 or summary["predbat_cost"] != 0.03 or summary["export_pending_slots"] != 1 or summary["import_kwh"][1] != 1.0 or summary["standing_billed"] != 0.01:
         print("ERROR: the summary should count only the fully billed row and say one is waiting for export, got {}".format(summary))
         return True
+    # A row waiting for its export before a fully billed one shows its import, so it is counted as pending, not missing
+    plan = attach_billing(_plan([600, 630]), _billing_attrs(imports, export_slots={_key(630): _slot(0.5, 7.5, label="GENERATION", standing=0.0)}, legs=legs), VIEW_MIDNIGHT, 30, {600: 10.0, 630: 2.5}, 55.52, {}, False, None, None)
+    summary = plan.get("billing_summary") or {}
+    if summary.get("missing_slots") != 0 or summary.get("export_pending_slots") != 1 or summary.get("billed_until") != _key(660):
+        print("ERROR: a pending row before the last billed one is pending, not missing, got {}".format(summary))
+        return True
     # No export at all yet: every row shows its import, flagged, and there is no summary
     plan = attach_billing(_plan([600, 630]), _billing_attrs(imports, export_slots={}, legs=legs), VIEW_MIDNIGHT, 30, {600: 2.5, 630: 10.0}, 55.52, {}, False, None, None)
     if "billing_summary" in plan or [row.get("billing_pending_export") for row in plan["rows"]] != [True, True] or [row.get("billed") for row in plan["rows"]] != [0.1, 0.1]:

@@ -461,7 +461,8 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
       flagged billing_pending_export, with no Diff, and is left out of the summary - no net figure is claimed;
     - any other row shows no billing.
     Billing whose rates don't match Predbat's is not shown at all. The summary is only added when at least
-    one row is fully billed. Returns plan_json; it is left untouched when there is no billing to match.
+    one row is fully billed. Returns plan_json; it is left untouched only when billing holds no import half-hours at
+    all or rows can't be matched to half-hours - a view with nothing billed in it still gets the (empty) fields.
     """
     slots = (billing or {}).get("slots") or {}
     imports = slots.get("import") or {}
@@ -542,7 +543,8 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     if not plausible or not any(update[5] for update in updates):
         return plan_json
     last_billed = max(index for index, update in enumerate(updates) if update[5])
-    missing_slots = sum(1 for update in updates[:last_billed] if not update[5])
+    # Rows showing nothing before the last fully billed one; rows waiting for their export show their import and are counted apart
+    missing_slots = sum(1 for update in updates[:last_billed] if not update[5] and not update[6])
     billed_until = (view_midnight_utc + timedelta(minutes=updates[last_billed][0]["slot_minute"] + plan_interval_minutes)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)
     plan_json["billing_summary"] = {
         "predbat_cost": _pounds(totals["predbat"]),

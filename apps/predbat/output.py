@@ -4315,7 +4315,8 @@ class Output:
         cost_data and import_cost_data are the recorded cost_today / cost_today_import histories (minute data
         keyed by minutes ago). With no export meter being read, Billed is import-only and is compared with
         Predbat's import cost rather than its net cost, which counts export earnings the bill would not. With an
-        export meter, rows whose export billing hasn't arrived (or failed to read) show none. Without the history
+        export meter, a row whose export billing hasn't arrived (or failed to read) shows its import charge, flagged as
+        waiting for export, with no Diff and left out of the summary. Without the history
         it needs nothing is shown.
         """
         import_only = (billing.get("legs") or {}).get("export") is None
