@@ -1346,11 +1346,23 @@ class Output:
                 if discharge_intersect >= 0:
                     charge_end_minute = min(charge_end_minute, self.export_window_best[discharge_intersect]["start"])
 
+                # A window that charges up to its target and then holds there ends this span where the target is
+                # reached, so the rest starts its own span and is labelled HoldChrg rather than Chrg (#5990)
+                charge_limit = self.charge_limit_best[charge_window_n]
+                if charge_limit > 0.0 and not self.is_freeze_charge(charge_limit):
+                    target_percent = calc_percent_limit(self.charge_window_best[charge_window_n].get("target", charge_limit), self.soc_max)
+                    if calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max) < target_percent:
+                        for split_minute in range(minute + self.plan_interval_minutes, charge_end_minute, self.plan_interval_minutes):
+                            if calc_percent_limit(self.predict_soc_best.get(split_minute - self.minutes_now, 0.0), self.soc_max) >= target_percent:
+                                charge_end_minute = split_minute
+                                break
+
                 rowspan = min(int((charge_end_minute - minute) / self.plan_interval_minutes), periods_left)
                 if rowspan > 1 and (export_window_n < 0):
                     in_span = True
                     start_span = True
-                    minute_relative_end = self.charge_window_best[charge_window_n]["end"] - minute_now_align
+                    # Judge the label on the span drawn, which may stop short of the window at an export or a split above
+                    minute_relative_end = charge_end_minute - self.minutes_now
                     rate_text_import = self.rate_range_text(self.rate_import, minute_start, charge_end_minute, rate_value_import)
                 else:
                     rowspan = 0
