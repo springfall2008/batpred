@@ -2948,6 +2948,81 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Hold charging above the reserve with no target SoC stops the charge, as the freeze service ignores the reserve
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_above_target_no_target_soc",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        has_target_soc=False,
+        has_timed_pause=False,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_reserve_array=[51, 51],
+        assert_immediate_charge_soc_target_array=[0, 0],
+        assert_immediate_charge_soc_freeze_array=[False, False],
+    )
+    if failed:
+        return failed
+
+    # At the reserve with no target SoC there is nothing above it to hand to the house, so it still freezes
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_at_reserve_no_target_soc",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=5.1,
+        has_target_soc=False,
+        has_timed_pause=False,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_reserve_array=[51, 51],
+        assert_immediate_charge_soc_target_array=[50, 50],
+        assert_immediate_charge_soc_freeze_array=[True, True],
+    )
+    if failed:
+        return failed
+
+    # With a target SoC the freeze at the target is unchanged
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_above_target_with_target_soc",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        has_target_soc=True,
+        has_timed_pause=False,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=100,
+        assert_reserve_array=[51, 51],
+        assert_immediate_charge_soc_target_array=[50, 50],
+        assert_immediate_charge_soc_freeze_array=[True, True],
+    )
+    if failed:
+        return failed
+
     # Charge/discharge with rate
     for inverter in my_predbat.inverters:
         inverter.inv_charge_discharge_with_rate = True
