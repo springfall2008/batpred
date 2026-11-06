@@ -2841,6 +2841,39 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 
 7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
 
+### Real-time dispatch (optional)
+
+Some Solis hybrid firmwares refuse to discharge below their own minimum SoC even inside a timed export slot, so Predbat's planned export depth is not reached. These inverters do expose a RAM-only **Remote Dispatch** block (protocol Ver3.4 or later) that obeys a live power command, and Predbat can drive an export through it instead of the timed slot.
+
+Enable it by pointing these `apps.yaml` args at the entities the integration creates. All three are required - without them Predbat keeps using the timed slot exactly as before:
+
+| Arg                      | Entity                                     |
+|:------------------------ |:------------------------------------------ |
+| `dispatch_power`         | `number.<name>_dispatch_power`             |
+| `dispatch_apply_button`  | `button.<name>_apply_remote_dispatch`      |
+| `dispatch_control_mode`  | `select.<name>_dispatch_control_mode`      |
+
+You also need a way to stop a running dispatch, so at least one of `dispatch_disable_button` and `dispatch_master` must be set. With neither, Predbat refuses dispatch and uses the timed slot, because nothing it did at the end of a window would reach the inverter.
+
+Optional args:
+
+| Arg                          | Default          | Meaning                                                                                          |
+|:---------------------------- |:---------------- |:------------------------------------------------------------------------------------------------ |
+| `dispatch_soc_min`           | -                | dispatch SOC floor; Predbat writes the planned export target to it                               |
+| `dispatch_soc_max`           | -                | dispatch SOC ceiling; Predbat writes 100 to it                                                    |
+| `dispatch_master`            | -                | master switch that enables the block                                                             |
+| `dispatch_disable_button`    | -                | button that stops the dispatch and clears the block                                               |
+| `dispatch_status`            | -                | sensor reporting whether the block is running                                                     |
+| `dispatch_failsafe_interval` | -                | failsafe interval entity, in minutes                                                              |
+| `dispatch_failsafe_minutes`  | `10`             | value to arm the failsafe with; never less than two execution cycles (10 minutes at the default 5-minute cycle) |
+| `dispatch_mode`              | `Battery Charge` | select option used for an export - the Solis name for "charge or discharge by the sign of the power" |
+
+While an export window is running Predbat re-applies the dispatch block every cycle, which is also what keeps the inverter-side failsafe fed, with the rate that cycle planned and the planned export depth as the SOC floor. Outside a window it disables the block, so if Predbat or Home Assistant stops the failsafe returns the inverter to demand mode. The timed export slot is not used for these inverters, and Predbat turns it off if it finds it armed.
+
+A freeze export is not driven through dispatch - there is no dispatch command that means "hold and do not export" - so it keeps the normal immediate-export path (including any `discharge_freeze_service`) and the dispatch block is stopped instead.
+
+On a multi-inverter system each inverter needs its own dispatch entities - do not share one block between two of them. Predbat warns and falls back to the timed slot rather than driving a shared block.
+
 ## Sunsynk Cloud
 
 **Experimental**
