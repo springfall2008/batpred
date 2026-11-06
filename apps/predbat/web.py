@@ -58,6 +58,7 @@ from web_helper import (
     get_component_edit_modal_css,
     get_entity_modal_js,
     get_component_edit_modal_js,
+    get_discovery_modal_js,
     get_logfile_js,
     get_entity_toggle_js,
     get_entity_control_css,
@@ -115,6 +116,25 @@ DEBUG_HISTORY_DOWNLOAD_MAX = 16
 # The /entity history table has a row per half hour, each expanding to the 5-minute slots inside it
 HISTORY_TABLE_ROW_MINUTES = 30
 HISTORY_TABLE_SLOT_MINUTES = 5
+
+# Where the Components page's discovery pop-up shows each record container (coordinator.CONTAINER_SPEC)
+# and sub-record (SECTION_SPEC): in the at-a-glance summary, in this order, or only in the folded full
+# record. Fields inside a container need no entry here - the summary renders whatever a container holds.
+# A container this page has never been told about still reaches the summary (see
+# _discovery_glance_html), but test_component_discovery_places_every_container fails until it is placed.
+DISCOVERY_GLANCE_CONTAINERS = ("hardware_ids", "account_ids", "info", "ratings", "coverage", "tariff", "capabilities")
+DISCOVERY_FOLDED_CONTAINERS = ("entities",)
+
+# Status-map entries (Coordinator._component_status) for a component with nothing to show, in words:
+# the short form for a card's Discovery line, and a sentence for the pop-up. A load_error entry is filed
+# whether or not the component ever had a reporter - there is no instance left to ask - so its sentence
+# must not claim one was expected (storage, web and db can fail to load too).
+DISCOVERY_STATUS_TEXT = {"no_report": "has not reported yet", "not_started": "not started", "load_error": "failed to load"}
+DISCOVERY_STATUS_SENTENCE = {
+    "no_report": "This component has not reported yet.",
+    "not_started": "This component has not started, so it has not reported yet.",
+    "load_error": "This component failed to load.",
+}
 
 
 def history_value_at(records, stamps, when):
@@ -635,6 +655,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/dash_content", self.html_dash_content)
         app.router.add_get("/components", self.html_components)
         app.router.add_get("/discovery", self.html_discovery)
+        app.router.add_get("/component_discovery", self.html_component_discovery)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
         app.router.add_get("/component_config", self.html_component_config)
@@ -5254,6 +5275,155 @@ chart.render();
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    def _discovery_status_map(self):
+        """The catalogue's per-component status map, or {} when there is no catalogue to read."""
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return {}
+        try:
+            return coordinator.catalogue().get("components", {})
+        except Exception as e:
+            self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+            return {}
+
+    def _discovery_status_text(self, status):
+        """One component's status-map entry in words: what it reported, or why it has nothing to show."""
+        if status.get("status") != "ok":
+            return DISCOVERY_STATUS_TEXT.get(status.get("status"), str(status.get("status")))
+        counts = status.get("counts") or {}
+        parts = ["{} {}".format(count, section[:-1] if count == 1 and section.endswith("s") else section) for section, count in counts.items()]
+        return ", ".join(parts) if parts else "nothing reported"
+
+    def _discovery_label(self, key):
+        """A field name as a label: underscores become spaces, and the name is otherwise as reported."""
+        return html_module.escape(str(key).replace("_", " "))
+
+    def _discovery_chips_html(self, items, off=()):
+        """Render values as chips, struck through for any in `off`. Values are escaped."""
+        return "".join("<span class='discovery-chip{}'>{}</span>".format(" discovery-chip-off" if item in off else "", html_module.escape(str(item))) for item in items)
+
+    def _discovery_glance_value_html(self, value):
+        """Render one summary value: a list as chips, a mapping as labelled rows, anything else as plain text."""
+        if isinstance(value, dict):
+            return self._discovery_fields_html(value)
+        if isinstance(value, list):
+            if all(not isinstance(item, (dict, list)) for item in value):
+                return self._discovery_chips_html(value)
+            return self._discovery_value_html(value)
+        return html_module.escape(str(value))
+
+    def _discovery_glance_html(self, record):
+        """Render one record's at-a-glance summary: what it is, how big it is, and what it does.
+
+        Built by rule from the record's own shape, never from a list of field names, so a field a
+        reporter adds later appears here with no change to this page. Identity containers come
+        first (serial, account ids, model, firmware), then the record's own top-level facts and
+        lists (type, composition, functions, flags), then its sizes and the rest of the summary
+        containers in DISCOVERY_GLANCE_CONTAINERS order, then any container this page has never
+        been told about, and finally "Predbat controls": the entities it can write to. Field names
+        are shown with underscores as spaces; values are shown as reported.
+        """
+        placed = set(DISCOVERY_GLANCE_CONTAINERS) | set(DISCOVERY_FOLDED_CONTAINERS)
+        identity = ("hardware_ids", "account_ids", "info")
+        rows = []
+
+        def add_container(container):
+            """Add one summary row per key of a mapping-valued container."""
+            for key, value in container.items():
+                rows.append((self._discovery_label(key), self._discovery_glance_value_html(value)))
+
+        for name in identity:
+            if isinstance(record.get(name), dict):
+                add_container(record[name])
+        for key, value in record.items():
+            if key in ("device_id", "source") or key in placed or isinstance(value, dict):
+                continue
+            rows.append((self._discovery_label(key), self._discovery_glance_value_html(value)))
+        for name in DISCOVERY_GLANCE_CONTAINERS:
+            value = record.get(name)
+            if name in identity or not isinstance(value, dict):
+                continue
+            if name == "capabilities":
+                rows.append((self._discovery_label(name), self._discovery_chips_html([str(key).replace("_", " ") for key in value], off={str(key).replace("_", " ") for key, flag in value.items() if not flag})))
+            else:
+                add_container(value)
+        for key, value in record.items():
+            if key not in placed and isinstance(value, dict):
+                add_container(value)
+        entities = record.get("entities")
+        if isinstance(entities, dict):
+            controls = [str(key).replace("_", " ") for key, descriptor in entities.items() if isinstance(descriptor, dict) and descriptor.get("access") == "rw"]
+            if controls:
+                rows.append(("Predbat controls", self._discovery_chips_html(controls)))
+
+        text = "<table class='discovery-glance'>\n"
+        for label, value in rows:
+            text += "<tr><td>{}</td><td>{}</td></tr>\n".format(label, value)
+        text += "</table>\n"
+        return text
+
+    def _discovery_component_html(self, catalogue, name):
+        """Render the Components page pop-up body for one component: its status, then each record it reported.
+
+        Each record gets the at-a-glance summary, with the full record (entities included) folded
+        beneath it. Reads the published catalogue, so this shows what a debug dump would carry.
+        """
+        from components import COMPONENT_LIST
+
+        display_name = COMPONENT_LIST.get(name, {}).get("name", name)
+        text = "<h2 class='discovery-modal-title'>{} · discovery</h2>\n".format(html_module.escape(str(display_name)))
+
+        status = catalogue.get("components", {}).get(name)
+        if status is None:
+            text += "<div class='discovery-meta'>This component has no discovery reporter.</div>\n"
+        elif status.get("status") == "ok":
+            meta = []
+            reported_at = status.get("reported_at")
+            if reported_at:
+                try:
+                    meta.append("Reported {}".format(format_time_ago(datetime.fromisoformat(reported_at)).lower()))
+                except (TypeError, ValueError):
+                    meta.append("Reported {}".format(reported_at))
+            if "automatic" in status:
+                meta.append("automatic: {}".format("yes" if status["automatic"] else "no"))
+            meta.append(self._discovery_status_text(status))
+            text += "<div class='discovery-meta'>{}</div>\n".format(html_module.escape(" · ".join(meta)))
+        else:
+            sentence = DISCOVERY_STATUS_SENTENCE.get(status.get("status"), "This component's discovery status is {}.".format(status.get("status")))
+            text += "<div class='discovery-meta'>{}</div>\n".format(html_module.escape(sentence))
+
+        meta_keys = ("schema_version", "generated", "components", "observations")
+        for section, records in catalogue.items():
+            if section in meta_keys or not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict) or record.get("source") != name:
+                    continue
+                text += "<div class='discovery-card'>\n"
+                text += "<div class='discovery-card-title'>{}<span class='discovery-source'>{}</span></div>\n".format(
+                    html_module.escape(str(record.get("device_id", "(no device_id)"))), html_module.escape(section[:-1] if section.endswith("s") else section)
+                )
+                text += self._discovery_glance_html(record)
+                text += "<details><summary>Full record</summary>\n{}</details>\n".format(self._discovery_record_html(record))
+                text += "</div>\n"
+
+        text += "<p><a href='./discovery'>Open the full discovery page &rarr;</a></p>\n"
+        return text
+
+    async def html_component_discovery(self, request):
+        """Return one component's discovery info as an HTML fragment, for the Components page pop-up."""
+        name = str(request.query.get("name", ""))
+        coordinator = self._coordinator()
+        catalogue = None
+        if coordinator is not None:
+            try:
+                catalogue = coordinator.catalogue()
+            except Exception as e:
+                self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+        if catalogue is None:
+            return web.Response(content_type="text/html", text="<div class='discovery-empty'>Discovery is not available - no component coordinator is running yet.</div>\n")
+        return web.Response(content_type="text/html", text=self._discovery_component_html(catalogue, name))
+
     async def html_components(self, request):
         """
         Return the Components view as an HTML page showing status of all components
@@ -5266,6 +5436,11 @@ chart.render();
         text += get_component_edit_modal_css()
         text += get_entity_modal_js()
         text += get_component_edit_modal_js()
+        text += get_discovery_css()
+        text += get_discovery_modal_js()
+
+        # Discovery status per component: the ones listed here get an info button (see html_component_discovery)
+        discovery_status = self._discovery_status_map()
 
         # Get all component information
         all_components = self.base.components.get_all()
@@ -5353,6 +5528,10 @@ chart.render();
             # Add edit button for all components
             text += f'<button class="edit-button" onclick="showComponentEditModal(\'{component_name}\')" title="Edit component configuration">&#9998;</button>\n'
 
+            # Add a discovery info button for every component the catalogue has a status for
+            if component_name in discovery_status:
+                text += f'<button class="info-button" onclick="showDiscoveryModal(\'{component_name}\')" title="Show what this component discovered">&#9432;</button>\n'
+
             text += f"</div>\n"
 
             # Component details
@@ -5370,6 +5549,11 @@ chart.render();
             if error_count is not None:
                 error_class = "error-count-high" if error_count > 0 else "error-count-none"
                 text += f'<p><strong>Error Count:</strong> <span class="{error_class}">{error_count}</span></p>\n'
+
+            # Summarise what the component discovered; the summary opens the same pop-up as the info button
+            if component_name in discovery_status:
+                discovery_text = html_module.escape(self._discovery_status_text(discovery_status[component_name]))
+                text += f'<p><strong>Discovery:</strong> <span class="discovery-summary-link" onclick="showDiscoveryModal(\'{component_name}\')">{discovery_text}</span></p>\n'
 
             # Show args and their current values
             args_info = component_info.get("args", {})
@@ -5454,6 +5638,14 @@ chart.render();
             </table>
         </div>
         <div id="entityEmptyState" class="entity-empty-state" style="display: none;">No entities found</div>
+    </div>
+</div>
+
+<!-- Discovery Modal -->
+<div id="discoveryModal" class="entity-modal">
+    <div class="entity-modal-content">
+        <span class="entity-modal-close" onclick="closeDiscoveryModal()">&times;</span>
+        <div id="discoveryModalBody"></div>
     </div>
 </div>
 

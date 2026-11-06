@@ -359,6 +359,306 @@ def test_discovery_route_is_registered(my_predbat):
     return failed
 
 
+class _StubComponentsPage(_StubComponents):
+    """_StubComponents plus the registry surface the Components page reads to draw its cards."""
+
+    def get_active(self):
+        """Every active component name - all of them, in this stub."""
+        return list(self._names)
+
+    def can_restart(self, name):
+        """Whether the named component can be restarted - never, in this stub."""
+        return False
+
+    def last_updated_time(self, name):
+        """When the named component last updated - never, in this stub."""
+        return None
+
+    def get_error_count(self, name):
+        """How many errors the named component has logged - none, in this stub."""
+        return 0
+
+    def get_component(self, name):
+        """A component instance with no build_discovery(), like Web or Storage on a real install.
+
+        The base stub returns None, which the coordinator counts as reportable (see _can_report),
+        so every active component would appear in the status map. A real active component always
+        resolves to an instance, and one without a reporter is left out of the map.
+        """
+        return object()
+
+
+def _render_component_discovery(my_predbat, coordinator, name, names=("givtcp", "octopus", "gecloud")):
+    """Render the per-component discovery pop-up body for `name` and return the response."""
+    w = _make_web(my_predbat, coordinator, names)
+    return asyncio.run(w.html_component_discovery(FakeRequest({"name": name})))
+
+
+def _render_components_page(my_predbat, coordinator, names):
+    """Render the Components page against a stub registry and return its HTML body."""
+    w = _make_web(my_predbat, coordinator, names)
+    my_predbat.components = _StubComponentsPage(coordinator, names)
+    w.get_arg = lambda *args, **kwargs: None
+    w.count_entities_matching_filter = lambda event_filter: 0
+    return asyncio.run(w.html_components(FakeRequest())).text
+
+
+def test_component_discovery_shows_only_that_components_records(my_predbat):
+    """The pop-up for one component shows its own devices and nothing another component reported."""
+    print("**** test_component_discovery_shows_only_that_components_records ****")
+    failed = False
+    saved = getattr(my_predbat, "components", None)
+    try:
+        coordinator = _real_coordinator(my_predbat)
+        response = _render_component_discovery(my_predbat, coordinator, "givtcp")
+        body = response.text
+        if response.status != 200:
+            print(f"  ERROR: expected status 200, got {response.status}")
+            failed = True
+        for expected in ("givtcp:CE2143G123", "CE2143G123", "Gen3", "D0.450"):
+            if expected not in body:
+                print(f"  ERROR: expected the GivTCP pop-up to show {expected!r}")
+                failed = True
+        if SAMPLE_MPAN in body or "E-1R-AGILE-24-10-01-A" in body:
+            print("  ERROR: the GivTCP pop-up showed a record the Octopus component reported")
+            failed = True
+    finally:
+        my_predbat.components = saved
+
+    if not failed:
+        print("PASS: the pop-up shows only the chosen component's records")
+    return failed
+
+
+def test_component_discovery_glance_summarises_the_record(my_predbat):
+    """The at-a-glance summary carries identity, ratings, functions, capabilities and what Predbat controls.
+
+    Built by rule from the record's own containers, so every value here comes through without the
+    web page naming a single field. Entity ids live only in the folded full record.
+    """
+    print("**** test_component_discovery_glance_summarises_the_record ****")
+    failed = False
+    saved = getattr(my_predbat, "components", None)
+    try:
+        body = _render_component_discovery(my_predbat, _real_coordinator(my_predbat), "givtcp").text
+        details_at = body.find("<details")
+        glance = body[:details_at] if details_at >= 0 else body
+        # Labels are the field names with underscores turned into spaces
+        for expected in ("serial", "CE2143G123", "firmware", "D0.450", "soc max", "9.5", "battery rate max", "3000", "solar", "battery", "support charge freeze", "can span midnight", "rest_v3", "charge rate"):
+            if expected not in glance:
+                print(f"  ERROR: expected the at-a-glance summary to show {expected!r}")
+                failed = True
+        if "discovery-chip" not in glance:
+            print("  ERROR: expected functions and capabilities to be drawn as chips")
+            failed = True
+        if "number.givtcp_ce2143g123_charge_rate" in glance:
+            print("  ERROR: an entity id belongs in the folded full record, not the summary")
+            failed = True
+        if details_at < 0 or "number.givtcp_ce2143g123_charge_rate" not in body[details_at:]:
+            print("  ERROR: expected the full record, entities included, folded under a <details>")
+            failed = True
+    finally:
+        my_predbat.components = saved
+
+    if not failed:
+        print("PASS: the summary is built from the record and the full record is folded below it")
+    return failed
+
+
+def test_component_discovery_shows_ids_and_withholds_email(my_predbat):
+    """The pop-up is the published view: the MPAN is readable and the login email is not."""
+    print("**** test_component_discovery_shows_ids_and_withholds_email ****")
+    failed = False
+    saved = getattr(my_predbat, "components", None)
+    try:
+        body = _render_component_discovery(my_predbat, _real_coordinator(my_predbat), "octopus").text
+        if SAMPLE_MPAN not in body:
+            print(f"  ERROR: the MPAN {SAMPLE_MPAN} is an identifier and should be readable")
+            failed = True
+        if SAMPLE_EMAIL in body:
+            print(f"  ERROR: the email {SAMPLE_EMAIL} reached the pop-up")
+            failed = True
+        if "E-1R-AGILE-24-10-01-A" not in body:
+            print("  ERROR: expected the meter's tariff to be shown")
+            failed = True
+    finally:
+        my_predbat.components = saved
+
+    if not failed:
+        print("PASS: the pop-up shows identifiers and withholds the email")
+    return failed
+
+
+def test_component_discovery_explains_a_silent_component(my_predbat):
+    """A component that should report but has not says why the pop-up is empty."""
+    print("**** test_component_discovery_explains_a_silent_component ****")
+    failed = False
+    saved = getattr(my_predbat, "components", None)
+    try:
+        catalogue = {
+            "schema_version": 2,
+            "generated": "2026-11-03T01:00:00+00:00",
+            "components": {"fox": {"status": "no_report", "reported_at": None}, "solis": {"status": "load_error", "reported_at": None}},
+            "inverters": [],
+            "observations": {"conflicts": []},
+        }
+        body = _render_component_discovery(my_predbat, _StubCoordinator(catalogue), "fox").text.lower()
+        if "not reported" not in body:
+            print("  ERROR: expected a no_report component to say it has not reported yet")
+            failed = True
+        body = _render_component_discovery(my_predbat, _StubCoordinator(catalogue), "solis").text.lower()
+        if "failed to load" not in body:
+            print("  ERROR: expected a load_error component to say it failed to load")
+            failed = True
+
+        # A component that failed to load is in the status map whether or not it ever had a
+        # reporter (there is no instance left to ask), so storage - which never reports - gets the
+        # pop-up too. Nothing it says may claim the component was expected to report.
+        catalogue["components"]["storage"] = {"status": "load_error", "reported_at": None}
+        for name in ("fox", "solis", "storage"):
+            body = _render_component_discovery(my_predbat, _StubCoordinator(catalogue), name).text.lower()
+            if "expected to report" in body or "has not reported anything" in body:
+                print(f"  ERROR: the {name} pop-up claims the component was expected to report, or repeats itself: {body[:200]!r}")
+                failed = True
+    finally:
+        my_predbat.components = saved
+
+    if not failed:
+        print("PASS: a silent component explains why it has nothing to show")
+    return failed
+
+
+def test_component_discovery_without_a_coordinator(my_predbat):
+    """With no coordinator the pop-up says discovery is unavailable rather than failing."""
+    print("**** test_component_discovery_without_a_coordinator ****")
+    failed = False
+    saved = getattr(my_predbat, "components", None)
+    try:
+        w = WebInterface.__new__(WebInterface)
+        w.base = my_predbat
+        w.log = my_predbat.log
+        w.prefix = my_predbat.prefix
+        my_predbat.components = None
+        response = asyncio.run(w.html_component_discovery(FakeRequest({"name": "givtcp"})))
+        if response.status != 200 or "not available" not in response.text.lower():
+            print(f"  ERROR: expected a 200 explaining discovery is not available, got {response.status}: {response.text[:120]!r}")
+            failed = True
+    finally:
+        my_predbat.components = saved
+
+    if not failed:
+        print("PASS: the pop-up degrades to a message without a coordinator")
+    return failed
+
+
+def test_component_discovery_renders_unknown_fields_and_escapes(my_predbat):
+    """A field or container the page was never taught still shows in the summary, and vendor strings are escaped."""
+    print("**** test_component_discovery_renders_unknown_fields_and_escapes ****")
+    failed = False
+    saved = getattr(my_predbat, "components", None)
+    try:
+        catalogue = {
+            "schema_version": 2,
+            "generated": "2026-11-03T01:00:00+00:00",
+            "components": {"future": {"status": "ok", "reported_at": "2026-11-03T00:59:00+00:00", "counts": {"inverters": 1}}},
+            "inverters": [
+                {
+                    "source": "future",
+                    "device_id": "future:1",
+                    "a_field_invented_tomorrow": "surprising-value",
+                    "container_invented_tomorrow": {"inner_key": "also-shown"},
+                    "info": {"model": "<script>alert('xss')</script>"},
+                }
+            ],
+            "observations": {"conflicts": []},
+        }
+        body = _render_component_discovery(my_predbat, _StubCoordinator(catalogue), "future").text
+        glance = body[: body.find("<details")]
+        for expected in ("a field invented tomorrow", "surprising-value", "inner key", "also-shown"):
+            if expected not in glance:
+                print(f"  ERROR: the summary dropped {expected!r} - it must be generic")
+                failed = True
+        if "<script>alert('xss')</script>" in body or "&lt;script&gt;" not in body:
+            print("  ERROR: a vendor-supplied value was not escaped")
+            failed = True
+    finally:
+        my_predbat.components = saved
+
+    if not failed:
+        print("PASS: unknown fields reach the summary and values are escaped")
+    return failed
+
+
+def test_component_discovery_places_every_container():
+    """Every record container and sub-record is placed in the summary or the fold, so none goes missing unseen.
+
+    A new container in coordinator.CONTAINER_SPEC (or a new sub-record in SECTION_SPEC) fails this
+    until someone decides where the pop-up shows it.
+    """
+    print("**** test_component_discovery_places_every_container ****")
+    from coordinator import CONTAINER_SPEC, SECTION_SPEC
+    from web import DISCOVERY_FOLDED_CONTAINERS, DISCOVERY_GLANCE_CONTAINERS
+
+    expected = set(CONTAINER_SPEC)
+    for spec in SECTION_SPEC.values():
+        expected |= set(spec["sub_records"])
+    placed = set(DISCOVERY_GLANCE_CONTAINERS) | set(DISCOVERY_FOLDED_CONTAINERS)
+    failed = False
+    missing = sorted(expected - placed)
+    if missing:
+        print(f"  ERROR: containers not placed in the pop-up's summary or fold: {missing}")
+        failed = True
+    both = sorted(set(DISCOVERY_GLANCE_CONTAINERS) & set(DISCOVERY_FOLDED_CONTAINERS))
+    if both:
+        print(f"  ERROR: containers placed in both the summary and the fold: {both}")
+        failed = True
+    if not failed:
+        print("PASS: every container is placed in the summary or the fold")
+    return failed
+
+
+def test_components_page_offers_discovery_info(my_predbat):
+    """A component in the catalogue's status map gets the info button and a Discovery line; one with no reporter gets neither."""
+    print("**** test_components_page_offers_discovery_info ****")
+    failed = False
+    saved = getattr(my_predbat, "components", None)
+    try:
+        coordinator = _real_coordinator(my_predbat)
+        body = _render_components_page(my_predbat, coordinator, ("givtcp", "octopus", "web"))
+        for name in ("givtcp", "octopus"):
+            if f"showDiscoveryModal('{name}')" not in body:
+                print(f"  ERROR: expected an info button opening {name}'s discovery")
+                failed = True
+        if "showDiscoveryModal('web')" in body:
+            print("  ERROR: a component that never reports should get no info button")
+            failed = True
+        if "1 inverter" not in body or "1 meter" not in body:
+            print("  ERROR: expected each card's Discovery line to summarise what it reported")
+            failed = True
+        if 'id="discoveryModal"' not in body:
+            print("  ERROR: expected the discovery pop-up container on the page")
+            failed = True
+    finally:
+        my_predbat.components = saved
+
+    if not failed:
+        print("PASS: the Components page offers discovery info on reporting components only")
+    return failed
+
+
+def test_component_discovery_route_is_registered(my_predbat):
+    """/component_discovery is wired into the router, so the info button's fetch resolves."""
+    print("**** test_component_discovery_route_is_registered ****")
+    import inspect
+
+    failed = '"/component_discovery"' not in inspect.getsource(WebInterface.start)
+    if failed:
+        print("  ERROR: expected /component_discovery to be registered on the router")
+    else:
+        print("PASS: the /component_discovery route is registered")
+    return failed
+
+
 def run_web_discovery_tests(my_predbat):
     """Run every discovery web page test."""
     failed = False
@@ -370,4 +670,13 @@ def run_web_discovery_tests(my_predbat):
     failed |= test_discovery_page_renders_a_field_it_was_never_taught(my_predbat)
     failed |= test_discovery_page_escapes_rendered_values(my_predbat)
     failed |= test_discovery_route_is_registered(my_predbat)
+    failed |= test_component_discovery_shows_only_that_components_records(my_predbat)
+    failed |= test_component_discovery_glance_summarises_the_record(my_predbat)
+    failed |= test_component_discovery_shows_ids_and_withholds_email(my_predbat)
+    failed |= test_component_discovery_explains_a_silent_component(my_predbat)
+    failed |= test_component_discovery_without_a_coordinator(my_predbat)
+    failed |= test_component_discovery_renders_unknown_fields_and_escapes(my_predbat)
+    failed |= test_component_discovery_places_every_container()
+    failed |= test_components_page_offers_discovery_info(my_predbat)
+    failed |= test_component_discovery_route_is_registered(my_predbat)
     return failed

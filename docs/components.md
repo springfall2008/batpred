@@ -2132,6 +2132,16 @@ Click the Pencil icon next to a component to change the component configuration,
 
 Once you save the component configuration the changes will be written to `apps.yaml` and Predbat and all components will be restarted.
 
+### Viewing what a component discovered
+
+Components that report to the [discovery catalogue](discovery-catalogue.md) show a teal ⓘ button next to the Pencil icon, and a **Discovery** line summarising what they found (for example "1 inverter" or "2 meters, 1 car"). Click either to see that component's devices:
+
+- An at-a-glance summary for each device: its serial and other identifiers, model, firmware, ratings such as battery size, what it is (solar, battery), its capabilities (struck through when it lacks one), and which settings Predbat controls on it
+- The full record, entities included, folded beneath it
+- A link to the full Discovery page
+
+A component that should report but has not says so instead, for example "has not reported yet" or "failed to load". The pop-up shows the same view as a bug report: identifiers are readable and email addresses are removed.
+
 ### Component Health
 
 A component is considered healthy when:

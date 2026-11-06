@@ -2943,7 +2943,7 @@ def get_components_css():
     color: #333;
 }
 
-.restart-button, .edit-button {
+.restart-button, .edit-button, .info-button {
     color: white;
     border: none;
     padding: 6px 12px;
@@ -2974,6 +2974,14 @@ def get_components_css():
 
 .edit-button:hover {
     background-color: #F57C00;
+}
+
+.info-button {
+    background-color: #00897B;
+}
+
+.info-button:hover {
+    background-color: #00695C;
 }
 
 .component-details {
@@ -3182,7 +3190,7 @@ body.dark-mode .error-count-high {
     font-weight: bold;
 }
 
-body.dark-mode .restart-button, body.dark-mode .edit-button {
+body.dark-mode .restart-button, body.dark-mode .edit-button, body.dark-mode .info-button {
     color: white;
 }
 
@@ -3205,6 +3213,14 @@ body.dark-mode .edit-button {
 
 body.dark-mode .edit-button:hover {
     background-color: #F57C00;
+}
+
+body.dark-mode .info-button {
+    background-color: #00897B;
+}
+
+body.dark-mode .info-button:hover {
+    background-color: #00695C;
 }
 
 /* Responsive design */
@@ -3434,6 +3450,84 @@ body.dark-mode .discovery-raw {
 body.dark-mode .discovery-empty {
     background: #333;
     color: #ccc;
+}
+
+/* The Components page's per-component discovery pop-up (see get_discovery_modal_js) */
+.discovery-modal-title {
+    margin: 0 0 4px 0;
+}
+
+.discovery-meta {
+    color: #666;
+    font-size: 0.9em;
+    margin: 0 0 12px 0;
+}
+
+body.dark-mode .discovery-meta {
+    color: #aaa;
+}
+
+.discovery-glance {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 12px 0;
+    font-size: 0.92em;
+}
+
+.discovery-glance td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #eee;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+.discovery-glance td:first-child {
+    color: #666;
+    width: 35%;
+}
+
+body.dark-mode .discovery-glance td {
+    border-bottom-color: #444;
+}
+
+body.dark-mode .discovery-glance td:first-child {
+    color: #aaa;
+}
+
+.discovery-chip {
+    display: inline-block;
+    background: #E0F2F1;
+    color: #00695C;
+    border-radius: 10px;
+    padding: 2px 8px;
+    margin: 2px 4px 2px 0;
+    font-size: 0.88em;
+}
+
+.discovery-chip-off {
+    background: #eee;
+    color: #999;
+    text-decoration: line-through;
+}
+
+body.dark-mode .discovery-chip {
+    background: #004D40;
+    color: #B2DFDB;
+}
+
+body.dark-mode .discovery-chip-off {
+    background: #3a3a3a;
+    color: #888;
+}
+
+.discovery-summary-link {
+    color: #00695C;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+body.dark-mode .discovery-summary-link {
+    color: #80CBC4;
 }
 
 @media (max-width: 768px) {
@@ -4039,6 +4133,41 @@ window.onclick = function(event) {
         closeEntityModal();
     }
 }
+</script>
+"""
+    return text
+
+
+def get_discovery_modal_js():
+    """
+    Return JavaScript for the Components page's discovery pop-up, filled from /component_discovery
+    """
+    text = """
+<script>
+async function showDiscoveryModal(name) {
+    const modal = document.getElementById('discoveryModal');
+    const body = document.getElementById('discoveryModalBody');
+    body.innerHTML = '<p>Loading...</p>';
+    modal.style.display = 'block';
+    try {
+        const response = await fetch('./component_discovery?name=' + encodeURIComponent(name));
+        body.innerHTML = await response.text();
+    } catch (error) {
+        console.error('Error fetching discovery info:', error);
+        body.innerHTML = '<p style="color: red;">Error loading discovery info</p>';
+    }
+}
+
+function closeDiscoveryModal() {
+    document.getElementById('discoveryModal').style.display = 'none';
+}
+
+// Close when clicking outside the pop-up. addEventListener, not window.onclick, which the entity modal already owns.
+window.addEventListener('click', function(event) {
+    if (event.target === document.getElementById('discoveryModal')) {
+        closeDiscoveryModal();
+    }
+});
 </script>
 """
     return text
