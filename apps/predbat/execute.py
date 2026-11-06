@@ -16,6 +16,7 @@ reserve level adjustments, and multi-inverter balancing.
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import timedelta, datetime
+from functools import partial
 from const import (
     MINUTE_WATT,
     EXPORT_LIMIT_IDLE,
@@ -37,7 +38,7 @@ from const import (
     RUN_STATE_READ_ONLY,
     RUN_STATE_CALIBRATION,
 )
-from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
+from utils import services_send_power, dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
 from predbat_metrics import metrics
 from inverter import Inverter, calibration_reported
 import time
@@ -438,6 +439,21 @@ class Execute:
             if event is not None:
                 self.log(format_failure(event, self.local_tz))
 
+    def queue_immediate(self, immediate_calls, call):
+        """
+        Make an immediate charge/export call now, or add it to immediate_calls to make after the rates are set.
+
+        immediate_calls is None unless a start or freeze service sends {power} (services_send_power()).
+        Those are sent the stored rate, and execute_plan() only writes this cycle's rates after its
+        per-inverter loop, so a call made in the loop sent the previous cycle's rate (#5252). Otherwise
+        there is no {power} to get wrong, so the call is made where it is, in the same order as the
+        inverter's other writes as before.
+        """
+        if immediate_calls is None:
+            call()
+        else:
+            immediate_calls.append(call)
+
     def execute_plan(self):
         # Per-inverter detail segments, assembled into the status text after the headline status is
         # resolved - see build_status_extra() for why they can't be concatenated inline.
@@ -492,6 +508,11 @@ class Execute:
         isCharging = False
         isExporting = False
         intent = {}
+        # Where a service sends {power}, the immediate calls (adjust_charge_immediate /
+        # adjust_export_immediate) are queued here and made after apply_rate_intent(), so the {power}
+        # they send is the rate actually set this cycle - balanced - rather than the previous cycle's
+        # (#5252). See queue_immediate().
+        immediate_calls = [] if services_send_power(self.args) else None
         export_rate_alloc = self.allocate_fleet_export_rates()
         # Inverter id -> (mode, slot start minutes, slot end minutes, target percent), for the
         # control-failure monitor. Only the four judged modes are recorded.
@@ -516,8 +537,16 @@ class Execute:
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                     inverter.adjust_battery_target(100.0, False)
                     inverter.adjust_reserve(0)
-                # Those writes go through the ordinary helpers, so they CONFER ownership - in
-                # exactly the mode where the inverter's own firmware is driving its settings.
+                # The start/stop services the earlier inverters queued still run, as they did before they
+                # were queued - dropping them would also drop a stop - so they carry calibration's full rates.
+                # They run here, before ownership is dropped below, as a write they make (Solis FB00's
+                # energy control) would otherwise stay owned for as long as calibration lasts.
+                for call in immediate_calls or []:
+                    call()
+                immediate_calls = None
+                # The writes above - calibration's and the queued calls' - go through the ordinary helpers,
+                # so they CONFER ownership - in exactly the mode where the inverter's own firmware is driving
+                # its settings.
                 # A value found moved next cycle is the inverter calibrating, not a third
                 # party, so ownership is dropped after the writes rather than before them.
                 self.clear_control_ledger("inverter {} is calibrating, so its own firmware is driving the settings".format(inverter.id))
@@ -1074,11 +1103,11 @@ class Execute:
 
                     # Immediate controls
                     if self.set_export_freeze and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_FREEZE:
-                        inverter.adjust_export_immediate(inverter.soc_percent, freeze=True)
+                        self.queue_immediate(immediate_calls, partial(inverter.adjust_export_immediate, inverter.soc_percent, freeze=True))
                     elif not disabled_export:
-                        inverter.adjust_export_immediate(export_target_percent)
+                        self.queue_immediate(immediate_calls, partial(inverter.adjust_export_immediate, export_target_percent))
                     else:
-                        inverter.adjust_export_immediate(int(EXPORT_LIMIT_IDLE))  # Dead code right, but kept in case other logic changes
+                        self.queue_immediate(immediate_calls, partial(inverter.adjust_export_immediate, int(EXPORT_LIMIT_IDLE)))  # Dead code right, but kept in case other logic changes
 
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
@@ -1088,9 +1117,9 @@ class Execute:
                                 inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(self.soc_kw, self.soc_max), isCharging, isExporting, isFreezeCharge=True)
                                 self.log("Inverter {} within charge freeze setting target SoC to SoC {} global target {}".format(inverter.id, dp0(inv_target_soc_percent), dp0(self.soc_kw)))
                                 if inverter.soc_kw >= inverter.reserve:
-                                    inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
+                                    self.queue_immediate(immediate_calls, partial(inverter.adjust_charge_immediate, inv_target_soc_percent, freeze=True))
                                 else:
-                                    inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=False)
+                                    self.queue_immediate(immediate_calls, partial(inverter.adjust_charge_immediate, inv_target_soc_percent, freeze=False))
                             elif not inverter.inv_has_target_soc:
                                 self.log("Inverter {} setting charging SoC to 0% as we are not charging and inverter doesn't support target SoC".format(inverter.id))
                                 self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
@@ -1107,7 +1136,7 @@ class Execute:
                                 target_soc = calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max)
                                 self.log("Inverter {} setting charging SoC to {}% as per target".format(inverter.id, target_soc))
                                 inv_target_soc = self.adjust_battery_target_multi(inverter, target_soc, isCharging, isExporting)
-                                inverter.adjust_charge_immediate(inv_target_soc)
+                                self.queue_immediate(immediate_calls, partial(inverter.adjust_charge_immediate, inv_target_soc))
                             elif not inverter.inv_has_target_soc:
                                 self.log("Inverter {} setting charging SoC to 0% as we are not charging and inverter doesn't support target SoC".format(inverter.id))
                                 self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
@@ -1153,10 +1182,10 @@ class Execute:
                     if isCharging:
                         if self.is_freeze_charge(self.charge_limit_best[0]):
                             inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(self.soc_kw, self.soc_max), isCharging, isExporting, check=True, isFreezeCharge=True)
-                            inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
+                            self.queue_immediate(immediate_calls, partial(inverter.adjust_charge_immediate, inv_target_soc_percent, freeze=True))
                         else:
                             inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max), isCharging, isExporting, check=True)
-                            inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
+                            self.queue_immediate(immediate_calls, partial(inverter.adjust_charge_immediate, inv_target_soc_percent, freeze=True))
 
             # Charging/Discharging off via service
             # Skipped while exporting: adjust_export_immediate() above already issues its own
@@ -1166,11 +1195,11 @@ class Execute:
             # mode discharge_start_service had just set (GH#4165, GH#4641).
             if not isCharging and not isExporting and self.set_charge_window:
                 if carHolding or boostHolding:
-                    inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
+                    self.queue_immediate(immediate_calls, partial(inverter.adjust_charge_immediate, inverter.soc_percent, freeze=True))
                 else:
-                    inverter.adjust_charge_immediate(0)
+                    self.queue_immediate(immediate_calls, partial(inverter.adjust_charge_immediate, 0))
             if not isExporting and self.set_export_window:
-                inverter.adjust_export_immediate(int(EXPORT_LIMIT_IDLE))
+                self.queue_immediate(immediate_calls, partial(inverter.adjust_export_immediate, int(EXPORT_LIMIT_IDLE)))
 
             # Reset reserve as discharge is enable but not running right now
             if self.set_reserve_enable and resetReserve:
@@ -1188,6 +1217,12 @@ class Execute:
         # the whole fleet before anything is written. Inverters that were skipped by the read-only
         # branch (continue) or the calibration branch (break) recorded no intent and are not written.
         self.apply_rate_intent(intent)
+
+        # Now the rates are set, start or stop each inverter through its services, in the order the loop chose
+        for call in immediate_calls or []:
+            call()
+
+        # After the queued calls, so a slot's grace period starts once its start service has been called
         self.record_control_expectations(status_per_inverter, monitor_slots)
 
         # Count register writes - after the apply pass so the rate writes land in this cycle's count

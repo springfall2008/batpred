@@ -36,6 +36,8 @@ class ActiveTestInverter:
         self.immediate_discharge_soc_target = -1
         self.immediate_charge_soc_freeze = False
         self.immediate_discharge_soc_freeze = False
+        self.immediate_charge_power = None
+        self.immediate_discharge_power = None
         self.charge_start_time_minutes = -1
         self.charge_end_time_minutes = -1
         self.charge_rate = 1000
@@ -122,10 +124,15 @@ class ActiveTestInverter:
     def adjust_charge_immediate(self, target_soc, freeze=False):
         self.immediate_charge_soc_target = target_soc
         self.immediate_charge_soc_freeze = freeze
+        # The {power} the real service call would carry: the rate stored when it is made (#5252)
+        if target_soc > 0:
+            self.immediate_charge_power = self.charge_rate
 
     def adjust_export_immediate(self, target_soc, freeze=False):
         self.immediate_discharge_soc_target = target_soc
         self.immediate_discharge_soc_freeze = freeze
+        if target_soc < 100:
+            self.immediate_discharge_power = self.discharge_rate
 
     def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
         self.force_export = force_export
@@ -331,6 +338,8 @@ def run_execute_test(
         # rather than inheriting whatever the previous scenario in this run happened to leave behind.
         inverter.immediate_charge_soc_target = -1
         inverter.immediate_discharge_soc_target = -1
+        inverter.immediate_charge_power = None
+        inverter.immediate_discharge_power = None
         if soc_kw_array:
             inverter.soc_kw = soc_kw_array[inverter.id]
         else:
@@ -507,6 +516,14 @@ def run_execute_test(
             failed = True
         if assert_status in ["Freeze exporting"] and inverter.immediate_discharge_soc_freeze is not True:
             print("ERROR: Inverter {} Immediate export SOC freeze should be True got {}".format(inverter.id, inverter.immediate_discharge_soc_freeze))
+            failed = True
+        # A service-driven inverter is sent {power} in the same cycle the rate is planned, so it must be
+        # the rate this cycle writes - not the previous cycle's (#5252)
+        if inverter.immediate_charge_power is not None and inverter.immediate_charge_power != inverter.charge_rate:
+            print("ERROR: Inverter {} charge service power {} should match this cycle's charge rate {}".format(inverter.id, inverter.immediate_charge_power, inverter.charge_rate))
+            failed = True
+        if inverter.immediate_discharge_power is not None and inverter.immediate_discharge_power != inverter.discharge_rate:
+            print("ERROR: Inverter {} export service power {} should match this cycle's discharge rate {}".format(inverter.id, inverter.immediate_discharge_power, inverter.discharge_rate))
             failed = True
 
     # Validate isCharging binary sensor state: must be True for any charging status (Freeze charging, Hold charging, Charging variants)
@@ -1532,6 +1549,54 @@ def undo_control_monitor_exporting(my_predbat, saved):
         inverter.discharge_end_time_minutes = end
 
 
+def test_control_monitor_expectation_after_start_service(my_predbat):
+    """
+    With a {power} start service the immediate calls are queued until after the rates are set
+    (#5252); each inverter's Charging expectation is only recorded once its start call has been
+    made, so the slot's grace period starts from the command rather than before it.
+    """
+    saved_monitor = my_predbat.control_monitor
+    my_predbat.control_monitor = ControlMonitor()
+    events = []
+    real_set_expectation = my_predbat.control_monitor.set_expectation
+
+    def record_set_expectation(inverter_id, *args, **kwargs):
+        """Note the expectation, then record it as normal."""
+        events.append(("expectation", inverter_id))
+        return real_set_expectation(inverter_id, *args, **kwargs)
+
+    def wrap_charge_immediate(inverter):
+        """Note this inverter's charge start call, then make it as normal."""
+        real_call = inverter.adjust_charge_immediate
+
+        def record_charge_immediate(target_soc, freeze=False):
+            """Note the call, then make it."""
+            events.append(("charge_immediate", inverter.id))
+            return real_call(target_soc, freeze=freeze)
+
+        return record_charge_immediate
+
+    my_predbat.control_monitor.set_expectation = record_set_expectation
+    for inverter in my_predbat.inverters:
+        inverter.adjust_charge_immediate = wrap_charge_immediate(inverter)
+    failed = False
+    try:
+        if control_monitor_charging_scenario(my_predbat, "control_monitor_after_start_service"):
+            return True
+        for inverter in my_predbat.inverters:
+            call = ("charge_immediate", inverter.id)
+            expectation = ("expectation", inverter.id)
+            if call not in events or expectation not in events or events.index(call) > events.index(expectation):
+                print("ERROR: inverter {} expectation recorded before its start call: {}".format(inverter.id, events))
+                failed = True
+    finally:
+        my_predbat.control_monitor = saved_monitor
+        for inverter in my_predbat.inverters:
+            # Drop the instance wrapper so the class method is used again
+            del inverter.adjust_charge_immediate
+    return failed
+
+
 def test_control_monitor_exporting_expectation(my_predbat):
     """Exporting sets an Exporting expectation, with the discharge rate written recorded on the inverter."""
     saved_monitor = my_predbat.control_monitor
@@ -2047,6 +2112,10 @@ def run_execute_tests(my_predbat):
         return failed
 
     reset_inverter(my_predbat)
+    # Service-driven inverters, so execute_plan() makes the immediate calls after the rates are set and
+    # each scenario's {power} check applies (#5252). The test inverters stub the calls, so no service runs.
+    my_predbat.args["charge_start_service"] = "charge_start"
+    my_predbat.args["discharge_start_service"] = "discharge_start"
 
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best_slot = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 7.5}]
@@ -3172,9 +3241,10 @@ def run_execute_tests(my_predbat):
     # breaks out of the loop. The headline status must stay "Calibration", not resolve back to the
     # stale "Charging" state inverter 0 left behind in status_per_inverter.
     # The per-inverter asserts below capture the real half-processed state the break leaves behind:
-    # inverter 0 keeps the charge window/immediate targets it was already given, inverter 1 never
-    # reached those calls, and isCharging stays True from inverter 0 (pre-existing behaviour, since
-    # the calibration branch breaks without resetting it).
+    # inverter 0 keeps the charge window it was already given, inverter 1 never reached those calls,
+    # and isCharging stays True from inverter 0 (pre-existing behaviour, since the calibration branch
+    # breaks without resetting it). With start services sending {power}, inverter 0's immediate calls
+    # are queued and still made, after the calibration writes.
     failed |= run_execute_test(
         my_predbat,
         "calibration_after_charging_inverter",
@@ -3193,6 +3263,53 @@ def run_execute_tests(my_predbat):
         assert_immediate_discharge_soc_target_array=[100, -1],
         assert_is_charging=True,
     )
+    if failed:
+        return failed
+
+    # The calibration branch drops control ownership after its own writes. Inverter 0's queued immediate
+    # calls must land before that drop, as they did when they were made inline: a write they make (the
+    # Solis FB00 energy control switch) would otherwise be owned while the firmware drives the settings.
+    def owning_immediate(inverter, call):
+        """Wrap an immediate call so that, like write_solis_energy_control(), it confers ownership of a control."""
+
+        def wrapped(target_soc, freeze=False):
+            """Record ownership of the control, then make the call."""
+            my_predbat.control_ledger.record_write("select.energy_control_{}".format(inverter.id), "energy_control", target_soc, now=1.0)
+            call(target_soc, freeze=freeze)
+
+        return wrapped
+
+    for inverter in inverters:
+        inverter.adjust_charge_immediate = owning_immediate(inverter, inverter.adjust_charge_immediate)
+        inverter.adjust_export_immediate = owning_immediate(inverter, inverter.adjust_export_immediate)
+    my_predbat.control_ledger.clear()
+    try:
+        failed |= run_execute_test(
+            my_predbat,
+            "calibration_after_charging_inverter_drops_ownership",
+            charge_window_best=charge_window_best,
+            charge_limit_best=charge_limit_best,
+            set_charge_window=True,
+            set_export_window=True,
+            in_calibration_array=[False, True],
+            assert_charge_time_enable_array=[True, False],
+            assert_status="Calibration",
+            assert_reserve=0,
+            assert_soc_target=100,
+            assert_charge_start_time_minutes=-1,
+            assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+            assert_immediate_charge_soc_target_array=[100, -1],
+            assert_immediate_discharge_soc_target_array=[100, -1],
+            assert_is_charging=True,
+        )
+        if my_predbat.control_ledger.records:
+            print("ERROR: calibration should leave no control owned, got {}".format(sorted(my_predbat.control_ledger.records)))
+            failed = True
+    finally:
+        for inverter in inverters:
+            del inverter.adjust_charge_immediate
+            del inverter.adjust_export_immediate
+        my_predbat.control_ledger.clear()
     if failed:
         return failed
     failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True)
@@ -5216,6 +5333,7 @@ def run_execute_tests(my_predbat):
 
     for control_monitor_test in (
         test_control_monitor_charging_counts_once,
+        test_control_monitor_expectation_after_start_service,
         test_control_monitor_exporting_expectation,
         test_control_monitor_read_only_records_nothing,
         test_control_monitor_read_only_between_plan_runs,
