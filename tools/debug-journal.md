@@ -88,7 +88,7 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 
 ### Fox (`fox.py`)
 
-- Cloud errno 42015/44096 = setting unsupported by the device (`FOX_SETTINGS_UNSUPPORTED_ERRNO`); it is marked unavailable and never polled or written again. WorkMode is a select, ExportLimit a number.
+- Cloud errno 42015/44096 = setting unsupported by the device (`FOX_SETTINGS_UNSUPPORTED_ERRNO`); it is marked unavailable and never polled or written again. WorkMode is a select, ExportLimit a number. Since PR #5840 (2026-10-30) the three unsupported-setting lines log at Info (the same errno from a non-setting endpoint still warns); a Warn form in an attached log just dates it to pre-#5840.
 - `soc_max` 4x too big when `batteryList` holds four `bmu` entries with one serial (AIO ESS, EVO 10-5-H): fixed in PR #5629 (2026-10-24). Unverified: whether `batteryDesignCapacity` totals a multi-pack stack.
 - `fox_automatic: true` re-`set_arg`s `soc_max` every cycle and it is not in `CONFIG_API_OVERRIDE`, so apps.yaml cannot override it; escape hatch `fox_automatic: false`.
 - With the Mode Scheduler deleted, `compute_schedule()` shows the charge window from the legacy `forceChargeTime` read, which Predbat cannot clear (`set_battery_charging_time()` has no production callers; GH#4939, re-checked 2026-11-05).
@@ -113,6 +113,7 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - Still live (2026-11-05): `write_time_windows()` defaults a never-read slot current to the cap, so no write is attempted; seed `cached_values` in fixtures.
 - Parallel pair (GH#5556, open): the master's V2 slot current is the group's, but 7224/7226 are per-inverter, so the pair under-delivers; PR #5909 (`solis_parallel_slaves`) unmerged.
 - API: `B0115` (datalogger offline) and `R0000` (200/day allowance gone) are never retried (`SOLIS_API_CODES_NO_RETRY`); `automatic_config()` retries every cycle; `_with_retry()` catches only `SolisAPIError`.
+- Unclassified outage codes (seen live in GH#5556's cloud outage: `B0072`, `B0673`) fall through `SOLIS_API_CODES_NO_RETRY` and get no datalogger cooldown; B0673 carries B0600's message text, so classify by code, not text (verified 2026-11-06).
 - Still live (GH#5093, open): `SolisAPI.run()` folds all inverters into one `poll_success`, so one unreachable unit holds startup in backoff (to 128 min); list working SNs in `solis_inverter_sn`.
 - Still live (GH#5190, open): `int()`/`float()` accept `_`, so `"1234567890_00"` passes `parse_cid_int()` and `get_arg()` coercion; start here on "absurdly huge value, fallback never fires".
 - Holds (PR #5265): `reserve` is CID 157, a floor only while CID 636 bit 4 (`SOLIS_BIT_BACKUP_MODE`) is set, so the bit is always set. Non-slot events wait for the next `run()`, beyond the 2s verify.
@@ -125,6 +126,7 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 
 - The Energy Storage Control Switch (Modbus 43110, `energy_control_switch`) is written by `alt_charge_discharge_enable()`, gated on `has_solis_energy_control`; `GS` reaches it via `mimic_target_soc()` (35/33).
 - `GS_fb00` (PR #5258): `write_solis_energy_control()` runs from `adjust_charge_immediate()` (49 charge/idle, 17 freeze/hold) or `adjust_export_immediate()` (64 freeze export, 49 export); a third writer would flip the switch twice a cycle. Before PR #5256 (2026-09-26) a switch left at 1 held charge slots at 0 W.
+- With `energy_control_switch` unset, `write_solis_energy_control()` writes nothing and `warn_missing` fires only on a real charge cycle (`warn_missing=(target_soc > 0 and not freeze)`), so freeze/hold cycles degrade silently while reserve writes report success; an S6-style separate work-mode select is not a valid target — Predbat writes the FB00 option names verbatim (GH#5834, re-checked 2026-11-06).
 - Bit 4 (Battery Reserve) makes `backup_mode_soc` (43024) a discharge floor. A SolisCloud session leaves the switch at 1 (`ENUM_SELF_USE_NO_GRID_CHARGING`) outside a slot. FB00 plugin names differ (`SOLAX_SOLIS_MODES_FB00`: Self-Use is 33).
 - `set_current_from_power()` re-asserts `timed_*_current` on every rate call (PR #4437); `inv_charge_discharge_with_rate` zeroes only the power register. A 2600 W plan rate is `battery_rate_max_raw`'s fallback (GH#4198 family). Open: #3914, #3868 (HV battery amp conversion).
 - Modbus-path types (`GS`, `GS_fb00`, `SX4`, Sofar) have no component: control args come only from the template, and `create_missing_arg()` only dummies, so a missed `charge_limit` logs `No entity_id for charge_limit` on every target change (GH#5129).
@@ -149,6 +151,7 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - Lifetime/history totals reset around EU midnight; `fetch_history_totals` clamps monotonically. Start here on "totals went backwards overnight".
 - Stock `SIG` is deliberately `has_reserve_soc: False`, so the planned reserve is model-only (GH#5358); an apps.yaml override bypasses the reserve guards and `adjust_reserve()` writes `number.sigen_plant_ess_discharge_cut_off_state_of_charge` (GH#4728).
 - `Applying mode=eco ... duration=720min` comes only from the no-window fall-through. Still live (GH#4894, open): with `sigenergy_automatic: False` writes land on dummy entities, and `fetch_controls()` runs only under `if first:`, so one missed event leaves state out of step for good.
+- `onboard_status` is an open string vocabulary: published verbatim, cached in Storage, and read by predbat-saas, so the SaaS UI lags a new status until that repo ships; statuses set during a failed onboard run live in memory until the next poll-cadence save (verified 2026-11-06; GH#5691/#5844).
 - Before PR #5377 (2026-10-04, v9.3.5) the six optional power/priority fields were sent outside `commands[0]` and ignored, so no power lever reached SIGCLOUD hardware (GH#5376); a test locking in current output made suite-green meaningless.
 - Docs freeze automations zeroed `grid_import_limitation`, blocking Sigenergy EV chargers: fixed in PR #5464 (2026-10-12), with the rated-power sensor names (plant `..._charging_power`, inverter `..._charge_power`; GH#4911/#5459).
 - Export limit (PR #5681): `antiReflux` off → 99999, on → `gridMaxBackfeedPowerW`; cached; `overwrite=False`. Each MQTT connect re-subscribes `openapi/change` (PRs #5813/#5815); MQTT 3.1.1 hides a refused subscription.
@@ -306,8 +309,15 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - With `<component>_control: true`, `charger_control_dispatch_active()` follows the raw `octopus_intelligent_slot` while planning reads `octopus_intelligent_planned_slot`, so a raw dispatch beats a filtered plan (GH#5807, open; PR #5816 open).
 - The raw follow is deliberate for `octopus_intelligent_charger_follows_car`; a fix must keep it.
 - `is_charger` is published only by Predbat's Octopus/Kraken components; for other dispatch sensors `charger_control_dispatch_is_charger()` returns None and `_control: true` means "drive anyway", with no stop-only veto. First question: which sensor `octopus_intelligent_slot` points at.
+- The Octopus/Kraken components re-point `octopus_intelligent_slot` with a plain `set_arg` regardless of apps.yaml mappings (Kraken `_publish_dispatch_sensors()`), and `is_charger: false` leaves the charger alone and skips `plan_car_charging()` for that car — both by design — so "Car N uses Intelligent, nothing planned, charger never controlled" starts at the component wiring (GH#5848; umbrella #5726).
 - The planned-slot fallback rule (arg unset, list too short, non-string, unresolved `re:`, equal to the slot sensor, or `octopus_intelligent_slot_action_config`) lives in `car_planned_slot_entity()` and, under #5816, the mixin; change both together.
 - Tests: `./run_all --test car_charger_control`
+
+### Discovery catalogue (coordinator.py)
+
+- Reporters' containers are type-checked, not coerced: `info`/`hardware_ids` are strings only (`_clean_string` rejects everything else), `ratings` takes numbers or bools, `capabilities` booleans, `entities` descriptors, `coverage` measures/tokens, and `functions`/`flags`/`effects` contain vocabulary tokens — boolean-style facts belong in `flags` (grep `CONTAINER_SPEC`).
+- Symptom: `Coordinator: <component> <container>.<key> value does not fit the container's type - dropped`; an emptied container silently disappears from the record, so the warn is the only signal (GH#5849, verified 2026-11-06).
+- The round-trip test (`Coordinator.report()` → redacted `catalogue()`) is the established guard but covers only the branches it builds; a reporter with a stub or fallback branch needs one per branch — Ohme's stub-fallback path once passed a raw-output assertion while validation dropped the marker (GH#5849).
 
 ### Hanchu Cloud (`hanchu.py`, `hanchu_const.py`)
 
@@ -361,6 +371,7 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 
 - EDF answers a day/night tariff on `standard-unit-rates/` with HTTP 400 (Octopus four-rate: 200, empty). 400/404/410 (`KRAKEN_REST_RATES_UNAVAILABLE_STATUSES`) trigger the GraphQL `applicableRates` fallback; standing charges only on 404/410 (GH#5166). Probe the URL from the log.
 - `_fetch_rates_rest()` returns `(None, None)` on a network error, so `err is None` is not success; success is `(results, None)`. `async_graphql_query()` counts its own failures, so do not count twice (PR #5641).
+- Rate-window bounds (PR #5843): REST builds true local-midnight instants via `astimezone(timezone.utc)`; the GraphQL fallback still starts at true UTC midnight, which differs for a UK tariff out of UTC. The read-back, `minute_data()`, keeps ±(forecast_days+1) days either side of midnight — check both edges on a "rate missing at the window edge" report (verified 2026-11-06).
 - Standing charges: payment-method variant fixed in PR #5568 (2026-10-17, GH#5502), covering-row selection in PR #5737 (2026-10-24, `_standing_charge_covering()`). Validity helpers must compare with `datetime.now(timezone.utc)`; `str2time()` is tz-aware.
 - REST rate rows arrive newest-first; the 3-page cap drops only the oldest history. The published `rates` attribute is window-trimmed (PR #5571). Provider entities (`sensor.predbat_<component>_...`) are outside the FAQ's recorder section (GH#5534).
 - SmartFlex dispatches publish as `octopus_intelligent_slot`, so every Octopus dispatch rule applies; start E.ON/EDF "EV smart-charge cost wrong" there (GH#5521). `intelligent_dispatch_billing` `auto` on eon makes every in-force half hour off-peak, never cancelled (PR #5581).
@@ -382,6 +393,7 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 
 - History is fetched in `HISTORY_CHUNK_DAYS` chunks with boundary dedup; the chunking also multiplies REST calls enough to trip the fatal API-error counter at startup (see "Too many API errors" under *Startup, config and apps.yaml*).
 - The largest memory peak is ML load-predictor training, not the plan.
+- Since PR #5837 (2026-10-29) `EntityHistory.prune()` keeps the last pre-cutoff record re-stamped at the cutoff, so a rarely-changing sensor's cached oldest record is an artificially-stamped anchor rather than a real change; suspected, unverified: a later cache merge can keep that re-stamped anchor contradicting a refetched record — one wrong minute at the window start (PR #5837 review; GH#5456).
 - Tests: `./run_all --test history_chunking`
 
 ### Minute data (`utils.py`)
@@ -401,6 +413,12 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - Neither configured gives a silent SoC of 0.0 with no validation (`get_arg("soc_kw", default=0.0) * battery_scaling`).
 - `soc_kw` has an `APPS_SCHEMA` entry and `soc_percent` none; neither is a CONFIG_ITEM, so a compare `config:` block cannot override either.
 - SIGCLOUD `automatic_config()` rebinds `soc_kw` with plain `set_arg`, overwriting a hand-set apps.yaml `soc_kw` when the component runs.
+
+### Balancer (`utils.py` `balance_inverters()`)
+
+- "Balancing holds the wrong battery / the house imports while a peer sits near its reserve" — check the snapshot first: `build_inverter_snapshot()` (execute.py) is where units cross, and `balance_inverters()` trusts the key names it is fed (GH#5835). Its takeover rule reads the snapshot's `reserve_percent` key, filled from `inverter.reserve_percent_current` since PR #5836 (2026-10-29).
+- Three similarly-named reserve attributes: `reserve_percent_current` = the live percent read, `reserve_current` = the kWh value derived from it, `reserve_percent` = Predbat's planning floor when `set_reserve_enable` is on. `adjust_reserve()` writes the device but never refreshes the `_current` attributes — they update only in `refresh_config()` — so the snapshot can read a stale reserve for up to one cycle after a mid-pass hold (verified 2026-11-06).
+- Fixture trap: the execute-path balancer fixture stores a percent into `inverter.reserve_current` (the kWh field), so a unit conflation at the snapshot boundary is invisible to it until a real-Inverter test uses a non-default reserve (GH#5835/#5836).
 
 ### Charge/discharge curve (`inverter.py`)
 
@@ -427,6 +445,12 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - No LuxPower code, `INVERTER_DEF` entry or component: support is template mapping only. The stock template targets LuxPython (`lux_*`); `lxp_*` entities come from the cloud integration. Start with what the user mapped and which integration publishes it (GH#5661).
 - `adjust_battery_target()` floors every target-SoC write at the reserve, so `execute.py`'s 0% resets arrive at `set_reserve_min`, which LuxPower's per-register minimums can reject (umbrella GH#4831, open). Workaround: `set_reserve_min` at or above the device minimum.
 - Tests: `./run_all --test inverter`
+
+### Huawei (no code — `templates/huawei.yaml` only)
+
+- "Battery charges at the AC cap while surplus solar exceeds it" is single-knob execution, not the plan: `inverter_limit_charge_dc` is model-only (docs: "This does not change how the inverter is controlled"), only the wired `charge_rate` entity's value is sent, and idle-cycle `reset_rates` rewrites that entity to `battery_rate_max_charge` every cycle, so raising it by hand reverts within one (GH#5846, open; verified on main 2026-11-06).
+- huawei_solar's "maximum charging power" number is the battery's overall charging ceiling, not a grid-only cap; the grid-only knob is "power of charge from grid" — wiring `charge_rate` to the battery-max entity and driving it as a grid cap clips solar charging too (the GH#5846 screenshot).
+- GH#1431 is the wider precedent; the community workaround points `charge_start_service` at a fixed-power HA script. The built-in chat agent's config quotes are grounded in apps.yaml, but its explanations of what a parameter does are not — expect screenshot-versus-chat disputes (GH#5846).
 
 ### Anker SOLIX X1 (`templates/anker_x1.yaml` template family, no code)
 
@@ -534,6 +558,7 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 
 - `html_plan_override` always returns success and `Hass.run_in_executor()` never reads its future, so an override-persist exception is swallowed silently (code-read, GH#3078).
 - MCP OAuth (GH#4799, open): `client_secret_basic` is advertised but `oauth_token` reads only the POST body; `issuer` is the bare base, not `{base}/mcp`, with hard-coded `http://`. Changing `resource` needs a matching audience check (`http://{request.host}`).
+- GH#5847 (confirmed on main 2026-10-29, unfixed 2026-11-06): the OAuth surface shares one `mcp_secret` across four mechanisms — the register endpoint returns it unauthenticated, verifying a client accepts any `client_id` with the right secret, the raw secret works as a legacy bearer token, and the JWT key is derived from it (`sha256("jwt_signing_key_" + mcp_secret)`), so a leak mints arbitrary tokens offline; the scope claim is never enforced at dispatch. Defaults: enable off, secret `predbat_mcp_secret`, binds `0.0.0.0`.
 - An unregistered method hits the `add_route("*")` catch-all, logging `Default route for <path> - 404` without the method, so a blocked OPTIONS preflight looks like a stray GET. MCP routes: `PredbatMCPServer.add_routes()`; PR #5622 (2026-10-24, GH#3807) added the missing preflight routes.
 - CORS headers appear only on preflight and `/.well-known` handlers (no middleware), so a browser MCP client passes the preflight and then has the real response blocked.
 - Chat: `type: openai` against Gemini breaks tool calls (fragments keyed on `index`; `thought_signature` not echoed; GH#4904, open). `ChatRequestError.friendly()` words every non-401 failure "OpenRouter returned HTTP N" whatever the provider (GH#5074).
@@ -614,6 +639,7 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - Option lists are built in three places (`manual_times()`, `manual_rates()`, `api_select_update()`); change all three.
 - Elapsed slots are pruned every cycle, so past cheap rates re-price at base (GH#5517, open). A dump never shows past selections; ask the reporter.
 - `get_override_time_from_string()` rolls forward only bare `HH:MM`, so a same-weekday earlier `"Thu 07:00"` decodes to the past and drops (GH#5832, open; coordinate with PR #5729). PRs #5078 and #5425 are open.
+- The manual-API allowlist (`CONFIG_API_OVERRIDE`) and `docs/manual-api.md`'s "Supported overrides" list drift, and the allowlist is the whole gate: `inverter_limit_charge_dc` is overridable at runtime but absent from the docs list (still on main 2026-11-06) — grep both in a PR touching either (GH#5839).
 - Tests: `./run_all --test manual_api`
 
 ### Marginal rate sensors (`marginal.py`)
@@ -775,6 +801,7 @@ What a report or log shows, and where to start. Where a symptom belongs to one i
 - **Attachments disagree in time.** Numbered logs (`predbat.1.log`, `.2.log`) are overlapping snapshots, not rotation order (check head and tail timestamps); debug-history snapshots are ~3-hourly; `predbat_debug.yaml` is download-time state (GH#5344). A new attachment URL can 404 for 10+ minutes (GH#5503).
 - **Debug file names.** Ring snapshots are `debug/predbat_debug_<id>.yaml.txt` (GitHub rejects bare `.yaml` and `.tar`); the per-cycle `create_debug_yaml()` dump still needs renaming. The HA Companion app's webview ignores `Content-Disposition: attachment` (GH#4720).
 - **Warnings.** Routine `Warn:` lines are the cause only if their timing matches the report. HA core's `Referenced entities ... are missing or not currently available` is only in the HA core log (GH#5420).
+- **Log severity is the message prefix, read by two different consumers** — the console prints a quiet line only when its prefix starts with error/warn/info, while `classify_log_line()` (utils.py) is substring, so a line containing "warn"/"error" anywhere lands in the web Warnings tab whatever its prefix; word log messages accordingly, and de-noise a repeating warn by switching it to an Info prefix once the condition is known-persistent (PR #5841's pattern, verified 2026-11-06).
 - **Hardware behaviour needs the hardware.** A unit test shows what the code does, not what the inverter did; say the maintainer must confirm.
 - **A flat SoC is not necessarily a stall.** On a large pack one percent can be ~10 minutes at 2 kW (GH#4784).
 - **Check that the report's premise exists.** Reports have cited AI-invented settings (GH#4918), features only on unmerged PRs (GH#4917), history `git log -S` disproves (GH#5022) and false "expert gated" claims (GH#5237). Grep `config.py`/`APPS_SCHEMA`, read each item's `enable:`, and check a proposal's symbols are on main (GH#5063).
@@ -806,7 +833,7 @@ What a report or log shows, and where to start. Where a symptom belongs to one i
 ### Clocks and time
 
 - **`midnight_utc` and `now_utc` are local time**, in `ComponentBase` and `now_utc_exact` too. Use `.astimezone(timezone.utc)` before a `Z` suffix or an API window, and test with a BST date (GH#5572, GH#5693). `time_abs_str()` prints local time (GH#5036).
-- **Build test dates from Predbat's clock**: anchor to `my_predbat.midnight_utc` and pin both clocks (PR #4877, PR #4998). Storage-cache expiry is the exception (real clock).
+- **Build test dates from Predbat's clock**: anchor to `my_predbat.midnight_utc` and pin both clocks (PR #4877, PR #4998). Storage-cache expiry is the exception (real clock). `ComponentBase.midnight_utc` is a property re-reading `base.now_utc`, so a component fixture built with `__new__` plus a MagicMock base can replace the clock after construction (PR #5843 review).
 - **The quick suite fails 00:00–01:00 local in summer on main** (2026-11-05): the teslemetry weekday test raises and aborts the run, and `test_solax.py`'s month test fails with an empty detail (grep `**** ERROR:`). Check the clock first.
 - **`minutes_now = 0` hides time-of-day bugs.** History-index code needs a test at non-zero `minutes_now` (GH#4732). A pin-guard test is vacuous when the pin equals the residue (`FIXTURE_MINUTES_NOW`).
 - **`timedelta.seconds` wraps into [0, 86399].** Use `abs((a - b).total_seconds())`; the button-press site was fixed in PR #5697 (GH#5694). Sites whose cache cleanup caps age below 24 h are fine.
