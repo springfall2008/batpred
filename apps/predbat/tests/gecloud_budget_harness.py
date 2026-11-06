@@ -21,6 +21,9 @@ the same HA service events a real install uses.
 
 import contextlib
 import copy
+import json
+from dataclasses import dataclass, field
+from datetime import timedelta
 from unittest.mock import patch
 
 from gecloud import GECloudDirect
@@ -70,6 +73,11 @@ TEMPLATE_INVERTER_ARGS = [
     "soc_max",
     "soc_percent",
 ]
+
+# A GivEnergy month, and the monthly budgets the day is measured against
+MONTH_DAYS = 30
+BUDGETS = (10000, 20000)
+STEPS_PER_DAY = 288
 
 # The HA services execute uses on an inverter entity, and the gecloud handler each one reaches
 ROUTED_SERVICES = {
@@ -136,6 +144,18 @@ def reset_config_to_defaults(my_predbat):
     my_predbat.fetch_config_options()
 
 
+@dataclass
+class DayResult:
+    """What one scenario's simulated day cost."""
+
+    scenario_id: int
+    startup_calls: list = field(default_factory=list)
+    day_calls: list = field(default_factory=list)
+    register_count: int = 0
+    steps: int = 0
+    recomputes: int = 0
+
+
 class GECloudBudgetHarness:
     """One scenario's simulated day against the fake GE Cloud."""
 
@@ -148,12 +168,88 @@ class GECloudBudgetHarness:
         self.fake = None
         self.midnight = None
         self.startup_calls = []
+        self.recompute_log = []
+        self.steps = 0
+        self.recomputes = 0
+        self.plan_stamp = None
+        self.planned_soc_percent = None
 
     def sim_time(self, minute):
         """The simulated time minute minutes after the day's midnight."""
-        from datetime import timedelta
-
         return self.midnight + timedelta(minutes=minute)
+
+    def capture_recompute_logs(self):
+        """Keep every log line that mentions a recompute, so a test can show the plan was only ever advanced."""
+        original_log = self.my_predbat.log
+
+        def log(message, *args, **kwargs):
+            """Pass the line on, keeping it if it is about recomputing the plan."""
+            if "recompute" in str(message).lower():
+                self.recompute_log.append(str(message))
+            return original_log(message, *args, **kwargs)
+
+        self.my_predbat.log = log
+
+    def record_plan(self):
+        """After a plan or advance: count a new optimisation if the plan was re-made, and keep the SOC it predicts 5 minutes on."""
+        stamp = self.my_predbat.plan_last_updated_minutes
+        if stamp != self.plan_stamp:
+            self.recomputes += 1
+            self.plan_stamp = stamp
+        predicted_kwh = self.my_predbat.predict_soc_best.get(5, self.my_predbat.soc_kw)
+        self.planned_soc_percent = predicted_kwh / self.my_predbat.soc_max * 100 if self.my_predbat.soc_max else self.fake.soc_percent
+
+    def next_soc_percent(self):
+        """The SOC the inverter reports for the next step. Ideal mode: exactly what the plan predicted (the SOC-drift follow-on overrides this)."""
+        return self.planned_soc_percent
+
+    def advance_meter(self):
+        """Move the meter counters on by one 5-minute share of the scenario's daily load and PV; they only need to move."""
+        load_kwh = self.scenario["params"]["load"]["daily_kwh"] / STEPS_PER_DAY
+        pv_kwh = sum(self.scenario["data"]["pv_day_kw"]) / 60.0 / STEPS_PER_DAY
+        for counters in (self.fake.meter_today, self.fake.meter_total):
+            counters["consumption"] += load_kwh
+            counters["grid"]["import"] += load_kwh
+            counters["solar"] += pv_kwh
+
+    def run_labelled(self, context, function, *args):
+        """Call function(*args) with CALL_CONTEXT set, so any API call it makes carries the label."""
+        token = CALL_CONTEXT.set(context)
+        try:
+            return function(*args)
+        finally:
+            CALL_CONTEXT.reset(token)
+
+    def step(self, minute):
+        """One 5-minute Predbat cycle ending at minute: gecloud's loop each minute, then fetch, advance the plan, execute."""
+        self.fake.soc_percent = self.next_soc_percent()
+        self.advance_meter()
+        for loop_minute in range(minute - 4, minute + 1):
+            self.gecloud.sim_now = self.sim_time(loop_minute)
+            self.run_labelled("poll seconds={}".format(60 * loop_minute), lambda seconds: run_async(self.gecloud.run(seconds, False)), 60 * loop_minute)
+        my_predbat = self.my_predbat
+        my_predbat.update_time(print=False, now=self.sim_time(minute))
+        self.run_labelled("fetch", my_predbat.fetch_inverter_data)
+        # recompute=False drops charge/export windows that have ended, as a real cycle that does not re-plan does
+        self.run_labelled("plan advance", my_predbat.calculate_plan, False)
+        self.record_plan()
+        self.run_labelled("execute {}".format(self.sim_time(minute).strftime("%H:%M")), my_predbat.execute_plan)
+        self.steps += 1
+
+    def simulate_day(self, last_minute=STEPS_PER_DAY * 5 - 5):
+        """Start up at midnight, then step every 5 minutes up to last_minute (23:55 by default)."""
+        self.startup()
+        with self.patched():
+            for minute in range(5, last_minute + 1, 5):
+                self.step(minute)
+        return DayResult(
+            scenario_id=self.scenario["id"],
+            startup_calls=self.startup_calls,
+            day_calls=list(self.fake.calls),
+            register_count=self.fake.register_count(),
+            steps=self.steps,
+            recomputes=self.recomputes,
+        )
 
     @contextlib.contextmanager
     def patched(self):
@@ -211,8 +307,55 @@ class GECloudBudgetHarness:
             apply_scenario_to_predbat(my_predbat, scenario)
             my_predbat.args["threads"] = 0
             my_predbat.calculate_plan(recompute=True)
-            token = CALL_CONTEXT.set("execute 00:00")
-            try:
-                my_predbat.execute_plan()
-            finally:
-                CALL_CONTEXT.reset(token)
+            self.record_plan()
+            # Only from here: the midnight optimisation itself logs a start-of-day recompute (the template's stamp is later than 00:00)
+            self.capture_recompute_logs()
+            self.run_labelled("execute 00:00", my_predbat.execute_plan)
+            self.steps = 1
+
+
+def count_by(records, key):
+    """Count records by an attribute, largest first."""
+    counts = {}
+    for record in records:
+        value = getattr(record, key)
+        counts[value] = counts.get(value, 0) + 1
+    return sorted(counts.items(), key=lambda item: (-item[1], str(item[0])))
+
+
+def budget_text(month_total):
+    """The month total set against each budget, e.g. '3600/month = 36.0% of 10000, 18.0% of 20000'."""
+    shares = ", ".join("{:.1f}% of {}".format(month_total * 100.0 / budget, budget) for budget in BUDGETS)
+    return "{}/month = {}".format(month_total, shares)
+
+
+def summarise(results):
+    """A plain-text report of what each scenario's day cost, and the worst case."""
+    lines = ["GE Cloud API budget - simulated day 00:00-23:55, one GE Cloud inverter, default settings"]
+    for result in results:
+        day_total = len(result.day_calls)
+        lines.append("")
+        lines.append("Scenario {}: {} executes, plan optimised {} time(s), {} readable registers".format(result.scenario_id, result.steps, result.recomputes, result.register_count))
+        lines.append("  Start-up (each restart): {} calls".format(len(result.startup_calls)))
+        lines.append("  Steady-state day: {} calls, {}".format(day_total, budget_text(day_total * MONTH_DAYS)))
+        for category, count in count_by(result.day_calls, "category"):
+            lines.append("    {:<16} {:>6}".format(category, count))
+        writes = [record for record in result.day_calls if record.category == "register_write"]
+        lines.append("  Writes per day: {}".format(len(writes)))
+        for name, count in count_by(writes, "setting_name"):
+            lines.append("    {:<40} {:>4}".format(name, count))
+    if results:
+        worst = max(results, key=lambda result: len(result.day_calls))
+        lines.append("")
+        lines.append("Worst case: scenario {} with {} calls/day, {}".format(worst.scenario_id, len(worst.day_calls), budget_text(len(worst.day_calls) * MONTH_DAYS)))
+    lines.append("SOC follows the plan exactly (ideal mode): write counts are a floor.")
+    lines.append("GECloudData history download: not simulated (not used).")
+    return "\n".join(lines)
+
+
+def write_call_log(results, path):
+    """Write every call, start-up first, as JSON lines."""
+    with open(path, "w") as file_handle:
+        for result in results:
+            for record in result.startup_calls + result.day_calls:
+                file_handle.write(json.dumps(record.to_dict()) + "\n")

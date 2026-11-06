@@ -16,12 +16,15 @@ introducing a monthly limit), so these tests pin that it counts every call, attr
 code that made it, and drives the real execute -> gecloud path rather than a shortcut.
 """
 
+import json
+import os
+import tempfile
 from datetime import datetime, timedelta, timezone
 
 from config import CONFIG_ITEMS
 from gecloud import GE_API_URL, regname_to_ha
-from tests.gecloud_budget_harness import TEMPLATE_INVERTER_ARGS, GECloudBudgetHarness
-from tests.gecloud_fake_cloud import CALL_CONTEXT, CAPTURED_REGISTERS, HARNESS_SERIAL, HARNESS_SITE_ID, FakeGECloud
+from tests.gecloud_budget_harness import TEMPLATE_INVERTER_ARGS, DayResult, GECloudBudgetHarness, summarise, write_call_log
+from tests.gecloud_fake_cloud import CALL_CONTEXT, CAPTURED_REGISTERS, HARNESS_SERIAL, HARNESS_SITE_ID, CallRecord, FakeGECloud
 from tests.test_infra import run_async
 from tests.test_random_scenarios import RANDOM_SCENARIOS, load_scenarios
 
@@ -215,6 +218,69 @@ def test_execute_write_reaches_fake(harness):
     return failed
 
 
+def _record(category, minute=0, setting_name="", scenario_id=0):
+    """A hand-made CallRecord for the summary tests."""
+    when = datetime(2026, 11, 6, tzinfo=timezone.utc) + timedelta(minutes=minute)
+    return CallRecord(when, scenario_id, "GET", "endpoint", "path", "", "", setting_name, category, "test", "", 200, False)
+
+
+def test_summary_maths():
+    """Per-day totals project to a 30-day month and are set against the 10k budget; the worst scenario is named."""
+    failed = False
+    first = DayResult(scenario_id=3, startup_calls=[_record("account")], day_calls=[_record("status")] * 100 + [_record("register_write", setting_name="Battery Reserve % Limit")] * 20, register_count=80, steps=288, recomputes=1)
+    second = DayResult(scenario_id=7, startup_calls=[], day_calls=[_record("status")] * 300, register_count=80, steps=288, recomputes=1)
+    text = summarise([first, second])
+    failed |= _expect("3600" in text, "first scenario's month projection (120 x 30 = 3600) missing from:\n{}".format(text))
+    failed |= _expect("36.0%" in text, "3600 / 10000 = 36.0% missing from:\n{}".format(text))
+    failed |= _expect("Worst case: scenario 7" in text, "worst case is not scenario 7 in:\n{}".format(text))
+    failed |= _expect("write counts are a floor" in text, "ideal-mode caveat missing")
+    failed |= _expect("Battery Reserve % Limit" in text, "writes by setting missing")
+    return failed
+
+
+def test_short_day_cadence(day):
+    """Over the first hour gecloud polls on its real cadence: status, meter and device info every 2 minutes, a full register sweep every 10."""
+    failed = False
+    counts = {}
+    for call in day.day_calls:
+        counts[call.category] = counts.get(call.category, 0) + 1
+    failed |= _expect(day.steps == 13, "expected 13 executes (00:00..01:00), got {}".format(day.steps))
+    for category in ("status", "meter", "device_info"):
+        failed |= _expect(counts.get(category, 0) == 30, "expected 30 {} calls in an hour, got {}".format(category, counts.get(category, 0)))
+    failed |= _expect(counts.get("register_read", 0) == day.register_count * 6, "expected {} register reads (6 sweeps), got {}".format(day.register_count * 6, counts.get("register_read", 0)))
+    return failed
+
+
+def test_short_day_never_recomputes(day, harness):
+    """Advancing the plan never re-optimises it, and the start-of-day forced recompute never fires."""
+    failed = False
+    failed |= _expect(day.recomputes == 1, "plan was optimised {} times".format(day.recomputes))
+    failed |= _expect(not [line for line in harness.recompute_log if "Force recompute" in line], "forced recompute logged: {}".format(harness.recompute_log))
+    return failed
+
+
+def test_fetch_makes_no_calls(day):
+    """Reading the inverter and advancing the plan read only what gecloud already published."""
+    calls = [call for call in day.day_calls if call.context in ("fetch", "plan advance")]
+    return _expect(not calls, "fetch / plan advance made {} API calls: {}".format(len(calls), [(call.context, call.category) for call in calls[:5]]))
+
+
+def test_call_log_round_trip(day):
+    """Every call, start-up included, is written as one JSON line with the CallRecord fields."""
+    failed = False
+    handle, path = tempfile.mkstemp(suffix=".jsonl")
+    os.close(handle)
+    try:
+        write_call_log([day], path)
+        with open(path) as file_handle:
+            lines = [json.loads(line) for line in file_handle if line.strip()]
+    finally:
+        os.remove(path)
+    failed |= _expect(len(lines) == len(day.startup_calls) + len(day.day_calls), "log has {} lines for {} calls".format(len(lines), len(day.startup_calls) + len(day.day_calls)))
+    failed |= _expect(all(set(line) == set(day.day_calls[0].to_dict()) for line in lines), "a log line lacks the CallRecord fields")
+    return failed
+
+
 def run_gecloud_budget_harness_tests(my_predbat):
     """Unit tests for the GE Cloud API budget harness. Returns True on failure."""
     print("**** Running GE Cloud API budget harness tests ****")
@@ -227,6 +293,7 @@ def run_gecloud_budget_harness_tests(my_predbat):
         test_unmatched_request_raises,
         test_context_recorded,
         test_device_info_vs_device_list_category,
+        test_summary_maths,
     ):
         if test():
             print("ERROR: {} failed".format(test.__name__))
@@ -246,4 +313,15 @@ def run_gecloud_budget_harness_tests(my_predbat):
         if test(harness):
             print("ERROR: {} failed".format(test.__name__))
             failed = True
+
+    # The first simulated hour, on a fresh harness
+    short = GECloudBudgetHarness(scenario)
+    day = short.simulate_day(last_minute=60)
+    for test in (test_short_day_cadence, test_fetch_makes_no_calls, test_call_log_round_trip):
+        if test(day):
+            print("ERROR: {} failed".format(test.__name__))
+            failed = True
+    if test_short_day_never_recomputes(day, short):
+        print("ERROR: test_short_day_never_recomputes failed")
+        failed = True
     return failed
