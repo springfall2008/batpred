@@ -58,6 +58,10 @@ and predicted house load.
 
 _CAUTION: You must manually set any charging required on the inverter and if the charge window is disabled then no charging will take place._
 
+While the inverter's own charge window is running with a target above the reserve, Predbat shows the status as Charging (Hold charging once the target is reached) and treats it as a charge in progress:
+it keeps the target steady rather than changing it for a marginal gain, it does not reset the target to 100% (**switch.predbat_inverter_soc_reset**),
+and it does not freeze export in Demand mode (**switch.predbat_set_freeze_export_during_demand**), which would pause the charge.
+
 ### Predbat Control charge mode
 
 In **Control charge** mode Predbat will set the charge times and charge percentages according to the Best plan, charging can be enabled and disabled by Predbat.
@@ -436,6 +440,8 @@ The default value is 0.0p which means this feature is disabled and the battery w
 If you use **input_number.predbat_pv_metric10_weight** then you probably don't need to use this as the 10% forecast does the same thing better
 Do not use it if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
+While a charge is running, Predbat keeps its current target unless changing it is worth at least 0.5p (or this setting, if higher), so a near-tie does not move the target part way through a charge.
+This also applies in Control SOC only mode, where the inverter runs its own charge window and Predbat only sets the target.
 
 **input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets how much a forced export has to earn, in pence per slot (30 minutes) of export time, scaled down for exports at lower power.
 Every 5 minutes of a planned export has to earn its share of this, so an export is shortened, or dropped, where its later minutes would earn less than that.
