@@ -10,7 +10,7 @@ Tests cover:
 
 from unittest.mock import patch
 
-from tests.test_hainterface_common import MockBase, create_ha_interface, create_mock_requests_response
+from tests.test_hainterface_common import MockBase, create_ha_interface, create_mock_requests_response, make_fake_time
 from tests.test_infra import run_async
 from ha import HAInterface
 
@@ -123,7 +123,8 @@ def test_hainterface_initialize_api_check_failed(my_predbat=None):
     ha_interface.api_started = False
     ha_interface.api_stop = False
 
-    with patch("ha.requests.get") as mock_get:
+    # initialize() waits for Home Assistant to come up (#5437), so run a fake clock rather than waiting for real
+    with patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time([1000.0])):
         # First call (app check) returns None, second call (services check) returns None
         mock_get.return_value = create_mock_requests_response(500, None)
 
