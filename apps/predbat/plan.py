@@ -671,6 +671,13 @@ class Plan:
             return self.minutes_now
         return max(self.minutes_now, int((confirmed - self.midnight_utc).total_seconds() // 60))
 
+    def car_force_held(self, car_n, now):
+        """
+        Whether a charger component is force-holding car_n off at now (car_force_hold_until).
+        """
+        hold_until = self.car_force_hold_until.get(car_n)
+        return hold_until is not None and hold_until > now
+
     def dynamic_load_car_target(self, car_n, minute, now, record=True):
         """
         Whether car_n's slots should be cancelled at minute and now (both on the exact clock).
@@ -681,6 +688,8 @@ class Plan:
         - Inside a slot, charging: trusted, straight away.
         - Inside a slot, not charging for the grace period (see dynamic_load_car_evidence()): cancelled.
         - Otherwise (still inside the grace period, or no evidence): unchanged, starting from the default.
+        - A car a charger is force-holding off (car_force_held()) is left alone: it is not charging because it
+          was told not to, so the check is paused and its grace clock cleared.
 
         With record True the "not charging since" clock is started and cleared; with record False
         (compare.py runs) it is only read.
@@ -688,6 +697,10 @@ class Plan:
         active = self.dynamic_load_car_active(car_n)
         default_cancelled = active and not self.dynamic_load_car_trusted_by_default(car_n)
         cancelled = self.dynamic_load_car_cancelled.get(car_n, default_cancelled)
+        if self.car_force_held(car_n, now):
+            if record:
+                self.dynamic_load_car_since.pop(car_n, None)
+            return cancelled
         dispatch = self.dynamic_load_car_dispatch(car_n, minute) if active else None
         if dispatch is None:
             if record:

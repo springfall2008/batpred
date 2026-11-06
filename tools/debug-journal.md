@@ -290,11 +290,15 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 
 - Sign-in works with `User-Agent: Predbat`. Capture: `wallbox.py --username <email> --raw`.
 - An OCPP-run charger (e.g. Octopus IOG) reports `operation_mode: "ocpp"` and sits in 209 Locked; unlock does nothing, and pause/resume 403/409 even for a super-admin, so a 403 does not prove missing rights. `held_by_lock()`/`held_by_ocpp()` keep control off it.
-- `GET v3/chargers/<id>/ocpp-configuration` returns the charge-point password: never paste `--get` output unredacted.
+- `GET v3/chargers/<id>/ocpp-configuration` returns the charge-point password: never paste `--get` output unredacted. A `POST` to the same path, writing the whole stored configuration back with only `type` changed (`set_ocpp_mode()`), switches OCPP off (`"wallbox"`) or on.
 - `locked` is 1/0 and `state_of_charge` always null. Charger N is car N through the append-only `car_order`.
 - Status ids (OCPP Pulsar Plus, Oct 2026): 209 no car; 210 just plugged in; 164/181 plugged in, including full; 161 brief no-car blips. 0 Disconnected means off Wallbox's cloud (even mid-charge), not unplugged.
 - On the shared `CarChargerControl` loop since PR #5798 (2026-10-28); records drop only on `EMPTY_STATUS_IDS` (161/162/165/209), no longer on 0. "Stayed paused after control was turned off": read `CarChargerControl`'s release path.
 - Unverified on hardware (Oct 2026): pause/resume on an unlocked non-OCPP charger, the charging/paused ids, 429s at a 120s poll.
+- Force hold (Pulsar Max on Intelligent Octopus over OCPP, live 31 Oct 2026): Octopus `updateDeviceSmartControl` SUSPEND does not stop the charger, so the hold is OCPP off then pause. A pause sent before a read shows OCPP really off is accepted but ignored, so `charger_control_force_pause()` sends only the switch until then; paused reads 182 at 0 W. PR #5900.
+- The cloud status lags the charger by minutes (Wallbox and HA both kept showing `Charging`): trust `last_sync`, and expect a repeated pause to answer 409.
+- Hand-back for an OCPP charger is the switch back on, then waiting for `connectionStatus` 4 (about 2.5 min); Octopus restarts the charge itself, so never send a resume. The switch answered 502 once while the paused charger had not synced; the retry worked.
+- By hand: `wallbox.py --ocpp on|off` and `--force-hold <minutes>` (Ctrl-C hands back). The CLI saves nothing, so recover a killed `--force-hold` with `--ocpp on`.
 
 ### Hypervolt (`hypervolt.py`)
 

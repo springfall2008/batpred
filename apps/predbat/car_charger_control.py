@@ -12,7 +12,7 @@ read only mode or its control switch is turned off. CarChargerControl owns that 
 once; a component supplies only what is specific to its charger.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from utils import parse_car_plan_windows, in_car_plan_window, strptime_aware
 
@@ -42,6 +42,13 @@ GUEST_CHARGING_MAX_HOURS = 12
 # Discovery normally finishes in the first cycle or two; past this, one that never gets there (a failed login,
 # say) is treated as cannot tell - warned about once, and a charger Predbat holds is handed back
 OCTOPUS_DISCOVERY_WAIT_MINUTES = 15
+
+# A force hold starts this long before a car slot the plan has cancelled for an export, so the charger is
+# stopped before whoever drives it (Octopus, say) starts the charge
+FORCE_HOLD_LEAD_MINUTES = 5
+
+# A hand-back still not confirmed this long after a force hold's end is warned about - it goes on being retried
+FORCE_HOLD_SAFETY_MINUTES = 15
 
 # The strings get_arg() reads as true for a boolean setting
 CONTROL_TRUE_STRINGS = ("on", "true", "yes", "enabled", "enable", "connected")
@@ -121,6 +128,22 @@ class CarChargerControl:
     For a component with storage, the chargers Predbat holds are saved with the control switch,
     so a restart can still release a charger an earlier session stopped. A stop is recorded
     before it is sent, as one whose reply is lost may still have been applied.
+
+    A force hold keeps a car off through a slot the plan has cancelled for an export
+    (car_charging_cancel_for_export), overriding whoever drives the charger - Octopus included,
+    so it runs whether or not Predbat-led control is on. See charger_control_force_hold_tick().
+    A component that can do it overrides:
+
+    - charger_control_can_force_hold(handle): True for a charger that can be force-held.
+    - charger_control_force_pause(handle, saved): one step towards stopping the charger,
+      returning the pre-hold state to keep (saved is None on the first call).
+    - charger_control_force_stopped(handle, saved): is the charger confirmed stopped? Asked every
+      cycle of the hold, and the pause sent again whenever it is not.
+    - charger_control_force_resume(handle, saved): one step towards handing back exactly what
+      force_pause changed.
+    - charger_control_force_handed_back(handle, saved): is the hand-back confirmed?
+
+    The pause and resume raise on a refusal, as send does, and are tried again next cycle.
     """
 
     def charger_control_setup(self, log_name, noun, storage_module=None, storage_key=None, storage_field=None, control=None, switch_prefix=None, control_setting=None):
@@ -176,6 +199,12 @@ class CarChargerControl:
         self.charger_control_guest_since = None
         self.charger_control_guest_empty = set()
         self.charger_control_guest_connected = set()
+        # charger key -> its force hold: {"car": car_n, "end": ISO 8601 with offset, "saved": what force_pause
+        # returned (None until it first has), "stopped": confirmed stopped, "warned": the overdue warning given}.
+        # Saved with the control switch, so a restart still hands back a charger an earlier session held off
+        self.charger_control_force_holds = {}
+        # charger key -> the end of a hold the user ended themselves, so it is not started again for the rest of that slot
+        self.charger_control_force_hold_ended = {}
 
     def charger_control_connected(self, handle):
         """Is a car on the cable - chargers that cannot tell are always treated as connected."""
@@ -430,6 +459,10 @@ class CarChargerControl:
             # Storage reports serialisation and I/O failures by returning False rather than raising
             document = dict(self.charger_control_extra_state())
             document.update({field: self.charger_control_enabled, "held": dict(self.charger_control_state)})
+            if self.charger_control_force_holds:
+                # Only while there is one: the whole document is rewritten each save, so leaving it out is no holds,
+                # and the document is unchanged for anyone not using car_charging_cancel_for_export
+                document["force_holds"] = {key: dict(hold) for key, hold in self.charger_control_force_holds.items()}
             if await self.storage.save(module, key, document) is False:
                 raise OSError("storage refused the save")
             self.charger_control_save_pending = False
@@ -477,8 +510,34 @@ class CarChargerControl:
                     # Not confirmed: the charger may have been changed while Predbat was down, and not every
                     # charger can tell, so the first cycle sends the plan's command again as it did before
                     self.charger_control_unconfirmed.add(str(charger_key))
+        self.charger_control_restore_force_holds(saved.get("force_holds"))
         self.charger_control_restore_extra(saved)
         return True
+
+    def charger_control_restore_force_holds(self, force_holds):
+        """Restore the force holds an earlier session saved, under any this session already has.
+
+        A hold that cannot be read is dropped with a warning: what it would have to hand back is unknown,
+        and keeping it would only stall the charger's control for good.
+        """
+        if not isinstance(force_holds, dict):
+            return
+        for charger_key, hold in force_holds.items():
+            key = str(charger_key)
+            if key in self.charger_control_force_holds:
+                continue
+            end = self.charger_control_force_hold_end(hold)
+            if end is None or not isinstance(hold.get("car"), int) or isinstance(hold.get("car"), bool):
+                self.log("Warn: {}: could not read the saved force hold on {} {}, dropping it - check the {} is charging as it should".format(self.charger_control_log_name, self.charger_control_noun, key, self.charger_control_noun))
+                continue
+            saved = hold.get("saved")
+            self.charger_control_force_holds[key] = {
+                "car": hold["car"],
+                "end": end.isoformat(),
+                "saved": saved if isinstance(saved, dict) else None,
+                "stopped": bool(hold.get("stopped")),
+                "warned": bool(hold.get("warned")),
+            }
 
     def charger_control_refresh_windows(self, now):
         """Read Predbat's planned car charging windows for every car into charger_control_windows.
@@ -580,6 +639,24 @@ class CarChargerControl:
         if self.charger_control_save_pending:
             # A save that failed is tried again each cycle, not only when a hold next changes
             await self.charger_control_save()
+        force_failure = None
+        if self.charger_control_loaded:
+            # Before the control checks, so a force hold runs with Predbat-led control off - Octopus driving the
+            # charger, say. Not until the saved state has been read, as a save before then would overwrite it
+            try:
+                await self.charger_control_force_hold_tick(now)
+            except self.charger_control_fatal_errors:
+                raise
+            except Exception as exc:
+                # Raised once the rest of the cycle has run, so one charger refusing a hold step does not
+                # also stop every other charger being driven from its plan
+                force_failure = exc
+        await self.charger_control_tick_control(now)
+        if force_failure is not None:
+            raise force_failure
+
+    async def charger_control_tick_control(self, now):
+        """The Predbat-led part of a cycle: release while control is off or handed back, otherwise drive from the plan."""
         if not self.charger_control_active:
             # A charger an earlier session held - control since turned off in apps.yaml - is still released.
             # Only for a component that ticks while control is off; one that does not leaves it held
@@ -641,7 +718,7 @@ class CarChargerControl:
 
         A charger that refuses stays held, so the next cycle retries just that one.
         """
-        held = [(key, handle) for key, handle in self.charger_control_chargers() if key in self.charger_control_state]
+        held = [(key, handle) for key, handle in self.charger_control_chargers() if key in self.charger_control_state and key not in self.charger_control_force_holds]
         await self.charger_control_each([lambda key=key, handle=handle: self.charger_control_release_held(key, handle) for key, handle in held])
 
     async def charger_control_release_inactive(self):
@@ -653,7 +730,8 @@ class CarChargerControl:
         car_count = self.charger_control_car_count()
         steps = []
         for car_n, (key, handle) in enumerate(self.charger_control_chargers()):
-            if key not in self.charger_control_state:
+            if key not in self.charger_control_state or key in self.charger_control_force_holds:
+                # A force-held charger is the hold's to hand back - releasing it would undo the hold
                 continue
             if car_n < car_count and self.charger_control_octopus_drives_charger(car_n) is True:
                 steps.append(lambda key=key, handle=handle: self.charger_control_hand_over_held(key, handle))
@@ -710,12 +788,14 @@ class CarChargerControl:
 
         It would otherwise never be commanded again, left charging or stopped with nobody in control.
         """
-        if key in self.charger_control_state:
+        if key in self.charger_control_state and key not in self.charger_control_force_holds:
             self.log("Info: {}: {} {} no longer has a car to follow, releasing it".format(self.charger_control_log_name, self.charger_control_noun, key))
             await self.charger_control_release_held(key, handle)
 
     async def charger_control_drive_one(self, car_n, key, handle, now):
-        """Drive one charger from car car_n's plan, or leave it to Octopus."""
+        """Drive one charger from car car_n's plan, or leave it to Octopus - not one force-held, which the hold drives."""
+        if key in self.charger_control_force_holds:
+            return
         drives = self.charger_control_octopus_drives_charger(car_n)
         if drives is not None:
             # Known either way, so a later wait for discovery starts its clock afresh
@@ -789,3 +869,230 @@ class CarChargerControl:
         await self.charger_control_hold(key, False)
         await self.charger_control_send(handle, charge, car_n)
         self.charger_control_unconfirmed.discard(key)
+
+    def charger_control_can_force_hold(self, handle):
+        """Can this charger be force-held off for a slot cancelled for an export - no, unless the component says so."""
+        return False
+
+    async def charger_control_force_pause(self, handle, saved):
+        """Take one step towards stopping the charger, returning the pre-hold state to keep.
+
+        saved is None on the first call, and what the last call returned after that. What is returned
+        must be JSON-serialisable and hold no secrets, as it is saved. Raises on a refusal.
+        """
+        return saved or {}
+
+    def charger_control_force_stopped(self, handle, saved):
+        """Is the charger confirmed stopped - never, unless the component can tell."""
+        return False
+
+    async def charger_control_force_resume(self, handle, saved):
+        """Take one step towards handing back exactly what force_pause changed. Raises on a refusal.
+
+        saved is {} when no force_pause call had returned before the hold ended.
+        """
+
+    async def charger_control_force_handed_back(self, handle, saved):
+        """Is the hand-back confirmed - yes, unless the component can tell."""
+        return True
+
+    def charger_control_force_hold_wanted(self):
+        """Should cancelled slots be force-held: the switch is on, Predbat is not in read only mode, and guest charging is off.
+
+        A guest's car is not one Predbat plans for, so a hold must never stop it: one under way is handed back.
+        """
+        return bool(self.get_arg("car_charging_cancel_for_export", False)) and not self.charger_control_read_only_now() and not self.charger_control_guest
+
+    def charger_control_cancelled_windows(self, car_n, now):
+        """Car car_n's slots the plan has cancelled for an export, as time-ordered (start, end) pairs.
+
+        Read from the car charging slot sensor's cancelled_for_export attribute. Windows that touch or
+        overlap are merged, so back-to-back cancelled slots are one hold rather than a hand-back and a
+        fresh pause at the join.
+        """
+        postfix = "" if car_n == 0 else "_{}".format(car_n)
+        cancelled = self.get_state_wrapper("binary_sensor.{}_car_charging_slot{}".format(self.prefix, postfix), attribute="cancelled_for_export")
+        if not isinstance(cancelled, list):
+            return []
+        merged = []
+        for start, end in sorted(parse_car_plan_windows(cancelled, now, self.local_tz)):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    def charger_control_force_hold_end(self, hold):
+        """When a force hold ends, as an aware UTC datetime, or None for a record that cannot be read."""
+        if not isinstance(hold, dict) or not isinstance(hold.get("end"), str):
+            return None
+        try:
+            end = datetime.fromisoformat(hold["end"])
+        except ValueError:
+            return None
+        # A time with no offset cannot be compared with the clock
+        return end.astimezone(timezone.utc) if end.tzinfo else None
+
+    def charger_control_force_hold_busy(self, now):
+        """Is a force hold under way, or due to start soon - for a component to poll its chargers every cycle.
+
+        Never with the switch off and no hold to hand back, so turning the feature off costs no extra calls.
+        """
+        if self.charger_control_force_holds:
+            return True
+        if not self.charger_control_force_hold_wanted():
+            return False
+        soon = timedelta(minutes=FORCE_HOLD_LEAD_MINUTES + 5)
+        for car_n, (key, handle) in enumerate(self.charger_control_chargers()[: self.charger_control_car_count()]):
+            if not self.charger_control_can_force_hold(handle):
+                continue
+            for start, end in self.charger_control_cancelled_windows(car_n, now):
+                if start - soon <= now < end:
+                    return True
+        return False
+
+    def charger_control_set_force_hold_until(self, car_n, end):
+        """Tell the planner car car_n is force-held until end, or no longer held when end is None."""
+        hold_until = getattr(self.base, "car_force_hold_until", None)
+        if hold_until is None:
+            hold_until = {}
+            self.base.car_force_hold_until = hold_until
+        if end is None:
+            hold_until.pop(car_n, None)
+        else:
+            hold_until[car_n] = end.astimezone(timezone.utc)
+
+    async def charger_control_force_hold_tick(self, now):
+        """Start, keep and hand back the force holds for slots the plan has cancelled for an export.
+
+        A hold starts FORCE_HOLD_LEAD_MINUTES before a cancelled slot, or at once for one already under
+        way, and is then committed: it runs to its end even if a later plan stops cancelling the slot, as
+        the pause has gone out. It extends into a cancelled slot that starts by the time it ends. At its end,
+        or as soon as the switch goes off, Predbat goes read only or guest charging goes on, the charger is handed back, and the
+        hand-back is repeated until the charger confirms it. A hold beyond the cars - num_cars dropped - is
+        handed back too.
+        """
+        wanted = self.charger_control_force_hold_wanted()
+        if not wanted and not self.charger_control_force_holds:
+            return
+        chargers = self.charger_control_chargers()
+        car_count = self.charger_control_car_count()
+        steps = [lambda car_n=car_n, key=key, handle=handle: self.charger_control_force_hold_one(car_n, key, handle, now, wanted) for car_n, (key, handle) in enumerate(chargers[:car_count])]
+        steps += [lambda key=key, handle=handle: self.charger_control_force_hand_back(key, handle, now) for key, handle in chargers[car_count:] if key in self.charger_control_force_holds]
+        await self.charger_control_each(steps)
+
+    async def charger_control_force_hold_one(self, car_n, key, handle, now, wanted):
+        """Start, keep or hand back one charger's force hold."""
+        hold = self.charger_control_force_holds.get(key)
+        if hold is None:
+            if not wanted or not self.charger_control_can_force_hold(handle) or self.charger_control_unplugged(handle):
+                return
+            ended = self.charger_control_force_hold_ended.get(key)
+            if ended is not None:
+                if now < ended:
+                    return
+                del self.charger_control_force_hold_ended[key]
+            lead = timedelta(minutes=FORCE_HOLD_LEAD_MINUTES)
+            window = next(((start, end) for start, end in self.charger_control_cancelled_windows(car_n, now) if start - lead <= now < end), None)
+            if window is None:
+                return
+            end = window[1].astimezone(timezone.utc)
+            hold = {"car": car_n, "end": end.isoformat(), "saved": None, "stopped": False, "warned": False}
+            self.charger_control_force_holds[key] = hold
+            self.log("Info: {}: holding car {}'s {} {} off until {} for a slot cancelled for an export".format(self.charger_control_log_name, car_n, self.charger_control_noun, key, window[1].strftime("%H:%M")))
+            self.charger_control_set_force_hold_until(car_n, end)
+            # Saved before the first pause is sent: one whose reply is lost may still have been applied,
+            # and must then be handed back like any other
+            await self.charger_control_save()
+        end = self.charger_control_force_hold_end(hold)
+        # A charger that can no longer be held - a hold restored after the component's car mapping changed - is handed back
+        if wanted and now < end and self.charger_control_can_force_hold(handle):
+            await self.charger_control_force_hold_keep(car_n, key, handle, hold, end, now)
+        else:
+            await self.charger_control_force_hand_back(key, handle, now)
+
+    async def charger_control_force_hold_keep(self, car_n, key, handle, hold, end, now):
+        """Keep a force hold: extend it into a cancelled slot that starts by its end, and pause whenever it is not stopped."""
+        extended = end
+        for start, window_end in self.charger_control_cancelled_windows(car_n, now):
+            if start <= extended < window_end:
+                extended = window_end.astimezone(timezone.utc)
+        if extended != end:
+            hold["end"] = extended.isoformat()
+            self.log("Info: {}: extending the hold on car {}'s {} {} to {}, into the next slot cancelled for an export".format(self.charger_control_log_name, car_n, self.charger_control_noun, key, extended.astimezone(self.local_tz).strftime("%H:%M")))
+            await self.charger_control_save()
+        self.charger_control_set_force_hold_until(hold["car"], extended)
+        # Checked every cycle, not only until the first stop: a charger confirmed stopped can start a charge
+        # again mid-hold - the car asking for one, a re-plug, the charger's own schedule
+        if hold["stopped"] and self.charger_control_force_stopped(handle, hold["saved"]):
+            return
+        # Repeated each cycle until the charger reads back as stopped - a pause can be accepted and not land
+        saved = await self.charger_control_force_pause(handle, hold["saved"])
+        stopped = bool(self.charger_control_force_stopped(handle, saved))
+        if saved != hold["saved"] or stopped != hold["stopped"]:
+            hold["saved"] = saved
+            hold["stopped"] = stopped
+            await self.charger_control_save()
+
+    async def charger_control_force_hand_back(self, key, handle, now):
+        """Hand back one force-held charger, dropping the hold once the charger confirms it.
+
+        Repeated each cycle until it confirms. One still owed FORCE_HOLD_SAFETY_MINUTES after the hold's end
+        is warned about once, and goes on being retried.
+
+        Until it confirms, the planner goes on hearing the car is held, a few minutes ahead at a time: a hand-back
+        can take minutes to land (live, a Wallbox's OCPP-on write was answered 502 once, the retry went through, and
+        the reconnect to Octopus then took about 2.5 minutes - about 7 from the first attempt), and meanwhile the car
+        sits idle inside a live dispatch, which the "in a dispatch but not charging" check would take as the
+        dispatch failing and cancel its slots - and their cheap rate.
+        """
+        hold = self.charger_control_force_holds[key]
+        handed_back = False
+        if hold["stopped"]:
+            # No longer confirmed stopped once a resume may have gone out, applied or not, so if the hold is
+            # wanted again before the hand-back confirms - the switch back on, read only over - it pauses afresh
+            hold["stopped"] = False
+            await self.charger_control_save()
+        try:
+            await self.charger_control_force_resume(handle, hold["saved"] or {})
+            handed_back = await self.charger_control_force_handed_back(handle, hold["saved"] or {})
+        finally:
+            if not handed_back:
+                self.charger_control_set_force_hold_until(hold["car"], now + timedelta(minutes=FORCE_HOLD_LEAD_MINUTES))
+                end = self.charger_control_force_hold_end(hold)
+                if not hold["warned"] and now >= end + timedelta(minutes=FORCE_HOLD_SAFETY_MINUTES):
+                    hold["warned"] = True
+                    self.log(
+                        "Warn: {}: {} {} has still not confirmed it was handed back {} minutes after its hold for an export ended - still retrying, check it is charging as it should".format(
+                            self.charger_control_log_name, self.charger_control_noun, key, FORCE_HOLD_SAFETY_MINUTES
+                        )
+                    )
+                    await self.charger_control_save()
+        if handed_back:
+            self.log("Info: {}: {} {} handed back after its hold for an export".format(self.charger_control_log_name, self.charger_control_noun, key))
+            await self.charger_control_drop_force_hold(key)
+
+    async def charger_control_drop_force_hold(self, key):
+        """Forget a force hold, tell the planner, and save that. Nothing to do for a hold already gone."""
+        # A user ending a hold from a control event can meet a hand-back that has just confirmed it
+        hold = self.charger_control_force_holds.pop(key, None)
+        if hold is None:
+            return
+        self.charger_control_set_force_hold_until(hold["car"], None)
+        if key in self.charger_control_state:
+            # The hold moved the charger behind Predbat-led control's back, so its next cycle sends the plan's
+            # command again rather than trusting the state it last set
+            self.charger_control_unconfirmed.add(key)
+        await self.charger_control_save()
+
+    async def charger_control_end_force_hold(self, key, why):
+        """End a force hold without handing the charger back - the user has taken it back themselves.
+
+        The slot may still be cancelled, but the hold is not started again until the next one: the user's
+        say goes for the rest of this slot.
+        """
+        if key not in self.charger_control_force_holds:
+            return
+        self.log("Info: {}: ending the hold for an export on {} {}: {}".format(self.charger_control_log_name, self.charger_control_noun, key, why))
+        self.charger_control_force_hold_ended[key] = self.charger_control_force_hold_end(self.charger_control_force_holds[key])
+        await self.charger_control_drop_force_hold(key)

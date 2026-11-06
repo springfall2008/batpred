@@ -1156,6 +1156,10 @@ It asks for your Wallbox password, so the password never appears in your shell h
 
 To try a control by hand, add one of `--pause`, `--resume`, `--resume-schedule`, `--lock`, `--unlock`, `--max-current <amps>` or `--eco-smart <off|eco_mode|full_solar>`, with `--charger <id>` to choose a charger other than the first. The charger's state is printed again a few seconds later so you can see whether it took effect.
 
+`--ocpp <on|off>` connects the charger to its OCPP backend or hands it to the Wallbox cloud, then prints the connection type and `connectionStatus` (4 is connected); the password is never printed.
+
+`--force-hold <minutes>` runs the force hold described under [Holding a charger off for an export](#holding-a-charger-off-for-an-export-wallbox) by hand: it switches on **car_charging_cancel_for_export**, publishes one cancelled window of that length for the chosen charger and then polls every 30 seconds, printing the charger and the hold, until the charger is handed back. Press Ctrl-C once to end the window early and hand the charger back; Predbat keeps polling until the hand-back is confirmed, which can take a few minutes. A second Ctrl-C gives up, and a process that is killed cannot hand back (nothing is saved between runs), so if the charger is left off OCPP run `--ocpp on`. Try it with the car plugged in but outside an Octopus dispatch first.
+
 #### What it publishes (wallbox)
 
 For each charger, with `<id>` being the Wallbox charger id:
@@ -1170,6 +1174,7 @@ For each charger, with `<id>` being the Wallbox charger id:
 | `binary_sensor.predbat_wallbox_<id>_charging` | On while the car is charging |
 | `switch.predbat_wallbox_<id>_charging` | Turn off to pause charging, on to resume a paused session |
 | `switch.predbat_wallbox_<id>_locked` | Lock or unlock the charger |
+| `switch.predbat_wallbox_<id>_ocpp` | Connect the charger to its OCPP backend (on) or hand it back to the Wallbox cloud (off) |
 | `number.predbat_wallbox_<id>_max_charging_current` | Maximum charging current in A |
 | `select.predbat_wallbox_<id>_eco_smart` | Eco-Smart mode: `off`, `eco_mode` or `full_solar`. Only on chargers with Eco-Smart |
 
@@ -1204,6 +1209,22 @@ Things to know:
 - Predbat-led charging is disabled for a charger run by an OCPP backend (its status sensor's `operation_mode` reads `ocpp`). The backend decides when that charger charges, so Predbat leaves it alone and logs a warning once. Other chargers on the account are still controlled.
 - Predbat never unlocks a locked charger, and cannot pause or resume one. While a charger is locked Predbat-led charging leaves it alone and logs a warning once. A charger Predbat had paused is resumed once you unlock it.
 - Some cars go to sleep when charging is paused and do not wake when it is resumed. If yours does, Predbat-led charging will not suit it.
+
+#### Holding a charger off for an export (wallbox)
+
+`switch.predbat_wallbox_<id>_ocpp` shows whether the charger is run by an OCPP backend, such as Octopus for Intelligent Octopus Go, and turning it off hands the charger to the Wallbox cloud. Predbat uses the same switch when it holds a charger off.
+
+When **car_charging_cancel_for_export** is on and the plan cancels a car charging slot so the battery can export, Predbat holds that car's charger off for the cancelled slot, starting 5 minutes ahead. This works whoever would otherwise charge the car, Octopus included, and it does not need `wallbox_control`, but it does need `wallbox_automatic`, which is what makes each charger its own car. Telling Octopus to suspend does not stop a Pulsar, so Predbat does what stops it:
+
+- A charger run by an OCPP backend is switched off OCPP first, then paused once it reports it has left OCPP mode. The backend can no longer start the charge.
+- Any other charger is paused. One you had already paused is left paused, and is not resumed when the hold ends.
+- At the end of the hold, or if the switch is turned off, Predbat goes read only or guest charging is turned on, an OCPP charger is switched back on and its backend restarts the charge by itself; any other charger Predbat paused is resumed and handed back to its own schedule and Eco-Smart, as at the end of Predbat-led charging. The hand-back is retried until the charger confirms it. Reconnecting to OCPP took about 2.5 minutes in testing, and Wallbox can answer the first attempt with an error, which is retried.
+
+Things to know:
+
+- Wallbox's cloud, and the Home Assistant Wallbox integration, can go on showing `Charging` for minutes after the charger has stopped. Predbat reads the charger afresh each cycle during a hold and tolerates this, but the sensor lags.
+- The first version relies on **car_charging_cancel_for_export**, which is off by default. The planner support that cancels slots for an export arrives separately, so until then no slot is cancelled and nothing is held.
+- A car that is unplugged is not held, and nor is one while guest charging is on.
 
 #### Configuration Options (wallbox)
 

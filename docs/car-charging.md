@@ -610,6 +610,8 @@ Predbat then registers each charger on the account as a car and sets **car_charg
 
 See [Wallbox Charger](components.md#wallbox-charger-wallbox) for the entities it publishes and how Predbat-led charging behaves.
 
+Predbat can also hold a Wallbox off while a car charging slot is cancelled for an export (**car_charging_cancel_for_export**), even when Octopus Intelligent is the one charging the car. A charger run by an OCPP backend is switched off OCPP with `switch.predbat_wallbox_<id>_ocpp` and then paused, and switched back on at the end of the hold; see [Holding a charger off for an export](components.md#holding-a-charger-off-for-an-export-wallbox). Every Wallbox can be held this way.
+
 If you would rather use the Home Assistant Wallbox integration, see [Wallbox Pulsar](devices.md#wallbox-pulsar).
 
 ## Hypervolt car charger direct integration
