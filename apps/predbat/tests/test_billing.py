@@ -810,15 +810,14 @@ def test_attach_hides_diff_when_predbat_saw_nothing():
 
 
 def test_attach_implausible_rate_hidden():
-    """Billing whose average rate is nowhere near Predbat's (a units mix-up, say) is not shown at all."""
+    """Billing whose average rate is nowhere near Predbat's (a units mix-up, say) is not shown: the columns stay, empty, with no summary."""
     from billing import attach_billing
 
     plan = {"rows": [{"slot_minute": m, "cost_change": 0.0, "import_rate": 25.0} for m in (600, 630)]}
-    before = copy.deepcopy(plan)
     billing = _billing_attrs({_key(600): _slot(1.0, 2500.0), _key(630): _slot(1.0, 2500.0)})
     attach_billing(plan, billing, VIEW_MIDNIGHT, 30, {600: 25.0, 630: 25.0}, 55.52, {}, False, None, None)
-    if plan != before:
-        print("ERROR: billing at 100x Predbat's rate should not be attached")
+    if "billing_summary" in plan or any(row.get("billed") is not None or row.get("billing_diff") is not None or row.get("billed_buckets") is not None or "billed" not in row for row in plan["rows"]):
+        print("ERROR: billing at 100x Predbat's rate should leave the billing columns empty with no summary, got {}".format(plan))
         return True
     plan = {"rows": [{"slot_minute": m, "cost_change": 0.0, "import_rate": 36.28} for m in (600, 630)]}
     attach_billing(plan, _billing_attrs({_key(600): _slot(1.0, 6.6), _key(630): _slot(1.0, 36.28)}), VIEW_MIDNIGHT, 30, {600: 36.28, 630: 36.28}, 55.52, {}, False, None, None)
@@ -926,6 +925,48 @@ def test_sensor_needs_export_when_configured():
     return False
 
 
+def test_attach_export_pending():
+    """With an export meter, a row whose import is billed but whose export isn't yet shows the import charge, flagged, with no Diff and outside the summary."""
+    from billing import attach_billing
+
+    legs = {"import": True, "export": True}
+    imports = {_key(m): _slot(1.0, 10.0) for m in (600, 630)}
+    exports = {_key(600): _slot(0.5, 7.5, label="GENERATION", standing=0.0)}
+    plan = attach_billing(_plan([600, 630]), _billing_attrs(imports, export_slots=exports, legs=legs), VIEW_MIDNIGHT, 30, {600: 2.5, 630: 10.0}, 55.52, {}, False, None, None)
+    full, pending = plan["rows"]
+    if full.get("billed") != 0.03 or full.get("billing_diff") != 0.0 or full.get("billing_pending_export") is not False:
+        print("ERROR: the fully billed row should show the net 2.5p with a zero Diff, got {}".format(full))
+        return True
+    if pending.get("billed") != 0.1 or pending.get("billing_diff") is not None or pending.get("billing_pending_export") is not True or list(pending.get("billed_buckets") or {}) != ["Home Low Rate"]:
+        print("ERROR: the row waiting for its export should show its 10p import, flagged, with no Diff, got {}".format(pending))
+        return True
+    summary = plan["billing_summary"]
+    if summary["billed_cost"] != 0.03 or summary["predbat_cost"] != 0.03 or summary["export_pending_slots"] != 1 or summary["import_kwh"][1] != 1.0 or summary["standing_billed"] != 0.01:
+        print("ERROR: the summary should count only the fully billed row and say one is waiting for export, got {}".format(summary))
+        return True
+    # No export at all yet: every row shows its import, flagged, and there is no summary
+    plan = attach_billing(_plan([600, 630]), _billing_attrs(imports, export_slots={}, legs=legs), VIEW_MIDNIGHT, 30, {600: 2.5, 630: 10.0}, 55.52, {}, False, None, None)
+    if "billing_summary" in plan or [row.get("billing_pending_export") for row in plan["rows"]] != [True, True] or [row.get("billed") for row in plan["rows"]] != [0.1, 0.1]:
+        print("ERROR: with no export billed yet every row should show its import flagged and no summary, got {}".format(plan))
+        return True
+    return False
+
+
+def test_attach_columns_when_nothing_billed():
+    """A view with billing configured but none of it inside the view (today, say) still gets the billing fields, empty, so the columns show."""
+    from billing import attach_billing
+
+    billing = _billing_attrs({_key(600, VIEW_MIDNIGHT - timedelta(days=3)): _slot(1.0, 10.0)})
+    plan = attach_billing(_plan([600, 630]), billing, VIEW_MIDNIGHT, 30, {600: 10.0, 630: 10.0}, 55.52, {610: "saving"}, False, None, None)
+    if "billing_summary" in plan or any("billed" not in row or row["billed"] is not None or row["billing_diff"] is not None for row in plan["rows"]):
+        print("ERROR: a view with nothing billed should carry empty billing fields and no summary, got {}".format(plan))
+        return True
+    if plan["rows"][0].get("billing_event") != "Saving event":
+        print("ERROR: a row with nothing billed should still carry its event label, got {}".format(plan["rows"][0]))
+        return True
+    return False
+
+
 def test_attach_shows_gaps():
     """The summary says how far billing reaches and how many half-hours before that are missing."""
     from billing import attach_billing
@@ -985,6 +1026,8 @@ def run_billing_tests(my_predbat):
         test_reader_settles_old_days,
         test_sensor_needs_export_when_configured,
         test_attach_shows_gaps,
+        test_attach_export_pending,
+        test_attach_columns_when_nothing_billed,
     ):
         print("billing: {}".format(test.__name__))
         if test():
