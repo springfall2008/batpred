@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.test_infra import run_async
 from car_charger_control import CarChargerControl, ChargerControlDeferred, GUEST_CHARGING_MAX_HOURS, OCTOPUS_DISCOVERY_WAIT_MINUTES, parse_control_setting, parse_dispatch_time
+from fetch import Fetch
 
 LONDON = pytz.timezone("Europe/London")
 
@@ -45,11 +46,20 @@ class FakeStorage:
 class FakeBase:
     """The parts of the base object the mixin reads."""
 
+    # Predbat's own filter for the dispatches still used while Octopus Smart Control is off
+    smart_control_off_slots = Fetch.smart_control_off_slots
+
     def __init__(self):
         """Not read only unless a test says so."""
         self.set_read_only = False
         self.set_read_only_axle = False
         self.num_cars = 1
+        # car_n -> True while that car's Octopus Smart Control switch is off
+        self.smart_control_off = {}
+
+    def octopus_smart_control_off(self, car_n, save=True):
+        """Whether the car's Smart Control switch is off, as Fetch.octopus_smart_control_off."""
+        return self.smart_control_off.get(car_n, False)
 
 
 class FakeCharger:
@@ -586,6 +596,32 @@ def test_dispatch_times_judged_against_the_clock():
     assert parse_dispatch_time("not a time") is None and parse_dispatch_time(None) is None
     # No offset: read as UTC rather than raising when compared with the clock
     component.sensors[DISPATCH] = {"is_charger": False, "state": "off", "planned_dispatches": [{"start": "2026-06-01T00:15:00", "end": "2026-06-01T01:00:00"}]}
+    assert component.charger_control_dispatch_active(0, now) is True
+
+
+def test_smart_control_off_ignores_planned_dispatches():
+    """While Octopus Smart Control is off the dispatch sensor keeps the plan Octopus made before, but
+    nothing will act on it (#5339), so the charger does not follow it - only a manual bump charge."""
+    component = _octopus_component(FakeOctopus(), is_charger=False)
+    component.args["octopus_intelligent_charger_follows_car"] = True
+    now = _now()  # 01:30 London, 00:30 UTC
+    smart = {"start": "2026-06-01T00:15:00+0000", "end": "2026-06-01T01:00:00+0000", "source": "smart-charge"}
+    component.sensors[DISPATCH]["state"] = "on"
+    component.sensors[DISPATCH]["planned_dispatches"] = [smart]
+    assert component.charger_control_dispatch_active(0, now) is True
+    component.base.smart_control_off[0] = True
+    assert component.charger_control_dispatch_active(0, now) is False
+    run_async(component.charger_control_tick(now))
+    assert component.commands == [("a", "off", 0)], component.commands
+    # The sensor's state reflects the ignored plan too, so it is not fallen back on
+    component.sensors[DISPATCH]["planned_dispatches"] = []
+    assert component.charger_control_dispatch_active(0, now) is False
+    # A bump charge the user asked for still runs the charger
+    component.sensors[DISPATCH]["planned_dispatches"] = [dict(smart, source="bump-charge")]
+    assert component.charger_control_dispatch_active(0, now) is True
+    # Another car's switch does not count
+    component.base.smart_control_off = {1: True}
+    component.sensors[DISPATCH]["planned_dispatches"] = [smart]
     assert component.charger_control_dispatch_active(0, now) is True
 
 
@@ -1167,6 +1203,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_charge_point_releases_a_running_charger()
     test_octopus_rule_car_integrated_follows_the_dispatch_sensor()
     test_dispatch_times_judged_against_the_clock()
+    test_smart_control_off_ignores_planned_dispatches()
     test_is_charger_that_has_lost_its_value_is_not_a_no()
     test_guest_switch_toggle()
     test_octopus_rule_explicit_true_never_overrides_a_charge_point()

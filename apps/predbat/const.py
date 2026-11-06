@@ -122,6 +122,8 @@ PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car
 # A car_charging_now sensor that reports a charging power (in W, after unit conversion) rather than
 # on/off counts as charging from this power: above a charger's standby draw, below the smallest charge
 CAR_CHARGING_NOW_POWER_W = 200
+# Planned Octopus dispatch sources the user asks for by hand - not scheduled by Smart Control, so switching it off does not void them
+OCTOPUS_MANUAL_DISPATCH_SOURCES = ("bump-charge", "BOOST")
 # A manually tracked car with no charge recorded keeps counting from up to this long ago, for energy its charger's history records late
 CAR_MANUAL_SOC_LATE_MINUTES = 60
 # A manually tracked car is only reset once its plugged-in sensor has read unplugged for this long - a charger reconnecting can read unplugged for a few minutes

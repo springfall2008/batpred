@@ -527,19 +527,28 @@ class CarChargerControl:
         The dispatch times on the sensor are judged against the clock rather than its on/off
         state, which only refreshes every couple of minutes and would run the charger on past
         the end of a dispatch. A sensor with no dispatch times falls back to its state.
+
+        While Octopus Smart Control is off the sensor goes on listing the plan Octopus made
+        before, which nothing will act on (#5339), so only the planned dispatches Predbat still
+        uses are followed - a bump charge the user asked for, or a charger's own schedule - and
+        the sensor's state, which reflects that plan too, is not fallen back on, even though a
+        sensor listing no dispatches could be on for a bump charge.
         """
         if not self.get_arg("octopus_intelligent_charging", True):
             return False
         slot = self.charger_control_dispatch_sensor(car_n)
         if not slot:
             return False
+        smart_control_off = self.base.octopus_smart_control_off(car_n, save=False)
         dispatches = []
         for attribute in ("planned_dispatches", "completed_dispatches"):
             value = self.get_state_wrapper(slot, attribute=attribute)
             if isinstance(value, list):
+                if smart_control_off and attribute == "planned_dispatches":
+                    value = self.base.smart_control_off_slots(value, False)
                 dispatches.extend(value)
         if not dispatches:
-            return self.get_state_wrapper(slot) == "on"
+            return not smart_control_off and self.get_state_wrapper(slot) == "on"
         for dispatch in dispatches:
             if not isinstance(dispatch, dict):
                 continue
