@@ -110,7 +110,7 @@ Every request is recorded with the simulated time, method, path and — where th
   calls (account, device list, site, register list, first sweep, automatic config, start-up default-option writes) are
   reported on their own line**, separate from the steady-state day. The month projection is made from the
   steady-state 24 hours only, with start-up shown as a per-restart cost. *(Builder's call, made by the designer.)*
-- Step the clock 288 times in 5-minute increments. Each step:
+- Step the clock 288 times in 5-minute increments, from 00:00 to 23:55. Each step:
   1. run gecloud's `run(seconds, first)` once for each simulated minute in the step, with `seconds` advancing as the
      real component loop would (so the 2-minute / 10-minute / hourly branches fire at their real cadence);
   2. **advance the existing plan — do not re-plan.** The plan is optimised once at the start (`calculate_plan(recompute=True)`).
@@ -122,11 +122,10 @@ Every request is recorded with the simulated time, method, path and — where th
      re-plan would mostly reproduce the same plan at many times the run time, and advancing keeps every write
      attributable to execute reacting to time and SOC.
   3. run `execute_plan()`, whose inverter writes reach gecloud through the HA event route.
-- **Only 24 hours are simulated.** The plan covers 48 hours, so it never runs out.
-- **Midnight:** `calculate_plan` forces a recompute when `plan_last_updated_minutes > minutes_now` ("Force recompute
-  due to start of day"), which a wrapping clock would trigger at midnight. Keep `midnight_utc` fixed at the plan's
-  midnight and let `minutes_now` count on past 1440 so the plan's window minutes stay valid and the day wrap does not
-  fire; check that the times execute writes to the inverter after midnight are still correct wall-clock times.
+- **The day runs midnight to 23:55.** The plan is generated at midnight (`minutes_now = 0`, overriding the random
+  scenario's own start time), and the last step is at 23:55. That gives 288 steps that never cross midnight, so
+  `calculate_plan`'s start-of-day forced recompute ("Force recompute due to start of day") never fires and no clock
+  handling is needed. *(Decided by the user.)*
 - **Re-planning every cycle is a follow-on**, paired with the SOC-perturbation mode below: once SOC drifts from the
   prediction, plan correction becomes a real source of writes and is worth measuring.
 
