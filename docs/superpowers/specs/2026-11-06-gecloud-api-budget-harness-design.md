@@ -113,25 +113,32 @@ Every request is recorded with the simulated time, method, path and — where th
 - Step the clock 288 times in 5-minute increments. Each step:
   1. run gecloud's `run(seconds, first)` once for each simulated minute in the step, with `seconds` advancing as the
      real component loop would (so the 2-minute / 10-minute / hourly branches fire at their real cadence);
-  2. **re-plan**, because plan churn between cycles is a real source of writes and a fixed plan would hide it — the
-     user's main question is what execution costs. Re-plan by re-applying the scenario at the new `minutes_now`
-     (re-expanding rates, load and PV, including across midnight), reading inverter state — SOC, reserve, current
-     windows — back from the entities gecloud publishes, and calling `calculate_plan()`. **Not** a full
-     `update_pred()`, which would need every scenario input faked as HA entities and history. *(Builder's call, made by
-     the designer.)*
+  2. **advance the existing plan — do not re-plan.** The plan is optimised once at the start (`calculate_plan(recompute=True)`).
+     Each later step moves the clock forward and calls `calculate_plan(recompute=False)`, which is exactly what a real
+     `update_pred()` cycle does when it does not re-plan: it drops charge and export windows whose end is in the past, so
+     the first window is always the current or next one (plan.py, the "Shift onto next charge/export window" loops at the
+     top of `calculate_plan`), and refreshes the prediction without optimising again. Use that function rather than
+     re-implementing the trim. *(Decided by the user.)* Rationale: with SOC following the plan and fixed forecasts a
+     re-plan would mostly reproduce the same plan at many times the run time, and advancing keeps every write
+     attributable to execute reacting to time and SOC.
   3. run `execute_plan()`, whose inverter writes reach gecloud through the HA event route.
-- A fixed-plan mode (plan once, replay for 24 h) is a useful option for isolating plan-churn writes from
-  time-driven writes, but re-planning is the default.
+- **Only 24 hours are simulated.** The plan covers 48 hours, so it never runs out.
+- **Midnight:** `calculate_plan` forces a recompute when `plan_last_updated_minutes > minutes_now` ("Force recompute
+  due to start of day"), which a wrapping clock would trigger at midnight. Keep `midnight_utc` fixed at the plan's
+  midnight and let `minutes_now` count on past 1440 so the plan's window minutes stay valid and the day wrap does not
+  fire; check that the times execute writes to the inverter after midnight are still correct wall-clock times.
+- **Re-planning every cycle is a follow-on**, paired with the SOC-perturbation mode below: once SOC drifts from the
+  prediction, plan correction becomes a real source of writes and is worth measuring.
 
 ### SOC and meter model
 
 **Decided: start with the ideal case.** The fake server's SOC follows the plan's own predicted SOC for the current
-simulated minute (from the most recent plan's prediction), and forecasts do not change during the day. Meter counters
-accumulate from the scenario's load and PV for the elapsed time. In this mode re-plans will mostly reproduce the
-previous plan, so the write count it gives is a **floor**, and the summary must say so.
+simulated minute (from the plan's prediction), and forecasts do not change during the day. Meter counters
+accumulate from the scenario's load and PV for the elapsed time. Because reality never departs from the plan, the
+write count this gives is a **floor**, and the summary must say so.
 
 **Follow-on, once the ideal run works:** a perturbation mode that nudges SOC away from the prediction at each 5-minute
-step (e.g. a few percent, seeded so runs are repeatable), to see how much extra writing plan correction causes. Design
+step (e.g. a few percent, seeded so runs are repeatable), combined with re-planning each cycle, to see how much extra writing plan correction causes. Design
 the SOC source so this is a small addition (one hook where the next step's SOC is decided), not a rework.
 
 ### Output
