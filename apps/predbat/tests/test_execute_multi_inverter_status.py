@@ -13,7 +13,7 @@ resolver that replaced execute_plan()'s previous "whichever inverter is processe
 overwrite, which silently hid genuine cross-inverter disagreement (e.g. real cross-charging).
 """
 
-from execute import build_status_extra, resolve_multi_inverter_status
+from execute import build_status_extra, resolve_export_status, resolve_multi_inverter_status
 
 
 def test_multi_inverter_status(my_predbat):
@@ -99,7 +99,35 @@ def test_multi_inverter_status(my_predbat):
         failed = True
 
     failed |= test_build_status_extra()
+    failed |= test_resolve_export_status()
 
+    return failed
+
+
+def test_resolve_export_status():
+    """Verify export_status follows EXPORT_STATE_PRECEDENCE across a fleet (#5125): active export over freeze,
+    freeze over hold, and none when no inverter is exporting. Spelt out as literals, as these strings are
+    published on an HA entity for user automations to read.
+    """
+    failed = False
+    print("**** Testing resolve_export_status ****")
+    cases = [
+        ({}, "none"),
+        ({0: "Exporting"}, "target"),
+        ({0: "Freeze exporting"}, "freeze"),
+        ({0: "Hold exporting"}, "none"),
+        ({0: "Charging"}, "none"),
+        ({0: "Exporting", 1: "Freeze exporting"}, "target"),
+        ({0: "Freeze exporting", 1: "Exporting"}, "target"),
+        ({0: "Hold exporting", 1: "Freeze exporting"}, "freeze"),
+        ({0: "Exporting", 1: "Hold exporting"}, "target"),
+        ({0: "Charging", 1: "Freeze exporting"}, "freeze"),
+    ]
+    for status_per_inverter, expected in cases:
+        result = resolve_export_status(status_per_inverter)
+        if result != expected:
+            print("  ERROR: expected export_status {!r} for {}, got {!r}".format(expected, status_per_inverter, result))
+            failed = True
     return failed
 
 
