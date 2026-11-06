@@ -175,6 +175,16 @@ class EnsureTriagedTests(unittest.TestCase):
         self.assertTrue(triage_daemon.find_triage_comment(4720))
 
     @patch("triage_daemon.subprocess.run")
+    def test_find_triage_comment_true_when_the_disclosure_opens_capitalised(self, mock_run):
+        """The skill words its own opening line, and 46 of 62 sampled triage comments start with a
+        capital A. A case-sensitive match missed them, so swapping BOT_TRIAGED for BOT_PR (#5964)
+        or BOT_REVIEW (#5741) triaged the issue all over again; #5741 got a second comment."""
+        for opening in ("🤖 Automated first-pass triage — a maintainer will review before any action is taken.", "**Automated first-pass triage** — a maintainer will review before any action is taken."):
+            with self.subTest(opening=opening):
+                mock_run.return_value = MagicMock(stdout=json.dumps({"comments": [{"body": opening + "\n\nClassification: **enhancement**"}]}))
+                self.assertTrue(triage_daemon.find_triage_comment(4720))
+
+    @patch("triage_daemon.subprocess.run")
     def test_find_triage_comment_false_when_no_match(self, mock_run):
         """Unrelated comments don't count as a triage comment."""
         mock_run.return_value = MagicMock(stdout=json.dumps({"comments": [{"body": "thanks for the report"}]}))
@@ -2067,6 +2077,30 @@ class ReporterRepliedSinceBotTests(unittest.TestCase):
         """A waiting_for_user a human applied, with no bot comment, is not the bot's to clear."""
         mock_run.return_value = MagicMock(stdout=comments_json(("maintainer", "please attach a log"), ("reporter", "attached")))
         self.assertFalse(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_reporter_reply_after_a_capitalised_triage_comment(self, mock_run):
+        """Most real triage comments open "Automated first-pass triage". Missing one left the issue
+        looking as if the bot had never spoken, so the reporter's answer never woke it."""
+        mock_run.return_value = MagicMock(stdout=comments_json(("maintainer", "🤖 Automated first-pass triage — a maintainer will review before any action is taken."), ("reporter", "log attached")))
+        self.assertTrue(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
+
+
+class IsBotCommentTests(unittest.TestCase):
+    """Tests for is_bot_comment()."""
+
+    def test_recognises_each_disclosure_line_whatever_its_case(self):
+        """The skills word their opening lines themselves, so the case of the disclosure varies."""
+        for body in (
+            "🤖 Automated first-pass triage — a maintainer will review before any action is taken.",
+            "🤖 This is an automated follow-up triage review (a maintainer will review before any action is taken).",
+            "**Automated me-too check** - this looks like a different problem.",
+        ):
+            with self.subTest(body=body):
+                self.assertTrue(triage_daemon.is_bot_comment({"body": body}))
+
+    def test_an_ordinary_comment_is_not_the_bots(self):
+        self.assertFalse(triage_daemon.is_bot_comment({"body": "Same here, my battery stopped charging too."}))
 
 
 class WakeWaitingIssueTests(unittest.TestCase):
