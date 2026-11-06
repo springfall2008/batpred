@@ -1,18 +1,20 @@
 name: owner gate
-# A required check standing in for "only the repository owner merges": main's ruleset requires a check
-# named owner-gate. GitHub's auto-merge never uses an admin bypass, so restricting updates to the owner
-# would also block the owner's own auto-merge; this gate keeps both.
+# A required status standing in for "only the repository owner merges": main's ruleset requires a
+# status named owner-approval. GitHub's auto-merge never uses an admin bypass, so restricting updates to
+# the owner would also block the owner's own auto-merge; this gate keeps both.
 #
 # The job never fails just because the owner has not approved yet. It records its verdict as an
-# owner-gate check run through the Checks API instead: in progress ("waiting for the owner") until the
-# go-ahead, then success. GitHub emails whoever triggered a FAILED workflow run, so a failing job sent
-# every contributor a "run failed" email on every PR - the pending check blocks the merge just as well
-# without one. The job is named differently from the check so its own green tick cannot satisfy the
-# requirement. The newest owner-gate check on the head commit is the one that counts. A waiting verdict
-# updates the newest check in place while it is still in progress rather than adding another, so a
-# commit normally carries one waiting check - though a lookup failing twice, or two runs racing, can
-# still add a second. A go-ahead completes every waiting check on the commit, so leftovers from older
-# runs cannot linger. A completed check is never reopened; a new check is added instead.
+# owner-approval commit status instead: pending ("waiting for the owner") until the go-ahead, then
+# success. GitHub emails whoever triggered a FAILED workflow run, so a failing job sent every
+# contributor a "run failed" email on every PR - the pending status blocks the merge just as well
+# without one. The job is named differently from the status so its own green tick cannot satisfy the
+# requirement. The newest owner-approval status on the head commit is the one that counts.
+#
+# A commit status rather than a check run: a check run created with the workflow token is filed into
+# the oldest GitHub Actions check suite on the commit, and the merge box only shows each workflow's
+# latest run for an event. Once a second run of this workflow fired for the same event on a commit, the
+# check sat in a superseded suite, so the merge box showed it as "Expected" however often it passed
+# (PRs #6001 and #6007). A commit status belongs to no suite.
 #
 # It passes only when the owner has given this PR an explicit go-ahead, whoever authored it:
 # - the owner applied the owner-approved label (the most recent time that label was applied, the
@@ -29,14 +31,14 @@ name: owner gate
 #
 # Events often arrive seconds apart (a push, a review, a label change), each starting its own run, and
 # the runs can finish in any order, so a run that read the PR before a later event could record its
-# stale verdict last. Each run therefore re-reads the PR after recording and corrects the check until
+# stale verdict last. Each run therefore re-reads the PR after recording and corrects the status until
 # its verdict holds. There is deliberately no concurrency group: GitHub keeps only the newest pending
 # run in a group, and dropping a pending run of a non-owner's push would drop its revocation.
 #
 # pull_request_target so the job runs this file as it is on main and gets a token that can remove the
 # label and switch auto-merge off. GitHub has no _target variant of pull_request_review, so a review
 # runs the copy of this file in the PR's merge ref instead - main's copy unless the PR edits it. On a
-# PR from a fork that run gets a read-only token and cannot record the check, so for fork PRs the owner
+# PR from a fork that run gets a read-only token and cannot record the status, so for fork PRs the owner
 # uses the label or auto-merge instead of a review. Neither path checks out or runs the PR's code.
 on:
   pull_request_target:
@@ -54,13 +56,13 @@ on:
       - dismissed
 
 permissions:
-  checks: write
+  statuses: write
   issues: write
   pull-requests: write
 
 jobs:
   evaluate:
-    # Not "owner-gate": this job's own check must not be the one the ruleset requires
+    # Not "owner-approval": this job's own check must not be the one the ruleset requires
     name: owner gate evaluator
     runs-on: ubuntu-latest
     steps:
@@ -111,54 +113,28 @@ jobs:
             message="Waiting for $owner to apply the $LABEL label, enable auto-merge or approve the PR"
           }
 
-          # Record the verdict as the owner-gate check on the head commit: "pass" completes it as a
-          # success, "wait" leaves it in progress, which blocks the merge without failing this job
+          # Record the verdict as the owner-approval commit status on the head commit: "pass" as success,
+          # "wait" as pending, which blocks the merge without failing this job. The newest status for a
+          # context is the one that counts, so each verdict simply posts a new one. The description is
+          # capped at GitHub's 140 characters; the full message is in this run's log, which the status links to
           record() {
             echo "$2"
-            # One retry, so a passing API error does not add a second waiting check; if both fail a new
-            # check is posted, which blocks rather than passes
-            checks=$(list_checks || { sleep 2; list_checks; }) || checks="[]"
-            newest_waiting=$(jq -r 'max_by(.id) | select(. != null and .status != "completed") | .id' <<< "$checks")
-            if [ "$1" = "pass" ]; then
-              for check_id in $(jq -r '.[] | select(.status != "completed") | .id' <<< "$checks"); do
-                write_check pass "$2" "$check_id"
-              done
-              # The newest check must be the success, so add one unless the newest was a waiting check just completed
-              if [ -z "$newest_waiting" ]; then
-                write_check pass "$2" ""
-              fi
-            else
-              write_check wait "$2" "$newest_waiting"
-            fi
+            if [ "$1" = "pass" ]; then status_state=success; else status_state=pending; fi
+            post_status "$2" || { sleep 2; post_status "$2"; } \
+              || echo "::warning::Could not record the owner-approval status - a review on a fork PR has a read-only token, so apply $LABEL or enable auto-merge instead"
           }
 
-          # This commit's owner-gate checks from GitHub Actions, as a JSON array
-          list_checks() {
-            gh api "repos/$GH_REPO/commits/$head_sha/check-runs?check_name=owner-gate&filter=all&per_page=100" \
-              --jq '[.check_runs[] | select(.app.slug == "github-actions")]'
-          }
-
-          # Write verdict $1 with message $2 to check $3, or to a new check when $3 is empty
-          write_check() {
-            if [ "$1" = "pass" ]; then
-              verdict_fields=(-f status=completed -f conclusion=success)
-            else
-              verdict_fields=(-f status=in_progress)
-            fi
-            if [ -n "$3" ]; then
-              target=(-X PATCH "repos/$GH_REPO/check-runs/$3")
-            else
-              target=(-X POST "repos/$GH_REPO/check-runs" -f name=owner-gate -f head_sha="$head_sha")
-            fi
-            gh api "${target[@]}" "${verdict_fields[@]}" -f "output[title]=$2" -f "output[summary]=$2" > /dev/null \
-              || echo "::warning::Could not record the owner-gate check - a review on a fork PR has a read-only token, so apply $LABEL or enable auto-merge instead"
+          # Post the owner-approval status with description $1
+          post_status() {
+            gh api "repos/$GH_REPO/statuses/$head_sha" -f state="$status_state" -f context=owner-approval \
+              -f description="${1:0:140}" -f target_url="$RUN_URL" > /dev/null
           }
 
           evaluate
 
           # New commits from anyone but the owner (or the CI bots) revoke an earlier go-ahead. A failed
-          # revocation must not end the run before the waiting check is recorded: that would leave the new
-          # commit with no owner-gate check and send its pusher a "run failed" email
+          # revocation must not end the run before the waiting status is recorded: that would leave the new
+          # commit with no owner-approval status and send its pusher a "run failed" email
           if [ "$ACTION" = "synchronize" ] && [ "$SENDER" != "$owner" ] && [ "$SENDER" != "pre-commit-ci[bot]" ] && [ "$SENDER" != "github-actions[bot]" ]; then
             not_revoked=""
             if [ "$has_label" = "true" ]; then
@@ -191,11 +167,12 @@ jobs:
             fi
             echo "The PR changed while this run was recording its verdict (attempt $attempt) - recording again"
           done
-          echo "::warning::The PR kept changing while this run recorded its verdict - the owner-gate check follows the next event's run"
+          echo "::warning::The PR kept changing while this run recorded its verdict - the owner-approval status follows the next event's run"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           SENDER: ${{ github.event.sender.login }}
           ACTION: ${{ github.event.action }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           LABEL: owner-approved
