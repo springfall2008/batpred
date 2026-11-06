@@ -139,7 +139,7 @@ def plan_joint_heating(base, request):
     if base.forecast_minutes != steps * PREDICT_STEP:
         raise ValueError("Thermal and battery horizons must match exactly")
     rates = tuple(base.rate_import.get(base.minutes_now + index * PREDICT_STEP) for index in range(steps))
-    exports = tuple(base.rate_export.get(base.minutes_now + index * PREDICT_STEP) for index in range(steps))
+    exports = tuple(base.rate_export.get(base.minutes_now + index * PREDICT_STEP, 0 if not base.rate_export else None) for index in range(steps))
     if any(not _number(rate) for rate in rates + exports):
         raise ValueError("Joint planning requires complete import and export prices")
     evaluator = BatteryHeatEvaluator(base, base.load_minutes_step, base.load_minutes_step10, base.load_minutes_step90)

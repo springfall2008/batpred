@@ -8,7 +8,7 @@ from typing import Any
 
 from const import EXPORT_MODE_IDLE, PREDICT_STEP
 from prediction import Prediction
-from utils import clone_windows, pack_export_limit
+from utils import clone_windows, pack_export_limit, remove_intersecting_windows
 
 
 def _copy_value(value, memo):
@@ -128,6 +128,7 @@ class BatteryHeatEvaluator:
         if planner.calculate_best:
             planner.optimise_all_windows(initial[0], initial[3], debug_mode=False)
             planner.update_target_values()
+        planner.charge_limit_best, planner.charge_window_best = remove_intersecting_windows(planner.charge_limit_best, planner.charge_window_best, planner.export_limits_best, planner.export_window_best)
         # The optimiser can shorten end_record according to its chosen windows. Compare all
         # heating candidates over one common horizon, including residual battery value.
         planner.end_record = planner.forecast_minutes

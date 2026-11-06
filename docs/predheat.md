@@ -245,11 +245,16 @@ The preview appears at `<predheat prefix>.joint_plan`, normally
   it is not simply the electricity bill.
 - `charge_windows`, `charge_limits_kwh`, `export_windows` and `export_limits`:
   the proposed battery settings. Window minutes use PredBat's existing clock and
-  export limits retain PredBat's encoded mode/percentage representation.
+  export limits retain PredBat's encoded mode/percentage representation. These
+  are optimiser scoring windows before native execution clipping and pruning
+  (`battery_windows_stage: before_execution_clipping`). A host must pass its
+  selected demand through normal plan finalisation before executing windows.
 - `baseline_cost` and `baseline_metric`, only when the native thermostat schedule
   satisfies the same comfort and terminal constraints.
 - `generated_at`, `evaluations`, `battery_evaluations` and `termination`:
-  provenance and search diagnostics. Failed refreshes invalidate the preview;
+  provenance and search diagnostics. Input refresh failures invalidate the preview and stop preparation of an
+  incomplete live load. Search-only failures mark the preview unavailable while
+  normal battery planning continues with the qualified thermostat baseline;
   disabling the feature marks a previous preview disabled.
 
 Search trials include advance heating, cheap-rate and solar-surplus seeds, then
@@ -303,7 +308,9 @@ that `thermal_input`, complete `minimum_temperature_c` and
 `maximum_temperature_c` sequences, a `terminal_minimum_c`, and
 `load_is_non_heating=True`. Call `plan_joint_heating(base, request)` on a prepared
 PredBat planning instance with all three non-heating load and solar scenarios,
-complete tariffs and the matching horizon. The function isolates each battery
+complete tariffs and the matching horizon. An absent export tariff means zero
+export revenue, matching normal battery planning; a partially supplied export
+schedule is rejected. The function isolates each battery
 trial, returns the best feasible thermal/battery pair and comparable baseline,
 and leaves the source plan unchanged. Replay hosts supply explicit historical
 inputs through this API instead of refreshing the live sensor adapter.

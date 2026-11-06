@@ -116,7 +116,6 @@ class PredHeat:
     def __init__(self, base):
         self.base = base
         self.log = base.log
-        self.record_status = base.record_status
         self.get_arg = base.get_arg
         self.set_state = base.set_state_wrapper
         self.call_service = base.call_service_wrapper
@@ -183,6 +182,12 @@ class PredHeat:
         self.days_previous = [7]
         self.days_previous_weight = [1]
         self.octopus_url_cache = {}
+
+    def record_status(self, message, debug="", had_errors=False, notify=False, extra=""):
+        """Retain component input errors while forwarding status to the main application."""
+        if had_errors:
+            self.had_errors = True
+        return self.base.record_status(message, debug=debug, had_errors=had_errors, notify=notify, extra=extra)
 
     def get_weather_data(self, now_utc):
         entity_id = self.get_arg("weather", indirect=False, domain="predheat")

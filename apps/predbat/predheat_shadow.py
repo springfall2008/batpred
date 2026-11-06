@@ -93,6 +93,19 @@ def _prepare_joint_heating_shadow(base, loads, pv_steps, evaluate=True, refresh_
     combined = tuple({minute: values[minute] + baseline_kwh[minute // PREDICT_STEP] for minute in range(0, base.forecast_minutes, PREDICT_STEP)} for values in loads)
     if not evaluate:
         return combined
+    try:
+        _publish_joint_heating_preview(base, loads, pv_steps, request)
+    except Exception as error:
+        # A qualified baseline is already available. Preview-only faults must
+        # not prevent the normal battery planner from using that native load.
+        clear_joint_heating_shadow(base, "joint_search_error")
+        base.log("PredHeat joint preview unavailable: {}".format(error))
+    return combined
+
+
+def _publish_joint_heating_preview(base, loads, pv_steps, request):
+    """Evaluate and publish a preview without affecting the prepared native baseline."""
+    predheat = base.predheat
     shadow = copy.copy(base)
     shadow.load_minutes_step, shadow.load_minutes_step10, shadow.load_minutes_step90 = tuple(dict(values) for values in loads)
     shadow.pv_forecast_minute_step, shadow.pv_forecast_minute10_step, shadow.pv_forecast_minute90_step = pv_steps
@@ -105,6 +118,7 @@ def _prepare_joint_heating_shadow(base, loads, pv_steps, evaluate=True, refresh_
         "battery_evaluations": result.battery_evaluations,
         "shadow_only": True,
         "search": "bounded_joint_search",
+        "battery_windows_stage": "before_execution_clipping",
         "baseline_comparable": result.baseline is not None,
     }
     if result.best is not None:
@@ -139,4 +153,3 @@ def _prepare_joint_heating_shadow(base, loads, pv_steps, evaluate=True, refresh_
     base.joint_heating_plan = summary
     base.set_state_wrapper(predheat.prefix + ".joint_plan", state=summary["state"], attributes=summary)
     base.log("PredHeat joint shadow plan: {} ({} thermal trials, {} battery evaluations)".format(summary["state"], result.evaluations, result.battery_evaluations))
-    return combined

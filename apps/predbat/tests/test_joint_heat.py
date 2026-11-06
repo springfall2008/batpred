@@ -189,6 +189,9 @@ def _battery_reoptimises(base):
     initial = base.run_prediction_metric(base.charge_limit, base.charge_window, base.export_window, base.export_limits, end_record=1440)
     base.optimise_all_windows(initial[0], initial[3], debug_mode=False)
     base.update_target_values()
+    from utils import remove_intersecting_windows
+
+    base.charge_limit_best, base.charge_window_best = remove_intersecting_windows(base.charge_limit_best, base.charge_window_best, base.export_limits_best, base.export_window_best)
     base.end_record = 1440
     native = base.run_prediction_metric(base.charge_limit_best, base.charge_window_best, base.export_window_best, base.export_limits_best, end_record=1440)
     assert isclose(no_heat.metric, native[0], abs_tol=0.001)
@@ -662,6 +665,63 @@ def _runtime_planning_clock(base):
             raise AssertionError("naive explicit planning origin was accepted")
         assert not reads
 
+        # Exercise the real component's error forwarding, not a manually set flag.
+        def failed_weather(now):
+            """Simulate the status emitted by an unavailable weather forecast."""
+            adapter.temperatures = {}
+            adapter.record_status("Warn: weather unavailable", had_errors=True)
+
+        adapter.get_weather_data = failed_weather
+        with patch("predheat_shadow.datetime", wraps=datetime) as failed_clock:
+            failed_clock.now.return_value = base.now_utc_real
+            try:
+                prepare_joint_heating_shadow(base, loads, solar, evaluate=False, refresh_inputs=True)
+            except ValueError as error:
+                assert "inputs are unavailable" in str(error)
+            else:
+                raise AssertionError("component input failure was ignored")
+        assert adapter.had_errors is True
+        assert base.had_errors is True
+        assert base.joint_heating_plan["state"] == "unavailable"
+
+
+def _runtime_search_failure(base):
+    """Preview faults preserve qualified native demand, and missing export tariffs mean zero revenue."""
+    from predheat_shadow import prepare_joint_heating_shadow
+    from predheat_model import simulate_heating
+    from predheat_joint import plan_joint_heating
+
+    base = _engine(base)
+    loads, solar = _runtime_series(base)
+    before = _snapshot(base)
+    with _runtime_source(base) as adapter:
+        baseline = simulate_heating(adapter.model_input)
+        for failure in (RuntimeError("isolated optimiser failure"), ValueError("invalid preview metric")):
+            with patch("predheat_shadow.plan_joint_heating", side_effect=failure):
+                combined = prepare_joint_heating_shadow(base, loads, solar)
+            assert base.joint_heating_plan["state"] == "unavailable"
+            assert base.joint_heating_plan["reason"] == "joint_search_error"
+            for scenario, values in enumerate(combined):
+                for index, row in enumerate(baseline.intervals):
+                    assert isclose(values[index * 5], loads[scenario][index * 5] + row.electrical_kwh, abs_tol=1e-12)
+        _unchanged(base, before)
+    base.rate_export = {}
+    result = plan_joint_heating(base, replace(_request(), max_evaluations=1))
+    assert result.best is not None
+    assert not base.rate_export
+    metric = result.best.battery.metric
+    base.rate_export = {minute: 0.0 for minute in range(2881)}
+    zero = plan_joint_heating(base, replace(_request(), max_evaluations=1))
+    assert isclose(zero.best.battery.metric, metric, abs_tol=1e-9)
+    # A gap in a supplied schedule remains unqualified, unlike no export tariff.
+    base.rate_export = {0: 5.0}
+    try:
+        plan_joint_heating(base, replace(_request(), max_evaluations=1))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("partial export tariff accepted")
+
 
 def run_joint_heat_tests(my_predbat):
     """Run public engine integration scenarios using the runner's real PredBat fixture."""
@@ -680,6 +740,7 @@ def run_joint_heat_tests(my_predbat):
         ("runtime_invalidation", lambda: _runtime_invalidation(my_predbat)),
         ("runtime_live_clock", lambda: _runtime_live_clock(my_predbat)),
         ("runtime_planning_clock", lambda: _runtime_planning_clock(my_predbat)),
+        ("runtime_search_failure", lambda: _runtime_search_failure(my_predbat)),
         ("joint_deadline", lambda: _joint_deadline(my_predbat)),
     ):
         try:
