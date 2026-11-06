@@ -317,6 +317,9 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - Floors and caps: `CHG_BAT_SOC_LMT` ≥ 50 (read, never written), `DTU_AC_CHG_SOC_LMT` ≥ 20, `DSCHG_BAT_SOC_LMT` ≤ 45, so a hold below 50% or a discharge target above 45% cannot be set. A hold is a 0 W charge slot.
 - One batched `iotSet` per change; a partial accept is never cached; overlapping writes fail with error 300004. The one-hour rolling hold slot is deliberate.
 - HC-HY-SL-*-G2 is missing from the `devModel` table, so it always takes the fallback.
+- Battery health (SoH, full-charge capacity) is only on the `/gateway/platform/` `bmsInfo/queryAllList` and `bmsInfo/queryBatteryDataDivisions` endpoints, which need an AES-encrypted body: plain JSON gets HTTP 403 code 433 "Json Request Forbidden Under Crypto Mode On". `bmsDesignCap` is the design figure, so for "is my battery smaller than rated" run `hanchu.py --battery-health` (`read_battery_health()`, `encrypt_payload()`; PR #5715, verified live 2026-10-24).
+- Those battery endpoints answer 403 "Permission Denied" until the account has signed into the Hanchu web portal once; one sign-in unlocks them for good (PR #5715).
+- `station/detail` (UPTON's way to list packs) answers code 100 "This API has been deprecated."; name packs with `--battery-serial` instead (PR #5715).
 
 ### Growatt Cloud OpenAPI (`growatt.py`, `growatt_const.py`)
 
