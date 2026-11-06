@@ -196,6 +196,11 @@ COMPONENT_LIST = {
                 "default": True,
                 "config": "ge_cloud_inverter_control",
             },
+            "poll_settings": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_poll_settings",
+            },
         },
         # ge_cloud_direct monitors the inverter (and EV charger), ge_cloud_evc_direct the EV charger alone
         "required_or": ["ge_cloud_direct", "evc_direct"],

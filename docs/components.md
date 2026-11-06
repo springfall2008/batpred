@@ -532,10 +532,38 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `automatic_evc` | Boolean | No | false | `ge_cloud_automatic_evc` | Set to `true` to wire your GivEnergy EV chargers into `car_charging_energy`, `car_charging_planned`, `car_charging_plugged` and `num_cars` — see [EV chargers](#ev-chargers-gecloud). Separate from `ge_cloud_automatic` because it registers a car |
 | `evc_control` | Boolean | No | false | `ge_cloud_evc_control` | Set to `true` to let Predbat start and stop your EV charger from its car charging plan — see [Charger control](#charger-control-gecloud). Needs `ge_cloud_automatic_evc` |
 | `inverter_control` | Boolean | No | true | `ge_cloud_inverter_control` | Set to `false` to monitor the inverter without Predbat controlling it — see [Monitoring and control](#monitoring-and-control-gecloud). Predbat writes no default settings and `ge_cloud_automatic` is ignored; changes you make to the `_gecloud_` entities are still sent |
+| `poll_settings` | Boolean | No | false | `ge_cloud_poll_settings` | Set to `true` to read every inverter register every 10 minutes. Off, the registers Predbat controls are read at startup and every 12 hours (and again on leaving read only mode, or after a control failure at most every 4 hours), and the rest only when there is no stored copy from the last 7 days — see [Register reads](#register-reads-gecloud) |
 | `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
+
+#### Register reads (gecloud)
+
+GivEnergy limits how many API calls an account can make each month, and the GE Cloud API reads an inverter's settings one
+register at a time, so reading them all every 10 minutes used to be most of Predbat's calls. Predbat now reads them by what
+they are for, for every device including an EMS or Gateway:
+
+- **Control registers** — the ones Predbat drives, named in `apps.yaml` by `ge_cloud_automatic` or by hand, plus the AC
+  charge gate it turns back on while force charging and, under an EMS, the battery inverters' slot 1 windows it watches.
+  These are read at startup and every 12 hours.
+- **All other registers** — read only when there is no full read in storage from the last 7 days, and straight away for
+  a device the hourly device check has just found.
+- **Straight away** — the control registers are read again when Predbat leaves read only mode, and when a
+  [control failure](output-data.md#control-failure-data) shows the inverter is not doing what Predbat asked (at most once every 4 hours).
+
+Predbat keeps its copy of each register up to date when it writes one, so its own changes need no re-read. A change made
+elsewhere, such as in the GivEnergy app, can take up to 12 hours to be seen (7 days for a register Predbat does not control).
+Set `ge_cloud_poll_settings: true` to go back to reading every register every 10 minutes.
+
+Eco mode is left on during a force export for an inverter GE Cloud reports as discharging at full power in eco mode (its
+`full-power-discharge-in-eco-mode` flag): `ge_cloud_automatic` gives it no `inverter_mode`, so Predbat never turns eco off and
+an export costs no eco writes. Predbat turns eco back on if it finds it off, at startup, once a day and on leaving read only mode.
+Other inverters still have eco turned off for an export.
+
+The live data is budgeted the same way: the inverter status (power flows, SoC), meter totals and EV charger data are polled
+every 5 minutes, in step with Predbat's 5 minute plan, and the device info (battery size, charge rate, model and battery
+health) at startup, whenever the hardware changes, and otherwise once a day.
 
 #### Site export limits (gecloud)
 

@@ -834,8 +834,11 @@ class Execute:
                 # Avoid adjust avoid start time forward when it's already started
                 if (inverter.discharge_start_time_minutes <= self.minutes_now) and (self.minutes_now >= minutes_start):
                     minutes_start = inverter.discharge_start_time_minutes
-                    # Don't allow overlap with charge window
-                    if minutes_start < inverter.charge_end_time_minutes and minutes_end >= inverter.charge_start_time_minutes:
+                    # Don't allow overlap with charge window. An empty charge window (start == end) holds nothing to
+                    # overlap, and one starting just as the export ends only touches it; counting either as an overlap
+                    # rewrote the start to "now" on every cycle of the export, a register write each time.
+                    charge_window_set = inverter.charge_end_time_minutes > inverter.charge_start_time_minutes
+                    if charge_window_set and minutes_start < inverter.charge_end_time_minutes and minutes_end > inverter.charge_start_time_minutes:
                         minutes_start = max(window["start"], self.minutes_now)
                     else:
                         self.log(
