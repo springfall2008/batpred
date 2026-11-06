@@ -63,6 +63,7 @@ from utils import (
 )
 from config import INVERTER_DEF
 from prediction import Prediction
+from predheat_shadow import clear_joint_heating_shadow, prepare_joint_heating_shadow
 from prediction_batch import export_end_soc_from_series, prediction_cache_key
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
@@ -2263,6 +2264,19 @@ class Plan:
             pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
             pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if self.metric_cloud_coverage else None, flip=True)
             pv_forecast_minute90_step = self.step_data_history(self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
+
+        # The opt-in joint preview uses the same prepared scenarios as battery
+        # planning. Live execution keeps native thermostat demand until a host
+        # explicitly adopts and implements a coordinated heating schedule.
+        if self.args.get("predheat", {}).get("joint_planning", False):
+            load_minutes_step, load_minutes_step10, load_minutes_step90 = prepare_joint_heating_shadow(
+                self,
+                (load_minutes_step, load_minutes_step10, load_minutes_step90),
+                (pv_forecast_minute_step, pv_forecast_minute10_step, pv_forecast_minute90_step),
+                evaluate=recompute and publish,
+            )
+        elif publish and getattr(self, "joint_heating_plan", {}).get("state") not in (None, "disabled"):
+            clear_joint_heating_shadow(self, "disabled")
 
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
