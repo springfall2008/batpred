@@ -255,7 +255,7 @@ def _test_yesterday_json_has_billing(my_predbat, failed):
 
 
 def _test_import_only_when_export_leg_missing(my_predbat, failed):
-    """With an export meter whose billing can't be read, the read counts as failed: no billing is shown rather than an import-only comparison."""
+    """With an export meter whose billing can't be read, no net comparison is made: the row shows its import flagged as waiting for export, with no Diff or summary."""
     print("history_days: import-only when the export leg failed")
     _yesterday_billing(my_predbat, {"import": True, "export": False})
     try:
@@ -263,12 +263,48 @@ def _test_import_only_when_export_leg_missing(my_predbat, failed):
         plan_without = _run_yesterday_with_rows(my_predbat, missing=(".cost_today_import",))
     finally:
         my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
-    if "billing_summary" in plan:
-        print("ERROR: with an export meter whose billing failed to read, rows without export billing should show none, got {}".format(plan.get("billing_summary")))
+    row = (plan.get("rows") or [{}])[0]
+    if "billing_summary" in plan or row.get("billed") != 0.1 or row.get("billing_diff") is not None or row.get("billing_pending_export") is not True:
+        print("ERROR: with an export meter whose billing failed to read, the row should show its import flagged as waiting for export, with no Diff or summary, got {} / {}".format(row, plan.get("billing_summary")))
         failed = True
     if "billing_summary" in plan_without:
         print("ERROR: import-only with no cost_today_import history should show no billing, got {}".format(plan_without.get("billing_summary")))
         failed = True
+    return failed
+
+
+def _test_yesterday_rebuilds_on_new_billing(my_predbat, failed):
+    """Within one slot the yesterday + today view is built once, unless new billing arrives, which rebuilds it straight away."""
+    print("history_days: yesterday view rebuilds when new billing arrives")
+    now_utc = _setup_base(my_predbat, minutes_now=360)
+    captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc)
+    my_predbat.get_history_wrapper = _history_mock(my_predbat, now_utc)
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", {"rows": [{"slot_minute": 600, "cost_change": 0.0}]})
+    my_predbat.yesterday_billing_mark = None
+    builds = []
+    my_predbat.replay_history_day = lambda *a, **kw: builds.append(1) or ("", {"rows": [{"slot_minute": 600, "cost_change": 0.0}]})
+    try:
+        my_predbat.calculate_yesterday()
+        my_predbat.calculate_yesterday()
+        if len(builds) != 1:
+            print("ERROR: a second run in the same slot with no new billing should not rebuild, built {} times".format(len(builds)))
+            failed = True
+        _yesterday_billing(my_predbat, {"import": True, "export": None})
+        my_predbat.calculate_yesterday()
+        if len(builds) != 2:
+            print("ERROR: billing arriving should rebuild the yesterday view within the slot, built {} times".format(len(builds)))
+            failed = True
+        my_predbat.calculate_yesterday()
+        if len(builds) != 2:
+            print("ERROR: the same billing again should not rebuild, built {} times".format(len(builds)))
+            failed = True
+    finally:
+        del my_predbat.replay_history_day
+        my_predbat.dashboard_item("sensor." + my_predbat.prefix + "_billing", state=None, attributes={})
+        _restore_methods(my_predbat, original_run_pred)
+        my_predbat.savings_last_updated = None
+        my_predbat.yesterday_billing_mark = None
     return failed
 
 
@@ -646,8 +682,8 @@ def _test_older_days_mark_recorded_events(my_predbat, failed):
         "2026-10-31": ([("17:30", "Saving event"), ("18:00", "Saving event")], ["Saving event"]),
         "2026-10-30": ([("13:00", "Free electricity"), ("13:30", "Free electricity")], ["Free electricity"]),
         "2026-10-29": ([("16:00", "Axle event")], ["Axle event"]),
-        # Not billed, so no row carries the label, but the picker still flags the day
-        "2026-10-28": ([], ["Saving event"]),
+        # Not billed, but the Billed column still shows (empty) on a view with billing, so the row carries the label and the picker flags the day
+        "2026-10-28": ([("10:00", "Saving event")], ["Saving event"]),
     }
     for day, (rows, labels) in expected.items():
         if _marked(day) != rows or (days.get(day) or {}).get("history_events") != labels:
@@ -757,6 +793,7 @@ def run_history_days_tests(my_predbat):
     failed = _test_history_days_rates_from_history(my_predbat, failed)
     failed = _test_yesterday_json_has_billing(my_predbat, failed)
     failed = _test_import_only_when_export_leg_missing(my_predbat, failed)
+    failed = _test_yesterday_rebuilds_on_new_billing(my_predbat, failed)
     failed = _test_history_days_real_replay(my_predbat, failed)
     failed = _test_history_row_costs_strip_next_day_standing(my_predbat, failed)
     failed = _test_clock_change_older_days(my_predbat, failed)

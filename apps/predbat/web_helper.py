@@ -7428,6 +7428,10 @@ def get_plan_renderer_js():
                     if (row.billed !== null && row.billed !== undefined) {
                         billedStr = `${Math.round(row.billed * 100)} ${minor}`;
                         billedTitle = Object.entries(row.billed_buckets || {}).map(([label, bucket]) => `${label}: ${bucket.kwh} kWh ${Math.round(bucket.cost * 100)}${minor}`).join('\\n');
+                        if (row.billing_pending_export) {
+                            // Import billed, export not published yet: the import charge alone, so no Diff
+                            billedStr += ` <span style="font-size: 11px;" title="Import only: the export for this slot hasn't been billed yet, so there is no Diff">(import, export not billed yet)</span>`;
+                        }
                     }
                     if (row.billing_event) {
                         billedStr += ` <span style="font-size: 11px;" title="${escapeAttr(row.billing_event + ' in this slot: the bill may not show it the way Predbat priced it')}">(${row.billing_event})</span>`;
@@ -8162,7 +8166,8 @@ def get_plan_renderer_js():
         html += tile('Export kWh', kwh(summary.export_kwh));
         html += tile('Standing charge', `${money(summary.standing_predbat)} vs ${money(summary.standing_billed)}`);
         html += '</div>';
-        const notes = [complete, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
+        const pending = summary.export_pending_slots > 0 ? `${summary.export_pending_slots} slot${summary.export_pending_slots === 1 ? '' : 's'} billed for import only (export not billed yet), left out of these totals` : '';
+        const notes = [complete, pending, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
         html += `<p style="font-size: 12px; margin: 0 0 8px 0; opacity: 0.8;">${notes.join(' &middot; ')}</p>`;
         return html;
     }

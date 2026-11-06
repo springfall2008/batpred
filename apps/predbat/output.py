@@ -3468,8 +3468,11 @@ class Output:
         # slots since it in neither view. Each rebuild takes under a second, and it waits one run past the boundary
         # (see history_slot) so the boundary run's own writes are recorded. A day rolling over rebuilds straight away,
         # on the midnight re-plan, so the *_yesterday sensors move on to the day just ended without waiting a re-plan.
-        if self.savings_last_updated and self.savings_last_updated.date() == self.now_utc.date() and self.history_slot(self.savings_last_updated) == self.history_slot(self.now_utc):
+        # New billing (any half-hour arriving, import or export) rebuilds it too, so the Billed column fills in without waiting for the slot
+        billing_mark = self.history_billing_mark(self.history_billing())
+        if self.savings_last_updated and self.savings_last_updated.date() == self.now_utc.date() and self.history_slot(self.savings_last_updated) == self.history_slot(self.now_utc) and billing_mark == self.yesterday_billing_mark:
             return
+        self.yesterday_billing_mark = billing_mark
 
         # Everything below is anchored on yesterday's recorded cost, so fetch that before doing any of
         # the expensive work - when Home Assistant isn't recording predbat.cost_today there is nothing
@@ -4148,6 +4151,13 @@ class Output:
             "supplier": self.get_state_wrapper(entity_id=entity, attribute="supplier", default=None),
         }
 
+    @staticmethod
+    def history_billing_mark(billing):
+        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included; None without billing."""
+        slots = (billing or {}).get("slots") or {}
+        mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] for leg in ("import", "export")]
+        return mark if mark[0][0] else None
+
     def history_minute_data(self, suffix, days):
         """Read a Predbat entity's recorded state history as minute data keyed by minutes ago, or None when there is none.
 
@@ -4305,7 +4315,8 @@ class Output:
         cost_data and import_cost_data are the recorded cost_today / cost_today_import histories (minute data
         keyed by minutes ago). With no export meter being read, Billed is import-only and is compared with
         Predbat's import cost rather than its net cost, which counts export earnings the bill would not. With an
-        export meter, rows whose export billing hasn't arrived (or failed to read) show none. Without the history
+        export meter, a row whose export billing hasn't arrived (or failed to read) shows its import charge, flagged as
+        waiting for export, with no Diff and left out of the summary. Without the history
         it needs nothing is shown.
         """
         import_only = (billing.get("legs") or {}).get("export") is None
@@ -4341,9 +4352,7 @@ class Output:
         """
         today = self.now_utc.astimezone(self.local_tz).date()
         billing = self.history_billing()
-        # Any half-hour arriving, a late one filling a gap included, changes the mark
-        import_slots = (billing or {}).get("slots", {}).get("import") or {}
-        billing_mark = [len(import_slots), max(import_slots)] if import_slots else None
+        billing_mark = self.history_billing_mark(billing)
         retry_due = self.history_days_retry_at is not None and self.now_utc >= self.history_days_retry_at
         if self.history_days_built_for == today and self.history_days_billing_mark == billing_mark and not retry_due:
             return
