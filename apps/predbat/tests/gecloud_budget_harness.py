@@ -1,0 +1,218 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+
+"""
+GE Cloud API budget harness: one simulated day of a GE Cloud inverter, counting every API call.
+
+GivEnergy is introducing a monthly API call limit, so this measures what Predbat really spends. A real
+PredBat and a real GECloudDirect run against FakeGECloud (tests/gecloud_fake_cloud.py) on a simulated
+clock. gecloud cold-starts and ge_cloud_automatic wires the inverter, a random scenario is planned once
+at midnight, and the plan is then advanced 5 minutes at a time - gecloud's own loop each minute, then
+fetch, calculate_plan(recompute=False) and execute_plan - with execute's writes reaching gecloud through
+the same HA service events a real install uses.
+"""
+
+import contextlib
+import copy
+from unittest.mock import patch
+
+from gecloud import GECloudDirect
+from inverter import Inverter
+from tests.gecloud_fake_cloud import CALL_CONTEXT, FakeGECloud
+from tests.test_infra import TestHAInterface, reset_inverter, run_async
+from tests.test_random_scenarios import RANDOM_TEMPLATE, apply_scenario_to_predbat
+
+# Inverter entity args the GivTCP template carries. async_automatic_config sets most of them again, but
+# any it leaves alone would point execute at a mock entity whose writes never reach the fake cloud.
+TEMPLATE_INVERTER_ARGS = [
+    "battery_power",
+    "battery_rate_max",
+    "battery_scaling",
+    "battery_temperature",
+    "battery_temperature_history",
+    "charge_end_time",
+    "charge_limit",
+    "charge_limit_enable",
+    "charge_rate",
+    "charge_rate_percent",
+    "charge_start_time",
+    "discharge_end_time",
+    "discharge_rate",
+    "discharge_rate_percent",
+    "discharge_start_time",
+    "discharge_target_soc",
+    "export_today",
+    "grid_power",
+    "idle_end_time",
+    "idle_start_time",
+    "import_today",
+    "inverter_limit",
+    "inverter_mode",
+    "inverter_time",
+    "load_power",
+    "load_today",
+    "pause_end_time",
+    "pause_mode",
+    "pause_start_time",
+    "pv_power",
+    "pv_today",
+    "reserve",
+    "scheduled_charge_enable",
+    "scheduled_discharge_enable",
+    "soc_kw",
+    "soc_max",
+    "soc_percent",
+]
+
+# The HA services execute uses on an inverter entity, and the gecloud handler each one reaches
+ROUTED_SERVICES = {
+    "switch/turn_on": "switch",
+    "switch/turn_off": "switch",
+    "switch/toggle": "switch",
+    "number/set_value": "number",
+    "select/select_option": "select",
+}
+
+
+async def no_sleep(*args, **kwargs):
+    """Stand-in for asyncio.sleep: gecloud's retry back-off and sweep pacing cost no wall-clock time."""
+    return None
+
+
+class HarnessGECloud(GECloudDirect):
+    """The real GECloudDirect, on the harness's simulated clock."""
+
+    sim_now = None
+
+    @property
+    def now_utc_exact(self):
+        """The simulated time, in place of the wall clock."""
+        return self.sim_now
+
+
+class HarnessHAInterface(TestHAInterface):
+    """TestHAInterface that delivers service calls on gecloud entities to gecloud's event handlers, as HA would."""
+
+    gecloud = None
+
+    def call_service(self, service, **kwargs):
+        """Route an inverter write on a gecloud entity to gecloud, labelling the calls it makes; anything else as before."""
+        entity_id = kwargs.get("entity_id", None)
+        domain = service.split("/")[0]
+        if self.gecloud and service in ROUTED_SERVICES and isinstance(entity_id, str) and entity_id.startswith("{}.{}_gecloud_".format(domain, self.gecloud.prefix)):
+            old = self.dummy_items.get(entity_id, None)
+            if isinstance(old, dict):
+                old = old.get("state", None)
+            if domain == "switch":
+                new = service.split("/")[1]
+                coroutine = self.gecloud.switch_event(entity_id, new)
+            elif domain == "number":
+                new = kwargs.get("value", None)
+                coroutine = self.gecloud.number_event(entity_id, new)
+            else:
+                new = kwargs.get("option", None)
+                coroutine = self.gecloud.select_event(entity_id, new)
+            token = CALL_CONTEXT.set("execute {} {}->{}".format(entity_id, old, new))
+            try:
+                run_async(coroutine)
+            finally:
+                CALL_CONTEXT.reset(token)
+            return True
+        return super().call_service(service, **kwargs)
+
+
+def reset_config_to_defaults(my_predbat):
+    """Put every setting back to its default, so the simulated user is a default GE Cloud user and not the template's."""
+    for item in my_predbat.CONFIG_ITEMS:
+        if "default" in item:
+            my_predbat.expose_config(item["name"], item["default"])
+    my_predbat.fetch_config_options()
+
+
+class GECloudBudgetHarness:
+    """One scenario's simulated day against the fake GE Cloud."""
+
+    def __init__(self, scenario, template_path=RANDOM_TEMPLATE):
+        """scenario is one entry from load_scenarios(); template_path is the debug dump the random scenarios build on."""
+        self.scenario = scenario
+        self.template_path = template_path
+        self.my_predbat = None
+        self.gecloud = None
+        self.fake = None
+        self.midnight = None
+        self.startup_calls = []
+
+    def sim_time(self, minute):
+        """The simulated time minute minutes after the day's midnight."""
+        from datetime import timedelta
+
+        return self.midnight + timedelta(minutes=minute)
+
+    @contextlib.contextmanager
+    def patched(self):
+        """Route aiohttp to the fake cloud and take every sleep out, for as long as the block runs."""
+        with patch("aiohttp.ClientSession", self.fake.session_factory()), patch("asyncio.sleep", no_sleep), patch.object(Inverter, "sleep", lambda inverter, seconds: None):
+            yield
+
+    def startup(self):
+        """Build Predbat and gecloud, cold-start gecloud against the fake, then plan and execute once at midnight."""
+        # Imported here: unit_test imports this module's tests, so a module level import would be circular
+        from unit_test import create_predbat
+
+        my_predbat = create_predbat()
+        ha_interface = HarnessHAInterface()
+        ha_interface.dummy_items = my_predbat.ha_interface.dummy_items
+        ha_interface.history = getattr(my_predbat.ha_interface, "history", None)
+        ha_interface.base = my_predbat
+        my_predbat.ha_interface = ha_interface
+        reset_inverter(my_predbat)
+        my_predbat.read_debug_yaml(self.template_path)
+        my_predbat.config_root = "./"
+        my_predbat.save_restore_dir = "./"
+        reset_config_to_defaults(my_predbat)
+        for arg in TEMPLATE_INVERTER_ARGS:
+            my_predbat.args.pop(arg, None)
+        for arg in [arg for arg, value in my_predbat.args.items() if "givtcp" in str(value) or "predbat_GE_0" in str(value)]:
+            del my_predbat.args[arg]
+        self.my_predbat = my_predbat
+        # Predbat's own clock follows the simulated one too, or the inverter clock check sees a skew of years
+        self.midnight = my_predbat.midnight_utc
+        my_predbat.update_time(print=False, now=self.midnight)
+
+        battery = self.scenario["params"]["battery"]
+        self.fake = FakeGECloud(battery_kwh=battery["soc_max_kwh"], rate_w=int(battery["rate_max_charge_kw"] * 1000), clock=lambda: self.gecloud.sim_now)
+        self.fake.scenario_id = self.scenario["id"]
+        self.fake.soc_percent = battery["initial_soc_percent"]
+        self.gecloud = HarnessGECloud(my_predbat, ge_cloud_direct=True, api_key="harness-key", automatic=True)
+        self.gecloud.sim_now = self.midnight
+        ha_interface.gecloud = self.gecloud
+
+        with self.patched():
+            token = CALL_CONTEXT.set("startup")
+            try:
+                run_async(self.gecloud.run(0, True))
+            finally:
+                CALL_CONTEXT.reset(token)
+            self.startup_calls = list(self.fake.calls)
+            self.fake.calls.clear()
+
+            my_predbat.inverters = []
+            my_predbat.fetch_inverter_data()
+
+            scenario = copy.deepcopy(self.scenario)
+            scenario["params"]["clock"] = {"minutes_now": 0}
+            apply_scenario_to_predbat(my_predbat, scenario)
+            my_predbat.args["threads"] = 0
+            my_predbat.calculate_plan(recompute=True)
+            token = CALL_CONTEXT.set("execute 00:00")
+            try:
+                my_predbat.execute_plan()
+            finally:
+                CALL_CONTEXT.reset(token)

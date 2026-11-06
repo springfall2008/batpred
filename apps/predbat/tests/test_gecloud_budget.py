@@ -18,9 +18,14 @@ code that made it, and drives the real execute -> gecloud path rather than a sho
 
 from datetime import datetime, timedelta, timezone
 
+from config import CONFIG_ITEMS
 from gecloud import GE_API_URL, regname_to_ha
+from tests.gecloud_budget_harness import TEMPLATE_INVERTER_ARGS, GECloudBudgetHarness
 from tests.gecloud_fake_cloud import CALL_CONTEXT, CAPTURED_REGISTERS, HARNESS_SERIAL, HARNESS_SITE_ID, FakeGECloud
 from tests.test_infra import run_async
+from tests.test_random_scenarios import RANDOM_SCENARIOS, load_scenarios
+
+GECLOUD_ENTITY_STEM = "predbat_gecloud_{}".format(HARNESS_SERIAL.lower())
 
 
 def _fake(soc_percent=50.0):
@@ -144,6 +149,72 @@ def test_device_info_vs_device_list_category():
     return failed
 
 
+def test_startup_finds_device(harness):
+    """Start-up finds the one inverter in polling mode and makes the cold-start calls, kept apart from the day."""
+    failed = False
+    failed |= _expect(harness.gecloud.device_list == [HARNESS_SERIAL.lower()], "device list was {}".format(harness.gecloud.device_list))
+    failed |= _expect(harness.gecloud.polling_mode is True, "polling_mode was {}".format(harness.gecloud.polling_mode))
+    categories = {call.category for call in harness.startup_calls}
+    for wanted in ("account", "device_list", "register_list", "register_read"):
+        failed |= _expect(wanted in categories, "start-up made no {} call, made {}".format(wanted, sorted(categories)))
+    failed |= _expect(all(call.context == "startup" for call in harness.startup_calls), "a start-up call is not labelled startup")
+    return failed
+
+
+def test_inverter_args_point_at_gecloud(harness):
+    """No inverter entity arg is left pointing at the GivTCP template's entities, so every write goes to the fake."""
+    failed = False
+    args = harness.my_predbat.args
+    for arg in TEMPLATE_INVERTER_ARGS:
+        if arg not in args:
+            continue
+        values = args[arg] if isinstance(args[arg], list) else [args[arg]]
+        for value in values:
+            # Predbat's own emulated entities (sensor.predbat_GEC_0_idle_start_time and the like) cost no API calls
+            if isinstance(value, str) and "." in value and not value.startswith("sensor.predbat_"):
+                failed |= _expect(GECLOUD_ENTITY_STEM in value, "arg {} still points at {}".format(arg, value))
+    leftovers = [arg for arg, value in args.items() if "givtcp" in str(value)]
+    failed |= _expect(not leftovers, "args still mention givtcp: {}".format(leftovers))
+    failed |= _expect(harness.my_predbat.inverters[0].inverter_type == "GEC", "inverter type was {}".format(harness.my_predbat.inverters[0].inverter_type))
+    return failed
+
+
+def test_config_defaults(harness):
+    """The simulated user has the default settings, not the template user's."""
+    default = next(item["default"] for item in CONFIG_ITEMS if item["name"] == "set_charge_low_power")
+    value = harness.my_predbat.get_arg("set_charge_low_power")
+    return _expect(value == default, "set_charge_low_power was {}, default {}".format(value, default))
+
+
+def test_inverter_reads_fake_soc(harness):
+    """The inverter takes its SOC from what gecloud polled from the fake."""
+    harness.fake.soc_percent = 37
+    with harness.patched():
+        run_async(harness.gecloud.run(120, False))
+        harness.my_predbat.fetch_inverter_data()
+    percent = round(harness.my_predbat.soc_kw / harness.my_predbat.soc_max * 100)
+    return _expect(percent == 37, "inverter SOC was {}%".format(percent))
+
+
+def test_execute_write_reaches_fake(harness):
+    """A charge window change from the inverter layer travels HA event -> gecloud -> HTTP, and read-back costs no call."""
+    failed = False
+    my_predbat = harness.my_predbat
+    harness.fake.calls.clear()
+    start = harness.sim_time(3 * 60 + 30)
+    end = harness.sim_time(4 * 60 + 30)
+    with harness.patched():
+        my_predbat.inverters[0].adjust_charge_window(start, end, my_predbat.minutes_now)
+    writes = [call for call in harness.fake.calls if call.category == "register_write" and call.setting_name == "AC Charge 1 Start Time"]
+    failed |= _expect(len(writes) >= 1, "no write reached AC Charge 1 Start Time; calls were {}".format([(call.category, call.setting_name) for call in harness.fake.calls]))
+    for call in writes:
+        failed |= _expect(call.context.startswith("execute select.{}_ac_charge_1_start_time".format(GECLOUD_ENTITY_STEM)), "write context was {}".format(call.context))
+        failed |= _expect("select_event" in call.caller, "write caller was {}".format(call.caller))
+    reads = [call for call in harness.fake.calls if call.category == "register_read"]
+    failed |= _expect(not reads, "write read-back cost {} API reads".format(len(reads)))
+    return failed
+
+
 def run_gecloud_budget_harness_tests(my_predbat):
     """Unit tests for the GE Cloud API budget harness. Returns True on failure."""
     print("**** Running GE Cloud API budget harness tests ****")
@@ -158,6 +229,21 @@ def run_gecloud_budget_harness_tests(my_predbat):
         test_device_info_vs_device_list_category,
     ):
         if test():
+            print("ERROR: {} failed".format(test.__name__))
+            failed = True
+
+    # One harness start-up shared by the start-up tests: it loads the scenario template and plans once
+    scenario = [item for item in load_scenarios(RANDOM_SCENARIOS) if item["id"] == 0][0]
+    harness = GECloudBudgetHarness(scenario)
+    harness.startup()
+    for test in (
+        test_startup_finds_device,
+        test_inverter_args_point_at_gecloud,
+        test_config_defaults,
+        test_inverter_reads_fake_soc,
+        test_execute_write_reaches_fake,
+    ):
+        if test(harness):
             print("ERROR: {} failed".format(test.__name__))
             failed = True
     return failed
