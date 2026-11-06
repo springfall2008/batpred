@@ -86,6 +86,7 @@ from sunsynk_const import (
     SUNSYNK_EQUIP_MODE_FIELD,
     SUNSYNK_PARALLEL_FIELD,
     SUNSYNK_BMS_CURRENT_FIELD,
+    SUNSYNK_BMS_VOLT_FIELD,
     SUNSYNK_BMS_LINK_FIELDS,
     SUNSYNK_PARALLEL_SUMMED_POWER,
     SUNSYNK_PARALLEL_SUMMED_ENERGY,
@@ -632,6 +633,24 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """Return True when the unit reports its own battery-management link (a non-zero bmsVolt or bmsSoc)."""
         values = self.device_values.get(sn, {})
         return any(self._as_float(values.get(field)) > 0 for field in SUNSYNK_BMS_LINK_FIELDS)
+
+    def battery_power_bms(self, sn):
+        """Return the battery power the BMS itself measures, -bmsCurrent x bmsVolt in W, or None without a BMS link.
+
+        This is what find_battery_size() integrates (bound as battery_size_power), not battery_power.
+        The battery endpoint's "power" is the inverter's own current x voltage, and that current
+        reads 7.3% above bmsCurrent on two real installs, part of why the estimate from "power" ran 11% high.
+        The BMS counts SoC with its own current, so integrating that against SoC gives the size the
+        SoC percentages are actually a share of. It is not used as battery_power because bmsCurrent
+        is whole amps - fine for the sustained charges the estimator looks at, coarse at idle.
+        Negated like the parallel group's battery power: bmsCurrent is positive while charging.
+        """
+        values = self.device_values.get(sn, {})
+        current = values.get(SUNSYNK_BMS_CURRENT_FIELD)
+        volts = self._as_float(values.get(SUNSYNK_BMS_VOLT_FIELD))
+        if not self._has_bms_link(sn) or current is None or volts <= 0:
+            return None
+        return round(-self._as_float(current) * volts)
 
     def _warn_parallel_once(self, key, message):
         """Log a parallel-group warning the first time its condition is seen."""
@@ -1356,6 +1375,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 if leaf in values:
                     self.dashboard_item(self._sensor_name(sn, leaf), state=values[leaf], attributes={"unit_of_measurement": unit, "friendly_name": f"Sunsynk {sn} {leaf.replace('_', ' ').title()}"}, app="sunsynk")
 
+            bms_power = self.battery_power_bms(sn)
+            if bms_power is not None:
+                self.dashboard_item(self._sensor_name(sn, "battery_power_bms"), state=bms_power, attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Battery Power (BMS)"}, app="sunsynk")
+
             # Ratings are published only when actually derivable. An arg pointing at a
             # sensor that never appears is worse than an absent arg, which the user can
             # fill in via apps.yaml.
@@ -1831,10 +1854,21 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             else:
                 self.log(f"Warn: Sunsynk not every inverter reports {leaf}, it must be set manually in apps.yaml")
 
+        # The capacity is bound as soc_max_fallback, never as soc_max. Sunsynk's "capacity" is the
+        # inverter's Batt Capacity setting (batteryCap, Ah) - typed in at commissioning, not measured -
+        # and a real ~280Ah bank set to 150Ah was planned at about half its size. Bound as soc_max it also
+        # replaced any apps.yaml soc_max, and became the nominal whose 0.65-1.20 plausibility band made
+        # find_battery_size() reject every real charge as capacity_too_high, so nothing could correct
+        # it. As soc_max_fallback it is planned with only until Predbat's own estimate is ready, and an
+        # apps.yaml soc_max wins outright.
         if all(self.battery_capacity(sn) > 0 for sn in driven):
-            self.set_arg_auto("soc_max", [self._sensor_name(sn, "battery_capacity") for sn in devices])
+            self.set_arg_auto("soc_max_fallback", [self._sensor_name(sn, "battery_capacity") for sn in devices], overwrite=False)
         else:
-            self.log("Warn: Sunsynk no battery capacity available for every inverter, soc_max must be set manually in apps.yaml")
+            self.log("Warn: Sunsynk no battery capacity available for every inverter, Predbat will estimate the battery size from charge history - set soc_max manually in apps.yaml to use a known size")
+        # The estimate is made from the BMS's own power, see battery_power_bms(). overwrite=False
+        # because the estimator reads this sensor's history.
+        if all(self.battery_power_bms(sn) is not None for sn in driven):
+            self.set_arg_auto("battery_size_power", [self._sensor_name(sn, "battery_power_bms") for sn in devices], overwrite=False)
         if all(self.battery_rate_max(sn) > 0 for sn in driven):
             self.set_arg_auto("battery_rate_max", [self._sensor_name(sn, "battery_rate_max") for sn in devices])
         else:
@@ -1880,7 +1914,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         soc_max is deliberately NOT a rating: Sunsynk reports amp-hours, and battery_capacity() turns
         them into kWh with a pack voltage Predbat infers from chargeVolt or the user sets
         (sunsynk_battery_nominal_voltage). A derived or user-overridden figure is an entity only (D14),
-        so soc_max appears in entities, bound to the battery_capacity sensor. The Ah the battery
+        so soc_max_fallback appears in entities, bound to the battery_capacity sensor - soc_max itself is
+        never bound, see automatic_config(). The Ah the battery
         endpoint returned is reported as the descriptive battery_capacity_ah. That endpoint is re-read
         every poll and can omit the field, so the last Ah seen is kept (_discovery_battery_ratings)
         rather than thinning the report on a partial poll; nothing is reported for an inverter whose
@@ -1925,7 +1960,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """
         seen = self._discovery_sensors.setdefault(sn, set())
         candidates = {
-            "soc_max": ("battery_capacity", "kWh", self.battery_capacity(sn) > 0),
+            "soc_max_fallback": ("battery_capacity", "kWh", self.battery_capacity(sn) > 0),
+            "battery_size_power": ("battery_power_bms", "W", self.battery_power_bms(sn) is not None),
             "battery_rate_max": ("battery_rate_max", "W", self.battery_rate_max(sn) > 0),
             "inverter_limit": ("inverter_limit", "W", self.inverter_limit(sn) > 0),
             # This sensor's state is export_limit(), the lower of pvMaxLimit and the rating - that is the

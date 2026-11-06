@@ -1817,6 +1817,169 @@ def test_battery_size_tracking_fallback_non_sticky(my_predbat):
     return failed
 
 
+def test_battery_size_tracking_soc_max_fallback(my_predbat):
+    """
+    With soc_max unset and no estimate yet, soc_max_fallback is planned with instead of the 8 kWh
+    default, and battery_scaling_auto is still enabled so the estimator can replace it.
+    """
+    print("*** Running test: battery_size_tracking_soc_max_fallback ***")
+    failed = False
+    inv = _make_inv_for_scaling(my_predbat, nominal_kwh=0.0)
+    my_predbat.battery_scaling_auto = False
+    my_predbat.args["soc_max_fallback"] = [7.2]
+    # Earlier tests leave a soc_max behind; this one is about a user who never set it
+    saved_soc_max = my_predbat.args.pop("soc_max", None)
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+    inv.find_battery_size = lambda _nc=0: None
+
+    try:
+        inv.battery_size_tracking()
+        if not my_predbat.battery_scaling_auto:
+            print("ERROR: battery_scaling_auto was not enabled when soc_max is unset and only soc_max_fallback is given")
+            failed = True
+        if abs(inv.soc_max - 7.2) > 0.001:
+            print("ERROR: soc_max expected soc_max_fallback 7.2, got {:.3f}".format(inv.soc_max))
+            failed = True
+        if abs(inv.nominal_capacity - 7.2) > 0.001:
+            print("ERROR: nominal_capacity expected 7.2 for this cycle, got {:.3f}".format(inv.nominal_capacity))
+            failed = True
+        if my_predbat.get_arg("soc_max", default=0.0, index=0):
+            print("ERROR: the fallback must not be persisted into soc_max, got {}".format(my_predbat.get_arg("soc_max", default=0.0, index=0)))
+            failed = True
+        if not failed:
+            print("SUCCESS: soc_max_fallback used until an estimate exists")
+    except Exception as e:
+        print("ERROR: test_battery_size_tracking_soc_max_fallback raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.args.pop("soc_max_fallback", None)
+    if saved_soc_max is not None:
+        my_predbat.args["soc_max"] = saved_soc_max
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_size_tracking_estimate_beats_fallback(my_predbat):
+    """
+    Once find_battery_size() has a figure it is used, even when it is far from soc_max_fallback:
+    a bank whose inverter is set to half its Ah reports 7.2 kWh but measures ~14.4 kWh.
+    """
+    print("*** Running test: battery_size_tracking_estimate_beats_fallback ***")
+    failed = False
+    inv = _make_inv_for_scaling(my_predbat, nominal_kwh=0.0)
+    my_predbat.battery_scaling_auto = False
+    my_predbat.args["soc_max_fallback"] = [7.2]
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+    inv.find_battery_size = lambda _nc=0: 14.4
+
+    try:
+        inv.battery_size_tracking()
+        if abs(inv.soc_max - 14.4) > 0.001:
+            print("ERROR: soc_max expected the 14.4 kWh estimate, got {:.3f}".format(inv.soc_max))
+            failed = True
+        else:
+            print("SUCCESS: estimate {:.2f} kWh replaced soc_max_fallback".format(inv.soc_max))
+    except Exception as e:
+        print("ERROR: test_battery_size_tracking_estimate_beats_fallback raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.args.pop("soc_max_fallback", None)
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_find_battery_size_nominal_band_vs_fallback(my_predbat):
+    """
+    A wrongly-reported size bound as soc_max becomes the nominal whose 0.65-1.20 band rejects every
+    real charge, so the estimator can never correct it. Bound as soc_max_fallback (nominal 0) the
+    band is off and the true size is found.
+    """
+    print("*** Running test: find_battery_size_nominal_band_vs_fallback ***")
+    failed = False
+    true_size = 14.4
+    reported_size = 7.2
+    inv = Inverter(my_predbat, 0)
+    inv.battery_rate_max_charge = 2600 / 60000
+    inv.battery_rate_max_discharge = 2600 / 60000
+    inv.soc_max = reported_size
+    inv.battery_scaling = 1.0
+    setup_predbat(my_predbat)
+    create_test_history_data(my_predbat, num_days=2, battery_size_kwh=true_size)
+
+    try:
+        banded = inv.find_battery_size(reported_size)
+        if banded:
+            print("ERROR: with the wrong size as nominal the band should reject every sample, got {}".format(banded))
+            failed = True
+        estimate_no_band = inv.find_battery_size(0)
+        if not estimate_no_band or not (true_size * 0.8 <= estimate_no_band <= true_size * 1.2):
+            print("ERROR: with no nominal the estimate should be near {} kWh, got {}".format(true_size, estimate_no_band))
+            failed = True
+        if not failed:
+            print("SUCCESS: banded estimate rejected, estimate with no band {} kWh".format(estimate_no_band))
+    except Exception as e:
+        print("ERROR: test_find_battery_size_nominal_band_vs_fallback raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    remove_test_history_data(my_predbat)
+    return failed
+
+
+def test_find_battery_size_prefers_battery_size_power(my_predbat):
+    """
+    find_battery_size() integrates battery_size_power when it is set, rather than battery_power.
+    Here battery_power points at a sensor with no history, so an estimate proves the other was read.
+    """
+    print("*** Running test: find_battery_size_prefers_battery_size_power ***")
+    failed = False
+    expected_battery_size = 10.0
+    inv = Inverter(my_predbat, 0)
+    inv.battery_rate_max_charge = 2600 / 60000
+    inv.battery_rate_max_discharge = 2600 / 60000
+    inv.soc_max = expected_battery_size
+    inv.battery_scaling = 1.0
+    setup_predbat(my_predbat)
+    create_test_history_data(my_predbat, num_days=2, battery_size_kwh=expected_battery_size)
+    my_predbat.args["battery_power"] = ["sensor.battery_power_no_history"]
+    my_predbat.args["battery_size_power"] = ["sensor.battery_power"]
+
+    try:
+        estimated_size = inv.find_battery_size(expected_battery_size)
+        if not estimated_size or not (expected_battery_size * 0.8 <= estimated_size <= expected_battery_size * 1.2):
+            print("ERROR: expected an estimate near {} kWh from battery_size_power, got {}".format(expected_battery_size, estimated_size))
+            failed = True
+        my_predbat.args.pop("battery_size_power", None)
+        if inv.find_battery_size(expected_battery_size):
+            print("ERROR: without battery_size_power the estimate should come from battery_power, which has no history here")
+            failed = True
+        if not failed:
+            print("SUCCESS: battery_size_power used for the estimate ({} kWh)".format(estimated_size))
+    except Exception as e:
+        print("ERROR: test_find_battery_size_prefers_battery_size_power raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.args.pop("battery_size_power", None)
+    setup_predbat(my_predbat)
+    remove_test_history_data(my_predbat)
+    return failed
+
+
 def run_find_battery_size_tests(my_predbat):
     """
     Run all find_battery_size tests
@@ -1955,6 +2118,22 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_battery_size_tracking_fallback_non_sticky(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_size_tracking_soc_max_fallback(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_size_tracking_estimate_beats_fallback(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_battery_size_nominal_band_vs_fallback(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_battery_size_prefers_battery_size_power(my_predbat)
     if failed:
         return failed
 
