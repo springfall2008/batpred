@@ -94,31 +94,48 @@ async def no_sleep(*args, **kwargs):
     return None
 
 
+class MemoryStorage:
+    """An in-memory stand-in for the Storage component, so a test can hand gecloud a settings cache."""
+
+    def __init__(self):
+        """Start empty; data is keyed by (module, filename)."""
+        self.data = {}
+
+    async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
+        """Keep a copy of the data."""
+        self.data[(module, filename)] = copy.deepcopy(data)
+        return True
+
+    async def load(self, module, filename):
+        """Return a copy of what was saved, or None."""
+        return copy.deepcopy(self.data.get((module, filename), None))
+
+    async def age(self, module, filename):
+        """Saved data is always fresh by file age; gecloud's own read stamps carry the real age."""
+        return 0 if (module, filename) in self.data else None
+
+
 class HarnessGECloud(GECloudDirect):
-    """The real GECloudDirect, on the harness's simulated clock."""
+    """The real GECloudDirect, on the harness's simulated clock and with an optional test storage."""
 
     sim_now = None
+    test_storage = None
 
     @property
     def now_utc_exact(self):
         """The simulated time, in place of the wall clock."""
         return self.sim_now
 
-    def sweep_reason(self, serial):
-        """Which of run()'s conditions makes it sweep this device's registers - polling_mode is checked first there, so it is named first here."""
-        if self.polling_mode:
-            return "polling_mode (no EMS), every 10 min"
-        if serial == self.ems_device:
-            return "EMS device, every 10 min"
-        if serial == self.gateway_device:
-            return "gateway device, every 10 min"
-        return "first run, new device or hourly slow refresh"
+    @property
+    def storage(self):
+        """The test's storage, if it gave one; otherwise none, as a fresh install without a cache."""
+        return self.test_storage
 
-    async def async_get_inverter_settings(self, serial, first=False, previous=None):
-        """The real sweep, with the reason it ran added to CALL_CONTEXT - the per-register reads run in tasks, which inherit it."""
-        token = CALL_CONTEXT.set("{} | sweep: {}".format(CALL_CONTEXT.get(), self.sweep_reason(serial)))
+    async def read_inverter_settings(self, serial, previous=None, keys=None, first=False):
+        """The real register read, with gecloud's own reason for it added to CALL_CONTEXT - the per-register reads run in tasks, which inherit it."""
+        token = CALL_CONTEXT.set("{} | sweep: {}".format(CALL_CONTEXT.get(), self.settings_read_reason))
         try:
-            return await super().async_get_inverter_settings(serial, first=first, previous=previous)
+            return await super().read_inverter_settings(serial, previous=previous, keys=keys, first=first)
         finally:
             CALL_CONTEXT.reset(token)
 
@@ -177,10 +194,12 @@ class DayResult:
 class GECloudBudgetHarness:
     """One scenario's simulated day against the fake GE Cloud."""
 
-    def __init__(self, scenario, template_path=RANDOM_TEMPLATE):
-        """scenario is one entry from load_scenarios(); template_path is the debug dump the random scenarios build on."""
+    def __init__(self, scenario, template_path=RANDOM_TEMPLATE, storage=None, extra_args=None):
+        """scenario is one entry from load_scenarios(); template_path is the debug dump the random scenarios build on; storage and extra_args (apps.yaml) are optional."""
         self.scenario = scenario
         self.template_path = template_path
+        self.test_storage = storage
+        self.extra_args = extra_args or {}
         self.my_predbat = None
         self.gecloud = None
         self.fake = None
@@ -327,6 +346,7 @@ class GECloudBudgetHarness:
             my_predbat.args.pop(arg, None)
         for arg in [arg for arg, value in my_predbat.args.items() if "givtcp" in str(value) or "predbat_GE_0" in str(value)]:
             del my_predbat.args[arg]
+        my_predbat.args.update(self.extra_args)
         self.my_predbat = my_predbat
         # Predbat's own clock follows the simulated one too, or the inverter clock check sees a skew of years
         self.midnight = my_predbat.midnight_utc
@@ -340,8 +360,10 @@ class GECloudBudgetHarness:
         self.fake = FakeGECloud(battery_kwh=battery["soc_max_kwh"], rate_w=rate_w, clock=lambda: self.gecloud.sim_now)
         self.fake.scenario_id = self.scenario["id"]
         self.fake.soc_percent = battery["initial_soc_percent"]
-        self.gecloud = HarnessGECloud(my_predbat, ge_cloud_direct=True, api_key="harness-key", automatic=True)
+        # The apps.yaml settings components.py would pass to the component
+        self.gecloud = HarnessGECloud(my_predbat, ge_cloud_direct=True, api_key="harness-key", automatic=True, poll_settings=my_predbat.args.get("ge_cloud_poll_settings", False))
         self.gecloud.sim_now = self.midnight
+        self.gecloud.test_storage = self.test_storage
         ha_interface.gecloud = self.gecloud
 
         with self.patched():

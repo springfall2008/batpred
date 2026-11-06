@@ -267,3 +267,32 @@ levers are:
 - the status/meter interval;
 - the hourly device and EV charger refresh (48/day for an account with no charger);
 - the two write patterns above.
+
+## After: register reads by purpose
+
+The first optimisation, in the same PR, measured with the same harness and scenarios. It changes three things:
+
+- `polling_mode` is off by default; `ge_cloud_poll_settings: true` turns it back on.
+- Control registers are read at start-up and every 12 hours. They are worked out from the gecloud entities
+  named in apps.yaml, plus the AC charge gate and, under an EMS, the watched slot 1 windows. On this inverter
+  that is 16 registers.
+- All other registers are read only when there is no full read in storage from the last 7 days.
+
+The control registers are also re-read straight away on leaving read only mode, and after a control failure
+(at most once every 4 hours). EMS and Gateway devices follow the same rules.
+
+| Scenario | Before (calls/day) | After (calls/day) | After (×30) | vs 10k | vs 20k |
+| -------- | -----------------: | ----------------: | ----------: | -----: | -----: |
+| 0 | 13,765 | 2,277 | 68,310 | 683% | 342% |
+| 5 | 13,771 | 2,283 | 68,490 | 685% | 342% |
+| 9 | 13,872 | 2,384 | 71,520 | 715% | 358% |
+| 17 | 13,801 | 2,313 | 69,390 | 694% | 347% |
+| 19 | 13,815 | 2,327 | 69,810 | 698% | 349% |
+
+- **Register reads:** 11,520 → 32 a day (16 control registers at 12:00 and 24:00).
+- **Start-up:** 88 calls on a cold start. A warm start (a full read stored in the last 7 days) reads only the 16
+  control registers, not all 80.
+- **What remains:** status, meter and device info at 720 each (2,160 a day, about 94% of the day). The planned
+  change to status and meter every 5 minutes and device info daily takes that to about 577.
+- **Control failure re-reads are not in these numbers.** The ideal-SOC day has no control failures, so none of
+  those re-reads are triggered.

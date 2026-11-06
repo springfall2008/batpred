@@ -16,6 +16,7 @@ introducing a monthly limit), so these tests pin that it counts every call, attr
 code that made it, and drives the real execute -> gecloud path rather than a shortcut.
 """
 
+import copy
 import json
 import os
 import tempfile
@@ -23,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 from config import CONFIG_ITEMS
 from gecloud import GE_API_URL, regname_to_ha
-from tests.gecloud_budget_harness import TEMPLATE_INVERTER_ARGS, DayResult, GECloudBudgetHarness, summarise, write_call_log
+from tests.gecloud_budget_harness import TEMPLATE_INVERTER_ARGS, DayResult, GECloudBudgetHarness, MemoryStorage, summarise, write_call_log
 from tests.gecloud_fake_cloud import CALL_CONTEXT, CAPTURED_REGISTERS, HARNESS_SERIAL, HARNESS_SITE_ID, CallRecord, FakeGECloud
 from tests.test_infra import run_async
 from tests.test_random_scenarios import RANDOM_SCENARIOS, load_scenarios
@@ -181,7 +182,7 @@ def test_startup_finds_device(harness):
     """Start-up finds the one inverter in polling mode and makes the cold-start calls, kept apart from the day."""
     failed = False
     failed |= _expect(harness.gecloud.device_list == [HARNESS_SERIAL.lower()], "device list was {}".format(harness.gecloud.device_list))
-    failed |= _expect(harness.gecloud.polling_mode is True, "polling_mode was {}".format(harness.gecloud.polling_mode))
+    failed |= _expect(harness.gecloud.polling_mode is False, "polling_mode should be off by default, was {}".format(harness.gecloud.polling_mode))
     categories = {call.category for call in harness.startup_calls}
     for wanted in ("account", "device_list", "register_list", "register_read"):
         failed |= _expect(wanted in categories, "start-up made no {} call, made {}".format(wanted, sorted(categories)))
@@ -264,7 +265,7 @@ def test_summary_maths():
 
 
 def test_short_day_cadence(day):
-    """Over the first hour gecloud polls on its real cadence: status, meter and device info every 2 minutes, a full register sweep every 10."""
+    """Over the first hour gecloud polls on its real cadence: status, meter and device info every 2 minutes, and no register is read again after start-up."""
     failed = False
     counts = {}
     for call in day.day_calls:
@@ -272,7 +273,7 @@ def test_short_day_cadence(day):
     failed |= _expect(day.steps == 13, "expected 13 executes (00:00..01:00), got {}".format(day.steps))
     for category in ("status", "meter", "device_info"):
         failed |= _expect(counts.get(category, 0) == 30, "expected 30 {} calls in an hour, got {}".format(category, counts.get(category, 0)))
-    failed |= _expect(counts.get("register_read", 0) == day.register_count * 6, "expected {} register reads (6 sweeps), got {}".format(day.register_count * 6, counts.get("register_read", 0)))
+    failed |= _expect(counts.get("register_read", 0) == 0, "expected no register reads after start-up in the first hour, got {}".format(counts.get("register_read", 0)))
     return failed
 
 
@@ -329,9 +330,9 @@ def test_scenario_state_follows_clock(day, harness):
 
 
 def test_sweep_reason_names_branch(day):
-    """Each register sweep read says which condition in gecloud's loop fired the sweep, not just the poll time."""
-    reads = [call for call in day.day_calls if call.category == "register_read"]
-    unlabelled = [call.context for call in reads if "sweep: polling_mode" not in call.context]
+    """Each register read says why gecloud read it, not just the poll time."""
+    reads = [call for call in day.startup_calls if call.category == "register_read"]
+    unlabelled = [call.context for call in reads if "sweep: start-up" not in call.context]
     return _expect(reads and not unlabelled, "{} of {} sweep reads lack the sweep reason, e.g. {}".format(len(unlabelled), len(reads), unlabelled[:2]))
 
 
@@ -352,6 +353,141 @@ def test_day_tail_polls(tail_day):
     for call in tail_day.day_calls:
         counts[call.category] = counts.get(call.category, 0) + 1
     return _expect(counts.get("status", 0) == 32 and tail_day.steps == 13, "expected 32 status polls to minute 65 with 13 executes, got {} and {}".format(counts.get("status", 0), tail_day.steps))
+
+
+# The registers Predbat drives on the captured inverter - the ones ge_cloud_automatic wires into apps.yaml
+CONTROL_NAMES = {
+    "Enable Eco Mode",
+    "Battery Charge Power",
+    "Battery Discharge Power",
+    "Battery Reserve % Limit",
+    "AC Charge 1 Start Time",
+    "AC Charge 1 End Time",
+    "AC Charge Upper % Limit",
+    "Enable AC Charge Upper % Limit",
+    "DC Discharge 1 Start Time",
+    "DC Discharge 1 End Time",
+    "AC Charge Enable",
+    "Enable DC Discharge",
+    "Pause Battery",
+    "Pause Battery Start Time",
+    "Pause Battery End Time",
+    "DC Discharge 1 Lower SOC % Limit",
+}
+
+
+def _reads(calls):
+    """The register names read by these calls, in order."""
+    return [call.setting_name for call in calls if call.category == "register_read"]
+
+
+def _polled(harness, first_minute, last_minute):
+    """Run gecloud's own loop over the minutes given and return the calls it made (the plan is not involved)."""
+    harness.fake.calls.clear()
+    with harness.patched():
+        harness.poll(first_minute, last_minute)
+    return list(harness.fake.calls)
+
+
+def _started(scenario, storage=None, args=None):
+    """A harness started at midnight, optionally with a settings cache and extra apps.yaml args."""
+    harness = GECloudBudgetHarness(scenario, storage=storage, extra_args=args)
+    harness.startup()
+    return harness
+
+
+def _cache_from(harness, full_age_days):
+    """A storage holding the harness's settings, as if a full read had happened full_age_days ago."""
+    storage = MemoryStorage()
+    stamp = (harness.midnight - timedelta(days=full_age_days)).isoformat()
+    storage.data[("gecloud", "settings")] = copy.deepcopy(harness.gecloud.settings)
+    storage.data[("gecloud", "settings_read")] = {serial: {"full": stamp, "control": stamp} for serial in harness.gecloud.settings}
+    return storage
+
+
+def test_cold_start_reads_everything_once(scenario):
+    """With nothing stored, start-up reads every register once; the next hours read none."""
+    failed = False
+    harness = _started(scenario)
+    failed |= _expect(len(_reads(harness.startup_calls)) == harness.fake.register_count(), "cold start read {} registers, expected {}".format(len(_reads(harness.startup_calls)), harness.fake.register_count()))
+    reads = _reads(_polled(harness, 1, 11 * 60))
+    failed |= _expect(not reads, "the first 11 hours read {} registers, expected none".format(len(reads)))
+    return failed
+
+
+def test_control_registers_every_12_hours(scenario):
+    """At 12 hours only the registers Predbat drives are read again."""
+    harness = _started(scenario)
+    _polled(harness, 1, 12 * 60 - 1)
+    reads = _reads(_polled(harness, 12 * 60, 12 * 60))
+    return _expect(sorted(reads) == sorted(CONTROL_NAMES), "the 12-hour read covered {} (extra {}, missing {})".format(len(reads), sorted(set(reads) - CONTROL_NAMES), sorted(CONTROL_NAMES - set(reads))))
+
+
+def test_warm_start_reads_controls_only(scenario):
+    """A cache whose full read is under 7 days old is trusted: start-up re-reads only the control registers."""
+    cache = _cache_from(_started(scenario), full_age_days=6)
+    harness = _started(scenario, storage=cache)
+    reads = _reads(harness.startup_calls)
+    return _expect(sorted(reads) == sorted(CONTROL_NAMES), "warm start read {} registers, expected the {} control registers".format(len(reads), len(CONTROL_NAMES)))
+
+
+def test_stale_cache_reads_everything(scenario):
+    """A cache whose last full read is over 7 days old is read again in full."""
+    cache = _cache_from(_started(scenario), full_age_days=8)
+    harness = _started(scenario, storage=cache)
+    reads = _reads(harness.startup_calls)
+    return _expect(len(reads) == harness.fake.register_count(), "stale cache start read {} registers, expected {}".format(len(reads), harness.fake.register_count()))
+
+
+def test_full_read_after_7_days_running(scenario):
+    """A Predbat left running reads everything again once its last full read is 7 days old."""
+    harness = _started(scenario)
+    harness.gecloud.sim_now = harness.midnight
+    stamps = harness.gecloud.settings_read_stamps[HARNESS_SERIAL.lower()]
+    stamps["full"] = harness.midnight - timedelta(days=7)
+    stamps["control"] = harness.midnight
+    reads = _reads(_polled(harness, 1, 10))
+    return _expect(len(reads) == harness.fake.register_count(), "a 7-day-old full read was followed by {} reads, expected {}".format(len(reads), harness.fake.register_count()))
+
+
+def test_control_failure_rereads_once_per_4_hours(scenario):
+    """A control failure re-reads the control registers once; more failures within 4 hours do not."""
+    failed = False
+    harness = _started(scenario)
+    # One quiet minute first: execute's midnight writes are answered from gecloud's pending writes until the next loop ends
+    _polled(harness, 1, 1)
+    monitor = harness.my_predbat.control_monitor
+    monitor.total += 1
+    reads = _reads(_polled(harness, 2, 2))
+    failed |= _expect(sorted(reads) == sorted(CONTROL_NAMES), "a control failure re-read {} registers, expected the control set".format(len(reads)))
+    monitor.total += 1
+    reads = _reads(_polled(harness, 3, 4 * 60 + 1))
+    failed |= _expect(not reads, "a second failure within 4 hours re-read {} registers".format(len(reads)))
+    monitor.total += 1
+    reads = _reads(_polled(harness, 4 * 60 + 2, 4 * 60 + 2))
+    failed |= _expect(sorted(reads) == sorted(CONTROL_NAMES), "a failure after 4 hours re-read {} registers, expected the control set".format(len(reads)))
+    return failed
+
+
+def test_leaving_read_only_rereads_controls(scenario):
+    """Coming out of read only re-reads the control registers, which may have been changed meanwhile."""
+    failed = False
+    harness = _started(scenario)
+    _polled(harness, 1, 1)
+    harness.my_predbat.set_read_only = True
+    reads = _reads(_polled(harness, 2, 5))
+    failed |= _expect(not reads, "entering read only read {} registers".format(len(reads)))
+    harness.my_predbat.set_read_only = False
+    reads = _reads(_polled(harness, 6, 6))
+    failed |= _expect(sorted(reads) == sorted(CONTROL_NAMES), "leaving read only re-read {} registers, expected the control set".format(len(reads)))
+    return failed
+
+
+def test_poll_settings_opt_in(scenario):
+    """ge_cloud_poll_settings brings back the full sweep every 10 minutes."""
+    harness = _started(scenario, args={"ge_cloud_poll_settings": True})
+    reads = _reads(_polled(harness, 1, 10))
+    return _expect(len(reads) == harness.fake.register_count(), "with ge_cloud_poll_settings the 10-minute sweep read {}, expected {}".format(len(reads), harness.fake.register_count()))
 
 
 def run_gecloud_budget_harness_tests(my_predbat):
@@ -404,6 +540,21 @@ def run_gecloud_budget_harness_tests(my_predbat):
     if test_day_tail_polls(tail_day):
         print("ERROR: test_day_tail_polls failed")
         failed = True
+
+    # Register polling rules, driven through gecloud's own loop
+    for test in (
+        test_cold_start_reads_everything_once,
+        test_control_registers_every_12_hours,
+        test_warm_start_reads_controls_only,
+        test_stale_cache_reads_everything,
+        test_full_read_after_7_days_running,
+        test_control_failure_rereads_once_per_4_hours,
+        test_leaving_read_only_rereads_controls,
+        test_poll_settings_opt_in,
+    ):
+        if test(scenario):
+            print("ERROR: {} failed".format(test.__name__))
+            failed = True
     return failed
 
 

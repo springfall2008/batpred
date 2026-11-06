@@ -728,6 +728,13 @@ daily pass that sets the inverter's default options (SoC limits, power percentag
 skipped. A change you make to one of the inverter's `_gecloud_` entities is still sent to the inverter.
 The EV charger settings above are not affected.
 
+- **ge_cloud_poll_settings** - Optional, defaults to false. GivEnergy limits how many API calls an account can make each month, and
+reading the inverter's settings is done one register at a time, so Predbat reads them sparingly: the registers it controls at
+startup and every 12 hours, and all the others only when it has no stored copy from the last 7 days. They are also re-read
+straight away when Predbat leaves read only mode, and when a control failure shows the inverter is not doing what Predbat asked
+(at most once every 4 hours). A setting you change in the GivEnergy app can therefore take up to 12 hours to be noticed. Set this
+to `true` to read every register every 10 minutes instead, as older versions did, at the cost of many more API calls.
+
 - **ge_cloud_evc_direct** - Optional, defaults to false. Set it to `true`, in place of **ge_cloud_direct**, when your inverter is
 controlled by something else, such as GivTCP or the GivEnergy app, and you only want GE Cloud for your EV charger.
 The inverters on your account are then never read, written to or reported; **ge_cloud_automatic_evc** and **ge_cloud_evc_control**
@@ -1326,6 +1333,7 @@ the controls of your inverter inside home assistant.
 - **ge_cloud_direct** - Set to true to enable GE Cloud direct access
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
 - **ge_cloud_inverter_control** - Optional, defaults to true. Set to false to monitor the inverter without Predbat controlling it
+- **ge_cloud_poll_settings** - Optional, defaults to false. Set to true to read every inverter register every 10 minutes instead of only as needed
 - **ge_cloud_evc_direct** - Set to true instead of **ge_cloud_direct** to use GE Cloud for a GivEnergy EV charger only, leaving the inverter alone
 
 ## Load filtering
