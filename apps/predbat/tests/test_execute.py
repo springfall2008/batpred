@@ -2092,6 +2092,35 @@ def run_execute_tests(my_predbat):
     my_predbat.holiday_days_left = 0
 
     failed |= run_execute_test(my_predbat, "no_charge", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, assert_reserve=-1)
+
+    # Control SOC only: the inverter runs its own charge window and Predbat only sets the target. While that window is
+    # running with a target above the reserve the battery is charging, and Predbat says so - but still programs nothing
+    # beyond the target, so no immediate charge is sent (#5991)
+    soc_only_window = {"inverter_charge_time_minutes_start": my_predbat.minutes_now - 30, "inverter_charge_time_minutes_end": my_predbat.minutes_now + 60}
+    failed |= run_execute_test(my_predbat, "soc_only_charge_running", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, soc_kw=5, assert_reserve=-1, assert_status="Charging", **soc_only_window)
+    failed |= run_execute_test(my_predbat, "soc_only_charge_held", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best2, soc_kw=6, assert_reserve=-1, assert_soc_target=50, assert_status="Hold charging", **soc_only_window)
+    # A target at the reserve charges nothing
+    failed |= run_execute_test(my_predbat, "soc_only_target_at_reserve", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best_frz, soc_kw=5, assert_reserve=-1, assert_status="Demand", **soc_only_window)
+    # The inverter's window has finished, so nothing is charging even though the plan's window covers now
+    failed |= run_execute_test(
+        my_predbat,
+        "soc_only_inverter_window_over",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        soc_kw=5,
+        assert_reserve=-1,
+        assert_status="Demand",
+        inverter_charge_time_minutes_start=my_predbat.minutes_now - 60,
+        inverter_charge_time_minutes_end=my_predbat.minutes_now,
+    )
+    # Freezing export in Demand mode pauses charging, so it must leave the inverter's own charge alone
+    my_predbat.set_freeze_export_during_demand = True
+    try:
+        failed |= run_execute_test(
+            my_predbat, "soc_only_charge_running_freeze_demand", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, soc_kw=5, assert_reserve=-1, assert_status="Charging", assert_pause_charge=False, **soc_only_window
+        )
+    finally:
+        my_predbat.set_freeze_export_during_demand = False
     failed |= run_execute_test(my_predbat, "no_charge2", set_charge_window=True, set_export_window=True, set_discharge_during_charge=False)
     failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True, set_discharge_during_charge=False, has_timed_pause=False)
     failed |= run_execute_test(my_predbat, "no_charge_future", set_charge_window=True, set_export_window=True, charge_window_best=charge_window_best4, charge_limit_best=charge_limit_best)

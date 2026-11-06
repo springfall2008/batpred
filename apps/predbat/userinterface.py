@@ -697,6 +697,27 @@ class UserInterface:
                             },
                         )
 
+    def expose_config_min(self, name, floor):
+        """
+        Raise the min an input_number config item publishes to a runtime floor, or put back its declared min once the floor drops below it.
+
+        The min goes onto the item itself, so the HA entity's attributes and the web /config slider both
+        follow it, and load_user_config() clamps to it. The value is left alone: raising it is the caller's
+        decision. Republished only when the min actually changes (GH#5995).
+        """
+        item = self.config_index.get(name, None)
+        if not item or item.get("type") != "input_number":
+            return
+        declared_min = item.setdefault("declared_min", item["min"])
+        new_min = min(max(declared_min, floor or 0), item["max"])
+        if isinstance(new_min, float) and new_min == int(new_min):
+            new_min = int(new_min)
+        if new_min == item["min"]:
+            return
+        item["min"] = new_min
+        if item.get("value", None) is not None:
+            self.expose_config(name, item["value"], force_ha=True)
+
     def user_config_item_enabled(self, item):
         """
         Check if user config item is enable
