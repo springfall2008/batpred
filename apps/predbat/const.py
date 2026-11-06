@@ -234,3 +234,6 @@ STATUS_STATE_MAX_LENGTH = 255
 # A log text that repeats (an API response, an Intelligent slot list) is logged in full again after this long, so
 # the full text is never only in a rotated-out log file; in between it is logged as one short line
 REPEAT_FULL_LOG_SECONDS = 3600
+
+# The default mcp_secret. It is published in the source and the docs, so the MCP server refuses to run with it (#5847)
+MCP_DEFAULT_SECRET = "predbat_mcp_secret"
