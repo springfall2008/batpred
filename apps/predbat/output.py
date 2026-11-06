@@ -1311,6 +1311,7 @@ class Output:
             charge_window_n = -1
             export_window_n = -1
             periods_left = int((end_plan - minute + self.plan_interval_minutes - 1) / self.plan_interval_minutes)
+            table_end = minute + periods_left * self.plan_interval_minutes  # end of the last row drawn
 
             show_limit = ""
 
@@ -1346,23 +1347,33 @@ class Output:
                 if discharge_intersect >= 0:
                     charge_end_minute = min(charge_end_minute, self.export_window_best[discharge_intersect]["start"])
 
-                # A window that charges up to its target and then holds there ends this span where the target is
-                # reached, so the rest starts its own span and is labelled HoldChrg rather than Chrg (#5990)
+                # A window that charges up to its target and then holds there ends this span at the earliest slot
+                # boundary from which SoC stays at the target, so the rest starts its own span and is labelled
+                # HoldChrg rather than Chrg (#5990). Staying there is the same test the HoldChrg label applies.
                 charge_limit = self.charge_limit_best[charge_window_n]
                 if charge_limit > 0.0 and not self.is_freeze_charge(charge_limit):
                     target_percent = calc_percent_limit(self.charge_window_best[charge_window_n].get("target", charge_limit), self.soc_max)
                     if calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max) < target_percent:
-                        for split_minute in range(minute + self.plan_interval_minutes, charge_end_minute, self.plan_interval_minutes):
-                            if calc_percent_limit(self.predict_soc_best.get(split_minute - self.minutes_now, 0.0), self.soc_max) >= target_percent:
-                                charge_end_minute = split_minute
+                        held_from = None
+                        lowest_percent = float("inf")
+                        check_minute = min(charge_end_minute, table_end) - self.minutes_now
+                        for split_minute in reversed(range(minute + self.plan_interval_minutes, charge_end_minute, self.plan_interval_minutes)):
+                            while check_minute >= split_minute - self.minutes_now:
+                                lowest_percent = min(lowest_percent, calc_percent_limit(self.predict_soc_best.get(check_minute, 0.0), self.soc_max))
+                                check_minute -= PREDICT_STEP
+                            if lowest_percent < target_percent:
                                 break
+                            held_from = split_minute
+                        if held_from is not None:
+                            charge_end_minute = held_from
 
                 rowspan = min(int((charge_end_minute - minute) / self.plan_interval_minutes), periods_left)
                 if rowspan > 1 and (export_window_n < 0):
                     in_span = True
                     start_span = True
-                    # Judge the label on the span drawn, which may stop short of the window at an export or a split above
-                    minute_relative_end = charge_end_minute - self.minutes_now
+                    # Judge the label on the span drawn, which may stop short of the window at an export, a split
+                    # above or the end of the plan
+                    minute_relative_end = min(charge_end_minute, table_end) - self.minutes_now
                     rate_text_import = self.rate_range_text(self.rate_import, minute_start, charge_end_minute, rate_value_import)
                 else:
                     rowspan = 0
@@ -1374,7 +1385,7 @@ class Output:
                 if start <= minute and rowspan > 1 and (charge_window_n < 0):
                     in_span = True
                     start_span = True
-                    minute_relative_end = export_end_minute - self.minutes_now
+                    minute_relative_end = min(export_end_minute, table_end) - self.minutes_now
                     rate_text_export = self.rate_range_text(self.rate_export, minute_start, export_end_minute, rate_value_export)
                 else:
                     rowspan = 0
