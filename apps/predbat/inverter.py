@@ -1765,6 +1765,10 @@ class Inverter:
         # sleep inside the main planning loop whenever GivTCP was slow.
         self.charge_rate_now = self.get_current_charge_rate() / MINUTE_WATT
         self.discharge_rate_now = self.get_current_discharge_rate() / MINUTE_WATT
+        # Keep the hardware hold separate from prediction's minimum/scaled rate. Once a held
+        # battery stops moving power, balancing needs this zero to keep the hold in place.
+        self.charge_rate_is_zero = self.charge_rate_now == 0
+        self.discharge_rate_is_zero = self.discharge_rate_now == 0
 
         self.charge_enable_time = self.base.get_arg("scheduled_charge_enable", "on", index=self.id) == "on"
         self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
