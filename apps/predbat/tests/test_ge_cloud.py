@@ -74,6 +74,7 @@ class MockGECloudDirect(GECloudDirect):
         # ge_cloud_poll_settings off, the components.py default; register read state as initialize() leaves it
         self.poll_settings = False
         self.settings_read_stamps = {}
+        self.info_stamp = {}
         self.settings_read_reason = ""
         self.control_reread_reason = None
         self.control_failures_seen = None
@@ -619,7 +620,7 @@ def _test_run_reports_auth_denied_scoped(my_predbat):
         ge_cloud.async_get_inverter_status = status_auth_fail
         ge_cloud.async_get_evc_device = evc_clears_flag
         status_messages.clear()
-        await ge_cloud.run(seconds=120, first=False)
+        await ge_cloud.run(seconds=300, first=False)
         if not any(denied in m for m in status_messages):
             print("ERROR: inverter auth failure on a poll cycle should report access-denied, got {}".format(status_messages))
             return 1
@@ -637,7 +638,7 @@ def _test_run_reports_auth_denied_scoped(my_predbat):
         ge_cloud.async_get_inverter_status = status_ok
         ge_cloud.async_get_evc_device = evc_sets_flag
         status_messages.clear()
-        await ge_cloud.run(seconds=120, first=False)
+        await ge_cloud.run(seconds=300, first=False)
         if any(denied in m for m in status_messages):
             print("ERROR: an EVC-only auth failure must not report inverter access-denied, got {}".format(status_messages))
             return 1
@@ -746,8 +747,8 @@ def _test_run_auth_status_reported_on_transition_only(my_predbat):
 
         # Two consecutive denied poll cycles -> reported only once.
         ge_cloud.async_get_inverter_status = status_auth_fail
-        await ge_cloud.run(seconds=120, first=False)
-        await ge_cloud.run(seconds=240, first=False)
+        await ge_cloud.run(seconds=300, first=False)
+        await ge_cloud.run(seconds=600, first=False)
         count = sum(1 for m in status_messages if denied in m)
         if count != 1:
             print("ERROR: a persistent auth denial should report once (transition), got {} reports".format(count))
@@ -755,10 +756,10 @@ def _test_run_auth_status_reported_on_transition_only(my_predbat):
 
         # Recover, then deny again -> reported again (new episode).
         ge_cloud.async_get_inverter_status = status_ok
-        await ge_cloud.run(seconds=360, first=False)
+        await ge_cloud.run(seconds=900, first=False)
         ge_cloud.async_get_inverter_status = status_auth_fail
         status_messages.clear()
-        await ge_cloud.run(seconds=480, first=False)
+        await ge_cloud.run(seconds=1200, first=False)
         if not any(denied in m for m in status_messages):
             print("ERROR: a new denial episode after recovery should report again")
             return 1
@@ -2915,9 +2916,9 @@ def _test_run_method(my_predbat):
             return 1
         ge_cloud.automatic_evc = False
 
-        # Test subsequent run at seconds=120 (not first, but divisible by 120)
+        # Test subsequent run at seconds=300 (not first, on the 5 minute poll); device info is daily, so not read again
         call_order = []
-        result = await ge_cloud.run(seconds=120, first=False)
+        result = await ge_cloud.run(seconds=300, first=False)
 
         if not result:
             print("ERROR: run() should return True on success")
@@ -2929,7 +2930,6 @@ def _test_run_method(my_predbat):
             "publish_status:inv001",
             "async_get_inverter_meter:inv001",
             "publish_meter:inv001",
-            "async_get_device_info:inv001",
             "publish_info:inv001",
             "async_get_evc_device:evc-001",
             "async_get_evc_device_data:evc-001",
@@ -2939,7 +2939,7 @@ def _test_run_method(my_predbat):
         ]
 
         if call_order != expected_order_120:
-            print("ERROR: Call order mismatch at seconds=120")
+            print("ERROR: Call order mismatch at seconds=300")
             print("Expected: {}".format(expected_order_120))
             print("Got:      {}".format(call_order))
             return 1
@@ -2953,7 +2953,6 @@ def _test_run_method(my_predbat):
             "publish_status:inv001",
             "async_get_inverter_meter:inv001",
             "publish_meter:inv001",
-            "async_get_device_info:inv001",
             "publish_info:inv001",
             "async_get_evc_device:evc-001",
             "async_get_evc_device_data:evc-001",

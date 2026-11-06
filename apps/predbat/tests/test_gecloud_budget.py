@@ -219,7 +219,7 @@ def test_inverter_reads_fake_soc(harness):
     """The inverter takes its SOC from what gecloud polled from the fake."""
     harness.fake.soc_percent = 37
     with harness.patched():
-        run_async(harness.gecloud.run(120, False))
+        run_async(harness.gecloud.run(300, False))
         harness.my_predbat.fetch_inverter_data()
     percent = round(harness.my_predbat.soc_kw / harness.my_predbat.soc_max * 100)
     return _expect(percent == 37, "inverter SOC was {}%".format(percent))
@@ -265,14 +265,15 @@ def test_summary_maths():
 
 
 def test_short_day_cadence(day):
-    """Over the first hour gecloud polls on its real cadence: status, meter and device info every 2 minutes, and no register is read again after start-up."""
+    """Over the first hour gecloud polls on its real cadence: status and meter every 5 minutes, device info not again after start-up (it is daily), and no register is read again."""
     failed = False
     counts = {}
     for call in day.day_calls:
         counts[call.category] = counts.get(call.category, 0) + 1
     failed |= _expect(day.steps == 13, "expected 13 executes (00:00..01:00), got {}".format(day.steps))
-    for category in ("status", "meter", "device_info"):
-        failed |= _expect(counts.get(category, 0) == 30, "expected 30 {} calls in an hour, got {}".format(category, counts.get(category, 0)))
+    for category in ("status", "meter"):
+        failed |= _expect(counts.get(category, 0) == 12, "expected 12 {} calls in an hour, got {}".format(category, counts.get(category, 0)))
+    failed |= _expect(counts.get("device_info", 0) == 0, "expected no device info call in the first hour, got {}".format(counts.get("device_info", 0)))
     failed |= _expect(counts.get("register_read", 0) == 0, "expected no register reads after start-up in the first hour, got {}".format(counts.get("register_read", 0)))
     return failed
 
@@ -352,7 +353,7 @@ def test_day_tail_polls(tail_day):
     counts = {}
     for call in tail_day.day_calls:
         counts[call.category] = counts.get(call.category, 0) + 1
-    return _expect(counts.get("status", 0) == 32 and tail_day.steps == 13, "expected 32 status polls to minute 65 with 13 executes, got {} and {}".format(counts.get("status", 0), tail_day.steps))
+    return _expect(counts.get("status", 0) == 13 and tail_day.steps == 13, "expected 13 status polls to minute 65 with 13 executes, got {} and {}".format(counts.get("status", 0), tail_day.steps))
 
 
 # The registers Predbat drives on the captured inverter - the ones ge_cloud_automatic wires into apps.yaml
@@ -412,6 +413,19 @@ def test_cold_start_reads_everything_once(scenario):
     failed |= _expect(len(_reads(harness.startup_calls)) == harness.fake.register_count(), "cold start read {} registers, expected {}".format(len(_reads(harness.startup_calls)), harness.fake.register_count()))
     reads = _reads(_polled(harness, 1, 11 * 60))
     failed |= _expect(not reads, "the first 11 hours read {} registers, expected none".format(len(reads)))
+    return failed
+
+
+def test_device_info_daily(scenario):
+    """Device info (battery size, rates, model) is fetched at start-up and then once a day; status and meter every 5 minutes."""
+    failed = False
+    harness = _started(scenario)
+    failed |= _expect(sum(1 for call in harness.startup_calls if call.category == "device_info") == 1, "start-up should fetch device info once")
+    calls = _polled(harness, 1, 24 * 60)
+    info = [call.sim_time.strftime("%H:%M") for call in calls if call.category == "device_info"]
+    failed |= _expect(info == ["00:00"], "device info should be fetched once, at the 24 hour mark, got {}".format(info))
+    status = sum(1 for call in calls if call.category == "status")
+    failed |= _expect(status == 288, "expected 288 status polls in 24 hours, got {}".format(status))
     return failed
 
 
@@ -544,6 +558,7 @@ def run_gecloud_budget_harness_tests(my_predbat):
     # Register polling rules, driven through gecloud's own loop
     for test in (
         test_cold_start_reads_everything_once,
+        test_device_info_daily,
         test_control_registers_every_12_hours,
         test_warm_start_reads_controls_only,
         test_stale_cache_reads_everything,

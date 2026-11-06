@@ -77,6 +77,12 @@ CONTROL_FAILURE_REREAD_HOLD_OFF_SECONDS = 4 * 60 * 60
 # Under EMS control the battery inverters' own slot 1 windows are not driven by Predbat but are watched,
 # as a slot changed behind Predbat's back silently overrides the EMS (#5103), so they are read with the
 # control registers.
+# How often the inverter status, meter and EV charger data are polled - Predbat plans every 5 minutes, so polling
+# more often than that only spends API calls (GivEnergy limits them monthly). Must be a multiple of 60.
+STATUS_POLL_SECONDS = 5 * 60
+# Device info (battery size, charge rate, model and battery health) hardly changes, so it is fetched at start-up,
+# when the device check finds the hardware has changed, and otherwise once a day.
+DEVICE_INFO_REFRESH_SECONDS = 24 * 60 * 60
 # How often the device list is re-read, so an inverter, EMS, Gateway or EV charger added to or removed
 # from the account is picked up without a restart (#5294). Must be a multiple of 60, as run() is only
 # called once a minute; a cycle that finds a change polls and reads settings whatever else is due.
@@ -682,6 +688,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.evc_devices_dict = {}
         self.evc_device_list = []
         self.settings_from_cache = False
+        # When each device's info was last fetched
+        self.info_stamp = {}
         # When each device's registers were last read in full and last read for control, {device: {"full": dt, "control": dt}}
         self.settings_read_stamps = {}
         # Why the registers being read now are being read, for the log
@@ -2528,7 +2536,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         if self.inverter_monitor:
             await self.update_site(first)
 
-        if first or devices_changed or (seconds % 120 == 0):
+        if first or devices_changed or (seconds % STATUS_POLL_SECONDS == 0):
             inverter_auth_denied = False
             for device in self.device_list:
                 self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
@@ -2539,8 +2547,11 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 await self.publish_status(device, self.status[device])
                 self.meter[device] = await self.async_get_inverter_meter(device, self.meter.get(device, {}))
                 await self.publish_meter(device, self.meter[device])
-                self.info[device] = await self.async_get_device_info(device, self.info.get(device, {}))
-                await self.publish_info(device, self.info[device])
+                if first or devices_changed or self.device_info_due(device):
+                    self.info[device] = await self.async_get_device_info(device, self.info.get(device, {}))
+                    if self.info[device]:
+                        self.info_stamp[device] = self.now_utc_exact
+                await self.publish_info(device, self.info.get(device, {}))
                 await self.publish_site_export_limit(device)
 
             # Surface a clear, correct status when the GivEnergy cloud API denied access to the core
@@ -2636,7 +2647,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             # not whether this component wired Predbat's apps.yaml to it - that distinction is
             # recorded in the report's own "automatic" flag. Placed after both settings (populated
             # for every device in self.device_list, above) and self.info (populated earlier this
-            # same cycle, in the seconds % 120 block) are in hand, so build_discovery()'s
+            # same cycle, in the STATUS_POLL_SECONDS block) are in hand, so build_discovery()'s
             # capabilities/info/ratings never see stale or empty data. Outside "if first:" above,
             # so a failed report is retried rather than lost - see refresh_discovery().
             self.refresh_discovery()
@@ -2809,6 +2820,11 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         await self.storage.save("gecloud", "settings", self.settings, format="json", expiry=None)
         stamps = {device: {kind: stamp.isoformat() for kind, stamp in device_stamps.items()} for device, device_stamps in self.settings_read_stamps.items() if device in self.settings}
         await self.storage.save("gecloud", "settings_read", stamps, format="json", expiry=None)
+
+    def device_info_due(self, device):
+        """Is this device's info more than DEVICE_INFO_REFRESH_SECONDS old, or never fetched successfully"""
+        stamp = self.info_stamp.get(device, None)
+        return stamp is None or (self.now_utc_exact - stamp).total_seconds() >= DEVICE_INFO_REFRESH_SECONDS
 
     def settings_read_due(self, device, first, new_devices, now):
         """

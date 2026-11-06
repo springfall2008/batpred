@@ -552,6 +552,10 @@ Predbat keeps its copy of each register up to date when it writes one, so its ow
 elsewhere, such as in the GivEnergy app, can take up to 12 hours to be seen (7 days for a register Predbat does not control).
 Set `ge_cloud_poll_settings: true` to go back to reading every register every 10 minutes.
 
+The live data is budgeted the same way: the inverter status (power flows, SoC), meter totals and EV charger data are polled
+every 5 minutes, in step with Predbat's 5 minute plan, and the device info (battery size, charge rate, model and battery
+health) at startup, whenever the hardware changes, and otherwise once a day.
+
 #### Site export limits (gecloud)
 
 Predbat reads your site's details from GivEnergy at startup, just after the device list,

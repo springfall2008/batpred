@@ -296,3 +296,45 @@ The control registers are also re-read straight away on leaving read only mode, 
   change to status and meter every 5 minutes and device info daily takes that to about 577.
 - **Control failure re-reads are not in these numbers.** The ideal-SOC day has no control failures, so none of
   those re-reads are triggered.
+
+## After: live data every 5 minutes, device info daily
+
+The second optimisation, in the same PR:
+
+- Inverter status, meter and EV charger data are polled every 5 minutes (`STATUS_POLL_SECONDS`), down from every 2.
+- Device info is fetched at start-up, when the device check finds a hardware change, and otherwise once a day
+  (`DEVICE_INFO_REFRESH_SECONDS`).
+
+| Scenario | Baseline | Register reads by purpose | + 5 min / daily info | Month (×30) | vs 10k | vs 20k |
+| -------- | -------: | ------------------------: | -------------------: | ----------: | -----: | -----: |
+| 0 | 13,765 | 2,277 | 694 | 20,820 | 208% | 104% |
+| 5 | 13,771 | 2,283 | 700 | 21,000 | 210% | 105% |
+| 9 | 13,872 | 2,384 | 801 | 24,030 | 240% | 120% |
+| 17 | 13,801 | 2,313 | 730 | 21,900 | 219% | 110% |
+| 19 | 13,815 | 2,327 | 744 | 22,320 | 223% | 112% |
+
+Before writes, a fixed 660 calls a day remain:
+
+| Category | Calls/day |
+| -------- | --------: |
+| status | 288 |
+| meter | 288 |
+| device list (hourly refresh) | 24 |
+| EV charger list (hourly refresh) | 24 |
+| control register reads | 32 |
+| site, account, device info | 4 |
+| **Total before writes** | **660** |
+
+Writes add 34–141 a day.
+
+A site with a GivEnergy EV charger adds 3 calls per charger every 5 minutes, which is 864 a day per charger.
+None of the scenarios has one.
+
+**Next levers, largest first:**
+
+1. **The write patterns** found in the baseline: the export start time following the clock, and the Eco mode
+   and DC discharge pair. Scenario 9's 141 writes are mostly these.
+2. **The meter poll.** At 288 a day, it feeds the load/import/export/PV totals Predbat records. They change
+   slowly, so they could be polled less often.
+3. **The hourly device and EV charger list refresh.** This is 48 a day, including 24 for an account with no
+   charger.
