@@ -192,7 +192,7 @@ Clients that connect through OAuth instead of a fixed `Authorization` header, su
 
 When the client opens the authorization page, enter your `mcp_secret` to approve it. A client that registers itself is given no secret of its own, so it can only connect through that page.
 
-An OAuth token carries scopes. A token with only `mcp:read` can call the tools that read Predbat but not `set_config` or `set_plan_override`, which need `mcp:write` or `mcp:control`. The scopes are the ones the client asks for when it opens the authorization page, unless it names others when it fetches the token. A client that asks for none of the three gets all three, as does the `Authorization: Bearer <your mcp_secret>` header.
+An OAuth token carries scopes. A token with only `mcp:read` can call the tools that read Predbat but not `set_config` or `set_plan_override`, which need `mcp:write` or `mcp:control`. The scopes are the ones the client asks for when it opens the authorization page. When it fetches the token it can narrow them, but it cannot add a scope it did not ask for there. A client that asks for none of the three gets all three, as does the `Authorization: Bearer <your mcp_secret>` header.
 
 Tokens are signed with a random key that Predbat creates on first start and keeps in its cache, so they survive a restart. Changing `mcp_secret` replaces the key, which revokes every token issued so far. After upgrading from a version before this change, each OAuth client has to authorise once more. A cloud-hosted client such as claude.ai connects from the internet rather than your home network, so read the security note above before you expose the port.
 
