@@ -2048,9 +2048,6 @@ var options = {
             text += "    title: {{ text: '{}' }},\n".format(yaxis_name)
             text += "    decimalsInFloat: 2\n"
             text += "  },\n"
-        text += "  title: {\n"
-        text += "    text: '{}'\n".format(chart_name)
-        text += "  },\n"
         text += "  legend: {\n"
         text += "    position: 'top',\n"
         text += "    formatter: function(seriesName, opts) {\n"
@@ -2080,16 +2077,20 @@ var options = {
         text += "   ]\n"
         text += "  }\n"
         text += "}\n"
-        # ApexCharts binds drag-to-zoom to the whole chart SVG, title included, so a drag (or a touch-scroll on mobile)
-        # starting on the heading zooms the chart (#5979). Stop the drag-start events from the title in the capture
-        # phase on the container, before they reach the SVG; zooming from the plot area is unaffected.
-        text += "document.getElementById('{}').addEventListener('mousedown', predbatStopTitleZoom, true);\n".format(tagname)
-        text += "document.getElementById('{}').addEventListener('touchstart', predbatStopTitleZoom, {{capture: true, passive: true}});\n".format(tagname)
-        text += "function predbatStopTitleZoom(e) {\n"
-        text += "  if (e.target && e.target.closest && e.target.closest('.apexcharts-title-text, .apexcharts-subtitle-text')) {\n"
-        text += "    e.stopPropagation();\n"
-        text += "  }\n"
-        text += "}\n"
+        # The title is an HTML heading above the chart, not an ApexCharts title: ApexCharts binds drag-to-zoom to the
+        # whole chart SVG, so a drag (or a touch-scroll on mobile) anywhere in a title band inside it - including the
+        # gap between the title text and the toolbar - zoomed the chart (#5979). Outside the SVG it cannot start a zoom,
+        # and it picks up the page's own heading style. The wrapper div keeps it on its own line, as h2 is inline here.
+        # The title goes in via a JSON string and textContent, so a friendly name with a quote or markup in it is safe.
+        chart_title_js = json.dumps(str(chart_name)).replace("<", "\\u003c")
+        text += "(function() {\n"
+        text += "  var container = document.getElementById('{}');\n".format(tagname)
+        text += "  var heading = document.createElement('h2');\n"
+        text += "  heading.textContent = {};\n".format(chart_title_js)
+        text += "  var wrapper = document.createElement('div');\n"
+        text += "  wrapper.appendChild(heading);\n"
+        text += "  container.parentNode.insertBefore(wrapper, container);\n"
+        text += "})();\n"
         # getElementById (not a '#id' CSS selector) - tagname can be unit-derived (e.g. "chart_%")
         # and '%' is not a valid unescaped CSS identifier character, which would throw in querySelector
         text += "var chart = new ApexCharts(document.getElementById('{}'), options);\n".format(tagname)
