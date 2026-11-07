@@ -53,9 +53,9 @@ Rate symbols (import and export):
 
 - ? &#8518; - Rate that has been modified based on **input_number.predbat_metric_future_rate_offset_import** or **input_number.predbat_metric_future_rate_offset_export**
 - ? &#x2696; - Rate that has been estimated using future rate estimation data (e.g. Nordpool)
-- &#61; - Rate that has been overridden by the user's apps.yaml
-- &#177; - Rate that has been adjusted with a rate offset in the user's apps.yaml
-- &dollar; - Rate that has been adjusted for an Octopus Saving session
+- &#61; - Rate that has been overridden by the user's `apps.yaml`
+- &#177; - Rate that has been adjusted with a rate offset in the user's `apps.yaml`
+- &dollar; - Rate that has been adjusted for an Octopus Saving session or Axle event
 - ? - Rate that has not yet been defined and the previous day's data was used instead
 
 Battery SoC symbols:
@@ -96,6 +96,11 @@ If battery discharging is planned by Predbat for a particular slot, the export r
 discharging and force exported, or being held at the current level.<BR>
 Alongside the state is an arrow which points upwards if the battery SoC is increasing (i.e. charging), to the right if the battery SoC remains constant,
 or downwards if the battery SoC is decreasing (i.e. discharging).<BR>
+On a Demand slot (or the part of a slot before an export starts), a car (&#128663;) replaces the arrow when the plan holds the battery for a charging car for at least half of that time:
+Predbat controls charge windows, *switch.predbat_car_charging_from_battery* is Off, and the car either has a charging slot
+(and is below its charge limit, unless Octopus Intelligent plans it with *switch.predbat_octopus_intelligent_consider_full* Off) or is reporting *car_charging_now*.
+House load that solar does not cover then comes from the grid rather than the battery.
+In the Yesterday view the car shows where Predbat's recorded status was "Hold for car" for at least half the slot.<BR>
 If Predbat's plan has been over-ridden and the [slot has been manually controlled](customisation.md#manual-control) to be a Charging slot, Discharging or Idle,
 then alongside the State and battery SoC arrow will be an upside down 'F' (&#8526;) indicating it is a 'Forced' activity.<BR>
 The slot will be coloured Green for Charging, Yellow for Discharging, Silver Grey for Freeze Charging, Dark Grey for Freeze Discharging, Pale Blue for Hold Charging or White for Idle.<BR>
@@ -162,6 +167,10 @@ if falling by 10kg or more it will be green with a downwards arrow, and in the m
 
 - **Debug** - (Only shown on the plan's [History view](web-interface.md#plan-view)) A download link to the [debug history snapshot](customisation.md#debug-history) captured for that exact time slot, if one was retained, labelled with the time it was taken. Empty if no snapshot was captured for that slot.
 
+Hovering over a cell shows what that value would be in the plan's [pessimistic and optimistic scenarios](customisation.md#scaling-and-weight-options),
+one line per scenario. In the web interface's plan view this works on the PV, Load, SoC %, Cost and Total columns; on the `predbat.plan_html` card, on the SoC % column only.
+A tooltip only appears when a scenario changes that cell's value as shown, and a scenario whose weight (`pv_metric10_weight` or `pv_metric90_weight`) is 0 is left out.
+
 ## Debug mode for Predbat Plan
 
 If [Predbat expert mode](customisation.md#expert-mode) is turned on then a number of additional controls and switches are made available in Home Assistant.
@@ -204,8 +213,8 @@ There's a further [explanation of the Predbat forecast and plan](faq.md#the-plan
 
 ## Customising and Reformatting the Predbat Plan
 
-An additional independent front-end Home Assistant component the 'Predbat Table Card' is available on HACS that gives a number of additional customisation and configuration options
-to tailor how the Predbat plan looks and is highly recommended if you want to change the standard plan look and feel:
+A couple of additional independent front-end Home Assistant components have been created by the Predbat community, the 'Predbat Table Card' on HACS, that gives additional customisation and configuration options
+to tailor how the Predbat plan looks and are highly recommended if you want to change the standard plan look and feel:
 
 - Change the sequence of columns and which columns are shown in the plan
 - Restyle the columns, or retain the Predbat original colour scheme
@@ -218,7 +227,9 @@ to tailor how the Predbat plan looks and is highly recommended if you want to ch
 
 ![image](images/predbat-table-card.png)
 
-See the [Predbat Table Card repository](https://github.com/pacemaker82/PredBat-Table-Card) for more details.
+The original [Predbat Table Card](https://github.com/pacemaker82/PredBat-Table-Card) which is now no longer being actively developed, and the recently released [Predbat Table Card Next](https://github.com/llbbdd/Predbat-Table-Card-Next).
+
+Please give them a try.
 
 ## PV Prediction summary
 
@@ -227,3 +238,18 @@ The same author of the Predbat Table Card has produced a nice visualisation for 
 ![image](images/pv-card-preview.png)
 
 See the [PV Card Preview repository](https://github.com/pacemaker82/PV-Card-Preview)
+
+## Predbat Card
+
+[Predbat Card](https://github.com/mimikm/Predbat-Card) is an independent community card that gives an at-a-glance overview of Predbat on your dashboard:
+
+- Status header with Predbat status, mode and last update
+- Overview tiles for battery SoC, what the battery is doing now, cost today, predicted saving today, and the next charge and export windows
+- Battery forecast chart (Predbat plan vs baseline), grid import & export chart and energy rates chart
+- Colour-coded plan timeline, upcoming actions and an expandable plan table
+- Visual editor with all Predbat entities prefilled
+- Six visual styles, light/dark override and adjustable text size
+
+![image](https://github.com/mimikm/Predbat-Card/blob/main/images/styles-light.png?raw=true)
+
+Install through HACS as a custom repository (Dashboard): `https://github.com/mimikm/Predbat-Card`

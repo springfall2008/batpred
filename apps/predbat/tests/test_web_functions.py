@@ -10,8 +10,9 @@
 
 import asyncio
 import os
+from unittest.mock import MagicMock, patch
 
-from web import WebInterface
+from web import WebInterface, is_data_numerical
 from web_helper import get_plan_renderer_js
 
 
@@ -177,6 +178,18 @@ def run_web_functions_tests(my_predbat):
         failed += 1
 
     # -------------------------------------------------------------------------
+    # Companion app cannot save tgz/create-debug downloads (its webview ignores
+    # Content-Disposition: attachment) - the dash page must say so and point at the
+    # debug/ folder mirror instead of trying to detect/grey out the links (#4720)
+    print("Test: dashboard explains the Companion app download limitation and the debug/ folder workaround")
+    if "Companion app" not in status_html:
+        print(f"  ERROR: expected a Companion app caveat on the dash page, got: {status_html}")
+        failed += 1
+    if "{}/debug/".format(my_predbat.config_root_p) not in status_html:
+        print(f"  ERROR: expected the caveat to point at config_root_p/debug/, got: {status_html}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
     # is_running() must handle both the legacy naive last_updated format (pre-existing
     # installs, before record_status() started writing a timezone-aware value) and the
     # current timezone-aware format, without raising on the naive/aware datetime subtraction
@@ -225,7 +238,71 @@ def run_web_functions_tests(my_predbat):
 
     failed += run_plan_empty_state_tests(my_predbat, web)
 
+    # -------------------------------------------------------------------------
+    # is_data_numerical() moved from web.py to utils.py (re-exported here) for the AI HA-state
+    # tools (#4768 follow-up), which need it and must not import from web.py.
+    failed += run_is_data_numerical_tests(my_predbat)
+
     print("**** Web functions tests completed ****")
+    return failed
+
+
+def run_is_data_numerical_tests(my_predbat):
+    """Unit tests for is_data_numerical() (moved from web.py to utils.py, re-exported from web).
+
+    Guards the three deliberately subtle rules the move must not disturb: on/off/true/false count
+    as numeric, the threshold is 10% of values rather than a majority, and empty history is
+    treated as numeric. web_chart_grouping's own tests only exercise clear-cut all-numeric and
+    all-text fixtures (100% or 0% either way), so they cannot tell a 10% threshold apart from a
+    50% one - these can, by bracketing the boundary on both sides.
+    """
+    failed = 0
+    print("**** Running is_data_numerical() tests ****")
+
+    def history_of(states):
+        """Wrap a list of state values in the [[record, ...]] shape is_data_numerical() expects."""
+        return [[{"last_updated": "2026-07-23T10:00:00+00:00", "state": state} for state in states]]
+
+    # -------------------------------------------------------------------------
+    print("Test: on/off/true/false count as numeric, because booleans plot as 0/1")
+    if not is_data_numerical(history_of(["on", "off", "true", "false"])):
+        print("  ERROR: expected boolean-only history to be treated as numeric")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the threshold is 10% of values, not a majority")
+    # 1 numeric reading among 9 non-numeric, non-unavailable text values = exactly 10%
+    at_threshold = history_of(["42"] + ["Idle"] * 9)
+    if not is_data_numerical(at_threshold):
+        print("  ERROR: expected a 10% numeric ratio to be treated as numeric")
+        failed += 1
+    # 1 numeric reading among 10 non-numeric text values is just under 10% and must not pass
+    below_threshold = history_of(["42"] + ["Idle"] * 10)
+    if is_data_numerical(below_threshold):
+        print("  ERROR: expected a ratio just under 10% to be treated as non-numeric")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: mostly-unavailable history is still numeric if the readings that exist are numeric")
+    mostly_unavailable = history_of(["unavailable"] * 9 + ["21.5"])
+    if not is_data_numerical(mostly_unavailable):
+        print("  ERROR: expected a sensor unavailable 90% of the time to still be numeric")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: empty history returns True")
+    if not is_data_numerical([[]]):
+        print("  ERROR: expected empty history to be treated as numeric")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: attribute mode classifies on the named attribute, not the state")
+    attr_history = [[{"last_updated": "2026-07-23T10:00:00+00:00", "state": "Idle", "attributes": {"level": "50"}}]]
+    if not is_data_numerical(attr_history, attribute="level"):
+        print("  ERROR: expected attribute mode to classify on the attribute value, not the (non-numeric) state")
+        failed += 1
+
+    print("**** is_data_numerical() tests completed ****")
     return failed
 
 
@@ -261,6 +338,37 @@ def run_compare_empty_state_tests(my_predbat, web):
         failed += 1
     if "Loading chart (please wait)" not in text:
         print(f"  ERROR: expected the genuine loading message when compare_list is set but not yet computed")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a numeric compare id finds its string-keyed result, and a malformed entry doesn't break the page (#5472)")
+    my_predbat.args["compare_list"] = ["not_a_dict", {"name": "No Id"}, {"id": 2024, "name": "Numeric Id Tariff"}]
+    fake_comparison = MagicMock()
+    fake_comparison.get_comparison.side_effect = lambda tariff_id: {"entity_id": "predbat.compare_tariff_2024", "html": "NUMERIC_ID_PLAN"} if tariff_id == "2024" else {}
+    try:
+        with patch.object(my_predbat, "comparison", fake_comparison):
+            text = asyncio.run(web.html_compare(None)).text
+    except Exception as exc:
+        text = None
+        print(f"  ERROR: html_compare() raised {exc!r} on a compare_list with malformed entries")
+        failed += 1
+    if text is not None:
+        if "NUMERIC_ID_PLAN" not in text:
+            print(f"  ERROR: expected the plan stored under '2024' to be shown for the numeric id")
+            failed += 1
+        if "compare_list entry 1 must be a dictionary" not in text or "compare_list entry 2 requires a non-empty &#x27;id&#x27;" not in text:
+            print(f"  ERROR: expected the page to say why entries 1 and 2 were skipped")
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a compare_list with only malformed entries explains them instead of 'not configured' or a stuck loading message (#5472)")
+    my_predbat.args["compare_list"] = [{"name": "No Id"}]
+    text = asyncio.run(web.html_compare(None)).text
+    if "No tariffs configured yet" in text or "Loading chart (please wait)" in text:
+        print(f"  ERROR: should not say 'not configured' or 'loading' when the configured entries are all malformed")
+        failed += 1
+    if "compare_list entry 1 requires a non-empty" not in text:
+        print(f"  ERROR: expected the page to say why the only entry was skipped")
         failed += 1
 
     my_predbat.args = original_args
@@ -476,4 +584,53 @@ def run_web_logo_image_tests(my_predbat):
         failed += 1
 
     print("**** Web logo image tests completed ****")
+    return failed
+
+
+def run_web_dark_mode_preference_tests(my_predbat):
+    """Unit tests for dark mode falling back to the OS/browser prefers-color-scheme setting (issue #4800)."""
+    failed = 0
+    print("**** Running web dark mode preference tests ****")
+
+    from web_helper import get_header_html
+
+    header = get_header_html("Test", False, "./dash", [], "v1.0", "")
+
+    print("Test: a shared preference helper checks prefers-color-scheme when no explicit choice is stored")
+    helper_pos = header.find("function getDarkModePreference()")
+    media_query_pos = header.find("matchMedia('(prefers-color-scheme: dark)')")
+    stored_check_pos = header.find("localStorage.getItem('darkMode')")
+    if helper_pos < 0 or media_query_pos < 0 or stored_check_pos < 0:
+        print("  ERROR: expected getDarkModePreference() to check both localStorage and prefers-color-scheme")
+        failed += 1
+
+    print("Test: the pre-CSS flash-prevention script and applyDarkMode() both use the shared helper")
+    pre_css_call_pos = header.find("if (getDarkModePreference())")
+    apply_dark_mode_call_pos = header.find("const darkModeEnabled = getDarkModePreference();")
+    if pre_css_call_pos < 0 or apply_dark_mode_call_pos < 0:
+        print("  ERROR: expected both the pre-CSS script and applyDarkMode() to call getDarkModePreference()")
+        failed += 1
+    elif not (helper_pos < pre_css_call_pos):
+        print("  ERROR: getDarkModePreference() must be defined before it is first called")
+        failed += 1
+
+    print("Test: an explicit stored preference is not overridden by prefers-color-scheme")
+    helper_body_start = header.find("function getDarkModePreference()")
+    helper_body_end = header.find("\n}", helper_body_start)
+    helper_body = header[helper_body_start:helper_body_end]
+    if "storedDarkMode === 'true'" not in helper_body or "storedDarkMode !== null" not in helper_body:
+        print("  ERROR: an explicit localStorage value should be honoured ahead of the OS preference")
+        failed += 1
+
+    print("Test: a live listener re-applies the theme if the OS preference changes with no explicit choice stored")
+    if "addEventListener('change'" not in header or "prefers-color-scheme: dark" not in header:
+        print("  ERROR: expected a matchMedia change listener so the page follows OS theme switches live")
+        failed += 1
+
+    print("Test: the live listener falls back to addListener() for browsers without MediaQueryList.addEventListener")
+    if "darkModeMediaQuery.addListener" not in header:
+        print("  ERROR: expected a fallback to the deprecated addListener() for older Safari/Chrome")
+        failed += 1
+
+    print("**** Web dark mode preference tests completed ****")
     return failed

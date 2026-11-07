@@ -411,7 +411,8 @@ class AxleAPI(ComponentBase):
                     if self.get_arg("set_event_notify"):
                         local_start = start_time.astimezone(self.local_tz)
                         local_end = end_time.astimezone(self.local_tz)
-                        self.call_notify("Predbat: Scheduled Axle VPP event {}-{}, {} p/kWh".format(local_start.strftime("%a %d/%m %H:%M"), local_end.strftime("%H:%M"), self.pence_per_kwh))
+                        msg = f"Scheduled Axle VPP event {local_start.strftime('%a %d/%m %H:%M')}-{local_end.strftime('%H:%M')}, {self.pence_per_kwh} p/kWh"
+                        self.call_notify(f"{self.prefix.capitalize()}: {msg}")
 
             self.cleanup_event_history()
             await self.save_event_history()
@@ -565,6 +566,35 @@ class AxleAPI(ComponentBase):
             },
         )
 
+    def build_discovery(self):
+        """
+        Describe the Axle Energy VPP enrolment for the discovery catalogue.
+
+        One "vpp" programme: a managed site keyed "axle:site:{site_id}" with its site id in account_ids,
+        or a BYOK account keyed "axle:vpp" (BYOK has no site id). An Axle session always rewrites the
+        import or export rate (load_axle_slot()), hence rate_override; with axle_control on, an active
+        session also puts Predbat in read-only mode (fetch.py), hence forces_read_only. Axle does not
+        know which supply point it is enrolled on, so the record names no meter rather than guessing
+        one. The axle_session binding is the event sensor automatic_config() wires, once Home
+        Assistant has seen it.
+
+        Identifiers are published readable; the BYOK API key and the partner login, password and token
+        are never read.
+
+        Returns None while Axle is disabled - no API key and no managed site.
+        """
+        if not self.managed_mode and not self.api_key:
+            return None
+        record = {"device_id": "axle:site:{}".format(self.site_id) if self.managed_mode else "axle:vpp", "kind": "vpp"}
+        if self.managed_mode:
+            record["account_ids"] = {"site_id": str(self.site_id)}
+        record["info"] = {"vendor": "Axle Energy", "mode": "managed" if self.managed_mode else "byok"}
+        record["effects"] = ["rate_override", "forces_read_only"] if self.get_arg("axle_control", False) else ["rate_override"]
+        entities = self.discovery_entities({"axle_session": {"entity_id": "binary_sensor." + self.prefix + "_axle_event", "domain": "binary_sensor", "access": "r"}})
+        if entities:
+            record["entities"] = entities
+        return {"automatic": self.automatic, "programmes": [record]}
+
     async def automatic_config(self):
         """
         Automatic configuration for Axle participation
@@ -598,6 +628,10 @@ class AxleAPI(ComponentBase):
                 self.failures_total += 1
 
         self.publish_axle_event()
+
+        # Filed every cycle, after the publish so the event sensor exists. refresh_discovery() owns the
+        # compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         return True
 

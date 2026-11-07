@@ -15,6 +15,7 @@ user configured for NZ dollars/cents saw "p/kWh" (pence) in the chart legend reg
 """
 
 import re
+from datetime import timedelta
 
 from web import WebInterface
 
@@ -83,6 +84,61 @@ def test_rates_chart_series_names_use_currency_symbol(my_predbat):
         return False
     finally:
         my_predbat.currency_symbols = original_currency_symbols
+        if original_dashboard_values is None:
+            if hasattr(my_predbat, "dashboard_values"):
+                del my_predbat.dashboard_values
+        else:
+            my_predbat.dashboard_values = original_dashboard_values
+
+
+def test_pv_chart_forecast_history_is_uncalibrated(my_predbat):
+    """
+    The PV chart's "Forecast History" series must plot the uncalibrated forecast sensor.
+
+    It used to plot the h0 sensor's state, which is the calibrated forecast while calibration is on,
+    so "Forecast History" and "Forecast History CL" drew the same line. The two sensors are served
+    different values here - 3.0 kW uncalibrated, 1.5 kW calibrated (h0's state and nowCL) - so each
+    series says outright which sensor it came from.
+
+    render_chart is captured rather than the rendered HTML parsed: what is under test is which
+    history get_chart() hands each series, not how the chart library formats it.
+    """
+    print("**** test_pv_chart_forecast_history_is_uncalibrated ****")
+
+    original_dashboard_values = getattr(my_predbat, "dashboard_values", None)
+
+    try:
+        w = _make_web(my_predbat)
+        stamp = (my_predbat.midnight_utc + timedelta(hours=1)).isoformat()
+        # get_chart() returns before drawing anything unless soc_kw_best has results
+        my_predbat.dashboard_values = {my_predbat.prefix + ".soc_kw_best": {"attributes": {"results": {stamp: 5.0}}}}
+        uncalibrated_entity = "sensor." + my_predbat.prefix + "_pv_forecast_h0_uncalibrated"
+        h0_entity = "sensor." + my_predbat.prefix + "_pv_forecast_h0"
+        histories = {
+            uncalibrated_entity: [[{"last_updated": stamp, "state": "3.0", "attributes": {}}]],
+            h0_entity: [[{"last_updated": stamp, "state": "1.5", "attributes": {"now": 3.0, "nowCL": 1.5}}]],
+        }
+        w.get_history_wrapper = lambda entity_id, *a, **kw: histories.get(entity_id, [])
+
+        captured = {}
+
+        def capture(series_data, *args, **kwargs):
+            """Record each series' data by name instead of rendering it."""
+            captured.update({series["name"]: series["data"] for series in series_data})
+            return ""
+
+        w.render_chart = capture
+        w.get_chart("PV")
+
+        forecast = list(captured.get("Forecast History", {}).values())
+        forecast_cl = list(captured.get("Forecast History CL", {}).values())
+        assert forecast and all(abs(value - 3.0) < 0.001 for value in forecast), f"Forecast History should plot {uncalibrated_entity} (3.0 kW), got {forecast}"
+        assert forecast_cl and all(abs(value - 1.5) < 0.001 for value in forecast_cl), f"Forecast History CL should plot h0's nowCL (1.5 kW), got {forecast_cl}"
+
+        print("✓ PV chart plots the uncalibrated sensor as Forecast History and h0's nowCL as Forecast History CL")
+        print("✓ Test passed")
+        return False
+    finally:
         if original_dashboard_values is None:
             if hasattr(my_predbat, "dashboard_values"):
                 del my_predbat.dashboard_values

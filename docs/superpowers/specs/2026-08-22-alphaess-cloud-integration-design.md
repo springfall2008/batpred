@@ -822,11 +822,22 @@ Each is marked `VERIFY@FIELD` in `alphaess_const.py`:
    sample; charge-negative is inferred.
 2. **`ctrDis = 1` with both periods disabled means "never discharge".** This is the
    natural reading of the documented "disabling a period is start == end", and it is what
-   freeze export depends on.
+   freeze CHARGE and the iBoost/car holds depend on. Update (GH#4701): supported by
+   AlphaESS's own manual - "outside the set time period, the batteries are only allowed
+   to be charged but cannot be discharged" - though start == end as the empty form is
+   still the inferred part. Note this is NOT what freeze export depends on; freeze export
+   needs charging stopped, which the API cannot express at all (see 3).
 3. **Whether surplus above house load reaches the grid during a discharge window.**
    `ctrDis` is documented as "Battery Discharge Time Control", so how much of an export
    window actually exports may depend on the unit's working mode. The writes are identical
    either way — this affects what a user should expect, not what the component sends.
+   **ANSWERED, No (GH#4701).** A tester reports the battery covering house load and
+   exporting only solar surplus during a programmed window, and AlphaESS's manual
+   describes the window as a permission window (self-consumption inside it, charge-only
+   outside it). Force Export is therefore not deliverable over the Open API, and neither
+   is Freeze Export, which needs charging stopped rather than discharging permitted.
+   Documented in apps-yaml.md; the recommended configuration is predbat_mode
+   'Control charge'. Forced export is reachable over local Modbus dispatch registers.
 4. **Whether the 24-hour write limit is enforced.** If a live tester sees `6008` or `6053`
    on a second same-day write, `alphaess_min_write_interval` becomes the primary defence
    and its default should rise.

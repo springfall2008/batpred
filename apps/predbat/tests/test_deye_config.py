@@ -15,7 +15,6 @@ def test_deyecloud_inverter_def():
     else:
         expect = {
             "has_ge_inverter_mode": False,
-            "has_fox_inverter_mode": False,
             "has_ge_eco_toggle": False,
             "has_charge_enable_time": True,
             "has_discharge_enable_time": True,

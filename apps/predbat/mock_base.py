@@ -35,8 +35,10 @@ class MockHAInterface:
     crash on any component that auto-configures a Predbat setting.
     """
 
-    async def set_state_external(self, entity_id, state, attributes={}):
+    async def set_state_external(self, entity_id, state, attributes=None):
         """Print an external state write instead of applying it."""
+        if attributes is None:
+            attributes = {}
         print(f"SET EXTERNAL: {entity_id} = {state}")
 
 
@@ -62,6 +64,8 @@ class MockBase:
         self.had_errors = False
         self.components = None
         self.num_cars = 0
+        # As reset() leaves it: no Axle VPP event is forcing read only
+        self.set_read_only_axle = False
         self.currency_symbols = "£p"
         self.arg_errors = {}
         self.args = {key: value for key, value in kwargs.items() if value is not None}
@@ -124,11 +128,13 @@ class MockBase:
         if isinstance(value, str) and "." in value:
             state = self.get_state_wrapper(value, default=None)
         elif isinstance(value, list):
-            state = "n/a []"
-            for item in value:
-                if isinstance(item, str) and "." in item:
-                    state = self.get_state_wrapper(item, default=None)
-                    break
+            # Every entry's state, position for position: in a mixed fleet the first entity can
+            # legitimately read 0 while a later one carries the value, e.g. PV on a battery-less
+            # string inverter listed after the battery inverter (issue #5279)
+            if any(isinstance(item, str) and "." in item for item in value):
+                state = [self.get_state_wrapper(item, default=None) if isinstance(item, str) and "." in item else "n/a" for item in value]
+            else:
+                state = "n/a []"
         else:
             state = "n/a"
         print(f"Set arg {key} = {value} (state={state})")

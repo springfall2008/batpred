@@ -35,6 +35,22 @@ def build_load_minutes(day_rates, extra_minutes=10):
     return MinuteArray(data, size)
 
 
+def build_recent_load_minutes(rate_at_tod, recorded_minutes, minutes_now, size=3 * 24 * 60):
+    """
+    Build a backwards-indexed cumulative load MinuteArray for a system installed recorded_minutes ago.
+
+    rate_at_tod(tod) gives the kWh-per-minute load at a time of day (minutes from midnight). Index i covers
+    the minute ending i minutes before now, so its time of day is (minutes_now - i - 1) mod 1440. Nothing
+    was recorded before the install, so every older index increments by zero.
+    """
+    data = {}
+    data[size - 1] = 0.0
+    for i in range(size - 2, -1, -1):
+        rate = rate_at_tod((minutes_now - i - 1) % (24 * 60)) if i < recorded_minutes else 0.0
+        data[i] = data[i + 1] + rate
+    return MinuteArray(data, size)
+
+
 def expected_day_weight(now_utc, day):
     """Re-implement the static weekday*age weighting (holiday matching applied separately) to validate the forecast."""
     today_dow = now_utc.weekday()
@@ -210,13 +226,14 @@ def test_load_forecast_history(my_predbat):
     else:
         print("Short history correctly used only {} available days".format(my_predbat.load_minutes_age))
 
-    # Zero age -> empty forecast
+    # Zero age with nothing recorded -> empty forecast (the days_previous fallback then applies)
     my_predbat.load_minutes_age = 0
+    my_predbat.load_minutes = build_load_minutes({1: 0.0})
     if my_predbat.compute_load_forecast_history(now_utc) != {}:
-        print("ERROR: zero age should return empty forecast")
+        print("ERROR: zero age with no recorded load should return empty forecast")
         failed = True
     else:
-        print("Zero age returned empty forecast")
+        print("Zero age with no recorded load returned empty forecast")
 
     # ---------------------------------------------------------------
     # Test 5: get_holiday_minutes reconstructs state-at-time via minute_data
@@ -407,11 +424,306 @@ def test_load_forecast_history(my_predbat):
         print("Tomorrow slot matches same-time-of-day today (constant rate): {:.5f}".format(energy_tomorrow))
 
     # ---------------------------------------------------------------
+    # Test 9: fetch_ml_load_forecast_history time-shifts load_today_h1 history (batpred#4750)
+    # ---------------------------------------------------------------
+    print("Test 9: fetch_ml_load_forecast_history time-shifts load_today_h1 history by its 60-minute lead")
+    setup_predbat(my_predbat, now_utc)
+    my_predbat.prefix = "predbat"
+    my_predbat.forecast_days = 2
+    my_predbat.midnight_utc = now_utc  # now_utc is exactly local midnight in this test file
+    original_get_history_wrapper = my_predbat.get_history_wrapper
+
+    try:
+        # A reading recorded yesterday at 23:30 predicts (via load_today_h1) the cumulative load at
+        # 00:30 today; a reading recorded today at 09:00 predicts the cumulative load at 10:00 today.
+        # A third, later reading (09:30) follows so 10:00 is an interior point of the reconstructed
+        # series rather than its tail - minute_data's smoothing tail-fill only settles on a point's
+        # true value once a later reading exists to interpolate towards, which is always the case in
+        # real usage since Load ML's most recent reading always predicts 60 minutes into the future.
+        yesterday_2330 = (now_utc - timedelta(minutes=30)).isoformat()
+        today_0900 = (now_utc + timedelta(hours=9)).isoformat()
+        today_0930 = (now_utc + timedelta(hours=9, minutes=30)).isoformat()
+        history_records = [
+            {"attributes": {"load_today_h1": 10.0}, "last_updated": yesterday_2330},
+            {"attributes": {"load_today_h1": 25.0}, "last_updated": today_0900},
+            {"attributes": {"load_today_h1": 26.0}, "last_updated": today_0930},
+        ]
+        captured_history_call = {}
+
+        def fake_get_history_wrapper(entity_id, days=30, required=True, tracked=True):
+            """Record the entity/days requested and return the fixed history_records."""
+            captured_history_call["entity_id"] = entity_id
+            captured_history_call["days"] = days
+            return [history_records]
+
+        my_predbat.get_history_wrapper = fake_get_history_wrapper
+
+        forecast = my_predbat.fetch_ml_load_forecast_history(now_utc)
+
+        if captured_history_call.get("entity_id") != "sensor.predbat_load_ml_stats":
+            print("ERROR: fetched history for wrong entity: {}".format(captured_history_call.get("entity_id")))
+            failed = True
+        elif captured_history_call.get("days", 0) < 2:
+            print("ERROR: history lookback should cover at least 2 days to include yesterday, got {}".format(captured_history_call.get("days")))
+            failed = True
+        elif abs(forecast.get(30, -1) - 10.0) > 1e-6:
+            print("ERROR: minute 30 (00:30 today, from yesterday 23:30 reading) expected 10.0, got {}".format(forecast.get(30)))
+            failed = True
+        elif abs(forecast.get(600, -1) - 25.0) > 1e-6:
+            print("ERROR: minute 600 (10:00 today, from today 09:00 reading) expected 25.0, got {}".format(forecast.get(600)))
+            failed = True
+        else:
+            print("PASS: past load_today_h1 readings correctly time-shifted onto their target minute ({} at 00:30, {} at 10:00)".format(forecast.get(30), forecast.get(600)))
+
+        # No history at all -> empty dict, not an error
+        my_predbat.get_history_wrapper = lambda entity_id, days=30, required=True, tracked=True: None
+        if my_predbat.fetch_ml_load_forecast_history(now_utc) != {}:
+            print("ERROR: missing history should return an empty forecast")
+            failed = True
+        else:
+            print("PASS: missing history returns an empty forecast rather than raising")
+    finally:
+        my_predbat.get_history_wrapper = original_get_history_wrapper
+
+    # ---------------------------------------------------------------
+    # Test 10: apply_load_ml_forecast_history gates on the ml_forecast passed in (batpred#4750, #4762)
+    # ---------------------------------------------------------------
+    print("Test 10: apply_load_ml_forecast_history overrides elapsed minutes only when Load ML is genuinely active")
+    my_predbat.minutes_now = 600
+    original_fetch_ml_load_forecast_history = my_predbat.fetch_ml_load_forecast_history
+    original_load_forecast = my_predbat.load_forecast
+
+    try:
+        # Case A: Load ML not active this cycle (e.g. running in the background but not selected as
+        # the forecast source, so fetch_sensor_data's own load_ml_forecast stayed empty) - must NOT
+        # touch self.load_forecast even if h1 history exists.
+        my_predbat.load_forecast = {300: 1.0, 600: 20.0}
+        my_predbat.fetch_ml_load_forecast_history = lambda now_utc: {300: 99.0}  # should be ignored entirely
+        my_predbat.apply_load_ml_forecast_history(now_utc, {})
+        if my_predbat.load_forecast != {300: 1.0, 600: 20.0}:
+            print("ERROR: load_forecast should be untouched when no ML forecast was fetched this cycle, got {}".format(my_predbat.load_forecast))
+            failed = True
+        else:
+            print("PASS: inactive Load ML leaves load_forecast untouched (falls through to the weighted-bucket baseline)")
+
+        # Case A2: the gate is a required precondition, not something a caller can skip by omitting
+        # the argument - the default must be inert rather than "assume ML was active".
+        my_predbat.load_forecast = {300: 1.0, 600: 20.0}
+        my_predbat.apply_load_ml_forecast_history(now_utc)
+        if my_predbat.load_forecast != {300: 1.0, 600: 20.0}:
+            print("ERROR: load_forecast should be untouched when ml_forecast is omitted, got {}".format(my_predbat.load_forecast))
+            failed = True
+        else:
+            print("PASS: omitted ml_forecast defaults to inactive rather than backfilling")
+
+        # Case B: Load ML active - overrides the weighted-bucket baseline for elapsed minutes only,
+        # leaves future (>= minutes_now) minutes from the live ML forecast untouched.
+        my_predbat.load_forecast = {300: 1.0, 600: 20.0, 900: 30.0}  # 300 = weighted-bucket baseline; 600/900 = live ML
+        my_predbat.fetch_ml_load_forecast_history = lambda now_utc: {300: 9.5, 900: 999.0}  # 900 is future, must not apply
+        my_predbat.apply_load_ml_forecast_history(now_utc, {600: 20.0, 900: 30.0})  # this cycle's live ML forecast
+        expected = {300: 9.5, 600: 20.0, 900: 30.0}
+        if my_predbat.load_forecast != expected:
+            print("ERROR: expected {} got {}".format(expected, my_predbat.load_forecast))
+            failed = True
+        else:
+            print("PASS: active Load ML overrides only elapsed minutes with genuine past forecasts ({})".format(my_predbat.load_forecast))
+    finally:
+        my_predbat.fetch_ml_load_forecast_history = original_fetch_ml_load_forecast_history
+        my_predbat.load_forecast = original_load_forecast
+
+    if run_new_install_tests(my_predbat):
+        failed = True
+
+    # ---------------------------------------------------------------
     # Restore mocks/state
     # ---------------------------------------------------------------
     my_predbat.get_holiday_minutes = original_get_holiday_minutes
     my_predbat.args.clear()
     my_predbat.args.update(original_args)
     my_predbat.fetch_config_options()
+
+    return failed
+
+
+def check_step(forecast, minute_absolute, expected, label):
+    """Compare one 5-minute bucket of a cumulative forecast against an expected kWh value, printing the outcome."""
+    actual = step_energy_at(forecast, minute_absolute)
+    if abs(actual - expected) > 2e-4:
+        print("ERROR: {} (minute {}) expected {} got {}".format(label, minute_absolute, round(expected, 6), round(actual, 6)))
+        return True
+    print("PASS: {} = {}".format(label, round(actual, 6)))
+    return False
+
+
+def run_new_install_tests(my_predbat):
+    """
+    New installs with less history than the search window (batpred#5548).
+
+    A slot with no recorded sample at its time of day on any previous day uses today's sample when that time of
+    day has already passed today, and otherwise the average of everything recorded so far (once at least an hour
+    exists), with base load as the floor. Established installs are unchanged: today never contributes while a
+    previous day has data for the slot.
+    """
+    print("**** Running load_forecast_history new-install tests (batpred#5548) ****")
+    failed = False
+    original_get_holiday_minutes = my_predbat.get_holiday_minutes
+    now_utc = datetime(2026, 6, 17, 14, 0, 0, tzinfo=timezone.utc)  # Wednesday 14:00
+    minutes_now = 14 * 60
+
+    def setup_midday(recorded_minutes, rate_at_tod, age_days):
+        """Mid-day fixture: now is 14:00, the system was installed recorded_minutes ago."""
+        setup_predbat(my_predbat, now_utc)
+        my_predbat.minutes_now = minutes_now
+        my_predbat.forecast_minutes = 24 * 60  # horizon runs to 14:30 tomorrow
+        my_predbat.holiday_load_scaling = 0.5
+        my_predbat.load_minutes = build_recent_load_minutes(rate_at_tod, recorded_minutes, minutes_now)
+        my_predbat.load_minutes_age = age_days
+        my_predbat.get_holiday_minutes = lambda now, n: None
+
+    try:
+        # ---------------------------------------------------------------
+        # Test 11: installed at 12:00 yesterday, large overnight load (the issue's example)
+        # ---------------------------------------------------------------
+        print("Test 11: installed mid-day yesterday - tonight's slots come from this morning")
+
+        def night_heavy(tod):
+            """1.2 kW overnight (00:00-06:00), 0.3 kW otherwise."""
+            return 0.02 if tod < 6 * 60 else 0.005
+
+        setup_midday(26 * 60, night_heavy, 1)
+        forecast = my_predbat.compute_load_forecast_history(now_utc)
+        # Tomorrow 03:00: yesterday 03:00 predates the install, so this morning's 03:00 is the only sample
+        failed |= check_step(forecast, 24 * 60 + 180, 5 * 0.02, "tomorrow 03:00 from today's 03:00")
+        # Today 03:00 (elapsed): no previous-day sample either, so it reads today's actual - neutral in-day comparison
+        failed |= check_step(forecast, 180, 5 * 0.02, "today 03:00 equals today's actual")
+        # Tomorrow 13:00: yesterday 13:00 was recorded, so the normal history path applies
+        failed |= check_step(forecast, 24 * 60 + 13 * 60, 5 * 0.005, "tomorrow 13:00 from yesterday")
+        # Tonight 20:00: yesterday 20:00 was recorded
+        failed |= check_step(forecast, 20 * 60, 5 * 0.005, "today 20:00 from yesterday")
+
+        # ---------------------------------------------------------------
+        # Test 12: established install - today is ignored while any previous day has data for the slot
+        # ---------------------------------------------------------------
+        print("Test 12: established install unchanged - today only fills slots no previous day covers")
+
+        setup_midday(0, lambda tod: 0.0, 2)
+        data = {}
+        size = 3 * 24 * 60
+        data[size - 1] = 0.0
+        for i in range(size - 2, -1, -1):
+            data[i] = data[i + 1] + (0.1 if i < minutes_now else 0.002)  # today so far at 6 kW, previous days 0.12 kW
+        my_predbat.load_minutes = MinuteArray(data, size)
+        forecast = my_predbat.compute_load_forecast_history(now_utc)
+        failed |= check_step(forecast, 24 * 60 + 60, 5 * 0.002, "tomorrow 01:00 ignores today's high load")
+
+        # ---------------------------------------------------------------
+        # Test 13: installed 3 hours ago (age 0) - same time of day from today, everything else the recorded average
+        # ---------------------------------------------------------------
+        print("Test 13: installed today - forecast built from today's recorded hours")
+
+        def three_hours(tod):
+            """0.6 kW 11:00-12:00, 1.2 kW 12:00-13:00, 1.8 kW 13:00-14:00."""
+            if tod < 12 * 60:
+                return 0.01
+            if tod < 13 * 60:
+                return 0.02
+            return 0.03
+
+        setup_midday(3 * 60, three_hours, 0)
+        forecast = my_predbat.compute_load_forecast_history(now_utc)
+        if not forecast:
+            print("ERROR: zero-age install with 3 hours recorded returned an empty forecast")
+            failed = True
+        else:
+            average = 5 * (0.01 + 0.02 + 0.03) / 3
+            failed |= check_step(forecast, 12 * 60 + 30, 5 * 0.02, "today 12:30 equals today's actual")
+            failed |= check_step(forecast, 24 * 60 + 13 * 60 + 30, 5 * 0.03, "tomorrow 13:30 from today's 13:30")
+            failed |= check_step(forecast, 24 * 60 + 180, average, "tonight 03:00 from the recorded average")
+            failed |= check_step(forecast, 18 * 60, average, "later today 18:00 from the recorded average")
+            # Elapsed hours before the install stay at base load (0 here): load_today_comparison counts them as
+            # base load actual, so the recorded average there would drag the in-day adjustment down (Test 17)
+            failed |= check_step(forecast, 8 * 60, 0.0, "today 08:00 (elapsed, before install) at base load")
+
+        # Base load lifts each sample before averaging, exactly as for any other history sample
+        setup_midday(3 * 60, three_hours, 0)
+        my_predbat.base_load = 1.5  # kW -> 0.125 kWh per 5 minutes, above the 0.05 and 0.1 hours, below the 0.15 hour
+        forecast = my_predbat.compute_load_forecast_history(now_utc)
+        failed |= check_step(forecast, 24 * 60 + 180, (0.125 + 0.125 + 0.15) / 3, "recorded average of base-load-floored samples")
+        failed |= check_step(forecast, 24 * 60 + 13 * 60 + 30, 5 * 0.03, "today's sample above base load kept")
+
+        # ---------------------------------------------------------------
+        # Test 14: under an hour recorded - no recorded average yet, base load elsewhere
+        # ---------------------------------------------------------------
+        print("Test 14: under an hour recorded - unseen slots get base load")
+        setup_midday(30, lambda tod: 0.01, 0)
+        my_predbat.base_load = 0.24  # kW -> 0.02 kWh per 5 minutes
+        forecast = my_predbat.compute_load_forecast_history(now_utc)
+        if not forecast:
+            print("ERROR: 30 minutes recorded should still produce a forecast")
+            failed = True
+        else:
+            failed |= check_step(forecast, 24 * 60 + 13 * 60 + 45, 5 * 0.01, "tomorrow 13:45 from today's 13:45")
+            failed |= check_step(forecast, 24 * 60 + 180, 0.24 * 5 / 60.0, "tonight 03:00 at base load")
+            failed |= check_step(forecast, 18 * 60, 0.24 * 5 / 60.0, "later today 18:00 at base load")
+
+        # ---------------------------------------------------------------
+        # Test 15: holiday mode with only non-holiday recordings - today's sample and the average are scaled
+        # ---------------------------------------------------------------
+        print("Test 15: holiday mode scales today's sample and the recorded average")
+        setup_midday(3 * 60, three_hours, 0)
+        my_predbat.holiday_days_left = 2  # today and tomorrow on holiday; nothing recorded on holiday
+        forecast = my_predbat.compute_load_forecast_history(now_utc)
+        average = 5 * (0.01 + 0.02 + 0.03) / 3
+        failed |= check_step(forecast, 24 * 60 + 13 * 60 + 30, 5 * 0.03 * 0.5, "holiday tomorrow 13:30 scaled")
+        failed |= check_step(forecast, 24 * 60 + 180, average * 0.5, "holiday tonight 03:00 average scaled")
+        my_predbat.holiday_days_left = 0
+
+        # ---------------------------------------------------------------
+        # Test 16: installed at 20:00 yesterday - under 24 hours, so load_minutes_age is still 0, but yesterday's
+        # evening is recorded and must be searched rather than replaced by the recorded average
+        # ---------------------------------------------------------------
+        print("Test 16: installed 18 hours ago (age 0) - yesterday's recorded evening is still used")
+
+        def evening_heavy(tod):
+            """2.4 kW 20:00-24:00, 0.6 kW otherwise."""
+            return 0.04 if tod >= 20 * 60 else 0.01
+
+        setup_midday(18 * 60, evening_heavy, 0)
+        forecast = my_predbat.compute_load_forecast_history(now_utc)
+        average = 5 * (4 * 0.04 + 14 * 0.01) / 18
+        failed |= check_step(forecast, 21 * 60, 5 * 0.04, "tonight 21:00 from yesterday's 21:00")
+        failed |= check_step(forecast, 24 * 60 + 180, 5 * 0.01, "tomorrow 03:00 from today's 03:00")
+        failed |= check_step(forecast, 16 * 60, average, "later today 16:00 from the recorded average")
+
+        # ---------------------------------------------------------------
+        # Test 17: the forecast leaves the in-day adjustment neutral on an install made earlier today
+        # ---------------------------------------------------------------
+        print("Test 17: in-day adjustment stays neutral for a same-day install")
+        setup_midday(3 * 60, lambda tod: 0.02, 0)  # installed 11:00, constant 1.2 kW
+        forecast = my_predbat.compute_load_forecast_history(now_utc)
+        saved = {name: getattr(my_predbat, name, None) for name in ("load_forecast_only", "midnight_utc", "calculate_inday_adjustment", "metric_inday_adjust_damping", "load_scaling", "load_scaling_dynamic", "manual_load_adjust", "get_history_wrapper")}
+        try:
+            my_predbat.load_forecast_only = True
+            my_predbat.midnight_utc = now_utc - timedelta(minutes=minutes_now)
+            my_predbat.calculate_inday_adjustment = True
+            my_predbat.metric_inday_adjust_damping = 1.0
+            my_predbat.load_scaling = 1.0
+            my_predbat.load_scaling_dynamic = {}
+            my_predbat.manual_load_adjust = {}
+            my_predbat.get_history_wrapper = lambda entity_id, days=30, required=True, tracked=True: None  # no yesterday factor
+            factor = my_predbat.load_today_comparison(my_predbat.load_minutes, forecast, {}, {}, minutes_now, save=False)
+            # Today's weight at 14:00 is 1 - 10/24, so a pre-install forecast of the 1.2 kW average across 00:00-11:00
+            # (13.2 kWh predicted against nothing recorded) would pull this to about 0.65
+            if abs(factor - 1.0) > 0.02:
+                print("ERROR: in-day adjustment for a same-day install expected ~1.0 got {}".format(factor))
+                failed = True
+            else:
+                print("PASS: in-day adjustment neutral for a same-day install ({})".format(round(factor, 4)))
+        finally:
+            for name, value in saved.items():
+                setattr(my_predbat, name, value)
+    finally:
+        my_predbat.get_holiday_minutes = original_get_holiday_minutes
+        my_predbat.holiday_days_left = 0
 
     return failed

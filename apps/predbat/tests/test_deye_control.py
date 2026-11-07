@@ -9,7 +9,7 @@
 """Tests for the DEYE behaviour to work-mode derivation (``derive_control_state``)."""
 
 from unittest.mock import patch
-from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, TOU_FILLER_TIMES, DEYE_ORDER_MAX_POLLS
+from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, DEYE_ORDER_MAX_POLLS
 from deye_const import CONFIG_BATTERY_KEYS, DEYE_TOU_DAYS
 from tests.test_deye_api import MockDeye, MOCK_RATED_POWER
 from tests.test_infra import run_async as run_async_local
@@ -401,10 +401,10 @@ def test_run_clears_pending_order_and_count_on_success():
 def test_window_times_reach_the_slots_in_deye_format():
     """A HH:MM:SS window becomes HH:MM slot times and actually produces a window.
 
-    Live regression: every control payload for two hours carried only the filler times
-    (00:00/04:00/08:00/12:00/16:00/20:00) with grid charge off everywhere — the signature of
-    build_tou_slots seeing no window at all — because Predbat was writing the window times
-    to dummy entities this component never reads.
+    Live regression: every control payload for two hours carried only padding slots with
+    grid charge off everywhere — the signature of build_tou_slots seeing no window at all —
+    because Predbat was writing the window times to dummy entities this component never
+    reads.
     """
     failed = False
     d = MockDeye()
@@ -425,9 +425,10 @@ def test_window_times_reach_the_slots_in_deye_format():
     if not any(s[TOU_FIELD["grid_charge"]] and s[TOU_FIELD["soc"]] == 95 for s in slots):
         print(f"ERROR: no grid-charge slot was produced for the window: {slots}")
         failed = True
-    # The all-filler payload is exactly what the bug produced, so assert we are not back there
-    if times == TOU_FILLER_TIMES[:TOU_SLOT_COUNT]:
-        print(f"ERROR: slots are pure filler, the window was lost: {times}")
+    # The window's end must come back too: a payload carrying the start but no return to
+    # self-use is an unterminated window, the other way this can go wrong.
+    if "05:30" not in times:
+        print(f"ERROR: the window's end never reached the slots: {times}")
         failed = True
 
     # A HH:MM window still works, so a stale entity value cannot break the payload
@@ -1147,6 +1148,114 @@ def test_fetch_tou_config_caches_and_survives_an_unsupported_model():
     assert not failed, "test_fetch_tou_config_caches_and_survives_an_unsupported_model"
 
 
+def _hm(text):
+    """Convert an HH:MM slot time to minutes past midnight.
+
+    Deliberately not DeyeAPI._hm_to_minutes: this is the test's own reading of the payload,
+    and sharing the parser would make the check agree with a broken one.
+    """
+    hours, minutes = str(text).split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def _slot_in_effect(slots, minute):
+    """Return the slot DEYE would be running at a given minute past midnight.
+
+    A slot runs from its own start until the next slot's start, so the one in effect is
+    the latest slot starting at or before the minute; before the first slot the programme
+    has wrapped round from the last slot of the previous day.
+    """
+    effective = slots[-1]
+    for slot in slots:
+        if _hm(slot[TOU_FIELD["time"]]) <= minute:
+            effective = slot
+        else:
+            break
+    return effective
+
+
+def _acting_at(slots, minute, field, target_soc):
+    """Return True if the slot running at this minute both sets the flag and holds the target SoC."""
+    slot = _slot_in_effect(slots, minute)
+    return bool(slot[field]) and slot[TOU_FIELD["soc"]] == target_soc
+
+
+def test_padding_slots_do_not_truncate_a_window():
+    """Every minute of a window must stay in that window's state, padding included.
+
+    GH#5156: the 6-slot programme used to be padded out at fixed clock hours, and those
+    slots carried the idle baseline whatever time they landed on. A padding slot inside a
+    window is a boundary the inverter obeys, so grid charging stopped dead at
+    04:00/08:00/12:00 while Predbat's plan still showed the window running to its end -
+    confirmed against the reporter's captured payload and their inverter's own
+    Time-of-Use table.
+
+    Checked minute by minute rather than by counting slots, because the bug did not change
+    how many slots there were or what times they carried: the 12:00 slot was correctly
+    present, it simply said the wrong thing. Placement is covered in test_tou_schedule;
+    this is the DEYE encoding's view of the same property.
+    """
+    failed = False
+    d = MockDeye()
+    cases = [
+        # (label, direction, start, end, target soc) - the two reported reproductions, an
+        # overnight window (the commonest shape, and the one the old fixed-hour padding
+        # broke most often), and the export side of the same flaw.
+        ("reported day 2", "charge", "09:45", "15:30", 100),
+        ("reported day 1", "charge", "11:15", "15:30", 100),
+        ("overnight charge", "charge", "00:30", "07:30", 100),
+        # 11:00-13:00 specifically: under the old fixed-hour padding only a window crossing
+        # 04:00, 08:00 or 12:00 got a padding slot landing inside it, so an export window
+        # over 16:00 passed whether or not the bug was present and proved nothing.
+        ("export over 12:00", "export", "11:00", "13:00", 20),
+    ]
+    for label, direction, start, end, target_soc in cases:
+        sched = _state(reserve=8, charge_power=12288, export_power=12000)
+        sched[direction] = {"enable": True, "soc": target_soc, "power": 12288, "start": start, "end": end}
+        slots = d.build_tou_slots(sched, current_soc=40, self_use_power=MOCK_RATED_POWER)
+        if len(slots) != TOU_SLOT_COUNT:
+            print(f"ERROR: {label} expected {TOU_SLOT_COUNT} slots got {len(slots)}")
+            failed = True
+            continue
+        # The action flag AND the target SoC: a slot that kept the flag but fell back to the
+        # reserve SoC would not charge or export either.
+        field = TOU_FIELD["grid_charge"] if direction == "charge" else TOU_FIELD["sell"]
+        broke_at = [minute for minute in range(_hm(start), _hm(end)) if not _acting_at(slots, minute, field, target_soc)]
+        if broke_at:
+            times = [s[TOU_FIELD["time"]] for s in slots]
+            first = broke_at[0]
+            print(f"ERROR: {label} {direction} window {start}-{end} stops at {first // 60:02d}:{first % 60:02d} ({len(broke_at)} minutes lost); slots {times}")
+            failed = True
+    assert not failed, "test_padding_slots_do_not_truncate_a_window"
+
+
+def test_padding_slots_outside_a_window_stay_idle():
+    """Every slot outside the window is idle in the DEYE encoding, padding included.
+
+    The other half of the GH#5156 fix. Placement is covered in test_tou_schedule; this is
+    the vendor's view of it - the padding must reach the wire as genuinely idle slots, with
+    grid charge and the sell flag both off, rather than inheriting a window's action.
+    """
+    failed = False
+    d = MockDeye()
+    sched = {"reserve": 8, "charge": {"enable": True, "soc": 100, "power": 12288, "start": "09:45", "end": "15:30"}, "export": {"enable": False, "soc": 0, "power": 12000}}
+    slots = d.build_tou_slots(sched, current_soc=40, self_use_power=MOCK_RATED_POWER)
+    for slot in slots:
+        inside = "09:45" <= slot[TOU_FIELD["time"]] < "15:30"
+        if inside and not slot[TOU_FIELD["grid_charge"]]:
+            print(f"ERROR: slot inside the window is not charging: {slot}")
+            failed = True
+        if not inside and (slot[TOU_FIELD["grid_charge"]] or slot[TOU_FIELD["sell"]]):
+            print(f"ERROR: slot outside the window is not idle: {slot}")
+            failed = True
+    # The window's own end must return to idle rather than running on.
+    end_slot = next((slot for slot in slots if slot[TOU_FIELD["time"]] == "15:30"), None)
+    if end_slot is None or end_slot[TOU_FIELD["grid_charge"]]:
+        print(f"ERROR: the window end slot must return to idle, got {end_slot}")
+        failed = True
+    assert not failed, "test_padding_slots_outside_a_window_stay_idle"
+
+
 def run_deye_control_tests(my_predbat):
     """Run all DEYE control-logic tests."""
     failed = False
@@ -1154,6 +1263,8 @@ def run_deye_control_tests(my_predbat):
         ("derive_table", test_derive_control_state_table),
         ("tou_slots", test_build_tou_slots_charge_window),
         ("tou_slots_distinct", test_build_tou_slots_times_are_distinct),
+        ("tou_padding_no_truncation", test_padding_slots_do_not_truncate_a_window),
+        ("tou_padding_idle_outside", test_padding_slots_outside_a_window_stay_idle),
         ("payload", test_build_dynamic_payload_and_equality),
         ("apply_suppress", test_apply_dynamic_control_suppresses_when_unchanged),
         ("apply_write", test_apply_dynamic_control_writes_and_caches_on_change),

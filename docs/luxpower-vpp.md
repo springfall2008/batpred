@@ -13,6 +13,11 @@ passive unless the relevant capability is explicitly enabled:
 Partner operations additionally require `luxpower_partner_token`. Supplying a
 token does not open a readiness gate.
 
+The component is imported only when configured. Invalid configuration leaves
+LuxPower inactive and reports a component load error while PredBat continues
+starting its other components. Binding status is retained by the cloud account
+setup and is not an engine configuration option.
+
 The client exposes device discovery, asset binding, latest telemetry, dispatch
 submit, dispatch status and dispatch cancellation. Dispatch validation enforces
 the documented single-command shape, UUID idempotency key, UTC control window,

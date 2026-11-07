@@ -17,16 +17,40 @@ to expose battery prediction data and plan information via the MCP protocol.
 """
 
 import asyncio
+import html
 import json
 from typing import Any, Dict
 from datetime import datetime, timezone, timedelta
-from utils import calc_percent_limit, get_override_time_from_string, mask_secret_args, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp, is_debug_excluded_key
-import re
 from aiohttp import web
+import hmac
 import secrets
+from urllib.parse import urlencode
 import jwt as pyjwt
-import hashlib
 from component_base import ComponentBase
+from const import MCP_DEFAULT_SECRET
+from agent_tools import (  # noqa: F401
+    PredbatTools,
+    TOOL_DEFS,
+    mcp_tool_list,
+    openai_tool_list,
+    MCPArgumentError,
+    parse_number_argument,
+    compile_filter_argument,
+    parse_bool_argument,
+    json_safe_value,
+    summarise_state_value,
+    measure_state_value,
+    LOG_FILTER_TYPES,
+    MCP_LOG_DEFAULT_LINES,
+    MCP_LOG_MAX_LINES,
+    MCP_LOG_MAX_LINE_CHARS,
+    MCP_LOG_DEFAULT_MAX_BYTES,
+    MCP_STATE_DEFAULT_MAX_BYTES,
+    MCP_STATE_MAX_BYTES_LIMIT,
+    MCP_STATE_TOTAL_BYTES_LIMIT,
+    MCP_STATE_LARGE_COLLECTION,
+    MCP_STATE_SAMPLE_ENTRIES,
+)
 
 
 """
@@ -42,163 +66,13 @@ Example usage in VSCode with OAuth
 """
 
 
-# Log filter levels accepted by the get_log tool, matching the web log view's tabs
-LOG_FILTER_TYPES = ("all", "info", "warnings", "errors")
-
-# get_log line budget - the default keeps a response small enough for an AI context window,
-# the cap stops a "max_lines": 999999 request pulling a 10MB log through the protocol (#4768)
-MCP_LOG_DEFAULT_LINES = 500
-MCP_LOG_MAX_LINES = 5000
-
-
-# get_state size guards. A real debug dump is ~5MB, but 272 of its 313 top-level keys are under
-# 1KB and total under 10KB between them - the whole scalar state of Predbat. The per-key budget
-# returns those freely while the handful of per-minute series (load_minutes, rate_import, ...)
-# are described rather than serialised (#4768).
-MCP_STATE_DEFAULT_MAX_BYTES = 2048
-MCP_STATE_MAX_BYTES_LIMIT = 262144
-MCP_STATE_TOTAL_BYTES_LIMIT = 262144
-
-# Collections longer than this are summarised without serialising them first - measuring a 2880
-# entry per-minute dict by encoding it would cost more than the tool call is worth.
-MCP_STATE_LARGE_COLLECTION = 200
-
-# How many entries of a large collection to show in its summary
-MCP_STATE_SAMPLE_ENTRIES = 3
-
-
-def json_safe_value(value, depth=0):
-    """
-    Convert a Predbat state value into something json.dumps can encode.
-
-    Tool results are serialised with a plain json.dumps, so a stray datetime or inverter object
-    would fail the whole call - anything unrecognised becomes its str() rather than an error.
-    """
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if depth >= 6:
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): json_safe_value(item, depth + 1) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [json_safe_value(item, depth + 1) for item in value]
-    return str(value)
-
-
-def summarise_state_value(value):
-    """
-    Describe a state value that is too large to return in full, so the caller can still see its
-    shape and decide whether to ask for it another way.
-    """
-    summary = {"type": type(value).__name__}
-    try:
-        summary["length"] = len(value)
-    except TypeError:
-        pass
-
-    if isinstance(value, dict):
-        keys = list(value.keys())[:MCP_STATE_SAMPLE_ENTRIES]
-        summary["sample_keys"] = [str(key) for key in keys]
-        numbers = [item for item in value.values() if isinstance(item, (int, float)) and not isinstance(item, bool)]
-    elif isinstance(value, (list, tuple, set)):
-        numbers = [item for item in value if isinstance(item, (int, float)) and not isinstance(item, bool)]
-        summary["sample_entries"] = [json_safe_value(item, depth=5) for item in list(value)[:MCP_STATE_SAMPLE_ENTRIES]]
-    elif isinstance(value, str):
-        summary["preview"] = value[:200]
-        numbers = []
-    else:
-        numbers = []
-
-    if numbers:
-        summary["min"] = min(numbers)
-        summary["max"] = max(numbers)
-        summary["mean"] = sum(numbers) / len(numbers)
-
-    return summary
-
-
-def measure_state_value(value, max_bytes):
-    """
-    Return (fits, safe_value, size_bytes) for a state value.
-
-    fits is a separate flag rather than a None safe_value because plenty of Predbat state is
-    legitimately None, and a None sentinel would report every one of those as omitted.
-
-    Long collections are rejected on their entry count alone so the per-minute series are never
-    serialised just to discover they don't fit.
-    """
-    if isinstance(value, (dict, list, tuple, set)) and len(value) > MCP_STATE_LARGE_COLLECTION:
-        return False, None, None
-    safe = json_safe_value(value)
-    try:
-        size = len(json.dumps(safe))
-    except (TypeError, ValueError):
-        safe = str(value)
-        size = len(safe) + 2
-    if size > max_bytes:
-        return False, None, None
-    return True, safe, size
-
-
-class MCPArgumentError(ValueError):
-    """Raised when a tool argument is the wrong type or shape, so it can be reported clearly."""
-
-
-def parse_number_argument(value, name, default, minimum=None, maximum=None, as_float=False):
-    """
-    Coerce a numeric tool argument, clamping it into range.
-
-    Out-of-range values are clamped rather than rejected - a client asking for more than the cap
-    wants as much as it can have - but a value that is not a number at all is a mistake, and the
-    caller is an AI assistant that can only correct itself if told which argument was wrong.
-    """
-    if value is None:
-        value = default
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        raise MCPArgumentError("'{}' must be a number, not a boolean".format(name))
-    try:
-        value = float(value) if as_float else int(value)
-    except (TypeError, ValueError):
-        raise MCPArgumentError("'{}' must be a {}, got {!r}".format(name, "number" if as_float else "whole number", value))
-    if minimum is not None:
-        value = max(minimum, value)
-    if maximum is not None:
-        value = min(maximum, value)
-    return value
-
-
-def compile_filter_argument(value, name="filter"):
-    """
-    Compile a regex tool argument, or return None when no filter was given.
-
-    Compiling up front turns an invalid pattern into a named argument error instead of a bare
-    Python traceback, and avoids re-compiling it for every entry the caller filters over.
-    """
-    if value is None or value == "":
-        return None
-    if not isinstance(value, str):
-        raise MCPArgumentError("'{}' must be a string regular expression, got {!r}".format(name, value))
-    try:
-        return re.compile(value)
-    except re.error as error:
-        raise MCPArgumentError("'{}' is not a valid regular expression: {}".format(name, error))
-
-
-def parse_bool_argument(value, default=False):
-    """
-    Coerce an MCP tool argument to a bool, tolerating the strings some clients send.
-    """
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return str(value).strip().lower() not in ("false", "0", "no", "off", "")
+# A tool that changes Predbat needs mcp:write or mcp:control; any other tool needs any MCP scope, as writing implies reading
+MCP_ALL_SCOPES = ("mcp:read", "mcp:write", "mcp:control")
+MCP_READ_SCOPES = set(MCP_ALL_SCOPES)
+MCP_WRITE_SCOPES = {"mcp:write", "mcp:control"}
+MCP_STORAGE_MODULE = "mcp"
+MCP_SIGNING_KEY_FILE = "jwt_signing_key"
+MCP_SIGNING_KEY_BYTES = 32
 
 
 class PredbatMCPServer(ComponentBase):
@@ -212,12 +86,12 @@ class PredbatMCPServer(ComponentBase):
         self.mcp_secret = mcp_secret
         self.mcp_port = mcp_port
         self.mcp_server = None
+        self.refused_reason = None
 
         # OAuth configuration
-        # Derive JWT signing key from mcp_secret (but don't use it directly)
-        # This keeps it stable across restarts but separate from the client secret
-
-        self.jwt_secret = hashlib.sha256(f"jwt_signing_key_{self.mcp_secret}".encode()).hexdigest()
+        # A random signing key, replaced by the saved one when the server starts (load_signing_key). It used to be
+        # derived from mcp_secret, which let anyone who knew the secret forge tokens offline (#5847).
+        self.jwt_secret = secrets.token_hex(MCP_SIGNING_KEY_BYTES)
         self.jwt_algorithm = "HS256"
         self.access_token_lifetime = timedelta(days=30)
         self.authorization_code_lifetime = timedelta(minutes=10)
@@ -225,45 +99,66 @@ class PredbatMCPServer(ComponentBase):
         # Authorization codes storage (code -> user/client info)
         self.authorization_codes = {}
 
+    def add_routes(self, app):
+        """Register the OAuth discovery, OAuth and MCP routes on an aiohttp application"""
+        # OAuth metadata endpoints (for OAuth discovery)
+        app.router.add_get("/.well-known/oauth-authorization-server", self.oauth_metadata)
+        app.router.add_options("/.well-known/oauth-authorization-server", self.handle_options)
+        app.router.add_get("/.well-known/oauth-authorization-server/mcp", self.oauth_metadata_mcp)
+        app.router.add_options("/.well-known/oauth-authorization-server/mcp", self.handle_options)
+        # Protected Resource Metadata (REQUIRED by MCP spec - RFC 9728)
+        app.router.add_get("/.well-known/oauth-protected-resource", self.oauth_protected_resource_metadata)
+        app.router.add_options("/.well-known/oauth-protected-resource", self.handle_options)
+        # Path-aware discovery for the /mcp resource (RFC 9728), probed by claude.ai (#3807)
+        app.router.add_get("/.well-known/oauth-protected-resource/mcp", self.oauth_protected_resource_metadata)
+        app.router.add_options("/.well-known/oauth-protected-resource/mcp", self.handle_options)
+
+        # OAuth endpoints
+        app.router.add_get("/oauth/authorize", self.oauth_authorize)
+        app.router.add_post("/oauth/authorize", self.oauth_authorize)  # Handle form submission
+        app.router.add_get("/authorize", self.oauth_authorize)  # VSCode compatibility
+        app.router.add_post("/authorize", self.oauth_authorize)  # VSCode compatibility
+        app.router.add_post("/oauth/token", self.oauth_token)
+        app.router.add_post("/token", self.oauth_token)  # VSCode compatibility
+        app.router.add_post("/oauth/register", self.oauth_register)  # Dynamic client registration
+        app.router.add_post("/register", self.oauth_register)  # Fallback path
+        # CORS preflight for browser-based clients, otherwise OPTIONS falls through to the 404 default route (#3807)
+        app.router.add_options("/oauth/token", self.handle_options)
+        app.router.add_options("/token", self.handle_options)
+        app.router.add_options("/oauth/register", self.handle_options)
+        app.router.add_options("/register", self.handle_options)
+
+        # MCP endpoints (OAuth protected)
+        app.router.add_get("/mcp", self.html_mcp_get)
+        app.router.add_post("/mcp", self.html_mcp_post)
+        app.router.add_get("/", self.html_mcp_get)
+        app.router.add_post("/", self.html_mcp_post)
+
+        # Favicon
+        app.router.add_get("/favicon.ico", self.favicon)
+
+        # Add default route for any other paths (MUST BE LAST)
+        app.router.add_route("*", "/{tail:.*}", self.default_route)
+
     async def start(self):
         """Start the MCP server if enabled"""
-        if self.mcp_enable:
+        if self.mcp_enable and (not str(self.mcp_secret or "").strip() or self.mcp_secret == MCP_DEFAULT_SECRET):
+            # The default secret is published, so anyone could use it to control Predbat (#5847)
+            self.refused_reason = "mcp_secret is not set, or is still the default, so the MCP server has not started - set your own mcp_secret in apps.yaml"
+            self.log("Error: MCP: " + self.refused_reason)
+            # Report started, so Predbat's start-up does not wait for a server that will never run; is_alive() reports the error
+            self.api_started = True
+            while not self.api_stop:
+                await asyncio.sleep(1)
+            self.api_started = False
+        elif self.mcp_enable:
+            await self.load_signing_key()
             self.mcp_server = create_mcp_server(self.base, self.log)
             await self.mcp_server.start()
 
             # Now create Web UI on port self.mcp_port
             app = web.Application()
-
-            # OAuth metadata endpoints (for OAuth discovery)
-            app.router.add_get("/.well-known/oauth-authorization-server", self.oauth_metadata)
-            app.router.add_options("/.well-known/oauth-authorization-server", self.handle_options)
-            app.router.add_get("/.well-known/oauth-authorization-server/mcp", self.oauth_metadata_mcp)
-            app.router.add_options("/.well-known/oauth-authorization-server/mcp", self.handle_options)
-            # Protected Resource Metadata (REQUIRED by MCP spec - RFC 9728)
-            app.router.add_get("/.well-known/oauth-protected-resource", self.oauth_protected_resource_metadata)
-            app.router.add_options("/.well-known/oauth-protected-resource", self.handle_options)
-
-            # OAuth endpoints
-            app.router.add_get("/oauth/authorize", self.oauth_authorize)
-            app.router.add_post("/oauth/authorize", self.oauth_authorize)  # Handle form submission
-            app.router.add_get("/authorize", self.oauth_authorize)  # VSCode compatibility
-            app.router.add_post("/authorize", self.oauth_authorize)  # VSCode compatibility
-            app.router.add_post("/oauth/token", self.oauth_token)
-            app.router.add_post("/token", self.oauth_token)  # VSCode compatibility
-            app.router.add_post("/oauth/register", self.oauth_register)  # Dynamic client registration
-            app.router.add_post("/register", self.oauth_register)  # Fallback path
-
-            # MCP endpoints (OAuth protected)
-            app.router.add_get("/mcp", self.html_mcp_get)
-            app.router.add_post("/mcp", self.html_mcp_post)
-            app.router.add_get("/", self.html_mcp_get)
-            app.router.add_post("/", self.html_mcp_post)
-
-            # Favicon
-            app.router.add_get("/favicon.ico", self.favicon)
-
-            # Add default route for any other paths (MUST BE LAST)
-            app.router.add_route("*", "/{tail:.*}", self.default_route)
+            self.add_routes(app)
 
             runner = web.AppRunner(app)
             await runner.setup()
@@ -284,6 +179,80 @@ class PredbatMCPServer(ComponentBase):
             self.api_started = False
             print("MCP interface stopped")
 
+    def is_alive(self):
+        """Report the component as unhealthy while it refuses to run with the default secret"""
+        return self.api_started and not self.refused_reason
+
+    def health_message(self):
+        """Say why the MCP server is not running, if it refused to start"""
+        return self.refused_reason
+
+    async def load_signing_key(self):
+        """
+        Load the token signing key from storage, creating and saving one on first use
+
+        Saving it means access tokens survive a restart. Without storage the per-instance key from
+        initialize() is kept, so tokens last only until Predbat restarts.
+        """
+        storage = self.storage
+        if not storage:
+            self.log("Warn: MCP: No storage available, so access tokens will not survive a restart")
+            return
+        data = await storage.load(MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE)
+        key = data.get("key") if isinstance(data, dict) else None
+        if isinstance(key, str) and len(key) >= MCP_SIGNING_KEY_BYTES * 2:
+            # The saved key is kept only while mcp_secret is unchanged, so changing the secret still revokes every token
+            if secrets.compare_digest(str(data.get("secret_check", "")), self.secret_check(key)):
+                self.jwt_secret = key
+                return
+            self.log("MCP: mcp_secret has changed, so a new token signing key is used and existing tokens are revoked")
+        if not await storage.save(MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE, {"key": self.jwt_secret, "secret_check": self.secret_check(self.jwt_secret)}):
+            self.log("Warn: MCP: Failed to save the token signing key, so access tokens will not survive a restart")
+            return
+        self.log("MCP: Created a new token signing key; clients authorised before this need to authorise again")
+
+    def authenticate_bearer(self, token, base_url, verb):
+        """
+        Check a bearer token: an OAuth access token, or mcp_secret itself (the legacy form)
+
+        Returns:
+            (authenticated, scopes): scopes is the token's set of scopes, or None for mcp_secret, which has every scope
+        """
+        token_payload = self.verify_access_token(token, expected_audience=base_url)
+        if token_payload:
+            client_id = token_payload.get("client_id", "unknown")
+            self.log(f"MCP {verb}: Authenticated via OAuth token (client: {client_id})")
+            return True, set(str(token_payload.get("scope", "")).split())
+        if self.secret_matches(token):
+            self.log(f"MCP {verb}: Authenticated via legacy bearer token")
+            return True, None
+        return False, None
+
+    def redirect_with(self, uri, params):
+        """Add URL-encoded query parameters to a redirect URI, so a crafted state cannot add parameters of its own"""
+        separator = "&" if "?" in uri else "?"
+        return uri + separator + urlencode(params)
+
+    def secret_check(self, key):
+        """Return a check value tying a signing key to the current mcp_secret, without saving the secret itself"""
+        return hmac.new(key.encode(), str(self.mcp_secret).encode(), "sha256").hexdigest()
+
+    def granted_scopes(self, scope_text):
+        """
+        Return the MCP scopes to grant for a space-separated scope request
+
+        Scopes this server doesn't know (such as openid) are dropped. A request naming no MCP scope gets
+        all three, as one with no scope at all always has, so such a client keeps working.
+        """
+        scopes = [scope for scope in str(scope_text or "").split() if scope in MCP_ALL_SCOPES]
+        return scopes if scopes else list(MCP_ALL_SCOPES)
+
+    def secret_matches(self, value) -> bool:
+        """Compare a submitted value with mcp_secret in constant time, so the comparison doesn't leak how much of it matched"""
+        if not isinstance(value, str) or not value or not self.mcp_secret:
+            return False
+        return secrets.compare_digest(value.encode(), str(self.mcp_secret).encode())
+
     def verify_oauth_client(self, client_id: str, client_secret: str) -> bool:
         """
         Verify OAuth client credentials against configured secret
@@ -295,7 +264,7 @@ class PredbatMCPServer(ComponentBase):
         Returns:
             True if credentials are valid, False otherwise
         """
-        return client_secret == self.mcp_secret
+        return self.secret_matches(client_secret)
 
     def get_canonical_server_uri(self, host: str = None) -> str:
         """
@@ -328,7 +297,7 @@ class PredbatMCPServer(ComponentBase):
 
         # Default scopes if not specified
         if scopes is None:
-            scopes = ["mcp:read", "mcp:write", "mcp:control"]
+            scopes = list(MCP_ALL_SCOPES)
 
         # Default audience if not specified
         if resource is None:
@@ -431,7 +400,7 @@ class PredbatMCPServer(ComponentBase):
         base_url = f"http://{request.host}"
         self.log(f"MCP: Protected Resource Metadata request from {request.remote}")
 
-        metadata = {"resource": base_url, "authorization_servers": [base_url], "scopes_supported": ["mcp:read", "mcp:write", "mcp:control"], "bearer_methods_supported": ["header"], "resource_documentation": f"{base_url}/docs"}
+        metadata = {"resource": base_url, "authorization_servers": [base_url], "scopes_supported": list(MCP_ALL_SCOPES), "bearer_methods_supported": ["header"], "resource_documentation": f"{base_url}/docs"}
 
         self.log(f"MCP: Protected Resource Metadata request from {request.remote}")
 
@@ -460,8 +429,8 @@ class PredbatMCPServer(ComponentBase):
             "grant_types_supported": ["authorization_code", "client_credentials"],
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],  # Only S256, plain is deprecated
-            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
-            "scopes_supported": ["mcp:read", "mcp:write", "mcp:control"],
+            "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
+            "scopes_supported": list(MCP_ALL_SCOPES),
         }
 
         # Add CORS headers for cross-origin requests (needed by ChatGPT, Claude, etc.)
@@ -490,8 +459,8 @@ class PredbatMCPServer(ComponentBase):
             "grant_types_supported": ["authorization_code", "client_credentials"],
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],  # Only S256, plain is deprecated
-            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
-            "scopes_supported": ["mcp:read", "mcp:write", "mcp:control"],
+            "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
+            "scopes_supported": list(MCP_ALL_SCOPES),
         }
 
         # Add CORS headers for cross-origin requests (needed by ChatGPT, Claude, etc.)
@@ -536,6 +505,7 @@ class PredbatMCPServer(ComponentBase):
                 state = data.get("state", "")
                 code_challenge = data.get("code_challenge", "")
                 code_challenge_method = data.get("code_challenge_method", "")
+                scope = data.get("scope", "")
                 submitted_secret = data.get("secret", "")
 
                 self.log(f"MCP OAuth: POST authorization request from client_id: {client_id}")
@@ -545,7 +515,7 @@ class PredbatMCPServer(ComponentBase):
                     error_message = "Missing required OAuth parameters"
                     self.log(f"MCP OAuth: {error_message}")
                 else:
-                    if submitted_secret == self.mcp_secret:
+                    if self.secret_matches(submitted_secret):
                         self.log(f"MCP OAuth: User authenticated successfully")
 
                         # Generate authorization code
@@ -556,6 +526,7 @@ class PredbatMCPServer(ComponentBase):
                             "code_challenge": code_challenge if code_challenge else None,
                             "code_challenge_method": code_challenge_method if code_challenge_method else None,
                             "state": state,
+                            "scope": scope,
                             "expires": datetime.now(timezone.utc) + self.authorization_code_lifetime,
                             "used": False,
                         }
@@ -563,10 +534,10 @@ class PredbatMCPServer(ComponentBase):
                         self.log(f"MCP OAuth: Authorization code generated for {client_id} with state={state}")
 
                         # Redirect back with code and state
-                        separator = "&" if "?" in redirect_uri else "?"
-                        redirect_url = f"{redirect_uri}{separator}code={auth_code}"
+                        params = {"code": auth_code}
                         if state:
-                            redirect_url += f"&state={state}"
+                            params["state"] = state
+                        redirect_url = self.redirect_with(redirect_uri, params)
 
                         self.log(f"MCP OAuth: Redirecting to {redirect_url}")
                         return web.HTTPFound(redirect_url)
@@ -582,6 +553,7 @@ class PredbatMCPServer(ComponentBase):
                 state = request.query.get("state", "")
                 code_challenge = request.query.get("code_challenge")
                 code_challenge_method = request.query.get("code_challenge_method")
+                scope = request.query.get("scope", "")
                 error_message = ""
 
                 self.log(f"MCP OAuth: GET authorization request from client_id: {client_id}")
@@ -589,23 +561,25 @@ class PredbatMCPServer(ComponentBase):
                 # Validate required parameters
                 if not client_id or not redirect_uri or response_type != "code":
                     error_uri = redirect_uri if redirect_uri else "about:blank"
-                    return web.HTTPFound(f"{error_uri}?error=invalid_request&state={state}")
+                    return web.HTTPFound(self.redirect_with(error_uri, {"error": "invalid_request", "state": state}))
 
                 # PKCE is REQUIRED per OAuth 2.1 and MCP spec
                 if not code_challenge or not code_challenge_method:
                     error_uri = redirect_uri if redirect_uri else "about:blank"
                     error_desc = "PKCE required: code_challenge and code_challenge_method are required"
                     self.log(f"MCP OAuth: {error_desc}")
-                    return web.HTTPFound(f"{error_uri}?error=invalid_request&error_description={error_desc}&state={state}")
+                    return web.HTTPFound(self.redirect_with(error_uri, {"error": "invalid_request", "error_description": error_desc, "state": state}))
 
                 # Only S256 method is supported (plain is deprecated in OAuth 2.1)
                 if code_challenge_method != "S256":
                     error_uri = redirect_uri if redirect_uri else "about:blank"
                     error_desc = "code_challenge_method must be S256"
                     self.log(f"MCP OAuth: {error_desc}")
-                    return web.HTTPFound(f"{error_uri}?error=invalid_request&error_description={error_desc}&state={state}")
+                    return web.HTTPFound(self.redirect_with(error_uri, {"error": "invalid_request", "error_description": error_desc, "state": state}))
 
             # Show login page (GET request or failed POST)
+            # Every value here comes from the request, so escape it, or a crafted link could run a script on this page and read the secret the user types
+            client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method, scope = (html.escape(str(value or "")) for value in (client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method, scope))
             login_html = f"""
 <!DOCTYPE html>
 <html>
@@ -723,6 +697,7 @@ class PredbatMCPServer(ComponentBase):
         <div class="client-info">
             <p><strong>Application:</strong> {client_id}</p>
             <p><strong>Requesting access to:</strong> Battery prediction data</p>
+            <p><strong>You will be returned to:</strong> {redirect_uri}</p>
         </div>
 
         {'<div class="error">' + error_message + '</div>' if error_message else ''}
@@ -737,6 +712,7 @@ class PredbatMCPServer(ComponentBase):
             <input type="hidden" name="state" value="{state}">
             <input type="hidden" name="code_challenge" value="{code_challenge or ''}">
             <input type="hidden" name="code_challenge_method" value="{code_challenge_method or ''}">
+            <input type="hidden" name="scope" value="{scope}">
             <button type="submit">Sign In & Authorize</button>
         </form>
 
@@ -781,25 +757,24 @@ class PredbatMCPServer(ComponentBase):
             # Extract client metadata (RFC 7591 Section 2)
             client_name = data.get("client_name", "Unnamed MCP Client")
             redirect_uris = data.get("redirect_uris", [])
-            grant_types = data.get("grant_types", ["authorization_code"])
             response_types = data.get("response_types", ["code"])
-            scope = data.get("scope", "mcp:read mcp:write mcp:control")
+            scope = data.get("scope", " ".join(MCP_ALL_SCOPES))
 
-            # Generate client credentials
-            # For MCP, we use a shared secret model where all clients use the same secret
-            # In a more sophisticated implementation, you'd generate unique credentials per client
+            # Anyone who can reach the port can register, so a registered client is a public one (#5847): no
+            # client secret, and only the authorization code grant, where the user must enter mcp_secret on the
+            # authorise page. Handing out a secret here, shared or per client, would let any caller swap it for
+            # a token through the client credentials grant without ever knowing mcp_secret.
             client_id = f"mcp-client-{secrets.token_urlsafe(16)}"
 
             # Return registration response (RFC 7591 Section 3.2.1)
             response = {
                 "client_id": client_id,
-                "client_secret": self.mcp_secret,  # Shared secret model
                 "client_name": client_name,
                 "redirect_uris": redirect_uris,
-                "grant_types": grant_types,
+                "grant_types": ["authorization_code"],
                 "response_types": response_types,
                 "scope": scope,
-                "token_endpoint_auth_method": "client_secret_post",
+                "token_endpoint_auth_method": "none",
             }
 
             self.log(f"MCP OAuth: Dynamic client registration successful for {client_name} (client_id: {client_id})")
@@ -868,17 +843,13 @@ class PredbatMCPServer(ComponentBase):
             self.log(f"MCP OAuth: Invalid credentials for client_id: {client_id}")
             return web.json_response({"error": "invalid_client", "error_description": "Invalid client credentials"}, status=401)
 
-        # Parse scopes if provided
-        scopes = None
-        if scope:
-            scopes = scope.split()
-
         # Generate access token with audience and scopes
+        scopes = self.granted_scopes(scope)
         access_token = self.generate_access_token(client_id, resource=resource, scopes=scopes)
 
         self.log(f"MCP OAuth: Access token issued for client: {client_id} (client_credentials), resource: {resource}")
 
-        return web.json_response({"access_token": access_token, "token_type": "Bearer", "expires_in": int(self.access_token_lifetime.total_seconds()), "scope": scope if scope else "mcp:read mcp:write mcp:control"}, status=200)
+        return web.json_response({"access_token": access_token, "token_type": "Bearer", "expires_in": int(self.access_token_lifetime.total_seconds()), "scope": " ".join(scopes)}, status=200)
 
     async def _handle_authorization_code(self, data: dict):
         """Handle authorization_code grant type"""
@@ -950,12 +921,10 @@ class PredbatMCPServer(ComponentBase):
         # Mark code as used
         code_data["used"] = True
 
-        # Parse scopes if provided
-        scopes = None
+        # Generate access token with audience and scopes: those approved at authorisation, narrowed (never widened) by the token request
+        scopes = self.granted_scopes(code_data.get("scope"))
         if scope:
-            scopes = scope.split()
-
-        # Generate access token with audience and scopes
+            scopes = [granted for granted in self.granted_scopes(scope) if granted in scopes] or scopes
         access_token = self.generate_access_token(client_id, resource=resource, scopes=scopes)
 
         # Clean up used code after a delay
@@ -967,7 +936,7 @@ class PredbatMCPServer(ComponentBase):
 
         self.log(f"MCP OAuth: Access token issued (authorization_code), resource: {resource}")
 
-        return web.json_response({"access_token": access_token, "token_type": "Bearer", "expires_in": int(self.access_token_lifetime.total_seconds()), "scope": scope if scope else "mcp:read mcp:write mcp:control"}, status=200)
+        return web.json_response({"access_token": access_token, "token_type": "Bearer", "expires_in": int(self.access_token_lifetime.total_seconds()), "scope": " ".join(scopes)}, status=200)
 
     async def html_mcp_get(self, request):
         """
@@ -983,7 +952,7 @@ class PredbatMCPServer(ComponentBase):
         if not auth_header or not auth_header.startswith("Bearer "):
             # REQUIRED: WWW-Authenticate header with resource_metadata (MCP spec)
             base_url = f"http://{request.host}"
-            www_auth = f'Bearer realm="{base_url}", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource", ' f'scope="mcp:read mcp:write mcp:control"'
+            www_auth = f'Bearer realm="{base_url}", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource", ' f'scope="{" ".join(MCP_ALL_SCOPES)}"'
 
             # Return JSON-RPC formatted error for compatibility
             return web.json_response(
@@ -993,23 +962,15 @@ class PredbatMCPServer(ComponentBase):
         token = auth_header.replace("Bearer ", "")
         base_url = f"http://{request.host}"
 
-        # Try OAuth token first (with audience validation)
-        token_payload = self.verify_access_token(token, expected_audience=base_url)
-        if token_payload:
-            # Valid OAuth token
-            client_id = token_payload.get("client_id", "unknown")
-            self.log(f"MCP GET: Authenticated via OAuth token (client: {client_id})")
-        elif token == self.mcp_secret:
-            # Legacy direct secret authentication (backwards compatible)
-            self.log("MCP GET: Authenticated via legacy bearer token")
-        else:
+        authenticated, scopes = self.authenticate_bearer(token, base_url, "GET")
+        if not authenticated:
             # Invalid token - return JSON-RPC formatted error with WWW-Authenticate
             www_auth = f'Bearer realm="{base_url}", ' f'error="invalid_token", ' f'error_description="Invalid or expired token", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource"'
 
             return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Unauthorized: Invalid or expired token."}}, status=401, headers={"WWW-Authenticate": www_auth})
 
         try:
-            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
+            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server, scopes=scopes)
             return web.json_response(result)
         except Exception as e:
             self.log(f"Error in MCP GET endpoint: {e}")
@@ -1031,7 +992,7 @@ class PredbatMCPServer(ComponentBase):
 
             # REQUIRED: WWW-Authenticate header with resource_metadata (MCP spec)
             base_url = f"http://{request.host}"
-            www_auth = f'Bearer realm="{base_url}", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource", ' f'scope="mcp:read mcp:write mcp:control"'
+            www_auth = f'Bearer realm="{base_url}", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource", ' f'scope="{" ".join(MCP_ALL_SCOPES)}"'
 
             return web.json_response(
                 {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Unauthorized: Missing or invalid Authorization header. Use 'Authorization: Bearer <token>' header."}}, status=401, headers={"WWW-Authenticate": www_auth}
@@ -1040,16 +1001,8 @@ class PredbatMCPServer(ComponentBase):
         token = auth_header.replace("Bearer ", "")
         base_url = f"http://{request.host}"
 
-        # Try OAuth token first (with audience validation)
-        token_payload = self.verify_access_token(token, expected_audience=base_url)
-        if token_payload:
-            # Valid OAuth token
-            client_id = token_payload.get("client_id", "unknown")
-            self.log(f"MCP POST: Authenticated via OAuth token (client: {client_id})")
-        elif token == self.mcp_secret:
-            # Legacy direct secret authentication (backwards compatible)
-            self.log("MCP POST: Authenticated via legacy bearer token")
-        else:
+        authenticated, scopes = self.authenticate_bearer(token, base_url, "POST")
+        if not authenticated:
             # Invalid token
             self.log("MCP POST: Invalid token")
 
@@ -1058,26 +1011,22 @@ class PredbatMCPServer(ComponentBase):
             return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Unauthorized: Token verification failed."}}, status=401, headers={"WWW-Authenticate": www_auth})
 
         try:
-            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
+            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server, scopes=scopes)
             return web.json_response(result)
         except Exception as e:
             self.log(f"Error in MCP POST endpoint: {e}")
             return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": f"Server error: {str(e)}"}}, status=500)
 
 
-class MCPServerWrapper:
+class MCPServerWrapper(PredbatTools):
     """
     Wrapper class for the MCP Server to provide HTTP-based MCP functionality for web interface
     """
 
     def __init__(self, base, log_func=None):
-        """Initialise the MCP server wrapper"""
-        self.base = base
-        self.prefix = base.prefix
-        self.log = log_func or print
+        """Initialise the MCP server wrapper over the shared tool layer."""
+        super().__init__(base, log_func=log_func)
         self.is_running = False
-        self.plan_interval_minutes = base.plan_interval_minutes
-
         if log_func:
             log_func("Creating HTTP MCP Server with Predbat integration")
 
@@ -1105,372 +1054,14 @@ class MCPServerWrapper:
         """
         return await self.handle_mcp_request(request, self)
 
-    async def _execute_get_plan(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the get_plan tool"""
-        try:
-            raw_plan = self.base.get_state_wrapper(self.base.prefix + ".plan_html", attribute="raw", default=None)
-            # Check if we have plan data available
-            if not raw_plan:
-                return {"success": False, "error": "No plan data available", "data": None}
-
-            # Return the complete plan data
-            return {"success": True, "error": None, "data": raw_plan, "timestamp": datetime.now().isoformat(), "description": "Current Predbat battery plan including forecasts, costs, and operational states"}
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving plan data: {str(e)}", "data": None}
-
-    async def _execute_get_entities(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Get current Predbat entities
-        """
-        try:
-            filter = compile_filter_argument(arguments.get("filter", None))
-            entities = self.base.dashboard_values
-            returned_entities = []
-            for entity in entities:
-                if isinstance(entity, str):
-                    entity_id = entity
-                else:
-                    entity_id = entity.get("entity_id", "")
-                if filter:
-                    if not filter.search(entity_id):
-                        continue
-                if isinstance(entity, str):
-                    value = {"entity_id": entity_id}
-                else:
-                    value = {
-                        "entity_id": entity.get("entity_id"),
-                        "state": entity.get("state"),
-                        "friendly_name": entity.get("friendly_name"),
-                    }
-                    if "unit_of_measurement" in entity:
-                        value["unit_of_measurement"] = entity.get("unit_of_measurement")
-                    if "device_class" in entity:
-                        value["device_class"] = entity.get("device_class")
-                    if "state_class" in entity:
-                        value["state_class"] = entity.get("state_class")
-                    if "icon" in entity:
-                        value["icon"] = entity.get("icon")
-                returned_entities.append(value)
-            return {"success": True, "error": None, "data": returned_entities, "timestamp": datetime.now().isoformat(), "description": "The current Predbat entities and their states"}
-
-        except MCPArgumentError as e:
-            return {"success": False, "error": str(e), "data": None}
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving entities data: {str(e)}", "data": None}
-
-    async def _execute_set_plan_override(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute a plan override request
-        """
-        try:
-            action = arguments.get("action", None)
-            time_str = arguments.get("time", None)
-
-            if not action or not time_str:
-                return {"success": False, "error": "Missing required parameters", "data": None}
-
-            action = action.lower()
-            action = action.replace(" ", "_")
-
-            now_utc = self.base.now_utc
-            override_time = get_override_time_from_string(now_utc, time_str, self.plan_interval_minutes)
-            if not override_time:
-                return {"success": False, "error": "Invalid time format. Use 'Day HH:MM' format e.g. Sat 14:30", "data": None}
-
-            minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 17 * 60:
-                return {"success": False, "error": "Override time must be within 17 hours from now.", "data": None}
-
-            selection_option = "{}".format(override_time.strftime("%H:%M:%S"))
-            clear_option = "[{}]".format(override_time.strftime("%H:%M:%S"))
-            if action == "clear":
-                await self.base.async_manual_select("manual_demand", selection_option)
-                await self.base.async_manual_select("manual_demand", clear_option)
-            else:
-                if action == "demand":
-                    await self.base.async_manual_select("manual_demand", selection_option)
-                elif action == "charge":
-                    await self.base.async_manual_select("manual_charge", selection_option)
-                elif action == "export":
-                    await self.base.async_manual_select("manual_export", selection_option)
-                elif action == "freeze_charge":
-                    await self.base.async_manual_select("manual_freeze_charge", selection_option)
-                elif action == "freeze_export":
-                    await self.base.async_manual_select("manual_freeze_export", selection_option)
-                else:
-                    return {"success": False, "error": "Unknown action {}".format(action), "data": None}
-
-            # Refresh plan
-            self.base.update_pending = True
-            self.base.plan_valid = False
-            return {"success": True, "error": None, "data": {"action": action, "time": override_time.isoformat()}, "timestamp": datetime.now().isoformat(), "description": f"Plan override applied: {action} at {override_time.isoformat()}"}
-        except Exception as e:
-            return {"success": False, "error": f"Error applying plan override: {str(e)}", "data": None}
-
-    async def _execute_get_config(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Get full HA configuration for Predbat
-        """
-        try:
-            entity_id_filter = compile_filter_argument(arguments.get("filter", None))
-            config_return = []
-            for item in self.base.CONFIG_ITEMS:
-                if entity_id_filter:
-                    entity_id = item.get("entity", None)
-                    if entity_id and entity_id_filter.search(entity_id):
-                        config_return.append(item)
-                else:
-                    config_return.append(item)
-            return {"success": True, "error": None, "data": config_return, "timestamp": datetime.now().isoformat(), "description": "The contents of the Predbat configuration settings"}
-
-        except MCPArgumentError as e:
-            return {"success": False, "error": str(e), "data": None}
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving apps.yaml data: {str(e)}", "data": None}
-
-    async def _execute_get_apps(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the get_apps tool"""
-        try:
-            # Credentials are redacted unless the caller explicitly opts out - apps.yaml carries
-            # API keys, secrets and tokens, and this tool exists to hand the configuration to an
-            # AI assistant for review (#4768). Matches the web UI's own apps.yaml download.
-            masked = parse_bool_argument(arguments.get("masked", True), default=True)
-            configuration = mask_secret_args(self.base.args) if masked else self.base.args
-            return_configuration = {}
-            config_id_filter = compile_filter_argument(arguments.get("filter", None))
-            for key, value in configuration.items():
-                if config_id_filter:
-                    if config_id_filter.search(key):
-                        return_configuration[key] = value
-                else:
-                    return_configuration[key] = value
-
-            description = "The contents of the Predbat apps.yaml configuration"
-            if masked:
-                description += " (credential-like values redacted as 'xxx')"
-            return {"success": True, "error": None, "data": return_configuration, "masked": masked, "timestamp": datetime.now().isoformat(), "description": description}
-
-        except MCPArgumentError as e:
-            return {"success": False, "error": str(e), "data": None}
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving Predbat apps.yaml data: {str(e)}", "data": None}
-
-    async def _execute_get_state(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the get_state tool"""
-        try:
-            requested = arguments.get("keys", None)
-            if isinstance(requested, str):
-                requested = [requested]
-            if requested is not None and not isinstance(requested, list):
-                raise MCPArgumentError("'keys' must be a list of state variable names, got {!r}".format(requested))
-
-            key_filter = compile_filter_argument(arguments.get("filter", None))
-            max_bytes = parse_number_argument(arguments.get("max_bytes", None), "max_bytes", MCP_STATE_DEFAULT_MAX_BYTES, minimum=1, maximum=MCP_STATE_MAX_BYTES_LIMIT)
-
-            state = {}
-            omitted = {}
-            total_bytes = 0
-            budget_exhausted = False
-            unknown_keys = []
-
-            # Snapshot the key list up front - the plan thread can add attributes while we walk it
-            available = list(self.base.__dict__.keys())
-            if requested is not None:
-                unknown_keys = [key for key in requested if key not in available]
-                candidates = [key for key in requested if key in available]
-            else:
-                candidates = available
-
-            for key in candidates:
-                # Same filter the debug yaml uses, so this can never return what a debug dump won't
-                if is_debug_excluded_key(key):
-                    continue
-                if key_filter and not key_filter.search(key):
-                    continue
-                try:
-                    value = self.base.__dict__[key]
-                except KeyError:
-                    continue
-                if callable(value):
-                    continue
-                if key == "args":
-                    value = mask_secret_args(value)
-
-                fits, safe, size = measure_state_value(value, max_bytes)
-                if not fits:
-                    # Too large to return, but say what it is so the caller isn't guessing
-                    omitted[key] = summarise_state_value(value)
-                    continue
-                if total_bytes + size > MCP_STATE_TOTAL_BYTES_LIMIT:
-                    budget_exhausted = True
-                    omitted[key] = summarise_state_value(value)
-                    continue
-                state[key] = safe
-                total_bytes += size
-
-            data = {
-                "state": state,
-                "omitted": omitted,
-                "returned_keys": len(state),
-                "omitted_keys": len(omitted),
-                "approx_bytes": total_bytes,
-                "max_bytes": max_bytes,
-            }
-            if unknown_keys:
-                data["unknown_keys"] = unknown_keys
-
-            description = "Predbat internal state - {} variables returned".format(len(state))
-            if omitted:
-                description += ", {} described in 'omitted' instead of being returned in full (ask for one by name, or raise max_bytes)".format(len(omitted))
-            if budget_exhausted:
-                description += ". The overall response budget was reached, so narrow the request with 'keys' or 'filter'"
-            return {"success": True, "error": None, "data": data, "timestamp": datetime.now().isoformat(), "description": description}
-
-        except MCPArgumentError as e:
-            return {"success": False, "error": str(e), "data": None}
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving state data: {str(e)}", "data": None}
-
-    async def _execute_get_log(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the get_log tool"""
-        try:
-            filter_type = str(arguments.get("filter", "warnings")).lower()
-            if filter_type not in LOG_FILTER_TYPES:
-                return {"success": False, "error": "Unknown filter '{}', expected one of {}".format(filter_type, ", ".join(LOG_FILTER_TYPES)), "data": None}
-
-            search_term = str(arguments.get("search", "") or "").lower().strip()
-            max_lines = parse_number_argument(arguments.get("max_lines", None), "max_lines", MCP_LOG_DEFAULT_LINES, minimum=1, maximum=MCP_LOG_MAX_LINES)
-            hours = parse_number_argument(arguments.get("hours", None), "hours", None, minimum=0, as_float=True)
-
-            loglines = read_predbat_log().split("\n")
-            total_lines = len(loglines)
-
-            # Cut-off for the hours filter. Lines with no parseable stamp (tracebacks and other
-            # continuation lines) inherit the timestamp of the newer line above them, so a
-            # multi-line entry is kept or dropped as a whole.
-            cutoff = (datetime.now() - timedelta(hours=hours)) if hours else None
-            last_timestamp = None
-
-            result_lines = []
-            truncated = False
-            matched_lines = 0
-
-            # Walk newest-first so max_lines keeps the most recent entries, as the web log view does
-            for lineno in range(total_lines - 1, -1, -1):
-                line = loglines[lineno]
-                if not line.strip():
-                    continue
-
-                timestamp = parse_log_timestamp(line)
-                if timestamp:
-                    last_timestamp = timestamp
-                if cutoff:
-                    effective_time = timestamp or last_timestamp
-                    if effective_time and effective_time < cutoff:
-                        # Everything below this point is older still
-                        break
-
-                line_type = classify_log_line(line)
-                if not log_line_included(line_type, filter_type):
-                    continue
-                if search_term and search_term not in line.lower():
-                    continue
-
-                matched_lines += 1
-                if len(result_lines) >= max_lines:
-                    truncated = True
-                    continue
-
-                result_lines.append({"line_number": lineno, "type": line_type, "line": line})
-
-            # Return oldest-first, which reads the way a log does
-            result_lines.reverse()
-
-            data = {
-                "lines": result_lines,
-                "total_lines": total_lines,
-                "returned_lines": len(result_lines),
-                "matched_lines": matched_lines,
-                "truncated": truncated,
-                "filter": filter_type,
-                "search": search_term,
-                "hours": hours,
-            }
-            description = "The Predbat log filtered to '{}' level".format(filter_type)
-            if truncated:
-                description += ", truncated to the most recent {} of {} matching lines".format(max_lines, matched_lines)
-            return {"success": True, "error": None, "data": data, "timestamp": datetime.now().isoformat(), "description": description}
-
-        except MCPArgumentError as e:
-            return {"success": False, "error": str(e), "data": None}
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving log data: {str(e)}", "data": None}
-
-    async def _execute_get_status(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the get_status tool"""
-
-        try:
-            debug_enable, _ = self.base.get_ha_config("debug_enable", None)
-            read_only, _ = self.base.get_ha_config("set_read_only", None)
-            predbat_mode, _ = self.base.get_ha_config("mode", None)
-            num_cars, _ = self.base.get_ha_config("num_cars", None)
-            status_entity = self.prefix + ".status"
-            last_updated = self.base.get_state_wrapper(status_entity, attribute="last_updated", default=None)
-            soc_percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
-            grid_power = self.base.grid_power
-            battery_power = self.base.battery_power
-            pv_power = self.base.pv_power
-            load_power = self.base.load_power
-            status_data = {
-                "is_running": self.base.is_running(),
-                "status": self.base.get_state_wrapper(status_entity),
-                "current_soc": self.base.soc_kw,
-                "soc_max": self.base.soc_max,
-                "soc_percent": soc_percent,
-                "reserve": self.base.reserve,
-                "mode": predbat_mode,
-                "num_cars": num_cars,
-                "carbon_enable": self.base.carbon_enable,
-                "iboost_enable": self.base.iboost_enable,
-                "forecast_minutes": self.base.forecast_minutes,
-                "debug_enable": debug_enable,
-                "read_only": read_only,
-                "last_updated": last_updated,
-                "grid_power": grid_power,
-                "battery_power": battery_power,
-                "pv_power": pv_power,
-                "load_power": load_power,
-            }
-
-            return {"success": True, "error": None, "data": status_data, "timestamp": datetime.now().isoformat()}
-
-        except Exception as e:
-            return {"success": False, "error": f"Error retrieving status: {str(e)}", "data": None}
-
-    async def _execute_set_config(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the set_config tool"""
-        try:
-            entity_id = arguments.get("entity_id")
-            value = arguments.get("value")
-
-            if not entity_id or value is None:
-                return {"success": False, "error": "Both 'entity_id' and 'value' must be provided", "data": None}
-
-            # Update the configuration setting
-            await self.set_state_external(entity_id, value)
-
-            return {"success": True, "error": None, "data": {"entity_id": entity_id, "new_value": value}, "timestamp": datetime.now().isoformat(), "description": f"Configuration setting '{entity_id}' updated successfully"}
-
-        except Exception as e:
-            return {"success": False, "error": f"Error setting configuration: {str(e)}", "data": None}
-
-    async def handle_mcp_request(self, request, mcp_server):
+    async def handle_mcp_request(self, request, mcp_server, scopes=None):
         """
         Handle HTTP requests implementing the Model Context Protocol over HTTP
 
         Args:
             request: Web request object
             mcp_server: MCP server instance
+            scopes: The caller's token scopes, or None for no restriction
 
         Returns:
             JSON response following MCP/JSON-RPC 2.0 protocol
@@ -1495,7 +1086,7 @@ class MCPServerWrapper:
                 elif method == "tools/list":
                     result = await self._handle_tools_list(params)
                 elif method == "tools/call":
-                    result = await self._handle_tools_call(params)
+                    result = await self._handle_tools_call(params, scopes=scopes)
                 elif method == "notifications/initialized":
                     # This is a notification - return empty success response
                     # Some clients expect a response even for notifications over HTTP
@@ -1520,118 +1111,26 @@ class MCPServerWrapper:
 
     async def _handle_tools_list(self, params):
         """Handle MCP tools/list request"""
-        return {
-            "tools": [
-                {"name": "get_plan", "description": "Get the current Predbat battery plan data including forecast, costs, and state information", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-                {"name": "get_status", "description": "Get the current Predbat system status and configuration", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-                {
-                    "name": "get_apps",
-                    "description": "Get predbat apps.yaml static configuration data, with credentials redacted by default",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "filter": {"type": "string", "description": "The configuration item name to filter on, as a Python regex (optional)"},
-                            "masked": {"type": "boolean", "description": "Redact credential-like values such as API keys, secrets and passwords (default true)"},
-                        },
-                        "required": [],
-                    },
-                },
-                {
-                    "name": "get_state",
-                    "description": "Get Predbat's internal state variables - the same data a debug yaml carries, one key at a time. Called with no arguments it returns every small variable and describes the large ones (per-minute series) without returning them.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "keys": {"type": "array", "items": {"type": "string"}, "description": "Specific state variable names to return (optional - omit for every small variable)"},
-                            "filter": {"type": "string", "description": "Only return variables whose name matches this Python regex (optional)"},
-                            "max_bytes": {"type": "integer", "description": "Per-variable size budget before it is described rather than returned (default {}, maximum {})".format(MCP_STATE_DEFAULT_MAX_BYTES, MCP_STATE_MAX_BYTES_LIMIT)},
-                        },
-                        "required": [],
-                    },
-                },
-                {
-                    "name": "get_log",
-                    "description": "Get the Predbat log (predbat.log), filtered by level, search term and age - use this to diagnose warnings and errors. Lines are returned oldest-first.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "filter": {"type": "string", "description": "Log level to return: all, info, warnings or errors (default warnings)", "enum": list(LOG_FILTER_TYPES)},
-                            "search": {"type": "string", "description": "Only return lines containing this text, case-insensitive (optional)"},
-                            "hours": {"type": "number", "description": "Only return lines written in the last N hours (optional)"},
-                            "max_lines": {
-                                "type": "integer",
-                                "description": "Maximum number of lines to return. The most recent matching lines are the ones kept, but they are returned oldest-first (default {}, maximum {})".format(MCP_LOG_DEFAULT_LINES, MCP_LOG_MAX_LINES),
-                            },
-                        },
-                        "required": [],
-                    },
-                },
-                {
-                    "name": "get_config",
-                    "description": "Get the current Predbat live configuration settings",
-                    "inputSchema": {"type": "object", "properties": {"filter": {"type": "string", "description": "The entity ID name to filter on, as a Python regex (optional)"}}, "required": []},
-                },
-                {
-                    "name": "get_entities",
-                    "description": "Get the current Predbat entities",
-                    "inputSchema": {"type": "object", "properties": {"filter": {"type": "string", "description": "The configuration item name to filter on, as a Python regex (optional)"}}, "required": []},
-                },
-                {
-                    "name": "set_config",
-                    "description": "Set Predbat configuration setting",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {"entity_id": {"type": "string", "description": "The entity ID of the configuration setting to update"}, "value": {"type": "string", "description": "The new value for the configuration setting"}},
-                        "required": ["entity_id", "value"],
-                    },
-                },
-                {
-                    "name": "set_plan_override",
-                    "description": "Override the current Predbat plan for a specific 30 minute period with a manual action",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "action": {"type": "string", "description": "The action to perform: demand, charge, export, freeze_charge, freeze_export, clear"},
-                            "time": {"type": "string", "description": 'The time at which to perform the action, in "Day HH:MM" format (24-hour), covers one 30-minute period'},
-                        },
-                        "required": ["action", "time"],
-                    },
-                },
-            ]
-        }
+        return {"tools": mcp_tool_list()}
 
-    async def _handle_tools_call(self, params):
-        """Handle MCP tools/call request"""
-        tool_name = params.get("name")
-        arguments = params.get("arguments", {})
-
+    async def _handle_tools_call(self, params, scopes=None):
+        """Handle MCP tools/call request, refusing a tool the caller's token scopes do not cover"""
+        if scopes is not None:
+            name = params.get("name")
+            tool = next((entry for entry in TOOL_DEFS if entry["name"] == name), None)
+            if tool is not None:
+                # A tool not marked writes: False is treated as a write, so one added without the flag is not open to a read-only token
+                needed = MCP_READ_SCOPES if tool.get("writes") is False else MCP_WRITE_SCOPES
+                if not scopes & needed:
+                    error = "Tool '{}' needs the {} scope, which this token was not granted".format(name, " or ".join(sorted(needed)))
+                    return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": error})}], "isError": True}
         try:
-            if tool_name == "get_plan":
-                result = await self._execute_get_plan(arguments)
-            elif tool_name == "get_status":
-                result = await self._execute_get_status(arguments)
-            elif tool_name == "get_apps":
-                result = await self._execute_get_apps(arguments)
-            elif tool_name == "get_config":
-                result = await self._execute_get_config(arguments)
-            elif tool_name == "get_log":
-                result = await self._execute_get_log(arguments)
-            elif tool_name == "get_state":
-                result = await self._execute_get_state(arguments)
-            elif tool_name == "get_entities":
-                result = await self._execute_get_entities(arguments)
-            elif tool_name == "set_config":
-                result = await self._execute_set_config(arguments)
-            elif tool_name == "set_plan_override":
-                result = await self._execute_set_plan_override(arguments)
-            else:
-                return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": f"Unknown tool: {tool_name}"})}], "isError": True}
-
-            # Return result in MCP format
-            return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
-
+            result = await self.execute(params.get("name"), params.get("arguments", {}))
         except Exception as e:
             return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": f"Tool execution failed: {str(e)}"})}], "isError": True}
+        if not result.get("success") and str(result.get("error", "")).startswith("Unknown tool"):
+            return {"content": [{"type": "text", "text": json.dumps(result)}], "isError": True}
+        return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
 
 
 def create_mcp_server(base, log_func=None):

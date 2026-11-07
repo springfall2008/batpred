@@ -161,7 +161,6 @@ def test_annual_bootstrap(my_predbat):
     my_predbat.soc_kw = 3.3
     my_predbat.manual_charge_times = [1, 2, 3]
     my_predbat.manual_export_times = [4]
-    my_predbat.manual_all_times = [5]
     my_predbat.cost_today_sofar = 123.0
     my_predbat.import_today_now = 4.0
     my_predbat.export_today_now = 5.0
@@ -185,6 +184,10 @@ def test_annual_bootstrap(my_predbat):
     my_predbat.rate_min = 5.0
     my_predbat.rate_max = 6.0
     my_predbat.rate_average = 7.0
+    my_predbat.rate_import_saving_minutes = {0}
+    my_predbat.rate_export_saving_minutes = {0}
+    my_predbat.rate_import_pre_saving = {0: 20.0}
+    my_predbat.rate_export_pre_saving = {0: 10.0}
 
     # Scenario 3's smart-car overrides (_run_scenarios() in annual.py), leaked here the way a
     # previous sample's with-car leg would leave them.
@@ -227,6 +230,10 @@ def test_annual_bootstrap(my_predbat):
         ("rate_min", 0),
         ("rate_max", 0),
         ("rate_average", 0),
+        ("rate_import_saving_minutes", set()),
+        ("rate_export_saving_minutes", set()),
+        ("rate_import_pre_saving", {}),
+        ("rate_export_pre_saving", {}),
         ("car_charging_planned", [False]),
         ("car_charging_limit", [0.0]),
         ("car_charging_soc", [0.0]),
@@ -326,7 +333,7 @@ def test_annual_bootstrap(my_predbat):
             print("  ERROR: create_headless_predbat left {} as {}, expected {} (the headless apps.yaml has no 'mode' key, so fetch_config_options() defaults to Monitor mode, which sets all four False)".format(name, actual, expected))
             failed = True
 
-    print("Test: create_headless_predbat restores PREDBAT_APPS_FILE afterwards, even if it was previously unset")
+    print("Test: create_headless_predbat never touches PREDBAT_APPS_FILE, whether it was set or unset beforehand")
     saved_env = os.environ.get("PREDBAT_APPS_FILE")
     try:
         os.environ["PREDBAT_APPS_FILE"] = "/tmp/should-not-leak-annual-bootstrap-test.yaml"

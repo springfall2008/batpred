@@ -27,6 +27,9 @@ Types covered (see APPS_SCHEMA in config.py):
   sensor_list (with entries, modify, none|string sensor_type)
 """
 
+import os
+import tempfile
+
 
 def _run(my_predbat, extra_args, extra_states=None, expect_errors=(), expect_clean=()):
     """Inject args/states, run validate_config, assert per-field expectations.
@@ -50,7 +53,12 @@ def _run(my_predbat, extra_args, extra_states=None, expect_errors=(), expect_cle
         for name in expect_clean:
             assert name not in my_predbat.arg_errors, f"Unexpected validation error for '{name}': {my_predbat.arg_errors.get(name)}"
     finally:
-        my_predbat.args = saved_args
+        # In place, not my_predbat.args = saved_args - a ComponentBase aliases self.args = base.args
+        # at construction time (component_base.py), so reassigning here would leave any component
+        # already holding that reference still pointing at the old, now-extra_args-mutated dict
+        # even though my_predbat.args itself looks restored (#5053 review).
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
         my_predbat.ha_interface.dummy_items = saved_states
 
 
@@ -81,6 +89,16 @@ def test_validate_config(my_predbat):
 
     print("  [string empty:True] empty string fails")
     _run(my_predbat, {"predbat_repository": ""}, expect_errors=["predbat_repository"])
+
+    # predbat_branch is a string or a list of strings, and blank is allowed as it just means no extra branch entry
+    print("  [string|string_list] predbat_branch single branch name passes")
+    _run(my_predbat, {"predbat_branch": "fix/my-feature"}, expect_clean=["predbat_branch"])
+
+    print("  [string|string_list] predbat_branch list of branch names passes")
+    _run(my_predbat, {"predbat_branch": ["fix/one", "feat/two"]}, expect_clean=["predbat_branch"])
+
+    print("  [string|string_list] predbat_branch blank passes")
+    _run(my_predbat, {"predbat_branch": ""}, expect_clean=["predbat_branch"])
 
     # ==========================================================================
     # STRING_LIST type  (notify_devices: {"type": "string_list"})
@@ -124,6 +142,29 @@ def test_validate_config(my_predbat):
 
     print("  [integer zero:False] zero fails")
     _run(my_predbat, {"gateway_mqtt_port": 0}, expect_errors=["gateway_mqtt_port"])
+
+    # min/max constraint (log_count: {"type": "integer", "min": 2, "max": 100}) - declared in the
+    # schema but not actually enforced by validate_config()'s integer branch, so an out-of-range
+    # value silently passed validation despite the schema promising a range check
+    # (Copilot review on #5076).
+    print("  [integer min/max] in-range value passes")
+    _run(my_predbat, {"log_count": 25}, expect_clean=["log_count"])
+
+    print("  [integer min/max] below minimum fails")
+    _run(my_predbat, {"log_count": 1}, expect_errors=["log_count"])
+
+    print("  [integer min/max] above maximum fails")
+    _run(my_predbat, {"log_count": 101}, expect_errors=["log_count"])
+
+    print("  [integer min/max] exactly at the boundary passes")
+    _run(my_predbat, {"log_count": 2}, expect_clean=["log_count"])
+    _run(my_predbat, {"log_count": 100}, expect_clean=["log_count"])
+
+    print("  [ML retrain interval] whole hours within 1-48 pass; invalid values fail")
+    for hours in (1, 2, 24, 48):
+        _run(my_predbat, {"load_ml_retrain_interval_hours": hours}, expect_clean=["load_ml_retrain_interval_hours"])
+    for hours in (-1, 0, 49, 2.5, "daily"):
+        _run(my_predbat, {"load_ml_retrain_interval_hours": hours}, expect_errors=["load_ml_retrain_interval_hours"])
 
     # ==========================================================================
     # INTEGER_LIST type  (days_previous: {"type": "integer_list"})
@@ -181,6 +222,39 @@ def test_validate_config(my_predbat):
 
     print("  [dict] list of non-dict items fails")
     _run(my_predbat, {"alerts": ["not_a_dict"]}, expect_errors=["alerts"])
+
+    # ==========================================================================
+    # redact_strings / redact_strings_labelled  (GH#4770 log/debug redaction denylist)
+    # ==========================================================================
+    print("  [string_list] redact_strings list of strings passes")
+    _run(my_predbat, {"redact_strings": ["some-mpan-1234567890"]}, expect_clean=["redact_strings"])
+
+    print("  [dict] redact_strings_labelled name->value mapping passes")
+    _run(my_predbat, {"redact_strings_labelled": {"my_landlords_mpan": "1234567890123"}}, expect_clean=["redact_strings_labelled"])
+
+    print("  [dict] redact_strings_labelled rejects a non-dict value")
+    _run(my_predbat, {"redact_strings_labelled": "not_a_dict"}, expect_errors=["redact_strings_labelled"])
+
+    print("  [dict, scalar_value_dict] redact_strings_labelled warns (not errors) on a numeric value")
+    # An unquoted numeric MPAN (my_mpan: 1234567890123) loads from YAML as an int. It passed this
+    # branch silently before - the dict-type check only looks at the mapping itself, never its
+    # values - even though the collector that actually redacts log lines only matched strings, so
+    # the value would go unredacted with no warning at all (#5053 review). Warn, not error: the
+    # value is still usable once collect_log_secret_values() coerces it to a string.
+    saved_args = my_predbat.args.copy()
+    saved_log = my_predbat.log
+    captured = []
+    try:
+        my_predbat.log = lambda msg, quiet=True: captured.append(msg)
+        my_predbat.args.update({"redact_strings_labelled": {"my_mpan": 1234567890123}})
+        my_predbat.validate_config()
+        assert "redact_strings_labelled" not in my_predbat.arg_errors, "a numeric redact_strings_labelled value should warn, not error: {}".format(my_predbat.arg_errors.get("redact_strings_labelled"))
+        assert any("my_mpan" in msg and "not a string" in msg for msg in captured), "expected a 'not a string' warning naming my_mpan, got {}".format(captured)
+    finally:
+        # In place, not reassignment - see _run()'s equivalent comment above (#5053 review).
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.log = saved_log
 
     # ==========================================================================
     # DICT_LIST type  (rates_import: {"type": "dict_list"})
@@ -301,6 +375,14 @@ def test_validate_config(my_predbat):
         expect_errors=["charge_rate"],
     )
 
+    print("  [sensor_list blank_entries] inverter_mode None entry passes (GE Cloud full power eco inverter has no inverter_mode)")
+    _run(
+        my_predbat,
+        {"inverter_mode": [None, "switch.predbat_gecloud_test_enable_eco_mode"], "num_inverters": 2},
+        extra_states={"switch.predbat_gecloud_test_enable_eco_mode": "on"},
+        expect_clean=["inverter_mode"],
+    )
+
     print("  [sensor_list modify] sensor.predbat_ prefix is exempt from modify restriction")
     _run(
         my_predbat,
@@ -308,6 +390,26 @@ def test_validate_config(my_predbat):
         extra_states={"sensor.predbat_charge_rate": 2.5},
         expect_clean=["charge_rate"],
     )
+
+    print("  [sensor_list modify] a placeholder named with a custom prefix is exempt too (#5242)")
+    saved_prefix = my_predbat.prefix
+    try:
+        my_predbat.prefix = "predbatsolcast"
+        _run(
+            my_predbat,
+            {"inverter_mode": ["sensor.predbatsolcast_solax_cloud_0_inverter_mode"], "num_inverters": 1},
+            extra_states={"sensor.predbatsolcast_solax_cloud_0_inverter_mode": "Eco"},
+            expect_clean=["inverter_mode"],
+        )
+        # The prefix only matches as a whole name part, and an ordinary sensor still fails
+        _run(
+            my_predbat,
+            {"charge_rate": ["sensor.predbatsolcast2_charge_rate"], "num_inverters": 1},
+            extra_states={"sensor.predbatsolcast2_charge_rate": 2.5},
+            expect_errors=["charge_rate"],
+        )
+    finally:
+        my_predbat.prefix = saved_prefix
 
     print("  [sensor_list modify] select. prefix is allowed for modification")
     _run(
@@ -390,7 +492,143 @@ def test_validate_config(my_predbat):
         print(f"  [transient_ok] {name} pointing at an entity that does not exist still fails")
         _run(my_predbat, {name: "sensor.test_charger_typo"}, expect_errors=[name])
 
+    # ==========================================================================
+    # car_charging_battery_size  (#2172)
+    #
+    # A fixed battery size is written as a list with one entry per car, the form
+    # every apps.yaml template uses. A bare number on the same line as the key
+    # is not accepted: the sensor branch wraps a scalar into a list only when it
+    # is a string (predbat.py), so a numeric scalar never reaches the "fixed
+    # float values are allowed" check. The car-charging docs used to describe
+    # that failing form ("must be entered with one decimal place, e.g. 50.0"),
+    # which is what #2172 reported.
+    # ==========================================================================
+    print("  [sensor float] car_charging_battery_size as a one-entry list passes")
+    _run(my_predbat, {"car_charging_battery_size": [77.4], "num_cars": 1}, expect_clean=["car_charging_battery_size"])
+
+    print("  [sensor float] car_charging_battery_size as a whole number in a list passes (templates use '- 75')")
+    _run(my_predbat, {"car_charging_battery_size": [75], "num_cars": 1}, expect_clean=["car_charging_battery_size"])
+
+    print("  [sensor float] car_charging_battery_size written inline as a number fails (#2172)")
+    _run(my_predbat, {"car_charging_battery_size": 77.4, "num_cars": 1}, expect_errors=["car_charging_battery_size"])
+
+    # A string scalar IS wrapped into a list, so it validates - the docs must not
+    # claim a list is the only accepted form, only that an inline number fails.
+    print("  [sensor float] car_charging_battery_size as an entity name still passes (scalar strings are wrapped)")
+    _run(
+        my_predbat,
+        {"car_charging_battery_size": "sensor.test_car_battery_size", "num_cars": 1},
+        extra_states={"sensor.test_car_battery_size": 77.4},
+        expect_clean=["car_charging_battery_size"],
+    )
+
+    # entries is "num_cars", so the list must have one entry per car. With two
+    # cars an inline number fails earlier, as the wrong type rather than the
+    # wrong sensor, so the reported error differs from the one-car case above.
+    print("  [sensor float] car_charging_battery_size needs one entry per car")
+    _run(my_predbat, {"car_charging_battery_size": [77.4, 64.0], "num_cars": 2}, expect_clean=["car_charging_battery_size"])
+    _run(my_predbat, {"car_charging_battery_size": 77.4, "num_cars": 2}, expect_errors=["car_charging_battery_size"])
+
+    # A pointer to one entity repeated to the maximum car count (8). The validator trims a list to
+    # num_cars, so one 8-entry list passes for every num_cars up to 8, whereas a single entity name
+    # is rejected as the wrong type as soon as num_cars exceeds 1.
+    pointer = ["sensor.test_car_profile_battery_size"] * 8
+    for cars in (0, 1, 2, 8):
+        print("  [sensor float] 8-entry car_charging_battery_size pointer passes with num_cars={}".format(cars))
+        _run(
+            my_predbat,
+            {"car_charging_battery_size": pointer, "num_cars": cars},
+            extra_states={"sensor.test_car_profile_battery_size": "10.5"},
+            expect_clean=["car_charging_battery_size"],
+        )
+
+    print("  [sensor float] a single entity pointer fails once num_cars exceeds 1")
+    _run(
+        my_predbat,
+        {"car_charging_battery_size": "sensor.test_car_profile_battery_size", "num_cars": 2},
+        extra_states={"sensor.test_car_profile_battery_size": "10.5"},
+        expect_errors=["car_charging_battery_size"],
+    )
+
+    print("  [sensor float] every slot of the pointer resolves the entity as a float")
+    saved_args = my_predbat.args.copy()
+    saved_states = my_predbat.ha_interface.dummy_items.copy()
+    try:
+        my_predbat.args["car_charging_battery_size"] = pointer
+        my_predbat.ha_interface.dummy_items["sensor.test_car_profile_battery_size"] = "10.5"
+        for slot in (0, 1, 7):
+            value = my_predbat.get_arg("car_charging_battery_size", 100.0, index=slot)
+            assert value == 10.5, "slot {} resolved {!r}, expected 10.5".format(slot, value)
+    finally:
+        my_predbat.args = saved_args
+        my_predbat.ha_interface.dummy_items = saved_states
+
     print("**** test_validate_config PASSED ****")
+    return False
+
+
+def test_validate_config_secrets(my_predbat):
+    """
+    Tests check_apps_yaml_secrets() (#4787) - re-reads apps.yaml with the ruamel round-trip
+    loader and flags credential-like values that are stored in plain text rather than
+    referenced via the '!secret' mechanism.
+
+    Writes a real temp apps.yaml so the round-trip loader has something genuine to parse:
+    provenance (whether a value came from a '!secret' tag or was written inline) only
+    survives in the raw file, not in self.args, which is why the check has to re-read it
+    rather than working off the already-resolved config the rest of validate_config() uses.
+    check_apps_yaml_secrets() takes an explicit path so this is independent of
+    PREDBAT_APPS_FILE and the working directory the test suite happens to run from.
+    """
+    print("**** test_validate_config_secrets ****")
+
+    apps_yaml_content = """
+pred_bat:
+  module: predbat
+  class: PredBat
+  mcp_secret: !secret my_mcp_secret
+  ohme_password: plaintext_password
+  kraken_key: ""
+  forecast_solar:
+    api_key: plaintext_nested_key
+  gateway_mqtt_host: mqtt.example.com
+  rates_import:
+    - start: "00:00"
+      end: "05:00"
+      rate: 0.07
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        temp_path = f.name
+        f.write(apps_yaml_content)
+
+    try:
+        my_predbat.check_apps_yaml_secrets(apps_yaml_path=temp_path)
+        warnings = my_predbat.arg_warnings
+
+        print("  Inline credential value is flagged")
+        assert "ohme_password" in warnings, f"Expected inline ohme_password to be flagged, got {warnings}"
+
+        print("  Nested inline credential value is flagged")
+        assert "forecast_solar.api_key" in warnings, f"Expected nested forecast_solar.api_key to be flagged, got {warnings}"
+
+        print("  '!secret'-referenced value is not flagged")
+        assert "mcp_secret" not in warnings, f"'!secret'-referenced mcp_secret must not be flagged, got {warnings}"
+
+        print("  Empty credential-like value is not flagged")
+        assert "kraken_key" not in warnings, f"Empty string value must not be flagged, got {warnings}"
+
+        print("  Non-credential key is not flagged")
+        assert "gateway_mqtt_host" not in warnings, f"Non-credential key must not be flagged, got {warnings}"
+        assert not any(w.startswith("rates_import") for w in warnings), f"Non-credential nested list must not be flagged, got {warnings}"
+    finally:
+        os.remove(temp_path)
+
+    print("  A missing apps.yaml is handled without error")
+    my_predbat.check_apps_yaml_secrets(apps_yaml_path="/tmp/does_not_exist_predbat_test_4787.yaml")
+    assert my_predbat.arg_warnings == {}, f"Expected no warnings for a missing file, got {my_predbat.arg_warnings}"
+
+    print("**** test_validate_config_secrets PASSED ****")
     return False
 
 

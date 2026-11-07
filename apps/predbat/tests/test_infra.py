@@ -8,9 +8,19 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from utils import unpack_export_limit
 from const import PREDBAT_MAX_CARS, MINUTE_WATT
 from prediction import Prediction
+import sys
+import matplotlib
+
+# Force the non-interactive Agg backend unless --plot was passed; otherwise merely importing
+# pyplot activates a GUI backend (bouncing the dock icon on macOS) even though plt.show() is
+# normally gated behind PLOT_ENABLED and not called in typical runs. Checked against sys.argv
+# directly since this import runs before argparse.
+if "--plot" not in sys.argv:
+    matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 import asyncio
 import numpy as np
@@ -38,6 +48,32 @@ def run_async(coro):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     return loop.run_until_complete(coro)
+
+
+class MockStorageComponents:
+    """
+    Minimal components mock returning a pre-configured storage component, for tests of code that saves
+    and loads through Storage.
+    """
+
+    def __init__(self, storage):
+        """Initialise with a storage instance (may be None to simulate unavailable)."""
+        self._storage = storage
+
+    def get_component(self, name):
+        """Return the mocked storage for 'storage', None for everything else."""
+        if name == "storage":
+            return self._storage
+        return None
+
+
+def make_test_storage(predbat, tmpdir):
+    """Create a StorageComponent backed by a real local-file backend in tmpdir."""
+    from storage import StorageComponent, StorageLocalFiles
+
+    storage = StorageComponent(predbat)
+    storage.backend = StorageLocalFiles(tmpdir, predbat.log)
+    return storage
 
 
 def create_aiohttp_mock_response(status=200, json_data=None, json_exception=None):
@@ -132,13 +168,52 @@ def create_aiohttp_mock_session(mock_response=None, exception=None):
     return mock_session
 
 
+class FakeComponentTask:
+    """Stand-in for the threading.Thread Components.start() creates, reporting itself alive."""
+
+    def is_alive(self):
+        """The fake task never dies, so Components.is_alive() is left to judge the component."""
+        return True
+
+
+class FakeInverterComponent:
+    """Stand-in for a registered inverter component reporting a given current health.
+
+    Lives here rather than in the individual test suites because both test_components.py and
+    test_inverter.py need one, and the health surface it mirrors (ComponentBase.get_error_count /
+    api_started / last_updated_time) changes shape rarely but across both suites when it does.
+    """
+
+    def __init__(self, errors=0, api_started=True, updated_recently=True):
+        """Record the health this fake component should report back."""
+        self.count_errors = errors
+        self.api_started = api_started
+        self.updated_recently = updated_recently
+
+    def get_error_count(self):
+        """Errors recorded so far, as ComponentBase.get_error_count() reports them."""
+        return self.count_errors
+
+    def is_alive(self):
+        """Current health, as ComponentBase.is_alive() reports it."""
+        return self.api_started and self.updated_recently
+
+    def last_updated_time(self):
+        """Time of the last successful operation, or None if never succeeded."""
+        return datetime.now(timezone.utc) if self.updated_recently else None
+
+
 class DummyInverter:
+    # A minimal stand-in for Inverter. adjust_battery_target_multi() reads soc_kw, soc_max, reserve, battery_rate_max_charge,
+    # battery_rate_max_discharge and, for a forced export, battery_rate_max_export from every inverter in my_predbat.inverters.
+    # A test that exercises another path through it may need this extended.
     def __init__(self, log, inverter_id=0):
         self.soc_kw = 0
         self.soc_max = 100
         self.soc_percent = 0
         self.battery_rate_max_charge = 1.0
         self.battery_rate_max_discharge = 1.0
+        self.battery_rate_max_export = 1.0
         self.battery_rate_max = 1.0 * 60 * 1000
         self.log = log
         self.id = inverter_id
@@ -161,6 +236,11 @@ class TestHAInterface:
         self.service_store = []
         self.service_store_fail = set()
         self.db_primary = False
+        # Set by create_predbat() so set_state_external() can route a CONFIG_ITEMS entity's
+        # change through the real switch/input_number/select service simulation, the same way
+        # HAInterface.set_state_external() does. None for the handful of narrower component
+        # tests that build a TestHAInterface() directly without a base to wire it to.
+        self.base = None
 
     def get_service_store(self):
         stored_service = self.service_store
@@ -174,13 +254,12 @@ class TestHAInterface:
         state = 0.0
         for count in range(int(days * 24 * 60 / self.step)):
             point = start + timedelta(minutes=count * self.step)
-            point_str = point.strftime("%Y-%m-%dT%H:%M:%SZ")
             history.append({"state": state, "last_changed": point})
         self.history = history
 
-    def get_state(self, entity_id, default=None, attribute=None, refresh=False, raw=False):
+    def get_state(self, entity_id=None, default=None, attribute=None, refresh=False, raw=False):
         if not entity_id:
-            return {}
+            return self.get_all_state()
         elif entity_id in self.dummy_items:
             result = self.dummy_items[entity_id]
             if raw:
@@ -198,6 +277,31 @@ class TestHAInterface:
         else:
             # print("Getting state: {} attribute {} => default {} ".format(entity_id, attribute, default))
             return default
+
+    def get_all_state(self):
+        """
+        Build the whole-state dict shape the real HAInterface.get_state() returns when called
+        with no entity_id: {entity_id: {"state", "attributes", "last_changed"}}.
+
+        dummy_items stores each entity as either a bare state value, or (via set_state()/the
+        test 'set_entity' helpers) a dict with 'state' plus every attribute as a flat sibling key
+        - not nested under an 'attributes' key the way the real interface stores it. This
+        reshapes each entry into the real shape on the way out, so callers of get_state() with no
+        entity_id (e.g. agent_tools.py's search_entities/get_entity_state) see the same contract
+        in tests as they do against a live Predbat.
+        """
+        all_state = {}
+        for entity_id, item in self.dummy_items.items():
+            if isinstance(item, dict):
+                state = item.get("state")
+                attributes = {key: value for key, value in item.items() if key not in ("state", "last_changed")}
+                last_changed = item.get("last_changed")
+            else:
+                state = item
+                attributes = {}
+                last_changed = None
+            all_state[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
+        return all_state
 
     def call_service(self, service, **kwargs):
         print("Calling service: {} {}".format(service, kwargs))
@@ -259,6 +363,45 @@ class TestHAInterface:
         # print("Item now: {}".format(self.dummy_items[entity_id]))
         return None
 
+    async def set_state_external(self, entity_id, state, attributes=None):
+        """
+        Mirror HAInterface.set_state_external(): when entity_id names a CONFIG_ITEMS entity,
+        route the change through the same switch/input_number/select service-call simulation
+        production code uses (self.base.trigger_callback), so a config switch flipped this way in
+        a test actually updates config_index[name]["value"] - what get_ha_config() reads - the
+        same way a real turn_on/turn_off service call would, rather than only ever touching the
+        entity's raw display state the way set_state() does.
+
+        Anything that is not a CONFIG_ITEMS entity, or when self.base was never wired up (the
+        narrower component tests that build a TestHAInterface() directly, with no base), falls
+        back to set_state()'s plain state write.
+        """
+        if self.base is not None:
+            for item in getattr(self.base, "CONFIG_ITEMS", []):
+                if item.get("entity") != entity_id:
+                    continue
+                old_value = item.get("value")
+                if old_value is None:
+                    old_value = item.get("default")
+                if old_value == state:
+                    return
+                item_type = item.get("type", "")
+                service_data = {"domain": item_type}
+                if item_type == "switch":
+                    service_data["service"] = "turn_on" if state else "turn_off"
+                    service_data["service_data"] = {"entity_id": entity_id}
+                elif item_type == "input_number":
+                    service_data["service"] = "set_value"
+                    service_data["service_data"] = {"entity_id": entity_id, "value": state}
+                elif item_type == "select":
+                    service_data["service"] = "select_option"
+                    service_data["service_data"] = {"entity_id": entity_id, "option": state}
+                else:
+                    break
+                await self.base.trigger_callback(service_data)
+                return
+        self.set_state(entity_id, state, attributes)
+
     def get_history(self, entity_id, now=None, days=30):
         # print("Getting history for {}".format(entity_id))
         if entity_id == "predbat.status":
@@ -272,6 +415,15 @@ class TestHAInterface:
 class TestInverter:
     def __init__(self):
         self.id = 0
+        self.inv_battery_export_permitted = True
+
+    def refresh_config(self, quiet=False):
+        """
+        No-op stand-in for Inverter.refresh_config().
+
+        The real one re-reads runtime config on each cycle now that the Inverter objects persist;
+        this double carries no config, so there is nothing to re-read.
+        """
         pass
 
 
@@ -358,7 +510,7 @@ class MockConfigProvider:
             "car_charging_exclusive": False,
             "car_charging_from_battery": False,
             "car_charging_planned_response": ["yes", "on", "enable", "true"],
-            "car_charging_now_response": ["yes", "on", "enable", "true"],
+            "car_charging_now_response": ["yes", "on", "enable", "true", "charging"],
             "combine_rate_threshold": 1.0,
             "combine_export_slots": True,
             "combine_charge_slots": True,
@@ -448,9 +600,10 @@ class MockConfigProvider:
             "car_charging_from_battery_1": False,
         }
 
-    def get_arg(self, key, default=None, index=None, indirect=True):
+    def get_arg(self, key, default=None, index=None, indirect=True, required_unit=None):
         """
-        Mock get_arg method that returns values from config dict
+        Mock get_arg method that returns values from config dict (required_unit is accepted, as the real
+        get_arg takes it, but the mock's config values are already in the unit asked for)
         """
         return self.config.get(key, default)
 
@@ -495,6 +648,22 @@ def update_rates_export(my_predbat, export_window_best):
         for minute in range(window["start"], window["end"]):
             my_predbat.rate_export[minute] = window["average"]
     my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
+
+
+# The fixture's clock: noon. create_predbat() pins minutes_now/now_utc from it so a standalone run
+# behaves like the suite, reset_inverter re-asserts the same value after its scenarios, and modules
+# that want to check their own clock import it rather than restating the literal - so the three can
+# never silently diverge (#5026).
+FIXTURE_MINUTES_NOW = 12 * 60
+
+
+def clear_manual_times(my_predbat):
+    """Clear every per-type manual override list, so manual_all_times, which is derived from them, is empty."""
+    my_predbat.manual_charge_times = []
+    my_predbat.manual_export_times = []
+    my_predbat.manual_demand_times = []
+    my_predbat.manual_freeze_charge_times = []
+    my_predbat.manual_freeze_export_times = []
 
 
 def reset_inverter(my_predbat):
@@ -544,7 +713,7 @@ def reset_inverter(my_predbat):
     my_predbat.iboost_smart = False
     my_predbat.iboost_on_export = False
     my_predbat.iboost_prevent_discharge = False
-    my_predbat.minutes_now = 12 * 60
+    my_predbat.minutes_now = FIXTURE_MINUTES_NOW
     my_predbat.best_soc_keep = 0.0
     my_predbat.carbon_enable = 0
     my_predbat.inverter_soc_reset = True
@@ -553,11 +722,7 @@ def reset_inverter(my_predbat):
     my_predbat.charge_window_best = []
     my_predbat.export_limits_best = []
     my_predbat.export_window_best = []
-    my_predbat.manual_charge_times = []
-    my_predbat.manual_demand_times = []
-    my_predbat.manual_export_times = []
-    my_predbat.manual_freeze_charge_times = []
-    my_predbat.manual_freeze_export_times = []
+    clear_manual_times(my_predbat)
     my_predbat.set_charge_window = True
     my_predbat.set_export_window = True
     my_predbat.set_charge_freeze = True
@@ -608,7 +773,7 @@ def simple_scenario(
     charge=0,
     charge_period_divide=1,
     discharge=100,
-    charge_window_best=[],
+    charge_window_best=None,
     charge_limit_best=None,
     inverter_loss=1.0,
     inverter_freeze_export_discharge_rate=0.0,
@@ -667,6 +832,8 @@ def simple_scenario(
     """
     No PV, No Load
     """
+    if charge_window_best is None:
+        charge_window_best = []
     if not quiet:
         print("Run scenario {}".format(name))
 
@@ -827,7 +994,9 @@ def simple_scenario(
     export_limit_best = []
     export_window_best = []
     if discharge < 100:
-        export_limit_best = [discharge]
+        # Callers express this as the packed percentage the encoding used to be (99 = freeze, a
+        # number = a target, with any fraction the export power) - normalise to an instruction
+        export_limit_best = [unpack_export_limit(discharge)]
         export_window_best = [{"start": my_predbat.minutes_now, "end": int(my_predbat.forecast_minutes / charge_period_divide) + my_predbat.minutes_now, "average": 0}]
     if save == "none":
         (

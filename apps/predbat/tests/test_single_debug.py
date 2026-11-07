@@ -11,6 +11,8 @@ import os
 import json
 import time
 from compare import Compare
+from const import CLOUD_FACTOR_PV10
+from utils import export_limit_sort_key
 from prediction import Prediction
 from tests.test_infra import reset_inverter
 
@@ -40,6 +42,69 @@ def _dump_state_before_plan(my_predbat, filename):
         json.dump(state, handle, indent=2, sort_keys=True)
 
 
+def rebuild_battery_value_rates(my_predbat):
+    """Rebuild battery_value_rate's tariff terms from a debug file's rates, as fetch_sensor_data() does.
+
+    fetch_sensor_data() builds rate_min_forward from the import tariff before any saving/free/Axle session,
+    and the export terms from rate_export_base. A debug file keeps the pre-saving import rates only for the
+    session minutes, so the tariff is the dumped import rates with those minutes put back (a minute the
+    session created from nothing is dropped and forward filled). A file with no base export rates leaves
+    the export terms alone.
+    """
+    if my_predbat.rate_import:
+        tariff_import = dict(my_predbat.rate_import)
+        for minute in my_predbat.rate_import_saving_minutes:
+            if minute in my_predbat.rate_import_pre_saving:
+                tariff_import[minute] = my_predbat.rate_import_pre_saving[minute]
+            else:
+                tariff_import.pop(minute, None)
+        my_predbat.rate_min_forward = my_predbat.rate_min_forward_calc(tariff_import)
+    if my_predbat.rate_export_base:
+        my_predbat.rate_export_max_forward = my_predbat.rate_export_max_forward_calc(my_predbat.rate_export_base)
+        my_predbat.rate_export_min_base = my_predbat.rate_minmax(my_predbat.rate_export_base)[0]
+
+
+def load_debug_dump(my_predbat, debug_file):
+    """
+    Load a debug dump into my_predbat ready to plan from it, resetting the derived state the dump does not carry.
+    """
+    reset_inverter(my_predbat)
+    # Some derived state is neither saved in the debug yaml (so read_debug_yaml cannot restore it) nor
+    # reset by reset_inverter, so inside the full suite it leaks from a previous test and makes the debug
+    # plan depend on test ordering. Reset these to their standalone-run defaults so each case is
+    # deterministic regardless of what ran before:
+    #   - dynamic_load_baseline feeds the load model calculate_plan rebuilds (normally produced by
+    #     dynamic_load(), which only runs from update_pred, not the debug harness).
+    #   - battery_rate_max_export is the discharge power cap used in prediction; a leaked full-precision
+    #     value (vs the 0.0333 default) can flip the plan at a decision boundary.
+    #   - rate_max_base, rate_export_max_forward and rate_export_min_base are the base-tariff terms
+    #     battery_value_rate uses; fetch rebuilds them every cycle in the product, but the debug harness
+    #     never calls fetch, and debug files written before those fields existed carry none of them. Their
+    #     absent-value defaults send battery_value_rate back to rate_max / rate_export_max /
+    #     rate_export_min, which the debug file does carry.
+    #   - the saving-session minutes and pre-saving snapshots set_rate_thresholds() reads with --redo,
+    #     and rate_import_tariff_max, which prices a vanished IOG dispatch: debug files written before
+    #     they existed carry none of them. Empty sets and snapshots mean no event, and a missing tariff
+    #     maximum falls back to rate_max, as the live code does before thresholds are worked out.
+    my_predbat.dynamic_load_baseline = {}
+    my_predbat.battery_rate_max_export = 0.0333
+    my_predbat.rate_max_base = 0
+    my_predbat.rate_export_max_forward = {}
+    my_predbat.rate_export_min_base = None
+    my_predbat.rate_import_saving_minutes = set()
+    my_predbat.rate_export_saving_minutes = set()
+    my_predbat.rate_import_pre_saving = {}
+    my_predbat.rate_export_pre_saving = {}
+    my_predbat.rate_import_tariff_max = None
+    my_predbat.read_debug_yaml(debug_file)
+    if my_predbat.rate_import_tariff_max is None:
+        my_predbat.rate_import_tariff_max = my_predbat.rate_max
+    my_predbat.config_root = "./"
+    my_predbat.save_restore_dir = "./"
+    my_predbat.load_user_config()
+    my_predbat.args["threads"] = 0
+
+
 def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
     print("**** Running debug test {} ****\n".format(debug_file))
     # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
@@ -52,28 +117,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     failed = False
 
     print("**** Test {} ****".format(test_name))
-    reset_inverter(my_predbat)
-    # Some derived state is neither saved in the debug yaml (so read_debug_yaml cannot restore it) nor
-    # reset by reset_inverter, so inside the full suite it leaks from a previous test and makes the debug
-    # plan depend on test ordering. Reset these to their standalone-run defaults so each case is
-    # deterministic regardless of what ran before:
-    #   - dynamic_load_baseline feeds the load model calculate_plan rebuilds (normally produced by
-    #     dynamic_load(), which only runs from update_pred, not the debug harness).
-    #   - battery_rate_max_export is the discharge power cap used in prediction; a leaked full-precision
-    #     value (vs the 0.0333 default) can flip the plan at a decision boundary.
-    #   - rate_max_base and rate_export_max_forward are the base-tariff terms battery_value_rate uses;
-    #     fetch rebuilds both every cycle in the product, but the debug harness never calls fetch, and
-    #     debug files written before those fields existed carry neither. Their absent-value defaults
-    #     send battery_value_rate back to rate_max / rate_export_max, which the debug file does carry.
-    my_predbat.dynamic_load_baseline = {}
-    my_predbat.battery_rate_max_export = 0.0333
-    my_predbat.rate_max_base = 0
-    my_predbat.rate_export_max_forward = {}
-    my_predbat.read_debug_yaml(debug_file)
-    my_predbat.config_root = "./"
-    my_predbat.save_restore_dir = "./"
-    my_predbat.load_user_config()
-    my_predbat.args["threads"] = 0
+    load_debug_dump(my_predbat, debug_file)
     # my_predbat.fetch_config_options()
 
     # Force off combine export XXX:
@@ -108,7 +152,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.carbon_enable = False
         # my_predbat.metric_battery_value_scaling = 0.50
         # my_predbat.manual_export_times = []
-        # my_predbat.manual_all_times = []
         # my_predbat.manual_charge_times = []
         # my_predbat.manual_demand_times = []
         # my_predbat.manual_freeze_charge_times = []
@@ -134,6 +177,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     print("Charge scaling 10 {} load scaling 10 {}".format(my_predbat.charge_scaling10, my_predbat.load_scaling10))
 
     if re_do_rates:
+        # The stored-energy value's tariff terms, which the debug file otherwise supplies as last computed
+        rebuild_battery_value_rates(my_predbat)
+        print("Rebuilt battery value rates: rate_min_forward at end of forecast {} rate_export_min_base {}".format(my_predbat.rate_min_forward.get(my_predbat.minutes_now + my_predbat.forecast_minutes), my_predbat.rate_export_min_base))
+
         # Set rate thresholds
         if my_predbat.rate_import or my_predbat.rate_export:
             print("Set rate thresholds")
@@ -150,12 +197,12 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
         # Find charging windows
         if my_predbat.rate_import:
-            # Find charging window
+            # Find charging window - mirrors fetch.py's fetch_sensor_data(), including the dawn
+            # light/dark split (#4699: this reimplementation used to omit pv_light_dark entirely,
+            # so a debug.yaml replay could never catch a regression in the split)
+            pv_light_dark = my_predbat.calc_pv_light_dark()
             print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
-            my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export)
-            # Update threshold automatically
-            if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
-                my_predbat.rate_import_cost_threshold = highest
+            my_predbat.find_low_rate_windows(alt_rates=my_predbat.rate_export, pv_light_dark=pv_light_dark)
     else:
         print("don't re-do rates")
 
@@ -205,7 +252,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         )
         my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
         my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(
-            my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + 0.2, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True
+            my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True
         )
 
     pv_step = my_predbat.pv_forecast_minute_step
@@ -267,7 +314,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     )
     my_predbat.log("Final plan soc_min {} final_soc {}".format(soc_min, soc))
 
-    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record, show_scenarios=True)
     filename = "plan_final.html"
     open(filename, "w").write(html_plan)
     filename = "plan_final.json"
@@ -275,7 +322,15 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     print("Wrote plan to {} metric {}".format(filename, metric))
 
     # Expected
-    actual_data = {"charge_limit_best": my_predbat.charge_limit_best, "charge_window_best": my_predbat.charge_window_best, "export_window_best": my_predbat.export_window_best, "export_limits_best": my_predbat.export_limits_best}
+    # The committed .expected.json goldens hold export limits as the bare packed numbers they were
+    # before the fields were split. Compare in that form deliberately - regenerating them would
+    # destroy their value as a regression against historical plans.
+    actual_data = {
+        "charge_limit_best": my_predbat.charge_limit_best,
+        "charge_window_best": my_predbat.charge_window_best,
+        "export_window_best": my_predbat.export_window_best,
+        "export_limits_best": [float(export_limit_sort_key(limit)) for limit in my_predbat.export_limits_best],
+    }
     actual_json = json.dumps(actual_data)
     if expected_file:
         print("Compare with {}".format(expected_file))

@@ -22,6 +22,8 @@ energy of a future slot, source/location) must still be detected.
 
 from datetime import datetime
 
+from octopus import dispatch_slots_signature
+
 
 def _slot(start, end, kwh, source="smart-charge", location="AT_HOME"):
     """Build an octopus dispatch slot dict"""
@@ -40,6 +42,8 @@ def test_octopus_slots_change(my_predbat):
     - Test 5: A slot transitioning from future to active → different signature
     - Test 6: The same instant in different string formats (+00:00 vs +0000) → same signature
     - Test 7: Unparseable slot timestamps do not raise and are still comparable
+    - Test 8: include_energy=False (OctopusAPI's replan request) compares a future slot's energy only as
+      unknown / some / none
     """
     print("**** Running octopus_slots_signature tests ****")
     failed = False
@@ -123,6 +127,32 @@ def test_octopus_slots_change(my_predbat):
         except (ValueError, TypeError) as e:
             print("ERROR: octopus_slots_signature raised on unparseable timestamp: {}".format(e))
             failed = True
+
+        # Test 8: without exact energy, only the classes decode_octopus_slot() tells apart count - a revised
+        # amount is the same, but energy appearing, going to none or becoming unknown is still a change
+        print("*** Test 8: include_energy=False compares energy only as unknown / some / none ***")
+        now = my_predbat.now_utc
+
+        def energy_signature(kwh):
+            """Signature of one future slot carrying kwh, with include_energy off."""
+            return dispatch_slots_signature([[_slot("2025-01-15T12:00:00+00:00", "2025-01-15T13:00:00+00:00", kwh)]], now, include_energy=False)
+
+        cases = [
+            (3.5, 4.2, False, "a revised amount"),
+            (3.5, 0, True, "energy going to none"),
+            (3.5, None, True, "energy becoming unknown"),
+            (0, -0.0, False, "zero in another form"),
+            ("abc", 0, False, "an unparseable amount, which decodes as none"),
+        ]
+        for before, after, changed, description in cases:
+            if (energy_signature(before) != energy_signature(after)) != changed:
+                print("ERROR: {} {} be a change with include_energy off ({} -> {})".format(description, "should" if changed else "should not", before, after))
+                failed = True
+        if dispatch_slots_signature([[_slot("2025-01-15T12:00:00+00:00", "2025-01-15T13:00:00+00:00", 3.5)]], now) == dispatch_slots_signature([[_slot("2025-01-15T12:00:00+00:00", "2025-01-15T13:00:00+00:00", 4.2)]], now):
+            print("ERROR: the default signature must still compare the exact energy")
+            failed = True
+        if not failed:
+            print("Test 8 passed - include_energy=False compares only unknown / some / none")
     finally:
         my_predbat.now_utc = old_now_utc
 

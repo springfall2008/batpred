@@ -24,8 +24,10 @@ import argparse
 import json
 import os
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
+from tou_schedule import TouScheduleMixin
 from deye_const import (
     DEYE_BASE_URLS,
     DEYE_ENDPOINTS,
@@ -37,7 +39,6 @@ from deye_const import (
     FREEZE_EXPORT_SOC,
     TOU_FIELD,
     TOU_SLOT_COUNT,
-    TOU_FILLER_TIMES,
     DEYE_TOU_DAYS,
     DEYE_ORDER_MAX_POLLS,
     DEYE_BUSY_CODES,
@@ -58,21 +59,44 @@ from deye_const import (
     DEYE_TTL_CONFIG,
     DEYE_TTL_LIVE,
     DEYE_RESTORE_MAX_CONTROL,
+    DEYE_RESTORE_MAX_CONTROL_ACTIVE,
     DEYE_CACHE_STATIC,
     DEYE_CACHE_CONFIG,
     DEYE_CACHE_TOU,
     DEYE_CACHE_RATINGS,
     DEYE_CACHE_CONTROL,
+    DEYE_CACHE_APPLIED_PAYLOAD,
 )
 
+# How every DeyeCloud inverter behaves, as the INVERTER_DEF keys a discovery record may override
+# (coordinator.CAPABILITY_KEYS). A literal, never read back from INVERTER_DEF: the discovery
+# completeness test proves the record rebuilds the row, which it could not if the record copied it.
+DEYE_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    # Freeze Export selects SELLING_FIRST: PV goes to load, then grid, then the battery
+    "support_feedin_first": True,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
 
-class DeyeAPI(ComponentBase, OAuthMixin):
+# The format publish_schedule_settings_ha() publishes the schedule time selects in, and so the one
+# Predbat must write them in
+DEYE_SCHEDULE_TIME_FORMAT = "HH:MM:SS"
+
+
+class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
     """DEYE Cloud API component."""
 
     # Trace every API request/response while the DEYE integration beds in; flip to
     # False once it is stable. A class attribute so it is always readable even when a
     # caller (tests, the CLI tool) builds the object without going through initialize().
     api_debug = True
+
+    # How many slots the TOU programme holds, read by TouScheduleMixin.build_tou_slots.
+    TOU_SLOTS = TOU_SLOT_COUNT
 
     def initialize(
         self,
@@ -709,122 +733,12 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             return self._action_slot(start_time, state)
         return self._self_use_slot(start_time, reserve, self_use_power)
 
-    def build_tou_slots(self, schedule, current_soc, self_use_power):
-        """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows."""
-        reserve = int(schedule.get("reserve", 0))
-        # Collect (start_time, state) segment boundaries, from a DERIVED baseline at 00:00.
-        # "No window is active" is not always demand - a freeze export is exactly that state
-        # plus a zero charge rate (see derive_control_state) - so every slot the schedule
-        # does not otherwise claim carries the baseline, and a freeze covers the whole
-        # programme instead of being defeated by the first filler that covers the current
-        # time. Predbat never says when a freeze ends, so there is no boundary to write.
-        baseline = self.derive_control_state({"reserve": reserve, "charge": {"enable": False, "power": int(schedule.get("charge", {}).get("power", 0))}, "export": {"enable": False, "power": int(schedule.get("export", {}).get("power", 0))}}, current_soc)
-        segments = {"00:00": dict(baseline)}
-        for direction in ("charge", "export"):
-            window = schedule.get(direction, {})
-            if window.get("enable") and window.get("start") and window.get("end"):
-                # Normalised to HH:MM here: these strings become DEYE slot times, and the
-                # entities they came from carry seconds.
-                start_time = self._to_slot_time(window["start"])
-                end_time = self._to_slot_time(window["end"])
-                if start_time == end_time:
-                    # Mirrors the guard in _window_active: a zero-length window has no
-                    # interval to act over. Compared on the NORMALISED times, so "02:00:00"
-                    # against "02:00" is caught too. Without this, an enable event arriving
-                    # before the time fields (both still the "00:00:00" default) would add an
-                    # action segment whose matching return-to-self-use segment cannot be
-                    # added at the same key — an unterminated, multi-hour full-power
-                    # grid-charge/export slot, even though _active_state correctly reports
-                    # the window inactive.
-                    continue
-                intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
-                intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
-                segments[start_time] = self.derive_control_state(intent, current_soc)
-                # After the window, return to the baseline.
-                segments.setdefault(end_time, dict(baseline))
-        ordered = sorted(segments.items(), key=lambda kv: kv[0])
-        slots = []
-        for start_time, state in ordered:
-            slots.append(self._slot_for(start_time, state, reserve, self_use_power))
-        # Normalise to exactly TOU_SLOT_COUNT slots, each with a DISTINCT ascending
-        # start time (DEYE rejects/mis-applies duplicate slot times). Pad with
-        # self-use slots at filler times not already used by a window boundary,
-        # then sort and trim keeping the earliest (imminent) slots.
-        used = {slot[TOU_FIELD["time"]] for slot in slots}
-        for filler_time in TOU_FILLER_TIMES:
-            if len(slots) >= TOU_SLOT_COUNT:
-                break
-            if filler_time not in used:
-                slots.append(self._slot_for(filler_time, baseline, reserve, self_use_power))
-                used.add(filler_time)
-        slots = sorted(slots, key=lambda slot: slot[TOU_FIELD["time"]])[:TOU_SLOT_COUNT]
-        return slots
-
     def _now_minutes(self):
         """Return minutes since local midnight, for time-aware window selection."""
         try:
             return int(self.minutes_now)
         except (TypeError, ValueError):
             return 0
-
-    @staticmethod
-    def _to_slot_time(value):
-        """Normalise a schedule time to the HH:MM DEYE's TOU slots require.
-
-        The control entities carry HH:MM:SS because that is the format Predbat writes (see
-        INVERTER_DEF charge_time_format), but DEYE's timeUseSettingItems take HH:MM, so the
-        seconds are dropped here — at the one point a schedule time becomes a slot time.
-        """
-        text = str(value or "00:00")
-        parts = text.split(":")
-        if len(parts) < 2:
-            return "00:00"
-        try:
-            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
-        except ValueError:
-            return "00:00"
-
-    @staticmethod
-    def _hm_to_minutes(hm):
-        """Convert a HH:MM string to minutes since midnight (0 on bad input)."""
-        try:
-            parts = str(hm).split(":")
-            return int(parts[0]) * 60 + int(parts[1])
-        except (ValueError, IndexError):
-            return 0
-
-    def _window_active(self, window, now_minutes):
-        """Return True if an enabled window covers now_minutes (handles a midnight wrap)."""
-        if not window.get("enable") or not window.get("start") or not window.get("end"):
-            return False
-        start = self._hm_to_minutes(window["start"])
-        end = self._hm_to_minutes(window["end"])
-        if start == end:
-            return False
-        if start < end:
-            return start <= now_minutes < end
-        return now_minutes >= start or now_minutes < end  # window wraps past midnight
-
-    def _active_state(self, schedule, current_soc, now_minutes):
-        """Derive the control state for the window active at now_minutes, else idle.
-
-        DEYE has a single global work mode per schedule, so the top-level mode must
-        follow the window active RIGHT NOW rather than a static export-first
-        precedence: otherwise an export window enabled elsewhere in the day would
-        pin the mode to SELLING_FIRST and block the charge window's grid charging.
-        """
-        reserve = int(schedule.get("reserve", 0))
-        charge = schedule.get("charge", {})
-        export = schedule.get("export", {})
-        # The rates are carried even when no window is active: with both windows shut a zero
-        # charge rate is Predbat's Freeze Export, and the mode has to follow it rather than
-        # sit in demand (see derive_control_state).
-        intent = {"reserve": reserve, "charge": {"enable": False, "power": int(charge.get("power", 0))}, "export": {"enable": False, "power": int(export.get("power", 0))}}
-        if self._window_active(export, now_minutes):
-            intent["export"] = {"enable": True, "soc": export.get("soc", 0), "power": export.get("power", 0)}
-        elif self._window_active(charge, now_minutes):
-            intent["charge"] = {"enable": True, "soc": charge.get("soc", 0), "power": charge.get("power", 0)}
-        return self.derive_control_state(intent, current_soc)
 
     def build_dynamic_payload(self, sn, schedule, current_soc, now_minutes=None):
         """Build the strategy_dynamic_control body for one inverter.
@@ -1323,6 +1237,129 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.set_arg("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
         self.set_arg("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
+    def _discovery_entities(self, sn):
+        """The entity map for one inverter: every setting automatic_config() binds, as this device has it.
+
+        Entity ids come from the same _sensor_name()/_control_name() calls automatic_config() makes,
+        so the two cannot drift. access is "rw" for the schedule controls Predbat writes and "r" for
+        the telemetry and rating sensors it only reads. The *_power_invert settings are all False
+        (publish_data() already emits Predbat's sign conventions), so no descriptor carries invert.
+
+        Each conditional sensor is listed when THIS inverter publishes it - the same per-device test
+        publish_data() uses - not behind automatic_config()'s fleet-wide "every inverter has it" gate
+        (spec D10). pv_power and pv_today are listed whatever automatic_ignore_pv says: that is the
+        user's opt-out, not a fact about the device (D11).
+        """
+        entities = {
+            "soc_percent": {"entity_id": self._sensor_name(sn, "soc"), "access": "r", "unit": "%"},
+            "battery_power": {"entity_id": self._sensor_name(sn, "battery_power"), "access": "r"},
+            "grid_power": {"entity_id": self._sensor_name(sn, "grid_power"), "access": "r"},
+            "load_power": {"entity_id": self._sensor_name(sn, "load_power"), "access": "r"},
+            "pv_power": {"entity_id": self._sensor_name(sn, "pv_power"), "access": "r"},
+            "battery_temperature": {"entity_id": self._sensor_name(sn, "temperature"), "access": "r"},
+        }
+        for leaf in DEYE_ENERGY_KEYS:
+            if leaf in self.device_energy.get(sn, {}):
+                entities[leaf] = {"entity_id": self._sensor_name(sn, leaf), "access": "r"}
+        published = {
+            "soc_max": ("battery_capacity", self.battery_capacity(sn) > 0),
+            "battery_min_soc": ("battery_reserve_min", sn in self.device_battery_config),
+            "battery_rate_max": ("battery_rate_max", self.battery_rate_max(sn) > 0),
+            "inverter_limit": ("inverter_limit", self.device_rated_power.get(sn, 0.0) > 0),
+        }
+        for setting, (leaf, present) in published.items():
+            if present:
+                entities[setting] = {"entity_id": self._sensor_name(sn, leaf), "access": "r"}
+        entities["reserve"] = {"entity_id": self._control_name("number", sn, "battery_schedule_reserve"), "access": "rw"}
+        for prefix, direction in (("charge", "charge"), ("discharge", "export")):
+            entities[prefix + "_start_time"] = {"entity_id": self._control_name("select", sn, "battery_schedule_{}_start_time".format(direction)), "access": "rw", "domain": "select", "format": DEYE_SCHEDULE_TIME_FORMAT}
+            entities[prefix + "_end_time"] = {"entity_id": self._control_name("select", sn, "battery_schedule_{}_end_time".format(direction)), "access": "rw", "domain": "select", "format": DEYE_SCHEDULE_TIME_FORMAT}
+            entities["scheduled_{}_enable".format(prefix)] = {"entity_id": self._control_name("switch", sn, "battery_schedule_{}_enable".format(direction)), "access": "rw"}
+        entities["charge_limit"] = {"entity_id": self._control_name("number", sn, "battery_schedule_charge_soc"), "access": "rw"}
+        entities["charge_rate"] = {"entity_id": self._control_name("number", sn, "battery_schedule_charge_power"), "access": "rw", "unit": "W"}
+        entities["discharge_target_soc"] = {"entity_id": self._control_name("number", sn, "battery_schedule_export_soc"), "access": "rw"}
+        entities["discharge_rate"] = {"entity_id": self._control_name("number", sn, "battery_schedule_export_power"), "access": "rw", "unit": "W"}
+        entities["schedule_write_button"] = {"entity_id": self._control_name("switch", sn, "battery_schedule_charge_write"), "access": "rw"}
+        return entities
+
+    def _discovery_ratings(self, sn):
+        """One inverter's device-reported ratings, keyed by Predbat setting name in its units, plus the raw Ah capacity.
+
+        A rating is a figure the device reports (spec D14). inverter_limit is device/latest's
+        RatedPower (W); battery_min_soc is config/battery's battLowCapacity (%), the floor the
+        installer set on the inverter. battery_capacity_ah is config/battery's raw battCapacity.
+        soc_max and battery_rate_max are left to their entities: both are Predbat derivations (an Ah
+        or amp figure scaled by a pack voltage Predbat infers from the BMS charge request), not
+        figures Deye reports. Deye holds no grid export or import cap, so there is no export_limit
+        or import_limit.
+        """
+        ratings = {}
+        rated_w = self._as_float(self.device_rated_power.get(sn), 0.0)
+        if rated_w > 0:
+            ratings["inverter_limit"] = rated_w
+        reserve_min = self.battery_reserve_min(sn)
+        if reserve_min > 0:
+            ratings["battery_min_soc"] = reserve_min
+        configured_ah = self._battery_config_value(sn, "capacity")
+        if configured_ah > 0:
+            ratings["battery_capacity_ah"] = configured_ah
+        return ratings
+
+    def build_discovery(self):
+        """
+        Describe the discovered Deye inverters for the discovery catalogue.
+
+        Reads only state the component already holds - device_list, station_ids,
+        device_rated_power, device_energy and the battery accessors - so this adds no API calls and
+        cannot change what Deye does. Reporting is independent of self.automatic.
+
+        automatic_config() registers every serial in device_list (already filtered to deviceType
+        "INVERTER") as "DeyeCloud" with no further test, and binds both PV and battery entities for
+        each. Deye's API offers no way to tell a PV-only unit from a hybrid, so neither can this:
+        every record carries inverter_type "DeyeCloud" and functions solar and battery, mirroring
+        automatic_config() as the source of truth. That is exactly what Predbat believes about the
+        device - and the fact a maintainer needs when a PV-only unit has been configured as a
+        battery inverter.
+
+        capabilities is the literal DEYE_CAPABILITIES; entities is every setting automatic_config()
+        binds, as this device has it (_discovery_entities); ratings are the figures the device itself
+        reports (_discovery_ratings). derive_battery_capacity() is never called here: it logs and
+        writes device_pack_voltage/device_capacity, whereas battery_capacity() and battery_rate_max()
+        only read them.
+
+        station_ids goes in account_ids only when the account has exactly one station:
+        get_device_list() queries every station at once and flattens the result, so which device
+        belongs to which station is not held, and attributing one of several would be a guess.
+
+        Deliberately not reported: model and firmware (not held - device/measurePoints and
+        station/latest are fetched for debug logging and discarded, and reading them would be a
+        new API dependency).
+
+        Returns None when no inverter has been discovered yet.
+        """
+        if not self.device_list:
+            return None
+
+        account_ids = {"station_id": self.station_ids[0]} if len(self.station_ids) == 1 else None
+
+        inverters = []
+        for sn in self.device_list:
+            inverters.append(
+                inverter_record(
+                    "deye:{}".format(sn),
+                    inverter_type="DeyeCloud",
+                    composition="direct",
+                    functions=["solar", "battery"],
+                    capabilities=dict(DEYE_CAPABILITIES),
+                    hardware_ids={"serial": sn},
+                    account_ids=account_ids,
+                    ratings=self._discovery_ratings(sn),
+                    entities=self._discovery_entities(sn),
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
+
     @staticmethod
     def _age_text(age):
         """Render a cache age in minutes for logging, tolerating an unknown age."""
@@ -1407,8 +1444,14 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         return False
 
     async def save_control(self):
-        """Cache control state: what was last written, and any order still in flight."""
-        return await self.save_cache(DEYE_CACHE_CONTROL, {"applied_payload": self.applied_payload, "pending_orders": self.pending_orders, "order_poll_count": self.order_poll_count})
+        """Cache control state: the payload itself, any pending order, and ownership.
+
+        The payload is kept in a short-lived change-detection cache, while control_active is
+        stored separately so ownership survives longer for reconciliation after a restart.
+        """
+        await self.save_cache(DEYE_CACHE_APPLIED_PAYLOAD, {"applied_payload": self.applied_payload})
+        await self.save_cache(DEYE_CACHE_CONTROL, {"pending_orders": self.pending_orders, "order_poll_count": self.order_poll_count, "control_active": sorted(self.control_active)})
+        return True
 
     async def restore_state(self):
         """Restore cached state at startup and seed each tier's refresh clock.
@@ -1460,28 +1503,79 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         # from caching it 1440 times a day. The live clock therefore starts unset and the
         # first tick polls immediately.
 
+        await self._restore_control_state()
+
+    async def _restore_control_state(self):
+        """Restore cached control orders, applied payload and ownership."""
         control, age = await self.load_cache(DEYE_CACHE_CONTROL)
         if isinstance(control, dict):
-            orders = control.get("pending_orders")
-            counts = control.get("order_poll_count")
-            # Orders restore unconditionally: an unpolled order is orphaned, and
-            # DEYE_ORDER_MAX_POLLS still bounds how long it can stay unconfirmed.
-            if isinstance(orders, dict):
-                self.pending_orders = orders
-                if orders:
-                    self.log(f"Info: DEYE resuming {len(orders)} pending control order(s) from cache")
-            if isinstance(counts, dict):
-                self.order_poll_count = counts
-            applied = control.get("applied_payload")
-            if isinstance(applied, dict) and applied:
-                if age is not None and age < DEYE_RESTORE_MAX_CONTROL:
-                    self.applied_payload = applied
+            self._restore_pending_orders(control)
+
+            applied = None
+            active = control.get("control_active")
+            if isinstance(control, dict) and "applied_payload" in control:
+                # legacy applied_payload was stored in the control cache, so if the payload cache is
+                # missing but the control cache has it, restore it from there.
+                legacy_applied = control.get("applied_payload")
+                if isinstance(legacy_applied, dict):
+                    applied = legacy_applied
+                    self.applied_payload = legacy_applied
+                active = control.get("control_active")
+
+            payload, payload_age = await self.load_cache(DEYE_CACHE_APPLIED_PAYLOAD)
+            if isinstance(payload, dict):
+                payload_applied = payload.get("applied_payload")
+                if isinstance(payload_applied, dict):
+                    applied = payload_applied
+            if isinstance(control, dict) and "applied_payload" in control and payload_age is None:
+                payload_age = age
+
+            # Either half is enough to be worth restoring, and neither gates the other. An
+            # emptied applied_payload is a normal state, not an absent cache: run() pops a
+            # serial whose order stayed unconfirmed past DEYE_ORDER_MAX_POLLS and then calls
+            # save_control() in the same cycle, so a control_active saved right beside an empty
+            # payload is current. Requiring a non-empty payload here would discard it and leave
+            # _reconcile_control gated off after a restart - the exact failure this fix is for,
+            # on the one inverter that had just been told to re-write.
+            if (isinstance(applied, dict) and applied) or (isinstance(active, list) and active):
+                if isinstance(active, list):
+                    self.control_active = set(active)
+
+                ownership_valid = age is None or age <= DEYE_RESTORE_MAX_CONTROL_ACTIVE
+                if payload_age is not None and payload_age < DEYE_RESTORE_MAX_CONTROL:
+                    if isinstance(applied, dict):
+                        self.applied_payload = applied
+                    elif not isinstance(active, list):
+                        self.control_active = set()
                 else:
-                    # Deliberately discarded. This cache asserts the inverter still holds
-                    # what Predbat last wrote; after a long gap that may be false, and a
-                    # wrongly SKIPPED write leaves the battery diverging from the plan. A
-                    # redundant write is the cheaper mistake.
-                    self.log(f"Info: DEYE applied-payload cache is stale (age {self._age_text(age)}), the next apply will re-write to the inverter")
+                    # The last payload is unsafe to trust after a long gap, but the
+                    # ownership flag must survive so _reconcile_control() can immediately
+                    # re-apply the current schedule. Clearing only applied_payload makes the
+                    # next apply a real write instead of waiting for an unrelated button event.
+                    self.applied_payload = {}
+                    self.log(f"Info: DEYE applied-payload cache is stale (age {self._age_text(payload_age)}), retaining control ownership so the next cycle re-writes the inverter")
+
+                if ownership_valid and not isinstance(active, list) and isinstance(applied, dict):
+                    # A cache written before control_active existed carries applied_payload
+                    # alone. Its keys are a safe lower bound because every applied payload was
+                    # produced after the control path had marked that inverter active.
+                    self.control_active = set(applied.keys())
+                elif not ownership_valid:
+                    self.control_active = set()
+                    self.log(f"Info: DEYE control ownership cache is stale (age {self._age_text(age)}), requiring a fresh write")
+
+    def _restore_pending_orders(self, control):
+        """Restore pending control orders and their poll counts."""
+        orders = control.get("pending_orders")
+        counts = control.get("order_poll_count")
+        # Orders restore unconditionally: an unpolled order is orphaned, and
+        # DEYE_ORDER_MAX_POLLS still bounds how long it can stay unconfirmed.
+        if isinstance(orders, dict):
+            self.pending_orders = orders
+            if orders:
+                self.log(f"Info: DEYE resuming {len(orders)} pending control order(s) from cache")
+        if isinstance(counts, dict):
+            self.order_poll_count = counts
 
     async def refresh_static(self):
         """Re-run discovery and the per-model capability reads, then cache them."""
@@ -1597,6 +1691,14 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         await self.publish_data()
         for sn in self.device_list:
             await self.publish_schedule_settings_ha(sn)
+
+        # Filed right after this cycle's publish and BEFORE `if first and not live_ok:` below:
+        # that branch returns False to defer startup when the first live poll fails, and
+        # automatic_config() follows it, so a report filed any later would never be filed on
+        # exactly the installs whose dump most needs to say what hardware was found. (Deye's
+        # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         # Drain any control orders left pending by apply_dynamic_control() every cycle (not
         # just on first run) so a write that is HTTP-accepted but then fails to apply on the

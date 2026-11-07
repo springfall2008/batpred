@@ -41,7 +41,7 @@ def time_perf_scenario(my_predbat, import_rate):
     )
 
     start_time = time.time()
-    for count in range(0, PERF_ITERATIONS):
+    for _count in range(0, PERF_ITERATIONS):
         failed |= simple_scenario(
             "load_bat_dc_pv2",
             my_predbat,

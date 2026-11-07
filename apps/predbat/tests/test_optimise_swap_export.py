@@ -22,7 +22,9 @@ only reaches the near-term windows, so it can only ever add exports at the front
 pass exists to push back.
 """
 
-from tests.test_infra import reset_rates, reset_inverter, update_rates_export
+from tests.test_infra import reset_rates, reset_inverter, update_rates_export, clear_manual_times
+from const import EXPORT_MODE_IDLE
+from utils import export_mode_of, export_target_of
 from prediction import Prediction
 
 
@@ -47,7 +49,7 @@ def setup_swap_export(
     my_predbat.soc_kw = battery_soc
     my_predbat.reserve = 0.0
     my_predbat.best_soc_keep = 0.0
-    my_predbat.manual_all_times = set()
+    clear_manual_times(my_predbat)
     my_predbat.iboost_enable = False
     my_predbat.iboost_plan = []
     my_predbat.iboost_on_export = False
@@ -160,7 +162,7 @@ def run_optimise_swap_export_tests(my_predbat):
     ]
     setup_swap_export(my_predbat, export_window_best, export_limits_best=[0.0, 100.0])
     my_predbat.optimise_swap_export(0, len(export_window_best))
-    if not (my_predbat.export_limits_best[0] == 100.0 and my_predbat.export_limits_best[1] == 0.0):
+    if not (export_mode_of(my_predbat.export_limits_best[0]) == EXPORT_MODE_IDLE and export_target_of(my_predbat.export_limits_best[1]) == 0):
         print("ERROR: equal priced windows should defer the export to the later window, got limits {}".format(my_predbat.export_limits_best))
         failed = True
 
@@ -174,7 +176,7 @@ def run_optimise_swap_export_tests(my_predbat):
     ]
     setup_swap_export(my_predbat, export_window_best, export_limits_best=[100.0, 0.0])
     my_predbat.optimise_swap_export(0, len(export_window_best))
-    if not (my_predbat.export_limits_best[0] == 100.0 and my_predbat.export_limits_best[1] == 0.0):
+    if not (export_mode_of(my_predbat.export_limits_best[0]) == EXPORT_MODE_IDLE and export_target_of(my_predbat.export_limits_best[1]) == 0):
         print("ERROR: an export already in the last window should be unchanged, got limits {}".format(my_predbat.export_limits_best))
         failed = True
 
@@ -192,6 +194,29 @@ def run_optimise_swap_export_tests(my_predbat):
         print("ERROR: disabled export optimisation should be unchanged, got {}".format(my_predbat.export_limits_best))
         failed = True
     my_predbat.calculate_best_export = True
+
+    # ---------------------------------------------------------------------------------------------
+    # Partial combine regression (#5423): moving export time from an earlier window into a later,
+    # trimmed one must shrink the earlier window, never grow it backwards into the slot before it.
+    # Here the slot before is a manual demand override, so growing into it exports through it.
+    # ---------------------------------------------------------------------------------------------
+    now = my_predbat.minutes_now
+    export_window_best = [
+        {"start": now, "end": now + 30, "average": 50.0},
+        {"start": now + 30, "end": now + 60, "average": 50.0},
+        {"start": now + 80, "end": now + 90, "average": 50.0, "start_orig": now + 60},
+    ]
+    setup_swap_export(my_predbat, export_window_best, export_limits_best=[100.0, 0.0, 0.0], rate_import=30.0, rate_export=50.0)
+    saved_manual_export_times = my_predbat.manual_export_times
+    my_predbat.manual_export_times = [now]
+    try:
+        my_predbat.optimise_swap_export(0, len(export_window_best))
+    finally:
+        my_predbat.manual_export_times = saved_manual_export_times
+    middle = my_predbat.export_window_best[1]
+    if middle["start"] < now + 30:
+        print("ERROR: partial combine grew window 1 back to {} into the manual slot ending {}, windows {}".format(middle["start"], now + 30, my_predbat.export_window_best))
+        failed = True
 
     # ---------------------------------------------------------------------------------------------
     # Ordering regression (#4478): the export swap must run after every pass that can enable an

@@ -101,18 +101,26 @@ def test_solar_model(my_predbat):
         print("  ERROR: p10_fallback 0.5 not applied, got {}".format(half_first["pv_estimate10"]))
         failed = True
 
-    print("Test: p10_instant overrides the fallback and is capped at P50")
-    ensemble = {FLAT_TIMES[index]: 0.1 for index in range(4)}
-    with_ensemble = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0, p10_instant=ensemble)
-    ensemble_first = with_ensemble[stamp_for(FLAT_TIMES[0])]
-    if ensemble_first["pv_estimate10"] >= ensemble_first["pv_estimate"]:
-        print("  ERROR: an ensemble P10 below P50 should stay below it, got {}".format(ensemble_first["pv_estimate10"]))
+    print("Test: band_ratio scales P50 into P10 and P90, each held to its own side of P50")
+    if "pv_estimate90" in first:
+        print("  ERROR: pv_estimate90 should only be returned when band_ratio is given")
         failed = True
-    huge = {FLAT_TIMES[index]: 99.0 for index in range(4)}
-    capped = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0, p10_instant=huge)
+    ensemble = {FLAT_TIMES[index]: (0.4, 1.6) for index in range(4)}
+    with_ensemble = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0, band_ratio=ensemble)
+    ensemble_first = with_ensemble[stamp_for(FLAT_TIMES[0])]
+    if abs(ensemble_first["pv_estimate10"] - ensemble_first["pv_estimate"] * 0.4) > 0.0002 or abs(ensemble_first["pv_estimate90"] - ensemble_first["pv_estimate"] * 1.6) > 0.0002:
+        print("  ERROR: band ratios 0.4 / 1.6 not applied to P50 {}, got {} / {}".format(ensemble_first["pv_estimate"], ensemble_first["pv_estimate10"], ensemble_first["pv_estimate90"]))
+        failed = True
+    inverted = {FLAT_TIMES[index]: (1.5, 0.5) for index in range(4)}
+    capped = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0, band_ratio=inverted)
     capped_first = capped[stamp_for(FLAT_TIMES[0])]
-    if abs(capped_first["pv_estimate10"] - capped_first["pv_estimate"]) > 0.0001:
-        print("  ERROR: an ensemble P10 above P50 should be capped at P50, got {}".format(capped_first["pv_estimate10"]))
+    if abs(capped_first["pv_estimate10"] - capped_first["pv_estimate"]) > 0.0001 or abs(capped_first["pv_estimate90"] - capped_first["pv_estimate"]) > 0.0001:
+        print("  ERROR: a P10 ratio above 1 and a P90 ratio below 1 should both be held at P50, got {} / {}".format(capped_first["pv_estimate10"], capped_first["pv_estimate90"]))
+        failed = True
+    sparse = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0, band_ratio={})
+    sparse_first = sparse[stamp_for(FLAT_TIMES[0])]
+    if abs(sparse_first["pv_estimate10"] - sparse_first["pv_estimate"] * 0.7) > 0.0002 or abs(sparse_first["pv_estimate90"] - sparse_first["pv_estimate"] * 1.3) > 0.0002:
+        print("  ERROR: hours missing from band_ratio should fall back to 0.7 / 1.3, got {} / {}".format(sparse_first["pv_estimate10"], sparse_first["pv_estimate90"]))
         failed = True
 
     print("Test: shading_factors apply the correct month")

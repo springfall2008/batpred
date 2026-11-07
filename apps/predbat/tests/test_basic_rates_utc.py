@@ -20,7 +20,6 @@ def _pin_clock(my_predbat, when):
     """Pin the predbat clock to local midnight on the given date, returning the UTC offset in minutes."""
     local_midnight = LONDON.localize(datetime(when.year, when.month, when.day, 0, 0, 0))
     my_predbat.midnight_utc = local_midnight
-    my_predbat.midnight = datetime(when.year, when.month, when.day, 0, 0, 0)
     return int(local_midnight.utcoffset().total_seconds() // 60)
 
 
@@ -40,12 +39,10 @@ def test_basic_rates_utc(my_predbat):
     put back or every later test inherits a date five days in the past and becomes order-dependent.
     """
     original_midnight_utc = my_predbat.midnight_utc
-    original_midnight = my_predbat.midnight
     try:
         return _run_basic_rates_utc_tests(my_predbat)
     finally:
         my_predbat.midnight_utc = original_midnight_utc
-        my_predbat.midnight = original_midnight
 
 
 def _run_basic_rates_utc_tests(my_predbat):

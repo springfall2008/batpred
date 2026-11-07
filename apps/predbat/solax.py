@@ -21,8 +21,10 @@ import asyncio
 import json
 import argparse
 import traceback
+from math import isfinite
 from datetime import datetime, timezone, timedelta
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
 
 SOLAX_TIMEOUT = 20
@@ -49,6 +51,9 @@ SOLAX_PLANT_INFO_MAX_AGE = 8 * 60  # Plant info is static, re-poll it once the d
 SOLAX_DEVICE_INFO_MAX_AGE = 30  # Device info changes rarely, re-poll it once the data is this many minutes old
 SOLAX_CACHE_EXPIRY_HOURS = 24  # Cached plant and device info is discarded by the storage layer after this long
 SOLAX_INFO_RETRY_MINUTES = 5  # Wait this long before retrying a plant or device info read that failed
+SOLAX_COUNTER_DIP_HOLD_HOURS = 24  # A lifetime counter reading below its last published value is held this long before the lower value is taken as a genuine reset
+SOLAX_COUNTER_SAVE_MINUTES = 15  # The last counter values are saved to storage this often, a dip starting or ending is saved at once
+SOLAX_COUNTER_EXPIRY_DAYS = 30  # Saved counter state is discarded by the storage layer after this long
 SOLAX_COMMAND_RETRY_DELAY = 2.0
 SOLAX_COMMAND_MAX_RETRIES = 8
 SOLAX_REGIONS = {
@@ -231,6 +236,18 @@ SOLAX_API_CODES = {
 }
 
 # Device model mapping for Residential (businessType=1)
+# The SolaxCloud INVERTER_DEF row's behaviour, stated in every discovery record so the record alone
+# rebuilds the row (coordinator.inverter_definition()).
+SOLAX_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": True,
+    "can_span_midnight": True,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
+
 SOLAX_DEVICE_MODEL_RESIDENTIAL = {
     1: {  # Inverter
         1: "X1-LX", 2: "X-Hybrid", 3: "X1-Hybrid-G3", 4: "X1-Boost/Air/Mini", 5: "X3-Hybrid-G1/G2",  # cspell:disable-line
@@ -252,6 +269,20 @@ SOLAX_DEVICE_MODEL_RESIDENTIAL = {
         1: "X1/X3-EVC", 2: "X1/X3-EVC G1.1", 3: "X1/X3-HAC", 4: "J1-EVC", 5: "A1-HAC", 6: "C1/C3-HAC",  # cspell:disable-line
     },
 }
+
+# Verified residential string-inverter model codes, using the same API enum as above. These have
+# no battery port: X1-Boost/Air/Mini, X1-Boost-G4, X1-Mini-G4 and X1-SMART-G2 respectively.
+# https://www.solaxpower.com/our-products/x1-boost-g3.html
+# https://kb.solaxpower.com/solution/detail/ff80808188eb4b920188f6abcad1006b
+# Also X3-MIC/PRO-G2 (16), A1-Micro 1 in 1 (27), X1-Micro 2 in 1 (28), X1-Micro 4 in 1 (29) and
+# X1-MINI-G4 PLUS (44): their data sheets list only PV input and AC output, with no battery section.
+# https://www.solaxpower.com/uploads/file/solax-x3-mic-g2-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-x3-pro-g2-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-a1-micro-1-in-1-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/x1-microinverter-2-in-1-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-x1-micro-4-in-1-datasheet-en.pdf
+# https://www.solaxpower.com/uploads/file/solax-x1-mini-g4-plus-series-datasheet-en.pdf
+SOLAX_PV_ONLY_MODELS_RESIDENTIAL = {4, 16, 18, 22, 26, 27, 28, 29, 44}
 
 # Device model mapping for Commercial & Industrial (businessType=4)
 SOLAX_DEVICE_MODEL_COMMERCIAL = {
@@ -387,6 +418,23 @@ class SolaxAPI(ComponentBase):
         self.realtime_plant_failed = set()
         self.realtime_device_failed = set()
 
+        # Plants whose PV energy has been built from their inverters, these never drop back to the plant total
+        self.plant_pv_from_devices = set()
+
+        # Last value published for each lifetime counter and when it first read lower than that, so that a
+        # counter which dips and recovers is held rather than the recovery being read as energy (GH#5388)
+        self.counter_last = {}
+        self.counter_dip_since = {}
+
+        # The same state as restored from storage. The sensors do not survive a Home Assistant restart and the
+        # dip start time is nowhere else, so both are saved (see save_counter_state)
+        self.counter_stored = {}
+        self.counter_save_due = False
+        self.counter_saved = None
+
+        # Plants already warned for having no inverter with PV inputs or a yield counter
+        self.plant_no_pv_warned = set()
+
         # When the plant and device info was last read successfully, seeded from the storage cache on
         # startup so that a restart does not re-read data that is still current, plus when it was last
         # attempted so that a failing read is retried at a sensible rate rather than every cycle
@@ -407,6 +455,133 @@ class SolaxAPI(ComponentBase):
             self.plant_sn_filter = plant_sn
 
         self.log(f"SolaX API: Initialised with region={region}, base_url={self.base_url}")
+
+    def _discovery_plants(self):
+        """The plants automatic_config() configures, in its order: those with an inverter and a battery device."""
+        plants = []
+        for plant_id, inverter_sns in self.plant_inverters.items():
+            if inverter_sns and any(device.get("plantId") == plant_id and device.get("deviceType") == 2 for device in self.device_info.values()):
+                plants.append(plant_id)
+        return plants
+
+    def _discovery_entities(self, plant, first):
+        """Every setting automatic_config() binds for one plant, as discovery entity descriptors.
+
+        Entity ids use the raw plantId and the same f-strings automatic_config() uses, so the two cannot
+        drift; tests/test_solax.py checks they agree both ways. battery_power is published with the
+        opposite sign to Predbat's convention (battery_power_invert), hence invert. battery_min_soc has no
+        entity: automatic_config() sets the constant floor SolaX Cloud clamps to, so it is a value
+        stand-in. battery_temperature_history is site-wide and bound from the first plant only (D15).
+        """
+        stem = f"{self.prefix}_solax_{plant}"
+        load_stem = f"{stem}_{self.plant_inverters[plant][0]}"
+
+        def sensor(leaf, unit=None, prefix=stem, **fields):
+            """A read-only binding to one of the plant's published sensors."""
+            descriptor = {"entity_id": f"sensor.{prefix}_{leaf}", "access": "r", **fields}
+            if unit:
+                descriptor["unit"] = unit
+            return descriptor
+
+        def control(domain, leaf, **fields):
+            """A binding to one of the control entities Predbat writes."""
+            return {"entity_id": f"{domain}.{stem}_{leaf}", "access": "rw", "domain": domain, **fields}
+
+        entities = {
+            "load_today": sensor("total_load", "kWh"),
+            "import_today": sensor("total_imported", "kWh"),
+            "export_today": sensor("total_exported", "kWh"),
+            "pv_today": sensor("pv_yield", "kWh"),
+            "battery_power": sensor("battery_charge_discharge_power", "W", invert=True),
+            "grid_power": sensor("grid_power", "W"),
+            "pv_power": sensor("pv_power", "W"),
+            "load_power": sensor("load_power", "W", prefix=load_stem),
+            "battery_scaling": sensor("battery_soh", prefix=load_stem),
+            "battery_temperature": sensor("battery_temperature", "°C"),
+            "soc_max": sensor("battery_capacity", "kWh"),
+            "soc_kw": sensor("battery_soc", "kWh"),
+            "battery_rate_max": sensor("battery_max_power", "W"),
+            "inverter_limit": sensor("inverter_max_power", "W"),
+            "reserve": control("number", "setting_reserve", unit="%"),
+            "battery_min_soc": {"value": SOLAX_MIN_RESERVE_PERCENT, "access": "r"},
+            "charge_start_time": control("select", "battery_schedule_charge_start_time", format="HH:MM:SS"),
+            "charge_end_time": control("select", "battery_schedule_charge_end_time", format="HH:MM:SS"),
+            "charge_limit": control("number", "battery_schedule_charge_target_soc", unit="%"),
+            "scheduled_charge_enable": control("switch", "battery_schedule_charge_enable"),
+            "charge_rate": control("number", "battery_schedule_charge_rate", unit="W"),
+            "scheduled_discharge_enable": control("switch", "battery_schedule_export_enable"),
+            "discharge_target_soc": control("number", "battery_schedule_export_target_soc", unit="%"),
+            "discharge_start_time": control("select", "battery_schedule_export_start_time", format="HH:MM:SS"),
+            "discharge_end_time": control("select", "battery_schedule_export_end_time", format="HH:MM:SS"),
+            "discharge_rate": control("number", "battery_schedule_export_rate", unit="W"),
+        }
+        if first:
+            entities["battery_temperature_history"] = sensor("battery_temperature", "°C")
+        return entities
+
+    def _discovery_ratings(self, plant):
+        """The figures the plant's devices report, under Predbat's setting names (spec D14).
+
+        inverter_limit sums the inverters' rated power. battery_rate_max is the battery devices' own
+        rated power only - get_max_power_battery() falls back to the inverters' rating when a battery
+        reports none, which is an estimate, not a rating. soc_max is the plant's reported capacity, never
+        the fallback derived from the state of charge.
+        """
+        ratings = {}
+        inverter_w = sum(float(self.device_info.get(sn, {}).get("ratedPower") or 0) for sn in self.plant_inverters.get(plant, [])) * 1000
+        if inverter_w > 0:
+            ratings["inverter_limit"] = inverter_w
+        capacity = sum(float(info.get("batteryCapacity") or 0) for info in self.plant_info or [] if info.get("plantId") == plant)
+        if capacity > 0:
+            ratings["soc_max"] = capacity
+        battery_w = sum(float(device.get("ratedPower") or 0) for device in self.device_info.values() if device.get("plantId") == plant and device.get("deviceType") == 2) * 1000
+        if battery_w > 0:
+            ratings["battery_rate_max"] = battery_w
+        return ratings
+
+    def build_discovery(self):
+        """
+        Describe the SolaX plants for the discovery catalogue.
+
+        One record per plant automatic_config() configures - a plant with an inverter and a battery - in
+        the same order, keyed by the plant's first inverter serial, with every inverter's serial in serials
+        when there is more than one. SolaX ties batteries to the plant, not to an inverter, so the record
+        stays "direct". The plantId is a cloud identifier and goes in account_ids, published readable like
+        every identifier, as are the entity ids that embed it.
+
+        Never reported: the plant name, the dongle (registerNo) serial and the API credentials.
+
+        Returns None when no plant has both an inverter and a battery.
+        """
+        plants = self._discovery_plants()
+        if not plants:
+            return None
+        models = SOLAX_DEVICE_MODEL_RESIDENTIAL.get(1, {})
+        inverters = []
+        for index, plant in enumerate(plants):
+            serials = list(self.plant_inverters[plant])
+            device = self.device_info.get(serials[0], {})
+            info = {"vendor": "SolaX"}
+            if models.get(device.get("deviceModel")):
+                info["model"] = models[device["deviceModel"]]
+            if device.get("armVersion") or device.get("dspVersion"):
+                info["firmware"] = "ARM {} DSP {}".format(device.get("armVersion", "?"), device.get("dspVersion", "?"))
+            inverters.append(
+                inverter_record(
+                    "solax:{}".format(serials[0]),
+                    inverter_type="SolaxCloud",
+                    composition="direct",
+                    serials=serials if len(serials) > 1 else None,
+                    functions=["solar", "battery"],
+                    capabilities=dict(SOLAX_CAPABILITIES),
+                    hardware_ids={"serial": serials[0]},
+                    account_ids={"plant_id": str(plant)},
+                    info=info,
+                    ratings=self._discovery_ratings(plant),
+                    entities=self._discovery_entities(plant, index == 0),
+                )
+            )
+        return {"automatic": self.automatic, "inverters": inverters}
 
     async def automatic_config(self):
         """
@@ -444,14 +619,17 @@ class SolaxAPI(ComponentBase):
         self.set_arg("load_today", [f"sensor.{self.prefix}_solax_{plant}_total_load" for plant in plants])
         self.set_arg("import_today", [f"sensor.{self.prefix}_solax_{plant}_total_imported" for plant in plants])
         self.set_arg("export_today", [f"sensor.{self.prefix}_solax_{plant}_total_exported" for plant in plants])
-        self.set_arg("pv_today", [f"sensor.{self.prefix}_solax_{plant}_total_yield" for plant in plants])
+        self.set_arg("pv_today", [f"sensor.{self.prefix}_solax_{plant}_pv_yield" for plant in plants])
         self.set_arg("battery_power", [f"sensor.{self.prefix}_solax_{plant}_battery_charge_discharge_power" for plant in plants])
         self.set_arg("battery_power_invert", [f"True" for plant in plants])
 
-        # Power and SOC from device realtime data (using first inverter)
+        # PV and grid power are plant sensors summed over every inverter, as a plant can have a PV-only
+        # inverter and a separate battery inverter and either of them can be listed first
+        self.set_arg("grid_power", [f"sensor.{self.prefix}_solax_{plant}_grid_power" for plant in plants])
+        self.set_arg("pv_power", [f"sensor.{self.prefix}_solax_{plant}_pv_power" for plant in plants])
+
+        # Load power and battery health are plant values too, published under the first inverter
         inverter_list = [self.plant_inverters[plant][0] for plant in plants]
-        self.set_arg("grid_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_grid_power" for plant, inv in zip(plants, inverter_list)])
-        self.set_arg("pv_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_pv_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("load_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_load_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("battery_scaling", [f"sensor.{self.prefix}_solax_{plant}_{inv}_battery_soh" for plant, inv in zip(plants, inverter_list)])
 
@@ -607,6 +785,160 @@ class SolaxAPI(ComponentBase):
         await self.publish_controls()
         return True
 
+    def inverter_expected(self, device_sn):
+        """
+        True unless the device info says the inverter is offline, an offline inverter is not expected to answer
+        """
+        return self.device_info.get(device_sn, {}).get("onlineStatus", 1) != 0
+
+    def hold_counter_dip(self, entity_id, value):
+        """
+        Value to publish for a lifetime counter in kWh, held at the last published value while it reads lower
+
+        SolaX can return a lower value for a lifetime counter for a while and then the right one again, and
+        published as received the recovery is counted as energy for that day (GH#5388). The last published
+        value is seeded from the sensor itself so that a dip straight after a restart is held too. A lower
+        value that lasts SOLAX_COUNTER_DIP_HOLD_HOURS is taken as a genuine reset. Returns the last published
+        value when there is no reading, or None if there has never been one
+
+        The sensor is the first choice for the last published value as it is exact, the value restored from
+        storage can be a few minutes old and is for when the sensor is gone
+        """
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            value = None
+        last = self.counter_last.get(entity_id)
+        if last is None:
+            try:
+                last = float(self.get_state_wrapper(entity_id, default=None))
+            except (ValueError, TypeError):
+                last = self.counter_stored.get(entity_id)
+        if value is None:
+            return last
+        if last is not None and value < last:
+            now = datetime.now(timezone.utc)
+            if entity_id not in self.counter_dip_since:
+                self.counter_dip_since[entity_id] = now
+                self.counter_save_due = True
+                self.log(f"Warn: SolaX API: {entity_id} read {value} which is lower than the last value {last}, keeping the last value")
+            if now - self.counter_dip_since[entity_id] < timedelta(hours=SOLAX_COUNTER_DIP_HOLD_HOURS):
+                self.counter_last[entity_id] = last
+                return last
+            self.log(f"Warn: SolaX API: {entity_id} has read lower than {last} for {SOLAX_COUNTER_DIP_HOLD_HOURS} hours, taking {value} as a reset")
+        if self.counter_dip_since.pop(entity_id, None) is not None:
+            self.counter_save_due = True
+        self.counter_last[entity_id] = value
+        return value
+
+    async def load_counter_state(self):
+        """
+        Restore the lifetime counter state from storage: the last values, and when any dip in progress started
+
+        Without the start time a restart would begin the hold period again, and a system restarted every day
+        would hold the old total for ever after a genuine reset
+        """
+        if not self.storage:
+            return
+        cached = await self.storage.load("solax", "counters")
+        if not isinstance(cached, dict):
+            return
+        for entity_id, value in (cached.get("last") or {}).items():
+            try:
+                self.counter_stored[entity_id] = float(value)
+            except (ValueError, TypeError):
+                pass
+        for entity_id, since in (cached.get("dip_since") or {}).items():
+            try:
+                self.counter_dip_since.setdefault(entity_id, datetime.fromisoformat(since))
+            except (ValueError, TypeError):
+                pass
+        self.log(f"SolaX API: Restored {len(self.counter_stored)} lifetime counter(s) from storage, {len(self.counter_dip_since)} held on a dip")
+
+    async def save_counter_state(self):
+        """
+        Save the lifetime counter state to storage, at once when a dip started or ended and otherwise every
+        SOLAX_COUNTER_SAVE_MINUTES
+
+        Returns:
+            True if the state was saved
+        """
+        if not self.storage or not self.counter_last:
+            return False
+        now = datetime.now(timezone.utc)
+        if not self.counter_save_due and self.counter_saved and now - self.counter_saved < timedelta(minutes=SOLAX_COUNTER_SAVE_MINUTES):
+            return False
+        data = {"last": dict(self.counter_last), "dip_since": {entity_id: since.isoformat() for entity_id, since in self.counter_dip_since.items()}}
+        if not await self.storage.save("solax", "counters", data, format="json", expiry=now + timedelta(days=SOLAX_COUNTER_EXPIRY_DAYS)):
+            return False
+        self.counter_save_due = False
+        self.counter_saved = now
+        return True
+
+    def get_inverter_last_yield(self, entity_plant_id, device_sn):
+        """
+        Last known lifetime yield of an inverter in kWh, or None if it has never given one
+
+        The inverter's own total yield sensor is the record of it, which survives a restart, so an inverter
+        which no longer answers stays in the plant sum rather than stepping it down. A read that comes back
+        lower, 0.0 included, does not replace a known figure
+        """
+        device_yield = None
+        if device_sn not in self.realtime_device_failed:
+            device_yield = self.realtime_device_data.get(device_sn, {}).get("totalYield")
+        return self.hold_counter_dip(f"sensor.{self.prefix}_solax_{entity_plant_id}_{device_sn}_total_yield", device_yield)
+
+    def plant_has_pv_source(self, plant_id):
+        """
+        True if any inverter in the plant has PV inputs or a yield counter, a counter reading 0.0 included. An
+        inverter that has not been read counts as having them
+        """
+        for device_sn in self.plant_inverters.get(plant_id, []):
+            realtime = self.realtime_device_data.get(device_sn)
+            if realtime is None or device_sn in self.realtime_device_failed or realtime.get("mpptMap") or realtime.get("pvMap") or realtime.get("totalYield") is not None:
+                return True
+        return False
+
+    def get_plant_pv_yield(self, plant_id, plant_yield):
+        """
+        Lifetime PV energy for a plant in kWh, summed from its inverters rather than taken from the plant total
+
+        The plant level totalYield includes the AC output of an AC-coupled battery inverter, so battery
+        discharge reads as generation (GH#5356). Each inverter contributes its last known yield, a lifetime
+        counter does not go backwards so a failed read cannot make the sum dip. An inverter with no yield of
+        its own counts as 0, and a plant where no inverter has PV inputs either gives 0 rather than the plant
+        total. Returns None when the value should be held, which is only when an inverter that should be
+        answering failed its read and has never given a yield
+
+        plant_id is the ID as SolaX gives it, which is what the inverters are stored under. The entity names
+        use a tidied form of it
+        """
+        entity_plant_id = plant_id.lower().replace(" ", "_")
+        pv_yield = 0.0
+        for device_sn in self.plant_inverters.get(plant_id, []):
+            device_yield = self.get_inverter_last_yield(entity_plant_id, device_sn)
+            if device_yield is None:
+                read_ok = device_sn in self.realtime_device_data and device_sn not in self.realtime_device_failed
+                if not read_ok and self.inverter_expected(device_sn):
+                    return None
+                device_yield = 0.0
+            pv_yield += device_yield
+        if pv_yield > 0:
+            self.plant_pv_from_devices.add(plant_id)
+            return pv_yield
+        if plant_id in self.plant_pv_from_devices:
+            return None
+        # A plant with no PV inputs at all has no PV figure. Its plant total is the inverter AC output, which is
+        # battery discharge, so 0 is published rather than that. Any PV on the site is on an inverter SolaX
+        # does not measure, and the load then excludes whatever that PV supplies (GH#5388)
+        if not self.plant_has_pv_source(plant_id):
+            if plant_id not in self.plant_no_pv_warned:
+                self.plant_no_pv_warned.add(plant_id)
+                self.log(f"Warn: SolaX API: Plant {plant_id} has no inverter with PV inputs or a yield counter, PV today is published as 0. If the site has PV on another inverter it is not measured, and load today will be low by whatever that PV supplies")
+            return 0.0
+        # The inverters have PV inputs but report no yield of their own, so the plant total is the only PV figure there is
+        return plant_yield
+
     def get_max_power_inverter(self, plant_id):
         rated_power = 0
         for device_id in self.plant_inverters.get(plant_id, []):
@@ -617,15 +949,34 @@ class SolaxAPI(ComponentBase):
         return rated_power * 1000  # Convert to Watts
 
     def get_max_power_battery(self, plant_id):
+        """
+        Battery capability in Watts, using explicit battery ratings before inverter ratings.
+
+        The inverter fallback excludes known residential PV-only models. Unknown models retain the
+        existing fallback, as missing metadata is not evidence that an inverter has no battery port.
+        This remains a rated-power estimate, not a measurement of the battery's DC charge limit.
+        """
         rated_power = 0
         for device_id in self.plant_batteries.get(plant_id, []):
             try:
-                rated_power += float(self.device_info.get(device_id, {}).get("ratedPower", 0))  # in kW
+                power = float(self.device_info.get(device_id, {}).get("ratedPower", 0))  # in kW
+                if isfinite(power) and power > 0:
+                    rated_power += power
             except (TypeError, ValueError):
                 pass
         if rated_power == 0:
-            # Fallback to inverter power if no battery power found
-            rated_power = self.get_max_power_inverter(plant_id) / 1000  # Convert back to kW
+            for device_id in self.plant_inverters.get(plant_id, []):
+                device = self.device_info.get(device_id, {})
+                # Older cached records omit businessType; the normal discovery path is residential.
+                residential = as_int(device.get("businessType", BUSINESS_TYPE_RESIDENTIAL)) == BUSINESS_TYPE_RESIDENTIAL
+                if residential and as_int(device.get("deviceModel")) in SOLAX_PV_ONLY_MODELS_RESIDENTIAL:
+                    continue
+                try:
+                    power = float(device.get("ratedPower", 0))  # in kW
+                    if isfinite(power) and power > 0:
+                        rated_power += power
+                except (TypeError, ValueError):
+                    pass
         return rated_power * 1000  # Convert to Watts
 
     def get_max_soc_battery(self, plant_id):
@@ -644,7 +995,7 @@ class SolaxAPI(ComponentBase):
     def get_charge_discharge_power_battery(self, plant_id):
         total_power = 0
         for device_id in self.plant_batteries.get(plant_id, []):
-            total_power += self.realtime_device_data.get(device_id, {}).get("chargeDischargePower", 0)
+            total_power += self.realtime_device_data.get(device_id, {}).get("chargeDischargePower") or 0
         return total_power  # in Watts
 
     def get_current_soc_battery_kwh(self, plant_id):
@@ -653,8 +1004,8 @@ class SolaxAPI(ComponentBase):
         battery_remainings = 0
         battery_size_max = 0
         for device_id in self.plant_batteries.get(plant_id, []):
-            current_soc += self.realtime_device_data.get(device_id, {}).get("batterySOC", 0)
-            battery_remainings += self.realtime_device_data.get(device_id, {}).get("batteryRemainings", 0)
+            current_soc += self.realtime_device_data.get(device_id, {}).get("batterySOC") or 0
+            battery_remainings += self.realtime_device_data.get(device_id, {}).get("batteryRemainings") or 0
             count_devices += 1
         if count_devices > 0:
             current_soc = current_soc / count_devices
@@ -664,7 +1015,9 @@ class SolaxAPI(ComponentBase):
     def get_battery_temperature(self, plant_id):
         temperature = 100.0
         for device_id in self.plant_batteries.get(plant_id, []):
-            temperature = min(self.realtime_device_data.get(device_id, {}).get("batteryTemperature", temperature), temperature)
+            battery_temperature = self.realtime_device_data.get(device_id, {}).get("batteryTemperature")
+            if battery_temperature is not None:
+                temperature = min(battery_temperature, temperature)
         if temperature == 100.0:
             temperature = None
         return temperature
@@ -904,7 +1257,8 @@ class SolaxAPI(ComponentBase):
             else:
                 default = min_value
         elif field == "rate":
-            max_value = self.get_max_power_inverter(plant_id)
+            # SOC target control takes AC power, so retain the inverter ceiling as well.
+            max_value = min(self.get_max_power_inverter(plant_id), self.get_max_power_battery(plant_id))
             min_value = 0
             default = max_value
             field_type = 'number'
@@ -1474,6 +1828,7 @@ class SolaxAPI(ComponentBase):
                 deviceSn = device.get("deviceSn")
                 if deviceSn:
                     device['deviceType'] = device_type
+                    device['businessType'] = params["businessType"]
                     self.device_info[deviceSn] = device
                     # Store inverter SNs by plant
                     if plant_id not in self.plant_inverters:
@@ -2269,7 +2624,8 @@ class SolaxAPI(ComponentBase):
                 mpptMap = realtime.get("mpptMap", {})  # cSpell:disable-line
                 totalActivePower = realtime.get("totalActivePower", 0)
                 totalReactivePower = realtime.get("totalReactivePower", 0)
-                totalYield = realtime.get("totalYield", 0)
+                # Held on a dip, this sensor is what the inverter's last known yield is seeded from after a restart
+                totalYield = self.hold_counter_dip(f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_total_yield", realtime.get("totalYield", 0))
                 deviceStatus = realtime.get("deviceStatus", 0)
                 deviceStatusText = SOLAX_INVERTER_STATUS.get(deviceStatus, "Unknown Status")
 
@@ -2289,8 +2645,8 @@ class SolaxAPI(ComponentBase):
                 # The entity SN is pinned to plant_inverters[plant_id][0] for stability; it is
                 # only set once (first inverter processed) so it never gets overwritten.
                 if plant_id not in plant_save:
-                    stable_sn = self.plant_inverters.get(plant_id, [device_sn])[0]
-                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": stable_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0}
+                    stable_sn = self.plant_inverters.get(device.get("plantId"), [device_sn])[0]
+                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": stable_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0, "raw_plant_id": device.get("plantId")}
                 plant_save[plant_id]["pv"] = (plant_save[plant_id]["pv"] or 0) + (pvPower or 0)
                 plant_save[plant_id]["grid"] = (plant_save[plant_id]["grid"] or 0) + (gridPower or 0)
 
@@ -2386,7 +2742,7 @@ class SolaxAPI(ComponentBase):
 
                 # Store per-plant battery value for load-power calculation (second pass)
                 if plant_id not in plant_save:
-                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": device_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0}
+                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": device_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0, "raw_plant_id": device.get("plantId")}
 
                 plant_save[plant_id]["battery"] += charge_discharge_power if charge_discharge_power is not None else 0
 
@@ -2491,6 +2847,34 @@ class SolaxAPI(ComponentBase):
             pv = saved["pv"] if saved["pv"] is not None else 0
             battery = saved["battery"] if saved["battery"] is not None else 0
             load_power = pv - battery - grid
+
+            # Plant PV and grid power, held when an inverter that should be answering was not read on this
+            # cycle as a sum with it missing would under-read. An offline inverter counts as 0W
+            if not any((inverter_sn in self.realtime_device_failed or inverter_sn not in self.realtime_device_data) and self.inverter_expected(inverter_sn) for inverter_sn in self.plant_inverters.get(saved.get("raw_plant_id"), [])):
+                plant_name = next((plant.get("plantName", plant_id) for plant in self.plant_info if plant.get("plantId", "unknown").lower().replace(" ", "_") == plant_id), plant_id)
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_pv_power",
+                    state=pv,
+                    attributes={
+                        "friendly_name": f"SolaX {plant_name} PV Power",
+                        "unit_of_measurement": "W",
+                        "device_class": "power",
+                        "state_class": "measurement",
+                    },
+                    app="solax",
+                )
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_grid_power",
+                    state=grid,
+                    attributes={
+                        "friendly_name": f"SolaX {plant_name} Grid Power",
+                        "unit_of_measurement": "W",
+                        "device_class": "power",
+                        "state_class": "measurement",
+                    },
+                    app="solax",
+                )
+
             self.dashboard_item(
                 f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_load_power",
                 state=load_power,
@@ -2635,10 +3019,16 @@ class SolaxAPI(ComponentBase):
             elif realtime_plant_id and realtime_plant_id in self.realtime_data:
                 realtime = self.realtime_data[realtime_plant_id]
 
+                # The lifetime totals are held on a dip, SolaX can return a lower value for a while and the
+                # recovery would otherwise be read as energy. The load below is built from the held values
+                totals = {}
+                for key, name in [("totalYield", "total_yield"), ("totalCharged", "total_charged"), ("totalDischarged", "total_discharged"), ("totalImported", "total_imported"), ("totalExported", "total_exported")]:
+                    totals[key] = self.hold_counter_dip(f"sensor.{self.prefix}_solax_{plant_id}_{name}", realtime.get(key, 0.0)) or 0.0
+
                 # Total Yield sensor
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_total_yield",
-                    state=realtime.get("totalYield", 0.0),
+                    state=totals["totalYield"],
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Yield",
                         "unit_of_measurement": "kWh",
@@ -2651,7 +3041,7 @@ class SolaxAPI(ComponentBase):
                 # Total Charged sensor
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_total_charged",
-                    state=realtime.get("totalCharged", 0.0),
+                    state=totals["totalCharged"],
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Charged",
                         "unit_of_measurement": "kWh",
@@ -2664,7 +3054,7 @@ class SolaxAPI(ComponentBase):
                 # Total Discharged sensor
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_total_discharged",
-                    state=realtime.get("totalDischarged", 0.0),
+                    state=totals["totalDischarged"],
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Discharged",
                         "unit_of_measurement": "kWh",
@@ -2677,7 +3067,7 @@ class SolaxAPI(ComponentBase):
                 # Total Imported sensor
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_total_imported",
-                    state=realtime.get("totalImported", 0.0),
+                    state=totals["totalImported"],
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Imported",
                         "unit_of_measurement": "kWh",
@@ -2690,7 +3080,7 @@ class SolaxAPI(ComponentBase):
                 # Total Exported sensor
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_total_exported",
-                    state=realtime.get("totalExported", 0.0),
+                    state=totals["totalExported"],
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Exported",
                         "unit_of_measurement": "kWh",
@@ -2699,26 +3089,38 @@ class SolaxAPI(ComponentBase):
                     },
                     app="solax",
                 )
-                # Work out total load
-                # This is will total imported + total discharged - total exported - total charged + total yield
-                total_load = (
-                    realtime.get("totalImported", 0.0)
-                    + realtime.get("totalDischarged", 0.0)
-                    - realtime.get("totalExported", 0.0)
-                    - realtime.get("totalCharged", 0.0)
-                    + realtime.get("totalYield", 0.0)
-                )
-                self.dashboard_item(
-                    f"sensor.{self.prefix}_solax_{plant_id}_total_load",
-                    state=total_load,
-                    attributes={
-                        "friendly_name": f"SolaX {plant_name} Total Load",
-                        "unit_of_measurement": "kWh",
-                        "device_class": "energy",
-                        "state_class": "measurement",
-                    },
-                    app="solax",
-                )
+                # PV energy is built from the inverters, as the plant total yield above counts the output of an
+                # AC-coupled battery inverter as generation. The load is derived from it so both are held together
+                pv_yield = self.get_plant_pv_yield(realtime_plant_id, totals["totalYield"])
+                if pv_yield is None:
+                    self.log(f"Warn: SolaX API: No inverter yield read for plant {realtime_plant_id}, keeping the previous PV yield and load values")
+                else:
+                    self.dashboard_item(
+                        f"sensor.{self.prefix}_solax_{plant_id}_pv_yield",
+                        state=pv_yield,
+                        attributes={
+                            "friendly_name": f"SolaX {plant_name} PV Yield",
+                            "unit_of_measurement": "kWh",
+                            "device_class": "energy",
+                            "state_class": "measurement",
+                        },
+                        app="solax",
+                    )
+
+                    # Work out total load
+                    # This is total imported + total discharged - total exported - total charged + PV yield
+                    total_load = totals["totalImported"] + totals["totalDischarged"] - totals["totalExported"] - totals["totalCharged"] + pv_yield
+                    self.dashboard_item(
+                        f"sensor.{self.prefix}_solax_{plant_id}_total_load",
+                        state=total_load,
+                        attributes={
+                            "friendly_name": f"SolaX {plant_name} Total Load",
+                            "unit_of_measurement": "kWh",
+                            "device_class": "energy",
+                            "state_class": "measurement",
+                        },
+                        app="solax",
+                    )
 
                 # Total Earnings sensor
                 self.dashboard_item(
@@ -2746,6 +3148,7 @@ class SolaxAPI(ComponentBase):
         if first:
             # Reuse whatever hardware information is still current, a restart then avoids re-reading it all
             await self.load_static_info()
+            await self.load_counter_state()
 
         # Plant info is static, it is only re-read once the data itself has aged out
         plant_info_refreshed = False
@@ -2823,6 +3226,11 @@ class SolaxAPI(ComponentBase):
             await self.publish_device_info()
             await self.publish_device_realtime_data()
             await self.publish_controls()
+            await self.save_counter_state()
+
+        # Filed every cycle, after this cycle's publish and before automatic_config(), which raises when
+        # no plant has a battery. refresh_discovery() owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         # Automatic configuration
         if first and self.automatic:
@@ -2945,6 +3353,15 @@ async def test_solax_api(client_id, client_secret, region, plant_id, test_mode=N
         return
     else:
         print("✓ Initialisation successful")
+
+    # Show where each plant's PV energy comes from, the plant total against the inverters it is now built from
+    for pv_plant_id in solax.plant_list:
+        plant_realtime = solax.realtime_data.get(pv_plant_id, {})
+        print(f"\nPV yield for plant {pv_plant_id}: plant totalYield {plant_realtime.get('totalYield')} kWh, dailyYield {plant_realtime.get('dailyYield')} kWh")
+        for device_sn in solax.plant_inverters.get(pv_plant_id, []):
+            device_realtime = solax.realtime_device_data.get(device_sn, {})
+            print(f"  Inverter {device_sn}: totalYield {device_realtime.get('totalYield')} dailyYield {device_realtime.get('dailyYield')} totalACOutput {device_realtime.get('totalACOutput')} dailyACOutput {device_realtime.get('dailyACOutput')}")
+        print(f"  Published PV yield: {solax.get_plant_pv_yield(pv_plant_id, plant_realtime.get('totalYield', 0.0))} kWh")
 
     # If raw test commands are specified, issue them in order against the first plant
     if test_commands and solax.plant_list:

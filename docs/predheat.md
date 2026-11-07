@@ -83,6 +83,20 @@ The **weather** configuration points to the Open Weather Map sensor by default s
 Set the **target_temperature** to point to a sensor that indicates what your boiler thermostat is set to, or manually enter the temperature setting here.
 
 Set **smart_thermostat** to True if your thermostat starts the boiler ahead of time for the new target temperature or False for regular options.
+When enabled, Predheat models each rise in the scheduled target temperature over the forecast as a pre-heat: it works out how long the heating takes to reach the new target, using only the heating period the rise belongs to (until the target next falls below the new value), and raises the target that much earlier.
+If the new target is not reached within its heating period the pre-heat starts as early as permitted, which is **smart_thermostat_max_minutes** when set or otherwise the length of that heating period.
+A pre-heat never lowers a higher target that is already scheduled, and never starts before the previous rise.
+
+Set **smart_thermostat_max_minutes** to the longest lead time, in minutes, that Predheat will model before a setpoint rise, which should be the longest early start your thermostat makes.
+It applies to every pre-heat window. When it is not set, or is not a finite number, the pre-heat lead time is not capped.
+Some thermostats only limit how early they pre-heat during the night, in which case set it to cover the longest daytime early start, or leave it unset.
+For example, for a thermostat that starts heating up to 60 minutes early:
+
+```yaml
+  predheat:
+    smart_thermostat: True
+    smart_thermostat_max_minutes: 60
+```
 
 Set **heating_energy** To point to a sensor that indicates the energy consumed by your boiler/heat pump in kWh. If the sensor isn't accurate then use **heating_energy_scaling** to adjust it to the actual energy consumed.
 You can also comment this line out if you don't have a sensor, but no historical cost information will be produced.
@@ -154,6 +168,8 @@ If your heat source makes use of weather compensation then add the following to 
 ```
 
 Predheat will fill in the gaps between the points provided.
+
+IMPORTANT: The weather compensation curve must have a low value of -20 degrees C and a high value of 20 degrees C. You can have whatever other points you want between the upper and lower bounds and Predheat will fill in the gaps, but if you don't have -20 and 20 Predheat will error when it tries to calculate the weather-adjusted flow temperature.
 
 ### Link Predheat to Predbat
 

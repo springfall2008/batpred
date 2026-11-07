@@ -94,6 +94,7 @@ class LuxpowerVppClient:
         self.timeout_seconds = timeout_seconds
 
     async def _request(self, method, path, token, json_body=None, expected=(200,)):
+        """Send an authenticated request and expose only documented problem fields."""
         if not isinstance(token, str) or not token:
             raise ValueError("LuxPower access token is required")
         status, payload, response_headers = await self.request_impl(
@@ -112,6 +113,7 @@ class LuxpowerVppClient:
         return payload if isinstance(payload, dict) else {}, response_headers
 
     def _partner_access_token(self):
+        """Require a partner credential before issuing a partner operation."""
         if not isinstance(self.partner_token, str) or not self.partner_token:
             raise ValueError("LuxPower partner access token is required")
         return self.partner_token
@@ -206,14 +208,13 @@ class LuxpowerAPI(ComponentBase):
         asset_id,
         base_url,
         partner_token=None,
-        binding_status=None,
         binding_ready=False,
         telemetry_ready=False,
         control_ready=False,
         request_impl=None,
     ):
+        """Initialise the selected asset with all vendor readiness gates closed by default."""
         self.asset_id = asset_id
-        self.binding_status = binding_status
         self.telemetry_ready = telemetry_ready is True
         self.control_ready = control_ready is True
         self.last_telemetry = None
