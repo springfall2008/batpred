@@ -62,6 +62,14 @@ You need to edit your Predbat `apps.yaml` to configure your system.
 
 Copy the following [predheat.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/predheat.yaml) template and append it to the end of Predbat's `apps.yaml`, after your existing inverter/battery configuration.
 
+Predheat works in °C internally. Temperatures that come from Home Assistant entities - the weather forecast, **external_temperature**, **internal_temperature**,
+**target_temperature**, and **flow_temp** or **volume_temp** when they point at a sensor - are converted from each entity's own unit (°F or K), so °F sensors
+work and can be mixed with °C ones. An entity with no unit, such as a climate entity's attribute or a template sensor, is read in Home Assistant's unit as
+your weather entity reports it; a **flow_temp** or **volume_temp** helper with no unit is taken as °C. Temperatures you type in as numbers (**flow_temp**,
+**hysteresis**, **hysteresis_off**, the **weather_compensation** curve) are in °C, and **heat_loss_degrees** and **heat_loss_watts** are per °C.
+The temperatures Predheat publishes (predheat.internal_temp and so on) are in the unit of your internal temperature sensor, or Home Assistant's if it has none.
+If they change to °F after an update, Home Assistant may report a one-off change of unit for their long-term statistics, which you can fix in Developer Tools > Statistics.
+
 Set the mode (**mode**) to 'gas' or 'pump' depending on if you have a gas boiler or heat pump.
 
 Set the external temperature sensor (**external_temperature**) either to a real sensor or create one from the open weather map by adding this sensor to your `configuration.yaml` file for HA:
