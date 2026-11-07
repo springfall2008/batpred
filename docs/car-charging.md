@@ -139,6 +139,13 @@ The following `apps.yaml` configuration items are pre-defined with regular expre
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
 ```
 
+*Note:* if your Octopus Intelligent device is an **Ohme charger**, these defaults won't work. For Ohme devices the Octopus Energy integration does not create the
+[charge target or target time entities](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/), and its 'intelligent dispatching' sensor never turns on.
+Predbat then logs `Regular expression argument: octopus_ready_time unable to match ..., now will disable` (and the same for `octopus_charge_limit`) and has no Octopus slots,
+ready time or charge limit for the car. Remove these three entries from `apps.yaml` and use the [Ohme car charger direct integration](#ohme-car-charger-direct-integration) instead,
+with `ohme_automatic_octopus_intelligent: true` if Predbat has no [Octopus direct connection](energy-rates.md#octopus-energy-direct) of its own to detect your tariff from.
+Alternatively, let Predbat plan the charging itself (Predbat-led) using the Home Assistant Ohme integration's sensors - see [Ohme HA in-built integration](devices.md#ohme-ha-in-built-integration).
+
 - **octopus_intelligent_slot** - Points to the Octopus Energy integration 'intelligent dispatching' sensor in the Octopus Energy integration that indicates
 whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
 For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car (see [Multiple Electric Cars](#multiple-electric-cars)).
@@ -778,6 +785,9 @@ Instead the house and battery pay the peak rate for 5 minutes of each half hour 
 This applies whether the dispatches come from the Octopus Energy integration or from Predbat's own Octopus connection.
 Because it shares that weight with the solar forecast, a high **input_number.predbat_pv_metric10_weight** can stop Predbat cycling the battery in a cheap dispatch window that it would cycle if the same rate came from your tariff.
 Turn **switch.predbat_octopus_intelligent_pv10_dispatch_gone** (*expert mode*, On by default) Off to trust dispatch rates in the PV10% scenario as well, so dispatch windows plan like any other cheap rate while the PV10% solar weighting stays in place.
+
+- When a dispatch is withdrawn, the Octopus Energy integration's import rate sensor can keep showing its cheap rate for a while. Predbat puts those minutes back to your normal rate once no dispatch covers them, as long as it saw a dispatch covering them before.
+Nothing is changed while a car is charging, as Octopus briefly lists no dispatches while it re-plans a running charge. With **switch.predbat_octopus_intelligent_dynamic** Off the half hour in progress is left alone too, as the car may have charged in it before the dispatch was withdrawn.
 
 - Let the Octopus app control when your car charges.
 

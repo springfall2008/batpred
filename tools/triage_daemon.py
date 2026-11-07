@@ -1037,6 +1037,12 @@ def refresh_gitnexus_index():
     hour rebuilding an index for a tree that had not changed. Failures are reported and
     ignored - a stale index degrades a flow's answers, a raised exception would stop the
     daemon, and check=False keeps this from becoming the latter.
+
+    --index-only, because a plain analyze also rewrites tracked files - the GitNexus section
+    of AGENTS.md and CLAUDE.md, and the skills under .claude/skills/gitnexus/ - undoing the
+    markdownlint fixes main carries. That left every flow starting on a dirty clone, and
+    unfinished_cleanup_reason() took those six files for unpushed fixes: PR #5997's cleanup
+    pushed its commit on 2026-11-06 and was still marked BOT_FAILED.
     """
     global _GITNEXUS_RUNNER_WARNED
     if not GITNEXUS_RUNNER.exists():
@@ -1057,7 +1063,7 @@ def refresh_gitnexus_index():
     if GITNEXUS_HEAD_FILE.exists() and GITNEXUS_HEAD_FILE.read_text().strip() == head:
         return
     print(f"[triage] gitnexus: re-analyzing at {head[:8] or 'unknown'}", flush=True)
-    result = subprocess.run(["node", str(GITNEXUS_RUNNER), "analyze"], cwd=str(CLONE_DIR), capture_output=True, text=True, check=False)
+    result = subprocess.run(["node", str(GITNEXUS_RUNNER), "analyze", "--index-only"], cwd=str(CLONE_DIR), capture_output=True, text=True, check=False)
     if result.returncode == 0:
         BASE_DIR.mkdir(parents=True, exist_ok=True)
         GITNEXUS_HEAD_FILE.write_text(head)

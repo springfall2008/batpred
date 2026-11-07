@@ -139,7 +139,7 @@ def run_web_charts_tests(my_predbat):
     print("Test: render_chart() puts the chart title in an HTML heading outside the chart SVG, where a drag cannot zoom")
     for daily_chart in (True, False):
         html = web.render_chart(series_data, "%", "SoC Chart", now_str, tagname="chart_%", daily_chart=daily_chart)
-        options = html.split("var options = {", 1)[1].split("\n}\n", 1)[0] if "var options = {" in html else ""
+        options = html.split("var options = {", 1)[1].split("\n};\n", 1)[0] if "var options = {" in html else ""
         if not options:
             print(f"  ERROR: test setup assumption wrong - render_chart(daily_chart={daily_chart}) no longer emits 'var options = {{', got: {html}")
             failed += 1
@@ -167,6 +167,27 @@ def run_web_charts_tests(my_predbat):
     if "innerHTML" in html:
         print("  ERROR: render_chart() sets the heading via innerHTML, which would parse a friendly name as markup")
         failed += 1
+
+    # -------------------------------------------------------------------------
+    # JavaScript only inserts a missing semicolon when the next line cannot continue the statement, and a line
+    # starting with '(' or '[' always can. render_chart() closed the options object with a bare '}' and the title
+    # script began '(function() {', so browsers ran it as a call on the options object and threw
+    # 'TypeError: ... is not a function' before the chart was created - every chart page was blank (#6015).
+    print("Test: render_chart() terminates each statement before a line that starts with '(' or '['")
+    for daily_chart in (True, False):
+        html = web.render_chart(series_data, "%", "SoC Chart", now_str, tagname="chart_s", daily_chart=daily_chart)
+        if "\n};\n(function() {\n" not in html:
+            print(f"  ERROR: render_chart(daily_chart={daily_chart}) does not close the options object with '}};' before the title script, got: {html}")
+            failed += 1
+        previous = ""
+        for line in html.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped[0] in "([" and previous and previous[-1] not in ";{,([":
+                print(f"  ERROR: render_chart(daily_chart={daily_chart}) line {stripped!r} follows {previous!r} with no ';', so the browser glues the two into one statement")
+                failed += 1
+            previous = stripped
 
     # -------------------------------------------------------------------------
     print("Test: render_timeline_chart() targets a percent-unit tagname via getElementById, not a CSS id selector")

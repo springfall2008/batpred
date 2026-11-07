@@ -235,7 +235,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.schedule_loaded = False
         self.log("Info: TeslemetryAPI initialising site filter={}".format(self.site_filter or "all account sites"))
-        self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes), backed by a forced re-assert of the full device tuple every {} minutes".format(FORCED_ASSERT_SECONDS // 60))
+        self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes), backed by a forced re-assert of the full device tuple and tariff every {} minutes".format(FORCED_ASSERT_SECONDS // 60))
         self.register_control_entities()
 
     def entity(self, suffix, domain="sensor"):
@@ -697,10 +697,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             # (GH#5157). The timer advances only on a fully successful forced assert, which keeps
             # _apply_command's failure-retry invariant: a forced assert that failed is retried on the next
             # cycle instead of waiting another two hours.
+            # The tariff is re-sent with the tuple: under signal-tariff control it is what steers Tesla's
+            # optimiser, so a dropped tariff is the same stall as a dropped reserve (GH#6020).
             force = (seconds - self._last_forced_assert) >= FORCED_ASSERT_SECONDS
-            await self.sync_tariff()
+            tariff_ok = await self.sync_tariff(force=force)
             asserted = await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc), force=force)
-            if force and asserted:
+            if force and asserted and tariff_ok:
                 self._last_forced_assert = seconds
         return success
 
@@ -818,9 +820,17 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
     def evaluate_schedule_tbc(self, minutes_now, soc):
         """Map the committed schedule to the device tuple under signal-tariff control (GH#4892).
 
-        Mode is autonomous in every state, because Tesla's optimiser only acts on the pushed tariff
-        under Time-Based Control - the tariff, not this tuple, is what asks for the charge or the
-        export. Reserve therefore stops being an overloaded charge signal and is simply the reserve
+        Mode is autonomous whenever the signal tariff has a band in it, because Tesla's optimiser only
+        acts on the pushed tariff under Time-Based Control - the tariff, not this tuple, is what asks
+        for the charge or the export. When neither window is in the tariff it is one flat band, which
+        gives the optimiser no price reason to cover house load, so it can leave small loads on the
+        grid with the reserve already released (GH#6020). That state uses self_consumption instead,
+        which covers house load down to the reserve whatever the tariff says, as the real-rate path
+        does. The test is the same windows sync_tariff builds the tariff from, so a charge window
+        committed ahead of its start already switches to autonomous, and the export band and
+        autonomous arrive together once the export starts (GH#5960).
+
+        Reserve stops being an overloaded charge signal and is simply the reserve
         Predbat asked for, in every state; the charge and export target percentages are advisory
         under this mode, since Tesla decides how much energy actually moves, and window length rather
         than a reserve floor is the lever for them.
@@ -845,7 +855,9 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if self.in_window(minutes_now, discharge):
             target = int(discharge.get("soc", 10))
             return {"export_rule": "battery_ok" if soc > target else "pv_only", "grid_charging": False, "reserve": reserve, "mode": "autonomous"}
-        return {"export_rule": "pv_only", "grid_charging": False, "reserve": reserve, "mode": "autonomous"}
+        charge_window, export_window = self._signal_windows(minutes_now)
+        mode = "autonomous" if (charge_window or export_window) else "self_consumption"
+        return {"export_rule": "pv_only", "grid_charging": False, "reserve": reserve, "mode": mode}
 
     def publish_schedule_entities(self):
         """Publish the schedule entities from the pending schedule (pending == committed after boot/apply).
@@ -1570,6 +1582,14 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         """Return (start_min, end_min) for the committed charge window when enabled, else None."""
         return self._committed_window("charge")
 
+    def _signal_windows(self, minutes_now):
+        """Return (charge_window, export_window) as they go into the signal tariff at minutes_now.
+
+        sync_tariff builds the tariff from these and evaluate_schedule_tbc picks the idle mode from
+        them, so the mode and the tariff cannot disagree about whether there is a band to act on.
+        """
+        return self._charge_window(), self._export_window_active(self._discharge_window(), minutes_now)
+
     @staticmethod
     def _window_intervals(window):
         """Split a (start, end) minute window into non-wrapping [from, to) ranges inside one day.
@@ -1709,11 +1729,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         signature = json.dumps(body, sort_keys=True)
         return await self._apply_command("tariff", signature, lambda: self._command("time_of_use_settings", {"tou_settings": body}), force=force)
 
-    async def sync_tariff(self):
+    async def sync_tariff(self, force=False):
         """Build the tariff from current rates + committed discharge window and push it (deduped).
 
         Cheap to call every cycle: set_tariff only reaches the API when the serialised tariff changes,
         i.e. on a genuine rate-band, discharge-window or day-of-week change. Gated on read-only mode.
+        `force=True` bypasses that dedupe, for run()'s FORCED_ASSERT_SECONDS re-assert.
 
         With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one. Its
         discharge window only reaches the tariff while it is running (see _export_window_active), so it
@@ -1727,11 +1748,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if self._is_read_only():
             return True
         if getattr(self, "tbc_control", self.DEFAULT_TBC_CONTROL):
-            export_window = self._export_window_active(self._discharge_window(), self.get_minutes_now())
-            tariff = self.build_signal_tariff(self._charge_window(), export_window)
+            tariff = self.build_signal_tariff(*self._signal_windows(self.get_minutes_now()))
         else:
             tariff = self.build_tariff(self._discharge_window())
-        return await self.set_tariff(tariff)
+        return await self.set_tariff(tariff, force=force)
 
     def _is_read_only(self):
         """Return True if Predbat is configured read-only, so device-write commands must not be sent.
