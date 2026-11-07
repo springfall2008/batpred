@@ -900,6 +900,129 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: a slot without a warning should not be flagged, got {}".format(next_row and _codes(next_row)))
         failed = True
 
+    # --- Test 18: a window that charges to its target and then holds there is split (#5990) ---
+    print("Test charge-then-hold window splits into Chrg and HoldChrg spans")
+    interval = my_predbat.plan_interval_minutes
+    my_predbat.charge_window_best = [{"start": minutes_now, "end": minutes_now + 4 * interval, "average": 10.0}]
+    my_predbat.charge_limit_best = [10.0]
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    # 90% rising to 100% by the end of the first slot, then held there for the rest of the window
+    my_predbat.predict_soc_best = {minute: min(9.0 + minute * (1.0 / interval), 10.0) for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    charge_row = _get_row(raw_plan, minutes_now)
+    hold_row = _get_row(raw_plan, minutes_now + interval)
+    if charge_row is None or charge_row["state"] != "Chrg" or charge_row["rowspan_state"] != 0:
+        print("ERROR: the charging part should be a single Chrg row, got {}".format(charge_row and (charge_row["state"], charge_row["rowspan_state"])))
+        failed = True
+    elif hold_row is None or hold_row["state"] != "HoldChrg" or hold_row["rowspan_state"] != 3 or hold_row["skip_state_cell"]:
+        print("ERROR: the held part should start its own HoldChrg span of 3, got {}".format(hold_row and (hold_row["state"], hold_row["rowspan_state"], hold_row["skip_state_cell"])))
+        failed = True
+
+    # A window that is already at its target throughout stays one HoldChrg span
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 10.0)
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or row["state"] != "HoldChrg" or row["rowspan_state"] != 4:
+        print("ERROR: a window held throughout should be one HoldChrg span of 4, got {}".format(row and (row["state"], row["rowspan_state"])))
+        failed = True
+
+    # A window that never reaches its target stays one Chrg span
+    my_predbat.predict_soc_best = {minute: min(5.0 + minute * 0.01, 9.0) for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or row["state"] != "Chrg" or row["rowspan_state"] != 4:
+        print("ERROR: a window that never reaches its target should be one Chrg span of 4, got {}".format(row and (row["state"], row["rowspan_state"])))
+        failed = True
+
+    # A window held at its target until an export that starts inside it: the span stops at the export,
+    # so the SoC falling during the export must not turn the held part into Chrg
+    my_predbat.export_window_best = [{"start": minutes_now + 3 * interval, "end": minutes_now + 4 * interval, "average": 30.0}]
+    my_predbat.export_limits_best = [30.0]
+    my_predbat.predict_soc_best = {minute: 10.0 if minute <= 3 * interval else max(10.0 - (minute - 3 * interval) * 0.1, 3.0) for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or row["state"] != "HoldChrg" or row["rowspan_state"] != 3:
+        print("ERROR: a window held until an export should be one HoldChrg span of 3, got {}".format(row and (row["state"], row["rowspan_state"])))
+        failed = True
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+
+    # Part way through a slot, a span's label must not look past the window's end at what follows it
+    aligned = minutes_now
+    my_predbat.minutes_now = aligned + 10
+    after_window = 3 * interval - 10  # the window's end, relative to the new minutes_now
+    my_predbat.charge_window_best = [{"start": aligned, "end": aligned + 3 * interval, "average": 10.0}]
+    my_predbat.predict_soc_best = {minute: 10.0 if minute <= after_window else 9.0 for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    row = _get_row(raw_plan, aligned)
+    if row is None or row["state"] != "HoldChrg" or row["rowspan_state"] != 3:
+        print("ERROR: a charge window held to its end should be one HoldChrg span of 3 mid-slot, got {}".format(row and (row["state"], row["rowspan_state"])))
+        failed = True
+
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.export_window_best = [{"start": aligned, "end": aligned + 3 * interval, "average": 30.0}]
+    my_predbat.export_limits_best = [50.0]
+    # Below the 50% export target for the whole window, then charged above it straight after
+    my_predbat.predict_soc_best = {minute: 4.0 if minute <= after_window else 9.0 for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    row = _get_row(raw_plan, aligned)
+    if row is None or row["state"] != "HoldExp" or row["rowspan_state"] != 3:
+        print("ERROR: an export window that never reaches its target should be one HoldExp span of 3 mid-slot, got {}".format(row and (row["state"], row["rowspan_state"])))
+        failed = True
+    my_predbat.minutes_now = aligned
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+
+    # Reaching the target and then dipping below it is not a hold: the split comes at the first boundary
+    # from which SoC stays at the target, not at the first one that touches it
+    my_predbat.charge_window_best = [{"start": minutes_now, "end": minutes_now + 4 * interval, "average": 10.0}]
+    my_predbat.charge_limit_best = [10.0]
+    my_predbat.predict_soc_best = {minute: 9.8 if 2 * interval < minute <= 2 * interval + 15 else min(9.0 + minute * (1.0 / interval), 10.0) for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    charge_row = _get_row(raw_plan, minutes_now)
+    hold_row = _get_row(raw_plan, minutes_now + 3 * interval)
+    if charge_row is None or charge_row["state"] != "Chrg" or charge_row["rowspan_state"] != 3:
+        print("ERROR: a dip after reaching the target should keep the Chrg span to 3, got {}".format(charge_row and (charge_row["state"], charge_row["rowspan_state"])))
+        failed = True
+    elif hold_row is None or hold_row["state"] != "HoldChrg" or hold_row["skip_state_cell"]:
+        print("ERROR: the slot held after the dip should be HoldChrg, got {}".format(hold_row and (hold_row["state"], hold_row["skip_state_cell"])))
+        failed = True
+
+    # Starting at the target, dipping below it and recovering is held only from the recovery
+    my_predbat.predict_soc_best = {minute: 9.5 if 0 < minute < interval else 10.0 for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    charge_row = _get_row(raw_plan, minutes_now)
+    hold_row = _get_row(raw_plan, minutes_now + interval)
+    if charge_row is None or charge_row["state"] != "Chrg" or charge_row["rowspan_state"] != 0:
+        print("ERROR: the slot that dips below the target should be a single Chrg row, got {}".format(charge_row and (charge_row["state"], charge_row["rowspan_state"])))
+        failed = True
+    elif hold_row is None or hold_row["state"] != "HoldChrg" or hold_row["rowspan_state"] != 3:
+        print("ERROR: the recovered part should be a HoldChrg span of 3, got {}".format(hold_row and (hold_row["state"], hold_row["rowspan_state"])))
+        failed = True
+
+    # A window ending part way through a row is labelled on its whole rows; the part row is drawn and labelled on its own
+    my_predbat.charge_window_best = [{"start": minutes_now, "end": minutes_now + 2 * interval + 15, "average": 10.0}]
+    my_predbat.predict_soc_best = {minute: 9.0 if 2 * interval < minute <= 2 * interval + 15 else 10.0 for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or row["state"] != "HoldChrg" or row["rowspan_state"] != 2:
+        print("ERROR: a held window ending mid-row should be a HoldChrg span of 2, got {}".format(row and (row["state"], row["rowspan_state"])))
+        failed = True
+    my_predbat.charge_window_best = [{"start": minutes_now, "end": minutes_now + 4 * interval, "average": 10.0}]
+
+    # A span cut short by the end of the plan is labelled on the part drawn, not on SoC past the table
+    my_predbat.predict_soc_best = {minute: 10.0 if minute <= 2 * interval else 9.0 for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    end_record = my_predbat.end_record
+    my_predbat.end_record = 2 * interval
+    _, raw_plan = render()
+    my_predbat.end_record = end_record
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or row["state"] != "HoldChrg" or row["rowspan_state"] != 2:
+        print("ERROR: a held span cut by the end of the plan should be one HoldChrg span of 2, got {}".format(row and (row["state"], row["rowspan_state"])))
+        failed = True
+
     if not failed:
         print("All plan why-reason tests passed")
     return failed
