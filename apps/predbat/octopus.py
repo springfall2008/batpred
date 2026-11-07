@@ -967,20 +967,20 @@ class OctopusAPI(ComponentBase):
         if not import_mpan:
             return
         now_utc = datetime.now(timezone.utc)
-        refreshed = False
+        self.billing.random_delay = self.get_arg("plan_random_delay", 0) > 0
         # The first run only publishes what was cached, keeping a restart free of API calls; the read follows a cycle later
         if not first and self.billing.due(now_utc):
             export_mpan = (self.tariffs.get("export") or {}).get("mpan")
             mpans = {"import": (self.account_id, import_mpan), "export": (self.account_id, export_mpan) if export_mpan else None}
-            await self.billing.refresh(self.async_graphql_query, mpans, now_utc)
-            refreshed = True
-        if refreshed or first:
+            await self.billing.read(self.async_graphql_query, mpans, now_utc, "octopus", app="octopus")
+        elif first:
             self.billing.publish("octopus", now_utc, app="octopus")
 
     async def final(self):
         """
         Final cleanup before stopping
         """
+        self.billing.stop()
         await self.api.async_close()
 
     async def process_commands(self, account_id):
