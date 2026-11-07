@@ -2252,6 +2252,21 @@ class Output:
         energy = over_cap_minutes[minute] if car_energy is None else car_energy
         return max(0.0, self.rate_max_base - self.rate_import.get(minute, 0)) * energy
 
+    def car_outside_clamp_energy(self, energy_import, energy_export, load_energy, car_energy):
+        """
+        A minute's import, export and load as the supply meter sees them, and the car energy imported from the grid.
+
+        With the charger outside the CT clamp (car_energy_reported_load off) the import and load sensors miss the car,
+        but the meter bills it. The car sits between the clamp and the meter, so what the clamp counts as export goes
+        into the car first, as the prediction treats it, and only the rest is imported. Inside the clamp the sensors
+        already have the car, so they are returned as they are and all the car's energy counts as imported.
+        """
+        if self.car_energy_reported_load or car_energy <= 0:
+            return energy_import, energy_export, load_energy, car_energy
+        car_from_export = min(car_energy, energy_export)
+        car_import = car_energy - car_from_export
+        return energy_import + car_import, energy_export - car_from_export, load_energy + car_energy, car_import
+
     def today_cost(self, import_today, export_today, car_today, load_today, save=True):
         """
         Work out energy costs today (approx)
@@ -2329,6 +2344,8 @@ class Output:
             else:
                 energy_export = 0
 
+            energy_import, energy_export, load_energy, car_import = self.car_outside_clamp_energy(energy_import, energy_export, load_energy, energy_car)
+
             hour_energy += energy_import - energy_export
             hour_energy_import += energy_import
             hour_energy_export += energy_export
@@ -2340,7 +2357,7 @@ class Output:
                 hour_cost += self.rate_import.get(minute, 0) * energy_import
                 hour_cost_import += self.rate_import.get(minute, 0) * energy_import
                 hour_cost_car += self.rate_import.get(minute, 0) * energy_car
-                premium = self.over_cap_premium(over_cap_minutes, minute, energy_car if car_today else None)
+                premium = self.over_cap_premium(over_cap_minutes, minute, car_import if car_today else None)
                 hour_cost_car += premium
                 hour_cost += premium
 
@@ -2390,6 +2407,7 @@ class Output:
                 energy_export = self.get_from_incrementing(export_today, minute_back)
             else:
                 energy_export = 0
+            energy, energy_export, load_energy, car_import = self.car_outside_clamp_energy(energy, energy_export, load_energy, car_energy)
             day_energy += energy
             day_energy_export += energy_export
             day_energy_total += energy - energy_export
@@ -2402,7 +2420,7 @@ class Output:
                 day_cost_import += self.rate_import.get(minute, 0) * energy
                 day_cost_nosc += self.rate_import.get(minute, 0) * energy
                 day_cost_car += self.rate_import.get(minute, 0) * car_energy
-                premium = self.over_cap_premium(over_cap_minutes, minute, car_energy if car_today else None)
+                premium = self.over_cap_premium(over_cap_minutes, minute, car_import if car_today else None)
                 day_cost_car += premium
                 day_cost += premium
                 day_cost_nosc += premium

@@ -241,6 +241,7 @@ from tests.test_dynamic_load_car import test_dynamic_load_car_not_charging
 from tests.test_octopus_dispatch_hold import test_octopus_dispatch_hold
 from tests.test_dispatch_billing_window import test_dispatch_billing_window
 from tests.test_iog_cap_cost_today import test_iog_cap_cost_today
+from tests.test_today_cost_car_clamp import test_today_cost_car_clamp
 from tests.test_octopus_feed_withdrawn import test_octopus_feed_withdrawn
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_deye_const import run_deye_const_tests
@@ -608,6 +609,7 @@ def main():
         ("octopus_dispatch_hold", test_octopus_dispatch_hold, "Octopus dispatch hold tests", False),
         ("dispatch_billing_window", test_dispatch_billing_window, "Dispatch billing window tests (E.ON)", False),
         ("iog_cap_cost_today", test_iog_cap_cost_today, "IOG cap premium in today's cost", False),
+        ("today_cost_car_clamp", test_today_cost_car_clamp, "Today's cost with the car outside the CT clamp", False),
         ("octopus_feed_withdrawn", test_octopus_feed_withdrawn, "Octopus feed discount for a withdrawn dispatch tests", False),
         ("car_charging_now", test_car_charging_now, "car_charging_now holds the battery and feeds the model but never adds a car slot", False),
         ("octopus_charge_target", test_octopus_charge_target, "A charger-linked Octopus Intelligent target adds to the SoC at plug-in (#3034)", False),
