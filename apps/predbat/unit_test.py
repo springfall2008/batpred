@@ -89,6 +89,7 @@ from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_trim_export import run_trim_export_tests
 from tests.test_plan_tiebreak import run_plan_tiebreak_tests
 from tests.test_plan_preclip import run_plan_preclip_tests
+from tests.test_replay_manual_times import run_replay_manual_times_tests
 from tests.test_plan_version_replace import run_plan_version_replace_tests
 from tests.test_plan_charge_keep import run_plan_charge_keep_tests
 from tests.test_pv_calibration_clipping import run_pv_calibration_clipping_tests
@@ -871,6 +872,7 @@ def main():
         ("trim_export", run_trim_export_tests, "Export trim ordering (buffer from cheapest slot) tests", False),
         ("plan_tiebreak", run_plan_tiebreak_tests, "Plan fragmentation near-tie tie-break tests", False),
         ("plan_preclip", run_plan_preclip_tests, "Plan selection scores the pre-clip plan", True),
+        ("replay_manual_times", run_replay_manual_times_tests, "manual_all_times is derived from the manual time lists, including in a debug replay", False),
         ("plan_version_replace", run_plan_version_replace_tests, "A plan made by another Predbat version is always replaced", False),
         ("plan_charge_keep", run_plan_charge_keep_tests, "calculate_plan works out the running charge once for optimise_charge_limit to keep", False),
         ("pv_calibration_clipping", run_pv_calibration_clipping_tests, "PV calibration does not learn inverter clipping as forecast error", False),
