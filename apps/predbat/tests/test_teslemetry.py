@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
-from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE, FORCED_ASSERT_SECONDS, EXPORT_PERMISSION_RECHECK_SECONDS
+from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE, FORCED_ASSERT_SECONDS, EXPORT_PERMISSION_RECHECK_SECONDS, SIGNAL_BASE_TIER
 
 
 class FakeStorage:
@@ -1202,10 +1202,63 @@ def test_teslemetry_tbc_export_stops_at_the_target():
     assert api.evaluate_schedule_tbc(18 * 60, 20) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 5, "mode": "autonomous"}
 
 
-def test_teslemetry_tbc_demand_is_autonomous_with_no_grid_charging():
-    """Outside both windows: autonomous on the base band, real reserve, and no route to import."""
+def test_teslemetry_tbc_demand_is_self_consumption_when_the_tariff_is_flat():
+    """With no window in the signal tariff it is one flat band, which gives Tesla's optimiser no price
+    reason to cover house load, so the idle state uses self_consumption instead (GH#6020)."""
     api = _tbc_api()
-    assert api.evaluate_schedule_tbc(12 * 60, 50) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 15, "mode": "autonomous"}
+    assert api.evaluate_schedule_tbc(12 * 60, 50) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 15, "mode": "self_consumption"}
+
+
+def test_teslemetry_tbc_demand_is_autonomous_once_a_charge_window_is_committed():
+    """A charge window committed ahead of its start is already a 0p band in the tariff, so the mode
+    moves to autonomous then rather than at the start, and the charge begins under TBC (GH#6020)."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1})
+    assert api.evaluate_schedule_tbc(1 * 60 + 55, 50) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 15, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_demand_is_self_consumption_until_the_export_window_starts():
+    """The export band is only pushed once the window starts (GH#5960), so until then the tariff is
+    flat and the mode is self_consumption; both change together at the start (GH#6020)."""
+    api = _tbc_api(discharge={"start_time": "18:10:00", "end_time": "18:30:00", "soc": 13, "enable": 1}, reserve=4)
+    assert api.evaluate_schedule_tbc(18 * 60 + 9, 60)["mode"] == "self_consumption"
+    assert api.evaluate_schedule_tbc(18 * 60 + 10, 60)["mode"] == "autonomous"
+    assert api.evaluate_schedule_tbc(18 * 60 + 30, 60)["mode"] == "self_consumption"
+
+
+def test_teslemetry_tbc_midnight_recommit_minute_stays_autonomous():
+    """TESLA cannot span midnight, so a 23:30-05:30 charge commits as 23:30-23:59 and re-commits after
+    midnight (GH#5748). In the 23:59 minute the window is still committed, so the tariff still has its
+    0p band and the mode must not drop to self_consumption for that one cycle."""
+    api = _tbc_api(charge={"start_time": "23:30:00", "end_time": "23:59:00", "soc": 90, "enable": 1})
+    assert api.evaluate_schedule_tbc(23 * 60 + 59, 50)["mode"] == "autonomous"
+
+
+def test_teslemetry_tbc_mode_matches_the_pushed_tariff():
+    """Minute by minute, the mode is self_consumption exactly when the tariff sync_tariff pushes is flat.
+
+    The two are built from the same committed windows, and this is the property that makes the idle
+    mode safe: autonomous is only ever paired with a tariff that has a band in it to act on.
+    """
+    no_window = {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "enable": 0}
+    schedules = [
+        (None, None),
+        ({"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, None),
+        (None, {"start_time": "18:10:00", "end_time": "18:30:00", "soc": 13, "enable": 1}),
+        ({"start_time": "23:30:00", "end_time": "05:30:00", "soc": 90, "enable": 1}, {"start_time": "16:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}),
+        (None, {"start_time": "23:00:00", "end_time": "01:00:00", "soc": 20, "enable": 1}),
+    ]
+    for charge, discharge in schedules:
+        api = _tbc_api(charge=charge or dict(no_window, soc=100), discharge=discharge or no_window)
+        api.base = _rate_base(import_p=28.0, export_p=15.0)
+        api.tbc_control = True
+        pushed = {}
+        api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
+        for minute in range(0, 1440):
+            api.get_minutes_now = lambda minute=minute: minute
+            run_async(api.sync_tariff())
+            flat = set(pushed["tariff"]["energy_charges"]["AllYear"]["rates"]) == {SIGNAL_BASE_TIER}
+            mode = api.evaluate_schedule_tbc(minute, 50)["mode"]
+            assert mode == ("self_consumption" if flat else "autonomous"), "schedule {} {} at minute {}: mode {} with a {} tariff".format(charge, discharge, minute, mode, "flat" if flat else "banded")
 
 
 def test_teslemetry_tbc_charge_wins_over_an_overlapping_export():
@@ -1225,7 +1278,7 @@ def test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off():
     charging off is what stops it importing to reach 100.
     """
     api = _tbc_api(reserve=86)
-    assert api.evaluate_schedule_tbc(12 * 60, 85) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 100, "mode": "autonomous"}
+    assert api.evaluate_schedule_tbc(12 * 60, 85) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 100, "mode": "self_consumption"}
 
 
 def test_teslemetry_tbc_reserve_band_warning_logs_once():
@@ -1705,6 +1758,48 @@ def test_teslemetry_forced_assert_failure_retries_next_cycle():
     api.requests_made.clear()
     run_async(api.run(seconds=FORCED_ASSERT_SECONDS + 60, first=False))
     assert "operation" in _control_posts(api)
+    assert api._last_forced_assert == FORCED_ASSERT_SECONDS + 60
+
+
+def _tariff_posts(api):
+    """Return the time_of_use_settings POSTs made so far."""
+    return [req for req in api.requests_made if req[0] == "POST" and req[1].endswith("/time_of_use_settings")]
+
+
+def test_teslemetry_forced_assert_resends_an_unchanged_tariff():
+    """The forced re-assert re-sends the tariff too, not just the device tuple (GH#6020).
+
+    Under signal-tariff control the tariff is what steers Tesla's optimiser, so a tariff the device
+    has silently dropped is the same GH#5157 stall as a dropped reserve, and would otherwise never be
+    corrected until a window changed it.
+    """
+    api = _make_forced_assert_api()
+    api.tbc_control = True
+    run_async(api.run(seconds=0, first=True))
+    assert _tariff_posts(api), "boot cycle should push the tariff"
+    api.requests_made.clear()
+    for seconds in range(60, FORCED_ASSERT_SECONDS, 60):
+        run_async(api.run(seconds=seconds, first=False))
+    assert _tariff_posts(api) == [], "an unchanged tariff must stay deduped before the forced re-assert is due"
+    run_async(api.run(seconds=FORCED_ASSERT_SECONDS, first=False))
+    assert len(_tariff_posts(api)) == 1
+    assert api._last_forced_assert == FORCED_ASSERT_SECONDS
+
+
+def test_teslemetry_forced_assert_tariff_failure_retries_next_cycle():
+    """A forced re-assert whose tariff push fails must not advance the timer, the same as a failed tuple write."""
+    api = _make_forced_assert_api()
+    api.tbc_control = True
+    run_async(api.run(seconds=0, first=True))
+    del api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"]
+    api.requests_made.clear()
+    run_async(api.run(seconds=FORCED_ASSERT_SECONDS, first=False))
+    assert _tariff_posts(api)
+    assert api._last_forced_assert == 0, "a failed forced tariff push must not advance the timer"
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    api.requests_made.clear()
+    run_async(api.run(seconds=FORCED_ASSERT_SECONDS + 60, first=False))
+    assert len(_tariff_posts(api)) == 1
     assert api._last_forced_assert == FORCED_ASSERT_SECONDS + 60
 
 
@@ -3359,7 +3454,11 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_tbc_hold_deadband_survives_a_one_percent_sag()
     test_teslemetry_tbc_export_uses_the_real_reserve_not_the_export_target()
     test_teslemetry_tbc_export_stops_at_the_target()
-    test_teslemetry_tbc_demand_is_autonomous_with_no_grid_charging()
+    test_teslemetry_tbc_demand_is_self_consumption_when_the_tariff_is_flat()
+    test_teslemetry_tbc_demand_is_autonomous_once_a_charge_window_is_committed()
+    test_teslemetry_tbc_demand_is_self_consumption_until_the_export_window_starts()
+    test_teslemetry_tbc_midnight_recommit_minute_stays_autonomous()
+    test_teslemetry_tbc_mode_matches_the_pushed_tariff()
     test_teslemetry_tbc_charge_wins_over_an_overlapping_export()
     test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off()
     test_teslemetry_tbc_reserve_band_warning_logs_once()
@@ -3391,6 +3490,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_dedupe_failed_post_not_cached_so_retries()
     test_teslemetry_forced_assert_resends_unchanged_tuple_after_interval()
     test_teslemetry_forced_assert_failure_retries_next_cycle()
+    test_teslemetry_forced_assert_resends_an_unchanged_tariff()
+    test_teslemetry_forced_assert_tariff_failure_retries_next_cycle()
     test_teslemetry_dedupe_tariff_identical_body_skips_repeat_post()
     test_teslemetry_dedupe_tariff_resends_when_rates_change()
     test_teslemetry_drift_correction_refreshes_cache_and_reasserts()
