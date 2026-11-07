@@ -60,6 +60,8 @@ def _check_js(failed):
             "function renderBillingSummary(" in js and "billing_summary" in _function_source(js, "renderBillingSummary") and "billed to" in _function_source(js, "renderBillingSummary") and "missing_slots" in _function_source(js, "renderBillingSummary"),
         ),
         ("summary strip says import only", "import only" in _function_source(js, "renderBillingSummary")),
+        ("row waiting for its export is marked", "billing_pending_export" in table and "export not billed yet" in table),
+        ("summary strip counts rows waiting for export", "export_pending_slots" in _function_source(js, "renderBillingSummary")),
         ("picker fetches an older day on demand", "./api/plan_history?date=" in _function_source(js, "selectHistoryDay")),
         ("default History view needs no fetch", "if (!day" in _function_source(js, "selectHistoryDay") or "if (day && " in _function_source(js, "selectHistoryDay")),
         ("picker rendered for the History view only", "currentView === 'yesterday'" in _function_source(js, "renderHistoryPicker")),

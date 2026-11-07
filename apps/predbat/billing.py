@@ -451,12 +451,18 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
 
     billing is the sensor.predbat_billing attributes dict. predbat_slot_cost maps each row's slot_minute
     to Predbat's own cost for it in pence, already without the standing charge (net, or import-only when
-    import_only), and
-    predbat_import_kwh / predbat_export_kwh map it to Predbat's recorded grid kWh (or are None), so the
-    summary compares only the rows that have billing. Predbat's daily standing charge (standing_pence)
-    and the billed one are reported separately, once per billed day. A row is billed only when every half-hour in
-    it is published (and its export too, when export is being read); anything else shows no billing
-    rather than a part figure. Returns plan_json; it is left untouched when no row is billed.
+    import_only), and predbat_import_kwh / predbat_export_kwh map it to Predbat's recorded grid kWh (or are
+    None). Predbat's daily standing charge (standing_pence) and the billed one are reported separately.
+
+    Every row gets the billing fields, so the Billed and Diff columns show even where nothing is billed yet:
+    - a row whose every half-hour is billed (and its export too, when export is read) shows Billed and Diff
+      and counts in the summary;
+    - a row whose import is billed but whose export hasn't been published yet shows the import charge,
+      flagged billing_pending_export, with no Diff, and is left out of the summary - no net figure is claimed;
+    - any other row shows no billing.
+    Billing whose rates don't match Predbat's is not shown at all. The summary is only added when at least
+    one row is fully billed. Returns plan_json; it is left untouched only when billing holds no import half-hours at
+    all or rows can't be matched to half-hours - a view with nothing billed in it still gets the (empty) fields.
     """
     slots = (billing or {}).get("slots") or {}
     imports = slots.get("import") or {}
@@ -477,57 +483,69 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         keys = _row_slot_keys(view_midnight_utc, slot_minute, plan_interval_minutes)
         billed_pence = None
         buckets = None
-        if all(key in imports for key in keys) and (not export_required or all(key in exports for key in keys)):
+        full = False
+        pending_export = False
+        if all(key in imports for key in keys):
+            full = not export_required or all(key in exports for key in keys)
+            pending_export = not full
+            row_exports = exports if full else {}
             billed_pence = 0.0
             buckets = {}
             for key in keys:
-                billed_pence += imports[key]["cost"] - (exports[key]["cost"] if key in exports else 0.0)
-                totals["standing_billed"] += imports[key]["standing"]
-                # Predbat's daily standing charge, counted for the billed half-hours only, so a part-billed day compares like with like,
-                # and spread over the day's real half-hours as the supplier does, so a 23 or 25 hour day still adds up to one charge
-                totals["standing_predbat"] += standing_pence / _half_hours_in_day(key, day_half_hours)
+                billed_pence += imports[key]["cost"] - (row_exports[key]["cost"] if key in row_exports else 0.0)
                 if row.get("import_rate") is not None:
+                    # The plausibility check is on the import bill alone, so a row waiting for its export still counts
                     totals["rate_cost"] += imports[key]["cost"]
                     totals["rate_kwh"] += imports[key]["kwh"]
                     totals["predbat_rate_cost"] += imports[key]["kwh"] * row["import_rate"]
-                totals["import_kwh"] += imports[key]["kwh"]
-                totals["export_kwh"] += exports[key]["kwh"] if key in exports else 0.0
+                if full:
+                    totals["standing_billed"] += imports[key]["standing"]
+                    # Predbat's daily standing charge, counted for the billed half-hours only, so a part-billed day compares like with like,
+                    # and spread over the day's real half-hours as the supplier does, so a 23 or 25 hour day still adds up to one charge
+                    totals["standing_predbat"] += standing_pence / _half_hours_in_day(key, day_half_hours)
+                    totals["import_kwh"] += imports[key]["kwh"]
+                    totals["export_kwh"] += row_exports[key]["kwh"] if key in row_exports else 0.0
                 for label, bucket in imports[key]["buckets"].items():
                     total = buckets.setdefault(label, {"kwh": 0.0, "cost": 0.0})
                     total["kwh"] += bucket["kwh"]
                     total["cost"] += bucket["cost"]
-                for label, bucket in exports[key]["buckets"].items() if key in exports else []:
+                for label, bucket in row_exports[key]["buckets"].items() if key in row_exports else []:
                     total = buckets.setdefault("Export " + label, {"kwh": 0.0, "cost": 0.0})
                     total["kwh"] += bucket["kwh"]
                     total["cost"] -= bucket["cost"]
             buckets = {label: {"kwh": round(value["kwh"], 3), "cost": _pounds(value["cost"])} for label, value in buckets.items()}
         predbat_pence = predbat_slot_cost.get(slot_minute)
-        if billed_pence is not None and predbat_pence is not None and abs(predbat_pence) < 0.005 and predbat_import_kwh is not None and abs(predbat_import_kwh.get(slot_minute, 0.0)) < 0.001:
+        if full and predbat_pence is not None and abs(predbat_pence) < 0.005 and predbat_import_kwh is not None and abs(predbat_import_kwh.get(slot_minute, 0.0)) < 0.001:
             if sum(imports[key]["kwh"] for key in keys) > BILLING_UNRECORDED_KWH:
                 predbat_pence = None
         diff = None
-        if billed_pence is not None and predbat_pence is not None:
+        if full and predbat_pence is not None:
             diff = _pounds(billed_pence - predbat_pence)
             totals["predbat"] += predbat_pence
             totals["billed"] += billed_pence
-        if billed_pence is not None:
+        if full:
             totals["predbat_import_kwh"] += (predbat_import_kwh or {}).get(slot_minute, 0.0)
             totals["predbat_export_kwh"] += (predbat_export_kwh or {}).get(slot_minute, 0.0)
-        updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes)))
-    if not any(update[1] is not None for update in updates):
+        updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes), full, pending_export))
+    if not updates:
         return plan_json
-    last_billed = max(index for index, update in enumerate(updates) if update[1] is not None)
-    missing_slots = sum(1 for update in updates[:last_billed] if update[1] is None)
-    billed_until = (view_midnight_utc + timedelta(minutes=updates[last_billed][0]["slot_minute"] + plan_interval_minutes)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)
+    plausible = True
     if totals["rate_kwh"] > 0.5 and totals["predbat_rate_cost"] > 0:
         ratio = totals["rate_cost"] / totals["predbat_rate_cost"]
-        if not BILLING_PLAUSIBLE_RATE_RATIO[0] <= ratio <= BILLING_PLAUSIBLE_RATE_RATIO[1]:
-            return plan_json
-    for row, billed, buckets, diff, event in updates:
-        row["billed"] = billed
-        row["billed_buckets"] = buckets
-        row["billing_diff"] = diff
+        plausible = BILLING_PLAUSIBLE_RATE_RATIO[0] <= ratio <= BILLING_PLAUSIBLE_RATE_RATIO[1]
+    for row, billed, buckets, diff, event, full, pending_export in updates:
+        # Billing that doesn't match the rates leaves the columns empty rather than showing a wrong figure
+        row["billed"] = billed if plausible else None
+        row["billed_buckets"] = buckets if plausible else None
+        row["billing_diff"] = diff if plausible else None
+        row["billing_pending_export"] = pending_export and plausible
         row["billing_event"] = event
+    if not plausible or not any(update[5] for update in updates):
+        return plan_json
+    last_billed = max(index for index, update in enumerate(updates) if update[5])
+    # Rows showing nothing before the last fully billed one; rows waiting for their export show their import and are counted apart
+    missing_slots = sum(1 for update in updates[:last_billed] if not update[5] and not update[6])
+    billed_until = (view_midnight_utc + timedelta(minutes=updates[last_billed][0]["slot_minute"] + plan_interval_minutes)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)
     plan_json["billing_summary"] = {
         "predbat_cost": _pounds(totals["predbat"]),
         "billed_cost": _pounds(totals["billed"]),
@@ -538,6 +556,7 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         "export_kwh": [None if predbat_export_kwh is None else round(totals["predbat_export_kwh"], 2), None if import_only or not exports else round(totals["export_kwh"], 2)],
         "billed_until": billed_until,
         "missing_slots": missing_slots,
+        "export_pending_slots": sum(1 for update in updates if update[6]),
         "import_only": bool(import_only),
         "supplier": billing.get("supplier"),
     }

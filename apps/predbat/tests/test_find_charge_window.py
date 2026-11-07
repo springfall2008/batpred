@@ -57,7 +57,7 @@ def test_find_charge_window(my_predbat):
     old_combine_charge = my_predbat.combine_charge_slots
     old_combine_export = my_predbat.combine_export_slots
     old_combine_thresh = my_predbat.combine_rate_threshold
-    old_manual_all_times = my_predbat.manual_all_times
+    old_manual_charge_times = my_predbat.manual_charge_times
     old_charge_slot_split = my_predbat.charge_slot_split
     old_export_slot_split = my_predbat.export_slot_split
     old_plan_interval = my_predbat.plan_interval_minutes
@@ -182,12 +182,12 @@ def test_find_charge_window(my_predbat):
     print("Test find_charge_window: manual_all_times split at plan_interval_minutes (Path D)")
     my_predbat.plan_interval_minutes = 30
     my_predbat.charge_slot_split = 30
-    my_predbat.manual_all_times = [0]   # start minute is a manual time
+    my_predbat.manual_charge_times = [0]   # start minute is a manual time
     rates_d = {m: low_rate for m in range(0, 120, 5)}
 
     s, e, _ = my_predbat.find_charge_window(rates_d, 0, thresh_lo, find_high=False)
     failed |= _assert_window("path D manual split", s, e, _, 0, 30)
-    my_predbat.manual_all_times = []
+    my_predbat.manual_charge_times = []
 
     # -----------------------------------------------------------------------
     # Test: Path E — alternate_rate_boundary splits export window
@@ -364,7 +364,7 @@ def test_find_charge_window(my_predbat):
     my_predbat.combine_charge_slots = old_combine_charge
     my_predbat.combine_export_slots = old_combine_export
     my_predbat.combine_rate_threshold = old_combine_thresh
-    my_predbat.manual_all_times = old_manual_all_times
+    my_predbat.manual_charge_times = old_manual_charge_times
     my_predbat.charge_slot_split = old_charge_slot_split
     my_predbat.export_slot_split = old_export_slot_split
     my_predbat.plan_interval_minutes = old_plan_interval

@@ -89,6 +89,7 @@ from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_trim_export import run_trim_export_tests
 from tests.test_plan_tiebreak import run_plan_tiebreak_tests
 from tests.test_plan_preclip import run_plan_preclip_tests
+from tests.test_replay_manual_times import run_replay_manual_times_tests
 from tests.test_plan_version_replace import run_plan_version_replace_tests
 from tests.test_plan_charge_keep import run_plan_charge_keep_tests
 from tests.test_pv_calibration_clipping import run_pv_calibration_clipping_tests
@@ -118,6 +119,7 @@ from tests.test_saving_session import (
     test_saving_session_zero_rate_skip,
     test_saving_session_min_octopoints_threshold,
     test_saving_session_entity_regex_power_rename,
+    test_templates_ship_octopus_free_session,
     test_saving_session_select_entity_join_defers_notify,
     test_saving_session_zero_octopoints_joined_is_free_slot,
 )
@@ -238,6 +240,7 @@ from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation, tes
 from tests.test_dynamic_load_car import test_dynamic_load_car_not_charging
 from tests.test_octopus_dispatch_hold import test_octopus_dispatch_hold
 from tests.test_dispatch_billing_window import test_dispatch_billing_window
+from tests.test_octopus_feed_withdrawn import test_octopus_feed_withdrawn
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_deye_const import run_deye_const_tests
 from tests.test_deye_config import run_deye_config_tests
@@ -309,6 +312,7 @@ from tests.test_get_arg_missing_index import test_get_arg_missing_index_uses_def
 from tests.test_get_arg_combine_units import test_get_arg_combine_units
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
 from tests.test_plan_why_reason import run_test_plan_why_reason
+from tests.test_plan_scenarios import run_test_plan_scenarios
 from tests.test_plan_scenario_summary import run_test_plan_scenario_summary
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
@@ -602,6 +606,7 @@ def main():
         ("dynamic_load_car_not_charging", test_dynamic_load_car_not_charging, "Dynamic load car not charging tests", False),
         ("octopus_dispatch_hold", test_octopus_dispatch_hold, "Octopus dispatch hold tests", False),
         ("dispatch_billing_window", test_dispatch_billing_window, "Dispatch billing window tests (E.ON)", False),
+        ("octopus_feed_withdrawn", test_octopus_feed_withdrawn, "Octopus feed discount for a withdrawn dispatch tests", False),
         ("car_charging_now", test_car_charging_now, "car_charging_now holds the battery and feeds the model but never adds a car slot", False),
         ("octopus_charge_target", test_octopus_charge_target, "A charger-linked Octopus Intelligent target adds to the SoC at plug-in (#3034)", False),
         ("units", run_test_units, "Unit tests", False),
@@ -693,6 +698,7 @@ def main():
         ("saving_session_zero_rate_skip", test_saving_session_zero_rate_skip, "Saving session zero reward rate skip test (issue #4593)", False),
         ("saving_session_min_octopoints_threshold", test_saving_session_min_octopoints_threshold, "Saving session configurable minimum octopoints threshold test (issue #4595)", False),
         ("saving_session_entity_regex_power_rename", test_saving_session_entity_regex_power_rename, "Saving/free session entity regex Power Down/Up rename test (issue #4548 point 2)", False),
+        ("templates_octopus_free_session", test_templates_ship_octopus_free_session, "apps.yaml templates ship octopus_free_session alongside octopus_saving_session (issue #5912)", False),
         ("saving_session_select_entity_join_defers_notify", test_saving_session_select_entity_join_defers_notify, "Select-entity join defers the joined notification test (issue #4593)", False),
         ("saving_session_zero_octopoints_free_slot", test_saving_session_zero_octopoints_joined_is_free_slot, "Joined zero octopoints session becomes a free import slot test (issue #4851)", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
@@ -781,6 +787,7 @@ def main():
         ("control_failures_dashboard", test_control_failures_dashboard_renders_section, "Metrics dashboard control_failures section render tests", False),
         ("plan_json_rate_adjust", run_test_plan_json_rate_adjust, "Plan JSON rate adjust type field tests", False),
         ("plan_why_reason", run_test_plan_why_reason, "Plan JSON per-slot 'why' reason text tests", False),
+        ("plan_scenarios", run_test_plan_scenarios, "Plan table PV10/PV90 scenario values and tooltips (#5871)", False),
         ("plan_scenario_summary", run_test_plan_scenario_summary, "Plan scenario_summary_state export-limit tuple regression test", False),
         # Download tests
         ("download", test_download, "Predbat download/update comprehensive tests (GitHub API, SHA1, install check, file ops)", False),
@@ -867,6 +874,7 @@ def main():
         ("trim_export", run_trim_export_tests, "Export trim ordering (buffer from cheapest slot) tests", False),
         ("plan_tiebreak", run_plan_tiebreak_tests, "Plan fragmentation near-tie tie-break tests", False),
         ("plan_preclip", run_plan_preclip_tests, "Plan selection scores the pre-clip plan", True),
+        ("replay_manual_times", run_replay_manual_times_tests, "manual_all_times is derived from the manual time lists, including in a debug replay", False),
         ("plan_version_replace", run_plan_version_replace_tests, "A plan made by another Predbat version is always replaced", False),
         ("plan_charge_keep", run_plan_charge_keep_tests, "calculate_plan works out the running charge once for optimise_charge_limit to keep", False),
         ("pv_calibration_clipping", run_pv_calibration_clipping_tests, "PV calibration does not learn inverter clipping as forecast error", False),

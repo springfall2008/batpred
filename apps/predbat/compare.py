@@ -104,6 +104,13 @@ COMPARE_PLAN_STATE = (
     "rate_best_cost_threshold_charge",
     "rate_best_cost_threshold_export",
     "io_confirmed_tiebreak",
+    # The live plan's PV10 and PV90 series behind its scenario tooltips (#5871). calculate_plan() replaces them only on a
+    # publishing run or a debug-mode pass, and a comparison makes neither, so this is a safeguard - listed because
+    # calculate_plan() assigns them, which the compare tests require to be accounted for
+    "predict_soc_best10",
+    "predict_metric_best10",
+    "predict_soc_best90",
+    "predict_metric_best90",
 )
 # Battery and inverter values a tariff can override, reset after each tariff as well as at the end
 COMPARE_HARDWARE_STATE = ("soc_max", "battery_rate_max_charge", "battery_rate_max_charge_dc", "battery_rate_max_discharge", "battery_rate_max_export", "inverter_limit")
@@ -119,7 +126,6 @@ COMPARE_RESTORED_STATE = (
         "manual_freeze_charge_times",
         "manual_freeze_export_times",
         "manual_demand_times",
-        "manual_all_times",
         "cost_today_sofar",
         "carbon_today_sofar",
         "iboost_today",
@@ -225,6 +231,9 @@ class Compare:
             entity_id = pb.resolve_arg("metric_octopus_import", tariff["metric_octopus_import"], indirect=False)
             if entity_id:
                 pb.rate_import = pb.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
+                # As fetch_sensor_data() does, so a feed still discounting a withdrawn dispatch matches the live rates
+                if pb.rate_import:
+                    pb.rate_import = pb.octopus_strip_withdrawn_feed_rates(pb.rate_import, save=False)
                 import_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Octopus entity id {}".format(tariff.get("id", ""), entity_id))
@@ -587,7 +596,6 @@ class Compare:
         my_predbat.manual_freeze_charge_times = []
         my_predbat.manual_freeze_export_times = []
         my_predbat.manual_demand_times = []
-        my_predbat.manual_all_times = []
         my_predbat.octopus_intelligent_charging = False
 
         self.recompute_iboost()
