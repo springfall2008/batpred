@@ -2775,6 +2775,7 @@ APPS_SCHEMA = {
     "pv_ac_limit": {"type": "float", "zero": True},
     "inverter_limit_charge": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "inverter_limit_charge_dc": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
+    "shared_power_groups": {"type": "dict_list"},
     "inverter_limit_discharge": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "inverter_limit_export": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "inverter_limit_override": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},

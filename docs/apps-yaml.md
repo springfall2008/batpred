@@ -1510,6 +1510,27 @@ Set it to the maximum DC charge rate of your battery system in Watts if this rat
 
 Note that for hybrid inverters the `inverter_limit` only applies to AC charging (grid) and not DC charge (from solar).
 
+### **shared_power_groups**
+
+Optional. This setting models DC EV chargers and home batteries that share a constrained grid-to-DC conversion resource. It changes prediction and optimisation only; it does not throttle the EV charger, send inverter commands, or alter existing car charging slots and automations.
+
+```yaml
+  shared_power_groups:
+    - id: grid_to_dc
+      limit_kw: 10.5
+      priority: ev_first
+      cars: [0]
+      inverters: [0]
+```
+
+`limit_kw` is the sustainable **combined DC charging output** in kW, independently of `inverter_limit` and the other AC limits. It should be calibrated from the hardware specification or measurements at the DC EV output and battery charging points; do not copy an AC inverter limit unless the manufacturer explicitly defines it as the same limit.
+
+`cars` and `inverters` contain zero-based indexes into the configured cars and inverters. A group can contain several cars and inverters, and several independent groups can be configured, but a car or inverter may belong to only one group. `ev_first` is currently the only allocation policy: predicted EV output consumes group capacity first and the remaining capacity limits grid-powered home-battery charging. Predbat does not throttle EV demand if it exceeds the group limit.
+
+Predbat converts scheduled EV input power to delivered EV energy using `car_charging_loss`, so EV output, battery input and the group limit are compared on a consistent DC basis. Grid import continues to include the configured inverter and charging losses. On a hybrid inverter, PV energy charging the battery directly on the DC bus does not consume this grid-to-DC capacity and is not reduced. Partial five-minute intervals and a car completing during an interval use only the EV energy actually delivered.
+
+Leave `shared_power_groups` unset for conventional AC EV chargers and any installation where the EV charger does not share conversion capacity. Existing prediction behaviour is then unchanged.
+
 ### **inverter_can_charge_during_export**
 
 Global setting, defaults to `true`.
