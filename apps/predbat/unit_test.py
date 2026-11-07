@@ -39,6 +39,7 @@ from tests.test_execute import run_execute_tests
 from tests.test_execute_multi_inverter_status import test_multi_inverter_status
 from tests.test_load_car_energy import test_load_car_energy_warns_when_configured_entity_has_no_data
 from tests.test_predheat import test_predheat, test_predheat_smart_thermostat, test_predheat_optional_energy_history, test_predheat_temperature_units, test_predheat_volume_temp, test_predheat_volume_temp_persistence, test_predheat_heat_to_temp_off_marker
+from tests.test_predheat_climate_scheduler import test_predheat_climate_scheduler
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_temperature_units import test_temperature_unit_conversion
 from tests.test_charge_hold import run_charge_hold_tests
@@ -590,6 +591,7 @@ def main():
         ("temperature_units", test_temperature_unit_conversion, "Shared unit conversion handles temperatures, other units unchanged (#5153)", False),
         ("predheat_volume_temp_persistence", test_predheat_volume_temp_persistence, "Predheat persisted volume temperature range tests", False),
         ("predheat_heat_to_temp_off", test_predheat_heat_to_temp_off_marker, "Predheat heat_to_temp off-marker tests (#6078)", False),
+        ("predheat_climate_scheduler", test_predheat_climate_scheduler, "Predheat Climate Scheduler regression tests", False),
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
