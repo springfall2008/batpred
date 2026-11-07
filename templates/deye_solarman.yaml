@@ -1,0 +1,240 @@
+# Shared local Deye/Solarman example. Read the Deye section of inverter-setup.md first.
+# Experimental charge/demand only; not a commissioned hold or power-limiting controller.
+# Back up apps.yaml, then replace the default GivTCP example with this template.
+# Configure your tariffs, forecasts and optional car in this file; do not merge inverter profiles.
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  timezone: Europe/London
+  template: true
+  threads: auto
+
+  # Replace with your actual HA entity prefix. Check every entity and its units/sign.
+  deye_entity_prefix: your_inverter
+  num_inverters: 1
+  inverter_type: DeyeSolarman
+  inverter:
+    name: "Deye / Solarman local"
+    has_rest_api: false
+    has_mqtt_api: false
+    output_charge_control: "none"
+    charge_control_immediate: false
+    charge_discharge_with_rate: false
+    has_charge_enable_time: false
+    has_discharge_enable_time: false
+    has_target_soc: false
+    target_soc_used_for_discharge: false
+    has_reserve_soc: false
+    has_timed_pause: false
+    support_charge_freeze: false
+    support_discharge_freeze: false
+    support_feedin_first: false
+    has_ge_inverter_mode: false
+    has_ge_eco_toggle: false
+    has_idle_time: false
+    time_button_press: false
+    # S + no mapped time entities gives Predbat private bookkeeping sensors.
+    # Never map the six physical ToU boundaries to charge_start_time/end_time.
+    charge_time_format: "S"
+    charge_time_entity_is_option: false
+    can_span_midnight: true
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    soc_units: "%"
+    num_load_entities: 1
+    write_and_poll_sleep: 10
+
+  load_today: ["sensor.{deye_entity_prefix}_today_load_consumption"]
+  import_today: ["sensor.{deye_entity_prefix}_today_energy_import"]
+  export_today: ["sensor.{deye_entity_prefix}_today_energy_export"]
+  pv_today: ["sensor.{deye_entity_prefix}_today_production"]
+  battery_power: ["sensor.{deye_entity_prefix}_battery_power"]
+  battery_voltage: ["sensor.{deye_entity_prefix}_battery_voltage"]
+  battery_temperature: ["sensor.{deye_entity_prefix}_battery_temperature"]
+  pv_power: ["sensor.{deye_entity_prefix}_pv_power"]
+  load_power: ["sensor.{deye_entity_prefix}_load_power"]
+  grid_power: ["sensor.{deye_entity_prefix}_grid_power"]
+  soc_percent: ["sensor.{deye_entity_prefix}_battery"]
+
+  # Examples ONLY: replace with verified installed usable capacity and limits.
+  # battery_min_soc is the domestic discharge floor, NOT the emergency shutdown SoC.
+  soc_max: [10]
+  battery_min_soc: [10]
+  battery_rate_max: [3000]
+  inverter_limit_charge: [3000]
+  inverter_limit_discharge: [3000]
+  inverter_limit: [5000]
+  export_limit: [0]
+  # These model power in W; they do not write or enforce inverter/site current limits.
+  # Keep manual global/grid-charge currents, BMS limits and protections unchanged.
+
+  # All six rows receive the CURRENT intent, not a six-period forecast schedule.
+  # Prerequisites (manual): Capacity/SoC mode, Zero Export To CT, valid all-day ToU,
+  # commissioned grid charging and no other automatic writer (including Deye Cloud).
+  # Each phase must be observed in HA before the next is attempted. HA observation
+  # is not hardware confirmation; cached/optimistic states need commissioning.
+  charge_start_service:
+    # YAML anchor: this step also names a mapping reused by later list entries.
+    - &disable_sources
+      service: select.select_option
+      entity_id: >-
+        select.{deye_entity_prefix}_program_1_charging,
+        select.{deye_entity_prefix}_program_2_charging,
+        select.{deye_entity_prefix}_program_3_charging,
+        select.{deye_entity_prefix}_program_4_charging,
+        select.{deye_entity_prefix}_program_5_charging,
+        select.{deye_entity_prefix}_program_6_charging
+      option: "Disabled"
+      verify: true
+    - &set_targets
+      service: number.set_value
+      entity_id: >-
+        number.{deye_entity_prefix}_program_1_soc,
+        number.{deye_entity_prefix}_program_2_soc,
+        number.{deye_entity_prefix}_program_3_soc,
+        number.{deye_entity_prefix}_program_4_soc,
+        number.{deye_entity_prefix}_program_5_soc,
+        number.{deye_entity_prefix}_program_6_soc
+      value: "{target_soc}"
+      verify: true
+    # YAML merge: reuse the entity/service/verify fields, replacing only the option.
+    - <<: *disable_sources
+      option: "Grid"
+
+  # Demand: no grid/generator charging; ordinary self-consumption above the floor.
+  # {reserve_soc} follows the effective Predbat minimum, rounded UP to whole %.
+  charge_stop_service:
+    - *disable_sources
+    - <<: *set_targets
+      value: "{reserve_soc}"
+
+  # No forced export exists here. Explicit [] prevents the generic fallback from
+  # stopping a charge when there is no discharge to stop. Do not add a work-mode write.
+  discharge_stop_service: []
+
+  # No physical time, Program Power, global current, reserve/shutdown or mode outputs.
+  # Start in Monitor. After checking the installation use Control charge for grid charging
+  # and ordinary discharge to household loads; scheduled forced export is not implemented.
+  # Freeze, low-power,
+  # reserve holds, solar SoC ceilings and car/iBoost battery holds are unsupported.
+  # Stopping Predbat/HA does NOT undo persistent ToU writes or provide a watchdog.
+  # General settings below follow the standard Predbat apps.yaml example.
+  # Edit timezone above and currency here for your location.
+  currency_symbols: ["£", "p"]
+
+  # The deye_hybrid profile describes a DC-coupled hybrid inverter.
+  inverter_hybrid: true
+  battery_scaling: [1.0]
+  import_export_scaling: 1.0
+
+  # Load history comes from load_today above. Use kWh energy, not a power sensor.
+  # Seven days of history and a 48-hour forecast follow the standard template.
+  load_filter_threshold: 30
+  days_previous: [7]
+  forecast_hours: 48
+  # Optional additional predicted load, for example from Predheat:
+  #load_forecast:
+  #  - predheat.heat_energy$external
+
+  # PV forecast: choose ONE source and configure it before removing template: true.
+  # Examples for the Solcast Home Assistant integration; change names if needed.
+  #pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  #pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  #pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  #pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+  # Alternatively use the Predbat Solcast API component (optional):
+  #solcast_host: https://api.solcast.com.au/
+  #solcast_api_key: !secret solcast_api_key
+  #solcast_poll_hours: 4.8
+  # For other providers, see apps-yaml.md (Solar PV predictions).
+
+  # Energy rates: configure your actual import/export rates before enabling control.
+  # Rates are in minor currency units per kWh (pence with the symbols above).
+  # Choose either a provider's rate sensors/API or your own rate schedule.
+  # Octopus Energy Home Assistant integration examples (optional):
+  #metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  #metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
+  #metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+  # Or replace these EXAMPLE prices with your own full-day schedule:
+  #rates_import:
+  #  - start: "00:30:00"
+  #    end: "04:30:00"
+  #    rate: 7.5
+  #  - start: "04:30:00"
+  #    end: "00:30:00"
+  #    rate: 40.0
+  #rates_export:
+  #  - rate: 4.2
+  # Do not leave gaps in a manually configured rate schedule.
+  # Direct provider APIs and tariff overrides are described in energy-rates.md.
+
+  # Car charging is OPTIONAL and off in this blank template.
+  # Set num_cars to 1 only after configuring the charger and per-car inputs.
+  # Planning a car does not install a Home Assistant relay automation.
+  num_cars: 0
+  # Daily/session metered charging energy, used to separate car and household load:
+  #car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+  # One entry per car: its connection/planned-state sensor, not a switch to write.
+  #car_charging_planned:
+  #  - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status|sensor.tesla_wall_connector_status)'
+  car_charging_planned_response:
+    - "yes"
+    - "on"
+    - "true"
+    - "connected"
+    - "ev connected"
+    - "charging"
+    - "paused"
+    - "waiting for car demand"
+    - "waiting for ev"
+    - "scheduled"
+    - "enabled"
+    - "latched"
+    - "locked"
+    - "plugged in"
+    - "waiting"
+    - "waiting_car"
+  #car_charging_now:
+  #  - sensor.your_charger_status
+  car_charging_now_response: ["yes", "on", "true", "charging"]
+  # Optional battery size in kWh; limit and current SoC in percent:
+  #car_charging_battery_size:
+  #  - 75
+  #car_charging_limit:
+  #  - 're:number.your_car_charge_limit'
+  #car_charging_soc:
+  #  - 're:sensor.your_car_battery'
+  #car_charging_exclusive:
+  #  - true
+  # Set charge rate and ready-by time in Predbat's car settings; see car-charging.md.
+  # The Deye template does not provide car/iBoost battery-hold control.
+
+  # Optional Intelligent Octopus planned slots take precedence when configured:
+  #octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  #octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
+  #octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
+  #octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))'
+
+  # Optional notifications and cache-driven plan updates:
+  #notify_devices:
+  #  - mobile_app_your_phone
+  #watch_list:
+  #  - '+[car_charging_planned]'
+  #  - '+[car_charging_soc]'
+  #  - '{octopus_intelligent_slot}'
+  #  - '{octopus_ready_time}'
+  #  - '{octopus_charge_limit}'
+  #  - '{octopus_saving_session}'
+
+  # Leave clock corrections at zero unless required by your installation.
+  # These adjust Predbat's plan times, not the six physical program boundaries.
+  inverter_clock_skew_start: 0
+  inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: 0
+  clock_skew: 0
+
+  # Additional log redaction is optional; use your own identifiers, never API keys here.
+  #redact_strings_labelled:
+  #  my_meter: "your_meter_identifier"
