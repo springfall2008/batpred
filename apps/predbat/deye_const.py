@@ -29,6 +29,12 @@ FREEZE_EXPORT_SOC = 99
 # cache is invalidated and the next apply is forced to re-write.
 DEYE_ORDER_MAX_POLLS = 3
 
+# Order-level status that GET /order/{orderId} reports for an order the device rejected. The
+# poll response's outer success flag only says the poll itself worked, so it is true here too.
+# Observed live (GH#6017): an executed order polls as status 666 with error null, a failed one
+# as {"success": true, "status": 500, "error": "540", "analysisResult": null}.
+DEYE_ORDER_FAILED_STATUSES = ("500",)
+
 # DEYE executes one control order at a time per device. A second command sent while one is
 # still running is rejected with this code — it means "retry shortly", not "rejected", so
 # it is logged as back-pressure rather than a failure and the caller re-applies next cycle.

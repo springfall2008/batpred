@@ -41,6 +41,7 @@ from deye_const import (
     TOU_SLOT_COUNT,
     DEYE_TOU_DAYS,
     DEYE_ORDER_MAX_POLLS,
+    DEYE_ORDER_FAILED_STATUSES,
     DEYE_BUSY_CODES,
     DEYE_BUSY_MARKERS,
     CONFIG_BATTERY_KEYS,
@@ -927,6 +928,13 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         if not resp.get("success", False):
             return "pending"
         self.pending_orders.pop(sn, None)
+        # The outer success flag only means the poll worked; the order's own status and error
+        # say whether the device executed it. A failed order was never applied, so the caller
+        # must not keep treating its payload as the inverter's current state.
+        order_error = resp.get("error")
+        if str(resp.get("status")) in DEYE_ORDER_FAILED_STATUSES or order_error not in (None, ""):
+            self.log(f"Warn: DEYE {sn} control order {order_id} failed on the device (status {resp.get('status')}, error {order_error})")
+            return "failed"
         return "success"
 
     def _is_read_only(self):
@@ -1077,8 +1085,8 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         "apply the schedule" action, so forcing here re-sent a byte-identical payload every
         few minutes — 36 orders in two hours on a live site with nothing actually changing.
         The applied-payload cache is the single source of truth for whether a write is
-        needed; when it must be distrusted (an order left unconfirmed after
-        DEYE_ORDER_MAX_POLLS) that path already pops the entry, which makes the next apply
+        needed; when it must be distrusted (an order the device reported as failed, or one
+        left unconfirmed after DEYE_ORDER_MAX_POLLS) run() already pops the entry, which makes the next apply
         write naturally.
         """
         schedule = await self.get_schedule_settings_ha(sn)
@@ -1712,6 +1720,11 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 status = "pending"
             if status == "success":
                 self.order_poll_count.pop(sn, None)
+            elif status == "failed":
+                # poll_order has already dropped the order. Its payload never reached the
+                # inverter, so invalidate the cache and the reconcile below re-writes it.
+                self.order_poll_count.pop(sn, None)
+                self.applied_payload.pop(sn, None)
             else:
                 self.order_poll_count[sn] = self.order_poll_count.get(sn, 0) + 1
                 if self.order_poll_count[sn] >= DEYE_ORDER_MAX_POLLS:
