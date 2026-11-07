@@ -53,6 +53,21 @@ CHARGE_SIDE_STATES = set(CHARGE_STATE_PRECEDENCE)
 EXPORT_SIDE_STATES = set(EXPORT_STATE_PRECEDENCE)
 
 
+def hold_reserve_percent(inverter, target_percent):
+    """Reserve percent that holds an inverter's battery at target_percent.
+
+    Most inverters only stop discharging at the reserve, so one above the target keeps the SoC from
+    drifting down. An inverter that charges from the grid to reach a reserve above its SoC (a Tesla
+    Powerwall does, even with grid charging disallowed) would turn that into a grid import, and each
+    cycle's rounded-up SoC would ratchet the reserve higher again, so it never gets a reserve above
+    the SoC rounded down.
+    """
+    if inverter.inv_reserve_above_soc_charges_from_grid:
+        live_percent = int(inverter.soc_kw / inverter.soc_max * 100.0) if inverter.soc_max > 0 else 0
+        return min(target_percent, live_percent, 100)
+    return min(target_percent + 1, 100)
+
+
 def resolve_multi_inverter_status(status_per_inverter, current_status):
     """Resolve one headline status across a multi-inverter fleet.
 
@@ -131,6 +146,52 @@ def export_target_percent_or_zero(export_limit):
     return 0 if target is None else target
 
 
+def split_change_by_rate(change_kwh, members):
+    """Split a fleet-wide change in stored energy across the inverters by their rate share, within each one's room.
+
+    Each inverter is given its share of the change in proportion to its rate (its charge rate when charging, its
+    export or discharge rate when exporting), so that they all finish together. An inverter that would go past its own limit (its capacity when
+    charging, its reserve when exporting) is held at that limit and the energy it could not take is shared out
+    among the others in the same proportion, repeating until nothing is left or every inverter is at its limit.
+    When no inverter reaches a limit this is exactly the plain rate split.
+
+    This is deliberately not a split by capacity that tries to end the inverters level: an inverter that is
+    ahead of the fleet's SoC % but still has room keeps its share, which is what stops the premature charge
+    pause described in #1484 (fixed by #1492).
+
+    Parameters:
+    - change_kwh (float): the fleet change in stored energy, positive to charge and negative to export
+    - members (list): one (soc_kw, soc_max, reserve, rate) tuple per inverter, where rate is the rate that
+      inverter delivers at: its charge rate when charging, its export or discharge rate when exporting
+
+    Returns:
+    - list: the target kWh for each inverter, in the same order. If the change is more than the inverters
+      have room for, each is taken to its limit.
+    """
+    direction = 1 if change_kwh >= 0 else -1
+    room = [max(soc_max - soc_kw, 0.0) if direction > 0 else max(soc_kw - reserve, 0.0) for soc_kw, soc_max, reserve, _rate in members]
+    moved = [0.0] * len(members)
+    open_members = list(range(len(members)))
+    remaining = abs(change_kwh)
+    while open_members and remaining > 1e-9:
+        total_rate = sum(members[index][3] for index in open_members)
+        if total_rate <= 0:
+            break
+        shares = {index: remaining * members[index][3] / total_rate for index in open_members}
+        full = [index for index in open_members if shares[index] > room[index]]
+        if not full:
+            # Nothing else reaches a limit, so every inverter still open takes its share and that is the end of it
+            for index in open_members:
+                moved[index] = shares[index]
+            break
+        # Inverters that cannot take their share are filled to their limit and the rest is shared among the others
+        for index in full:
+            remaining -= room[index]
+            moved[index] = room[index]
+            open_members.remove(index)
+    return [member[0] + direction * amount for member, amount in zip(members, moved)]
+
+
 class Execute:
     """Execution mixin for applying optimised plans to physical inverters.
 
@@ -175,7 +236,7 @@ class Execute:
             snapshot.append(
                 {
                     "soc_percent": inverter.soc_percent,
-                    "reserve_percent": inverter.reserve_current,
+                    "reserve_percent": inverter.reserve_percent_current,
                     "battery_power": inverter.battery_power,
                     "pv_power": inverter.pv_power,
                     "grid_power": inverter.grid_power,
@@ -304,6 +365,9 @@ class Execute:
         # the windows. With both off - Monitor, Control SoC only - an unclaimed rate is left
         # exactly as it is. A rate something DID claim, executor or balancer, is always written.
         reset_rates = intent.get("reset_rates", True)
+
+        # Rates are truncated with int() here (a calculated 1819.9999999999998 W is written as 1819 W). Inverter.adjust_*_rate() rounds,
+        # but is handed a whole number, so the truncation is what takes effect
         if charge_rate is None:
             if reset_rates:
                 inverter.adjust_charge_rate(int(inverter.battery_rate_max_charge * MINUTE_WATT), notify=notify_charge)
@@ -466,9 +530,18 @@ class Execute:
         # is a global flag, so this is decided once rather than re-decided per inverter.
         if self.set_read_only:
             self.clear_control_ledger("read-only mode is enabled, so Predbat is not setting anything")
+            solis = self.solis_read_only_component()
+            if solis and solis.read_only_reset_error:
+                # Publish Idle as a clean Demo cycle does at the end of this function, so only the warning differs
+                self.set_charge_export_status(False, False, True)
+                self.isCharging = False
+                self.isExporting = False
+                return "Warn: Solis handover unconfirmed", solis.read_only_reset_error
 
         isCharging = False
         isExporting = False
+        # Control SOC only: a charge the inverter is running in its own window, which Predbat does not command
+        soc_only_charging = False
         intent = {}
         export_rate_alloc = self.allocate_fleet_export_rates()
         # Inverter id -> (mode, slot start minutes, slot end minutes, target percent), for the
@@ -651,7 +724,7 @@ class Execute:
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
                                 if self.set_reserve_enable and (not inverter.inv_has_timed_pause):
-                                    inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                    inverter.adjust_reserve(hold_reserve_percent(inverter, inverter.soc_percent))
                                     resetReserve = False
                             else:
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
@@ -689,7 +762,7 @@ class Execute:
 
                                         # Hold on reserve if we can't pause or won't pause the discharge (due to higher battery level)
                                         if self.set_reserve_enable and (not inverter.inv_has_timed_pause or (inverter.soc_percent > inv_target_soc_percent)):
-                                            inverter.adjust_reserve(min(inv_target_soc_percent + 1, 100, inverter.reserve_max))
+                                            inverter.adjust_reserve(min(hold_reserve_percent(inverter, inv_target_soc_percent), inverter.reserve_max))
                                             resetReserve = False
                                     else:
                                         inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
@@ -787,6 +860,19 @@ class Execute:
                 inverter.disable_charge_window()
             else:
                 self.log("Inverter {} Set charge window is disabled".format(inverter.id))
+                # Control SOC only: the inverter runs its own charge window and Predbat only sets the target, so none
+                # of the above runs. While that window is running with a target above the reserve the battery is
+                # charging all the same, so record it - for the status, the planner's keep of a running charge
+                # (isCharging), the SoC reset and the Demand-only export freeze - without sending a charge command (#5991)
+                if self.set_soc_enable and self.charge_limit_best and inverter.charge_start_time_minutes <= self.minutes_now < inverter.charge_end_time_minutes:
+                    target_soc = calc_percent_limit(self.charge_limit_best[0], self.soc_max)
+                    if target_soc > self.reserve_percent:
+                        soc_only_charging = True
+                        self.isCharging_Target = self.charge_limit_best[0]
+                        status = RUN_STATE_HOLD_CHARGING if inverter.soc_percent >= target_soc else RUN_STATE_CHARGING
+                        status_per_inverter[inverter.id] = status
+                        status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, target_soc)))
+                        self.log("Inverter {} is running its own charge window to target SoC {}% (Control SOC only)".format(inverter.id, target_soc))
 
             # Set discharge modes/window?
             if self.set_export_window and self.export_window_best:
@@ -797,8 +883,11 @@ class Execute:
                 # Avoid adjust avoid start time forward when it's already started
                 if (inverter.discharge_start_time_minutes <= self.minutes_now) and (self.minutes_now >= minutes_start):
                     minutes_start = inverter.discharge_start_time_minutes
-                    # Don't allow overlap with charge window
-                    if minutes_start < inverter.charge_end_time_minutes and minutes_end >= inverter.charge_start_time_minutes:
+                    # Don't allow overlap with charge window. An empty charge window (start == end) holds nothing to
+                    # overlap, and one starting just as the export ends only touches it; counting either as an overlap
+                    # rewrote the start to "now" on every cycle of the export, a register write each time.
+                    charge_window_set = inverter.charge_end_time_minutes > inverter.charge_start_time_minutes
+                    if charge_window_set and minutes_start < inverter.charge_end_time_minutes and minutes_end > inverter.charge_start_time_minutes:
                         minutes_start = max(window["start"], self.minutes_now)
                     else:
                         self.log(
@@ -911,7 +1000,7 @@ class Execute:
                 inverter.adjust_force_export(False)
 
             # if Predbat is not currently Charging or Exporting, and set_freeze_export_during_demand is On, then disable charging (i.e. set Freeze Export) (to prevent cross charging)
-            if (not isCharging) and (not isExporting) and self.set_freeze_export_during_demand:
+            if (not isCharging) and (not soc_only_charging) and (not isExporting) and self.set_freeze_export_during_demand:
                 self.log("In Demand mode, turning on Freeze Export")
 
                 # In export freeze mode we disable charging
@@ -977,7 +1066,7 @@ class Execute:
                                     if discharge_rate is None:
                                         discharge_rate = 0
                                     if self.set_reserve_enable:
-                                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                        inverter.adjust_reserve(hold_reserve_percent(inverter, inverter.soc_percent))
                                         resetReserve = False
                                 if hold_applied:
                                     self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
@@ -1009,7 +1098,7 @@ class Execute:
                         if discharge_rate is None:
                             discharge_rate = 0
                         if self.set_reserve_enable:
-                            inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                            inverter.adjust_reserve(hold_reserve_percent(inverter, inverter.soc_percent))
                             resetReserve = False
                     boostHolding = True
                     self.log("Disabling battery discharge whilst iBoost is running")
@@ -1054,7 +1143,9 @@ class Execute:
                     if self.set_export_freeze and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_FREEZE:
                         inverter.adjust_export_immediate(inverter.soc_percent, freeze=True)
                     elif not disabled_export:
-                        inverter.adjust_export_immediate(export_target_percent)
+                        # Each inverter's own share of the fleet target, the same split the export rates were allocated by, as an
+                        # inverter driven by discharge_start_service stops itself at the target it is sent
+                        inverter.adjust_export_immediate(self.adjust_battery_target_multi(inverter, export_target_percent, isCharging, isExporting, check=True))
                     else:
                         inverter.adjust_export_immediate(int(EXPORT_LIMIT_IDLE))  # Dead code right, but kept in case other logic changes
 
@@ -1078,7 +1169,7 @@ class Execute:
                                 self.adjust_battery_target_multi(inverter, 100.0, isCharging, isExporting)
                         else:
                             # If not charging and not hybrid we should reset the target % to 100 to avoid losing solar
-                            if not self.inverter_hybrid and self.inverter_soc_reset and not isCharging and inverter.inv_has_target_soc:
+                            if not self.inverter_hybrid and self.inverter_soc_reset and not (isCharging or soc_only_charging) and inverter.inv_has_target_soc:
                                 self.log("Inverter {} resetting charging SoC as we are not charging and inverter_soc_reset is enabled".format(inverter.id))
                                 self.adjust_battery_target_multi(inverter, 100.0, isCharging, isExporting)
                             elif isCharging:
@@ -1134,7 +1225,11 @@ class Execute:
                             inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
                         else:
                             inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max), isCharging, isExporting, check=True)
-                            inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
+                            if not inverter.inv_has_target_soc and not resetReserve and inverter.soc_percent > hold_reserve_percent(inverter, inv_target_soc_percent):
+                                # Hold on the reserve written above: the freeze service (Back-up on FoxESS) would ignore it and pin the battery
+                                inverter.adjust_charge_immediate(0)
+                            else:
+                                inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
 
             # Charging/Discharging off via service
             # Skipped while exporting: adjust_export_immediate() above already issues its own
@@ -1182,8 +1277,9 @@ class Execute:
         status_extra = build_status_extra(status_extra_parts)
 
         # Set the charge/discharge status information
-        self.set_charge_export_status(isCharging, isExporting, not (isCharging or isExporting))
-        self.isCharging = isCharging
+        # A Control SOC only charge is a charge for everything but the commands sent above
+        self.set_charge_export_status(isCharging or soc_only_charging, isExporting, not (isCharging or soc_only_charging or isExporting))
+        self.isCharging = isCharging or soc_only_charging
         self.isExporting = isExporting
 
         # append the status texts together
@@ -1201,7 +1297,8 @@ class Execute:
     def adjust_battery_target_multi(self, inverter, soc, is_charging, is_exporting, isFreezeCharge=False, check=False):
         """
         Adjust target SoC based on the current SoC of all the inverters accounting for their
-        charge rates and battery capacities
+        charge rates (export or discharge rates when exporting) and battery capacities. What an inverter
+        has no room for is given to the others, see split_change_by_rate()
         """
         target_kwh = dp2(self.soc_max * (soc / 100.0))
         soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
@@ -1220,8 +1317,22 @@ class Execute:
                 self.log("Inverter {} adjust target SoC for export to {}% based on requested all inverter SoC {}%".format(inverter.id, dp0(new_soc_percent), soc))
         else:
             add_kwh = target_kwh - self.soc_kw
-            add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
-            new_soc_kwh = max(min(inverter.soc_kw + add_this, inverter.soc_max), inverter.reserve)
+            # Split the change by rate share so the inverters finish together, giving what one has no room for to the others.
+            # The rate is the one each inverter will actually deliver at: the charge rate when charging, the export rate for a forced
+            # export (inverter_limit_export, which is what the plan models and allocate_fleet_export_rates() allocates by) and the
+            # discharge rate for any other discharge. This used the charge rate for all three, which misjudged any inverter whose
+            # discharge or export rate differs from its charge rate, and gave an inverter limited to a rate of 0 a share of a
+            # change it could not deliver.
+            if add_kwh >= 0:
+                rates = [inv.battery_rate_max_charge for inv in self.inverters]
+            elif is_exporting:
+                rates = [inv.battery_rate_max_export for inv in self.inverters]
+            else:
+                rates = [inv.battery_rate_max_discharge for inv in self.inverters]
+            members = [(inv.soc_kw, inv.soc_max, inv.reserve, rate) for inv, rate in zip(self.inverters, rates)]
+            new_soc_kwh = split_change_by_rate(add_kwh, members)[self.inverters.index(inverter)]
+            new_soc_kwh = max(min(new_soc_kwh, inverter.soc_max), inverter.reserve)
+            add_this = new_soc_kwh - inverter.soc_kw
             new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
             if not check:
                 self.log(
@@ -1261,14 +1372,29 @@ class Execute:
         """
         return calc_percent_limit(charge_limit_kwh, self.soc_max) == self.reserve_percent
 
+    def solis_read_only_component(self):
+        """Find the native Solis controller only when it serves this executor's inverters and has control enabled.
+
+        A monitor-only component (solis_control_enable: false) never wrote a schedule, so there is
+        nothing to hand over and the inverters take the ordinary local reset instead.
+        """
+        if self.components and any(inverter.inverter_type == "SolisCloud" for inverter in self.inverters):
+            solis = self.components.get_component("solis")
+            if solis and solis.control_enable:
+                return solis
+        return None
+
     def reset_inverter(self):
         """
         Reset inverter to safe mode
         """
+        solis = self.solis_read_only_component() if self.set_read_only and self.inverter_needs_reset_force == "set_read_only" else None
         if not self.set_read_only or (self.inverter_needs_reset_force in ["set_read_only"]):
             self.last_service_hash = {}
             # Don't reset in read only mode unless forced
             for inverter in self.inverters:
+                if solis and inverter.inverter_type == "SolisCloud":
+                    continue  # Local slot entities cannot confirm this asynchronous controller's cleanup.
                 self.log("Reset inverter settings to safe mode (set_charge_window={} set_export_window={} force={})".format(self.set_charge_window, self.set_export_window, self.inverter_needs_reset_force))
                 if self.set_charge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
@@ -1285,6 +1411,8 @@ class Execute:
                     inverter.adjust_export_immediate(int(EXPORT_LIMIT_IDLE))
                     self.isExporting = False
 
+        if solis and not solis.request_read_only_reset():
+            self.record_status("Warn: Solis handover unconfirmed", solis.read_only_reset_error, had_errors=True)
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
 
@@ -1334,6 +1462,7 @@ class Execute:
         inverter_limit = 0.0
         export_limit = 0.0
         inverter_support_feedin_first = True
+        battery_export_permitted = True
 
         # Create the inverters only when we don't already have the right number of them. The objects
         # persist across cycles: rebuilding them every cycle wiped any state they accumulated, which
@@ -1435,6 +1564,10 @@ class Execute:
             # charging during Freeze Export means the fleet as a whole cannot recapture PV.
             if not inverter.inv_support_feedin_first:
                 inverter_support_feedin_first = False
+            # Fleet-wide for the same reason, applied after the loop
+            if not inverter.inv_battery_export_permitted:
+                self.log("Note: Inverter {} is not permitted to export battery energy - export windows disabled".format(inverter.id))
+                battery_export_permitted = False
             current_charge_limit_kwh += dp2(inverter.current_charge_limit * inverter.soc_max / 100.0)
             soc_max += inverter.soc_max
             soc_kw += inverter.soc_kw
@@ -1477,6 +1610,15 @@ class Execute:
         self.battery_temperature = int(dp0(battery_temperature / self.num_inverters))
         self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
         self.inverter_support_feedin_first = inverter_support_feedin_first
+        # A site barred from exporting battery energy gets no export windows. Only those are skipped, not the
+        # battery: it still covers the house load and spare solar is still exported, so the rest of the model
+        # stays true (GH#5710). set_export_window stays on so a window already on the inverter is switched off.
+        # A change either way replans this cycle, as a reused or restored plan was made under the other answer.
+        if battery_export_permitted != self.battery_export_permitted:
+            self.plan_valid = False
+        self.battery_export_permitted = battery_export_permitted
+        if not battery_export_permitted:
+            self.calculate_best_export = False
 
         # Additional PVs without inverters
         pv_power_sensors = self.get_arg("pv_power", [], indirect=False)

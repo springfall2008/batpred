@@ -19,9 +19,9 @@ compensation curves, and thermal models to predict heating energy
 requirements and costs for heat pump systems.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytz
-from utils import str2time, dp2, dp3, minute_data, minutes_since_midnight
+from utils import str2time, dp2, dp3, minute_data, minutes_since_midnight, next_aligned_run
 
 from const import TIME_FORMAT
 
@@ -585,7 +585,12 @@ class PredHeat:
         self.internal_temperature, age_internal = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True)
         self.target_temperature, age_target = self.minute_data_entity(now_utc, "target_temperature")
         self.heating_energy, age_energy = self.minute_data_entity(now_utc, "heating_energy", incrementing=True, smoothing=True, scaling=self.heating_energy_scaling)
-        self.minute_data_age = min(age_external, age_internal, age_target, age_energy)
+        # Heating energy history is optional; without it, valid temperature and
+        # thermostat histories should still drive the forecast schedule.
+        history_ages = [age_external, age_internal, age_target]
+        if self.heating_energy:
+            history_ages.append(age_energy)
+        self.minute_data_age = min(history_ages)
 
         self.heat_energy_today = self.heating_energy.get(0, 0) - self.heating_energy.get(self.minutes_now, 0)
 
@@ -653,21 +658,14 @@ class PredHeat:
             raise e
 
         run_every = self.get_arg("run_every", 5, domain="predheat") * 60
-        now = datetime.now()
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        seconds_now = (now - midnight).seconds
-
-        # Calculate next run time to exactly align with the run_every time
-        seconds_offset = seconds_now % run_every
-        seconds_next = seconds_now + (run_every - seconds_offset)
-        next_time = midnight + timedelta(seconds=seconds_next)
+        next_time = next_aligned_run(run_every)
         self.log("Predheat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
 
         self.update_pending = True
 
         # And then every N minutes
         self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
-        self.run_every(self.update_time_loop, datetime.now(), 5, random_start=0, random_end=0)
+        self.run_every(self.update_time_loop, datetime.now(timezone.utc), 5, random_start=0, random_end=0)
 
     def is_enabled(self):
         """

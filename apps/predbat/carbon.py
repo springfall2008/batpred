@@ -19,7 +19,7 @@ from utils import strptime_aware
 import asyncio
 import sys
 import aiohttp
-from const import TIME_FORMAT_HA
+from const import TIME_FORMAT_HA, CARBON_FETCH_SHORT_HOURS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
@@ -109,6 +109,12 @@ class CarbonAPI(ComponentBase):
             self.carbon_data_points = collected_data
             self.publish_carbon_data()
             self.log("Carbon API: Successfully fetched {} data points".format(len(collected_data)))
+            # Warn here, once per fetch, when the API itself published short - the plan's per-cycle replication
+            # can't tell that apart from the forecast simply ageing between polls
+            last_to = max(strptime_aware(point["to"], TIME_FORMAT_HA) for point in collected_data)
+            hours_ahead = (last_to - datetime.now(timezone.utc)).total_seconds() / 3600.0
+            if hours_ahead < CARBON_FETCH_SHORT_HOURS:
+                self.log("Warn: Carbon API: Forecast for postcode {} only reaches {:.1f} hours ahead, short of the 48 hours the API normally publishes - the rest of the plan will repeat the previous day".format(postcode, hours_ahead))
 
     def publish_carbon_data(self):
         """
@@ -123,6 +129,32 @@ class CarbonAPI(ComponentBase):
                 value_now = point["intensity"]
 
         self.dashboard_item("sensor." + self.prefix + "_carbon_intensity", state=value_now, app="carbon", attributes={"unit_of_measurement": "gCO2/kWh", "friendly_name": "Carbon Intensity", "forecast": self.carbon_data_points})
+
+    def build_discovery(self):
+        """
+        Describe the carbon intensity forecast service for the discovery catalogue.
+
+        One forecasts record of kind "carbon" for the postcode district fetch_carbon_data() queries (the
+        stem before the space - the Carbon Intensity API's regional lookup), covering the 48 hours the API
+        publishes from now at its 30-minute resolution. Its binding is the intensity sensor
+        automatic_config() wires to carbon_intensity, once Home Assistant has seen it. The postcode
+        district is published readable, as identifiers and location are.
+
+        Returns None without a postcode, since there is then nothing to query.
+        """
+        if not self.postcode:
+            return None
+        district = str(self.postcode).split(" ")[0]
+        record = {
+            "device_id": "carbon:{}".format(district),
+            "kind": "carbon",
+            "info": {"vendor": "Carbon Intensity API", "postcode_district": district},
+            "coverage": {"horizon_hours": 48, "resolution_minutes": 30},
+        }
+        entities = self.discovery_entities({"carbon_intensity": {"entity_id": "sensor." + self.prefix + "_carbon_intensity", "domain": "sensor", "access": "r", "unit": "gCO2/kWh"}})
+        if entities:
+            record["entities"] = entities
+        return {"automatic": self.automatic, "forecasts": [record]}
 
     async def automatic_config(self):
         """
@@ -139,6 +171,10 @@ class CarbonAPI(ComponentBase):
 
         if first and self.automatic:
             await self.automatic_config()
+
+        # Filed every cycle, after any fetch and publish. refresh_discovery() owns the compare/retry/guard
+        # loop and never raises.
+        self.refresh_discovery()
 
         return True
 

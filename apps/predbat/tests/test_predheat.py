@@ -335,3 +335,61 @@ def test_predheat_smart_thermostat(my_predbat):
             my_predbat.args["predheat"] = original_predheat_args
 
     return failed
+
+
+def test_predheat_optional_energy_history(my_predbat):
+    """Missing heating-energy history must not disable thermostat schedule history."""
+    failed = False
+    original_args = my_predbat.args.get("predheat")
+    try:
+        my_predbat.args["predheat"] = {"mode": "gas", "forecast_days": 2, "days_previous": [7]}
+        predheat = PredHeat(my_predbat)
+        predheat.reset()
+
+        # The target schedule has seven days of history; gas energy is unavailable.
+        histories = {
+            "external_temperature": ({0: 10.0}, 7),
+            "internal_temperature": ({0: 20.0}, 7),
+            "target_temperature": ({0: 21.0, 7 * 24 * 60: 21.0}, 7),
+            "heating_energy": ({}, 0),
+        }
+        predheat.minute_data_entity = lambda now, key, **kwargs: histories[key]
+        predheat.get_weather_data = lambda now: None
+        predheat.today_cost = lambda history: 0
+        predicted_targets = []
+
+        def simulate(volume_temp, heating_active, save="best", last_predict_minute=None):
+            """Record the replayed setpoint and pass volume temperature through both simulation passes."""
+            predicted_targets.append(predheat.get_historical(predheat.target_temperature, 0, default=20.0))
+            return volume_temp, {}
+
+        predheat.run_simulation = simulate
+
+        print("Test: missing heating-energy history preserves scheduled target history")
+        predheat.update_pred(scheduled=False)
+        if predheat.minute_data_age != 7 or predicted_targets != [21.0, 21.0]:
+            print("  ERROR: expected seven days and 21 C targets; got age {} targets {}".format(predheat.minute_data_age, predicted_targets))
+            failed = True
+
+        print("Test: available heating-energy history continues to limit history age")
+        histories["heating_energy"] = ({0: 1.0}, 3)
+        predicted_targets.clear()
+        predheat.update_pred(scheduled=False)
+        if predheat.minute_data_age != 3:
+            print("  ERROR: expected three days, got {}".format(predheat.minute_data_age))
+            failed = True
+
+        print("Test: absent thermostat history still produces zero history age")
+        histories["heating_energy"] = ({}, 0)
+        histories["target_temperature"] = ({}, 0)
+        predheat.update_pred(scheduled=False)
+        if predheat.minute_data_age != 0:
+            print("  ERROR: expected zero days, got {}".format(predheat.minute_data_age))
+            failed = True
+    finally:
+        if original_args is None:
+            my_predbat.args.pop("predheat", None)
+        else:
+            my_predbat.args["predheat"] = original_args
+
+    return failed

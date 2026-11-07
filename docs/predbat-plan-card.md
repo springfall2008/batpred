@@ -167,6 +167,10 @@ if falling by 10kg or more it will be green with a downwards arrow, and in the m
 
 - **Debug** - (Only shown on the plan's [History view](web-interface.md#plan-view)) A download link to the [debug history snapshot](customisation.md#debug-history) captured for that exact time slot, if one was retained, labelled with the time it was taken. Empty if no snapshot was captured for that slot.
 
+Hovering over a cell shows what that value would be in the plan's [pessimistic and optimistic scenarios](customisation.md#scaling-and-weight-options),
+one line per scenario. In the web interface's plan view this works on the PV, Load, SoC %, Cost and Total columns; on the `predbat.plan_html` card, on the SoC % column only.
+A tooltip only appears when a scenario changes that cell's value as shown, and a scenario whose weight (`pv_metric10_weight` or `pv_metric90_weight`) is 0 is left out.
+
 ## Debug mode for Predbat Plan
 
 If [Predbat expert mode](customisation.md#expert-mode) is turned on then a number of additional controls and switches are made available in Home Assistant.

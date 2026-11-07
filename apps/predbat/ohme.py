@@ -27,6 +27,7 @@ from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA, DISPATCH_SOURCE_CHARGER_SCHEDULE
 from component_base import ComponentBase
+from coordinator import car_record, charger_record
 from car_charger_control import CarChargerControl, parse_control_setting
 from predbat_metrics import record_api_call
 
@@ -74,6 +75,10 @@ SLOT_MODE_CHARGER = "charger_schedule"
 # How often the Predbat-led control loop re-evaluates the plan. The plan is minute-granular so a
 # finer cadence buys nothing, and this matches the gateway EV charger control loop
 CONTROL_INTERVAL_SECONDS = 60
+
+# Where the held charger and its saved target are kept across a restart
+OHME_STORAGE_MODULE = "ohme"
+OHME_CONTROL_STATE = "control_state"
 
 # The charger-facing entities for the discovery catalogue's chargers record - see
 # OhmeAPI.build_discovery(). Predbat standard name -> entity descriptor, filtered down to what
@@ -237,8 +242,10 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         # Tri-state: True/False force the Intelligent wiring on or off, None auto-detects it
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
         self.ohme_control = parse_control_setting(ohme_control)
-        # No control switch: read only mode is what releases an Ohme charger
-        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control, switch_prefix="ohme", control_setting="ohme_control")
+        # No control switch: read only mode is what releases an Ohme charger. The storage keeps the held
+        # charger and its saved target across a restart, so one an earlier session held is still released
+        # once control is off (#5788)
+        self.charger_control_setup("Ohme API", "charger", OHME_STORAGE_MODULE, OHME_CONTROL_STATE, "control_enabled", control=self.ohme_control, switch_prefix="ohme", control_setting="ohme_control")
         # Whether the car is on Octopus Intelligent as last decided, None until the first decision
         self.octopus_intelligent = None
         # Octopus Intelligent is driving a live device and wires the car slots to it itself - the car, another
@@ -284,6 +291,15 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """
         if first:
             self.log("Ohme API: Started")
+        # Every cycle until it succeeds, before anything decides control: a read that failed at start-up
+        # must not lose a charger an earlier session held. Here as well as in the shared tick, as Ohme's own
+        # stand-down hand-back runs outside it
+        if not self.charger_control_loaded:
+            await self.charger_control_load_enabled()
+        elif self.charger_control_save_pending and not self.charger_control_active:
+            # The shared tick retries a failed save, but only runs while control is on - this covers a
+            # stand-down hand-back whose save failed
+            await self.charger_control_save()
 
         # Process queued events
         refresh = False
@@ -408,6 +424,17 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         if charge:
             return mode is not ChargerMode.MAX_CHARGE
         return mode is not ChargerMode.PAUSED
+
+    def charger_control_extra_state(self):
+        """Save the charger's own target and whether Predbat started max charge, which a release needs."""
+        return {"saved_target": self.control_saved_target, "max_charge_started": self.control_max_charge_started}
+
+    def charger_control_restore_extra(self, saved):
+        """Restore what charger_control_extra_state() saved, keeping anything this session already knows."""
+        if self.control_saved_target is None and isinstance(saved.get("saved_target"), (int, float)):
+            self.control_saved_target = saved["saved_target"]
+        if saved.get("max_charge_started"):
+            self.control_max_charge_started = True
 
     async def charger_control_send(self, client, charge, car_n):
         """Max charge inside a planned window, paused outside one."""
@@ -872,7 +899,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         exactly the kind of fabricated record the catalogue design forbids - ratings is therefore
         never populated at all rather than populated with a guess.
 
-        The car record is a stub - device_id "ohme:{serial}:car", info.stub true - unless the Ohme
+        The car record is a stub - device_id "ohme:{serial}:car", flags ["stub"] - unless the Ohme
         account reports a current vehicle (self.client._cars, via _discovery_vehicle()), which this
         component discards today. When one is known, the record instead carries a genuine identity:
         device_id "ohme:{vehicle id}" with make/model in info. This is the one place a charger
@@ -910,29 +937,26 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         if device_model:
             charger_info["model"] = device_model
 
-        charger = {
-            "device_id": charger_device_id,
-            "hardware_ids": {"serial": serial},
-            "info": charger_info,
-            "serves_cars": [car_device_id],
-            "entities": self.discovery_entities(CHARGER_DISCOVERY_ENTITY_SPEC),
-        }
+        charger = charger_record(
+            charger_device_id,
+            serves_cars=[car_device_id],
+            hardware_ids={"serial": serial},
+            info=charger_info,
+            entities=self.discovery_entities(CHARGER_DISCOVERY_ENTITY_SPEC),
+        )
 
-        if vehicle_id:
-            car_info = {}
-            if make:
-                car_info["make"] = make
-            if model:
-                car_info["model"] = model
-        else:
-            car_info = {"stub": True}
-
-        car = {
-            "device_id": car_device_id,
-            "charged_by": charger_device_id,
-            "info": car_info,
-            "entities": self.discovery_entities(CAR_DISCOVERY_ENTITY_SPEC),
-        }
+        car_info = {}
+        if make:
+            car_info["make"] = make
+        if model:
+            car_info["model"] = model
+        car = car_record(
+            car_device_id,
+            charged_by=charger_device_id,
+            flags=None if vehicle_id else ["stub"],
+            info=car_info,
+            entities=self.discovery_entities(CAR_DISCOVERY_ENTITY_SPEC),
+        )
 
         return {"automatic": self.ohme_automatic, "chargers": [charger], "cars": [car]}
 
