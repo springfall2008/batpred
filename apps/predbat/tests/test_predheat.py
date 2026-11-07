@@ -381,29 +381,21 @@ def test_predheat_volume_temp(my_predbat):
             predheat = PredHeat(my_predbat)
             predheat.reset()
 
-            predheat.minute_data_entity = (
-                lambda now, key, **kwargs: histories[key]
-            )
+            predheat.minute_data_entity = lambda now, key, **kwargs: histories[key]
             predheat.get_weather_data = lambda now: None
             predheat.today_cost = lambda history: 0
 
             initial_temps = []
 
-            def simulate(volume_temp, heating_active,
-                         save="best", last_predict_minute=None):
+            def simulate(volume_temp, heating_active, save="best", last_predict_minute=None):
                 initial_temps.append(volume_temp)
                 return volume_temp, {}
 
             predheat.run_simulation = simulate
             predheat.update_pred(scheduled=False)
 
-            if len(initial_temps) != 2 or any(
-                abs(float(temp) - expected) > 0.001
-                for temp in initial_temps
-            ):
-                print("  ERROR: {} expected {}, got {}".format(
-                    label, expected, initial_temps
-                ))
+            if len(initial_temps) != 2 or any(abs(float(temp) - expected) > 0.001 for temp in initial_temps):
+                print("  ERROR: {} expected {}, got {}".format(label, expected, initial_temps))
                 failed = True
 
     finally:
