@@ -204,12 +204,16 @@ class FakeInverterComponent:
 
 
 class DummyInverter:
+    # A minimal stand-in for Inverter. adjust_battery_target_multi() reads soc_kw, soc_max, reserve, battery_rate_max_charge,
+    # battery_rate_max_discharge and, for a forced export, battery_rate_max_export from every inverter in my_predbat.inverters.
+    # A test that exercises another path through it may need this extended.
     def __init__(self, log, inverter_id=0):
         self.soc_kw = 0
         self.soc_max = 100
         self.soc_percent = 0
         self.battery_rate_max_charge = 1.0
         self.battery_rate_max_discharge = 1.0
+        self.battery_rate_max_export = 1.0
         self.battery_rate_max = 1.0 * 60 * 1000
         self.log = log
         self.id = inverter_id
