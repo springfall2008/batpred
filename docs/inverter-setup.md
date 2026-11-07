@@ -2806,7 +2806,8 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 
 1. Install PredBat as per the [Installation Summary](installation-summary.md)
 
-2. Ensure that you have the Solax Modbus integration running and select the inverter type **Solis FB00** (not **Solis**).
+2. Install wills106's [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) and select the inverter type **Solis FB00** (not **Solis**).
+   This is the integration the `GS_fb00` inverter type and its template are written and tested for: Predbat's freeze, hold and export control relies on the entities it creates, in particular the Energy Storage Control Switch (see step 5).
    There are a number of entities which this integration disables by default that you will need to enable via the Home Assistant GUI:
 
    | Name                         | Description     |
