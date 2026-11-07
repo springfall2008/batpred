@@ -4256,20 +4256,18 @@ class Octopus:
 
         return sorted(slots_decoded, key=lambda x: x[0])
 
-    def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
+    def octopus_cap_segments(self, car_n, octopus_slots):
         """
-        Turn octopus slots into charging plan
+        Count every car's dispatches on the account against the midday-to-midday cap, earliest first.
+
+        Returns car_n's own slots from octopus_slot_segments() as (slot, capped) pairs, capped when the slot is
+        eligible for the off-peak rate and so counted against the cap, and the set of minutes, of any car's
+        dispatch, that fitted the budget. Shared by load_octopus_slots() and octopus_over_cap_minutes().
         """
-        new_slots = []
-        if car_n >= self.num_cars:
-            # Car not configured, just return the slots as they are (for export or other non-car use)
-            return new_slots
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         cap_minutes = self.get_octopus_cap_minutes()
         minutes_per_day = {}  # Track dispatch minutes used per midday-to-midday period
         budget_minutes = set()  # The minutes, of any car's dispatch, that fitted the budget
-        car_soc = self.car_charging_soc[car_n]
-        limit = self.car_charging_limit[car_n]
 
         # Earliest first across the cars, the lower car first on a tie
         account_segments = sorted(
@@ -4300,6 +4298,42 @@ class Octopus:
                 budget_minutes.update(wanted_minutes[:granted_minutes])
             if slot_car == car_n:
                 own_segments.append((slot, capped))
+        return own_segments, budget_minutes
+
+    def octopus_over_cap_minutes(self, car_n, octopus_slots):
+        """
+        The minutes of car_n's dispatches beyond the midday-to-midday cap, past ones included, each with the
+        dispatch's own energy for that minute.
+
+        Octopus bills the car's charging in these at the peak rate while the house keeps its own rate.
+        load_octopus_slots() only plans from now on, and the running dispatch's start is moved up to now each
+        cycle, so its slots cannot say what has already been charged beyond the cap - today_cost() reads that from here.
+        """
+        over_cap = {}
+        if car_n >= self.num_cars:
+            return over_cap
+        own_segments, budget_minutes = self.octopus_cap_segments(car_n, octopus_slots)
+        for slot, capped in own_segments:
+            start_minutes, end_minutes, kwh = slot[0], slot[1], slot[2]
+            if not capped or end_minutes <= start_minutes:
+                continue
+            kwh_per_minute = kwh / (end_minutes - start_minutes)
+            for minute in range(start_minutes, end_minutes):
+                if minute not in budget_minutes:
+                    over_cap[minute] = over_cap.get(minute, 0.0) + kwh_per_minute
+        return over_cap
+
+    def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
+        """
+        Turn octopus slots into charging plan
+        """
+        new_slots = []
+        if car_n >= self.num_cars:
+            # Car not configured, just return the slots as they are (for export or other non-car use)
+            return new_slots
+        car_soc = self.car_charging_soc[car_n]
+        limit = self.car_charging_limit[car_n]
+        own_segments, budget_minutes = self.octopus_cap_segments(car_n, octopus_slots)
 
         # Add in the current charging slot
         for slot, capped in own_segments:
@@ -4777,10 +4811,15 @@ class Octopus:
         # as never having happened
         covering = [slot for slot in completed if not window or self.decode_octopus_slot(car_n, slot, raw=True)[2] > 0]
         covered = []
-        for slot in covering + list(planned):
+        for slot in covering:
             start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
             if start_minutes != end_minutes:
                 covered.append(round_out_to_period(start_minutes, end_minutes))
+        planned_spans = []
+        for slot in planned:
+            start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+            if start_minutes != end_minutes:
+                planned_spans.append((start_minutes, end_minutes))
 
         dispatches = []
         for period_start in sorted(held):
@@ -4791,6 +4830,15 @@ class Octopus:
             period_minute = minutes_to_time(period_start, self.midnight_utc)
             if any(start_minutes < period_minute + 30 and end_minutes > period_minute for start_minutes, end_minutes in covered):
                 continue
+            # A planned dispatch still reaching the half hour covers it from its own start: the running one's start is
+            # advanced to now, so the part of the half hour it has already run in is held up to there, or the cap would
+            # not count those minutes and the car's charging in them would be priced as if it never happened
+            reached_from = [start_minutes for start_minutes, end_minutes in planned_spans if start_minutes < period_minute + 30 and end_minutes > period_minute]
+            if reached_from:
+                planned_start = min(reached_from)
+                if planned_start <= period_minute:
+                    continue
+                end = min(end, self.midnight_utc + timedelta(minutes=planned_start))
             dispatches.append({"start": period_start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "source": held[period_start], "location": "AT_HOME", "held": True})
         return dispatches
 

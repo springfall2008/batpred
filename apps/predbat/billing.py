@@ -37,8 +37,9 @@ BILLING_ENTITY_SUFFIX = "billing"
 BILLING_SLOT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 BILLING_LEGS = ("import", "export")
 # A past day is read again each refresh until it is complete, but once it is this many days old one more read settles it:
-# suppliers publish within a day or two, so a half-hour still missing by then (or a meter that publishes nothing) is not coming
-BILLING_SETTLE_DAYS = 3
+# import is published within a day or two but export can lag several days behind it, so a half-hour still missing by then
+# (or a meter that publishes nothing) is not coming
+BILLING_SETTLE_DAYS = 5
 # The measurements query asks for Europe/London days, and the supplier spreads each London day's standing charge over its half-hours
 BILLING_TZ = ZoneInfo("Europe/London")
 

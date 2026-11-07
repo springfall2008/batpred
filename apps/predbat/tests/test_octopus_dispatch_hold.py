@@ -189,7 +189,12 @@ def _run(my_predbat):
     completed = [_dispatch(my_predbat, 1050, 1080, kwh=3.8)]
     rates = _cycle(my_predbat, 1125, planned=[_dispatch(my_predbat, 1123, 1800, kwh=65.0, location=None)], completed=completed)
     failed |= _check("t2 still cheap", _low(rates, 1050, 1110))
-    failed |= _check("t2 only the half hour not yet listed is held", [slot["start"] for slot in _held(my_predbat)] == [_dispatch(my_predbat, 1080, 1110)["start"]], "held {}".format(_held(my_predbat)))
+    failed |= _check(
+        "t2 only the half hour not yet listed is held, and the part of the one in progress the running dispatch has gone past",
+        [slot["start"] for slot in _held(my_predbat)] == [_dispatch(my_predbat, 1080, 1110)["start"], _dispatch(my_predbat, 1110, 1123)["start"]],
+        "held {}".format(_held(my_predbat)),
+    )
+    failed |= _check("t2 the half hour in progress is held up to the running dispatch's start", _held(my_predbat)[-1]["end"] == _dispatch(my_predbat, 1110, 1123)["end"], "held {}".format(_held(my_predbat)))
     # A completed dispatch of no energy is treated as never having happened, and is the record once listed
     completed.append(_dispatch(my_predbat, 1080, 1110, kwh=0.0))
     rates = _cycle(my_predbat, 1130, planned=[_dispatch(my_predbat, 1128, 1800, kwh=64.0, location=None)], completed=completed)
