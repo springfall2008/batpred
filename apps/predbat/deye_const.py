@@ -35,6 +35,11 @@ DEYE_ORDER_MAX_POLLS = 3
 # as {"success": true, "status": 500, "error": "540", "analysisResult": null}.
 DEYE_ORDER_FAILED_STATUSES = ("500",)
 
+# Order-level error values that mean "no error". Any other error marks the order failed. Only
+# null has been observed on an executed order; a numeric zero is excluded too so that a firmware
+# reporting error 0 alongside status 666 is not mistaken for a failure and re-sent every cycle.
+DEYE_ORDER_NO_ERROR_VALUES = ("", "0")
+
 # DEYE executes one control order at a time per device. A second command sent while one is
 # still running is rejected with this code — it means "retry shortly", not "rejected", so
 # it is logged as back-pressure rather than a failure and the caller re-applies next cycle.

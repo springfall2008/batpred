@@ -412,13 +412,17 @@ DEYE_FAILED_ORDER_POLL = {
 
 
 def test_poll_order_device_failure_is_failed():
-    """An order whose poll has outer success but order status 500 / error set is reported failed and dropped; status 666 with no error still counts as success."""
+    """An order whose poll has outer success but order status 500 / error set is reported failed and dropped; status 666 with no error (null, empty or zero) still counts as success."""
     failed = False
     cases = [
         ("status 500 with error", DEYE_FAILED_ORDER_POLL, "failed"),
         ("error alone", {"success": True, "status": 666, "error": "540"}, "failed"),
         ("status 500 as a string", {"success": True, "status": "500", "error": None}, "failed"),
         ("executed", {"success": True, "status": 666, "error": None, "analysisResult": "{}"}, "success"),
+        ("executed with numeric zero error", {"success": True, "status": 666, "error": 0}, "success"),
+        ("executed with string zero error", {"success": True, "status": 666, "error": "0"}, "success"),
+        ("executed with empty error", {"success": True, "status": 666, "error": ""}, "success"),
+        ("status 500 with zero error", {"success": True, "status": 500, "error": 0}, "failed"),
     ]
     for label, body, expected in cases:
         d = MockDeye()

@@ -42,6 +42,7 @@ from deye_const import (
     DEYE_TOU_DAYS,
     DEYE_ORDER_MAX_POLLS,
     DEYE_ORDER_FAILED_STATUSES,
+    DEYE_ORDER_NO_ERROR_VALUES,
     DEYE_BUSY_CODES,
     DEYE_BUSY_MARKERS,
     CONFIG_BATTERY_KEYS,
@@ -932,7 +933,8 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         # say whether the device executed it. A failed order was never applied, so the caller
         # must not keep treating its payload as the inverter's current state.
         order_error = resp.get("error")
-        if str(resp.get("status")) in DEYE_ORDER_FAILED_STATUSES or order_error not in (None, ""):
+        error_set = order_error is not None and str(order_error).strip() not in DEYE_ORDER_NO_ERROR_VALUES
+        if str(resp.get("status")) in DEYE_ORDER_FAILED_STATUSES or error_set:
             self.log(f"Warn: DEYE {sn} control order {order_id} failed on the device (status {resp.get('status')}, error {order_error})")
             return "failed"
         return "success"
