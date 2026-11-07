@@ -1255,6 +1255,16 @@ class GitnexusIndexTests(DaemonPathsTestCase):
         self.assertIn("analyze", commands[-1])
         self.assertEqual(triage_daemon.GITNEXUS_HEAD_FILE.read_text(), "abc1234")
 
+    def test_analyze_does_not_rewrite_tracked_files(self):
+        """A plain analyze rewrites AGENTS.md, CLAUDE.md and the GitNexus skills, which left
+        every flow on a dirty clone and made PR #5997's finished cleanup look unpushed."""
+        self._install_runner()
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [MagicMock(returncode=0, stdout="abc1234\n"), MagicMock(returncode=0, stdout="")]
+            triage_daemon.refresh_gitnexus_index()
+            commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn("--index-only", commands[-1])
+
     def test_analyze_is_skipped_when_head_is_unchanged(self):
         """analyze takes ~37s and sync_repo() runs before every flow, so an unguarded call
         would spend minutes an hour rebuilding an index for a tree that had not moved."""

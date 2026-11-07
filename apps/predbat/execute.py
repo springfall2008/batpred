@@ -1174,7 +1174,11 @@ class Execute:
                             inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
                         else:
                             inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max), isCharging, isExporting, check=True)
-                            inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
+                            if not inverter.inv_has_target_soc and not resetReserve and inverter.soc_percent > hold_reserve_percent(inverter, inv_target_soc_percent):
+                                # Hold on the reserve written above: the freeze service (Back-up on FoxESS) would ignore it and pin the battery
+                                inverter.adjust_charge_immediate(0)
+                            else:
+                                inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
 
             # Charging/Discharging off via service
             # Skipped while exporting: adjust_export_immediate() above already issues its own

@@ -1489,7 +1489,7 @@ class TestPlanHookConversion:
         """The fractional part of the export limit sets the export power (rate_scale = 1 - frac)."""
         gw = self._make_gateway()
 
-        # limit 5.3 -> rate_scale 0.7 -> 2500 * 0.7 = 1750W, target 5%
+        # limit 5.3 -> rate_scale 0.7 -> 2500 * 0.7 = 1750W, target 5% (reserve 4% sits below it)
         gw._on_plan_executed(
             charge_windows=[],
             charge_limits=[],
@@ -1498,7 +1498,7 @@ class TestPlanHookConversion:
             charge_rate_w=3000,
             discharge_rate_w=2500,
             soc_max=10,
-            reserve=1,
+            reserve=0.4,
             timezone="Europe/London",
         )
 
@@ -1506,6 +1506,70 @@ class TestPlanHookConversion:
         assert entry["mode"] == 2
         assert entry["power_w"] == 1750  # round(2500 * (1 - 0.3))
         assert entry["target_soc"] == 5
+
+    def test_export_target_below_reserve_clamped_to_reserve(self):
+        """An export target below the reserve is sent as the reserve, so the Hub never drains past the user's minimum."""
+        gw = self._make_gateway()
+
+        # soc_max=10kWh, reserve=1kWh -> reserve_percent=10%; the planner's 0 means "as far as allowed"
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}, {"start": 1200, "end": 1260}],
+            export_limits=[0, 3.5],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        assert [(e["power_w"], e["target_soc"]) for e in entries] == [(2500, 10), (1250, 10)]
+
+        # The planner ships tuples today (plan.py ladder, manual export override packs target 0)
+        from const import EXPORT_MODE_TARGET
+        from utils import pack_export_limit
+
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}, {"start": 1200, "end": 1260}],
+            export_limits=[pack_export_limit(EXPORT_MODE_TARGET, 0), pack_export_limit(EXPORT_MODE_TARGET, 3, 0.5)],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        assert [(e["power_w"], e["target_soc"]) for e in entries] == [(2500, 10), (1250, 10)]
+
+    def test_export_target_clamped_to_best_soc_min_above_reserve(self):
+        """With best_soc_min above the reserve, an export target is floored at best_soc_min, matching execute.py's export floor."""
+        from const import EXPORT_MODE_TARGET
+        from utils import pack_export_limit
+
+        gw = self._make_gateway()
+
+        # soc_max=10kWh, reserve=0.4kWh (4%), best_soc_min=1kWh (10%): a manual export (target 0) must stop at 10%
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}, {"start": 1200, "end": 1260}],
+            export_limits=[pack_export_limit(EXPORT_MODE_TARGET, 0), pack_export_limit(EXPORT_MODE_TARGET, 25)],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=0.4,
+            best_soc_min=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        # The 25% target is above the floor and passes through unchanged
+        assert [(e["power_w"], e["target_soc"]) for e in entries] == [(2500, 10), (2500, 25)]
 
     def test_exact_float_99_export_is_freeze(self):
         """An export limit of 99.0 (float) is still treated as freeze export."""
@@ -1606,8 +1670,10 @@ class TestPlanRepublish:
 
         async def fake_publish_raw(topic, payload, retain=False):
             gw._published.append((topic, payload, retain))
+            return True
 
         gw._publish_raw = fake_publish_raw
+        gw._last_oversize_warn = 0
         return gw
 
     def _run(self, coro):
@@ -3105,8 +3171,10 @@ class TestPublishPredbatData:
 
         async def fake_publish_raw(topic, payload, retain=False):
             gw._published.append((topic, payload, retain))
+            return True
 
         gw._publish_raw = fake_publish_raw
+        gw._last_oversize_warn = 0
         return gw
 
     def _run(self, coro):

@@ -3079,6 +3079,8 @@ APPS_SCHEMA = {
     "solis_control_enable": {"type": "boolean"},
     "solis_cloud_pv_load_ignore": {"type": "boolean"},
     "solis_nominal_voltage": {"type": "float"},
+    "solis_parallel_slaves": {"type": "dict"},
+    "solis_parallel_slot_current_max": {"type": "float"},
     "solis_auth_method": {"type": "string", "empty": False},
     "solis_access_token": {"type": "string", "empty": False},
     "solis_token_expires_at": {"type": "string", "empty": False},
