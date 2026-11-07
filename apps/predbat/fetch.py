@@ -2560,11 +2560,15 @@ class Fetch:
         pv_forecast10_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast10")
         pv_forecast90_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast90")
         relative_time = self.get_state_wrapper(entity_id=entity_id, attribute="relative_time")
-        try:
-            relative_time = strptime_aware(relative_time, TIME_FORMAT)
-        except (ValueError, TypeError):
-            self.log(f"Warn: Unable to parse relative_time from PV forecast sensor: {relative_time}, using midnight UTC as fallback")
+        if relative_time is None:
+            # No PV forecast source configured (or it has not published yet) - midnight UTC is the correct default
             relative_time = self.midnight_utc
+        else:
+            try:
+                relative_time = strptime_aware(relative_time, TIME_FORMAT)
+            except (ValueError, TypeError):
+                self.log(f"Warn: Unable to parse relative_time from PV forecast sensor: {relative_time}, using midnight UTC as fallback")
+                relative_time = self.midnight_utc
 
         # Convert keys to integers and values to floats
         pv_forecast_packed = {}
