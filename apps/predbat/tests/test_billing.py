@@ -441,6 +441,166 @@ def test_reader_restart_restores_cache():
     return False
 
 
+def test_reader_random_first_read_delay():
+    """With random_delay on, the first read after a start waits for a random moment up to 30 minutes after the first check."""
+    from unittest.mock import patch
+    from billing import BillingReader
+
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    reader = BillingReader(_Owner(_FakeStorage()), "octopus_user", "billing")
+    reader.random_delay = True
+    with patch.object(billing.random, "uniform", return_value=600.0) as uniform:
+        if reader.due(now_utc):
+            print("ERROR: with random_delay the first read should be held back")
+            return True
+        if uniform.call_args.args != (0, billing.BILLING_FIRST_READ_DELAY_SECONDS) or billing.BILLING_FIRST_READ_DELAY_SECONDS != 30 * 60:
+            print("ERROR: the first read delay should be drawn from 0 to 30 minutes, got {}".format(uniform.call_args.args))
+            return True
+        if reader.due(now_utc + timedelta(minutes=9)):
+            print("ERROR: the first read should still be held back 9 minutes in, before the 10 minute delay")
+            return True
+        if not reader.due(now_utc + timedelta(minutes=10)):
+            print("ERROR: the first read should be due once the random delay has passed")
+            return True
+        if uniform.call_count != 1:
+            print("ERROR: the delay should be picked once per start, picked {} times".format(uniform.call_count))
+            return True
+    # A reader restored from a recent read waits out the refresh period as before, as well as the delay
+    reader.fetched_at = now_utc
+    if reader.due(now_utc + timedelta(minutes=10)):
+        print("ERROR: a reader read 10 minutes ago should not be due")
+        return True
+    if not BillingReader(_Owner(_FakeStorage()), "octopus_user", "billing").due(now_utc):
+        print("ERROR: without random_delay a reader that has never fetched should be due at once")
+        return True
+    return False
+
+
+def test_reader_paces_day_queries():
+    """With pace_seconds, each day's query after the first waits a random 0 to pace_seconds; without it none waits."""
+    import asyncio
+    from unittest.mock import patch
+    from billing import BillingReader
+
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    mpans = {"import": ("A-1", "IMP"), "export": ("A-1", "EXP")}
+    events = []
+
+    async def query_fn(query, context):
+        """Answer every day with a full day of billing, noting the query."""
+        events.append("query")
+        return _day_response(_query_day(query))
+
+    async def fake_sleep(seconds):
+        """Note the sleep instead of waiting."""
+        events.append(seconds)
+
+    with patch.object(billing.asyncio, "sleep", fake_sleep), patch.object(billing.random, "uniform", side_effect=lambda low, high: high / 2):
+        asyncio.run(BillingReader(_Owner(_FakeStorage()), "octopus_user", "billing").refresh(query_fn, mpans, now_utc, pace_seconds=billing.BILLING_DAY_PACE_SECONDS))
+        queries = events.count("query")
+        sleeps = [event for event in events if event != "query"]
+        if queries != 2 * (billing.BILLING_DAYS + 1) or len(sleeps) != queries - 1 or events[0] != "query":
+            print("ERROR: expected {} queries with a sleep before each but the first, got {}".format(2 * (billing.BILLING_DAYS + 1), events))
+            return True
+        if any(sleep != billing.BILLING_DAY_PACE_SECONDS / 2 for sleep in sleeps) or billing.BILLING_DAY_PACE_SECONDS != 60:
+            print("ERROR: each sleep should be drawn from 0 to 60 seconds, got {}".format(sleeps))
+            return True
+        events.clear()
+        asyncio.run(BillingReader(_Owner(_FakeStorage()), "octopus_user", "billing").refresh(query_fn, mpans, now_utc))
+        if any(event != "query" for event in events):
+            print("ERROR: a refresh without pacing should not sleep, got {}".format(events))
+            return True
+    return False
+
+
+def test_reader_background_read():
+    """With random_delay on, read() runs the paced refresh in the background, isn't due again meanwhile, and publishes when done."""
+    import asyncio
+    from unittest.mock import patch
+    from billing import BillingReader
+
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    owner = _Owner(_FakeStorage())
+    reader = BillingReader(owner, "octopus_user", "billing")
+    reader.random_delay = True
+    reader.first_read_after = now_utc
+    release = None
+
+    async def query_fn(query, context):
+        """Hold the first query until released, then answer every day with a full day of billing."""
+        await release.wait()
+        return _day_response(_query_day(query))
+
+    async def scenario():
+        """Start a background read, check it is running, release it and wait for it."""
+        nonlocal release
+        release = asyncio.Event()
+        await reader.read(query_fn, {"import": ("A-1", "IMP"), "export": None}, now_utc, "octopus", "octopus")
+        await asyncio.sleep(0)
+        if not reader.running() or reader.due(now_utc + timedelta(hours=4)):
+            return "the read should be running in the background and not due again while it runs"
+        if owner.published:
+            return "nothing should be published before the background read finishes"
+        release.set()
+        await reader.task
+        if reader.running() or billing.billing_entity_id("predbat") not in owner.published:
+            return "the background read should publish the billing when it finishes"
+        return None
+
+    async def cancelled():
+        """A stop() while the background read waits cancels it."""
+        nonlocal release
+        release = asyncio.Event()
+        stopping = BillingReader(_Owner(_FakeStorage()), "octopus_user", "billing")
+        stopping.random_delay = True
+        stopping.first_read_after = now_utc
+        await stopping.read(query_fn, {"import": ("A-1", "IMP"), "export": None}, now_utc, "octopus", "octopus")
+        await asyncio.sleep(0)
+        stopping.stop()
+        try:
+            await stopping.task
+        except asyncio.CancelledError:
+            pass
+        return None if stopping.task.cancelled() else "stop() should cancel the background read"
+
+    with patch.object(billing.random, "uniform", return_value=0.0):
+        for check in (scenario, cancelled):
+            error = asyncio.run(check())
+            if error:
+                print("ERROR: " + error)
+                return True
+    return False
+
+
+def test_kraken_run_random_delay_reads_in_background():
+    """With plan_random_delay set, KrakenAPI.run() starts the billing read in the background and it publishes when done."""
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    api = _kraken_api_for_billing(provider="eon")
+    api.import_mpan = "3333333333333"
+    api.base.get_arg = MagicMock(side_effect=lambda arg, default=None, **kwargs: 30 if arg == "plan_random_delay" else default)
+
+    async def scenario():
+        """Run one cycle, then wait for the background read it started."""
+        await api.run(60, False)
+        if not api.billing.task:
+            return "run() should start a background billing read with plan_random_delay set"
+        await api.billing.task
+        return None
+
+    # A zero draw makes both the first read delay and the pacing sleeps nothing, so the read runs straight through
+    with patch.object(billing.random, "uniform", return_value=0.0):
+        error = asyncio.run(scenario())
+    if error:
+        print("ERROR: " + error)
+        return True
+    if not api.billing.random_delay or not _billing_publishes(api):
+        print("ERROR: the background billing read should publish sensor.predbat_billing")
+        return True
+    return False
+
+
 def test_octopus_partial_errors_is_failure(my_predbat):
     """A response with data and errors (e.g. KT-CT-4718 on one MPAN) is a failed read, not an empty day."""
     import asyncio
@@ -499,7 +659,17 @@ def test_octopus_run_publishes_billing(my_predbat):
         return _day_response(_query_day(query))
 
     api.async_graphql_query = fake_query
-    asyncio.run(api.run(60, False))
+    # coverage/apps.yaml sets plan_random_delay, which would hold the read back and run it in the background
+    had_delay = "plan_random_delay" in my_predbat.args
+    saved_delay = my_predbat.args.get("plan_random_delay")
+    my_predbat.args["plan_random_delay"] = 0
+    try:
+        asyncio.run(api.run(60, False))
+    finally:
+        if had_delay:
+            my_predbat.args["plan_random_delay"] = saved_delay
+        else:
+            my_predbat.args.pop("plan_random_delay", None)
     billing_queries = [query for query in queries if "measurements" in query]
     mpans = {query.split('marketSupplyPointId: "')[1].split('"')[0] for query in billing_queries}
     if mpans != {"1111111111111", "2222222222222"}:
@@ -884,16 +1054,19 @@ def test_reader_settles_old_days():
 
     asyncio.run(reader.refresh(query_fn, mpans, now_utc))
     settle_by = date(2026, 11, 2) - timedelta(days=BILLING_SETTLE_DAYS)
-    if sorted(asked) != [date(2026, 10, 26) + timedelta(days=offset) for offset in range(8)] or len(warnings()) != 5:
-        print("ERROR: the first refresh should ask for every export day and give up on the 5 up to {}, asked {} warned {}".format(settle_by, sorted(asked), warnings()))
+    if BILLING_SETTLE_DAYS != 5:
+        print("ERROR: export billing can lag days behind import, so a day should be read until it is 5 days old, got {}".format(BILLING_SETTLE_DAYS))
         return True
-    if reader.settled["export"] != ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30"] or reader.legs["export"] is not True:
-        print("ERROR: 26-30 Oct should be settled with the export leg still read OK, got {} {}".format(reader.settled, reader.legs))
+    if sorted(asked) != [date(2026, 10, 26) + timedelta(days=offset) for offset in range(8)] or len(warnings()) != 3:
+        print("ERROR: the first refresh should ask for every export day and give up on the 3 up to {}, asked {} warned {}".format(settle_by, sorted(asked), warnings()))
+        return True
+    if reader.settled["export"] != ["2026-10-26", "2026-10-27", "2026-10-28"] or reader.legs["export"] is not True:
+        print("ERROR: 26-28 Oct should be settled with the export leg still read OK, got {} {}".format(reader.settled, reader.legs))
         return True
 
     asked.clear()
     asyncio.run(reader.refresh(query_fn, mpans, now_utc + timedelta(hours=3)))
-    if sorted(asked) != [date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 2)] or len(warnings()) != 5:
+    if sorted(asked) != [date(2026, 10, 29), date(2026, 10, 30), date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 2)] or len(warnings()) != 3:
         print("ERROR: a later refresh should only re-read the export days not yet settled, asked {}".format(sorted(asked)))
         return True
 
@@ -902,11 +1075,11 @@ def test_reader_settles_old_days():
     asyncio.run(restarted.load())
     asked.clear()
     asyncio.run(restarted.refresh(query_fn, mpans, datetime(2026, 11, 3, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)))
-    if sorted(asked) != [date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 2), date(2026, 11, 3)]:
-        print("ERROR: after a restart the settled days should stay settled, and 31 Oct is read once more on 3 Nov, asked {}".format(sorted(asked)))
+    if sorted(asked) != [date(2026, 10, 29), date(2026, 10, 30), date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 2), date(2026, 11, 3)]:
+        print("ERROR: after a restart the settled days should stay settled, and 29 Oct is read once more on 3 Nov, asked {}".format(sorted(asked)))
         return True
-    if restarted.settled["export"] != ["2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31"]:
-        print("ERROR: 26 Oct should leave the settled list with the window and 31 Oct join it, got {}".format(restarted.settled["export"]))
+    if restarted.settled["export"] != ["2026-10-27", "2026-10-28", "2026-10-29"]:
+        print("ERROR: 26 Oct should leave the settled list with the window and 29 Oct join it, got {}".format(restarted.settled["export"]))
         return True
     if any("import" in line and "won't be read again" in line for line in owner.logged + restarted_owner.logged):
         print("ERROR: complete import days are settled quietly")
@@ -1012,6 +1185,10 @@ def run_billing_tests(my_predbat):
         test_reader_fetches_only_incomplete_days,
         test_reader_failed_read_marks_leg,
         test_reader_restart_restores_cache,
+        test_reader_random_first_read_delay,
+        test_reader_paces_day_queries,
+        test_reader_background_read,
+        test_kraken_run_random_delay_reads_in_background,
         test_kraken_run_publishes_billing,
         test_kraken_export_uses_export_account,
         test_kraken_no_mpan_skips,

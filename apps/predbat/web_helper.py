@@ -6006,7 +6006,13 @@ function initializeCodeMirror() {
                     cm.replaceSelection('  ', 'end', '+input');
                 }
             },
-            'Ctrl-Space': 'autocomplete'
+            'Ctrl-Space': 'autocomplete',
+            'Ctrl-F': 'findPersistent',
+            'Cmd-F': 'findPersistent',
+            'Ctrl-G': 'findNext',
+            'Cmd-G': 'findNext',
+            'Shift-Ctrl-G': 'findPrev',
+            'Shift-Cmd-G': 'findPrev'
         }
     });
 
@@ -8857,6 +8863,11 @@ function toggleSwitch(element, fieldName) {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/mode/yaml/yaml.min.js"></script>
+    <!-- Full-document search -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/dialog/dialog.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/dialog/dialog.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/search/searchcursor.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/search/search.min.js"></script>
 
     <!-- CodeMirror Theme -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/theme/monokai.min.css">

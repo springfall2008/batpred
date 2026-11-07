@@ -47,6 +47,9 @@ high battery charge levels when the car was charged previously (e.g. last week).
         - Automatically disable **switch.predbat_car_charging_hold** (no need to strip car data from house load, as it was never included).
         - Automatically set **switch.predbat_car_charging_from_battery** to On in the model (the battery cannot discharge into the car anyway as it is on a separate circuit).
         - Model that any export from the battery/PV may flow into the car rather than the grid, and so conservatively not credit that energy with export income.
+        - Add the car's energy, from **car_charging_energy** in `apps.yaml`, to today's cost (**predbat.cost_today**) and to the History view's import and export kWh, since your supplier's meter bills it even though the inverter never sees it. Energy the inverter counts as export goes into the car first and is not credited; the rest is costed as import at that time's rate - on Octopus Intelligent the rate your dispatches gave it, or the peak rate for car charging beyond the 6-hour daily cap.
+
+        This assumes **import_today** and **export_today** come from your inverter's CT clamp, as they are meant to. If yours come from a smart meter (for example a Glow or Octopus Home Mini sensor), the meter already sees the car, so it would be counted twice - use your inverter's import and export sensors instead.
 
 - **switch.predbat_car_charging_hold** - A switch that when turned On (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. This switch is automatically overridden to Off when **switch.predbat_car_energy_reported_load** is Off, since the car load is not in the house load data.
 

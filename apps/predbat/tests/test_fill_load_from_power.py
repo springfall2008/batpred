@@ -8,9 +8,9 @@ import os
 # Add the apps/predbat directory to the path
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "apps", "predbat"))
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fetch import Fetch
-from utils import dp4
+from utils import dp4, minute_data
 
 
 class TestFetch(Fetch):
@@ -350,6 +350,242 @@ def test_fill_load_from_power_data_extends_beyond_load():
     print("Test 7 PASSED")
 
 
+def test_fill_load_from_power_quantised_counter_not_double_counted():
+    """
+    A load counter that only moves in 0.1 kWh steps sits flat between steps while load_power shows
+    the real draw. Each plateau is filled from the power, but the counter's own step at the end of the
+    plateau already holds that energy, so the filled history must add up to the counter, not about
+    twice it, and must never step backwards (#5855)
+    """
+    print("\n=== Test: quantised counter plateaus are not counted twice ===")
+
+    fetch = TestFetch()
+
+    # 8 hours at a constant 170 W (1.36 kWh); minute 0 is now, the counter rounds down to 0.1 kWh
+    minutes = 8 * 60
+    load_minutes = {minute: 5.0 + int(0.170 * (minutes - minute) / 60 * 10) / 10.0 for minute in range(0, minutes + 1)}
+    load_power_data = {minute: 170.0 for minute in range(0, minutes + 1)}
+
+    result = fetch.fill_load_from_power(load_minutes, load_power_data)
+
+    assert any("periods of zero load" in msg for msg in fetch.log_messages), "Expected the plateaus to be found and filled"
+    counter_delta = load_minutes[0] - load_minutes[minutes]
+    filled_delta = result[0] - result[minutes]
+    assert abs(filled_delta - counter_delta) <= 0.01, "Filled history should add up to the counter ({} kWh), got {} kWh".format(dp4(counter_delta), dp4(filled_delta))
+    for minute in range(0, minutes):
+        assert result[minute] >= result[minute + 1] - 1e-4, "Cumulative load must not step backwards: minute {} = {} < minute {} = {}".format(minute, result[minute], minute + 1, result[minute + 1])
+    print("✓ Counter {} kWh, filled {} kWh".format(dp4(counter_delta), dp4(filled_delta)))
+    print("Quantised counter test PASSED")
+
+
+def test_fill_load_from_power_gap_without_catch_up_is_filled():
+    """
+    A fine-grained counter (it moves every minute) that sat still for an hour while the power showed
+    1 kW has lost readings: a step can't explain a flat hour. It never made them up, so the hour is
+    filled from the power and the later minutes lifted by it - while the good hour after the gap keeps
+    its own energy (#5855). A counter that didn't exist yet (0.0 before it starts) is left alone.
+    """
+    print("\n=== Test: a gap a fine counter never makes up is filled from the power ===")
+
+    fetch = TestFetch()
+
+    # 1 kW throughout; the counter rises 1/60 kWh a minute except for minutes 60-119, where it stalled
+    load_minutes = {}
+    value = 10.0
+    for minute in range(180, -1, -1):
+        load_minutes[minute] = round(value, 6)
+        if not 60 <= minute < 120:
+            value += 1.0 / 60
+    load_power_data = {minute: 1000.0 for minute in range(0, 181)}
+
+    result = fetch.fill_load_from_power(load_minutes, load_power_data)
+
+    counter_delta = load_minutes[0] - load_minutes[180]
+    filled_delta = result[0] - result[180]
+    assert abs(filled_delta - 3.0) < 0.02, "3 h at 1 kW is 3.0 kWh (the counter lost the middle hour, {} kWh), got {} kWh".format(dp4(counter_delta), dp4(filled_delta))
+    # The good hour after the gap keeps its energy rather than being spread back into the gap
+    assert abs((result[0] - result[60]) - 1.0) < 0.02, "The hour after the gap read 1.0 kWh and should keep it, got {} kWh".format(dp4(result[0] - result[60]))
+
+    # A counter that didn't exist yet (0.0 before it starts) keeps its real history: 5 h at 1 kW
+    load_minutes = {minute: (0.0 if minute >= 300 else round((300 - minute) / 60, 6)) for minute in range(0, 901)}
+    result = fetch.fill_load_from_power(load_minutes, {minute: 1000.0 for minute in range(0, 901)})
+    assert abs((result[0] - result[300]) - 5.0) < 0.02 and abs(result[300] - result[900]) < 0.001, "A new counter's 5 kWh should stay where it was counted, got {} kWh after and {} kWh before".format(
+        dp4(result[0] - result[300]), dp4(result[300] - result[900])
+    )
+    for minute in range(0, 180):
+        assert result[minute] >= result[minute + 1] - 1e-4, "Cumulative load must not step backwards at minute {}".format(minute)
+    print("✓ Counter {} kWh, filled {} kWh".format(dp4(counter_delta), dp4(filled_delta)))
+    print("Gap without catch-up test PASSED")
+
+
+def test_fill_load_from_power_power_reading_high_adds_nothing():
+    """
+    A load_power sensor that reads 30% high shapes the flat runs but adds no energy to the counter's
+    total (#5855)
+    """
+    print("\n=== Test: load_power reading high adds nothing ===")
+
+    minutes = 8 * 60
+    load_minutes = _load_history_through_loader(lambda minute: 5.0 + int(0.1 * (minutes + 60 - minute) / 60 * 10 + 1e-9) / 10.0, minutes, 5)
+    fetch = TestFetch()
+    result = fetch.fill_load_from_power(load_minutes, {minute: 130.0 for minute in range(0, minutes + 1)})
+    counter_delta = load_minutes[0] - load_minutes[minutes]
+    filled_delta = result[0] - result[minutes]
+    assert abs(filled_delta - counter_delta) < 0.001, "A power sensor reading high should not change the counter's {} kWh, got {} kWh".format(dp4(counter_delta), dp4(filled_delta))
+    print("✓ Counter {} kWh, filled {} kWh".format(dp4(counter_delta), dp4(filled_delta)))
+    print("Power reading high test PASSED")
+
+
+def test_fill_load_from_power_gap_with_catch_up_not_double_counted():
+    """
+    A counter that stalled for two hours and then caught up in one jump already holds the missed
+    energy, so the fill spreads it over the gap instead of adding it again (#5855)
+    """
+    print("\n=== Test: a gap the counter catches up is not counted twice ===")
+
+    fetch = TestFetch()
+
+    # 1 kW throughout; the counter stalls for minutes 60-179 then jumps 2 kWh at minute 59
+    load_minutes = {}
+    value = 10.0
+    for minute in range(240, -1, -1):
+        load_minutes[minute] = round(value, 6)
+        if minute == 60:
+            value += 2.0 + 1.0 / 60
+        elif not 60 <= minute < 180:
+            value += 1.0 / 60
+    load_power_data = {minute: 1000.0 for minute in range(0, 241)}
+
+    result = fetch.fill_load_from_power(load_minutes, load_power_data)
+
+    counter_delta = load_minutes[0] - load_minutes[240]
+    filled_delta = result[0] - result[240]
+    assert abs(filled_delta - counter_delta) < 0.001, "The counter caught up ({} kWh for about 4 h at 1 kW), so the fill should match it, got {} kWh".format(dp4(counter_delta), dp4(filled_delta))
+    for minute in range(0, 240):
+        assert result[minute] >= result[minute + 1] - 1e-4, "Cumulative load must not step backwards at minute {}".format(minute)
+    print("✓ Filled {} kWh".format(dp4(filled_delta)))
+    print("Gap with catch-up test PASSED")
+
+
+def test_fill_load_from_power_plateau_at_now_takes_power_energy():
+    """
+    A plateau that runs up to minute 0 has not been counted yet, so it is ramped by the power's
+    energy as it stands (#5855)
+    """
+    print("\n=== Test: a plateau at minute 0 ===")
+
+    fetch = TestFetch()
+
+    # Flat at 6.0 for the last 40 minutes at 600 W, before that rising 0.01 kWh a minute
+    load_minutes = {minute: 6.0 for minute in range(0, 40)}
+    for minute in range(40, 101):
+        load_minutes[minute] = round(6.0 - (minute - 39) * 0.01, 6)
+    load_power_data = {minute: 600.0 for minute in range(0, 101)}
+
+    result = fetch.fill_load_from_power(load_minutes, load_power_data)
+
+    # 40 flat minutes at 600 W up to now, not counted yet: 0.39 kWh from the power (39 one-minute steps after the oldest reading)
+    assert abs(result[0] - (6.0 + 39 * 0.6 / 60)) < 0.001, "The plateau up to now should be ramped by the power to {}, got minute 0 = {}".format(6.0 + 39 * 0.6 / 60, result[0])
+    for minute in range(0, 100):
+        assert result[minute] >= result[minute + 1] - 1e-4, "Cumulative load must not step backwards at minute {}".format(minute)
+    print("✓ Minute 0 = {}".format(dp4(result[0])))
+    print("Plateau at now test PASSED")
+
+
+def _load_history_through_loader(counter_at, minutes, poll_minutes):
+    """Build load_today history readings every poll_minutes and load it the way Predbat does (minute_data)"""
+    now = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+    history = []
+    for minute in range(minutes, -1, -poll_minutes):
+        history.append({"state": str(counter_at(minute)), "last_updated": (now - timedelta(minutes=minute)).isoformat(), "attributes": {"unit_of_measurement": "kWh"}})
+    load_minutes, _ = minute_data(history, 1, now, "state", "last_updated", backwards=True, smoothing=True, clean_increment=True, required_unit="kWh", interpolate=True)
+    return {minute: value for minute, value in load_minutes.items() if minute <= minutes}
+
+
+def test_fill_load_from_power_reported_every_few_minutes():
+    """
+    Through the real loader, a counter that reports every 5 minutes has each step spread over those
+    5 minutes, so the energy of the flat run before it shows up over several minutes, not one. The fill
+    must still match the counter, for a 0.1 kWh-step counter and for a stall it catches up (#5855)
+    """
+    print("\n=== Test: counters reported every 5 minutes, through minute_data ===")
+
+    # 100 W for 8 h on a 0.1 kWh-step counter: true 0.8 kWh
+    minutes = 8 * 60
+    load_minutes = _load_history_through_loader(lambda minute: 5.0 + int(0.1 * (minutes + 60 - minute) / 60 * 10 + 1e-9) / 10.0, minutes, 5)
+    fetch = TestFetch()
+    result = fetch.fill_load_from_power(load_minutes, {minute: 100.0 for minute in range(0, minutes + 1)})
+    filled_delta = result[0] - result[minutes]
+    assert abs(filled_delta - 0.8) < 0.001, "100 W for 8 h is 0.8 kWh, got {} kWh".format(dp4(filled_delta))
+    for minute in range(0, minutes):
+        assert result[minute] >= result[minute + 1] - 1e-4, "Cumulative load must not step backwards at minute {}".format(minute)
+    print("✓ Quantised counter: filled {} kWh".format(dp4(filled_delta)))
+
+    # 1 kW for 4 h, the counter stalls for 2 h (minutes 60-179) and then catches up: true 4.0 kWh
+    def stalled(minute):
+        """Counter reading at a minute ago: stalled for minutes 60-179, caught up from minute 59"""
+        if minute >= 180:
+            return 10.0 + (240 - minute) / 60
+        if minute >= 60:
+            return 11.0
+        return 11.0 + 2.0 + (60 - minute) / 60
+
+    load_minutes = _load_history_through_loader(stalled, 240, 5)
+    fetch = TestFetch()
+    result = fetch.fill_load_from_power(load_minutes, {minute: 1000.0 for minute in range(0, 241)})
+    filled_delta = result[0] - result[240]
+    assert abs(filled_delta - 4.0) < 0.02, "1 kW for 4 h is 4.0 kWh and the counter caught up, got {} kWh".format(dp4(filled_delta))
+    print("✓ Stall caught up: filled {} kWh".format(dp4(filled_delta)))
+
+    # Every 40 minutes, the counter's rise after each flat run lasts two readings (80 minutes): it must all
+    # be counted against the flat run, or the part left out is added again
+    load_minutes = _load_history_through_loader(lambda minute: 5.0 + int(0.1 * (minutes + 60 - minute) / 60 * 10 + 1e-9) / 10.0, minutes, 40)
+    fetch = TestFetch()
+    result = fetch.fill_load_from_power(load_minutes, {minute: 100.0 for minute in range(0, minutes + 1)})
+    counter_delta = load_minutes[0] - load_minutes[minutes]
+    filled_delta = result[0] - result[minutes]
+    assert abs(filled_delta - 0.8) < 0.01, "Every 40 minutes: 100 W for 8 h is 0.8 kWh (counter {} kWh), got {} kWh".format(dp4(counter_delta), dp4(filled_delta))
+    print("✓ Reported every 40 minutes: counter {} kWh, filled {} kWh".format(dp4(counter_delta), dp4(filled_delta)))
+    print("Reported every few minutes test PASSED")
+
+
+def test_load_counter_quantum():
+    """
+    The load counter's step is found from the gaps between the levels it sits at, including when two
+    flat stretches are several steps apart; a counter that never sits still reads as fine (#5855)
+    """
+    print("\n=== Test: load counter step size ===")
+
+    fetch = TestFetch()
+    # 0.1 kWh steps, flat for 40 minutes between each
+    coarse = {minute: 5.0 + 0.1 * ((600 - minute) // 40) for minute in range(0, 601)}
+    assert abs(fetch.load_counter_quantum(coarse, 600) - 0.1) < 1e-9, "Expected 0.1 kWh steps, got {}".format(fetch.load_counter_quantum(coarse, 600))
+    # 0.01 kWh steps, but flat stretches 16 and 17 steps apart
+    levels = [5.0, 5.16, 5.33, 5.49, 5.66, 5.82]
+    sparse = {}
+    for index, level in enumerate(levels):
+        for minute in range(index * 60, index * 60 + 10):
+            sparse[600 - minute] = level
+        for minute in range(index * 60 + 10, index * 60 + 60):
+            sparse[600 - minute] = round(level + (levels[min(index + 1, len(levels) - 1)] - level) * (minute - index * 60 - 9) / 51, 6)
+    sparse = {minute: value for minute, value in sparse.items() if minute >= 0}
+    assert abs(fetch.load_counter_quantum(sparse, max(sparse)) - 0.01) < 1e-9, "Expected 0.01 kWh steps from gaps of 0.16/0.17, got {}".format(fetch.load_counter_quantum(sparse, max(sparse)))
+    # A fine counter that only sits still where it stalled twice: one-off gaps say nothing about its step
+    stalled = {}
+    value = 10.0
+    for minute in range(600, -1, -1):
+        stalled[minute] = round(value, 6)
+        if not (100 <= minute < 160 or 400 <= minute < 460):
+            value += 1.0 / 60
+    assert fetch.load_counter_quantum(stalled, 600) == 0.0, "Two stalls on a fine counter should not read as a step, got {}".format(fetch.load_counter_quantum(stalled, 600))
+    result = fetch.fill_load_from_power(stalled, {minute: 1000.0 for minute in range(0, 601)})
+    assert abs((result[0] - result[600]) - 10.0) < 0.05, "Both stalls should be filled: 10 h at 1 kW is 10.0 kWh, got {}".format(dp4(result[0] - result[600]))
+    # Moves every minute: as fine as the history shows
+    fine = {minute: 10.0 - minute / 60 for minute in range(0, 601)}
+    assert fetch.load_counter_quantum(fine, 600) == 0.0, "A counter that never sits still should read as fine"
+    print("Load counter step size test PASSED")
+
+
 def test_fill_load_from_power_negative_power_corrupts_load_total():
     """
     Regression test: negative power values in a zero-load period corrupt the day total.
@@ -423,6 +659,13 @@ def run_all_tests(my_predbat=None):
         test_fill_load_from_power_data_extends_beyond_load()
         test_fill_load_from_power_distorted_power_inflation()
         test_fill_load_from_power_negative_power_corrupts_load_total()
+        test_load_counter_quantum()
+        test_fill_load_from_power_quantised_counter_not_double_counted()
+        test_fill_load_from_power_gap_without_catch_up_is_filled()
+        test_fill_load_from_power_power_reading_high_adds_nothing()
+        test_fill_load_from_power_gap_with_catch_up_not_double_counted()
+        test_fill_load_from_power_plateau_at_now_takes_power_energy()
+        test_fill_load_from_power_reported_every_few_minutes()
 
         print("\n" + "=" * 60)
         print("✅ ALL TESTS PASSED")
