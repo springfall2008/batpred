@@ -9887,6 +9887,7 @@ def get_internals_css():
     padding: 10px 15px;
     cursor: pointer;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
     background-color: #fff;
@@ -9900,18 +9901,24 @@ def get_internals_css():
 .thread-name {
     font-weight: bold;
     color: #2196F3;
-    flex: 0 0 200px;
+    flex: 0 1 200px;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .thread-id {
     color: #666;
     font-size: 0.9em;
-    flex: 0 0 150px;
+    flex: 0 1 150px;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .thread-status {
     color: #4CAF50;
     font-size: 0.9em;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .thread-stack {
