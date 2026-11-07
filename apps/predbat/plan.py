@@ -489,19 +489,31 @@ class Plan:
                 return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
             if self.minutes_now - PREDICT_STEP < dispatch_start or self.minutes_now > dispatch_end:
                 return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
-            if self.dynamic_load_classify() != "low":
-                return False, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
-            live_configured, live_load = self.dynamic_load_car_live_load()
-            live_low = not live_configured or (live_load is not None and live_load < self.dynamic_load_car_low_kw())
+            low = self.dynamic_load_car_load_low(car_n)
+            if low is None:
+                return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            return low, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+        return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+
+    def dynamic_load_car_load_low(self, car_n, log=True):
+        """
+        Whether the house load says car_n, inside the CT clamp, is not charging: True when load_last_period is
+        low (see dynamic_load_classify()) and so is the live load, False when load_last_period is not low (the
+        car may be charging), None when only the window is low - the live load is not, or has no reading, so it
+        is no evidence either way (see dynamic_load_car_evidence()). The caller checks the window is the one
+        it means. With log True the low reading is logged.
+        """
+        if self.dynamic_load_classify() != "low":
+            return False
+        live_configured, live_load = self.dynamic_load_car_live_load()
+        live_low = not live_configured or (live_load is not None and live_load < self.dynamic_load_car_low_kw())
+        if log:
             self.log(
                 "Octopus Intelligent: car {} load last period {:.2f}kW is low (under {:.2f}kW), live load {} - {}".format(
                     car_n, self.load_last_period, self.dynamic_load_car_low_kw(), "{:.2f}kW".format(live_load) if live_load is not None else ("unavailable" if live_configured else "not configured"), "not charging" if live_low else "no evidence"
                 )
             )
-            if not live_low:
-                return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
-            return True, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
-        return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+        return True if live_low else None
 
     def dynamic_load_any_car_charging_now(self):
         """
@@ -996,7 +1008,10 @@ class Plan:
         self.dynamic_load_car_save()
         # ...and holds the half hour a dispatch is running in: one too short for any 5 minute cycle to see
         # running, once confirmed, is otherwise at the day rate until Octopus lists it as completed (#5520)
-        self.octopus_held_update(now)
+        if self.octopus_held_update(now):
+            # A half hour let go for a withdrawn dispatch is at the day rate from now, so the plan must not wait
+            # for the next cycle to stop charging in it
+            due = True
 
         if due:
             self.log("Octopus Intelligent: car charging state changed, will re-plan")
