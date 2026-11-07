@@ -2615,6 +2615,162 @@ def test_publish_rate_sensors_before_midnight_still_covers_next_day():
     assert min(_utc(r["valid_from"]) for r in attributes["rates"]) <= datetime(2026, 1, 10, 0, 0, tzinfo=timezone.utc)
 
 
+# Discovery catalogue reporter
+
+
+def _discovery_kraken(provider="edf", **kwargs):
+    """A Kraken component that has found an import tariff, a SmartFlex car and an export tariff."""
+    api = make_kraken_api(provider=provider, **kwargs)
+    api.current_tariff = {"tariff_code": "E-1R-EDF-FREEPHASE-24-A", "product_code": "EDF-FREEPHASE-24"}
+    api.import_mpan = "1900000000456"
+    api.import_standing_charge = 0.5321
+    api.export_tariff = {"tariff_code": "E-1R-EDF-EXPORT-B", "product_code": "EDF-EXPORT"}
+    api.export_mpan = "1900000000789"
+    api.export_rates_available = True
+    api.intelligent_devices = {"00000000-aaaa-bbbb-cccc-0000000abcde": {"device_id": "00000000-aaaa-bbbb-cccc-0000000abcde", "make": "Tesla", "model": "Model Y", "planned_dispatches": [], "completed_dispatches": []}}
+    return api
+
+
+def test_kraken_discovery_none_before_tariff():
+    """Nothing is reported until a tariff has been found."""
+    assert make_kraken_api().build_discovery() is None
+
+
+def test_kraken_discovery_import_meter():
+    """The import meter carries its MPAN and account, the tariff codes, the standing charge in pence and its bindings."""
+    report = _discovery_kraken().build_discovery()
+    assert report["automatic"] is True
+    meter = next(record for record in report["meters"] if record["direction"] == "import")
+    assert meter["device_id"] == "kraken:1900000000456", meter
+    assert meter["account_ids"] == {"mpan": "1900000000456", "account": "A-TEST123"}, meter
+    assert meter["tariff"] == {"info": {"tariff_code": "E-1R-EDF-FREEPHASE-24-A", "product_code": "EDF-FREEPHASE-24"}}, meter
+    assert meter["ratings"] == {"standing_charge_p": 53.21}, meter
+    assert meter["entities"]["metric_octopus_import"]["entity_id"] == "sensor.predbat_kraken_a_test123_import_rates", meter
+    assert meter["entities"]["metric_standing_charge"]["entity_id"] == "sensor.predbat_kraken_a_test123_import_standing", meter
+
+
+def test_kraken_discovery_export_meter_uses_export_account():
+    """E.ON can put export on its own account: the export meter carries that account, and binds export rates only once they exist."""
+    api = _discovery_kraken(provider="eon", export_account_id="A-EXPORT99")
+    meter = next(record for record in api.build_discovery()["meters"] if record["direction"] == "export")
+    assert meter["device_id"] == "kraken:1900000000789", meter
+    assert meter["account_ids"] == {"mpan": "1900000000789", "account": "A-EXPORT99"}, meter
+    assert meter["entities"]["metric_octopus_export"]["entity_id"] == "sensor.predbat_kraken_a_test123_export_rates", meter
+    api.export_rates_available = False
+    meter = next(record for record in api.build_discovery()["meters"] if record["direction"] == "export")
+    assert "entities" not in meter, "an export tariff with no rates is never wired, so its binding is not claimed"
+
+
+def test_kraken_discovery_cars():
+    """Each LIVE SmartFlex car is a cars record bound to the dispatch slot sensor _publish_dispatch_sensors() publishes."""
+    car = _discovery_kraken().build_discovery()["cars"][0]
+    assert car["device_id"] == "kraken:00000000-aaaa-bbbb-cccc-0000000abcde", car
+    assert car["account_ids"] == {"intelligent_device_id": "00000000-aaaa-bbbb-cccc-0000000abcde"}
+    assert car["info"] == {"make": "Tesla", "model": "Model Y"}, car
+    assert car["entities"]["octopus_intelligent_slot"]["entity_id"] == "binary_sensor.predbat_kraken_a_test123_intelligent_dispatch_0000000abcde", car
+    assert "ratings" not in car
+
+
+def test_kraken_discovery_flextras_programme():
+    """An EDF account enrolled in Flextras is a free_electricity programme cross-linked to the import meter."""
+    api = _discovery_kraken()
+    api.flextras_last_status = 200
+    api.flextras_property_id = "P-778899"
+    report = api.build_discovery()
+    programme = report["programmes"][0]
+    assert programme["device_id"] == "kraken:flextras:A-TEST123", programme
+    assert programme["kind"] == "free_electricity"
+    assert programme["meter"] == "kraken:1900000000456"
+    assert programme["account_ids"] == {"account": "A-TEST123", "programme_id": "P-778899"}, programme
+    assert programme["effects"] == ["rate_override"]
+    assert programme["entities"]["octopus_free_electricity"]["entity_id"] == "sensor.predbat_kraken_a_test123_free_electricity"
+
+
+def test_kraken_discovery_no_programme_when_not_enrolled():
+    """A Flextras fetch that was refused, or an E.ON account, gives no programme record at all."""
+    api = _discovery_kraken()
+    api.flextras_last_status = 401
+    assert api.build_discovery()["programmes"] == []
+    api = _discovery_kraken(provider="eon")
+    api.flextras_last_status = 200
+    assert api.build_discovery()["programmes"] == []
+
+
+def test_kraken_discovery_programme_follows_the_binding_across_restart_and_errors():
+    """The programme stays while octopus_free_electricity is bound: after a restart that restored the sessions
+    from cache (no Flextras fetch yet, so no status) and through a transient server error."""
+    api = _discovery_kraken()
+    api.flextras_sessions = [{"start": "2026-11-02T13:00:00+00:00", "end": "2026-11-02T14:00:00+00:00"}]
+    api.set_arg = MagicMock()
+    api._publish_free_electricity_sensor()
+    assert api.flextras_last_status is None, "a restart inside the refresh window has fetched nothing yet"
+    assert len(api.build_discovery()["programmes"]) == 1, "the sensor is bound, so the programme is described"
+    api.flextras_last_status = 503
+    assert len(api.build_discovery()["programmes"]) == 1, "a transient server error does not unbind the sensor"
+    fresh = _discovery_kraken()
+    assert fresh.build_discovery()["programmes"] == [], "never fetched and never bound: no programme"
+
+
+def test_kraken_discovery_entities_only_when_published():
+    """A binding is claimed only once Home Assistant has seen its entity."""
+    api = _discovery_kraken()
+    api.base.get_state_wrapper = MagicMock(side_effect=lambda entity_id=None, *args, **kwargs: "1" if entity_id and entity_id.endswith("import_rates") else None)
+    meter = next(record for record in api.build_discovery()["meters"] if record["direction"] == "import")
+    assert list(meter["entities"]) == ["metric_octopus_import"], meter
+
+
+def test_kraken_discovery_never_reads_credentials():
+    """The API key, login email, password and tokens never reach the report."""
+    api = _discovery_kraken(auth_method="email", key=None, email="jane@example.com", password="hunter2")
+    api.access_token = "eyJhbGciOiJIUzI1NiJ9.token"
+    api.refresh_token = "refresh-abc123"
+    text = str(api.build_discovery())
+    for secret in ("jane@example.com", "hunter2", "eyJhbGciOiJIUzI1NiJ9", "refresh-abc123", "test-key"):
+        assert secret not in text, secret
+
+
+def test_kraken_discovery_round_trip():
+    """Through the real Coordinator: no warnings, MPAN and account readable, the programme's meter link resolving to the import meter."""
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    api = _discovery_kraken()
+    api.flextras_last_status = 200
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("kraken", api.build_discovery())
+    catalogue = coordinator.catalogue()
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    import_meter = next(record for record in catalogue["meters"] if record["direction"] == "import")
+    assert import_meter["account_ids"]["mpan"] == "1900000000456"
+    assert catalogue["programmes"][0]["meter"] == import_meter["device_id"]
+    assert catalogue["programmes"][0]["effects"] == ["rate_override"]
+    assert len(catalogue["cars"]) == 1
+
+
+def test_kraken_run_files_report_every_cycle():
+    """run() files the report on a cycle that found a tariff."""
+    api = make_kraken_api()
+    discovered = {"tariff_code": "E-1R-NEW-01", "product_code": "NEW-01"}
+
+    async def find_tariffs_side_effect():
+        api.current_tariff = discovered
+        return discovered
+
+    api.async_find_tariffs = AsyncMock(side_effect=find_tariffs_side_effect)
+    api.async_discover_smart_devices = AsyncMock()
+    api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5, "valid_from": "2026-03-23T00:00:00Z", "valid_to": "2026-03-24T00:00:00Z"}])
+    api.async_fetch_standing_charges = AsyncMock(return_value=0.53)
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+    filed = []
+    api.report_discovery = filed.append
+    assert asyncio.run(api.run(0, True)) is True
+    assert len(filed) == 1 and filed[0]["meters"][0]["device_id"] == "kraken:import", filed
+
+
 def run_kraken_tests(my_predbat=None):
     """Run all KrakenAPI tests. Returns True on failure, False on success."""
     # Discovered, not listed: a hardcoded list silently skips any test added below it, and

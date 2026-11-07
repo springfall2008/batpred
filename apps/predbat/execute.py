@@ -549,6 +549,8 @@ class Execute:
 
         isCharging = False
         isExporting = False
+        # Control SOC only: a charge the inverter is running in its own window, which Predbat does not command
+        soc_only_charging = False
         intent = {}
         export_rate_alloc = self.allocate_fleet_export_rates()
         # Inverter id -> (mode, slot start minutes, slot end minutes, target percent), for the
@@ -867,6 +869,19 @@ class Execute:
                 inverter.disable_charge_window()
             else:
                 self.log("Inverter {} Set charge window is disabled".format(inverter.id))
+                # Control SOC only: the inverter runs its own charge window and Predbat only sets the target, so none
+                # of the above runs. While that window is running with a target above the reserve the battery is
+                # charging all the same, so record it - for the status, the planner's keep of a running charge
+                # (isCharging), the SoC reset and the Demand-only export freeze - without sending a charge command (#5991)
+                if self.set_soc_enable and self.charge_limit_best and inverter.charge_start_time_minutes <= self.minutes_now < inverter.charge_end_time_minutes:
+                    target_soc = calc_percent_limit(self.charge_limit_best[0], self.soc_max)
+                    if target_soc > self.reserve_percent:
+                        soc_only_charging = True
+                        self.isCharging_Target = self.charge_limit_best[0]
+                        status = RUN_STATE_HOLD_CHARGING if inverter.soc_percent >= target_soc else RUN_STATE_CHARGING
+                        status_per_inverter[inverter.id] = status
+                        status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, target_soc)))
+                        self.log("Inverter {} is running its own charge window to target SoC {}% (Control SOC only)".format(inverter.id, target_soc))
 
             # Set discharge modes/window?
             if self.set_export_window and self.export_window_best:
@@ -877,8 +892,11 @@ class Execute:
                 # Avoid adjust avoid start time forward when it's already started
                 if (inverter.discharge_start_time_minutes <= self.minutes_now) and (self.minutes_now >= minutes_start):
                     minutes_start = inverter.discharge_start_time_minutes
-                    # Don't allow overlap with charge window
-                    if minutes_start < inverter.charge_end_time_minutes and minutes_end >= inverter.charge_start_time_minutes:
+                    # Don't allow overlap with charge window. An empty charge window (start == end) holds nothing to
+                    # overlap, and one starting just as the export ends only touches it; counting either as an overlap
+                    # rewrote the start to "now" on every cycle of the export, a register write each time.
+                    charge_window_set = inverter.charge_end_time_minutes > inverter.charge_start_time_minutes
+                    if charge_window_set and minutes_start < inverter.charge_end_time_minutes and minutes_end > inverter.charge_start_time_minutes:
                         minutes_start = max(window["start"], self.minutes_now)
                     else:
                         self.log(
@@ -991,7 +1009,7 @@ class Execute:
                 inverter.adjust_force_export(False)
 
             # if Predbat is not currently Charging or Exporting, and set_freeze_export_during_demand is On, then disable charging (i.e. set Freeze Export) (to prevent cross charging)
-            if (not isCharging) and (not isExporting) and self.set_freeze_export_during_demand:
+            if (not isCharging) and (not soc_only_charging) and (not isExporting) and self.set_freeze_export_during_demand:
                 self.log("In Demand mode, turning on Freeze Export")
 
                 # In export freeze mode we disable charging
@@ -1158,7 +1176,7 @@ class Execute:
                                 self.adjust_battery_target_multi(inverter, 100.0, isCharging, isExporting)
                         else:
                             # If not charging and not hybrid we should reset the target % to 100 to avoid losing solar
-                            if not self.inverter_hybrid and self.inverter_soc_reset and not isCharging and inverter.inv_has_target_soc:
+                            if not self.inverter_hybrid and self.inverter_soc_reset and not (isCharging or soc_only_charging) and inverter.inv_has_target_soc:
                                 self.log("Inverter {} resetting charging SoC as we are not charging and inverter_soc_reset is enabled".format(inverter.id))
                                 self.adjust_battery_target_multi(inverter, 100.0, isCharging, isExporting)
                             elif isCharging:
@@ -1214,7 +1232,11 @@ class Execute:
                             inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
                         else:
                             inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max), isCharging, isExporting, check=True)
-                            inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
+                            if not inverter.inv_has_target_soc and not resetReserve and inverter.soc_percent > hold_reserve_percent(inverter, inv_target_soc_percent):
+                                # Hold on the reserve written above: the freeze service (Back-up on FoxESS) would ignore it and pin the battery
+                                inverter.adjust_charge_immediate(0)
+                            else:
+                                inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
 
             # Charging/Discharging off via service
             # Skipped while exporting: adjust_export_immediate() above already issues its own
@@ -1262,8 +1284,9 @@ class Execute:
         status_extra = build_status_extra(status_extra_parts)
 
         # Set the charge/discharge status information
-        self.set_charge_export_status(isCharging, isExporting, not (isCharging or isExporting))
-        self.isCharging = isCharging
+        # A Control SOC only charge is a charge for everything but the commands sent above
+        self.set_charge_export_status(isCharging or soc_only_charging, isExporting, not (isCharging or soc_only_charging or isExporting))
+        self.isCharging = isCharging or soc_only_charging
         self.isExporting = isExporting
 
         # append the status texts together

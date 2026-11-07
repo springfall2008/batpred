@@ -175,6 +175,16 @@ class EnsureTriagedTests(unittest.TestCase):
         self.assertTrue(triage_daemon.find_triage_comment(4720))
 
     @patch("triage_daemon.subprocess.run")
+    def test_find_triage_comment_true_when_the_disclosure_opens_capitalised(self, mock_run):
+        """The skill words its own opening line, and 46 of 62 sampled triage comments start with a
+        capital A. A case-sensitive match missed them, so swapping BOT_TRIAGED for BOT_PR (#5964)
+        or BOT_REVIEW (#5741) triaged the issue all over again; #5741 got a second comment."""
+        for opening in ("🤖 Automated first-pass triage — a maintainer will review before any action is taken.", "**Automated first-pass triage** — a maintainer will review before any action is taken."):
+            with self.subTest(opening=opening):
+                mock_run.return_value = MagicMock(stdout=json.dumps({"comments": [{"body": opening + "\n\nClassification: **enhancement**"}]}))
+                self.assertTrue(triage_daemon.find_triage_comment(4720))
+
+    @patch("triage_daemon.subprocess.run")
     def test_find_triage_comment_false_when_no_match(self, mock_run):
         """Unrelated comments don't count as a triage comment."""
         mock_run.return_value = MagicMock(stdout=json.dumps({"comments": [{"body": "thanks for the report"}]}))
@@ -1245,6 +1255,16 @@ class GitnexusIndexTests(DaemonPathsTestCase):
         self.assertIn("analyze", commands[-1])
         self.assertEqual(triage_daemon.GITNEXUS_HEAD_FILE.read_text(), "abc1234")
 
+    def test_analyze_does_not_rewrite_tracked_files(self):
+        """A plain analyze rewrites AGENTS.md, CLAUDE.md and the GitNexus skills, which left
+        every flow on a dirty clone and made PR #5997's finished cleanup look unpushed."""
+        self._install_runner()
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [MagicMock(returncode=0, stdout="abc1234\n"), MagicMock(returncode=0, stdout="")]
+            triage_daemon.refresh_gitnexus_index()
+            commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn("--index-only", commands[-1])
+
     def test_analyze_is_skipped_when_head_is_unchanged(self):
         """analyze takes ~37s and sync_repo() runs before every flow, so an unguarded call
         would spend minutes an hour rebuilding an index for a tree that had not moved."""
@@ -1806,6 +1826,16 @@ class TriageTests(DaemonPathsTestCase):
         cmd = mock_run.call_args[0][0]
         self.assertNotIn("--max-budget-usd", cmd)
 
+    @patch("triage_daemon.subprocess.run")
+    def test_gets_a_turn_budget_matching_the_write_flows(self, mock_run):
+        """100 turns still failed 13 of 154 triage runs between mid-October and 2026-11-05,
+        and in Ollama mode --max-turns is the only cap left, so the number has to cover a hard
+        investigation - the run that finally finished #5889 took 94 tool calls."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "150")
+
 
 class CreatePrTests(DaemonPathsTestCase):
     """Tests for create_pr(), new in the bot PR flow."""
@@ -2058,6 +2088,30 @@ class ReporterRepliedSinceBotTests(unittest.TestCase):
         mock_run.return_value = MagicMock(stdout=comments_json(("maintainer", "please attach a log"), ("reporter", "attached")))
         self.assertFalse(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
 
+    @patch("triage_daemon.subprocess.run")
+    def test_reporter_reply_after_a_capitalised_triage_comment(self, mock_run):
+        """Most real triage comments open "Automated first-pass triage". Missing one left the issue
+        looking as if the bot had never spoken, so the reporter's answer never woke it."""
+        mock_run.return_value = MagicMock(stdout=comments_json(("maintainer", "🤖 Automated first-pass triage — a maintainer will review before any action is taken."), ("reporter", "log attached")))
+        self.assertTrue(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
+
+
+class IsBotCommentTests(unittest.TestCase):
+    """Tests for is_bot_comment()."""
+
+    def test_recognises_each_disclosure_line_whatever_its_case(self):
+        """The skills word their opening lines themselves, so the case of the disclosure varies."""
+        for body in (
+            "🤖 Automated first-pass triage — a maintainer will review before any action is taken.",
+            "🤖 This is an automated follow-up triage review (a maintainer will review before any action is taken).",
+            "**Automated me-too check** - this looks like a different problem.",
+        ):
+            with self.subTest(body=body):
+                self.assertTrue(triage_daemon.is_bot_comment({"body": body}))
+
+    def test_an_ordinary_comment_is_not_the_bots(self):
+        self.assertFalse(triage_daemon.is_bot_comment({"body": "Same here, my battery stopped charging too."}))
+
 
 class WakeWaitingIssueTests(unittest.TestCase):
     """Tests for wake_waiting_issue()."""
@@ -2278,6 +2332,14 @@ class TriageFollowupTests(DaemonPathsTestCase):
         self.assertIn("/issue-triage-followup 4720", cmd[2])
         self.assertIn(triage_daemon.ALLOWED_TOOLS, cmd)
         self.assertIn(triage_daemon.DISALLOWED_TOOLS, cmd)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_gets_a_turn_budget_for_rereading_the_original_triage(self, mock_run):
+        """#5955 and #5556 both died on "Reached max turns (60)" in early November 2026."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage_followup(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "100")
 
     @patch("triage_daemon.subprocess.run")
     def test_raises_on_a_non_zero_exit(self, mock_run):
@@ -3115,6 +3177,14 @@ class JournalCapturePromptTests(unittest.TestCase):
         anyway, and the daily PR fills with restatements of what the journal already says."""
         self.assertIn("nothing", triage_daemon.JOURNAL_CAPTURE_PROMPT.lower())
 
+    def test_asks_for_symptoms_and_facts_not_file_paths_or_line_numbers(self):
+        """The journal reached 730KB largely on per-issue detail: file:line citations that
+        drifted, and long stories behind each fix. Candidates arrive in whatever shape this
+        prompt asks for, so it has to ask for the symptom and the fact behind it."""
+        prompt = triage_daemon.JOURNAL_CAPTURE_PROMPT.lower()
+        self.assertIn("symptom", prompt)
+        self.assertIn("no file paths or line numbers", prompt)
+
 
 class JournalCaptureReachesEveryFlowTests(DaemonPathsTestCase):
     """Every claude-invoking flow must carry the capture instruction."""
@@ -3283,16 +3353,21 @@ class JournalFlushInvocationTests(DaemonPathsTestCase):
         self.assertEqual(cmd[cmd.index("--allowedTools") + 1], triage_daemon.ALLOWED_TOOLS_JOURNAL)
         self.assertEqual(cmd[cmd.index("--disallowedTools") + 1], triage_daemon.DISALLOWED_TOOLS_JOURNAL)
 
-    def test_the_flush_gets_a_turn_budget_matching_the_other_write_flows(self):
+    def test_the_flush_gets_a_larger_turn_budget_than_the_other_write_flows(self):
         """80 turns stopped being enough on 2026-09-13, and every run from then to 2026-09-19
         died on `Error: Reached max turns (80)`. The flush reads a journal that grew from 73KB
         to 130KB in a week and verifies every candidate against main, so it is not the cheap
-        flow the old budget assumed - issue-pr and pr-cleanup have had 150 all along."""
+        flow the old budget assumed - issue-pr and pr-cleanup have had 150 all along.
+
+        150 then ran out in turn: by 2026-11-05 the journal was 730KB, and four of the five
+        flushes from 2026-10-31 died on "Reached max turns (150)", one of them on the
+        pre-commit step just before it would have committed. So the flush now gets more than the
+        other write flows, not the same."""
         with patch("triage_daemon.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
             triage_daemon.flush_journal("2026-09-07")
             cmd = mock_run.call_args_list[0][0][0]
-        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "150")
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "250")
 
     def test_tells_the_skill_where_the_queue_is(self):
         """The queue lives outside the clone, so the path has to be passed in and added to the

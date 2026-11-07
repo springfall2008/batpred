@@ -1489,7 +1489,7 @@ class TestPlanHookConversion:
         """The fractional part of the export limit sets the export power (rate_scale = 1 - frac)."""
         gw = self._make_gateway()
 
-        # limit 5.3 -> rate_scale 0.7 -> 2500 * 0.7 = 1750W, target 5%
+        # limit 5.3 -> rate_scale 0.7 -> 2500 * 0.7 = 1750W, target 5% (reserve 4% sits below it)
         gw._on_plan_executed(
             charge_windows=[],
             charge_limits=[],
@@ -1498,7 +1498,7 @@ class TestPlanHookConversion:
             charge_rate_w=3000,
             discharge_rate_w=2500,
             soc_max=10,
-            reserve=1,
+            reserve=0.4,
             timezone="Europe/London",
         )
 
@@ -1506,6 +1506,70 @@ class TestPlanHookConversion:
         assert entry["mode"] == 2
         assert entry["power_w"] == 1750  # round(2500 * (1 - 0.3))
         assert entry["target_soc"] == 5
+
+    def test_export_target_below_reserve_clamped_to_reserve(self):
+        """An export target below the reserve is sent as the reserve, so the Hub never drains past the user's minimum."""
+        gw = self._make_gateway()
+
+        # soc_max=10kWh, reserve=1kWh -> reserve_percent=10%; the planner's 0 means "as far as allowed"
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}, {"start": 1200, "end": 1260}],
+            export_limits=[0, 3.5],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        assert [(e["power_w"], e["target_soc"]) for e in entries] == [(2500, 10), (1250, 10)]
+
+        # The planner ships tuples today (plan.py ladder, manual export override packs target 0)
+        from const import EXPORT_MODE_TARGET
+        from utils import pack_export_limit
+
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}, {"start": 1200, "end": 1260}],
+            export_limits=[pack_export_limit(EXPORT_MODE_TARGET, 0), pack_export_limit(EXPORT_MODE_TARGET, 3, 0.5)],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        assert [(e["power_w"], e["target_soc"]) for e in entries] == [(2500, 10), (1250, 10)]
+
+    def test_export_target_clamped_to_best_soc_min_above_reserve(self):
+        """With best_soc_min above the reserve, an export target is floored at best_soc_min, matching execute.py's export floor."""
+        from const import EXPORT_MODE_TARGET
+        from utils import pack_export_limit
+
+        gw = self._make_gateway()
+
+        # soc_max=10kWh, reserve=0.4kWh (4%), best_soc_min=1kWh (10%): a manual export (target 0) must stop at 10%
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}, {"start": 1200, "end": 1260}],
+            export_limits=[pack_export_limit(EXPORT_MODE_TARGET, 0), pack_export_limit(EXPORT_MODE_TARGET, 25)],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=0.4,
+            best_soc_min=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        # The 25% target is above the floor and passes through unchanged
+        assert [(e["power_w"], e["target_soc"]) for e in entries] == [(2500, 10), (2500, 25)]
 
     def test_exact_float_99_export_is_freeze(self):
         """An export limit of 99.0 (float) is still treated as freeze export."""
@@ -1606,8 +1670,10 @@ class TestPlanRepublish:
 
         async def fake_publish_raw(topic, payload, retain=False):
             gw._published.append((topic, payload, retain))
+            return True
 
         gw._publish_raw = fake_publish_raw
+        gw._last_oversize_warn = 0
         return gw
 
     def _run(self, coro):
@@ -1706,6 +1772,272 @@ class TestPlanRepublish:
         assert len(gw._published) == 1
         assert gw._plan_version == 1
         assert gw._last_published_plan == entries
+
+
+class TestDiscovery:
+    """GatewayMQTT.build_discovery(): one record per inverter automatic_config() drives (#5917)."""
+
+    @staticmethod
+    def _contract():
+        """The discovery contract helpers, imported after predbat (circular-import guard)."""
+        import predbat  # noqa: F401
+        import tests.discovery_contract as contract
+
+        return contract
+
+    def _configured(self, status, **attrs):
+        """A gateway holding *status*, configured by automatic_config(); returns (gateway, captured args)."""
+        gw = TestAutomaticConfig()._make_gateway()
+        for name, value in attrs.items():
+            setattr(gw, name, value)
+        gw._last_status = status
+        captured = self._contract().capture_automatic_config(gw)
+        return gw, captured
+
+    @staticmethod
+    def _unit(status, serial, inv_type=pb.INVERTER_TYPE_GIVENERGY, primary=False, battery=False, pv_w=0, pv_today_wh=0):
+        """Add one unit to *status* as current hub firmware reports it."""
+        inv = status.inverters.add()
+        inv.type = inv_type
+        inv.serial = serial
+        inv.primary = primary
+        inv.connected = True
+        inv.active = True
+        if battery:
+            inv.battery.soc_percent = 50
+            inv.battery.capacity_wh = 9500
+            inv.battery.rate_max_w = 3000
+            inv.inverter.rate_max_w = 5000
+        if pv_w:
+            inv.pv.power_w = pv_w
+        if pv_today_wh:
+            inv.energy.pv_today_wh = pv_today_wh
+        return inv
+
+    @staticmethod
+    def _agree_at(record, captured, index):
+        """Agreement both ways for driven unit `index`; a list shorter than the fleet binds nothing for later units."""
+        contract = TestDiscovery._contract()
+        entities = record.get("entities") or {}
+        per_device = {}
+        for setting, value in captured.items():
+            if isinstance(value, list) and index >= len(value):
+                assert setting not in entities, "{} is bound for {} units only, so unit {} must not carry it".format(setting, len(value), index)
+            elif isinstance(value, list) and value[index] is None:
+                assert setting not in entities, "{} is bound to nothing for unit {}".format(setting, index)
+            else:
+                per_device[setting] = value
+        contract.assert_record_agrees(record, per_device, index=index)
+        contract.assert_record_binds_nothing_extra(record, captured, index=index)
+
+    def _single(self):
+        """One GivEnergy AIO, configured."""
+        return self._configured(TestAutomaticConfig()._basic_status(serial="CE123456789"))
+
+    def test_none_before_auto_config(self):
+        """Nothing is reported until automatic_config() has chosen the units it drives."""
+        gw = TestAutomaticConfig()._make_gateway()
+        gw._last_status = TestAutomaticConfig()._basic_status()
+        assert gw.build_discovery() is None
+
+    def test_single_aio_record(self):
+        """A single AIO is a direct record keyed by its own serial, the same serial GivTCP and GE Cloud report."""
+        gw, _ = self._single()
+        report = gw.build_discovery()
+        record = report["inverters"][0]
+        assert report["automatic"] is True and report["chargers"] == [] and report["cars"] == []
+        assert record["device_id"] == "gateway:CE123456789"
+        assert record["inverter_type"] == "GWMQTT" and record["composition"] == "direct"
+        assert record["hardware_ids"] == {"serial": "CE123456789"}
+        assert record["functions"] == ["solar", "battery"]
+        assert record["info"] == {"vendor": "GivEnergy"}, record["info"]
+        assert record["entities"]["charge_rate"]["step_percent_of_capacity"] == 1
+        assert record["entities"]["inverter_time"]["format"] == "%Y-%m-%dT%H:%M:%S%z"
+        assert record["ratings"] == {"soc_max": 9.5, "battery_rate_max": 5000}, record["ratings"]
+
+    def test_single_aio_rebuilds_row(self):
+        """The record alone rebuilds the GWMQTT row; the clock and rate step are the entity attributes inverter.py applies at runtime."""
+        from gateway import GatewayMQTT
+
+        contract = self._contract()
+        gw, _ = self._single()
+        record = contract.validated_inverters(gw.build_discovery())[0]
+        contract.assert_definition_complete(
+            record,
+            GatewayMQTT.WRITE_AND_POLL_SLEEP,
+            except_fields=("clock_time_format", "rate_step_percent_of_capacity"),
+            write_max_retry=GatewayMQTT.WRITE_MAX_RETRY,
+            write_backoff=GatewayMQTT.WRITE_BACKOFF,
+        )
+
+    def test_single_aio_agrees(self):
+        """The record binds exactly what automatic_config() binds."""
+        contract = self._contract()
+        gw, captured = self._single()
+        record = contract.validated_inverters(gw.build_discovery())[0]
+        contract.assert_record_agrees(record, captured)
+        contract.assert_record_binds_nothing_extra(record, captured)
+
+    def test_shared_ct_two_aios(self):
+        """Two AIOs on one CT: the second reads grid and load as a fixed 0 and carries no site totals."""
+        status = TestAutomaticConfig()._basic_status(serial="CE123456789")
+        TestAutomaticConfig()._make_inverter(status, serial="CE987654321")
+        gw, captured = self._configured(status)
+        records = self._contract().validated_inverters(gw.build_discovery())
+        assert [record["device_id"] for record in records] == ["gateway:CE123456789", "gateway:CE987654321"]
+        for index, record in enumerate(records):
+            self._agree_at(record, captured, index)
+        second = records[1]["entities"]
+        assert second["grid_power"] == {"value": 0, "access": "r"} and second["load_power"] == {"value": 0, "access": "r"}
+        assert "import_today" not in second and "battery_temperature_history" not in second
+        assert "battery_temperature_history" in records[0]["entities"]
+
+    def test_gateway_composition_fronts_aios(self):
+        """Two or more AIOs behind a GivEnergy Gateway: one record for the Gateway, listing the AIOs it fronts."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_gateway"
+        status.timestamp = 1741789200
+        self._unit(status, "GW00000001", inv_type=pb.INVERTER_TYPE_GIVENERGY_GATEWAY, primary=True)
+        self._unit(status, "CE00000002", primary=True, battery=True)
+        self._unit(status, "CE00000003", primary=True, battery=True)
+        gw, captured = self._configured(status)
+        records = self._contract().validated_inverters(gw.build_discovery())
+        assert len(records) == 1
+        assert records[0]["composition"] == "gateway" and records[0]["serials"] == ["CE00000002", "CE00000003"], records[0]
+        self._agree_at(records[0], captured, 0)
+
+    def test_ems_record(self):
+        """A Plant EMS is the single control point: an "ems" record whose same-day-only slots cannot span midnight."""
+        from gateway import GatewayMQTT
+
+        contract = self._contract()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_ems"
+        status.timestamp = 1741789200
+        self._unit(status, "EM00000001", inv_type=pb.INVERTER_TYPE_GIVENERGY_EMS, primary=True)
+        self._unit(status, "CE00000002", battery=True)
+        self._unit(status, "CE00000003", battery=True)
+        gw, captured = self._configured(status)
+        record = contract.validated_inverters(gw.build_discovery())[0]
+        assert record["composition"] == "ems" and record["serials"] == ["CE00000002", "CE00000003"], record
+        assert record["capabilities"]["can_span_midnight"] is False
+        contract.assert_definition_complete(
+            record,
+            GatewayMQTT.WRITE_AND_POLL_SLEEP,
+            except_fields=("clock_time_format", "rate_step_percent_of_capacity", "can_span_midnight"),
+            write_max_retry=GatewayMQTT.WRITE_MAX_RETRY,
+            write_backoff=GatewayMQTT.WRITE_BACKOFF,
+        )
+        self._agree_at(record, captured, 0)
+
+    def test_pv_only_unit_record(self):
+        """A battery-less PV inverter gets a solar-only record carrying its generation, with no inverter type (spec D12)."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_hybrid_pv"
+        status.timestamp = 1741789200
+        self._unit(status, "FA0000A001", primary=True, battery=True, pv_w=1400, pv_today_wh=5000)
+        self._unit(status, "PD0000A002", pv_w=900, pv_today_wh=2000)
+        gw, _ = self._configured(status)
+        assert gw._pv_only_serials == ("PD0000A002",)
+        report = gw.build_discovery()
+        pv = next(record for record in report["inverters"] if record["device_id"] == "gateway:PD0000A002")
+        assert pv["functions"] == ["solar"] and "inverter_type" not in pv and "capabilities" not in pv, pv
+        assert pv["entities"] == {"pv_power": {"entity_id": "sensor.predbat_gateway_00a002_pv_power", "access": "r", "unit": "W"}}, "only its pv_power is counted without a serial list"
+
+    def test_run_refreshes_discovery_every_cycle(self):
+        """run() files the report after every cycle, whatever that cycle returned."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        gw = TestAutomaticConfig()._make_gateway()
+        for outcome in (True, False):
+            gw._run_cycle = AsyncMock(return_value=outcome)
+            gw.refresh_discovery = MagicMock()
+            assert asyncio.run(gw.run(0, True)) is outcome
+            gw.refresh_discovery.assert_called_once_with()
+
+    def _with_ev(self, charge_point_id="CP1", **attrs):
+        """One configured AIO plus an OCPP EV charger."""
+        status = TestAutomaticConfig()._basic_status(serial="CE123456789")
+        ev = status.ev_chargers.add()
+        ev.connected = True
+        ev.charge_point_id = charge_point_id
+        ev.max_current_a = 32
+        return self._configured(status, **attrs)
+
+    def test_ev_charger_record(self):
+        """The EV charger the hub drives is a charger with a stub car, keyed by its OCPP charge point id."""
+        gw, _ = self._with_ev()
+        report = gw.build_discovery()
+        charger, car = report["chargers"][0], report["cars"][0]
+        assert charger["device_id"] == "gateway:evc:CP1"
+        assert charger["hardware_ids"] == {"serial": "CP1"}
+        assert charger["serves_cars"] == ["gateway:evc:CP1:car"]
+        assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_now", "car_charging_energy", "car_charging_power"}, charger["entities"]
+        assert car == {"device_id": "gateway:evc:CP1:car", "charged_by": "gateway:evc:CP1", "flags": ["stub"]}
+
+    def test_ev_charger_entities_match_register_ev_car(self):
+        """Each charger entity is the one _register_ev_car() binds under the same Predbat name."""
+        gw, captured = self._with_ev(gateway_evc_automatic=True)
+        gw.base.expose_config = lambda *args, **kwargs: None
+        entities = gw.build_discovery()["chargers"][0]["entities"]
+        for setting, descriptor in entities.items():
+            bound = captured[setting]
+            bound = bound[0] if isinstance(bound, list) else bound
+            assert descriptor["entity_id"] == bound, (setting, descriptor, bound)
+
+    def test_ev_charger_reported_without_evc_automatic(self):
+        """The charger is hardware the hub found, so it is described whether or not Predbat wires it."""
+        gw, captured = self._with_ev(gateway_evc_automatic=False)
+        assert "car_charging_planned" not in captured
+        assert len(gw.build_discovery()["chargers"]) == 1
+
+    def test_no_ev_charger_no_records(self):
+        """No charger in the status, no charger or car records."""
+        gw, _ = self._single()
+        report = gw.build_discovery()
+        assert report["chargers"] == [] and report["cars"] == []
+
+    def test_ev_round_trip(self):
+        """Through the real Coordinator: the stub flag and every charger entity survive."""
+        from coordinator import Coordinator
+        from mock_base import MockBase
+
+        gw, _ = self._with_ev()
+        logs = []
+        coordinator = Coordinator(MockBase())
+        coordinator.log = logs.append
+        coordinator.report("gateway", gw.build_discovery())
+        cleaned = coordinator.reports["gateway"]
+        assert cleaned["cars"][0]["flags"] == ["stub"]
+        assert len(cleaned["chargers"][0]["entities"]) == 5
+        assert not [line for line in logs if line.startswith("Warn")], logs
+
+    def test_ev_serial_shaped_charge_point_id_stays_readable(self):
+        """A charger whose OCPP id is its serial keeps it readable everywhere, with no redaction warnings (charger ids are not secret)."""
+        from coordinator import Coordinator
+        from mock_base import MockBase
+
+        gw, _ = self._with_ev(charge_point_id="GL1T-2300123456")
+        report = gw.build_discovery()
+        assert report["chargers"][0]["hardware_ids"] == {"serial": "GL1T-2300123456"}, report["chargers"][0]
+        logs = []
+        coordinator = Coordinator(MockBase())
+        coordinator.log = logs.append
+        coordinator.report("gateway", report)
+        catalogue = coordinator.catalogue()
+        assert catalogue["chargers"][0]["device_id"] == "gateway:evc:GL1T-2300123456", catalogue["chargers"][0]
+        assert catalogue["cars"][0]["charged_by"] == "gateway:evc:GL1T-2300123456"
+        assert not [line for line in logs if line.startswith("Warn")], logs
+
+    def test_no_credentials_in_report(self):
+        """The hub's MQTT username and token and the inverter's network details never reach the report."""
+        gw, _ = self._single()
+        gw.gateway_device_id = "pbgw_secret_user"
+        gw.mqtt_token = "eyJhbGciOiJIUzI1NiJ9.secret"
+        gw._last_status.inverters[0].ip = "192.168.1.50"
+        text = str(gw.build_discovery())
+        for secret in ("pbgw_secret_user", "eyJhbGciOiJIUzI1NiJ9", "192.168.1.50", "pbgw_test"):
+            assert secret not in text, secret
 
 
 class TestAutomaticConfig:
@@ -2839,8 +3171,10 @@ class TestPublishPredbatData:
 
         async def fake_publish_raw(topic, payload, retain=False):
             gw._published.append((topic, payload, retain))
+            return True
 
         gw._publish_raw = fake_publish_raw
+        gw._last_oversize_warn = 0
         return gw
 
     def _run(self, coro):
@@ -8511,6 +8845,7 @@ def run_gateway_tests(my_predbat=None):
         TestInjectEntities,
         TestDebugLogging,
         TestAutomaticConfig,
+        TestDiscovery,
         TestIntegratePower,
         TestBoundEntitiesAreWritten,
         TestGatewayUnitControlBinding,

@@ -2871,12 +2871,14 @@ def get_components_css():
 <style>
 .components-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    /* min() so the 400px column floor never exceeds a phone's width */
+    grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr));
     gap: 20px;
     margin: 20px 0;
 }
 
 .component-card {
+    min-width: 0;
     border: 2px solid #ddd;
     border-radius: 8px;
     padding: 20px;
@@ -2941,7 +2943,7 @@ def get_components_css():
     color: #333;
 }
 
-.restart-button, .edit-button {
+.restart-button, .edit-button, .info-button {
     color: white;
     border: none;
     padding: 6px 12px;
@@ -2972,6 +2974,14 @@ def get_components_css():
 
 .edit-button:hover {
     background-color: #F57C00;
+}
+
+.info-button {
+    background-color: #00897B;
+}
+
+.info-button:hover {
+    background-color: #00695C;
 }
 
 .component-details {
@@ -3180,7 +3190,7 @@ body.dark-mode .error-count-high {
     font-weight: bold;
 }
 
-body.dark-mode .restart-button, body.dark-mode .edit-button {
+body.dark-mode .restart-button, body.dark-mode .edit-button, body.dark-mode .info-button {
     color: white;
 }
 
@@ -3205,16 +3215,32 @@ body.dark-mode .edit-button:hover {
     background-color: #F57C00;
 }
 
+body.dark-mode .info-button {
+    background-color: #00897B;
+}
+
+body.dark-mode .info-button:hover {
+    background-color: #00695C;
+}
+
 /* Responsive design */
 @media (max-width: 768px) {
+    /* minmax(0, 1fr), not 1fr: a 1fr track grows to its widest content and pushed cards off screen */
     .components-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
     }
 
+    /* The name on its own line, then the status and buttons on one wrapping row beneath it */
     .component-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 5px;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 6px;
+    }
+
+    .component-header h3 {
+        flex-basis: 100%;
     }
 
     .args-table {
@@ -3424,6 +3450,84 @@ body.dark-mode .discovery-raw {
 body.dark-mode .discovery-empty {
     background: #333;
     color: #ccc;
+}
+
+/* The Components page's per-component discovery pop-up (see get_discovery_modal_js) */
+.discovery-modal-title {
+    margin: 0 0 4px 0;
+}
+
+.discovery-meta {
+    color: #666;
+    font-size: 0.9em;
+    margin: 0 0 12px 0;
+}
+
+body.dark-mode .discovery-meta {
+    color: #aaa;
+}
+
+.discovery-glance {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 12px 0;
+    font-size: 0.92em;
+}
+
+.discovery-glance td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #eee;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+.discovery-glance td:first-child {
+    color: #666;
+    width: 35%;
+}
+
+body.dark-mode .discovery-glance td {
+    border-bottom-color: #444;
+}
+
+body.dark-mode .discovery-glance td:first-child {
+    color: #aaa;
+}
+
+.discovery-chip {
+    display: inline-block;
+    background: #E0F2F1;
+    color: #00695C;
+    border-radius: 10px;
+    padding: 2px 8px;
+    margin: 2px 4px 2px 0;
+    font-size: 0.88em;
+}
+
+.discovery-chip-off {
+    background: #eee;
+    color: #999;
+    text-decoration: line-through;
+}
+
+body.dark-mode .discovery-chip {
+    background: #004D40;
+    color: #B2DFDB;
+}
+
+body.dark-mode .discovery-chip-off {
+    background: #3a3a3a;
+    color: #888;
+}
+
+.discovery-summary-link {
+    color: #00695C;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+body.dark-mode .discovery-summary-link {
+    color: #80CBC4;
 }
 
 @media (max-width: 768px) {
@@ -4029,6 +4133,41 @@ window.onclick = function(event) {
         closeEntityModal();
     }
 }
+</script>
+"""
+    return text
+
+
+def get_discovery_modal_js():
+    """
+    Return JavaScript for the Components page's discovery pop-up, filled from /component_discovery
+    """
+    text = """
+<script>
+async function showDiscoveryModal(name) {
+    const modal = document.getElementById('discoveryModal');
+    const body = document.getElementById('discoveryModalBody');
+    body.innerHTML = '<p>Loading...</p>';
+    modal.style.display = 'block';
+    try {
+        const response = await fetch('./component_discovery?name=' + encodeURIComponent(name));
+        body.innerHTML = await response.text();
+    } catch (error) {
+        console.error('Error fetching discovery info:', error);
+        body.innerHTML = '<p style="color: red;">Error loading discovery info</p>';
+    }
+}
+
+function closeDiscoveryModal() {
+    document.getElementById('discoveryModal').style.display = 'none';
+}
+
+// Close when clicking outside the pop-up. addEventListener, not window.onclick, which the entity modal already owns.
+window.addEventListener('click', function(event) {
+    if (event.target === document.getElementById('discoveryModal')) {
+        closeDiscoveryModal();
+    }
+});
 </script>
 """
     return text
@@ -6960,6 +7099,9 @@ def get_plan_renderer_js():
     <script>
     // State variables
     let currentView = 'plan';
+    // The History view's chosen older day (YYYY-MM-DD), or null for the default yesterday + today
+    let historyDay = null;
+    window.historyDayData = window.historyDayData || {};
     let newestDataTimestamp = null;  // Track the newest data timestamp we've seen
     let updateIntervalId = null;
     let dropdownCounter = 0;
@@ -7066,6 +7208,8 @@ def get_plan_renderer_js():
                 iboost: 'Energy planned for the solar diverter (iBoost, MyEnergi Eddi, etc) this slot.',
                 soc: 'Estimated battery state of charge at the start of this slot.',
                 cost: 'Estimated cost (or saving) for this slot.',
+                billed: 'What your supplier billed for this slot (hover for the rate buckets). Blank until they publish it, usually 1-2 days later.',
+                billing_diff: 'Billed less the Cost column: red when you were billed more than Predbat recorded, green when less. The standing charge is left out of both.',
                 total: 'Running total cost for today so far, at the start of this slot.',
                 co2_rate: 'Estimated carbon intensity of the grid at the start of this slot.',
                 co2_total: 'Estimated cumulative carbon footprint at the start of this slot.',
@@ -7077,6 +7221,9 @@ def get_plan_renderer_js():
                 const attrs = extraAttrs ? ` ${extraAttrs.trim()}` : '';
                 return `<th${attrs}${titleAttr}><b>${innerHtml}</b></th>`;
             }
+
+            // Billing columns appear on a History view only once the supplier's half-hourly bill is attached
+            const hasBilling = jsonData.rows.some(r => r.billed !== undefined);
 
             // Render header
             html += '<tr>';
@@ -7101,6 +7248,10 @@ def get_plan_renderer_js():
             }
             html += th('soc', 'SoC %');
             html += th('cost', 'Cost');
+            if (hasBilling) {
+                html += th('billed', 'Billed');
+                html += th('billing_diff', 'Diff');
+            }
             html += th('total', 'Total');
             if (jsonData.carbon_enable) {
                 html += th('co2_rate', 'CO2 g/kWh');
@@ -7210,17 +7361,17 @@ def get_plan_renderer_js():
                 if (row.pv_forecast >= 0.1) {
                     pvText += '&#9728;';
                 }
-                html += `<td id=pv bgcolor=${row.pv_color || '#FFFFFF'}>${pvText}</td>`;
+                html += `<td id=pv bgcolor=${row.pv_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'pv_forecast', row.pv_forecast)}>${pvText}</td>`;
 
                 // Load forecast (with 10% value in brackets if debug mode)
                 if (editable) {
-                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5, row.slot_minute);
+                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5, row.slot_minute, scenarioTitle(jsonData, row, 'load_forecast', row.load_forecast));
                 } else {
                     let loadText = row.load_forecast !== undefined ? row.load_forecast : '';
                     if (showDebug && row.load_forecast10 > 0) {
                         loadText += ` (${row.load_forecast10})`;
                     }
-                    html += `<td id=load bgcolor=${row.load_color || '#FFFFFF'}>${loadText}</td>`;
+                    html += `<td id=load bgcolor=${row.load_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'load_forecast', row.load_forecast)}>${loadText}</td>`;
                 }
 
                 // Clipped (only if debug)
@@ -7252,9 +7403,9 @@ def get_plan_renderer_js():
                 // SOC
                 const socSym = row.soc_sym || (row.soc_change > 0 ? '&nearr;' : (row.soc_change < 0 ? '&searr;' : '&rarr;'));
                 if (editable) {
-                    html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides, row.slot_minute);
+                    html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides, row.slot_minute, scenarioTitle(jsonData, row, 'soc_percent', row.soc_percent));
                 } else {
-                    html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}>${row.soc_percent}${socSym}</td>`;
+                    html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'soc_percent', row.soc_percent)}>${row.soc_percent}${socSym}</td>`;
                 }
 
                 // Cost change
@@ -7267,11 +7418,43 @@ def get_plan_renderer_js():
                 } else {
                     costStr = '&rarr;';
                 }
-                html += `<td id=cost bgcolor=${row.cost_color || '#FFFFFF'}>${costStr}</td>`;
+                html += `<td id=cost bgcolor=${row.cost_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'cost_change', costChange)}>${costStr}</td>`;
+
+                // What the supplier billed, and how far it is from Predbat's own cost
+                if (hasBilling) {
+                    const minor = jsonData.currency_symbols[1];
+                    let billedStr = '&mdash;';
+                    let billedTitle = '';
+                    if (row.billed !== null && row.billed !== undefined) {
+                        billedStr = `${Math.round(row.billed * 100)} ${minor}`;
+                        billedTitle = Object.entries(row.billed_buckets || {}).map(([label, bucket]) => `${label}: ${bucket.kwh} kWh ${Math.round(bucket.cost * 100)}${minor}`).join('\\n');
+                        if (row.billing_pending_export) {
+                            // Import billed, export not published yet: the import charge alone, so no Diff
+                            billedStr += ` <span style="font-size: 11px;" title="Import only: the export for this slot hasn't been billed yet, so there is no Diff">(import, export not billed yet)</span>`;
+                        }
+                    }
+                    if (row.billing_event) {
+                        billedStr += ` <span style="font-size: 11px;" title="${escapeAttr(row.billing_event + ' in this slot: the bill may not show it the way Predbat priced it')}">(${row.billing_event})</span>`;
+                    }
+                    html += `<td id=billed bgcolor=${row.billing_event ? '#FFF2B0' : '#EEF6FF'} title="${escapeAttr(billedTitle)}">${billedStr}</td>`;
+
+                    let diffStr = '&mdash;';
+                    let diffColor = '#FFFFFF';
+                    if (row.billing_diff !== null && row.billing_diff !== undefined) {
+                        const diffPence = Math.round(row.billing_diff * 100);
+                        diffStr = diffPence > 0 ? `+${diffPence} ${minor}` : `${diffPence} ${minor}`;
+                        if (row.billing_diff > 0 && diffPence !== 0) {
+                            diffColor = '#F4C7C3';
+                        } else if (row.billing_diff < 0 && diffPence !== 0) {
+                            diffColor = '#C8F0C8';
+                        }
+                    }
+                    html += `<td id=billing_diff bgcolor=${diffColor}>${diffStr}</td>`;
+                }
 
                 // Total cost
                 const totalCost = row.total_cost ? `${jsonData.currency_symbols[0]}${row.total_cost.toFixed(2)}` : '';
-                html += `<td id=total_cost bgcolor=#FFFFFF>${totalCost}</td>`;
+                html += `<td id=total_cost bgcolor=#FFFFFF${scenarioTitle(jsonData, row, 'total_cost', row.total_cost || 0)}>${totalCost}</td>`;
 
                 // Carbon (conditional)
                 if (jsonData.carbon_enable) {
@@ -7334,6 +7517,11 @@ def get_plan_renderer_js():
 
                 // Empty cell for SOC change
                 html += '<td></td>';
+
+                // Billing columns are summarised in the strip above the table
+                if (hasBilling) {
+                    html += '<td></td><td></td>';
+                }
 
                 // Total cost
                 const totalCostStr = totals.total_cost >= 0 ?
@@ -7570,7 +7758,49 @@ def get_plan_renderer_js():
     }
 
     // Render load cell with dropdown for load adjustments
-    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue, slotMinute) {
+    // Tooltip listing one plan cell's value in every scenario the plan was scored against (#5871). name is the
+    // field's name in jsonData.scenario_fields and expected the cell's own value; empty when the row has no
+    // scenarios or every scenario has the same value for this cell.
+    function scenarioTitle(jsonData, row, name, expected) {
+        if (!row.scenarios || !jsonData.scenario_fields) {
+            return '';
+        }
+        // Positions come from the published field order, so the row lists can change shape without breaking this
+        const field = jsonData.scenario_fields.indexOf(name);
+        if (field < 0) {
+            return '';
+        }
+        const keys = Object.keys(row.scenarios).sort();
+        if (keys.every(key => row.scenarios[key][field] === expected)) {
+            return '';
+        }
+        const format = (value) => {
+            if (name === 'soc_percent') {
+                return `${value}%`;
+            }
+            if (name === 'pv_forecast' || name === 'load_forecast') {
+                return `${Number(value).toFixed(2)} kWh`;
+            }
+            if (name === 'cost_change') {
+                // Written as the Cost column is ("+5 p"); + 0 turns a rounded -0 into 0
+                const pence = Math.round(value * 100) + 0;
+                return `${pence >= 0 ? '+' : ''}${pence} ${jsonData.currency_symbols[1]}`;
+            }
+            // Written as this view's Total column is
+            return `${jsonData.currency_symbols[0]}${Number(value).toFixed(2)}`;
+        };
+        // The text goes inside a double-quoted attribute, so escape it (a currency symbol could carry a quote)
+        const escape = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const parts = [escape(`Expected ${format(expected)}`)];
+        for (const key of keys) {
+            const label = (jsonData.scenario_names && jsonData.scenario_names[key]) || `PV${key}`;
+            parts.push(escape(`${label} ${format(row.scenarios[key][field])}`));
+        }
+        // One scenario per line - &#10; is a line break inside a title attribute
+        return ` title="${parts.join('&#10;')}"`;
+    }
+
+    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue, slotMinute, titleAttr = '') {
         const dropdownId = `dropdown_${dropdownCounter++}`;
         const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_load_adjust.some(r => r.minutes === minutesFromMidnight);
@@ -7583,7 +7813,8 @@ def get_plan_renderer_js():
 
         const defaultLoadValue = manualLoadValue !== undefined ? manualLoadValue : 0.5;
         let html = `<td id=load data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
-        html += `${displayValue}${isOverride ? ' &#8526;' : ''}`;
+        // The scenario tooltip sits on the value, not the cell, so it doesn't cover the override menu
+        html += `<span${titleAttr}>${displayValue}</span>${isOverride ? ' &#8526;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += '<label>Adjust load (kWh):</label>';
@@ -7597,14 +7828,15 @@ def get_plan_renderer_js():
     }
 
     // Render SOC cell with dropdown for manual SOC targets (minimum floor and maximum ceiling)
-    function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides, slotMinute) {
+    function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides, slotMinute, titleAttr = '') {
         const dropdownId = `dropdown_${dropdownCounter++}`;
         const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_soc.some(r => r.minutes === minutesFromMidnight);
         const isOverrideMax = overrides.manual_soc_max.some(r => r.minutes === minutesFromMidnight);
 
         let html = `<td id=soc data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
-        html += `${socValue}${socSym}${isOverride ? ' &#8526;' : ''}${isOverrideMax ? ' &#11015;' : ''}`;
+        // The scenario tooltip sits on the value, not the cell, so it doesn't cover the override menu
+        html += `<span${titleAttr}>${socValue}${socSym}</span>${isOverride ? ' &#8526;' : ''}${isOverrideMax ? ' &#11015;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += '<label>Minimum SOC (%):</label>';
@@ -7824,6 +8056,9 @@ def get_plan_renderer_js():
             }
         });
 
+        // The History view's day picker
+        renderHistoryPicker();
+
         // Show/hide debug toggle based on view
         const debugToggleLabel = document.getElementById('debugToggleLabel');
         if (debugToggleLabel) {
@@ -7870,8 +8105,8 @@ def get_plan_renderer_js():
             return;
         }
 
-        // Check for stale data
-        checkStaleness(data);
+        // Check for stale data - an older History day is a fixed record, never stale
+        checkStaleness(currentView === 'yesterday' && historyDay ? null : data);
 
         // Render table
         const editable = (currentView === 'plan');
@@ -7879,7 +8114,7 @@ def get_plan_renderer_js():
         // its rows are entirely in the past, unlike the live Plan view which is mostly
         // future predictions with no corresponding capture.
         const showHistoryLinks = (currentView === 'yesterday');
-        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
+        container.innerHTML = (currentView === 'yesterday' ? renderBillingSummary(data) : '') + renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
 
         // Apply dark mode colors if needed
         updateTableColors();
@@ -7895,7 +8130,90 @@ def get_plan_renderer_js():
 
     // The data the current view shows
     function currentViewData() {
+        if (currentView === 'yesterday' && historyDay) {
+            return window.historyDayData[historyDay] || null;
+        }
         return currentView === 'plan' ? window.planData : (currentView === 'yesterday' ? window.yesterdayData : window.baselineData);
+    }
+
+    // Day picker under the History button: the older days Predbat has rebuilt, oldest first, then the default view
+    function renderHistoryPicker() {
+        const picker = document.getElementById('historyPicker');
+        if (!picker) return;
+        const days = window.historyDays || [];
+        if (currentView === 'yesterday' && days.length > 0) {
+            if (historyDay && !days.includes(historyDay)) {
+                historyDay = null;
+            }
+            const buttonStyle = 'padding: 4px 10px; border-radius: 3px; font-size: 13px; border: 1px solid #ddd; cursor: pointer;';
+            // A day with a saving session, free electricity or Axle event gets a dot: its bill may not match Predbat's pricing
+            const eventMark = (labels) => (labels && labels.length) ? ` <span style="color: #C08000;" title="${escapeAttr(labels.join(', ') + ' on this day: the bill may not show it the way Predbat priced it')}">&#9679;</span>` : '';
+            const dayEvents = window.historyDayEvents || {};
+            let html = '';
+            for (const day of days) {
+                const label = new Date(day + 'T12:00:00').toLocaleDateString([], {weekday: 'short', day: 'numeric', month: 'short'});
+                const selected = historyDay === day;
+                html += `<button class="history-day-button" onclick="selectHistoryDay('${day}')" style="${buttonStyle} background-color: ${selected ? '#4CAF50' : '#f0f0f0'}; color: ${selected ? 'white' : 'black'};">${label}${eventMark(dayEvents[day])}</button>`;
+            }
+            const latest = historyDay === null;
+            html += `<button class="history-day-button" onclick="selectHistoryDay(null)" style="${buttonStyle} background-color: ${latest ? '#4CAF50' : '#f0f0f0'}; color: ${latest ? 'white' : 'black'};">Yesterday + today${eventMark((window.yesterdayData || {}).history_events)}</button>`;
+            picker.innerHTML = html;
+            picker.style.display = 'flex';
+        } else {
+            picker.innerHTML = '';
+            picker.style.display = 'none';
+        }
+    }
+
+    // Show one older day (fetched once, on demand) or, with null, the default yesterday + today view
+    async function selectHistoryDay(day) {
+        historyDay = day;
+        renderHistoryPicker();
+        if (day && !window.historyDayData[day]) {
+            try {
+                const response = await fetch('./api/plan_history?date=' + encodeURIComponent(day));
+                if (response.ok) {
+                    window.historyDayData[day] = await response.json();
+                }
+            } catch (error) {
+                console.error('Error fetching history day:', error);
+            }
+        }
+        refreshPlan();
+    }
+
+    // The strip above a History view: the day's Predbat cost against what the supplier billed
+    function renderBillingSummary(jsonData) {
+        const summary = jsonData && jsonData.billing_summary;
+        if (!summary) return '';
+        const major = (jsonData.currency_symbols && jsonData.currency_symbols[0]) || '';
+        const money = value => (value === null || value === undefined) ? '&mdash;' : (value < 0 ? `-${major}${Math.abs(value).toFixed(2)}` : `${major}${value.toFixed(2)}`);
+        const kwh = pair => (pair && pair[0] !== null && pair[1] !== null) ? `${pair[0]} vs ${pair[1]}` : (pair && pair[1] !== null ? `? vs ${pair[1]}` : '&mdash;');
+        const diffColor = summary.diff > 0.005 ? '#b00' : (summary.diff < -0.005 ? '#080' : 'inherit');
+        const supplier = summary.supplier ? summary.supplier.charAt(0).toUpperCase() + summary.supplier.slice(1) : 'supplier';
+        let complete = '';
+        if (summary.billed_until) {
+            const when = new Date(summary.billed_until);
+            if (!isNaN(when.getTime())) {
+                complete = `billed to ${when.toLocaleString([], {weekday: 'short', hour: '2-digit', minute: '2-digit'})}`;
+                if (summary.missing_slots > 0) {
+                    complete += ` (${summary.missing_slots} slot${summary.missing_slots === 1 ? '' : 's'} before that not billed yet, shown as &mdash;)`;
+                }
+            }
+        }
+        const tile = (label, value, style) => `<div style="border: 1px solid #ccc; border-radius: 4px; padding: 6px 10px; font-size: 12px;">${label}<b style="display: block; font-size: 15px; ${style || ''}">${value}</b></div>`;
+        let html = '<div class="billing-summary" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px;">';
+        html += tile('Predbat cost', money(summary.predbat_cost));
+        html += tile(`Billed (${escapeAttr(supplier)})`, money(summary.billed_cost));
+        html += tile('Difference', (summary.diff > 0 ? '+' : '') + money(summary.diff), `color: ${diffColor};`);
+        html += tile('Import kWh', kwh(summary.import_kwh));
+        html += tile('Export kWh', kwh(summary.export_kwh));
+        html += tile('Standing charge', `${money(summary.standing_predbat)} vs ${money(summary.standing_billed)}`);
+        html += '</div>';
+        const pending = summary.export_pending_slots > 0 ? `${summary.export_pending_slots} slot${summary.export_pending_slots === 1 ? '' : 's'} billed for import only (export not billed yet), left out of these totals` : '';
+        const notes = [complete, pending, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
+        html += `<p style="font-size: 12px; margin: 0 0 8px 0; opacity: 0.8;">${notes.join(' &middot; ')}</p>`;
+        return html;
     }
 
     // Show the stale warning when the view's data is older than it should be; with no data, hide it
@@ -7959,6 +8277,23 @@ def get_plan_renderer_js():
             window.baselineData = data.baseline;
             window.overridesData = data.overrides;
             window.overridesHash = data.overrides_hash;
+            if (Array.isArray(data.history_days)) {
+                // Older days are rebuilt as new billing lands, so drop what was fetched and re-read the one on show
+                window.historyDayData = {};
+                window.historyDays = data.history_days;
+                window.historyDayEvents = data.history_day_events || {};
+                if (historyDay && window.historyDays.includes(historyDay)) {
+                    try {
+                        const dayResponse = await fetch('./api/plan_history?date=' + encodeURIComponent(historyDay));
+                        if (dayResponse.ok) {
+                            window.historyDayData[historyDay] = await dayResponse.json();
+                        }
+                    } catch (error) {
+                        console.error('Error refreshing history day:', error);
+                    }
+                }
+                renderHistoryPicker();
+            }
 
             // Update newestDataTimestamp to the newest timestamp from the data we just received
             const timestamps = [];

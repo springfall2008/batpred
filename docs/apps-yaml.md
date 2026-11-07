@@ -728,6 +728,13 @@ daily pass that sets the inverter's default options (SoC limits, power percentag
 skipped. A change you make to one of the inverter's `_gecloud_` entities is still sent to the inverter.
 The EV charger settings above are not affected.
 
+- **ge_cloud_poll_settings** - Optional, defaults to false. GivEnergy limits how many API calls an account can make each month, and
+reading the inverter's settings is done one register at a time, so Predbat reads them sparingly: the registers it controls at
+startup and every 12 hours, and all the others only when it has no stored copy from the last 7 days. They are also re-read
+straight away when Predbat leaves read only mode, and when a control failure shows the inverter is not doing what Predbat asked
+(at most once every 4 hours). A setting you change in the GivEnergy app can therefore take up to 12 hours to be noticed. Set this
+to `true` to read every register every 10 minutes instead, as older versions did, at the cost of many more API calls.
+
 - **ge_cloud_evc_direct** - Optional, defaults to false. Set it to `true`, in place of **ge_cloud_direct**, when your inverter is
 controlled by something else, such as GivTCP or the GivEnergy app, and you only want GE Cloud for your EV charger.
 The inverters on your account are then never read, written to or reported; **ge_cloud_automatic_evc** and **ge_cloud_evc_control**
@@ -903,6 +910,14 @@ Keep `solis_api_key` and `solis_api_secret` in `secrets.yaml` rather than in `ap
 - `solis_cloud_pv_load_ignore` - Optional, defaults to false. When set to `true`, Predbat will override the **solis_automatic** setting and use the **load_today**, **load_power**, **pv_today** and **pv_load** sensors configured in `apps.yaml`.<BR>
 This can be useful if the Solis cloud data in the does not accurately reflect your house PV and load (e.g. multiple inverters that share load or PV inverter and micro-inverters) and you want to use a custom sensors.  All other sensors will use either the `apps.yaml` entries or the Solis Cloud entities depending upon **solis_automatic**.
 - `solis_nominal_voltage` - Optional, your battery's nominal pack voltage (e.g. cell count x nominal cell voltage per cell - **not** the live/resting battery voltage reported by the inverter, which varies with charge state). The inverter stores its charge and discharge limits as currents, so this is the voltage Predbat uses to convert them to watts: it sets the `battery_capacity` sensor, the max charge/discharge power and slot power sensors, and hence `battery_rate_max`. Without it, Predbat infers the voltage instead: on an LV pack it classifies the pack from the BMS-requested charge voltage the inverter reports (48V below 55V, 51.2V at or above it), and on an HV pack it continues to use the live reading. The LV result is fixed across polls, so nothing drifts as the battery charges and discharges, but it is an inference rather than a stated figure, so `battery_capacity` is flagged unreliable (a `reliable: false` attribute, plus a log warning). Set this option for an accurate figure - and note that on an HV pack it is the only way to stop the derived watt values moving with state of charge. `soc_max` must still be set manually either way (see below), the `battery_capacity` sensor is informational only and is not auto-bound to it.
+- `solis_parallel_slaves` - Optional, for inverters wired in parallel (master and slave) on one battery bank. Maps each master's serial number to its slave's serial number, or a list of them; quote serial numbers that are all digits. On such a pair the master's charge and discharge slot current is the whole group's, shared between the inverters, so when Predbat sets the master's slots it adds each slave's planned current for the same slot to the master's own. Each inverter is still planned at its own rate. Every slave must also be one of the inverters Predbat controls (see `solis_inverter_sn`), and this only applies in TOU V2 mode (inverters with six charge and discharge slots).
+- `solis_parallel_slot_current_max` - Optional, used with `solis_parallel_slaves`: the most, in amps, that the master's slot current may be set to for the whole group. Without it the master's slots stay capped at its own battery limit (CID 7224/7226), however many inverters share them, and without `solis_parallel_slaves` it does nothing. Set it from your **battery bank's** rated maximum continuous charge and discharge current, never from the sum of the inverters' ratings: two inverters can draw more than a shared bank can safely take. Predbat also checks the slot accepts it by probing, as it does for every inverter's slot current, and uses the lower figure.
+
+```yaml
+  solis_parallel_slaves:
+    "MASTER_SERIAL": "SLAVE_SERIAL"
+  solis_parallel_slot_current_max: 270
+```
 
 #### Important notes (Solis)
 
@@ -1326,6 +1341,7 @@ the controls of your inverter inside home assistant.
 - **ge_cloud_direct** - Set to true to enable GE Cloud direct access
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
 - **ge_cloud_inverter_control** - Optional, defaults to true. Set to false to monitor the inverter without Predbat controlling it
+- **ge_cloud_poll_settings** - Optional, defaults to false. Set to true to read every inverter register every 10 minutes instead of only as needed
 - **ge_cloud_evc_direct** - Set to true instead of **ge_cloud_direct** to use GE Cloud for a GivEnergy EV charger only, leaving the inverter alone
 
 ## Load filtering
@@ -1577,6 +1593,9 @@ Be careful of setting the rate at a value higher than your inverter can handle f
 - **soc_max** - Entity name for the maximum charge level for the battery in kWh.
 If not set or set to 0, Predbat will attempt to automatically determine the battery size by analyzing historical charging data from `soc_percent` and `battery_power` sensors.
 This requires at least several days of historical data with charging periods of 15% or more SoC change. If automatic detection fails, you must manually set this value.
+- **soc_max_fallback** - Optional. The battery size in kWh (or an entity giving it) to plan with while `soc_max` is unset and Predbat has not yet estimated the size from charge history - without it Predbat uses 8 kWh. Unlike `soc_max` it is never treated as the battery's nominal size, so it does not constrain the estimate: once one exists it is used instead, however far it is from the fallback.
+Some inverter integrations (e.g. Sunsynk) set this automatically from a capacity the inverter reports but cannot be trusted.
+- **battery_size_power** - Optional. A battery power sensor (W, same sign convention and `battery_power_invert` as `battery_power`) used only for estimating the battery size from charge history, in place of `battery_power`. Set it when a more accurate battery-side reading exists for sustained charging than the one used for live power - Sunsynk sets it automatically to the battery management system's own power.
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 Can also be set to a fixed percentage rather than an entity name for inverters that have no reserve register to point at -
@@ -2610,8 +2629,12 @@ giving a stable average that is robust to occasional outliers).
 
 The calculation is performed at most once per calendar day to avoid wasting compute resources.
 On subsequent Predbat cycles in the same day the stored sensor state is used instead.
+If the day's calculation finds no usable charge (it runs just after midnight UTC, before an overnight charge), it is retried hourly
+until it does, so that night's charge is used the same morning. The time of the last attempt is kept on the sensor as `last_attempt`.
 
 The resulting `battery_scaling` is clamped to the range [0.8, 1.0] if `soc_max` is configured.
+If `soc_max` is not set the estimate is used directly and stays an estimate: it is never written back as `soc_max`,
+so later days are measured afresh rather than held near the first figure.
 
 This is useful for batteries that degrade over time — the scaling will gradually reduce as the measured capacity drifts
 below the nominal figure, without needing any manual adjustment.

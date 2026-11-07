@@ -657,6 +657,15 @@ def update_rates_export(my_predbat, export_window_best):
 FIXTURE_MINUTES_NOW = 12 * 60
 
 
+def clear_manual_times(my_predbat):
+    """Clear every per-type manual override list, so manual_all_times, which is derived from them, is empty."""
+    my_predbat.manual_charge_times = []
+    my_predbat.manual_export_times = []
+    my_predbat.manual_demand_times = []
+    my_predbat.manual_freeze_charge_times = []
+    my_predbat.manual_freeze_export_times = []
+
+
 def reset_inverter(my_predbat):
     my_predbat.inverter_limit = 1 / 60.0
     my_predbat.num_inverters = 1
@@ -713,11 +722,7 @@ def reset_inverter(my_predbat):
     my_predbat.charge_window_best = []
     my_predbat.export_limits_best = []
     my_predbat.export_window_best = []
-    my_predbat.manual_charge_times = []
-    my_predbat.manual_demand_times = []
-    my_predbat.manual_export_times = []
-    my_predbat.manual_freeze_charge_times = []
-    my_predbat.manual_freeze_export_times = []
+    clear_manual_times(my_predbat)
     my_predbat.set_charge_window = True
     my_predbat.set_export_window = True
     my_predbat.set_charge_freeze = True

@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 import aiohttp
 
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 
@@ -76,6 +77,20 @@ POWERWALL_1_MAX_POWER = 3500  # Per-unit nameplate power at/below this is treate
 # whatever its nameplate, ~9.8 kW with one expansion, the 11 kW nameplate with two, ~5.04 kW per Powerwall 2
 # unit - and solar charging stops at the same figure.
 POWERWALL_CHARGE_PER_UNIT_W = 5000
+
+# The TESLA INVERTER_DEF row's behaviour, stated in every discovery record so the record alone rebuilds
+# the row (coordinator.inverter_definition()). A reserve set above the live SoC is met from the grid,
+# hence reserve_above_soc_charges_from_grid.
+TESLA_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": False,
+    "support_feedin_first": False,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+    "reserve_above_soc_charges_from_grid": True,
+}
 # max/min_site_meter_power_ac report "no limit" as +/-1e9
 SITE_METER_UNLIMITED = 1_000_000
 
@@ -210,12 +225,17 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self._last_export_permission_check = 0
         self.battery_type = None  # components.battery_type from site_info: solar_powerwall (PW3) or ac_powerwall (PW2)
         self.powerwall_3 = False  # battery_type solar_powerwall AND a "Powerwall 3" gateway, set by fetch_site_info
+        # Held from site_info for the discovery catalogue only (build_discovery()): the hardware list and
+        # the figures the site itself reports. Nothing Teslemetry controls reads them.
+        self.site_components = {}
+        self.site_ratings = {}
+        self.site_version = None
         self._reserve_band_warned = False
         self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.schedule_loaded = False
         self.log("Info: TeslemetryAPI initialising site filter={}".format(self.site_filter or "all account sites"))
-        self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes), backed by a forced re-assert of the full device tuple every {} minutes".format(FORCED_ASSERT_SECONDS // 60))
+        self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes), backed by a forced re-assert of the full device tuple and tariff every {} minutes".format(FORCED_ASSERT_SECONDS // 60))
         self.register_control_entities()
 
     def entity(self, suffix, domain="sensor"):
@@ -488,12 +508,22 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             # live_status (total_pack_energy) will upgrade this if/when it appears.
             self.publish_soc_max(self.estimate_pack_kwh(response), estimate=True)
         nameplate_power = response.get("nameplate_power", 0)
+        export_limit = self.site_export_limit_w(response)
+        self.site_components = components
+        self.site_version = response.get("version")
+        self.site_ratings = {}
+        if nameplate_wh or gateway_kwh:
+            self.site_ratings["soc_max"] = round(nameplate_wh / 1000.0, 3) if nameplate_wh else gateway_kwh
+        if nameplate_power:
+            self.site_ratings["inverter_limit"] = int(round(nameplate_power))
+            self.site_ratings["battery_rate_max"] = int(round(nameplate_power))
+        if export_limit is not None:
+            self.site_ratings["export_limit"] = export_limit
         if nameplate_power:
             self.publish_sensor("battery_rate_max", int(round(nameplate_power)), unit="W", state_class=None, friendly="Powerwall Max Rate")
             # The Powerwall's own AC rating - on a Powerwall 3 the commissioned limit. max_site_meter_power_ac
             # is the site's supply limit at the meter (18.4 kW on an 80 A service), not the inverter's (GH#5275).
             self.publish_sensor("inverter_limit", int(round(nameplate_power)), unit="W", state_class=None, friendly="Powerwall AC Limit")
-        export_limit = self.site_export_limit_w(response)
         if export_limit is not None:
             self.publish_sensor("export_limit", export_limit, unit="W", state_class=None, friendly="Powerwall Export Limit")
         charge_limit = self.site_charge_limit_w(response)
@@ -647,6 +677,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if first or (seconds - self.last_energy_poll >= ENERGY_POLL_SECONDS):
             self.last_energy_poll = seconds
             await self.fetch_energy_today()
+        # Filed every cycle that resolved a site, after this cycle's publishes and before the auto-config
+        # gate, which waits on a soc_max sensor some hardware is slow to produce. refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
         # Auto-config once site info is read AND a battery-capacity sensor (soc_max) exists. soc_max may
         # come from live_status (total_pack_energy) rather than site_info on some hardware (e.g. PW3), so
         # this is gated on the published sensor and runs after the live poll rather than on site_info alone.
@@ -663,10 +697,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             # (GH#5157). The timer advances only on a fully successful forced assert, which keeps
             # _apply_command's failure-retry invariant: a forced assert that failed is retried on the next
             # cycle instead of waiting another two hours.
+            # The tariff is re-sent with the tuple: under signal-tariff control it is what steers Tesla's
+            # optimiser, so a dropped tariff is the same stall as a dropped reserve (GH#6020).
             force = (seconds - self._last_forced_assert) >= FORCED_ASSERT_SECONDS
-            await self.sync_tariff()
+            tariff_ok = await self.sync_tariff(force=force)
             asserted = await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc), force=force)
-            if force and asserted:
+            if force and asserted and tariff_ok:
                 self._last_forced_assert = seconds
         return success
 
@@ -784,9 +820,17 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
     def evaluate_schedule_tbc(self, minutes_now, soc):
         """Map the committed schedule to the device tuple under signal-tariff control (GH#4892).
 
-        Mode is autonomous in every state, because Tesla's optimiser only acts on the pushed tariff
-        under Time-Based Control - the tariff, not this tuple, is what asks for the charge or the
-        export. Reserve therefore stops being an overloaded charge signal and is simply the reserve
+        Mode is autonomous whenever the signal tariff has a band in it, because Tesla's optimiser only
+        acts on the pushed tariff under Time-Based Control - the tariff, not this tuple, is what asks
+        for the charge or the export. When neither window is in the tariff it is one flat band, which
+        gives the optimiser no price reason to cover house load, so it can leave small loads on the
+        grid with the reserve already released (GH#6020). That state uses self_consumption instead,
+        which covers house load down to the reserve whatever the tariff says, as the real-rate path
+        does. The test is the same windows sync_tariff builds the tariff from, so a charge window
+        committed ahead of its start already switches to autonomous, and the export band and
+        autonomous arrive together once the export starts (GH#5960).
+
+        Reserve stops being an overloaded charge signal and is simply the reserve
         Predbat asked for, in every state; the charge and export target percentages are advisory
         under this mode, since Tesla decides how much energy actually moves, and window length rather
         than a reserve floor is the lever for them.
@@ -811,7 +855,9 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if self.in_window(minutes_now, discharge):
             target = int(discharge.get("soc", 10))
             return {"export_rule": "battery_ok" if soc > target else "pv_only", "grid_charging": False, "reserve": reserve, "mode": "autonomous"}
-        return {"export_rule": "pv_only", "grid_charging": False, "reserve": reserve, "mode": "autonomous"}
+        charge_window, export_window = self._signal_windows(minutes_now)
+        mode = "autonomous" if (charge_window or export_window) else "self_consumption"
+        return {"export_rule": "pv_only", "grid_charging": False, "reserve": reserve, "mode": mode}
 
     def publish_schedule_entities(self):
         """Publish the schedule entities from the pending schedule (pending == committed after boot/apply).
@@ -913,6 +959,103 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if not all(results.values()):
             self.log("Warn: Teslemetry device-state assert incomplete: {}".format({key: value for key, value in results.items() if not value}))
         return all(results.values())
+
+    def _discovery_entities(self):
+        """Every setting automatic_config() binds, as discovery entity descriptors.
+
+        Entity ids come from the same self.entity() calls automatic_config() makes, so the two cannot
+        drift; tests/test_teslemetry.py checks they agree both ways. The four limits are bound only when
+        their entity exists - the test automatic_config() itself applies, since fetch_site_info()
+        publishes each only when site_info carried a basis for it. grid_power is published with the
+        opposite sign to Predbat's convention, hence invert; battery_power is not inverted.
+        """
+
+        def sensor(suffix, unit=None, domain="sensor", **fields):
+            """A read-only binding to one of the published sensors."""
+            descriptor = {"entity_id": self.entity(suffix, domain=domain), "access": "r", **fields}
+            if unit:
+                descriptor["unit"] = unit
+            return descriptor
+
+        def control(domain, suffix, **fields):
+            """A binding to one of the schedule control entities Predbat writes."""
+            return {"entity_id": self.entity(suffix, domain=domain), "access": "rw", "domain": domain, **fields}
+
+        entities = {
+            "soc_percent": sensor("soc", "%"),
+            "soc_max": sensor("soc_max", "kWh"),
+            "battery_power": sensor("battery_power", "W"),
+            "grid_power": sensor("grid_power", "W", invert=True),
+            "load_power": sensor("load_power", "W"),
+            "pv_power": sensor("solar_power", "W"),
+            "load_today": sensor("load_today", "kWh"),
+            "import_today": sensor("import_today", "kWh"),
+            "export_today": sensor("export_today", "kWh"),
+            "pv_today": sensor("solar_today", "kWh"),
+            "reserve": control("number", "schedule_reserve", unit="%"),
+            "charge_start_time": control("select", "schedule_charge_start_time", format="HH:MM:SS"),
+            "charge_end_time": control("select", "schedule_charge_end_time", format="HH:MM:SS"),
+            "charge_limit": control("number", "schedule_charge_soc", unit="%"),
+            "scheduled_charge_enable": control("switch", "schedule_charge_enable"),
+            "discharge_start_time": control("select", "schedule_discharge_start_time", format="HH:MM:SS"),
+            "discharge_end_time": control("select", "schedule_discharge_end_time", format="HH:MM:SS"),
+            "discharge_target_soc": control("number", "schedule_discharge_soc", unit="%"),
+            "scheduled_discharge_enable": control("switch", "schedule_discharge_enable"),
+            "schedule_write_button": control("switch", "schedule_write"),
+            "battery_export_permitted": sensor("battery_export_permitted", domain="binary_sensor"),
+        }
+        for limit_arg in ("battery_rate_max", "inverter_limit", "inverter_limit_charge", "export_limit"):
+            if self.get_state_wrapper(self.entity(limit_arg)) is not None:
+                entities[limit_arg] = sensor(limit_arg, "W")
+        return entities
+
+    def build_discovery(self):
+        """
+        Describe the Tesla energy site for the discovery catalogue.
+
+        One record for the site, keyed by its Backup Gateway (or, on a Powerwall 3, the Powerwall 3
+        itself, which site_info lists as the gateway), with the battery units behind it in serials and
+        composition "gateway". A Powerwall 2 is AC coupled - its solar is a separate inverter the
+        gateway only meters - so its functions are battery only; a Powerwall 3 is a hybrid inverter with
+        its own solar inputs. The energy site id is an account identifier and goes in account_ids,
+        published readable like every identifier.
+
+        Ratings are the figures site_info reports (nameplate energy and power, the configured export
+        limit). inverter_limit_charge is derived per battery unit and the battery_count capacity
+        estimate is a guess, so neither is a rating; both stay bound as entities where automatic_config()
+        binds them.
+
+        Never reported: the site name, address, timezone, gateway DINs and device UUIDs.
+
+        Returns None until site_info has been read.
+        """
+        if not self.site_info_done:
+            return None
+        components = self.site_components or {}
+        gateways = [gateway for gateway in components.get("gateways") or [] if isinstance(gateway, dict)]
+        gateway = gateways[0] if gateways else {}
+        batteries = [str(battery["serial_number"]) for battery in components.get("batteries") or [] if isinstance(battery, dict) and battery.get("serial_number")]
+        serial = gateway.get("serial_number")
+        info = {"vendor": "Tesla"}
+        if gateway.get("part_name"):
+            info["model"] = gateway["part_name"]
+        firmware = str(gateway.get("firmware_version") or self.site_version or "")
+        if firmware:
+            info["firmware"] = firmware
+        record = inverter_record(
+            "teslemetry:{}".format(serial) if serial else "teslemetry:site:{}".format(self.site_id),
+            inverter_type="TESLA",
+            composition="gateway" if batteries else "direct",
+            serials=batteries,
+            functions=["solar", "battery"] if self.powerwall_3 else ["battery"],
+            capabilities=dict(TESLA_CAPABILITIES),
+            hardware_ids={"serial": str(serial)} if serial else None,
+            account_ids={"energy_site_id": str(self.site_id)},
+            info=info,
+            ratings=dict(self.site_ratings or {}),
+            entities=self._discovery_entities(),
+        )
+        return {"automatic": self.automatic, "inverters": [record]}
 
     async def automatic_config(self):
         """Automatically wire Predbat's inverter args to this component's virtual entities (fox parity).
@@ -1419,9 +1562,33 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         """Return (start_min, end_min) for the committed discharge window when enabled, else None."""
         return self._committed_window("discharge")
 
+    @staticmethod
+    def _export_window_active(window, minutes_now):
+        """Return the export window while it is running, else None, so its boost band is only pushed once it starts (GH#5960).
+
+        Pushed any earlier, Tesla's optimiser sees an upcoming sale worth more than covering house load
+        and holds the battery through the run-up, so the house imports while Predbat's plan has the
+        battery serving it. The device acts on a tariff push within a couple of minutes, so starting
+        the band at the window start costs only that much of the export. Midnight wrap is supported.
+        """
+        if not window:
+            return None
+        start, end = window
+        if (minutes_now - start) % 1440 < (end - start) % 1440:
+            return window
+        return None
+
     def _charge_window(self):
         """Return (start_min, end_min) for the committed charge window when enabled, else None."""
         return self._committed_window("charge")
+
+    def _signal_windows(self, minutes_now):
+        """Return (charge_window, export_window) as they go into the signal tariff at minutes_now.
+
+        sync_tariff builds the tariff from these and evaluate_schedule_tbc picks the idle mode from
+        them, so the mode and the tariff cannot disagree about whether there is a band to act on.
+        """
+        return self._charge_window(), self._export_window_active(self._discharge_window(), minutes_now)
 
     @staticmethod
     def _window_intervals(window):
@@ -1562,22 +1729,29 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         signature = json.dumps(body, sort_keys=True)
         return await self._apply_command("tariff", signature, lambda: self._command("time_of_use_settings", {"tou_settings": body}), force=force)
 
-    async def sync_tariff(self):
+    async def sync_tariff(self, force=False):
         """Build the tariff from current rates + committed discharge window and push it (deduped).
 
         Cheap to call every cycle: set_tariff only reaches the API when the serialised tariff changes,
         i.e. on a genuine rate-band, discharge-window or day-of-week change. Gated on read-only mode.
+        `force=True` bypasses that dedupe, for run()'s FORCED_ASSERT_SECONDS re-assert.
 
-        With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one; it
-        depends only on the committed windows, so it re-pushes strictly less often.
+        With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one. Its
+        discharge window only reaches the tariff while it is running (see _export_window_active), so it
+        depends on the committed windows and on whether the export window is live, which costs up to
+        two extra pushes per export window: one as the band appears and one as it is withdrawn.
+
+        The real-rate path keeps the whole committed window: it also uses it to keep the export slots
+        out of the band quantisation, and outside the window the device is in self_consumption, which
+        does not act on the tariff, so it has no run-up hold to avoid.
         """
         if self._is_read_only():
             return True
         if getattr(self, "tbc_control", self.DEFAULT_TBC_CONTROL):
-            tariff = self.build_signal_tariff(self._charge_window(), self._discharge_window())
+            tariff = self.build_signal_tariff(*self._signal_windows(self.get_minutes_now()))
         else:
             tariff = self.build_tariff(self._discharge_window())
-        return await self.set_tariff(tariff)
+        return await self.set_tariff(tariff, force=force)
 
     def _is_read_only(self):
         """Return True if Predbat is configured read-only, so device-write commands must not be sent.
