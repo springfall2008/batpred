@@ -112,6 +112,7 @@ class WebSecurityTests(unittest.TestCase):
             instance.CONFIG_ITEMS = []
             instance.components = None
             instance.log = lambda *args: None
+            instance.manual_all_times = []
             text = instance.create_debug_yaml(write_file=False)
             instance.create_debug_yaml(write_file=True)
             saved = next((Path(root) / "debug").glob("*.yaml")).read_text()
