@@ -165,6 +165,31 @@ The final figure should be the number of watts your house loses per 1 degree of 
 Then you can set **heat_gain_static** to be the static heat output of other things in your house eg. computers and people. You can figure this out by looking at how many degrees of
 temperature difference your house can maintain without any heating and multiply up your heat loss watts figure by this.
 
+### Scheduled target temperatures (Climate Scheduler)
+
+By default, Predheat estimates future thermostat setpoints from the history of
+`target_temperature`. If you use the third-party [Climate Scheduler](https://github.com/kneave/climate-scheduler)
+integration to control your thermostat, you can optionally use its future
+setpoint changes in the Predheat forecast instead:
+
+```yaml
+predheat:
+  target_temperature: sensor.my_heating_setpoint
+  target_temperature_schedule: climate.my_thermostat
+```
+
+Keep `target_temperature` pointing to the **current effective setpoint** (including
+any manual override). Set `target_temperature_schedule` to the climate entity
+managed by Climate Scheduler. Replace both example entity IDs with yours. The
+schedule is fetched when Predheat updates its forecast; the current effective
+setpoint applies until the next scheduled temperature change.
+
+If Climate Scheduler is unavailable, its schedule is disabled or invalid, or a
+required Workday lookup fails, Predheat falls back to its existing historical
+setpoint prediction. Nodes marked as **no change** are ignored. An HVAC-off
+schedule node cannot be represented by a target temperature alone, so Predheat
+also falls back to history instead of attempting to model such a schedule.
+
 ### Weather Compensation
 
 If your heat source makes use of weather compensation then add the following to the configuration to map out your heat curve. The example has a flow temp of 45C at -3C outside and 25C at 15C outside:
