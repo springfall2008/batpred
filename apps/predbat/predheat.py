@@ -20,6 +20,8 @@ requirements and costs for heat pump systems.
 """
 
 from datetime import datetime, timedelta, timezone
+from bisect import bisect_right
+import math
 import pytz
 from utils import str2time, dp2, dp3, convert_temperature, is_entity_id, minute_data, minutes_since_midnight, next_aligned_run, temperature_scale, clock_change_minutes
 
@@ -126,6 +128,7 @@ class PredHeat:
         self.system_unit = None
         self.display_unit = TEMPERATURE_UNIT
         self.call_service = base.call_service_wrapper
+        self.get_state = base.get_state_wrapper
         self.get_history = base.get_history_wrapper
         self.expose_config = base.expose_config
         self.get_services = base.get_services_wrapper
@@ -381,6 +384,137 @@ class PredHeat:
         else:
             return total / total_weight
 
+    def load_target_schedule(self, now_local):
+        """Load effective Climate Scheduler targets for this forecast."""
+        self.schedule_change_minutes = None
+        entity_id = self.get_arg(
+            "target_temperature_schedule", None,
+            indirect=False, domain="predheat"
+        )
+        if not entity_id:
+            return
+
+        try:
+            response = self.call_service(
+                "climate_scheduler/get_schedule",
+                schedule_id=entity_id,
+                return_response=True
+            )
+        except Exception as exc:
+            self.log("Predheat: Cannot fetch heating schedule: {}".format(exc))
+            return
+
+        if not isinstance(response, dict) or not response.get("enabled"):
+            self.log("Predheat: Schedule disabled or unavailable; using history")
+            return
+
+        schedules = response.get("schedules")
+        mode = response.get("schedule_mode", "all_days")
+        if not isinstance(schedules, dict) or mode not in (
+            "all_days", "5/2", "individual"
+        ):
+            self.log("Predheat: Invalid schedule; using history")
+            return
+
+        # Preserve the live setpoint, including a manual override,
+        # until the next scheduled temperature change.
+        target_entity = self.get_arg(
+            "target_temperature", None,
+            indirect=False, domain="predheat"
+        )
+        if isinstance(target_entity, str) and "." in target_entity:
+            live = self.get_state(entity_id=target_entity, default=None)
+        else:
+            live = target_entity
+
+        try:
+            initial = float(live)
+            if not math.isfinite(initial):
+                raise ValueError("Non-finite setpoint")
+        except (ValueError, TypeError):
+            self.log("Predheat: No live setpoint; using history")
+            return
+
+        tz = now_local.tzinfo
+        now_utc = now_local.astimezone(timezone.utc)
+        events = []
+        day_names = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+        for day_offset in range(self.forecast_days + 2):
+            day = now_local.date() + timedelta(days=day_offset)
+            weekday = day.weekday()
+
+            if mode == "all_days":
+                key = "all_days"
+            elif mode == "5/2":
+                key = "weekday" if weekday < 5 else "weekend"
+            else:
+                key = day_names[weekday]
+
+            for node in schedules.get(key, []):
+                if not isinstance(node, dict) or node.get("noChange"):
+                    continue
+
+                # HVAC-off cannot be modelled by a target alone.
+                if node.get("hvac_mode") == "off":
+                    self.log("Predheat: HVAC-off node; using historical targets")
+                    return
+
+                try:
+                    hour, minute = map(int, node["time"].split(":"))
+                    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                        continue
+                    temp = float(node["temp"])
+                    if not math.isfinite(temp):
+                        continue
+
+                    wall = datetime(
+                        day.year, day.month, day.day, hour, minute
+                    )
+                    try:
+                        when = tz.localize(wall, is_dst=None)
+                    except pytz.AmbiguousTimeError:
+                        when = tz.localize(wall, is_dst=True)
+                    except pytz.NonExistentTimeError:
+                        when = tz.normalize(tz.localize(wall, is_dst=False))
+
+                    elapsed = (
+                        when.astimezone(timezone.utc) - now_utc
+                    ).total_seconds() / 60.0
+
+                    if 0 < elapsed <= self.forecast_minutes:
+                        events.append((elapsed, temp))
+
+                except (KeyError, AttributeError, TypeError, ValueError):
+                    continue
+
+        if not events and not any(schedules.get(k) for k in schedules):
+            self.log("Predheat: Empty schedule; using history")
+            return
+
+        events.sort(key=lambda point: point[0])
+        self.schedule_initial_temperature = initial
+        self.schedule_change_minutes = [x[0] for x in events]
+        self.schedule_change_temperatures = [x[1] for x in events]
+
+        self.log(
+            "Predheat: Using Climate Scheduler {} "
+            "({} future changes, initial {} C)".format(
+                entity_id, len(events), initial
+            )
+        )
+
+    def get_target_temperature(self, minute):
+        """Use the effective schedule, or historical prediction as fallback."""
+        if self.schedule_change_minutes is None:
+            return self.get_historical(
+                self.target_temperature, minute, default=20.0
+            )
+        index = bisect_right(self.schedule_change_minutes, minute) - 1
+        if index < 0:
+            return self.schedule_initial_temperature
+        return self.schedule_change_temperatures[index]
+
     def run_simulation(self, volume_temp, heating_active, save="best", last_predict_minute=None):
         internal_temp = self.internal_temperature[0]
         external_temp = self.external_temperature[0]
@@ -409,10 +543,10 @@ class PredHeat:
         if last_predict_minute:
             forecast_minutes = self.forecast_days * 24 * 60
             max_minutes = self.smart_thermostat_max_minutes
-            last_target_temp = self.get_historical(self.target_temperature, 0, default=20.0)
+            last_target_temp = self.get_target_temperature(0)
             last_adjust_end = 0
             for minute in range(0, forecast_minutes, PREDICT_STEP):
-                target_temp = self.get_historical(self.target_temperature, minute, default=20.0)
+                target_temp = self.get_target_temperature(minute)
                 if target_temp > last_target_temp:
                     adjust = {}
                     adjust["from"] = last_target_temp
@@ -423,7 +557,7 @@ class PredHeat:
                     # The heating period lasts until the setpoint drops below the new target
                     period_end = forecast_minutes
                     for next_minute in range(minute + PREDICT_STEP, forecast_minutes, PREDICT_STEP):
-                        if self.get_historical(self.target_temperature, next_minute, default=20.0) < target_temp:
+                        if self.get_target_temperature(next_minute) < target_temp:
                             period_end = next_minute
                             break
 
@@ -453,7 +587,7 @@ class PredHeat:
             minute_absolute = minute + self.minutes_now
             external_temp = self.temperatures.get(minute, external_temp)
 
-            target_temp = self.get_historical(self.target_temperature, minute, default=20.0)
+            target_temp = self.get_target_temperature(minute)
 
             # Find the next temperature adjustment
             next_adjust = None
@@ -700,6 +834,7 @@ class PredHeat:
         self.external_temperature, age_external = self.minute_data_entity(now_utc, "external_temperature", smoothing=True, temperature=True)
         self.internal_temperature, age_internal = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True, temperature=True)
         self.target_temperature, age_target = self.minute_data_entity(now_utc, "target_temperature", temperature=True)
+        self.load_target_schedule(now_utc)
         self.heating_energy, age_energy = self.minute_data_entity(now_utc, "heating_energy", incrementing=True, smoothing=True, scaling=self.heating_energy_scaling)
         # Heating energy history is optional; without it, valid temperature and
         # thermostat histories should still drive the forecast schedule.
