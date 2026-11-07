@@ -190,3 +190,132 @@ To resolve this you need to use **car_charging_energy** to [exclude heat pump lo
   car_charging_energy:
     - 'sensor.ashp_energy_today'
 ```
+
+## Joint heat and battery planning preview
+
+PredHeat can now simulate heating targets inside PredBat's battery optimiser. Each
+feasible heating schedule gets a fresh battery optimisation using the same import
+and export tariffs, solar forecasts, battery constraints and terminal battery
+value. The search retains minimum room and water temperatures at the end, so a
+candidate cannot appear cheaper just by leaving those thermal stores depleted.
+
+This is an opt-in planning preview. The proposed heating targets and battery
+windows are published together, while normal battery operation continues to use
+the current thermostat's PredHeat heating forecast. The preview does not send
+heating commands or adopt the proposed battery windows. A host integrating the
+pure planner must implement coordinated heating and battery execution before
+applying its result.
+
+### Native configuration
+
+Add these settings under your existing `predheat:` configuration:
+
+```yaml
+predheat:
+  joint_planning: true
+  joint_load_is_non_heating: true
+  joint_comfort_margin: 0.5
+  joint_overheat_margin: 1.5
+  joint_max_evaluations: 32
+  joint_max_seconds: 30
+```
+
+**Only enable this with a qualified non-heating household load forecast.** All
+three prepared load scenarios must exclude heating. Setting
+`joint_load_is_non_heating: true` is an explicit assertion about those inputs,
+not an automatic disaggregation feature. Remove any existing PredHeat extra-load
+forecast and exclude heating from the underlying household load forecast too.
+Otherwise heating would be counted twice. PredBat applies household load scaling
+first, then adds PredHeat electricity once to each scenario.
+
+The comfort bounds follow the native target schedule: target minus
+`joint_comfort_margin` through target plus `joint_overheat_margin`, in Celsius.
+The default terminal room and water reserves are their initial temperatures.
+Use `joint_terminal_temperature` and `joint_terminal_water_temperature` to set
+explicit terminal reserves in Celsius. Infeasible bounds produce a diagnostic,
+not a relaxed comfort policy or a fabricated saving.
+
+The preview appears at `<predheat prefix>.joint_plan`, normally
+`predheat.joint_plan`. Its attributes include:
+
+- `results`: end-of-interval room, water, outdoor and target temperatures, plus
+  interval heating electricity in kWh.
+- `cost`, `metric`, `battery_value` and `terminal_soc_kwh`: the selected battery
+  result. The metric includes PredBat's battery value and configured penalties;
+  it is not simply the electricity bill.
+- `charge_windows`, `charge_limits_kwh`, `export_windows` and `export_limits`:
+  the proposed battery settings. Window minutes use PredBat's existing clock and
+  export limits retain PredBat's encoded mode/percentage representation. These
+  are optimiser scoring windows before native execution clipping and pruning
+  (`battery_windows_stage: before_execution_clipping`). A host must pass its
+  selected demand through normal plan finalisation before executing windows.
+- `baseline_cost` and `baseline_metric`, only when the native thermostat schedule
+  satisfies the same comfort and terminal constraints.
+- `generated_at`, `evaluations`, `battery_evaluations` and `termination`:
+  provenance and search diagnostics. Input refresh failures invalidate the preview and stop preparation of an
+  incomplete live load. Search-only failures mark the preview unavailable while
+  normal battery planning continues with the qualified thermostat baseline;
+  disabling the feature marks a previous preview disabled.
+
+Search trials include advance heating, cheap-rate and solar-surplus seeds, then
+block target adjustments. Every feasible trial is scored by the real battery
+optimiser. This bounded search does not guarantee a global optimum. Trial count
+and elapsed time are bounded between trials; one battery evaluation may run past
+the time budget. The defaults are 32 trials and a 30-second soft budget, with
+configuration limits of 256 trials and 300 seconds. Site-wide import capacity
+and equipment-specific compressor constraints are not added by this preview.
+
+The native adapter refreshes once at the current planning instant on every live
+cycle, including cycles that reuse the battery schedule. Only recomputes run the
+joint search. History, weather and the simulation use the explicit host planning
+instant, including its configured clock skew. Comparison calculations reuse the
+matching snapshot without sensor reads or preview publication. Live refresh requires an unrounded cycle origin
+within 30 minutes of the wall clock, allowing fetch/search delays while rejecting
+historical replay and snapshots whose forecast origin does not match the
+battery clock. This alignment check does not establish sensor observation
+freshness: adapters remain responsible for qualifying their source data.
+
+### Pure simulation and host integration
+
+`predheat_model.py` contains the shared PredHeat thermal model, without sensor,
+network or publication dependencies. The normal PredHeat charts use this same
+model, preserving existing thermostat behaviour, water volume, emitter output,
+heat loss, weather compensation and outdoor-temperature efficiency tables.
+It does not introduce automatic property learning or a new measured COP model.
+
+A host can supply explicit data without Home Assistant:
+
+```python
+from predheat_model import HeatingConfig, HeatingInput, HeatingState, simulate_heating
+
+inputs = HeatingInput(
+    config=HeatingConfig(heat_loss_watts=120, watt_per_degree=3000),
+    initial_state=HeatingState(20.0, 35.0, False),
+    target_temperature_c=(20.0,) * 288,
+    outdoor_temperature_c=(6.0,) * 288,
+)
+forecast = simulate_heating(inputs)
+```
+
+Each interval represents five minutes. Temperatures are Celsius, energy fields
+are interval kWh, and model power settings are watts. `HeatingConfig` must be
+calibrated to the property and equipment by the host. Optional
+`heat_output_fraction` caps simulated thermal output; it does not imply that a
+manufacturer supports a compressor power command.
+
+For joint planning, construct a `JointHeatingRequest` from `predheat_joint` with
+that `thermal_input`, complete `minimum_temperature_c` and
+`maximum_temperature_c` sequences, a `terminal_minimum_c`, and
+`load_is_non_heating=True`. Call `plan_joint_heating(base, request)` on a prepared
+PredBat planning instance with all three non-heating load and solar scenarios,
+complete tariffs and the matching horizon. An absent export tariff means zero
+export revenue, matching normal battery planning; a partially supplied export
+schedule is rejected. The function isolates each battery
+trial, returns the best feasible thermal/battery pair and comparable baseline,
+and leaves the source plan unchanged. Replay hosts supply explicit historical
+inputs through this API instead of refreshing the live sensor adapter.
+
+`replace_heating_load(total, embedded, proposed)` is also available for hosts
+that know the exact heating contribution already embedded in a same-horizon
+forecast. It rejects negative or inconsistent interval energy. It cannot infer
+heating ownership from a historical meter series.

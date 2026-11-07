@@ -39,6 +39,8 @@ from tests.test_execute import run_execute_tests
 from tests.test_execute_multi_inverter_status import test_multi_inverter_status
 from tests.test_load_car_energy import test_load_car_energy_warns_when_configured_entity_has_no_data
 from tests.test_predheat import test_predheat, test_predheat_smart_thermostat, test_predheat_optional_energy_history
+from tests.test_predheat_model import run_predheat_model_tests
+from tests.test_joint_heat import run_joint_heat_tests
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_charge_hold import run_charge_hold_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_slot_max_default_tests
@@ -519,6 +521,8 @@ def main():
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),
         ("predheat", test_predheat, "Predheat scheduler and predheat_enable gate tests (#4670)", False),
+        ("predheat_model", run_predheat_model_tests, "Pure PredHeat physics, immutable inputs and output caps", False),
+        ("joint_heat", run_joint_heat_tests, "Joint thermal and battery optimisation with native economics", False),
         ("predheat_smart_thermostat", test_predheat_smart_thermostat, "Predheat smart thermostat pre-heat window tests", False),
         ("predheat_optional_energy_history", test_predheat_optional_energy_history, "Predheat without optional energy history tests", False),
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
