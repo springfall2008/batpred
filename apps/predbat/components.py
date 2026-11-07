@@ -44,6 +44,7 @@ import asyncio
 import os
 
 from coordinator import Coordinator
+from const import MCP_DEFAULT_SECRET
 
 
 def serves_inverter(component):
@@ -109,7 +110,7 @@ COMPONENT_LIST = {
         "name": "MCP Server",
         "args": {
             "mcp_enable": {"required": True, "config": "mcp_enable", "default": False},
-            "mcp_secret": {"required": False, "secret": True, "config": "mcp_secret", "default": "predbat_mcp_secret"},
+            "mcp_secret": {"required": False, "secret": True, "config": "mcp_secret", "default": MCP_DEFAULT_SECRET},
             "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
         },
         "phase": 1,
@@ -198,6 +199,11 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": True,
                 "config": "ge_cloud_inverter_control",
+            },
+            "poll_settings": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_poll_settings",
             },
         },
         # ge_cloud_direct monitors the inverter (and EV charger), ge_cloud_evc_direct the EV charger alone
