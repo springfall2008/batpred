@@ -67,6 +67,9 @@ Battery SoC symbols:
 - &#9998; - A [manual SoC target](customisation.md#manual-control) (minimum SoC, set with **select.predbat_manual_soc**) applies to the slot
 - &#11015; - A [manual SoC maximum](customisation.md#manual-control) (SoC ceiling, set with **select.predbat_manual_soc_max**) applies to the slot
 
+On the plan in the Predbat web interface, where you can click the SoC % cell to set or clear a manual SoC target or maximum, the cell also repeats the override after the SoC value:
+a 'Forced' (&#8526;) for a manual SoC target and a second down arrow (&#11015;) for a manual SoC maximum.
+
 Cost symbols:
 
 - &rarr; - Current cost expected to remain level
