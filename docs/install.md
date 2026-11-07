@@ -60,13 +60,11 @@ If you have a [different inverter](inverter-setup.md) then you will need to use 
 You will need a method of editing configuration files within your Home Assistant environment.
 
 There are several ways to achieve this in Home Assistant, but two of the simplest are to use either the File Editor or Studio Code Server apps.
-Whichever you use is a personal preference. File Editor is a bit simpler, Studio Code Server is more powerful
-but on Home Assistant 2026.10 or older does require HACS (the Home Assistant Community Store) to be installed first.
-On Home Assistant 2026.11 or newer HACS has been replaced by the built-in Marketplace, so there is nothing extra to install (see [HACS and the Marketplace](#hacs-and-the-marketplace)).
+Whichever you use is a personal preference. File Editor is a bit simpler, Studio Code Server is more powerful.
+Both are apps installed from **Settings** → **Apps**, so neither needs HACS or the Marketplace.
 
 If you do not have one of these file editors already installed in Home Assistant:
 
-- For Studio Code Server on Home Assistant 2026.10 or older you will need to install HACS first (see Speak To The Geek video linked above)
 - Go to Settings / Apps / Install app (bottom right)
 - Scroll down the app list, to find either 'File editor' or 'Studio Code Server' as appropriate, click on the app, click 'INSTALL'
 - Once the editor has been installed, ensure that the 'Start on boot' option is turned on, and click 'START' to start the app

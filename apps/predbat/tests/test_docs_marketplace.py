@@ -26,8 +26,8 @@ DOCS_DIR = os.path.join(REPO_ROOT, "docs")
 TEMPLATES_DIR = os.path.join(REPO_ROOT, "templates")
 
 # HACS mentions that are names rather than install instructions: the deprecated "HACS, Appdaemon
-# app then Predbat" install method, the "Old Ohme HACS Integration" heading, and YouTube video titles
-HISTORICAL_HACS_RE = re.compile(r"HACS,? Appdaemon|Old Ohme HACS Integration|\]\(https://(?:www\.)?youtu", re.IGNORECASE)
+# app then Predbat" install method, the "Old Ohme HACS Integration" heading, and HACS inside a YouTube video title
+HISTORICAL_HACS_RE = re.compile(r"HACS,? Appdaemon|Old Ohme HACS Integration|\[[^\]]*HACS[^\]]*\]\(https://(?:www\.)?youtu", re.IGNORECASE)
 HEADING_RE = re.compile(r"^#{1,6} ")
 
 
@@ -79,6 +79,12 @@ def test_docs_marketplace(my_predbat):
         failed = True
     if _hacs_only_sections("## Old\n\nThe deprecated HACS, Appdaemon app then Predbat installation method.\n\n## Old Ohme HACS Integration\n"):
         print("ERROR: a historical HACS name was flagged as an install instruction")
+        failed = True
+    if _hacs_only_sections("## Videos\n\n- [Installing HACS from Speak to the Geek](https://www.youtube.com/watch?v=x)\n"):
+        print("ERROR: a YouTube video title naming HACS was flagged as an install instruction")
+        failed = True
+    if _hacs_only_sections("## Install\n\nInstall the card via HACS, see [our install video](https://youtu.be/x).\n") != ["## Install"]:
+        print("ERROR: a HACS-only install line carrying a YouTube link was not flagged")
         failed = True
 
     print("Test: {} docs pages give no HACS-only install instructions".format(len(doc_paths)))
