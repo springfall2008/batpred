@@ -176,8 +176,11 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - The Open API has no forced-export, working-mode or dispatch endpoint, so Force Export exports only solar surplus and Freeze Export equals Demand. Recommended mode: `Control charge`; forced export needs local Modbus.
 - Once any discharge window is configured (`ctrDis=1`) firmware allows discharge only inside it; `execute.py` has no AlphaESS case, so an early-programmed window bars house load until it opens (GH#4723, open).
 - `batUseCap` below 10 was rejected with undocumented errno `10001`; floored at 10% in PR #5838 (2026-10-29, GH#4748).
-- Hold is an enabled 10% target at 100 W on a stable daily window (`ALPHAESS_HOLD_SOC`/`ALPHAESS_HOLD_POWER`), not zero rate; below 10% SoC it is a standing 100 W charge request (untested on hardware).
+- Hold is an enabled 10% target at `alphaess_hold_power` (default 100 W) on a stable daily window (`ALPHAESS_HOLD_SOC`), not zero rate; below 10% SoC it is a standing charge request at that power (untested on hardware).
 - `snap_time_grid()` snaps times to a select's step.
+- A successful write is cached in `applied_payload` as acknowledged, not read back. Readback gets five minutes' propagation grace, then a mismatch in an owned field (including `executeCycleType`, daily vs weekly) re-applies; active control reads config every five minutes, monitoring or read-only every 30. Before PR #5272 an app-side change could go unseen for about two hours (2026-10-13). Start at `note_external_change()`.
+- A schedule overwritten while `select.predbat_mode` is `Monitor`: `control_active` persists across restarts, so before PR #5272 cached schedules were re-applied over manual ones (2026-10-14). `_automatic_control_enabled()` now gates re-apply, fast polling and `alphaess_shutdown_mode` clearing on Monitor and read-only; a write-button press still goes through.
+- A future charge window left enabled outside the current one is the generic executor's choice, not proof an AlphaESS write failed (PR #5272).
 - Tests: `./run_all --test alphaess_control`
 
 ### Ohme (`ohme.py`)

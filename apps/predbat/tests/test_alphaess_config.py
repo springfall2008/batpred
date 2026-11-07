@@ -44,6 +44,9 @@ def test_alphaess_component_registered():
         ("battery_rate_max", "alphaess_battery_rate_max", None),
         ("api_delay", "alphaess_api_delay", 2),
         ("min_write_interval", "alphaess_min_write_interval", 300),
+        ("startup_write_delay", "alphaess_startup_write_delay", 300),
+        ("hold_power", "alphaess_hold_power", 100),
+        ("shutdown_mode", "alphaess_shutdown_mode", "none"),
     ]:
         info = entry["args"].get(arg)
         if not info:
@@ -126,6 +129,9 @@ def test_alphaess_apps_schema_keys():
         "alphaess_battery_rate_max": "float",
         "alphaess_api_delay": "float",
         "alphaess_min_write_interval": "integer",
+        "alphaess_startup_write_delay": "integer",
+        "alphaess_hold_power": "integer",
+        "alphaess_shutdown_mode": "string",
     }
     for key, kind in expected.items():
         entry = APPS_SCHEMA.get(key)
