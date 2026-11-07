@@ -40,6 +40,7 @@ from deye import DeyeAPI
 from sunsynk import SunsynkAPI
 from enphase import EnphaseAPI
 from kraken import KrakenAPI
+from luxpower import LuxpowerAPI
 from web_mcp import PredbatMCPServer
 
 try:
@@ -391,6 +392,22 @@ COMPONENT_LIST = {
         # Gate activation on having an AppID. Without this the component would start for
         # every instance, since all individual args are optional.
         "required_or": ["app_id"],
+        "phase": 1,
+        "can_restart": True,
+    },
+    "luxpower": {
+        "class": LuxpowerAPI,
+        "name": "LuxPower VPP API",
+        "event_filter": "predbat_luxpower_",
+        "args": {
+            "asset_id": {"required": True, "config": "luxpower_asset_id"},
+            "base_url": {"required": True, "config": "luxpower_base_url"},
+            "partner_token": {"required": False, "config": "luxpower_partner_token"},
+            "binding_status": {"required": False, "config": "luxpower_binding_status"},
+            "binding_ready": {"required": False, "default": False, "config": "luxpower_binding_ready"},
+            "telemetry_ready": {"required": False, "default": False, "config": "luxpower_telemetry_ready"},
+            "control_ready": {"required": False, "default": False, "config": "luxpower_control_ready"},
+        },
         "phase": 1,
         "can_restart": True,
     },
