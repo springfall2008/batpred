@@ -9,6 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timezone, timedelta
+import copy
+import pytz
 
 
 def run_test_manual_times(my_predbat):
@@ -438,6 +440,8 @@ def run_test_manual_times(my_predbat):
     else:
         print("PASS: T15 Manual demand 4 days ahead correctly dropped: {}".format(manual_demand_far))
 
+    failed |= test_manual_slots_dst(my_predbat)
+
     # Restore time context to current time
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc =  my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -449,3 +453,101 @@ def run_test_manual_times(my_predbat):
     my_predbat.manual_select("manual_export", "off")
     my_predbat.manual_select("manual_soc", "off")
     return failed
+
+
+def test_manual_slots_dst(my_predbat):
+    """Keep manual slot instants and labels stable across both clock changes."""
+    clock_keys = ("now_utc", "midnight_utc", "minutes_now", "forecast_minutes", "load_scaling_dynamic", "load_scaling_free")
+    saved_clock = {key: getattr(my_predbat, key) for key in clock_keys}
+    item_keys = ("manual_demand", "manual_import_rates")
+    saved_items = {key: copy.deepcopy(my_predbat.config_index[key]) for key in item_keys}
+    local_tz = pytz.timezone("Europe/London")
+    try:
+        for now, start_minute in ((datetime(2026, 10, 24, 18, 5), 2100), (datetime(2026, 3, 28, 18, 5), 1980), (datetime(2026, 10, 26, 18, 5), 2040)):
+            my_predbat.now_utc = local_tz.localize(now)
+            my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+            my_predbat.minutes_now = 18 * 60 + 5
+            my_predbat.forecast_minutes = 48 * 60
+            my_predbat.load_scaling_dynamic = {}
+            my_predbat.load_scaling_free = 1.0
+            day = (now + timedelta(days=1)).strftime("%a")
+            labels = [f"{day} {hour:02d}:{minute:02d}" for hour, minute in ((10, 0), (10, 30), (11, 0), (11, 30))]
+            times_value = "+" + ",".join(labels)
+            rates_value = "+" + ",".join(label + "=0.0" for label in labels)
+            my_predbat.config_index["manual_demand"]["value"] = times_value
+            my_predbat.config_index["manual_import_rates"]["value"] = rates_value
+            expected_times = list(range(start_minute, start_minute + 120, 30))
+            expected_rates = dict.fromkeys(range(start_minute, start_minute + 120), 0.0)
+            for _ in range(3):
+                assert my_predbat.manual_times("manual_demand") == expected_times
+                manual_rates = my_predbat.manual_rates("manual_import_rates")
+                assert manual_rates == expected_rates
+                assert my_predbat.config_index["manual_demand"]["value"] == times_value
+                assert my_predbat.config_index["manual_import_rates"]["value"] == rates_value
+            for key in item_keys:
+                before = copy.deepcopy(my_predbat.config_index[key])
+                decoded = my_predbat.manual_times(key, update=False) if key == "manual_demand" else my_predbat.manual_rates(key, update=False)
+                assert decoded == (expected_times if key == "manual_demand" else expected_rates)
+                assert my_predbat.config_index[key] == before
+                options = before["options"]
+                assert f"[{labels[0]}]" in options if key == "manual_demand" else f"[{labels[0]}=0.0]" in options
+                assert options.count(f"{day} 01:00") <= 1
+                assert options.count(f"{day} 01:30") <= 1
+                if now.month == 3:
+                    assert f"{day} 01:00" not in options
+                    assert f"{day} 01:30" not in options
+            # A supplier session is already absolute: it still maps to 11:00-12:00 local.
+            target_date = now + timedelta(days=1)
+            session_start = local_tz.localize(target_date.replace(hour=11, minute=0))
+            session_end = local_tz.localize(target_date.replace(hour=12, minute=0))
+            session = {"start": session_start.astimezone(timezone.utc).isoformat(), "end": session_end.astimezone(timezone.utc).isoformat(), "rate": 0.0}
+            rates = dict.fromkeys(range(start_minute - 60, start_minute + 180), 25.0)
+            tags = {}
+            my_predbat.load_free_slot([session], rates, rate_replicate=tags)
+            assert set(tags) == set(range(start_minute + 60, start_minute + 120))
+            assert set(tags.values()) == {"saving"}
+            rates = my_predbat.apply_manual_rates(rates, manual_rates, rate_replicate=tags)
+            assert {minute for minute, rate in rates.items() if rate == 0.0} == set(expected_rates)
+            assert {minute for minute, tag in tags.items() if tag == "manual"} == set(expected_rates)
+            assert rates[start_minute - 1] == rates[start_minute + 120] == 25.0
+            # Replanning after the change retains the selected wall times with the new origin.
+            my_predbat.now_utc = local_tz.localize(target_date.replace(hour=9, minute=5))
+            my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+            my_predbat.minutes_now = 9 * 60 + 5
+            assert my_predbat.manual_times("manual_demand") == [600, 630, 660, 690]
+            assert my_predbat.manual_rates("manual_import_rates") == dict.fromkeys(range(600, 720), 0.0)
+            assert my_predbat.config_index["manual_demand"]["value"] == times_value
+            assert my_predbat.config_index["manual_import_rates"]["value"] == rates_value
+        # Only the first repeated slot is selectable, including once it is marked as selected.
+        my_predbat.now_utc = local_tz.localize(datetime(2026, 10, 25, 0, 5))
+        assert my_predbat.manual_times("manual_demand", new_value="Sun 01:30") == [90]
+        assert my_predbat.manual_rates("manual_import_rates", new_value="Sun 01:30=0.0") == dict.fromkeys(range(90, 120), 0.0)
+        for key, selected in (("manual_demand", "[Sun 01:30]"), ("manual_import_rates", "[Sun 01:30=0.0]")):
+            options = my_predbat.config_index[key]["options"]
+            assert options.count(selected) == 1
+            assert "Sun 01:30" not in options
+        # A missing spring slot is persisted as the first real time, then decodes identically.
+        my_predbat.now_utc = local_tz.localize(datetime(2026, 3, 28, 18, 5))
+        for key, decode, value in (("manual_demand", my_predbat.manual_times, "Sun 01:30"), ("manual_import_rates", my_predbat.manual_rates, "Sun 01:30=0.0")):
+            result = decode(key, new_value=value)
+            stored = my_predbat.config_index[key]["value"]
+            assert "Sun 02:00" in stored
+            assert decode(key) == result
+        # Horizon boundaries are elapsed minutes, including the extra/missing DST hour.
+        for now, key, decode, horizon in (
+            (datetime(2026, 10, 24, 12), "manual_demand", my_predbat.manual_times, 48 * 60),
+            (datetime(2026, 3, 28, 12), "manual_demand", my_predbat.manual_times, 48 * 60),
+            (datetime(2026, 10, 25, 0), "manual_import_rates", my_predbat.manual_rates, 7 * 24 * 60),
+        ):
+            my_predbat.now_utc = local_tz.localize(now)
+            boundary = (my_predbat.now_utc.astimezone(timezone.utc) + timedelta(minutes=horizon)).astimezone(local_tz)
+            assert not decode(key, new_value=boundary.strftime("%a %H:%M"), update=False)
+            inside = (boundary.astimezone(timezone.utc) - timedelta(minutes=30)).astimezone(local_tz)
+            assert decode(key, new_value=inside.strftime("%a %H:%M"), update=False)
+    finally:
+        for key, value in saved_clock.items():
+            setattr(my_predbat, key, value)
+        for key, value in saved_items.items():
+            my_predbat.config_index[key].clear()
+            my_predbat.config_index[key].update(value)
+    return False

@@ -8,7 +8,9 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+import pytz
 from utils import get_override_time_from_string
 
 
@@ -153,5 +155,37 @@ def test_get_override_time_from_string(my_predbat):
         print("ERROR: Test 15 failed - expected {} got {}".format(expected, result))
         failed = True
 
+    failed |= test_override_time_dst()
     print("**** get_override_time_from_string tests completed ****")
     return failed
+
+
+def test_override_time_dst():
+    """Resolve target-date wall times across DST with pytz, zoneinfo and fixed offsets."""
+    cases = [
+        (datetime(2026, 10, 24, 18, 5), "Sun 10:00", datetime(2026, 10, 25, 10), "Sun 10:00"),
+        (datetime(2026, 3, 28, 18, 5), "Sun 10:00", datetime(2026, 3, 29, 9), "Sun 10:00"),
+        (datetime(2026, 10, 25, 0, 5), "Sun 10:00", datetime(2026, 10, 25, 10), "Sun 10:00"),
+        (datetime(2026, 3, 29, 0, 5), "Sun 10:00", datetime(2026, 3, 29, 9), "Sun 10:00"),
+        (datetime(2026, 10, 24, 18, 5), "10:00", datetime(2026, 10, 25, 10), "Sun 10:00"),
+        (datetime(2026, 3, 28, 18, 5), "10:00", datetime(2026, 3, 29, 9), "Sun 10:00"),
+        # Match the tariff policy: first repeated occurrence; skipped times reach the clock jump.
+        (datetime(2026, 10, 24, 18, 5), "Sun 01:30", datetime(2026, 10, 25, 0, 30), "Sun 01:30"),
+        (datetime(2026, 3, 28, 18, 5), "Sun 01:30", datetime(2026, 3, 29, 1), "Sun 02:00"),
+        (datetime(2026, 10, 25, 10, 23), "10:23", datetime(2026, 10, 25, 10), "Sun 10:00"),
+        (datetime(2026, 3, 29, 10, 23), "10:23", datetime(2026, 3, 29, 9), "Sun 10:00"),
+        (datetime(2026, 10, 26, 14, 23), "14:23", datetime(2026, 10, 26, 14), "Mon 14:00"),
+        (datetime(2026, 10, 26, 14, 23), "Mon 10:00", datetime(2026, 10, 26, 10), "Mon 10:00"),
+        (datetime(2026, 3, 28, 18, 5), "Mon 13:47", datetime(2026, 3, 30, 12, 30), "Mon 13:30"),
+    ]
+    for local_tz in (pytz.timezone("Europe/London"), ZoneInfo("Europe/London")):
+        for now, label, expected_utc, expected_label in cases:
+            now = local_tz.localize(now) if hasattr(local_tz, "localize") else now.replace(tzinfo=local_tz)
+            result = get_override_time_from_string(now, label, 30)
+            assert result.astimezone(timezone.utc) == expected_utc.replace(tzinfo=timezone.utc), (now, label, result)
+            assert result.strftime("%a %H:%M") == expected_label, (now, label, result)
+            assert result.astimezone(timezone.utc).astimezone(local_tz) == result
+    for local_tz in (timezone.utc, timezone(timedelta(hours=5, minutes=30)), None):
+        now = datetime(2026, 10, 24, 18, 5, tzinfo=local_tz)
+        assert get_override_time_from_string(now, "Sun 10:47", 15) == datetime(2026, 10, 25, 10, 45, tzinfo=local_tz)
+    return False
