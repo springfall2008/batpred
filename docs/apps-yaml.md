@@ -1589,6 +1589,10 @@ This requires at least several days of historical data with charging periods of 
 Some inverter integrations (e.g. Sunsynk) set this automatically from a capacity the inverter reports but cannot be trusted.
 - **battery_size_power** - Optional. A battery power sensor (W, same sign convention and `battery_power_invert` as `battery_power`) used only for estimating the battery size from charge history, in place of `battery_power`. Set it when a more accurate battery-side reading exists for sustained charging than the one used for live power - Sunsynk sets it automatically to the battery management system's own power.
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
+- **battery_max_soc** - Optional per-inverter upper limit on the usable battery capacity, a percentage (default 100, so unset
+leaves the computed `soc_max` unchanged). When set below 100 the usable capacity Predbat models, plans charge towards and
+predicts against is capped to `soc_max` x `battery_max_soc`/100, mirroring how Fox's device Max SoC setting stops the battery
+filling all the way. The Fox Cloud component binds it to `number.<prefix>_fox_<sn>_setting_maxsoc` automatically.
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 Can also be set to a fixed percentage rather than an entity name for inverters that have no reserve register to point at -
 the supplied Huawei and Sofar templates do this. A fixed value tells Predbat what the inverter is set to so it can be modelled,

@@ -6520,6 +6520,29 @@ def test_automatic_config_single_battery(my_predbat):
     return False
 
 
+def test_automatic_config_binds_fox_maxsoc_to_battery_max_soc(my_predbat):
+    """
+    Test automatic_config binds the Fox Max SoC setting entity to battery_max_soc
+
+    The per-inverter max SoC percent arg must be wired to the number entity that
+    carries the device Max SoC setting, mirroring the battery_min_soc floor binding.
+    """
+    print("  - test_automatic_config_binds_fox_maxsoc_to_battery_max_soc")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    captured = capture_automatic_config(fox)
+
+    sn_lower = deviceSN.lower()
+    assert captured.get("battery_max_soc") == [f"number.predbat_fox_{sn_lower}_setting_maxsoc"], captured.get("battery_max_soc")
+
+    return False
+
+
 def test_automatic_config_multiple_batteries(my_predbat):
     """
     Test automatic_config with multiple battery devices
@@ -8378,6 +8401,7 @@ def run_fox_api_tests(my_predbat):
         # automatic_config tests
         failed |= test_automatic_config_single_battery(my_predbat)
         failed |= test_automatic_config_multiple_batteries(my_predbat)
+        failed |= test_automatic_config_binds_fox_maxsoc_to_battery_max_soc(my_predbat)
         failed |= test_automatic_config_battery_and_pv_inverter(my_predbat)
         failed |= test_automatic_config_no_scheduler_error(my_predbat)
         failed |= test_automatic_config_custom_prefix(my_predbat)
