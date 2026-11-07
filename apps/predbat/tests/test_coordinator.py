@@ -6,7 +6,7 @@ import inspect
 from datetime import datetime
 
 from mock_base import MockBase
-from coordinator import CAPABILITY_KEYS, CONTAINER_SPEC, Coordinator, NOT_APPLICABLE_DEFAULTS, SCHEMA_VERSION, SECTION_SPEC, VOCAB_CONTAINERS, car_record, charger_record, charger_with_stub_car, inverter_definition, inverter_record, validate_report
+from coordinator import CAPABILITY_KEYS, CONTAINER_SPEC, Coordinator, NOT_APPLICABLE_DEFAULTS, OPTIONAL_CAPABILITY_DEFAULTS, SCHEMA_VERSION, SECTION_SPEC, VOCAB_CONTAINERS, car_record, charger_record, charger_with_stub_car, inverter_definition, inverter_record, validate_report
 from config import INVERTER_DEF
 
 
@@ -983,24 +983,26 @@ def _full_record():
 
 
 def test_optional_capability_defaults_false_without_a_gap():
-    """reserve_above_soc_charges_from_grid is optional: absent means False and is not a gap; stated, it is used."""
-    definition, gaps, _ = inverter_definition(_full_record(), 2)
-    assert definition["reserve_above_soc_charges_from_grid"] is False, definition
-    assert "reserve_above_soc_charges_from_grid" not in gaps, gaps
-    record = _full_record()
-    record["capabilities"]["reserve_above_soc_charges_from_grid"] = True
-    definition, gaps, _ = inverter_definition(record, 2)
-    assert definition["reserve_above_soc_charges_from_grid"] is True and gaps == [], (definition, gaps)
-    print("PASS: the optional capability defaults False without a gap, and is used when stated")
+    """Each optional capability (reserve_above_soc_charges_from_grid, charge_window_blocks_discharge): absent means False and is not a gap; stated, it is used."""
+    for key in OPTIONAL_CAPABILITY_DEFAULTS:
+        definition, gaps, _ = inverter_definition(_full_record(), 2)
+        assert definition[key] is False, (key, definition)
+        assert key not in gaps, (key, gaps)
+        record = _full_record()
+        record["capabilities"][key] = True
+        definition, gaps, _ = inverter_definition(record, 2)
+        assert definition[key] is True and gaps == [], (key, definition, gaps)
+    print("PASS: the optional capabilities default False without a gap, and are used when stated")
     return 0
 
 
 def test_optional_capability_survives_validation():
-    """The capabilities container accepts the optional key without a warning."""
-    logs = []
-    cleaned = validate_report({"inverters": [{"device_id": "x:1", "capabilities": {"reserve_above_soc_charges_from_grid": True}}]}, "x", logs.append)
-    assert cleaned["inverters"][0]["capabilities"] == {"reserve_above_soc_charges_from_grid": True}, cleaned
-    assert not logs, logs
+    """The capabilities container accepts each optional key without a warning."""
+    for key in OPTIONAL_CAPABILITY_DEFAULTS:
+        logs = []
+        cleaned = validate_report({"inverters": [{"device_id": "x:1", "capabilities": {key: True}}]}, "x", logs.append)
+        assert cleaned["inverters"][0]["capabilities"] == {key: True}, cleaned
+        assert not logs, logs
     print("PASS: the optional capability survives validation")
     return 0
 

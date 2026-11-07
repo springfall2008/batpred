@@ -186,7 +186,7 @@ small set of **containers**, each declaring the *type* of value it accepts:
 | `ratings` | Numbers and booleans, keyed by Predbat's setting name where one exists (`inverter_limit`, `export_limit`, `import_limit`, `battery_rate_max`, `soc_max`, `battery_min_soc`) |
 | `coverage` | A number/boolean, or a list of lowercase tokens |
 | `entities` | An entity descriptor: `access` (`rw` or `r`, required), exactly one of `entity_id` or a fixed `value`, and typed fields such as `domain`, `unit`, `format`, `min`/`max`, `invert` |
-| `capabilities` | `true`/`false` for the seven behaviour keys of an inverter definition (`support_charge_freeze`, `support_discharge_freeze`, `support_feedin_first`, `can_span_midnight`, `charge_discharge_with_rate`, `charge_control_immediate`, `target_soc_used_for_discharge`) |
+| `capabilities` | `true`/`false` for the seven behaviour keys of an inverter definition (`support_charge_freeze`, `support_discharge_freeze`, `support_feedin_first`, `can_span_midnight`, `charge_discharge_with_rate`, `charge_control_immediate`, `target_soc_used_for_discharge`), plus the optional `reserve_above_soc_charges_from_grid` and `charge_window_blocks_discharge`, which default to `false` when left out |
 | `account_ids` | Any scalar: an identifier that names your account or site rather than hardware (an MPAN, an account number, a site id) |
 | `functions` / `flags` / `effects` | Lists of short lowercase tokens |
 

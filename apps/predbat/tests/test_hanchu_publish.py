@@ -10,7 +10,7 @@
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 from config import INVERTER_DEF
-from coordinator import CAPABILITY_KEYS
+from coordinator import CAPABILITY_KEYS, OPTIONAL_CAPABILITY_DEFAULTS
 from hanchu import HANCHU_CAPABILITIES
 from hanchu_const import HANCHU_KEY_CHARGE_END, HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_CHARGE_START, HANCHU_KEY_DISCHARGE_SOC
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
@@ -310,14 +310,17 @@ def test_hanchu_capabilities_match_the_inverter_def_row():
     """The discovery record rebuilds the INVERTER_DEF row, so the two must agree exactly."""
     failed = False
     row = INVERTER_DEF["HanchuCloud"]
-    for key in CAPABILITY_KEYS:
+    known_keys = CAPABILITY_KEYS + tuple(OPTIONAL_CAPABILITY_DEFAULTS)
+    for key in known_keys:
         # support_feedin_first is absent from the row on purpose, and inverter.py defaults it to
         # False, which is what the capability set must therefore claim.
-        expected = row.get(key, False)
-        if HANCHU_CAPABILITIES.get(key) != expected:
-            print(f"ERROR: capability {key} = {HANCHU_CAPABILITIES.get(key)} != INVERTER_DEF's {expected}")
+        # An optional capability may be left out of both, and then takes its default.
+        expected = row.get(key, OPTIONAL_CAPABILITY_DEFAULTS.get(key, False))
+        claimed = HANCHU_CAPABILITIES.get(key, OPTIONAL_CAPABILITY_DEFAULTS.get(key))
+        if claimed != expected:
+            print(f"ERROR: capability {key} = {claimed} != INVERTER_DEF's {expected}")
             failed = True
-    extra = set(HANCHU_CAPABILITIES) - set(CAPABILITY_KEYS)
+    extra = set(HANCHU_CAPABILITIES) - set(known_keys)
     if extra:
         print(f"ERROR: HANCHU_CAPABILITIES carries keys the catalogue does not know: {sorted(extra)}")
         failed = True
