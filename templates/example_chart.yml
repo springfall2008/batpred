@@ -20,10 +20,14 @@ now:
 yaxis:
   - min: 0
     max: 9.54
+apex_config:
+  stroke:
+    dashArray: [0, 0, 0, 0, 4, 4, 4, 0, 0, 0]
 series:
   - entity: predbat.soc_kw_h0
-    stroke_width: 1
+    stroke_width: 2
     curve: stepline
+    color: '#000000'
     name: actual
     extend_to: now
     show:
@@ -42,6 +46,7 @@ series:
   - entity: predbat.soc_kw_best
     stroke_width: 3
     curve: smooth
+    color: '#1f77b4'
     name: best
     data_generator: >
       let res = []; for (const [key, value] of
@@ -62,11 +67,12 @@ series:
     show:
       in_header: raw
   - entity: predbat.best_charge_limit_kw
-    stroke_width: 4
+    stroke_width: 3
     curve: stepline
+    color: '#2ca02c'
     name: charge_limit_best
-    type: area
-    opacity: 0.2
+    type: line
+    opacity: 0.8
     data_generator: >
       let res = []; for (const [key, value] of
       Object.entries(entity.attributes.results)) { res.push([new
@@ -75,8 +81,9 @@ series:
     show:
       in_header: raw
   - entity: predbat.charge_limit_kw
-    stroke_width: 1
+    stroke_width: 2
     curve: stepline
+    color: '#98df8a'
     name: charge_limit_base
     data_generator: >
       let res = []; for (const [key, value] of
@@ -88,6 +95,7 @@ series:
   - entity: predbat.best_export_limit_kw
     stroke_width: 2
     curve: stepline
+    color: '#d62728'
     name: export_best
     data_generator: >
       let res = []; for (const [key, value] of
@@ -114,6 +122,18 @@ series:
     stroke_width: 1
     curve: smooth
     name: base10
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    show:
+      in_header: raw
+  - entity: predbat.clipping_remaining
+    name: clipping
+    type: column
+    color: '#ff9800'
+    opacity: 0.5
     data_generator: >
       let res = []; for (const [key, value] of
       Object.entries(entity.attributes.results)) { res.push([new

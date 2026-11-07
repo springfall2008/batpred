@@ -9,6 +9,7 @@ directly with `python3 tools/test_owner_gate.py`; nothing here touches GitHub.
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -124,6 +125,8 @@ class OwnerGateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Extract the script from the workflow and write the fake gh and a no-op sleep."""
+        if not shutil.which("bash") or not shutil.which("jq"):
+            raise unittest.SkipTest("tools/test_owner_gate.py requires bash and jq on PATH")
         workflow = yaml.safe_load(WORKFLOW.read_text())
         cls.script = workflow["jobs"]["evaluate"]["steps"][0]["run"]
         cls.tmp = tempfile.TemporaryDirectory()
