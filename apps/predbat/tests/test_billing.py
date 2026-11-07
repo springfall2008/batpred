@@ -884,16 +884,19 @@ def test_reader_settles_old_days():
 
     asyncio.run(reader.refresh(query_fn, mpans, now_utc))
     settle_by = date(2026, 11, 2) - timedelta(days=BILLING_SETTLE_DAYS)
-    if sorted(asked) != [date(2026, 10, 26) + timedelta(days=offset) for offset in range(8)] or len(warnings()) != 5:
-        print("ERROR: the first refresh should ask for every export day and give up on the 5 up to {}, asked {} warned {}".format(settle_by, sorted(asked), warnings()))
+    if BILLING_SETTLE_DAYS != 5:
+        print("ERROR: export billing can lag days behind import, so a day should be read until it is 5 days old, got {}".format(BILLING_SETTLE_DAYS))
         return True
-    if reader.settled["export"] != ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30"] or reader.legs["export"] is not True:
-        print("ERROR: 26-30 Oct should be settled with the export leg still read OK, got {} {}".format(reader.settled, reader.legs))
+    if sorted(asked) != [date(2026, 10, 26) + timedelta(days=offset) for offset in range(8)] or len(warnings()) != 3:
+        print("ERROR: the first refresh should ask for every export day and give up on the 3 up to {}, asked {} warned {}".format(settle_by, sorted(asked), warnings()))
+        return True
+    if reader.settled["export"] != ["2026-10-26", "2026-10-27", "2026-10-28"] or reader.legs["export"] is not True:
+        print("ERROR: 26-28 Oct should be settled with the export leg still read OK, got {} {}".format(reader.settled, reader.legs))
         return True
 
     asked.clear()
     asyncio.run(reader.refresh(query_fn, mpans, now_utc + timedelta(hours=3)))
-    if sorted(asked) != [date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 2)] or len(warnings()) != 5:
+    if sorted(asked) != [date(2026, 10, 29), date(2026, 10, 30), date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 2)] or len(warnings()) != 3:
         print("ERROR: a later refresh should only re-read the export days not yet settled, asked {}".format(sorted(asked)))
         return True
 
@@ -902,11 +905,11 @@ def test_reader_settles_old_days():
     asyncio.run(restarted.load())
     asked.clear()
     asyncio.run(restarted.refresh(query_fn, mpans, datetime(2026, 11, 3, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)))
-    if sorted(asked) != [date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 2), date(2026, 11, 3)]:
-        print("ERROR: after a restart the settled days should stay settled, and 31 Oct is read once more on 3 Nov, asked {}".format(sorted(asked)))
+    if sorted(asked) != [date(2026, 10, 29), date(2026, 10, 30), date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 2), date(2026, 11, 3)]:
+        print("ERROR: after a restart the settled days should stay settled, and 29 Oct is read once more on 3 Nov, asked {}".format(sorted(asked)))
         return True
-    if restarted.settled["export"] != ["2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31"]:
-        print("ERROR: 26 Oct should leave the settled list with the window and 31 Oct join it, got {}".format(restarted.settled["export"]))
+    if restarted.settled["export"] != ["2026-10-27", "2026-10-28", "2026-10-29"]:
+        print("ERROR: 26 Oct should leave the settled list with the window and 29 Oct join it, got {}".format(restarted.settled["export"]))
         return True
     if any("import" in line and "won't be read again" in line for line in owner.logged + restarted_owner.logged):
         print("ERROR: complete import days are settled quietly")
