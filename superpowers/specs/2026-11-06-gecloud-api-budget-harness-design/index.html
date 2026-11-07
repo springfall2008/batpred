@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>GE Cloud API budget harness — design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "GE Cloud API budget harness \u2014 design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-11-06-gecloud-api-budget-harness-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">GE Cloud API budget harness — design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="ge-cloud-api-budget-harness-design">GE Cloud API budget harness — design</h1>
+<p>Date: 2026-11-06
+Status: approved; harness built, baseline recorded below</p>
+<h2 id="why">Why</h2>
+<p>GivEnergy is introducing a monthly limit of 10,000 API calls per account; going over it costs money. 10,000 a month is
+about 330 calls a day — roughly one per 5-minute Predbat cycle. Reading <code>apps/predbat/gecloud.py</code> suggests a single
+ordinary (non-EMS) inverter currently makes somewhere around 12,000–16,000 calls <strong>a day</strong>, dominated by the full
+register sweep, which reads every setting individually and runs every 10 minutes because <code>polling_mode</code> is true for
+every non-EMS site.</p>
+<p>Before changing anything we want a <strong>measured baseline</strong>: a harness that runs a realistic simulated day through the
+real <code>execute.py</code> → <code>gecloud.py</code> path against a fake GE Cloud server, counts every API call, and logs when and why each
+one was made. The harness is then the yardstick for the optimisation work that follows.</p>
+<p>The user's view of a realistic target: 10,000 a month may not be achievable once writes are counted; 20,000 a month
+(about 660 a day) is more feasible. The open question the harness must answer is <strong>what execution costs</strong> — how many
+writes a day a real plan generates.</p>
+<h2 id="scope-of-this-piece-of-work">Scope of this piece of work</h2>
+<p><strong>In scope:</strong> the harness, and running it to record the baseline for current <code>main</code>.</p>
+<p><strong>Not in scope (follow-on work, measured with this harness afterwards):</strong> changing gecloud's polling. The user has
+already decided the direction for that follow-on:</p>
+<ul>
+<li>status and meter polled every 5 minutes (currently every 2 minutes);</li>
+<li>device info moved to a daily poll (currently every 2 minutes, and called once per inverter although the endpoint
+  returns every device on the account);</li>
+<li>the full register sweep dropped, replaced by reading only the registers Predbat actually uses, every 12 hours;</li>
+<li>the <code>GECloudData</code> history download is not used and can go.</li>
+</ul>
+<p>The harness must be able to show the before/after count for each of those changes, but making them is not part of
+this work.</p>
+<h2 id="goals">Goals</h2>
+<ol>
+<li>Count every HTTP request <code>GECloudDirect</code> (and <code>GECloudData</code>, if enabled) makes during a simulated 24 hours.</li>
+<li>Produce a per-call log that says <strong>when</strong> (simulated time), <strong>what</strong> (method, endpoint, and the setting name for a
+   register read or write) and <strong>why</strong> (which polling branch made it, or which execute action triggered the write —
+   e.g. "charge window start 23:30 → 00:00").</li>
+<li>Summarise: total per day, breakdown by category (status, meter, device info, register list, register reads,
+   register writes, account, site, device list, EVC, history, retries), and projection to a 30-day month compared
+   against 10,000 and 20,000.</li>
+<li>Writes must be genuine: they travel the real route — <code>execute.py</code> → inverter control via HA entity →
+   gecloud's <code>select_event</code> / <code>number_event</code> / <code>switch_event</code> → HTTP — not be synthesised by the harness.</li>
+<li>Run several random scenarios, because writes vary a lot by plan shape (export days, cars, IOG dispatches), and
+   report each scenario plus the worst case.</li>
+</ol>
+<h2 id="non-goals">Non-goals</h2>
+<ul>
+<li>Simulating GivEnergy's real behaviour beyond what is needed to keep Predbat on its normal code path (no rate-limit
+  emulation, no device timeouts unless the builder wants a retry-path test).</li>
+<li>Modelling physics accurately. SOC only needs to be believable enough that execute makes realistic decisions.</li>
+<li>EMS / Gateway / multi-inverter / EV charger topologies in the first version (see "Left to the builder").</li>
+<li>Changing any production polling behaviour.</li>
+</ul>
+<h2 id="anti-goals-would-make-it-a-failure-even-if-it-runs">Anti-goals (would make it a failure even if it runs)</h2>
+<ul>
+<li>Calls that bypass the fake server and go to the real <code>api.givenergy.cloud</code>. The fake must be the only reachable
+  endpoint; an unmatched request should fail loudly, not silently succeed.</li>
+<li>Counting at a layer that misses calls — e.g. counting <code>async_get_inverter_data</code> invocations but not retries, or
+  counting in gecloud but not in <code>GECloudData</code>. Count at the HTTP boundary.</li>
+<li>A harness that takes real wall-clock time. Retry back-off sleeps (<code>asyncio.sleep</code> in gecloud),
+  <code>write_and_poll_sleep</code> (10 s for GE Cloud inverters) and the 60-second component loop must all be skipped; a
+  simulated day should take seconds to a few minutes.</li>
+<li>A "why" column that is just the endpoint restated. The reason has to point at the code branch or the plan change
+  responsible, or the log is useless for tuning.</li>
+</ul>
+<h2 id="how-it-works-decided">How it works (decided)</h2>
+<h3 id="fake-ge-cloud-server">Fake GE Cloud server</h3>
+<p>A local HTTP stand-in for <code>GE_API_URL</code> (<code>https://api.givenergy.cloud/v1/</code>). It serves:</p>
+<ul>
+<li><code>account</code>, <code>site/{uuid}</code>, <code>communication-device</code>, <code>inverter/{serial}/system-data/latest</code> (status),
+  <code>inverter/{serial}/meter-data/latest</code> (meter), <code>inverter/{serial}/settings</code> (register list),
+  <code>inverter/{serial}/settings/{id}/read</code>, <code>inverter/{serial}/settings/{id}/write</code>, and the inverter
+  <code>data-points/{date}</code> history endpoint if <code>GECloudData</code> is enabled;</li>
+<li>a register list taken from a real capture: <code>coverage/ge_cloud.log</code> (git-ignored; produced by <code>gecloud.py</code>'s
+  <code>main()</code> test mode against a real account). It holds 81 control registers — 28 number, 45 select, 8 switch — from a
+  GivEnergy <strong>Gateway</strong> site (two All-In-Ones behind it): AC charge 1–10 start/end/upper SOC limit, DC discharge 1–10
+  start/end/lower SOC limit, battery charge/discharge power, charge/discharge power percentage, reserve, cutoff,
+  AC charge upper limit + enable, eco mode, DC discharge enable, pause battery + start/end, export power priority, EPS,
+  calculated load, force off grid, max output active power, restart hardware. The log gives each register's friendly
+  name and entity type (and so its HA name) but <strong>not</strong> its setting id or validation rules; ids are assigned by the
+  harness and validation rules reconstructed from type (time selects → <code>date_format:H:i</code>, numbers → <code>between:</code>,
+  switches → boolean, option selects → <code>in:</code> / options text; restart hardware → <code>writeonly</code>).
+  <strong>The log contains a live API key and a customer's personal details: copy only register names and types out of it,
+  never serials, the key, or account data.</strong> Use anonymised serials in the fixture. The user can capture a fresh log
+  if needed;</li>
+<li>writes update the stored register value, so subsequent reads return what was written.</li>
+</ul>
+<p>Status responses carry SOC; meter responses carry today/total kWh. Both evolve over the simulated day (see below).</p>
+<p>Every request is recorded with the simulated time, method, path and — where the harness can attach one — a reason tag.</p>
+<h3 id="the-simulated-day">The simulated day</h3>
+<ul>
+<li>Take a scenario from the random-scenario generator in <code>apps/predbat/tests/test_random_scenarios.py</code>
+  (<code>generate_random_scenario</code> / <code>apply_scenario_to_predbat</code>) to set rates, load, PV and battery.</li>
+<li>Build a <code>PredBat</code> configured for a single GE Cloud inverter (<code>ge_cloud_direct</code>, <code>ge_cloud_automatic</code>, inverter
+  type <code>GEC</code>) with the <code>GECloudDirect</code> component pointed at the fake server. <strong>Settings: the defaults a GE Cloud user
+  gets</strong> — <code>CONFIG_ITEMS</code> defaults plus whatever <code>ge_cloud_automatic</code> sets up — not a particular user's debug dump.
+  Low power charge (<code>set_charge_low_power</code> on) is a follow-on variant, expected to be the heaviest writer; leave room
+  for a settings variant without building it now.</li>
+<li>Start cold: the first gecloud <code>run()</code> uses <code>first=True</code> with no storage cache, as a real start-up does. <strong>Start-up
+  calls (account, device list, site, register list, first sweep, automatic config, start-up default-option writes) are
+  reported on their own line</strong>, separate from the steady-state day. The month projection is made from the
+  steady-state 24 hours only, with start-up shown as a per-restart cost. <em>(Builder's call, made by the designer.)</em></li>
+<li>Step the clock 288 times in 5-minute increments, from 00:00 to 23:55. Each step:
+  1. run gecloud's <code>run(seconds, first)</code> once for each simulated minute in the step, with <code>seconds</code> advancing as the
+     real component loop would (so the 2-minute / 10-minute / hourly branches fire at their real cadence);
+  2. <strong>advance the existing plan — do not re-plan.</strong> The plan is optimised once at the start (<code>calculate_plan(recompute=True)</code>).
+     Each later step moves the clock forward and calls <code>calculate_plan(recompute=False)</code>, which is exactly what a real
+     <code>update_pred()</code> cycle does when it does not re-plan: it drops charge and export windows whose end is in the past, so
+     the first window is always the current or next one (plan.py, the "Shift onto next charge/export window" loops at the
+     top of <code>calculate_plan</code>), and refreshes the prediction without optimising again. Use that function rather than
+     re-implementing the trim. <em>(Decided by the user.)</em> Rationale: with SOC following the plan and fixed forecasts a
+     re-plan would mostly reproduce the same plan at many times the run time, and advancing keeps every write
+     attributable to execute reacting to time and SOC.
+  3. run <code>execute_plan()</code>, whose inverter writes reach gecloud through the HA event route.</li>
+<li><strong>The day runs midnight to 23:55.</strong> The plan is generated at midnight (<code>minutes_now = 0</code>, overriding the random
+  scenario's own start time), and the last step is at 23:55. That gives 288 steps that never cross midnight, so
+  <code>calculate_plan</code>'s start-of-day forced recompute ("Force recompute due to start of day") never fires and no clock
+  handling is needed. <em>(Decided by the user.)</em></li>
+<li><strong>Re-planning every cycle is a follow-on</strong>, paired with the SOC-perturbation mode below: once SOC drifts from the
+  prediction, plan correction becomes a real source of writes and is worth measuring.</li>
+</ul>
+<h3 id="soc-and-meter-model">SOC and meter model</h3>
+<p><strong>Decided: start with the ideal case.</strong> The fake server's SOC follows the plan's own predicted SOC for the current
+simulated minute (from the plan's prediction), and forecasts do not change during the day. Meter counters
+accumulate from the scenario's load and PV for the elapsed time. Because reality never departs from the plan, the
+write count this gives is a <strong>floor</strong>, and the summary must say so.</p>
+<p><strong>Follow-on, once the ideal run works:</strong> a perturbation mode that nudges SOC away from the prediction at each 5-minute
+step (e.g. a few percent, seeded so runs are repeatable), combined with re-planning each cycle, to see how much extra writing plan correction causes. Design
+the SOC source so this is a small addition (one hook where the next step's SOC is decided), not a rework.</p>
+<h3 id="output">Output</h3>
+<ul>
+<li>A summary printed at the end: per-scenario totals, per-category breakdown, worst case, month projection vs 10k / 20k.</li>
+<li>A per-call log written to a file (CSV or JSON lines) with columns: simulated time, scenario id, method, endpoint
+  template, serial, setting id + name, reason, HTTP status, whether it was a retry.</li>
+</ul>
+<h3 id="where-it-lives-and-how-it-is-run">Where it lives and how it is run</h3>
+<p>A slow test registered in <code>TEST_REGISTRY</code> in <code>apps/predbat/unit_test.py</code>, run with
+<code>./run_all --test gecloud_api_budget</code> from <code>coverage/</code>, excluded from <code>--quick</code>. It writes the log into <code>coverage/</code>
+(or a path given on the command line). The first version records the baseline; it should not assert a budget yet
+(current main would fail any sensible one). A budget assertion can be added once the optimisation lands.</p>
+<p>The harness itself needs unit tests for its own moving parts (fake server routing, the call log, the reason tagging,
+the summary maths), per the repo rule that all new code is tested.</p>
+<h2 id="constraints">Constraints</h2>
+<ul>
+<li>Repo conventions: docstrings on every function/class (interrogate 100%), British spelling (cspell), Black line
+  length 256, <code>lower_case_with_underscores</code>.</li>
+<li><code>gecloud.py</code> must not grow harness-only branches in production code paths. If attaching a "why" needs a hook, prefer
+  something cheap and general (e.g. a context/reason that the call layer can read) over special-casing the test.</li>
+<li>Use the repo's existing test infrastructure (<code>create_predbat()</code>, <code>TestHAInterface</code>) rather than a parallel one.</li>
+</ul>
+<h2 id="known-wiring-points-for-the-builder">Known wiring points (for the builder)</h2>
+<ul>
+<li>Inverter writes for GE Cloud go through <code>call_service_wrapper</code> (<code>number/set_value</code>, <code>select/select_option</code>,
+  <code>switch/turn_on</code> / <code>turn_off</code>) in <code>inverter.py</code> (<code>write_and_poll_value</code>, <code>write_and_poll_option</code>,
+  <code>write_and_poll_switch</code>). In a real install HA turns those into events that reach <code>userinterface.py</code>'s
+  <code>select_event</code> / <code>number_event</code> / <code>switch_event</code>, then <code>components.py</code> routes them to <code>GECloudDirect</code> by entity
+  prefix. <code>TestHAInterface.call_service</code> currently just updates <code>dummy_items</code>; the harness has to complete that loop.</li>
+<li>After a write gecloud republishes the register entity from the write's response, so execute's read-back costs no
+  API call. The harness should confirm this rather than assume it.</li>
+<li><code>async_get_inverter_data</code> opens a fresh <code>aiohttp.ClientSession</code> per call against <code>GE_API_URL</code>; redirecting to the
+  fake can be done by pointing the URL at a local server or by intercepting the session — builder's choice, as long as
+  counting happens at the HTTP boundary.</li>
+<li><code>component_base.py</code> drives <code>run()</code> every 60 s; the harness calls <code>run()</code> directly with simulated <code>seconds</code> instead.</li>
+</ul>
+<h2 id="left-to-the-builder">Left to the builder</h2>
+<ul>
+<li>How the fake server is implemented (aiohttp test server, a patched client session, etc.).</li>
+<li>How reasons are attached to calls (call-site tags, a context variable, stack inspection), provided the result names
+  the polling branch or the execute action.</li>
+<li>Setting ids and reconstructed validation rules for the captured register list.</li>
+<li>How many scenarios run by default and which seeds (enough to cover export, car and IOG variants), and the
+  command-line options for choosing scenarios, fixed-plan mode and the log path.</li>
+<li>Whether <code>GECloudData</code> (history download) is included in the default run — it is configurable today; the summary
+  should make clear whether it was on.</li>
+<li>Whether to include an optional multi-inverter or EMS variant later.</li>
+</ul>
+<h2 id="topology-note">Topology note</h2>
+<p>The captured register list comes from a Gateway site, but the first version simulates a <strong>single</strong> inverter with no
+EMS and no Gateway. That is the commonest install and the one where <code>polling_mode</code> makes the register sweep run every
+10 minutes. Note that a Gateway site also sweeps every 10 minutes (the gateway device is always swept), so the baseline
+applies to it too. A single hybrid's real register list may be a little shorter than the Gateway's 81; the summary
+should state the register count it ran with so the sweep cost can be rescaled.</p>
+<h2 id="baseline-results-main-e5f424be">Baseline results (main @ e5f424be)</h2>
+<p>Measured with <code>./run_all --test gecloud_api_budget</code>: one GE Cloud inverter, no EMS, default settings,
+80 readable registers (81 captured, one write-only). Execute runs every 5 minutes from 00:00 to 23:55,
+and gecloud's own loop carries on to 24:00, so a whole 24 hours of polling is counted. SOC follows the
+plan exactly, so the write counts are a <strong>floor</strong>. The per-call log is written to
+<code>coverage/gecloud_api_budget_log.jsonl</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Plan shape</th>
+<th style="text-align: right;">Calls/day</th>
+<th style="text-align: right;">Writes/day</th>
+<th style="text-align: right;">Month (×30)</th>
+<th style="text-align: right;">vs 10k</th>
+<th style="text-align: right;">vs 20k</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>IOG, negative half-hourly import</td>
+<td style="text-align: right;">13,765</td>
+<td style="text-align: right;">34</td>
+<td style="text-align: right;">412,950</td>
+<td style="text-align: right;">4,130%</td>
+<td style="text-align: right;">2,065%</td>
+</tr>
+<tr>
+<td>5</td>
+<td>two cars, dual rate, 13.5 kWh</td>
+<td style="text-align: right;">13,771</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">413,130</td>
+<td style="text-align: right;">4,131%</td>
+<td style="text-align: right;">2,066%</td>
+</tr>
+<tr>
+<td>9</td>
+<td>IOG, heavy export</td>
+<td style="text-align: right;">13,872</td>
+<td style="text-align: right;">141</td>
+<td style="text-align: right;">416,160</td>
+<td style="text-align: right;">4,162%</td>
+<td style="text-align: right;">2,081%</td>
+</tr>
+<tr>
+<td>17</td>
+<td>car + IOG, Agile-like, heavy export</td>
+<td style="text-align: right;">13,801</td>
+<td style="text-align: right;">70</td>
+<td style="text-align: right;">414,030</td>
+<td style="text-align: right;">4,140%</td>
+<td style="text-align: right;">2,070%</td>
+</tr>
+<tr>
+<td>19</td>
+<td>negative half-hourly, 20 kWh, heavy charge</td>
+<td style="text-align: right;">13,815</td>
+<td style="text-align: right;">84</td>
+<td style="text-align: right;">414,450</td>
+<td style="text-align: right;">4,145%</td>
+<td style="text-align: right;">2,072%</td>
+</tr>
+</tbody>
+</table>
+<p>Polling is the same in every scenario, 13,731 calls a day:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th style="text-align: right;">Calls/day</th>
+<th>Where it comes from</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>register_read</td>
+<td style="text-align: right;">11,520</td>
+<td>the full register sweep, 80 registers × 144 sweeps. It runs every 10 min because <code>polling_mode</code> is on for a non-EMS site (the log's sweep reason says so)</td>
+</tr>
+<tr>
+<td>status</td>
+<td style="text-align: right;">720</td>
+<td>every 2 min</td>
+</tr>
+<tr>
+<td>meter</td>
+<td style="text-align: right;">720</td>
+<td>every 2 min</td>
+</tr>
+<tr>
+<td>device_info</td>
+<td style="text-align: right;">720</td>
+<td>every 2 min (<code>communication-device</code>, which returns every device on the account)</td>
+</tr>
+<tr>
+<td>device_list</td>
+<td style="text-align: right;">24</td>
+<td>hourly device refresh</td>
+</tr>
+<tr>
+<td>evc</td>
+<td style="text-align: right;">24</td>
+<td>hourly device refresh (EV charger list, even with no charger)</td>
+</tr>
+<tr>
+<td>site</td>
+<td style="text-align: right;">2</td>
+<td>12-hourly</td>
+</tr>
+<tr>
+<td>account</td>
+<td style="text-align: right;">1</td>
+<td>daily</td>
+</tr>
+<tr>
+<td>register_write</td>
+<td style="text-align: right;">34–141</td>
+<td>execute</td>
+</tr>
+</tbody>
+</table>
+<p>The sweep is 84% of the day.</p>
+<p><strong>Start-up</strong> costs 88 calls on a cold start: one full sweep (80) plus account, device list, EV charger
+list, site, register list, status, meter and device info. A warm restart costs less. Settings under 10
+minutes old, the account (under 24 h) and the site (under 12 h) are restored from storage.</p>
+<p><strong>Writes</strong> are 0.2–1.0% of the day today, but they matter once polling is cut. Two patterns stand out:</p>
+<ul>
+<li><strong>The export start time follows the clock.</strong> In scenario 9, from 20:55 to 23:45 during an active export
+  window, <code>DC Discharge 1 Start Time</code> is rewritten to the current time every cycle: 36 writes in under
+  3 hours.</li>
+<li><strong>Eco mode and DC discharge toggle together.</strong> Each change to whether Predbat is exporting writes both
+  <code>Enable Eco Mode</code> and <code>Enable DC Discharge</code>. That is 12–64 writes a day across the scenarios (64 in
+  scenario 9). Some of it is export starting and stopping as solar lifts the SOC back over the export
+  target.</li>
+</ul>
+<p><strong>A hazard found while building the harness.</strong> When a write is clamped by the register's range (for
+example a <code>Battery Discharge Power</code> range below the charge-rate sensor Predbat takes its discharge rate
+from), the read-back never matches. Execute's write-and-poll then retries about 10 times every cycle,
+which is about 2,880 extra calls a day. Real GivEnergy hardware reports matching charge and discharge
+rates, so the baseline models that. But a mismatch between what Predbat writes and what a register
+accepts is expensive under a call limit. The harness test <code>test_no_write_retry_loop</code> guards against it.</p>
+<p><strong>Against the direction already chosen</strong> (estimated from this baseline, not yet measured):</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th style="text-align: right;">Calls/day</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>status and meter every 5 min</td>
+<td style="text-align: right;">576</td>
+</tr>
+<tr>
+<td>a twice-daily read of the registers Predbat uses (assuming about 25 registers)</td>
+<td style="text-align: right;">~50</td>
+</tr>
+<tr>
+<td>device info daily, plus site, account and the hourly device and EV charger list refresh</td>
+<td style="text-align: right;">~52</td>
+</tr>
+<tr>
+<td><strong>Before writes</strong></td>
+<td style="text-align: right;"><strong>~680</strong></td>
+</tr>
+<tr>
+<td><strong>With this baseline's 34–141 writes</strong></td>
+<td style="text-align: right;"><strong>710–820</strong></td>
+</tr>
+</tbody>
+</table>
+<p>That is 21,400–24,600 a month: around the 20k target and well over 10k. After the sweep, the next
+levers are:</p>
+<ul>
+<li>the status/meter interval;</li>
+<li>the hourly device and EV charger refresh (48/day for an account with no charger);</li>
+<li>the two write patterns above.</li>
+</ul>
+<h2 id="after-register-reads-by-purpose">After: register reads by purpose</h2>
+<p>The first optimisation, in the same PR, measured with the same harness and scenarios. It changes three things:</p>
+<ul>
+<li><code>polling_mode</code> is off by default; <code>ge_cloud_poll_settings: true</code> turns it back on.</li>
+<li>Control registers are read at start-up and every 12 hours. They are worked out from the gecloud entities
+  named in apps.yaml, plus the AC charge gate and, under an EMS, the watched slot 1 windows. On this inverter
+  that is 16 registers.</li>
+<li>All other registers are read only when there is no full read in storage from the last 7 days.</li>
+</ul>
+<p>The control registers are also re-read straight away on leaving read only mode, and after a control failure
+(at most once every 4 hours). EMS and Gateway devices follow the same rules.</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th style="text-align: right;">Before (calls/day)</th>
+<th style="text-align: right;">After (calls/day)</th>
+<th style="text-align: right;">After (×30)</th>
+<th style="text-align: right;">vs 10k</th>
+<th style="text-align: right;">vs 20k</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td style="text-align: right;">13,765</td>
+<td style="text-align: right;">2,277</td>
+<td style="text-align: right;">68,310</td>
+<td style="text-align: right;">683%</td>
+<td style="text-align: right;">342%</td>
+</tr>
+<tr>
+<td>5</td>
+<td style="text-align: right;">13,771</td>
+<td style="text-align: right;">2,283</td>
+<td style="text-align: right;">68,490</td>
+<td style="text-align: right;">685%</td>
+<td style="text-align: right;">342%</td>
+</tr>
+<tr>
+<td>9</td>
+<td style="text-align: right;">13,872</td>
+<td style="text-align: right;">2,384</td>
+<td style="text-align: right;">71,520</td>
+<td style="text-align: right;">715%</td>
+<td style="text-align: right;">358%</td>
+</tr>
+<tr>
+<td>17</td>
+<td style="text-align: right;">13,801</td>
+<td style="text-align: right;">2,313</td>
+<td style="text-align: right;">69,390</td>
+<td style="text-align: right;">694%</td>
+<td style="text-align: right;">347%</td>
+</tr>
+<tr>
+<td>19</td>
+<td style="text-align: right;">13,815</td>
+<td style="text-align: right;">2,327</td>
+<td style="text-align: right;">69,810</td>
+<td style="text-align: right;">698%</td>
+<td style="text-align: right;">349%</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Register reads:</strong> 11,520 → 32 a day (16 control registers at 12:00 and 24:00).</li>
+<li><strong>Start-up:</strong> 88 calls on a cold start. A warm start (a full read stored in the last 7 days) reads only the 16
+  control registers, not all 80.</li>
+<li><strong>What remains:</strong> status, meter and device info at 720 each (2,160 a day, about 94% of the day). The planned
+  change to status and meter every 5 minutes and device info daily takes that to about 577.</li>
+<li><strong>Control failure re-reads are not in these numbers.</strong> The ideal-SOC day has no control failures, so none of
+  those re-reads are triggered.</li>
+</ul>
+<h2 id="after-live-data-every-5-minutes-device-info-daily">After: live data every 5 minutes, device info daily</h2>
+<p>The second optimisation, in the same PR:</p>
+<ul>
+<li>Inverter status, meter and EV charger data are polled every 5 minutes (<code>STATUS_POLL_SECONDS</code>), down from every 2.</li>
+<li>Device info is fetched at start-up, when the device check finds a hardware change, and otherwise once a day
+  (<code>DEVICE_INFO_REFRESH_SECONDS</code>).</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th style="text-align: right;">Baseline</th>
+<th style="text-align: right;">Register reads by purpose</th>
+<th style="text-align: right;">+ 5 min / daily info</th>
+<th style="text-align: right;">Month (×30)</th>
+<th style="text-align: right;">vs 10k</th>
+<th style="text-align: right;">vs 20k</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td style="text-align: right;">13,765</td>
+<td style="text-align: right;">2,277</td>
+<td style="text-align: right;">694</td>
+<td style="text-align: right;">20,820</td>
+<td style="text-align: right;">208%</td>
+<td style="text-align: right;">104%</td>
+</tr>
+<tr>
+<td>5</td>
+<td style="text-align: right;">13,771</td>
+<td style="text-align: right;">2,283</td>
+<td style="text-align: right;">700</td>
+<td style="text-align: right;">21,000</td>
+<td style="text-align: right;">210%</td>
+<td style="text-align: right;">105%</td>
+</tr>
+<tr>
+<td>9</td>
+<td style="text-align: right;">13,872</td>
+<td style="text-align: right;">2,384</td>
+<td style="text-align: right;">801</td>
+<td style="text-align: right;">24,030</td>
+<td style="text-align: right;">240%</td>
+<td style="text-align: right;">120%</td>
+</tr>
+<tr>
+<td>17</td>
+<td style="text-align: right;">13,801</td>
+<td style="text-align: right;">2,313</td>
+<td style="text-align: right;">730</td>
+<td style="text-align: right;">21,900</td>
+<td style="text-align: right;">219%</td>
+<td style="text-align: right;">110%</td>
+</tr>
+<tr>
+<td>19</td>
+<td style="text-align: right;">13,815</td>
+<td style="text-align: right;">2,327</td>
+<td style="text-align: right;">744</td>
+<td style="text-align: right;">22,320</td>
+<td style="text-align: right;">223%</td>
+<td style="text-align: right;">112%</td>
+</tr>
+</tbody>
+</table>
+<p>Before writes, a fixed 660 calls a day remain:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th style="text-align: right;">Calls/day</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>status</td>
+<td style="text-align: right;">288</td>
+</tr>
+<tr>
+<td>meter</td>
+<td style="text-align: right;">288</td>
+</tr>
+<tr>
+<td>device list (hourly refresh)</td>
+<td style="text-align: right;">24</td>
+</tr>
+<tr>
+<td>EV charger list (hourly refresh)</td>
+<td style="text-align: right;">24</td>
+</tr>
+<tr>
+<td>control register reads</td>
+<td style="text-align: right;">32</td>
+</tr>
+<tr>
+<td>site, account, device info</td>
+<td style="text-align: right;">4</td>
+</tr>
+<tr>
+<td><strong>Total before writes</strong></td>
+<td style="text-align: right;"><strong>660</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Writes add 34–141 a day.</p>
+<p>A site with a GivEnergy EV charger adds 3 calls per charger every 5 minutes, which is 864 a day per charger.
+None of the scenarios has one.</p>
+<p><strong>Next levers, largest first:</strong></p>
+<ol>
+<li><strong>The write patterns</strong> found in the baseline: the export start time following the clock, and the Eco mode
+   and DC discharge pair. Scenario 9's 141 writes are mostly these.</li>
+<li><strong>The meter poll.</strong> At 288 a day, it feeds the load/import/export/PV totals Predbat records. They change
+   slowly, so they could be polled less often.</li>
+<li><strong>The hourly device and EV charger list refresh.</strong> This is 48 a day, including 24 for an account with no
+   charger.</li>
+</ol>
+<h2 id="after-export-start-time-kept-while-an-export-runs">After: export start time kept while an export runs</h2>
+<p>The third change in the PR is a generic <code>execute.py</code> fix. While an export is running, execute keeps the start time
+the inverter already holds. Its overlap guard counted two cases as overlapping a charge window when they don't:</p>
+<ul>
+<li>an empty charge window (start == end);</li>
+<li>a charge window that starts exactly when the export ends.</li>
+</ul>
+<p>In either case it rewrote the start to "now" on every cycle. The guard now needs a charge window that is set and
+really overlaps.</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th style="text-align: right;">Writes/day before</th>
+<th style="text-align: right;">Writes/day after</th>
+<th style="text-align: right;">Calls/day</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td style="text-align: right;">34</td>
+<td style="text-align: right;">34</td>
+<td style="text-align: right;">694</td>
+</tr>
+<tr>
+<td>5</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">38</td>
+<td style="text-align: right;">698</td>
+</tr>
+<tr>
+<td>9</td>
+<td style="text-align: right;">141</td>
+<td style="text-align: right;">106</td>
+<td style="text-align: right;">766</td>
+</tr>
+<tr>
+<td>17</td>
+<td style="text-align: right;">70</td>
+<td style="text-align: right;">70</td>
+<td style="text-align: right;">730</td>
+</tr>
+<tr>
+<td>19</td>
+<td style="text-align: right;">84</td>
+<td style="text-align: right;">84</td>
+<td style="text-align: right;">744</td>
+</tr>
+</tbody>
+</table>
+<p>In scenario 9, <code>DC Discharge 1 Start Time</code> writes fall from 50 to 15. The 15 left each set up an upcoming window.
+The day is now 694–766 calls, 20,820–22,980 a month.</p>
+<h2 id="after-eco-mode-left-on-for-inverters-that-export-at-full-power-in-eco">After: Eco mode left on for inverters that export at full power in Eco</h2>
+<p>GE Cloud reports a <code>full-power-discharge-in-eco-mode</code> flag in each inverter's device info. So far every
+GivEnergy device seen reports it, and the fake now does too. The change is entirely in <code>gecloud.py</code>:</p>
+<ul>
+<li><code>async_automatic_config</code> gives a flagged inverter no <code>inverter_mode</code> (<code>None</code> for that inverter), so
+  <code>adjust_inverter_mode()</code> takes its existing quiet path and never turns eco off to export.</li>
+<li><code>ensure_full_power_eco()</code> turns eco back on if it finds it off. It runs with the default options (start-up,
+  new device, daily) and after the control re-read on leaving read only, where the eco register is now one of
+  the flagged inverter's control registers.</li>
+<li>Inverters without the flag still have eco turned off for an export. GivTCP is unchanged.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th style="text-align: right;">Writes/day before</th>
+<th style="text-align: right;">Writes/day after</th>
+<th style="text-align: right;">Calls/day</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td style="text-align: right;">34</td>
+<td style="text-align: right;">28</td>
+<td style="text-align: right;">688</td>
+</tr>
+<tr>
+<td>5</td>
+<td style="text-align: right;">38</td>
+<td style="text-align: right;">33</td>
+<td style="text-align: right;">693</td>
+</tr>
+<tr>
+<td>9</td>
+<td style="text-align: right;">106</td>
+<td style="text-align: right;">74</td>
+<td style="text-align: right;">734</td>
+</tr>
+<tr>
+<td>17</td>
+<td style="text-align: right;">70</td>
+<td style="text-align: right;">54</td>
+<td style="text-align: right;">714</td>
+</tr>
+<tr>
+<td>19</td>
+<td style="text-align: right;">84</td>
+<td style="text-align: right;">70</td>
+<td style="text-align: right;">730</td>
+</tr>
+</tbody>
+</table>
+<p>That is 20,640–22,020 calls a month.</p>
+<p>The largest remaining write pattern is <code>Enable DC Discharge</code> (32 writes a day in scenario 9). Export starts,
+reaches its target, stops, and solar lifts SOC back above the target, so export starts again.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

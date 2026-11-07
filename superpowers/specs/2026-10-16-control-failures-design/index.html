@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Control failure detection — design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Control failure detection \u2014 design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-10-16-control-failures-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Control failure detection — design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="control-failure-detection-design">Control failure detection — design</h1>
+<p>Date: 2026-10-16
+Status: implemented</p>
+<h2 id="purpose">Purpose</h2>
+<p>Predbat commands an inverter to charge, force-export, freeze-charge or freeze-export, but today it
+has no record of whether the battery actually did it. A silently ignored command (a cloud write that
+never landed, an inverter app overriding the mode, a BMS limit) shows up only as a plan that keeps
+missing its targets.</p>
+<p>This feature watches each controlled slot, decides when the battery is clearly not doing what was
+asked, logs a single warning for that slot and counts it. It is the counterpart of the control
+conflicts ledger (<code>control_ledger.py</code>): that one detects settings changed <em>outside</em> Predbat, this one
+detects Predbat's own commands <em>not taking effect</em>.</p>
+<p>It is observation only. Nothing here re-sends commands or changes behaviour.</p>
+<h2 id="scope">Scope</h2>
+<p>In scope:</p>
+<ul>
+<li>Per-inverter detection for four modes: Charging, Exporting (force export), Freeze charging,
+  Freeze exporting.</li>
+<li>One <code>Warn:</code> log line and one count per failed slot per inverter.</li>
+<li>Two HA sensors (24h rolling count with events, lifetime total).</li>
+<li>Persistence of both across restarts via the sensors' own state/attributes.</li>
+<li>Prometheus gauges and a "Control failures" section on the metrics dashboard.</li>
+<li>Documentation in <code>docs/output-data.md</code>.</li>
+</ul>
+<p>Out of scope:</p>
+<ul>
+<li>Any remedial action (retrying writes, alerts beyond the log line and sensors).</li>
+<li>User-configurable thresholds — constants until real data says they need tuning.</li>
+</ul>
+<h2 id="detection-rules">Detection rules</h2>
+<h3 id="when-no-judgement-is-made">When no judgement is made</h3>
+<p>The monitor holds no expectation for an inverter — so nothing is observed or counted — when:</p>
+<ul>
+<li>Read-only mode is on (<code>set_read_only</code>). This is a hard requirement: read-only must never count.</li>
+<li>The inverter is calibrating. On the 60s poll this is read live from the <code>battery_calibration</code>
+  sensor, not only the flag cached by the last plan run, so a calibration that starts between plan
+  runs is seen at once.</li>
+<li>The inverter's status is anything other than the four judged modes (Demand, Hold charging, Hold
+  exporting, Hold for car/iBoost, etc.).</li>
+<li>Predbat is not driving that window type: <code>set_charge_window</code> off for the charge modes,
+  <code>set_export_window</code> off for the export modes.</li>
+<li>No plan has run since process start (no expectation exists yet).</li>
+<li>For Charging and Exporting, the requested rate (<code>P_req</code>, below) is below the floor (too little
+  power to judge).</li>
+<li>The reading's <code>battery_power</code> could not be read — the sensor is unconfigured, <code>unavailable</code> or not
+  a number. It still reads as 0 W elsewhere, as it always has, but <code>Inverter.update_status</code> records
+  <code>battery_power_valid = False</code> and that reading is skipped entirely (not judged, no minutes, the
+  consecutive count untouched): judging the stand-in 0 W would report an idle battery that may not be.</li>
+<li>The commanded end has passed (<code>now &gt;= deadline</code>) — see Timing.</li>
+</ul>
+<p>An expectation cleared mid-slot simply stops further observation; an event already recorded stays.</p>
+<h3 id="per-mode-rules">Per-mode rules</h3>
+<p>Battery power sign convention: negative = charging, positive = discharging (as used by the charge
+curve learner, <code>inverter.py</code>). <code>P_req</code> is the rate that inverter's battery can actually deliver:
+the rate written to it, capped by the battery's charge (or discharge) power curve at the current SoC
+and by its temperature cap — so a battery tapering near full, or a cold one, is not failing — and for
+Exporting also by the headroom solar leaves: <code>AC limit − PV</code> on a hybrid inverter and
+<code>export limit + load − PV</code> (a limit of 0 is treated as not set). It is computed on the engine side
+(<code>Execute.expected_battery_rates</code>) on every reading and passed in, so the monitor stays engine-free.</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Judged only while</th>
+<th>Failing reading when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Charging</td>
+<td><code>soc_percent &lt; target_percent</code></td>
+<td>charge power (<code>-battery_power</code>) &lt; <code>FAIL_FRACTION × P_req</code></td>
+</tr>
+<tr>
+<td>Exporting</td>
+<td><code>soc_percent &gt; target_percent</code></td>
+<td>discharge power (<code>battery_power</code>) &lt; <code>FAIL_FRACTION × P_req</code></td>
+</tr>
+<tr>
+<td>Freeze charging</td>
+<td>always</td>
+<td><code>battery_power &gt; FLOOR_W</code> (discharging)</td>
+</tr>
+<tr>
+<td>Freeze exporting</td>
+<td>always</td>
+<td><code>-battery_power &gt; FLOOR_W</code> (charging)</td>
+</tr>
+</tbody>
+</table>
+<p>The SoC condition is evaluated on every reading using the fresh SoC, so reaching target between plan
+runs stops judgement immediately instead of waiting for the status to flip to Hold. A reading for
+which the SoC condition is false is not failing and resets the consecutive count.</p>
+<p>For Exporting, <code>target_percent</code> is the fleet export target raised to at least that inverter's own
+<code>reserve_percent</code>: <code>adjust_reserve()</code> clamps each inverter to its own minimum, so on a fleet with
+20% and 4% reserves the first battery rightly stops at 20% while the fleet target is lower.</p>
+<h3 id="timing">Timing</h3>
+<ul>
+<li><strong>Grace:</strong> <code>GRACE_S = 300</code>, measured from <code>entered_at</code> — when this inverter entered this
+  (mode, slot) — not from the slot's start. A mid-slot switch from Hold charging to Charging gets its
+  own five minutes.</li>
+<li><strong>Confirmation:</strong> a slot is declared failed on the <code>CONFIRM_READINGS = 3</code>rd consecutive failing
+  reading after grace. Any non-failing reading resets the consecutive count to zero.</li>
+<li><strong>Failed minutes:</strong> every failing reading after grace adds <code>min(now - last_observed_at,
+  MAX_GAP_S)</code> with <code>MAX_GAP_S = 120</code>, so a skipped or throttled poll neither loses nor invents time.
+  Minutes from the readings that led up to confirmation are included in the event.</li>
+<li><strong>Once per slot:</strong> on confirmation the event is created, the <code>Warn:</code> line logged and both counters
+  incremented. Later failing readings in the same slot only add to that event's <code>failed_minutes</code>.</li>
+<li><strong>Slot end:</strong> a reading at or after the expectation's <code>deadline</code> — the end most recently
+  commanded — is not judged and credits no minutes. The <code>deadline</code> is kept separately from
+  <code>slot_end</code> (the span covered, only ever widened, which events are matched on), so a replan that
+  shortens the active window stops judgement at the new end. The 60s poll keeps observing when a plan run is skipped (several <code>update_pred</code> early
+  exits skip <code>execute_plan</code>), and by then the battery has rightly left the mode, so the stale
+  expectation must not read the revert to Demand as a failure.</li>
+<li><strong>Reading spacing:</strong> a reading less than <code>MIN_GAP_S = 30</code> seconds after the previous one for the
+  same inverter is ignored entirely. A plan cycle's fetch and the 60s quick poll can land seconds
+  apart, often returning the same sensor value; without this "3 in a row" could be met in about a
+  minute.</li>
+</ul>
+<p>Slot identity is <code>(inverter_id, mode, slot_start)</code>, where a slot is a <strong>contiguous run</strong> of the same
+mode. The planner splits a long charge into back-to-back windows, so when the next window's start
+falls inside the current slot's <code>[slot_start, slot_end]</code> the slot is extended rather than replaced:
+the key, grace and counters carry on, and one sustained failure is counted once, not once per
+half-hour window. For a charge slot the run stops where the charge/freeze instruction changes:
+the inverter's schedule combines Charging, Freeze charging and Charging windows into one, but the
+monitor treats each Charging run as its own slot, so a failure in the second is not absorbed into
+the first one's event.</p>
+<h3 id="constants">Constants</h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GRACE_S</code></td>
+<td>300</td>
+<td>grace after entering a mode in a slot</td>
+</tr>
+<tr>
+<td><code>CONFIRM_READINGS</code></td>
+<td>3</td>
+<td>consecutive failing readings to declare a failure</td>
+</tr>
+<tr>
+<td><code>FAIL_FRACTION</code></td>
+<td>0.25</td>
+<td>Charging/Exporting fail below this fraction of <code>P_req</code></td>
+</tr>
+<tr>
+<td><code>FLOOR_W</code></td>
+<td>200</td>
+<td>minimum <code>P_req</code> to judge; wrong-way flow threshold for Freeze modes</td>
+</tr>
+<tr>
+<td><code>MAX_GAP_S</code></td>
+<td>120</td>
+<td>cap on minutes credited between two readings</td>
+</tr>
+<tr>
+<td><code>MIN_GAP_S</code></td>
+<td>30</td>
+<td>readings closer together than this are ignored</td>
+</tr>
+<tr>
+<td><code>DEFAULT_WINDOW_S</code></td>
+<td>86400</td>
+<td>rolling window for the 24h sensor</td>
+</tr>
+</tbody>
+</table>
+<h2 id="architecture">Architecture</h2>
+<h3 id="new-module-appspredbatcontrol_monitorpy">New module: <code>apps/predbat/control_monitor.py</code></h3>
+<p>No engine dependencies, so it is unit-testable with plain numbers, mirroring <code>control_ledger.py</code>.</p>
+<pre><code class="language-python">class ControlMonitor:
+    def set_expectation(self, inverter_id, mode, slot_start, slot_end, target_percent, now)
+    def clear_expectation(self, inverter_id=None)   # None clears every inverter
+    def observe(self, inverter_id, battery_power_w, soc_percent, requested_charge_w, requested_discharge_w, now)
+        # -&gt; event dict on first failure of a slot, else None
+    def recent_events(self, now, window_s=DEFAULT_WINDOW_S)
+    def newest_events(self, limit)
+    def prune(self, now, window_s=DEFAULT_WINDOW_S)
+    def restore(self, events, total)
+    total  # lifetime count (int)
+</code></pre>
+<p>Per-inverter state: the current expectation, <code>entered_at</code>, <code>consecutive_failing</code>,
+<code>pending_failed_s</code> (failed time accumulated before confirmation), <code>last_observed_at</code>, and a
+reference to the slot's event once fired.</p>
+<p><code>set_expectation</code> for the same mode with a <code>slot_start</code> inside the current slot updates
+<code>target_percent</code>, extends <code>slot_end</code> and sets <code>deadline</code> to the new commanded end in place, keeping
+<code>entered_at</code> and the counters; anything
+else starts fresh tracking. Fresh tracking first looks for an existing event for that inverter and
+mode whose slot contains the new start, and attaches to it (adopting its <code>slot_start</code>), so neither a
+Hold-then-Charging re-entry nor a restart re-counts the slot. <code>slot_start</code>/<code>slot_end</code> are epoch
+seconds.</p>
+<p>The requested rate is passed to <code>observe</code> rather than fixed at <code>set_expectation</code>, because the 60s
+balancer can change it between plan runs. <code>observe</code> picks the charge rate for Charging and the
+discharge rate for Exporting; Freeze modes ignore both.</p>
+<p>Event record (a plain dict, JSON-serialisable for the HA attribute):</p>
+<pre><code class="language-python">{&quot;inverter&quot;: 0, &quot;mode&quot;: &quot;Charging&quot;, &quot;slot_start&quot;: ..., &quot;slot_end&quot;: ..., &quot;at&quot;: ...,
+ &quot;requested_w&quot;: 3000, &quot;measured_w&quot;: 120, &quot;failed_minutes&quot;: 3.0}
+</code></pre>
+<h3 id="wiring">Wiring</h3>
+<ol>
+<li><strong><code>PredBat.__init__</code></strong> (<code>predbat.py</code>, beside <code>control_ledger</code>): <code>self.control_monitor =
+   ControlMonitor()</code>. Whether the restore has resolved is tracked on the monitor itself
+   (<code>control_monitor.restored</code>).</li>
+<li><strong><code>apply_inverter_rates</code></strong> (<code>execute.py</code>): store the rate actually written on the inverter as
+   <code>inverter.requested_charge_w</code> / <code>inverter.requested_discharge_w</code>, with <code>None</code> resolved to the
+   inverter maximum when rates are reset. This is the per-inverter value after the 60s balancer, not
+   the pre-balance stored intent.</li>
+<li><strong>End of <code>execute_plan</code></strong> (<code>execute.py</code>), after per-inverter status is final: for each inverter,
+   <code>set_expectation(...)</code> when its status is one of the four judged modes and the matching
+   <code>set_*_window</code> is on, otherwise <code>clear_expectation(inverter.id)</code>. Inputs: mode from
+   <code>status_per_inverter</code>; slot start from <code>charge_window_best[0]</code> / <code>export_window_best[0]</code>, slot
+   end from the contiguous charge windows that share the first one's charge/freeze instruction /
+   the export window end; target from <code>inv_target_soc_percent</code> (Charging) or the export target
+   percent raised to the inverter's own reserve (Exporting).</li>
+<li><strong>Read-only and calibration early exits</strong> in <code>execute_plan</code> (where <code>clear_control_ledger</code> is
+   called today): <code>clear_expectation()</code> for all inverters.</li>
+<li><strong>End of <code>fetch_inverter_data</code></strong> (quick and full): <code>observe(...)</code> for each inverter with its
+   fresh <code>battery_power</code>, <code>soc_percent</code> and the requested rates from step 2. If read-only mode or
+   calibration has started since the last plan run, all expectations are cleared here instead, so
+   nothing is counted in the minutes before the next <code>execute_plan</code>. On a plan cycle this runs before <code>execute_plan</code>, so the
+   reading is judged against the command in force when it was taken. A returned event is logged as
+   <code>Warn: Control failure: inverter {id} {mode} {HH:MM}-{HH:MM} - battery {charging|discharging}
+   {measured}W vs {requested}W requested</code> (Freeze modes describe the wrong-way flow against the
+   floor instead).</li>
+</ol>
+<h3 id="publishing-and-persistence">Publishing and persistence</h3>
+<p>In <code>predbat.py</code>, directly after the <code>control_conflicts</code> block, with the same restore-once /
+prune / recent / newest split:</p>
+<table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>State</th>
+<th>Attributes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>predbat.control_failures</code></td>
+<td>count of events in the last 24h; <code>state_class: measurement</code>, unit <code>failures</code></td>
+<td><code>friendly_name: "Control failures (24h)"</code>, <code>icon: mdi:battery-alert</code>, <code>events</code> (newest 20 — the durable store restore reads), <code>by_mode</code> (24h count per mode)</td>
+</tr>
+<tr>
+<td><code>predbat.control_failures_total</code></td>
+<td>lifetime count; <code>state_class: total_increasing</code>, unit <code>failures</code></td>
+<td><code>friendly_name: "Control failures (total)"</code>, <code>icon: mdi:battery-alert</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="restart-behaviour">Restart behaviour</h3>
+<p>All durable data lives in the two entities; nothing goes through the Storage component (an async
+component-side cache the core loop does not use). Restore reads them with
+<code>load_previous_value_from_ha</code>, which tries the current state and falls back to the last history
+entry. On Predbat.com the same calls are served by the DB component (<code>DatabaseManager</code>), so one
+mechanism covers both deployments, as it does for control conflicts and the savings totals.</p>
+<p>What survives a restart:</p>
+<ul>
+<li><strong>24h events</strong> — restored from the <code>events</code> attribute. A restored event whose slot is still live is
+  re-attached to that inverter's state (matched on inverter and mode, with the tracked slot start
+  inside the event's slot), so a restart mid-slot neither re-warns nor re-counts, and its
+  <code>failed_minutes</code> continue to accumulate. In production the first plan run after a restart sets
+  the expectation <em>before</em> the publish cycle restores the events, so the attach is tried in three
+  places: when an expectation is set fresh, at the end of every <code>restore()</code> for any tracking not yet
+  attached, and when a contiguous window extends tracking that is still unattached.</li>
+<li><strong>Lifetime total</strong> — restored numerically from the total entity's state.</li>
+</ul>
+<p>What a restart deliberately drops: the in-flight per-inverter state (expectation, <code>entered_at</code>,
+<code>consecutive_failing</code>, unconfirmed failed time). A slot that was failing but not yet confirmed starts
+again with a fresh grace once the first plan run sets its expectation. Predbat re-sends its commands
+on start-up, so the inverter is owed the same grace as on first entry. The cost is detection up to
+<code>GRACE_S</code> + <code>CONFIRM_READINGS</code> minutes later than without the restart, and the pre-restart minutes of
+an unconfirmed slot are not counted.</p>
+<p>Guarding the total against a failed restore. If the restore reads nothing (HA unreachable or the
+entity momentarily <code>unavailable</code> at start-up) and Predbat then publishes its in-memory total of 0,
+the real value is overwritten and HA long-term statistics record a reset. Checking just before each
+publish cannot recover from that once the 0 is written, so the guard is:</p>
+<ol>
+<li>Until a restore read returns a value, the restore is retried on every publish cycle rather than
+   once per process. The first attempt, and every 12th after it (<code>RESTORE_HISTORY_EVERY</code>, roughly
+   hourly), uses the full <code>load_previous_value_from_ha</code> (state, then a history fallback); the
+   attempts in between read current state only, filtering <code>unavailable</code>/<code>unknown</code> the same way, so
+   an install that has never had a failure does not search 30 days of history every cycle. The first value read is merged as <code>total = restored + total</code>: before the
+   restore resolves, the in-memory total holds only failures counted since this process started,
+   so adding (not <code>max</code>) keeps them. The merge happens once; later restore calls merge events only.</li>
+<li>While the restore is unresolved and the in-memory total is 0, the total entity is <strong>not written</strong>.
+   On a genuinely fresh install this means <code>predbat.control_failures_total</code> first appears with the
+   first counted failure; after that write, the restore is considered resolved.</li>
+<li>Once resolved, the in-memory total starts from the restored value and only increments, so the
+   published total never goes backwards.</li>
+</ol>
+<p>Residual risk, accepted: if the entity exists but stays unreadable until a failure is counted, rule 2
+lets that first write through and the old total is lost. That needs HA state and history both
+unreadable for the whole period before the first failure, while the restore is retried every cycle
+(with history consulted on the first attempt and about hourly after it).</p>
+<p>The 24h <code>events</code> attribute gets only rule 1 (events read on a later attempt are merged in,
+de-duplicated by slot key). If an empty list was already published over them they are lost, which is
+acceptable: the 24h sensor is a rolling window and recovers within a day, and no statistics depend on
+it.</p>
+<h3 id="metrics-and-dashboard">Metrics and dashboard</h3>
+<ul>
+<li><code>predbat_metrics.py</code>: gauges <code>predbat_control_failures_24h</code> and <code>predbat_control_failures_total</code>,
+  plus a <code>control_failures_events</code> list, exported through the same dict as the
+  <code>control_conflicts_*</code> fields.</li>
+<li><code>predbat.py</code> metrics update: set them alongside the control conflicts metrics.</li>
+<li><code>web_metrics_dashboard.py</code>: a "Control failures" section next to the control conflicts section —
+  summary tiles (24h count, lifetime total) and a table of recent events (time, inverter, mode,
+  slot, requested vs measured, failed minutes).</li>
+</ul>
+<h3 id="documentation">Documentation</h3>
+<p><code>docs/output-data.md</code>: both sensors, what a failure means, and the common causes (cloud polling lag,
+an inverter app or schedule overriding the mode, a BMS charge/discharge limit, a failed write).</p>
+<h2 id="testing">Testing</h2>
+<p>New <code>apps/predbat/tests/test_control_monitor.py</code>, registered in <code>TEST_REGISTRY</code>, written test-first.</p>
+<p>Monitor in isolation:</p>
+<ul>
+<li>nothing is judged during grace</li>
+<li>fires on the 3rd consecutive failing reading, not the 2nd</li>
+<li>a passing reading resets the consecutive count</li>
+<li>fires once per slot; <code>failed_minutes</code> keeps growing afterwards</li>
+<li>a new slot, or a new mode in the same slot, resets grace</li>
+<li>SoC reaching target stops judgement (Charging and Exporting)</li>
+<li><code>requested_w</code> below <code>FLOOR_W</code> is not judged</li>
+<li>Freeze charging fails on discharge, Freeze exporting fails on charge, each only above <code>FLOOR_W</code></li>
+<li>the <code>MAX_GAP_S</code> cap on credited time</li>
+<li><code>clear_expectation</code> mid-slot stops observation but keeps the event</li>
+<li>prune and the 24h window</li>
+<li>restore of a mid-slot event does not double-count, and its <code>failed_minutes</code> continue</li>
+<li>restore merges by slot key without duplicating events</li>
+<li>total survives restore (<code>restored + counted</code>, merged once) and never decreases</li>
+</ul>
+<p>Restart guard (wired into Predbat):</p>
+<ul>
+<li>restore read returns nothing: the total entity is not written while the total is 0, and the
+  restore is retried next cycle</li>
+<li>restore succeeds on a later cycle after a failure was counted while unresolved: published total is
+  <code>restored + counted</code></li>
+<li>fresh install: the total entity first appears with the first counted failure</li>
+</ul>
+<p>Wired into Predbat (<code>create_predbat</code>):</p>
+<ul>
+<li><code>execute_plan</code> in read-only mode sets no expectation and nothing is counted</li>
+<li>calibration likewise</li>
+<li>a Charging plan with <code>battery_power</code> at 0 produces one <code>Warn:</code> line and both sensors at 1</li>
+<li>the per-inverter balanced rate, not the stored intent, is used as <code>P_req</code></li>
+</ul>
+<p>Metrics/dashboard: a round-trip test and a section render test, following
+<code>tests/test_metrics_dashboard_control_conflicts.py</code>.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

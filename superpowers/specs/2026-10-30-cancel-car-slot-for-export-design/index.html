@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Cancel a planned car slot to export — design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Cancel a planned car slot to export \u2014 design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-10-30-cancel-car-slot-for-export-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Cancel a planned car slot to export — design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="cancel-a-planned-car-slot-to-export-design">Cancel a planned car slot to export — design</h1>
+<p>Status: draft for review, 2026-10-30. Revised 2026-10-31 after a live test: the hold moves from
+Octopus to the charger.</p>
+<h2 id="intent">Intent</h2>
+<p>Some export opportunities are worth far more than charging the car at that moment — an Octopus Saving
+Session paying £1-£3/kWh is the motivating case. Today Predbat can never take one if a car charging slot
+overlaps it: with <code>car_charging_from_battery</code> off, any export window that touches a car slot is
+disallowed outright (<code>allow_this_export_window()</code> in <code>plan.py</code>, <code>export_window_allowed()</code> in the levels
+pass, and the freeze-export pass all check <code>hit_car_window()</code>).</p>
+<p>This feature lets the detailed planner cancel a pre-planned car slot so that an export can run over it,
+but only when the export is clearly worth more than the car energy given up. The cancellation then
+becomes real:
+- A Predbat-led car simply doesn't charge in that slot.
+- A car whose slots someone else plans, such as Octopus Intelligent, is held off <strong>at the charger</strong>. The
+  charger component force-pauses it for the slot and hands it back afterwards. The supplier's smart
+  control is left on throughout.</p>
+<h2 id="goals">Goals</h2>
+<ul>
+<li>A new switch, off by default, that allows the detailed pass to cancel car slots for export.</li>
+<li>A cancellation only wins when it is genuinely valuable, judged pessimistically: the car energy given up
+  is valued as if it had to be bought back at the highest base import rate.</li>
+<li>The comparison is fair: a cancelled trial pays the import rate the house would really pay in that slot.</li>
+<li>Cancellations are reflected in the published car plan.</li>
+<li>Cars on a supplier's smart charging are physically held off during a cancelled slot and released
+  afterwards, robustly (restarts, failed calls).</li>
+<li>A general "force hold" capability on the charger components, so each charger can join by implementing it.
+  Wallbox first, then Zappi, Ohme and Hypervolt, others as their mechanisms are found.</li>
+</ul>
+<h2 id="non-goals">Non-goals</h2>
+<ul>
+<li>The levels pass and freeze export are unchanged — they keep today's hard block.</li>
+<li>No attempt to re-plan the car around a cancellation (move the energy to a later window). The
+  pessimistic valuation stands in for that; the car plan is rebuilt every cycle anyway.</li>
+<li>Suspending Octopus smart control, in the first version. On its own it doesn't hold the car (see "Live
+  test"). Whether some chargers need it alongside their pause is left to testers' feedback (see
+  "Supplier suspend").</li>
+<li>Changing the Octopus target SoC/time as a cancel mechanism (rejected).</li>
+<li>Chargers without a force-hold implementation: their cars keep the hard block until one is written.</li>
+</ul>
+<h2 id="anti-goals">Anti-goals</h2>
+<ul>
+<li>Routine cancellation for ordinary export rates. If this fires on a normal day, the valuation is wrong.</li>
+<li>A car left uncharged because a hold was never released (restart mid-hold, a failed resume call).</li>
+<li>A charger left in a changed state: OCPP left off, or a Zappi left in Stopped. Octopus may get confused
+  if a charger stays that way.</li>
+<li>Undoing a setting the user made themselves, such as turning OCPP back on when they had it off.</li>
+<li>A cancellation that looks free because no time is left before the ready time.</li>
+</ul>
+<h2 id="decisions-taken">Decisions taken</h2>
+<h3 id="switch">Switch</h3>
+<p>New config item <code>car_charging_cancel_for_export</code> (switch, default <code>False</code>), defined in <code>config.py</code>
+alongside the other car items. <em>(Name and placement are my call; friendly name e.g. "Allow export to
+cancel a car charging slot".)</em> When off, behaviour is byte-for-byte today's.</p>
+<h3 id="cancellation-is-a-property-of-the-plan-derived-not-stored">Cancellation is a property of the plan, derived, not stored</h3>
+<p>With the switch on, <strong>every</strong> prediction applies one rule: an export window set to a full export (not
+idle, not freeze) that touches a slot of a cancellable car cancels that slot. The cancel set is derived
+from the plan's export windows each time, never chosen once and carried. <em>(My call.)</em> So the trials in
+the optimiser, the final published prediction, <code>should_replace_plan()</code>'s re-scoring of the old plan,
+and plans reused without re-optimising (<code>calculate_plan_every</code>, or restored after a restart) all see the
+same cancellations. Nothing extra needs saving with the plan, and a reused plan can never keep an export
+while losing its cancellation.</p>
+<p><strong>Which passes may open such a window:</strong> <code>allow_this_export_window()</code> stops rejecting a window that only
+hits cancellable car slots. That gate is shared by the detailed pass and the refinement passes after it
+(<code>optimise_plan_pass()</code>, <code>optimise_solar()</code>, <code>optimise_swap_export()</code>). Those passes refine the detailed
+plan rather than levelling it, so they get the relaxed gate as well. <em>(My call.)</em> The levels pass
+(<code>export_window_allowed()</code>) and freeze export keep today's hard block, as the user asked.</p>
+<p><strong>Whole slots only.</strong> An export window that touches a car slot cancels the whole slot, because a hold
+stops the car for the whole slot anyway. <em>(My call.)</em></p>
+<p><strong>Cancellable cars (decided with the user)</strong> are the ones Predbat can really stop:
+- <strong>Predbat-led cars</strong> (slots from <code>plan_car_charging()</code>, <code>octopus: False</code>). Their own car plan drives the
+  charger, so leaving the slot out is enough.
+- <strong>Any car whose charger component can force-hold it</strong>, whoever plans its slots: Predbat's Octopus
+  component, the Octopus Energy HA integration, or Kraken (E.ON/EDF SmartFlex). The charger does the
+  stopping, not the supplier.</p>
+<p>A car with neither keeps the hard block. Which charger serves which car is the charger component's own
+car mapping (<code>CarChargerControl</code>, see below).</p>
+<h3 id="valuing-the-cancelled-energy-decided-with-the-user">Valuing the cancelled energy (decided with the user)</h3>
+<p>In a trial that cancels slots:</p>
+<ol>
+<li>The car load for those slots is removed, so the prediction's <code>cost</code> naturally drops by roughly
+   kWh × slot rate (the car no longer buys that energy).</li>
+<li><code>metric_keep</code> is increased by <strong>cancelled kWh × <code>rate_max_base</code></strong> — the highest <em>base</em> import rate
+   over the forecast (<code>rate_base_min_max()</code> in <code>fetch.py</code>: no IO dispatch overlay, no saving/free/Axle
+   sessions, no overrides).</li>
+</ol>
+<p>The net effect on the metric is kWh × (<code>rate_max_base</code> − slot rate): the cost of having to buy that
+energy back at peak. The slot rate must be subtracted <strong>once only</strong> — via the cost drop — so
+<code>metric_keep</code> adds the full <code>rate_max_base</code>, not the difference.</p>
+<p><code>rate_max_base</code> is used rather than "the highest rate between the slot and the car's ready time" because
+that window can be empty or all-cheap when the slot runs up to the ready time, making the cancellation
+look free while the car leaves short. Using the horizon peak is deliberately pessimistic: a car with
+plenty of time left pays the same penalty as one that would genuinely have to top up at peak. With a 7p
+slot and a 30p peak, an export has to beat ~23p/kWh net to win — saving sessions clear that, normal
+export rates do not.</p>
+<p>Being score-only (<code>metric_keep</code>), the penalty never appears in reported cost.</p>
+<h3 id="fair-rates-in-the-cancelled-slot-decided-with-the-user">Fair rates in the cancelled slot (decided with the user)</h3>
+<p>An Octopus Intelligent dispatch outside the fixed off-peak window makes the house's import cheap only
+because the dispatch happens. When a prediction cancels such a slot, the slot's minutes go <strong>back to
+peak</strong>, as the user put it. This follows the rule <code>dynamic_load_car_strip_feed_rates()</code> already uses for
+a dispatch it has cancelled (<code>octopus.py</code>):</p>
+<ul>
+<li>A minute is set to <code>rate_max_base</code> only when it is all of these: in the cancelled slot, from now
+  onwards, outside the fixed 23:30-05:30 window, and marked <code>io_adjusted</code>.</li>
+<li>It stays cheap if a dispatch of another car that is not cancelled covers it, because every car shares
+  the same rates.</li>
+<li>A saving/free/Axle session rate on that minute still wins over the reverted rate.</li>
+</ul>
+<p><em>(Settled from the user's "back to peak" and the existing precedent. <code>rate_import_no_io</code> was considered
+and rejected: when the rate feed itself delivers the dispatch discount, that snapshot still holds the
+cheap price, so nothing would be reverted.)</em></p>
+<p>Consequences that fall out:
+- A slot inside the fixed off-peak window keeps its rate, since it is cheap by tariff, not by dispatch.
+- Predbat-led slots on tariffs with no dispatch overlay have no <code>io_adjusted</code> minutes, so nothing changes.
+- Under the window billing rule (<code>dispatch_billing_window()</code>, GH#5521, Kraken/E.ON), the supplier bills
+  the whole planned dispatch off-peak whether the car charges or not, so the rate is <strong>not</strong> reverted.
+  Kraken cars are cancellable now, through their charger, so this case is live and needs a test.</p>
+<h3 id="the-prediction-kernel">The prediction kernel</h3>
+<p>Car slots and import rates are currently baked into the prediction context, both in Python
+(<code>Prediction</code>) and the C++ kernel (<code>prediction_kernel.py</code> / <code>prediction_kernel.cpp</code>, built from
+<code>pred.car_charging_slots</code> and <code>io_adjusted</code>). Because the cancel set follows from the export windows
+passed to each prediction call, both engines need to work it out per call. For each cancelled slot they
+zero the car load, revert the rate for its minutes, and add the <code>metric_keep</code> penalty. One way to do it is
+to precompute in the context, for each cancellable slot, its kWh, its reverted-rate minutes and its
+penalty, so each call only has to test window overlap. Python and kernel must produce identical results,
+and the existing parity tests must cover the new input. Kernel binaries for every platform must be
+rebuilt (<code>build_kernel.sh</code> / <code>build_kernel_cross.sh</code>) and verified (<code>verify_kernel_binary.py</code>).</p>
+<p>The design of that per-trial input (e.g. a bitmask over car slots, a per-minute car-load scale plus rate
+override array) is left to the builder, with the constraint that the switch off / no cancellation path
+must not slow the optimiser down measurably — the detailed pass runs a very large number of trials.</p>
+<h3 id="publishing-the-cancellation">Publishing the cancellation</h3>
+<p>After the plan is chosen, each car slot touched by an exporting window is marked cancelled in
+<code>car_charging_slots</code>, following the existing <code>dynamic_load_car_check()</code> pattern: <code>kwh</code> set to 0, the
+original kept in <code>kwh_cancelled</code>, <code>cost</code> set to 0. The plan display shows it as cancelled (for example
+with the existing "?"/cancelled styling or a distinct marker — builder's choice). Additionally record a
+reason (e.g. <code>cancelled_for_export: True</code>) so the charger hold can find it.</p>
+<p>For a Predbat-led car this is the whole mechanism: <code>binary_sensor.predbat_car_charging_slot</code> stays off for
+that slot, so the charger does not start.</p>
+<p>The car plan is rebuilt from scratch every cycle (<code>plan_car_charging()</code> in <code>fetch.py</code>), so each cycle must
+re-justify the cancellation. If it stops being worth it, it falls away by itself. <em>(Accepted as correct
+behaviour.)</em> Hysteresis: the existing plan-replacement rules (<code>should_replace_plan()</code>,
+<code>metric_min_improvement_plan</code>) apply as normal.</p>
+<h3 id="the-force-hold-on-the-charger-decided-with-the-user">The force hold on the charger (decided with the user)</h3>
+<p><strong>The interface.</strong> <code>CarChargerControl</code> (<code>car_charger_control.py</code>) is the shared base of the charger
+components: Wallbox, myenergi, Hypervolt, Ohme, and GivEnergy's charger in <code>gecloud.py</code>. It gains an
+optional force-hold capability:
+- a "can force-hold" check, which defaults to no;
+- <code>force_pause()</code>: stop the charger now, overriding whoever is driving it;
+- <code>force_resume()</code>: undo exactly what <code>force_pause()</code> changed, and leave whoever was driving it to
+  restart the charge.</p>
+<p>A component that doesn't implement it keeps its cars uncancellable. Hold state is saved through the
+existing <code>charger_control_extra_state()</code> / <code>charger_control_restore_extra()</code> persistence, not a new store.</p>
+<p><strong>Shared hold rules</strong> (the base class owns these, each charger supplies only the two actions):
+- <strong>When:</strong> in the 5 minutes before a cancelled slot starts, force-pause. This is driven from the 15-second
+  loop, as <code>dynamic_load_car_poll()</code> is, so it is never up to 5 minutes late. If the plan cancels a slot
+  that has already started, force-pause immediately. <em>(Mid-slot behaviour is my call.)</em>
+- <strong>Resume:</strong> when the cancelled slot (or the contiguous run of cancelled slots) ends, force-resume.
+- <strong>A hold, once started, is committed (decided with the user).</strong> After the force pause has gone out, the
+  hold stays until its planned resume time, even if a later plan no longer cancels the slot. While held,
+  the car plan keeps showing the slot as cancelled. If the plan also cancels the very next slot before the
+  resume time, the hold extends to cover it. Before the force pause goes out, the plan can change its mind
+  freely.
+- <strong>Verify, don't assume.</strong> After a force pause, read the charger back and repeat the pause until it
+  reports stopped. After a force resume, read it back and repeat until the charger reports it has been
+  handed back. Each charger defines what "stopped" and "handed back" look like.
+- <strong>Persistence.</strong> The hold is saved: car, charger, start, planned resume time, and the charger's
+  pre-hold state (what <code>force_resume()</code> has to put back). After a restart Predbat continues the hold, or
+  resumes at once if the resume time has passed.
+- <strong>Safety resume.</strong> A hold is never allowed to outlast its planned resume time plus a margin, even if
+  the plan has changed or a resume call failed. The resume is retried until it lands. <em>(The margin is the
+  builder's choice; that a safety resume exists is my call.)</em>
+- <strong>Only undo our own changes.</strong> <code>force_resume()</code> restores only what <code>force_pause()</code> changed. If the user
+  had OCPP off already, or a Zappi already in Stopped, Predbat leaves it that way.
+- <strong>Slot confirmation paused.</strong> During a hold the car sits idle inside a live dispatch, so
+  <code>dynamic_load_car_check()</code> must not cancel the held car's slots for "in a dispatch but not charging".
+- <strong>The supplier is not touched.</strong> Octopus smart control stays on, the device stays active, and its
+  dispatches are read as normal. In the live test Octopus kept every dispatch through the hold. It did
+  re-cut one at the hold's start (19:00→05:30 became 19:00→19:05 + 19:05→05:30), so the published slots
+  can change shape mid-hold and the hold must key on time, not on a slot's identity.</p>
+<h3 id="wallbox-force-hold-first-implementation-decided-with-the-user">Wallbox force hold (first implementation, decided with the user)</h3>
+<p>While Octopus drives a Wallbox charger over OCPP, the Wallbox cloud refuses pause and resume (HTTP 409),
+which Predbat's existing <code>held_by_ocpp()</code> guard already knows. So the Wallbox component gets:</p>
+<ul>
+<li><strong>(a) An OCPP connection toggle.</strong> A switch per charger that writes the charger's OCPP configuration
+  (<code>v3/chargers/&lt;id&gt;/ocpp-configuration</code>, POST), changing <code>type</code> between <code>ocpp</code> and <code>wallbox</code> and keeping
+  <code>address</code>, <code>chargePointIdentity</code> and <code>password</code> as they were read. The password is never logged.</li>
+<li><strong>(b) Force pause.</strong> Read and keep the OCPP configuration. Switch <code>type</code> to <code>wallbox</code>, wait until the
+  charger reports it has left OCPP mode, and only then send the pause (remote-action 2). Read back and
+  re-pause until it reports paused (<code>status_id</code> 182, 0 W).</li>
+<li><strong>(c) Force resume.</strong> Switch <code>type</code> back to <code>ocpp</code> only; no resume command is sent. Octopus restarts the
+  charge itself once the link is back (<code>connectionStatus</code> 4). Retry the OCPP write on failure, including
+  HTTP 502, and keep checking until the link reconnects.</li>
+</ul>
+<p>Only a charger that was in OCPP mode when the hold began has its OCPP switched off and on. One that was
+already in Wallbox mode (e.g. Predbat-led) just gets a plain pause and resume.</p>
+<h3 id="zappi-force-hold-second-implementation">Zappi force hold (second implementation)</h3>
+<p>The myenergi component already sets Zappi modes (<code>set_mode()</code>, with <code>ZAPPI_MODE_STOPPED</code>):
+- <strong>Force pause:</strong> keep the current mode (Eco+, Eco or Fast) in the hold state, then set Stopped. Stopped
+  overrides the supplier's active command.
+- <strong>Force resume:</strong> set the kept mode back.</p>
+<p>Leaving a Zappi in Stopped can confuse Octopus's scheduling, so the safety resume matters most here. This
+needs its own live test before it's trusted.</p>
+<h3 id="ohme-force-hold-third-implementation">Ohme force hold (third implementation)</h3>
+<p>The Ohme component already has both calls: <code>async_pause_charge()</code> (<code>POST /v1/chargeSessions/&lt;serial&gt;/stop</code>,
+shown on a Home Pro as "Charging Paused") and <code>async_resume_charge()</code> (<code>.../resume</code>).
+- <strong>Force pause:</strong> pause the session.
+- <strong>Force resume:</strong> resume it.</p>
+<p>Ohme's own guidance warns that a session left paused for a long time can make Octopus and Ohme raise a
+"failed session" or communication alert, because the car isn't taking power when told to. So, as with the
+Zappi, the hold is kept short and the safety resume matters most. Open questions for its live test:
+- Does Octopus's next instruction override the pause mid-slot?
+- Does resume hand the session back to Octopus's schedule, or start a charge regardless?</p>
+<p>This also covers cars whose slots the Ohme component owns (<code>car_slot_owner</code> <code>"ohme"</code>).</p>
+<h3 id="hypervolt-force-hold">Hypervolt force hold</h3>
+<p>The Hypervolt component already stops and starts a charger: <code>sync.apply {"release": false}</code> over the
+charger's websocket stops it, and <code>{"release": true}</code> lets it charge again (<code>release_command()</code>).
+- <strong>Force pause:</strong> release false.
+- <strong>Force resume:</strong> release true.</p>
+<p>There is no OCPP-style link to switch off: Octopus reaches a Hypervolt through Hypervolt's cloud. The
+existing code says it isn't known whether Octopus can undo a Hypervolt stop (<code>charger_control_hand_to_octopus()</code>
+in <code>hypervolt.py</code>). The verify step will show it: if Octopus overrides the pause, the charger reports
+charging again during the hold. Testers' feedback decides whether a Hypervolt needs the supplier suspend
+step below.</p>
+<h3 id="other-chargers">Other chargers</h3>
+<p>GivEnergy's charger follows when its force-pause mechanism is found and live-tested. Until then its cars
+keep the hard block.</p>
+<h3 id="supplier-suspend-not-in-the-first-version-decided-with-the-user">Supplier suspend: not in the first version (decided with the user)</h3>
+<p>The first version never suspends the supplier's smart charging; the charger hold does the work alone.
+Holding at the charger and suspending the supplier was considered. The evidence so far:
+- For Wallbox it doesn't help. The 409 in the live test came while Octopus was suspended; switching OCPP off
+  is what unlocked the charger, and Octopus stayed tidy without a suspend.
+- It might help chargers that Octopus drives cloud-to-cloud (Hypervolt, Ohme), if Octopus overrides their
+  pause. It might also quiet the "failed session" alerts Ohme and myenergi warn about when a car ignores
+  instructions.</p>
+<p>Users with those chargers will test the first version and report back. If a charger turns out to need it,
+the suspend becomes a per-charger step in the hold, off by default, with this ordering:
+- <strong>Hold:</strong> pause the charger first, then suspend. A charger left without Octopus's control charges at
+  full power, as the Pulsar did.
+- <strong>Release:</strong> unsuspend first, then release the charger, so it never charges at peak in the gap.</p>
+<p>It would also bring back the rule that a temporary suspension is not a suspension. Predbat's Octopus
+component drops a suspended device from <code>num_cars</code> and rewires its slots within a minute, as seen in the
+live test, so a held device would have to stay active with its slots kept.</p>
+<p>The <code>updateDeviceSmartControl</code> mutation (<code>SUSPEND</code> / <code>UNSUSPEND</code>) is confirmed from the live schema.</p>
+<h2 id="live-test-2026-10-31-users-wallbox-pulsar-on-octopus-intelligent-ocpp">Live test, 2026-10-31 (user's Wallbox Pulsar on Octopus Intelligent, OCPP)</h2>
+<p><strong>Octopus suspend: doesn't hold the car.</strong> <code>updateDeviceSmartControl(input: {deviceId, action})</code>, with
+<code>action</code> <code>SUSPEND</code> or <code>UNSUSPEND</code> (confirmed by schema introspection):
+- 18:56: suspended. The device went <code>SMART_CONTROL_OFF</code>, <code>isSuspended</code> true.
+- Octopus did <strong>not</strong> withdraw the planned dispatches.
+- 19:01: the Pulsar was charging at full power anyway.
+- Predbat's existing suspended-device handling dropped the car's Intelligent slots within a minute ("Live
+  intelligent devices changed … to []") and fell back to its own car plan.
+- 19:03: unsuspended, and Octopus control returned straight away.</p>
+<p><strong>Wallbox pause under OCPP: refused.</strong> HTTP 409 "the charger cannot do that in its current state".</p>
+<p><strong>Wallbox with OCPP switched off: works.</strong>
+- 19:10:06: OCPP switched off (<code>type</code> <code>wallbox</code>). The write was accepted at once.
+- 19:10:21: first pause. Accepted, but the charger hadn't finished leaving OCPP mode and kept charging.
+- 19:12:02: second pause. The car stopped (<code>status_id</code> 182, 0 W). The Wallbox app and HA's Wallbox
+  sensor kept showing "charging" for several minutes; the API's <code>last_sync</code> time is the trustworthy one.
+- Octopus kept the device <code>SMART_CONTROL_IN_PROGRESS</code> and kept its dispatches throughout.
+- 19:17:01: switching OCPP back on returned <strong>HTTP 502</strong>. The paused charger hadn't synced with the
+  Wallbox cloud since 19:13:48.
+- 19:21:39: retried. Accepted, with <code>connectionStatus</code> 2.
+- 19:24:07: <code>connectionStatus</code> 4. Octopus restarted the charge at 7.06 kW <strong>without any resume command</strong>.</p>
+<h2 id="build-order-decided-with-the-user">Build order (decided with the user)</h2>
+<ol>
+<li><strong>Wallbox force hold</strong>, in the Wallbox component: the OCPP toggle, force pause and force resume, with a
+   way to call each by hand (the existing <code>wallbox.py</code> command line). Live re-test on the user's charger
+   with the real code.</li>
+<li><strong>The force-hold interface and shared hold rules</strong> in <code>CarChargerControl</code>.</li>
+<li><strong>The planner work:</strong> switch, valuation, rates, kernel and publishing. The Predbat-led half depends on
+   none of the above and can be built alongside.</li>
+<li><strong>Zappi, Ohme and Hypervolt force holds.</strong> The user can't test these, so they ship marked as needing
+   testers' feedback, which also decides whether any of them needs the supplier suspend step.</li>
+</ol>
+<h2 id="constraints">Constraints</h2>
+<ul>
+<li>Switch off ⇒ no behaviour change and no measurable optimiser slowdown.</li>
+<li>Unit tests for all new code (repo rule), including:</li>
+<li>Python/kernel parity for the cancelled-slot input.</li>
+<li>The valuation: cancellation wins on a saving-session rate, loses on a normal export rate, and doesn't
+    look free when the slot ends at the ready time.</li>
+<li>The rate reversion cases: dispatch outside off-peak, inside off-peak, another car's live dispatch on
+    the same minute, saving-session overlap, and the window billing rule.</li>
+<li>The cancel set derived identically in trials, the final prediction, the old-plan re-score and a
+    reused/restored plan.</li>
+<li>Cars with neither Predbat-led slots nor a force-hold charger never cancelled.</li>
+<li>Car-plan publishing.</li>
+<li>The hold lifecycle: pause timing, the commitment rule and extension, verify-and-repeat on both
+    pause and resume, restart mid-hold, a failed resume retried (including a 502), the safety resume,
+    and the user's own OCPP-off or Stopped setting left alone.</li>
+<li>Wallbox: OCPP write keeps address, identity and password and never logs the password; pause only
+    after the mode change has landed.</li>
+<li>Tests share one <code>PredBat</code> fixture: restore any state the new tests change.</li>
+<li>Docs: document the switch in <code>docs/</code> (car charging, Octopus Intelligent and the charger component
+  pages), British English.</li>
+</ul>
+<h2 id="left-to-the-builder">Left to the builder</h2>
+<ul>
+<li>The per-trial cancellation representation in Python and the kernel.</li>
+<li>Exactly how the plan display marks a slot cancelled for export.</li>
+<li>The safety-resume margin and retry cadence.</li>
+<li>How each charger reports "stopped" and "handed back" for the verify step, within what's described above.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

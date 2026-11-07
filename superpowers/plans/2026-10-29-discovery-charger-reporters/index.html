@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Discovery Charger Reporters Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Discovery Charger Reporters Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-10-29-discovery-charger-reporters.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Discovery Charger Reporters Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="discovery-charger-reporters-implementation-plan">Discovery Charger Reporters Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Every EV charger integration publishes <code>chargers</code> and <code>cars</code> records to the discovery catalogue: myenergi (Zappi), Wallbox, Hypervolt and GE Cloud's EV charger, alongside Ohme which already does.</p>
+<p><strong>Architecture:</strong> Add <code>charger_record()</code>, <code>car_record()</code> and <code>charger_with_stub_car()</code> builders to <code>coordinator.py</code>, siblings of <code>inverter_record()</code>. Fix the stub-car marker, which validation drops today. Migrate Ohme onto the builders. Then give each charger component a <code>build_discovery()</code> and one <code>self.refresh_discovery()</code> call per <code>run()</code> cycle. The rollout stays observe-only: no <code>automatic_config()</code> or control path changes.</p>
+<p><strong>Tech Stack:</strong> Python 3, Predbat's in-tree test harness (<code>coverage/run_all</code>), pre-commit (Black 256, Flake8 250, interrogate 100%, cspell en-gb).</p>
+<p><strong>Spec:</strong> <a href="../../specs/2026-09-10-discovery-catalogue-design/">docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md</a> (sections <code>chargers</code> / <code>cars</code>, redaction "Four classes"), and <a href="../../../discovery-catalogue/">docs/discovery-catalogue.md</a> ("Writing a reporter"). The reference reporter is <code>OhmeAPI.build_discovery()</code> in <code>apps/predbat/ohme.py</code>.</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Observe-only. Do not change <code>automatic_config()</code>, <code>async_automatic_config_evc()</code>, <code>charger_control_*</code> or any entity a component publishes.</li>
+<li>A charger record has <code>device_id</code> <code>"&lt;component&gt;:&lt;hardware serial&gt;"</code>. Its car is a stub, <code>"&lt;charger device_id&gt;:car"</code>, with <code>flags: ["stub"]</code> and a <code>charged_by</code> link back. The charger links forward with <code>serves_cars: [&lt;car device_id&gt;]</code>.</li>
+<li><code>info.vendor</code> is always set. <code>info.model</code> and <code>info.firmware</code> are set only when the vendor API supplies them.</li>
+<li><strong>No <code>ratings</code> on any of the four.</strong> None of them gets a device-reported power or phase rating. A live max-current <em>setting</em> is not a rating, and the catalogue design forbids invented ratings.</li>
+<li><strong>Never report:</strong> charger nicknames (myenergi cloud <code>alias</code>, Wallbox <code>name</code>, Hypervolt <code>name</code>, GE <code>alias</code>), location (Wallbox <code>zipcode</code>/<code>country</code>/<code>timezone</code>), vehicle registration (Wallbox <code>car_plate</code>), user/login ids (myenergi <code>hub_serial</code> is the digest-auth username, Wallbox <code>user_id</code>/<code>user_name</code>).</li>
+<li><strong>Entities are the ones the component's own automatic config binds</strong>, keyed by Predbat standard name and filtered through <code>self.discovery_entities()</code>. All four bind the same four names: <code>car_charging_planned</code>, <code>car_charging_plugged</code>, <code>car_charging_energy</code>, <code>car_charging_power</code>. Leave out <code>car_charging_now</code>, which only re-binds the power entity (Ohme's precedent). A stub car carries no entities: none of the four binds a car-facing entity.</li>
+<li>Records are listed in the component's own car order, the same order <code>charger_control_chargers()</code> uses, so two dumps of unchanged hardware do not differ.</li>
+<li><code>build_discovery()</code> returns <code>None</code> when there is no charger to describe. <code>refresh_discovery()</code> is called once per <code>run()</code> cycle, outside any <code>if first:</code> gate.</li>
+<li>Every new function needs a docstring. Unknown words go in <code>.cspell/custom-dictionary-workspace.txt</code>.</li>
+<li>Tests: from <code>coverage/</code>, save output to a file and grep the file afterwards, e.g. <code>./run_all --test wallbox &gt; /tmp/out.txt 2&gt;&amp;1; grep -E "FAIL|Error|passed|failed" /tmp/out.txt</code>.</li>
+</ul>
+<h2 id="review-focus">Review Focus</h2>
+<ol>
+<li><strong>A nickname reaching the dump.</strong> Every vendor holds a user-chosen charger name. Each vendor task has a round-trip test that sets a nickname and asserts it is absent from both the raw report and the redacted catalogue.</li>
+<li><strong>GE Cloud serial case.</strong> GE entity ids lowercase the serial (<code>sensor.predbat_gecloud_ev2244g123_...</code>) while <code>hardware_ids.serial</code> keeps it uppercase. The redactor's serial strip is case-insensitive (<code>Redactor._whole_token</code>), so all four entities should survive. Task 5's round-trip test pins this with an uppercase serial.</li>
+<li><strong>A second charger appearing later.</strong> <code>refresh_discovery()</code> compares whole reports, so a grown charger list re-files. Tasks 3 and 4 each add a two-cycle test: one charger, then two, then the report holds both.</li>
+<li><strong>A Wallbox payload with no <code>serial_number</code>.</strong> The charger must still be reported, not silently skipped. Task 3 pins the fallback identity.</li>
+<li><strong>A charger-only GE Cloud install</strong> (<code>ge_cloud_direct</code> off, <code>evc_direct</code> on). Its report has to carry the charger. The existing <code>evc_only_run</code> test asserts the report is otherwise empty, so Task 5 updates it.</li>
+</ol>
+<h2 id="out-of-scope-flag-to-the-maintainer-do-not-build">Out of scope (flag to the maintainer, do not build)</h2>
+<ul>
+<li><code>contested_car_slots</code> (<code>Coordinator._conflicts</code>) only fires when one component reports a car with no charger. Two charger components that both claim car slots (Ohme plus Hypervolt) raise nothing. Whether that should be a conflict is a design decision.</li>
+<li>GE Cloud's <code>"automatic"</code> flag is <code>self.automatic and self.inverter_control</code>, so a charger-only install reports <code>automatic: false</code> even with <code>ge_cloud_automatic_evc</code> on. A single per-component flag cannot describe two independently automated device types.</li>
+<li>Wallbox <code>max_available_current</code> (amps, device-reported) could become a charger rating once the allocator needs one. There is no consumer today.</li>
+<li>myenergi Eddi (a hot-water diverter) has no catalogue section.</li>
+</ul>
+<hr />
+<h3 id="task-1-chargercar-record-builders-stub-marker-fix-ohme-migration">Task 1: Charger/car record builders, stub marker fix, Ohme migration</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/coordinator.py</code> (beside <code>inverter_record()</code>, ~line 1134)
+- Modify: <code>apps/predbat/ohme.py</code> (<code>build_discovery()</code>, ~line 884-963)
+- Modify: <code>docs/discovery-catalogue.md</code> ("Writing a reporter" last paragraph; line 76 reporter list)
+- Modify: <code>docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md:177</code> (<code>info.stub</code> → <code>flags: ["stub"]</code>)
+- Test: <code>apps/predbat/tests/test_coordinator.py</code>, <code>apps/predbat/tests/test_ohme.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces, all in <code>coordinator.py</code>, with the same omit-empty, copy-containers and sort-sets semantics as <code>inverter_record()</code>:
+  - <code>charger_record(device_id, *, serves_cars=None, hardware_ids=None, account_ids=None, info=None, ratings=None, entities=None) -&gt; dict</code>
+  - <code>car_record(device_id, *, charged_by=None, flags=None, hardware_ids=None, info=None, ratings=None, entities=None) -&gt; dict</code>
+  - <code>charger_with_stub_car(device_id, *, hardware_ids=None, account_ids=None, info=None, entities=None) -&gt; tuple[dict, dict]</code>. Returns <code>(charger, car)</code>, where the car is <code>car_record(device_id + ":car", charged_by=device_id, flags=["stub"])</code> and the charger has <code>serves_cars=[device_id + ":car"]</code>.
+- Extract the omit/copy/sort loop from <code>inverter_record()</code> into a private <code>_record(device_id, fields: dict) -&gt; dict</code> and have all three use it. <code>inverter_record()</code>'s behaviour must not change; its existing tests prove that.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong> in <code>test_coordinator.py</code> and add each one to <code>test_coordinator_all()</code>:</li>
+</ul>
+<pre><code class="language-python">def test_charger_with_stub_car_cross_links():
+    charger, car = charger_with_stub_car(&quot;wallbox:900001&quot;, hardware_ids={&quot;serial&quot;: &quot;900001&quot;}, info={&quot;vendor&quot;: &quot;Wallbox&quot;}, entities={})
+    assert charger == {&quot;device_id&quot;: &quot;wallbox:900001&quot;, &quot;serves_cars&quot;: [&quot;wallbox:900001:car&quot;], &quot;hardware_ids&quot;: {&quot;serial&quot;: &quot;900001&quot;}, &quot;info&quot;: {&quot;vendor&quot;: &quot;Wallbox&quot;}}, charger
+    assert car == {&quot;device_id&quot;: &quot;wallbox:900001:car&quot;, &quot;charged_by&quot;: &quot;wallbox:900001&quot;, &quot;flags&quot;: [&quot;stub&quot;]}, car
+    return 0
+
+def test_stub_car_survives_validation():
+    _, car = charger_with_stub_car(&quot;x:1&quot;)
+    logs = []
+    cleaned = validate_report({&quot;cars&quot;: [car]}, &quot;x&quot;, logs.append)
+    assert cleaned[&quot;cars&quot;][0][&quot;flags&quot;] == [&quot;stub&quot;], cleaned
+    assert not logs, logs
+    return 0
+</code></pre>
+<p>Builders drop <code>None</code>, <code>""</code> and empty containers at the top level only, exactly like <code>inverter_record()</code>. They do not recurse into <code>info</code>, so each reporter leaves out empty <code>info</code> values itself. Add <code>test_charger_record_omits_empty_containers</code> mirroring <code>test_inverter_record_omits_empty_containers</code>.</p>
+<p>In <code>test_ohme.py</code>, change <code>_test_ohme_build_discovery_stub_car_when_no_vehicle</code> (line ~4467) to assert <code>car["flags"] == ["stub"]</code> and <code>"info" not in car</code>. Add <code>_test_ohme_stub_car_round_trips_validation</code>: build with no vehicle, <code>Coordinator(MockBase()).report("ohme", report)</code>, then assert the cleaned car has <code>flags == ["stub"]</code> and nothing was logged. This is the test that would have caught the bug.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Run to verify they fail.</strong> Run <code>./run_all --test coordinator --test ohme &gt; /tmp/t1.txt 2&gt;&amp;1</code>. Expected: <code>charger_with_stub_car</code> is not defined, and the Ohme stub assertion fails on <code>flags</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement</strong> <code>_record</code>, <code>charger_record</code>, <code>car_record</code> and <code>charger_with_stub_car</code> in <code>coordinator.py</code>. Then rewrite <code>OhmeAPI.build_discovery()</code> on <code>charger_record()</code> and <code>car_record()</code>: a known vehicle gives <code>car_record("ohme:{vehicle_id}", charged_by=..., info={make, model})</code>, and no vehicle gives <code>flags=["stub"]</code> and no <code>info</code>. Keep its docstring true. In <code>docs/discovery-catalogue.md</code>, extend the last paragraph of "Writing a reporter" to name the three new builders. Replace the stale parenthesised reporter list at line 76 with "No reporter populates <code>programmes</code> yet". Change <code>info.stub</code> to <code>flags: ["stub"]</code> in the design spec.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Run to verify they pass.</strong> Run <code>./run_all --test coordinator --test ohme --test discovery_catalogue &gt; /tmp/t1.txt 2&gt;&amp;1</code>. Expected: every listed test passes, and Ohme's existing round-trip test is unchanged and green.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Commit.</strong> Message: <code>fix(discovery): stub cars kept through validation; add charger/car record builders</code>, with <code>Fixes #5849</code> in the body. The PR body must carry it too.</p>
+</li>
+</ul>
+<hr />
+<h3 id="task-2-myenergi-zappi-reporter">Task 2: myenergi Zappi reporter</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/myenergi.py</code> (new <code>build_discovery()</code> and <code>DISCOVERY_ENTITY_SUFFIXES</code>; <code>run()</code> ~line 1113)
+- Test: <code>apps/predbat/tests/test_myenergi.py</code> (register each test in <code>test_myenergi()</code>)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>charger_with_stub_car</code> (Task 1).
+- Produces: <code>MyEnergiAPI.build_discovery() -&gt; dict | None</code>.</p>
+<p>Decisions:
+- One record per Zappi from <code>self.controlled_zappis()</code> (myenergi.py:915), in that order. Skip Eddi.
+- <code>device_id</code> is <code>"myenergi:{device.serial}"</code>. It is built from the hardware serial, so the direct and cloud transports give the same identity, even though their <code>device_id</code>s differ (<code>Z…</code> versus the cloud id).
+- <code>hardware_ids</code> is <code>{"serial": str(device.serial)}</code>. <code>info</code> is <code>{"vendor": "myenergi", "model": "zappi"}</code>. No <code>account_ids</code>: the hub serial is a login identifier and is not needed.
+- Entities with prefix <code>self.entity_prefix(device)</code> (myenergi.py:819). The bindings are <code>car_charging_planned</code> = <code>sensor.{p}_plug_status</code> (domain <code>sensor</code>), <code>car_charging_plugged</code> = <code>binary_sensor.{p}_plugged</code>, <code>car_charging_energy</code> = <code>sensor.{p}_session_energy</code> and <code>car_charging_power</code> = <code>sensor.{p}_power</code>. All have <code>access: "r"</code>.
+- Return <code>{"automatic": self.automatic, "chargers": [...], "cars": [...]}</code>, or <code>None</code> if there are no Zappis.
+- Call <code>self.refresh_discovery()</code> immediately before the final <code>return True</code> of <code>run()</code> (~line 1113), at the outermost level of the function. It then runs on non-poll cycles too, against the cached <code>self.devices</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write failing tests:</strong></li>
+<li><code>test_discovery_none_without_zappi</code>: only an Eddi gives <code>build_discovery() is None</code>.</li>
+<li><code>test_discovery_zappi_record</code>: with <code>_zappi(12345678)</code> polled through <code>run(0, True)</code> and entities published, <code>report["chargers"][0]["device_id"] == "myenergi:12345678"</code>, the four entity keys are exactly the set above, and <code>report["cars"][0]["flags"] == ["stub"]</code>.</li>
+<li><code>test_discovery_cloud_alias_never_reported</code>: a cloud-normalised Zappi with <code>alias="Dad's car"</code> gives the same <code>device_id</code>, <code>"Dad's car"</code> is not in <code>str(report)</code>, and <code>"12345678"</code> (the hub serial used by <code>_make_component</code>) is not in <code>str(report)</code>.</li>
+<li><code>test_discovery_round_trip</code>: feed the report through <code>Coordinator(MockBase()).report("myenergi", report)</code>. All four entities survive, <code>flags</code> survives, nothing is logged, and after <code>assemble()</code> the serial is readable in <code>str(coordinator.catalogue())</code>.</li>
+<li><code>test_discovery_refreshed_on_non_poll_cycle</code>: stub <code>report_discovery</code> to record calls, run <code>run(0, True)</code> and then <code>run(30, False)</code> with <code>poll_seconds=60</code>. The report is filed once, and a failure raised from <code>build_discovery</code> on the first cycle is retried on the second.</li>
+</ul>
+<p>Use a hub serial that differs from the Zappi serial in these fixtures. Otherwise the leak assertion proves nothing.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run to verify they fail.</strong> Run <code>./run_all --test myenergi &gt; /tmp/t2.txt 2&gt;&amp;1</code>. Expected: an <code>AttributeError</code> for <code>build_discovery</code>, or a <code>None</code> report.</li>
+<li>[ ] <strong>Step 3: Implement</strong> <code>build_discovery()</code> and the <code>run()</code> call as decided above.</li>
+<li>[ ] <strong>Step 4: Run to verify they pass.</strong> Run the same command. Expected: <code>test_myenergi</code> passes in full.</li>
+<li>[ ] <strong>Step 5: Commit.</strong> Message: <code>feat(myenergi): report Zappi chargers to the discovery catalogue</code>.</li>
+</ul>
+<hr />
+<h3 id="task-3-wallbox-reporter">Task 3: Wallbox reporter</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/wallbox.py</code> (new <code>build_discovery()</code>; <code>run()</code> lines ~599-602)
+- Test: <code>apps/predbat/tests/test_wallbox.py</code> (register each test in <code>test_wallbox()</code>)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>charger_with_stub_car</code> (Task 1).
+- Produces: <code>WallboxAPI.build_discovery() -&gt; dict | None</code>.</p>
+<p>Decisions:
+- One record per charger from <code>self.ordered_chargers()</code>.
+- <code>device_id</code> is <code>"wallbox:{charger.serial}"</code>. When <code>serial</code> is empty, fall back to <code>"wallbox:charger:{charger_id}"</code>; never skip the charger.
+- <code>hardware_ids</code> is <code>{"serial": charger.serial, "charger_id": str(charger.charger_id)}</code>, with <code>serial</code> only when known. The charger id is not secret (maintainer decision, 2026-10-29), so it stays readable, as do the entity ids that embed it.
+- <code>info</code> is <code>{"vendor": "Wallbox", "model": charger.part_number, "firmware": charger.software_version}</code>, keeping only the non-empty values.
+- Entities with prefix <code>"{prefix}_wallbox_{charger_id}"</code>: <code>car_charging_planned</code> = <code>binary_sensor.{p}_connected</code>, <code>car_charging_plugged</code> = <code>binary_sensor.{p}_plugged</code>, <code>car_charging_energy</code> = <code>sensor.{p}_session_energy</code> and <code>car_charging_power</code> = <code>sensor.{p}_power</code>.
+- <code>automatic</code> comes from <code>self.automatic</code>.
+- In <code>run()</code>, replace <code>if …: return await self.poll(seconds, first)</code> / <code>return True</code> with: assign <code>ok</code> from <code>poll()</code> or <code>True</code>, then call <code>self.refresh_discovery()</code>, then <code>return ok</code>. The rate-limit <code>skip_cycles</code> early return, and exceptions raised out of <code>poll()</code>, still skip the call. Both are failure paths and are retried next cycle.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write failing tests:</strong></li>
+<li><code>test_discovery_record</code>: <code>_started_component</code> gives a charger <code>device_id</code> of <code>"wallbox:900001"</code>, <code>info.model</code> equal to the fixture's <code>part_number</code>, <code>hardware_ids == {"serial": "900001", "charger_id": "101"}</code>, the four entity keys, and a stub car.</li>
+<li><code>test_discovery_private_fields_never_reported</code>: the fixture's charger <code>name</code> ("Garage"), <code>zipcode</code>, <code>car_plate</code> and <code>user_name</code> values are all absent from <code>str(report)</code>.</li>
+<li><code>test_discovery_no_serial_fallback</code>: a payload with <code>serial_number</code> removed gives <code>device_id == "wallbox:charger:101"</code> and <code>hardware_ids == {"charger_id": "101"}</code>.</li>
+<li><code>test_discovery_second_charger_refiles</code>: run one cycle with a single charger, then add a second to the stub transport and run a list cycle (<code>seconds = CHARGER_LIST_SECONDS</code>). The recorded <code>report_discovery</code> calls are 2, and the last one has 2 chargers in car order.</li>
+<li><code>test_discovery_round_trip</code>: a ≥6-digit <code>charger_id</code> (e.g. <code>"4417302"</code>), through <code>Coordinator.report</code> then <code>assemble()</code> then <code>catalogue()</code>. All four entities and the stub flag survive validation and redaction, and <code>"4417302"</code> stays readable in the redacted catalogue.</li>
+<li>[ ] <strong>Step 2: Run to verify they fail.</strong> Run <code>./run_all --test wallbox &gt; /tmp/t3.txt 2&gt;&amp;1</code>.</li>
+<li>[ ] <strong>Step 3: Implement</strong> as decided above.</li>
+<li>[ ] <strong>Step 4: Run to verify they pass.</strong> Expected: <code>test_wallbox</code> passes in full.</li>
+<li>[ ] <strong>Step 5: Commit.</strong> Message: <code>feat(wallbox): report chargers to the discovery catalogue</code>.</li>
+</ul>
+<hr />
+<h3 id="task-4-hypervolt-reporter">Task 4: Hypervolt reporter</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/hypervolt.py</code> (new <code>build_discovery()</code>; <code>run()</code> between the <code>except HypervoltError</code> block ~942 and <code>if not self.car_order:</code> ~943)
+- Test: <code>apps/predbat/tests/test_hypervolt.py</code> (register each test in <code>test_hypervolt()</code>)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>charger_with_stub_car</code> (Task 1).
+- Produces: <code>HypervoltAPI.build_discovery() -&gt; dict | None</code>.</p>
+<p>Decisions:
+- One record per charger from <code>self.ordered_chargers()</code>. <code>device_id</code> is <code>"hypervolt:{charger_id}"</code>, and <code>hardware_ids</code> is <code>{"serial": charger_id}</code>. The Hypervolt charger id is the device's hardware id, with the generation encoded in its length (<code>charger_major_version</code>, hypervolt.py:303).
+- <code>info</code> is <code>{"vendor": "Hypervolt", "model": charger.model, "firmware": charger.firmware_version}</code>, keeping only the non-empty values.
+- Entities with prefix <code>"{prefix}_hypervolt_{charger_id}"</code>: the same four bindings as Wallbox (<code>_connected</code>, <code>_plugged</code>, <code>_session_energy</code>, <code>_power</code>).
+- <code>automatic</code> comes from <code>self.automatic</code>.
+- Call <code>self.refresh_discovery()</code> on its own line after the <code>try/except</code> and before <code>if not self.car_order:</code>. That covers both the empty-account path and the stale-charger early returns.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write failing tests:</strong></li>
+<li><code>test_discovery_record</code>: <code>_started_component()</code> gives a charger <code>device_id</code> of <code>f"hypervolt:{V3_ID}"</code>, <code>info.model == "Home 3 Pro"</code>, the four entity keys, and a stub car.</li>
+<li><code>test_discovery_name_never_reported</code>: <code>"Driveway"</code> is not in <code>str(report)</code>.</li>
+<li><code>test_discovery_empty_account_files_nothing</code>: a component signed in with no chargers gives <code>build_discovery() is None</code>, and <code>run()</code> still returns True.</li>
+<li><code>test_discovery_second_charger_refiles</code>: use <code>_two_chargers</code> (line ~1428) with the second charger added after the first cycle. The last filed report holds both chargers in <code>car_order</code>.</li>
+<li><code>test_discovery_round_trip</code>: through <code>Coordinator</code>, all four entities and the stub flag survive, and the serial is readable in the redacted catalogue.</li>
+<li>[ ] <strong>Step 2: Run to verify they fail.</strong> Run <code>./run_all --test hypervolt &gt; /tmp/t4.txt 2&gt;&amp;1</code>.</li>
+<li>[ ] <strong>Step 3: Implement</strong> as decided above.</li>
+<li>[ ] <strong>Step 4: Run to verify they pass.</strong></li>
+<li>[ ] <strong>Step 5: Commit.</strong> Message: <code>feat(hypervolt): report chargers to the discovery catalogue</code>.</li>
+</ul>
+<hr />
+<h3 id="task-5-ge-cloud-ev-charger-records">Task 5: GE Cloud EV charger records</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/gecloud.py</code> (<code>build_discovery()</code> ~2069-2169; the call site at ~2581 is unchanged)
+- Test: <code>apps/predbat/tests/test_ge_cloud.py</code> (add tuples to <code>sub_tests</code> in <code>test_ge_cloud()</code>; update <code>evc_only_run</code> ~8808)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>charger_with_stub_car</code> (Task 1).
+- Produces: <code>GECloudDirect.build_discovery()</code> now also returns <code>"chargers"</code> and <code>"cars"</code> keys.</p>
+<p>Decisions:
+- One record per uuid in <code>self.controlled_evc_devices()</code> (gecloud.py:2217), which already keeps only chargers with a <code>serial_number</code> and sorts them by serial. The serial comes from <code>self.evc_device[uuid]["serial_number"]</code>.
+- <code>device_id</code> is <code>"gecloud:{serial}"</code>, <code>hardware_ids</code> is <code>{"serial": serial}</code> (original case), and <code>info</code> is <code>{"vendor": "GivEnergy"}</code>. Do not report the uuid, <code>alias</code> or <code>type</code>.
+- Entities with <code>en = "{prefix}_gecloud_{serial}".lower()</code>, matching <code>async_automatic_config_evc()</code>: <code>car_charging_planned</code> = <code>binary_sensor.{en}_evc_car_connected</code>, <code>car_charging_plugged</code> = <code>binary_sensor.{en}_evc_car_plugged</code>, <code>car_charging_energy</code> = <code>sensor.{en}_evc_energy_active_import_register</code> and <code>car_charging_power</code> = <code>sensor.{en}_evc_power_active_import</code>. Do not report <code>_evc_soc</code>, which is published but never bound.
+- Add the keys to the existing return value. Leave <code>"automatic"</code> and <code>"inverters"</code> untouched (see Out of scope).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write failing tests:</strong></li>
+<li><code>discovery_evc</code>: using <code>_make_rediscovery_ge_cloud(..., evc_devices=[{"uuid": "evc-1", "alias": "Garage"}])</code> and one run, the report has one charger with <code>device_id</code> <code>"gecloud:evc-1-sn"</code>, the stub car, and <code>"Garage"</code> absent.</li>
+<li><code>discovery_evc_round_trip</code>: an uppercase serial <code>"EV2244G123"</code> with all four lowercase-serial entities staged, through <code>Coordinator.report</code> then <code>assemble()</code>. All four entities survive validation <em>and</em> redaction, and <code>"EV2244G123"</code> is readable in the catalogue.</li>
+<li><code>discovery_evc_skips_charger_without_serial</code>: a uuid whose <code>evc_device</code> entry has no <code>serial_number</code> is not reported.</li>
+<li>Update <code>evc_only_run</code>: it currently asserts the report is empty. Assert <code>report["inverters"] == []</code>, <code>report["automatic"] is False</code>, and <code>len(report["chargers"]) == 1</code>.</li>
+<li>[ ] <strong>Step 2: Run to verify they fail.</strong> Run <code>./run_all --test ge_cloud &gt; /tmp/t5.txt 2&gt;&amp;1</code>.</li>
+<li>[ ] <strong>Step 3: Implement</strong> as decided above.</li>
+<li>[ ] <strong>Step 4: Run to verify they pass.</strong> Expected: every <code>ge_cloud</code> sub-test passes, including the existing <code>discovery_*</code> set.</li>
+<li>[ ] <strong>Step 5: Final verification, then commit.</strong></li>
+<li>Run <code>./run_all --quick &gt; /tmp/quick.txt 2&gt;&amp;1</code> and grep for failures. Expected: the suite is green.</li>
+<li>From the repo root, <code>git add</code> everything, then run <code>./run_pre_commit</code>. Expected: every hook passes or is auto-fixed. Re-stage after the cspell dictionary sort.</li>
+<li>Run <code>detect_changes({scope: "compare", base_ref: "main"})</code>. Expected: only the five components, <code>coordinator.py</code>, the tests and the docs.</li>
+<li>Commit: <code>feat(gecloud): report GivEnergy EV chargers to the discovery catalogue</code>.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

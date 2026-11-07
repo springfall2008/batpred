@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Discovery Kraken Reporter Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Discovery Kraken Reporter Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-11-02-discovery-kraken-reporter.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Discovery Kraken Reporter Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="discovery-kraken-reporter-implementation-plan">Discovery Kraken Reporter Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> <code>KrakenAPI</code> (EDF / E.ON Next) publishes <code>meters</code>, <code>cars</code> and <code>programmes</code> records to the discovery catalogue. These are the catalogue's first <code>programmes</code> records.</p>
+<p><strong>Architecture:</strong> add a <code>build_discovery()</code> modelled on <code>OctopusAPI.build_discovery()</code> (octopus.py ~1701-1810), plus one <code>self.refresh_discovery()</code> call per <code>run()</code> cycle. Observe-only: no binding, publish or fetch changes. Stacked on #5924 (identifiers published readable; only credentials and emails withheld).</p>
+<p><strong>Spec:</strong> <a href="../../specs/2026-09-10-discovery-catalogue-design/">docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md</a>, the <code>meters</code>, <code>cars</code> and <code>programmes</code> sections. Readability rules: <a href="../../../discovery-catalogue/">docs/discovery-catalogue.md</a> "What is, and is not, redacted".</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li><strong>Readable ids:</strong> identifiers are readable. Never read credentials: <code>_api_key</code>, <code>_email</code>, <code>_password</code>, <code>access_token</code>, <code>refresh_token</code>, <code>token_hash</code>, <code>token_expires_at</code>. Never report the account address.</li>
+<li><strong>Entities:</strong> the ones Kraken actually binds, by Predbat setting name, filtered through <code>self.discovery_entities()</code> (the Octopus convention). Each is included under the same condition that gates its <code>set_arg</code>, ignoring the one-shot <code>wired</code> / <code>export_wired</code> latches, since the record describes the device, not whether wiring already happened.</li>
+<li><strong>Automatic:</strong> <code>"automatic": True</code>. Kraken has no automatic flag; every <code>set_arg</code> it makes is unconditional.</li>
+<li><strong>Tests:</strong> run from <code>coverage/</code>, write output to a file, then grep it.</li>
+</ul>
+<h2 id="decisions">Decisions</h2>
+<ul>
+<li><strong>Meters:</strong></li>
+<li><strong>Import:</strong> an import record when <code>self.current_tariff</code> is set.<ul>
+<li><code>device_id</code> is <code>"kraken:{mpan}"</code>, where mpan is <code>self.import_mpan</code>, falling back to <code>self.configured_mpan</code>, then to the direction name.</li>
+<li><code>account_ids</code> is <code>{"mpan": ..., "account": self.account_id}</code>.</li>
+<li><code>tariff.info</code> holds <code>tariff_code</code> and <code>product_code</code>. There are no flags: Kraken exposes nothing to derive them from.</li>
+<li><code>ratings.standing_charge_p</code> is <code>self.import_standing_charge</code> (£/day) × 100, when known.</li>
+<li>Entities: <code>metric_octopus_import</code> and <code>metric_standing_charge</code>.</li>
+</ul>
+</li>
+<li><strong>Export:</strong> an export record when <code>self.export_tariff</code> is set.<ul>
+<li>The mpan is <code>self.export_mpan</code>, and the account is <code>self.export_account_id or self.account_id</code>.</li>
+<li>Entity <code>metric_octopus_export</code>, only when <code>self.export_rates_available</code>.</li>
+</ul>
+</li>
+<li>No gas: Kraken does not fetch gas.</li>
+<li><strong>Cars:</strong> one record per <code>self.intelligent_devices</code> entry (all are LIVE EVs).</li>
+<li><code>device_id</code> is <code>"kraken:{device_id}"</code>, and <code>account_ids</code> is <code>{"intelligent_device_id": device_id}</code>.</li>
+<li><code>info</code> holds <code>make</code> and <code>model</code> when present.</li>
+<li>No ratings: battery size and charge-point power are never populated.</li>
+<li>Entity <code>octopus_intelligent_slot</code> = <code>binary_sensor</code> from <code>get_entity_name("binary_sensor", "intelligent_dispatch_" + suffix)</code>, using the same suffix rule <code>_publish_dispatch_sensors()</code> uses.</li>
+<li><strong>Programmes:</strong> one <code>free_electricity</code> record when the account is enrolled in EDF Flextras: <code>provider == "edf"</code> and <code>self.flextras_last_status == 200</code>.</li>
+<li><code>device_id</code> is <code>"kraken:flextras:{account}"</code>, and <code>meter</code> is the import meter's <code>device_id</code>.</li>
+<li><code>account_ids</code> is <code>{"account": self.account_id}</code>, plus <code>"programme_id": self.flextras_property_id</code> when known.</li>
+<li><code>effects</code> is <code>["rate_override"]</code>.</li>
+<li>Entity <code>octopus_free_electricity</code> = the published free-electricity sensor.</li>
+<li>Not enrolled (any other status, or E.ON): no programme record.</li>
+<li><strong><code>build_discovery()</code></strong> returns <code>None</code> until a tariff has been found.</li>
+<li><strong>Placement:</strong> <code>refresh_discovery()</code> goes in <code>run()</code> right after the <code>account_status</code> <code>dashboard_item</code> and before the cache save. It must sit before the <code>if first and (oauth_failed or not current_tariff): return False</code>.</li>
+</ul>
+<h2 id="review-focus">Review Focus</h2>
+<ol>
+<li><strong>E.ON split export account:</strong> the export meter carries <code>export_account_id</code>, not the import account.</li>
+<li><strong>Flextras not enrolled:</strong> a 401/404 last status, or E.ON, must give no programme record, not an empty one.</li>
+<li><strong>Unpublished entity:</strong> an entity Home Assistant has not seen yet is not claimed.</li>
+<li><strong>First-cycle failure:</strong> a first cycle that fails (no tariff) files nothing and retries next cycle.</li>
+<li><strong>Credentials:</strong> none of the API key, email, password or tokens reaches the report.</li>
+</ol>
+<hr />
+<h3 id="task-1-kraken-reporter">Task 1: Kraken reporter</h3>
+<p><strong>Files:</strong> modify <code>apps/predbat/kraken.py</code> (new <code>build_discovery()</code>, plus the <code>run()</code> call); test in <code>apps/predbat/tests/test_kraken.py</code> (collected automatically by <code>run_kraken_tests</code>).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write failing tests:</strong></li>
+<li><code>test_kraken_discovery_none_before_tariff</code></li>
+<li><code>test_kraken_discovery_import_meter</code>: device_id, account_ids, tariff info, <code>standing_charge_p</code> in pence, both entities.</li>
+<li><code>test_kraken_discovery_export_meter_uses_export_account</code>: E.ON split account; <code>metric_octopus_export</code> only when rates are available.</li>
+<li><code>test_kraken_discovery_cars</code>: one record per device, the slot entity id matching <code>_publish_dispatch_sensors()</code>'s, make and model in <code>info</code>.</li>
+<li><code>test_kraken_discovery_flextras_programme</code>: enrolled EDF gives a <code>free_electricity</code> programme cross-linked to the import meter.</li>
+<li><code>test_kraken_discovery_no_programme_when_not_enrolled</code>: covers status 401 and E.ON.</li>
+<li><code>test_kraken_discovery_entities_only_when_published</code></li>
+<li><code>test_kraken_discovery_never_reads_credentials</code>: <code>str(report)</code> holds none of the key, email, password or token.</li>
+<li><code>test_kraken_discovery_round_trip</code>: through the real <code>Coordinator</code> with no <code>Warn</code>. The MPAN and account stay readable; the programme's <code>meter</code> equals the import meter's <code>device_id</code>.</li>
+<li><code>test_kraken_run_files_report_every_cycle</code>: <code>run(0, True)</code> with a tariff found files one report.</li>
+<li>[ ] <strong>Step 2: Run to verify they fail.</strong> Run <code>./run_all --test kraken &gt; &lt;ws&gt;/k-red.txt 2&gt;&amp;1</code>. Expected: <code>AttributeError: build_discovery</code>.</li>
+<li>[ ] <strong>Step 3: Implement</strong> as decided.</li>
+<li>[ ] <strong>Step 4: Run to verify they pass</strong>, then run <code>./run_all --quick</code> and pre-commit on the changed files.</li>
+<li>[ ] <strong>Step 5: Commit.</strong> Message: <code>feat(kraken): report meters, SmartFlex cars and Flextras to the discovery catalogue</code>.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
