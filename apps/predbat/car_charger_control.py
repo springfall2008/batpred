@@ -524,6 +524,9 @@ class CarChargerControl:
         stops the charger holding the car off for the first minutes of a new dispatch. With
         octopus_intelligent_charging off Predbat follows only its own plan.
 
+        The planned dispatches come from octopus_intelligent_planned_slot where it is set, as they
+        do for the car's plan, so a dispatch that sensor leaves out does not run the charger.
+
         The dispatch times on the sensor are judged against the clock rather than its on/off
         state, which only refreshes every couple of minutes and would run the charger on past
         the end of a dispatch. A sensor with no dispatch times falls back to its state.
@@ -533,13 +536,18 @@ class CarChargerControl:
         slot = self.charger_control_dispatch_sensor(car_n)
         if not slot:
             return False
+        planned_slot = self.charger_control_planned_sensor(car_n, slot)
+        reads = [(planned_slot or slot, "planned_dispatches"), (slot, "completed_dispatches")]
+        if planned_slot:
+            reads.append((planned_slot, "completed_dispatches"))
         dispatches = []
-        for attribute in ("planned_dispatches", "completed_dispatches"):
-            value = self.get_state_wrapper(slot, attribute=attribute)
+        for entity_id, attribute in reads:
+            value = self.get_state_wrapper(entity_id, attribute=attribute)
             if isinstance(value, list):
                 dispatches.extend(value)
         if not dispatches:
-            return self.get_state_wrapper(slot) == "on"
+            # The slot sensor's state would put back the dispatches the planned sensor left out
+            return False if planned_slot else self.get_state_wrapper(slot) == "on"
         for dispatch in dispatches:
             if not isinstance(dispatch, dict):
                 continue
@@ -561,6 +569,25 @@ class CarChargerControl:
         if not slot or (isinstance(slot, str) and slot.startswith("re:")):
             return None
         return slot
+
+    def charger_control_planned_sensor(self, car_n, slot):
+        """The sensor this car's planned dispatches come from in place of its slot sensor, or None.
+
+        The same rule as Fetch.car_planned_slot_entity() and its caller: none set, a regex that matched
+        nothing, the slot sensor itself, or octopus_intelligent_slot_action_config in use all leave the
+        slot sensor as the plan.
+        """
+        if "octopus_intelligent_slot_action_config" in self.args:
+            return None
+        planned = self.get_arg("octopus_intelligent_planned_slot", None, indirect=False)
+        if planned and not isinstance(planned, list):
+            planned = [planned]
+        if not planned or car_n >= len(planned):
+            return None
+        planned = planned[car_n]
+        if not planned or not isinstance(planned, str) or planned.startswith("re:") or planned == slot:
+            return None
+        return planned
 
     async def charger_control_tick(self, now):
         """Run one cycle of charger control, releasing rather than just going quiet.
