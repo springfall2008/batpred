@@ -222,6 +222,7 @@ from tests.test_octopus_waf_block import test_octopus_waf_block_wrapper
 from tests.test_octopus_catalogue_cache import test_octopus_catalogue_cache_wrapper
 from tests.test_octopus_rate_limit import test_octopus_rate_limit_wrapper
 from tests.test_octopus_backoff import test_octopus_backoff_wrapper
+from tests.test_octopus_mint_block_recovery import test_octopus_mint_block_recovery_wrapper
 from tests.test_octopus_logging import test_octopus_logging_wrapper
 from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previous_dispatch_wrapper
 from tests.test_octopus_intelligent_devices import test_octopus_intelligent_devices_wrapper
@@ -576,6 +577,7 @@ def main():
         ("octopus_catalogue_cache", test_octopus_catalogue_cache_wrapper, "Octopus EV catalogue caching tests", False),
         ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
         ("octopus_backoff", test_octopus_backoff_wrapper, "Octopus rate limit backoff tests", False),
+        ("octopus_mint_block_recovery", test_octopus_mint_block_recovery_wrapper, "Octopus token mint block recovery and health tests", False),
         ("octopus_logging", test_octopus_logging_wrapper, "Octopus GraphQL logging redaction tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
         ("octopus_intelligent_devices", test_octopus_intelligent_devices_wrapper, "Octopus intelligent devices tests (flexPlannedDispatches, energyAddedKwh)", False),

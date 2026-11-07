@@ -47,6 +47,7 @@ from utils import (
     parse_retry_after,
     TOKEN_MINT_BACKOFF_BASE_SECONDS,
     TOKEN_MINT_BACKOFF_MAX_SECONDS,
+    TOKEN_MINT_RATE_LIMIT_BACKOFF_MAX_SECONDS,
     GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS,
     GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
     strptime_aware,
@@ -200,6 +201,10 @@ def parse_date_time(dt_str):
 # recover from a misclassification. Measured in time rather than a count of blocked requests:
 # one poll sends several queries, so a count of five was reached within a couple of minutes.
 EDGE_BLOCK_REFRESH_AFTER_SECONDS = 30 * 60
+# Once the token mint has been refused this long without a break, report the component as
+# failed. Public rate downloads keep succeeding through a mint block, so without this the
+# component looked healthy while every authenticated call (dispatches, saving sessions) failed.
+OCTOPUS_MINT_UNHEALTHY_AFTER_SECONDS = 60 * 60
 
 
 api_token_query = """mutation {{
@@ -547,6 +552,13 @@ class OctopusEnergyApiClient:
         self.session = aiohttp.ClientSession(headers=self.default_headers, skip_auto_headers=["User-Agent"])
         return self.session
 
+    async def async_reset_client_session(self):
+        """Close the session so the next request starts a fresh one, with no cookies or pooled connections."""
+        session = self.session
+        self.session = None
+        if session is not None:
+            await session.close()
+
 
 def _slot_tou_label(node):
     """
@@ -837,7 +849,20 @@ class OctopusAPI(ComponentBase):
         pass
 
     def is_alive(self):
-        return self.api_started and self.account_data
+        """Report unhealthy once the token mint has been refused for a while, however much cached or public data is still arriving."""
+        return bool(self.api_started and self.account_data) and not self.token_mint_failing()
+
+    def token_mint_failing(self):
+        """Return True when the token mint has been refused continuously for OCTOPUS_MINT_UNHEALTHY_AFTER_SECONDS."""
+        started_at = self.token_mint_backoff.started_at
+        return started_at is not None and (datetime.now(timezone.utc) - started_at).total_seconds() >= OCTOPUS_MINT_UNHEALTHY_AFTER_SECONDS
+
+    def health_message(self):
+        """Say why Octopus is unhealthy, so the run status names the refused sign-in rather than just the component."""
+        if not self.token_mint_failing():
+            return None
+        hours = (datetime.now(timezone.utc) - self.token_mint_backoff.started_at).total_seconds() / 3600
+        return "sign-in {} by Octopus for {:.0f}h, retrying automatically".format("rate limited" if self.token_mint_backoff.reason == "rate limited" else "blocked", hours)
 
     def _data_age_minutes(self, fetched_at):
         """Return how many minutes ago fetched_at was, or 9999 if not set."""
@@ -2499,7 +2524,9 @@ class OctopusAPI(ComponentBase):
             reason: How the mint was refused - "edge/WAF blocked" or "rate limited".
             retry_after: Seconds the server asked us to wait, or None.
         """
-        delay = self.token_mint_backoff.start(reason, retry_after)
+        # KT-CT-1199 is a per-key limit that an hourly retry can keep tripped, so let it rest longer
+        max_seconds = TOKEN_MINT_RATE_LIMIT_BACKOFF_MAX_SECONDS if reason == "rate limited" else None
+        delay = self.token_mint_backoff.start(reason, retry_after, max_seconds=max_seconds)
         self.log("Warn: OctopusAPI: Token mint {} (block {}) - this is rate limiting, not a bad API key. Backing off for {}s".format(reason, self.token_mint_backoff.count, delay))
 
     def log_token_mint_backoff(self):
@@ -2558,6 +2585,13 @@ class OctopusAPI(ComponentBase):
                 return self.graphql_token
             self.log_token_mint_backoff()
             return None
+
+        # An edge/WAF block on the mint has been seen to stick to one HTTP session for days, while a
+        # fresh process on the same key was let straight through (Nov 2026). So retry a blocked mint
+        # from a fresh session, with no cookies or pooled connections carried over from the block.
+        if self.token_mint_backoff.count and self.token_mint_backoff.reason == "edge/WAF blocked":
+            self.log("OctopusAPI: Starting a fresh HTTP session to retry the token mint after edge/WAF block {}".format(self.token_mint_backoff.count))
+            await self.api.async_reset_client_session()
 
         client = await self.api.async_create_client_session()
         url = f"{self.api.base_url}/v1/graphql/"
