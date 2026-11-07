@@ -22,7 +22,7 @@ from tests.test_octopus_dispatch_hold import STATE_FIELDS, _check
 
 RATE_FLAT = 24.5
 RATE_EXPORT = 15.0
-CLAMP_FIELDS = ("car_energy_reported_load",)
+CLAMP_FIELDS = ("car_energy_reported_load", "import_today", "export_today", "car_charging_energy")
 
 
 def _cost(my_predbat, import_minutes, export_minutes, car_minutes):
@@ -102,6 +102,26 @@ def _run(my_predbat):
     expected = in_cap * my_predbat.rate_min_base + at_peak * RATE_PEAK
     failed |= _check("t4 dispatch-priced car", abs(cost - expected) < 0.5, "got {:.2f}p expected {:.2f}p (in cap {:.2f} kWh, at peak {:.2f} kWh)".format(cost, expected, in_cap, at_peak))
     failed |= _check("t4 dispatch minutes are off-peak", my_predbat.rate_import[1300] == my_predbat.rate_min_base and my_predbat.rate_import[1090] == RATE_PEAK, "rates {} {}".format(my_predbat.rate_import[1300], my_predbat.rate_import[1090]))
+
+    print("Test 5: the History rows' kWh are what the meter saw, the car outside the clamp included")
+    _setup_flat(my_predbat, 600)
+    export = {minute: 0.05 for minute in range(150, 180)}
+    car = {minute: 0.12 for minute in range(120, 180)}
+    my_predbat.import_today = _incrementing(600, house)
+    my_predbat.export_today = _incrementing(600, export)
+    my_predbat.car_charging_energy = _incrementing(600, car)
+    my_predbat.car_energy_reported_load = False
+    import_rows, export_rows = my_predbat.history_row_meter_kwh(600, 600)
+    # 02:00-02:30: the house's 0.3 kWh and all the car's 3.6; 02:30-03:00: the car takes the clamp's export, importing 0.07 a minute
+    failed |= _check("t5 car row import", abs(import_rows[120] - (0.3 + 3.6)) < 0.001 and abs(import_rows[150] - (0.3 + 30 * 0.07)) < 0.001, "rows {} {}".format(import_rows[120], import_rows[150]))
+    failed |= _check("t5 export into the car is not exported", abs(export_rows[150]) < 0.001, "row {}".format(export_rows[150]))
+    failed |= _check("t5 house-only row", abs(import_rows[0] - 0.3) < 0.001, "row {}".format(import_rows[0]))
+    my_predbat.car_energy_reported_load = True
+    import_rows, export_rows = my_predbat.history_row_meter_kwh(600, 600)
+    failed |= _check("t5 inside the clamp the sensors are taken as they are", abs(import_rows[120] - 0.3) < 0.001 and abs(export_rows[150] - 1.5) < 0.001, "rows {} {}".format(import_rows[120], export_rows[150]))
+    my_predbat.export_today = {}
+    _, export_rows = my_predbat.history_row_meter_kwh(600, 600)
+    failed |= _check("t5 no export sensor, no export rows", export_rows is None, "rows {}".format(export_rows))
 
     return failed
 

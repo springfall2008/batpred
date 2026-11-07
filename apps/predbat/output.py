@@ -4335,14 +4335,31 @@ class Output:
             costs[minute] = cost
         return costs
 
-    def history_row_kwh(self, incrementing, status_offset, view_minutes):
-        """Predbat's recorded kWh for each History row from an incrementing energy series, or None when there is none."""
-        if not incrementing:
-            return None
-        rows = {}
+    def history_row_meter_kwh(self, status_offset, view_minutes):
+        """Predbat's recorded import and export kWh for each History row as the supply meter saw them, or None for one with no sensor.
+
+        A car outside the CT clamp is added from its own sensor the way today_cost() costs it (car_outside_clamp_energy()),
+        so the rows match the supplier's metered kWh, which include the car.
+        """
+        if not self.import_today:
+            return None, None
+        car_today = self.car_charging_energy if self.num_cars > 0 else None
+        import_rows = {}
+        export_rows = {}
         for minute in range(0, view_minutes, self.plan_interval_minutes):
-            rows[minute] = sum(self.get_from_incrementing(incrementing, status_offset - offset - 1) for offset in range(minute, min(minute + self.plan_interval_minutes, view_minutes)))
-        return rows
+            import_kwh = 0.0
+            export_kwh = 0.0
+            for offset in range(minute, min(minute + self.plan_interval_minutes, view_minutes)):
+                index = status_offset - offset - 1
+                energy_import = self.get_from_incrementing(self.import_today, index)
+                energy_export = self.get_from_incrementing(self.export_today, index) if self.export_today else 0.0
+                car_energy = self.get_from_incrementing(car_today, index) if car_today else 0.0
+                energy_import, energy_export, _, _ = self.car_outside_clamp_energy(energy_import, energy_export, 0.0, car_energy)
+                import_kwh += energy_import
+                export_kwh += energy_export
+            import_rows[minute] = import_kwh
+            export_rows[minute] = export_kwh
+        return import_rows, export_rows if self.export_today else None
 
     @staticmethod
     def history_events(rate_import_replicated, rate_export_replicated, offset):
@@ -4430,6 +4447,7 @@ class Output:
         boundaries = self.history_day_boundaries(view_midnight_utc, view_minutes)
         array = self.history_cumulative_array(data, status_offset, view_minutes, boundaries)
         costs = self.history_row_costs(array, view_minutes, 0.0 if import_only else self.metric_standing_charge, boundaries)
+        import_kwh, export_kwh = self.history_row_meter_kwh(status_offset, view_minutes)
         attach_billing(
             plan_json,
             billing,
@@ -4439,8 +4457,8 @@ class Output:
             self.metric_standing_charge,
             events,
             import_only,
-            self.history_row_kwh(self.import_today, status_offset, view_minutes),
-            None if import_only else self.history_row_kwh(self.export_today, status_offset, view_minutes),
+            import_kwh,
+            None if import_only else export_kwh,
         )
 
     def local_midnight_utc(self, day):
