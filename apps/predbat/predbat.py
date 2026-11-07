@@ -36,7 +36,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.6.5"
+THIS_VERSION = "v9.7.0"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
@@ -421,6 +421,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.predict_iboost_best = {}
+        self.predict_clipped_best = {}
+        self.predict_carbon_best = {}
         self.predict_car_hold_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0
@@ -533,6 +535,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.io_confirmed_active = False
         # One replan may take a same-cost plan once a run becomes boosted (should_replace_plan)
         self.io_confirmed_tiebreak = False
+        # Target % of the charge running when the planner started, kept by optimise_charge_limit (calculate_plan)
+        self.charge_keep_target = None
         # Repeated Intelligent slot lists are logged briefly between full logs (rate_add_io_slots)
         self.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
         self.current_charge_limit = 0.0
@@ -666,6 +670,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.savings_today_pvbat = 0.0
         self.savings_today_actual = 0.0
         self.savings_last_updated = None
+        self.history_days_built_for = None
+        self.history_days_billing_mark = None
+        self.history_days_retry_at = None
+        self.yesterday_billing_mark = None
         self.cost_yesterday_car = 0.0
         self.cost_total_car = 0.0
         self.carbon_yesterday = 0.0
@@ -1467,6 +1475,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Publish rate data
         self.publish_rate_and_threshold()
+        self.publish_rate_overrides()
 
         return {
             "recomputed": recompute,

@@ -616,6 +616,18 @@ def fetch_bot_pr_issues():
 TRIAGE_DISCLOSURE_MARKER = "automated first-pass triage"
 
 
+def has_disclosure(body, markers):
+    """Return True if a comment body carries any of the given disclosure markers, ignoring case.
+
+    The skills word their own opening line, so the case varies: 46 of 62 sampled triage comments
+    open "Automated first-pass triage". A case-sensitive match missed them, and an issue whose
+    BOT_TRIAGED label a maintainer swapped for BOT_PR or BOT_REVIEW was triaged all over again
+    (#5964, #5741). The markers are lower case, so only the body needs folding.
+    """
+    folded = (body or "").casefold()
+    return any(marker in folded for marker in markers)
+
+
 def is_already_triaged(labels):
     """Return True if BOT_TRIAGED is present in a gh --json labels list."""
     return any(label["name"] == "BOT_TRIAGED" for label in labels)
@@ -630,7 +642,7 @@ def find_triage_comment(issue_number):
         check=True,
     )
     comments = json.loads(result.stdout).get("comments", [])
-    return any(TRIAGE_DISCLOSURE_MARKER in comment.get("body", "") for comment in comments)
+    return any(has_disclosure(comment.get("body"), (TRIAGE_DISCLOSURE_MARKER,)) for comment in comments)
 
 
 def backfill_triaged_label(issue_number):
@@ -1623,7 +1635,7 @@ def reporter_replied_since_bot(issue_number, reporter):
     )
     comments = json.loads(result.stdout).get("comments", [])
     markers = (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER)
-    last_bot = max((index for index, comment in enumerate(comments) if any(marker in comment.get("body", "") for marker in markers)), default=None)
+    last_bot = max((index for index, comment in enumerate(comments) if has_disclosure(comment.get("body"), markers)), default=None)
     if last_bot is None:
         return False
     return any((comment.get("author") or {}).get("login") == reporter for comment in comments[last_bot + 1 :])
@@ -1674,8 +1686,7 @@ ME_TOO_WATERMARK_MARGIN_SECONDS = 600
 
 def is_bot_comment(comment):
     """Return True if a comment was posted by one of the bot's own flows, judged by its disclosure line."""
-    body = comment.get("body", "")
-    return any(marker in body for marker in (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER, ME_TOO_DISCLOSURE_MARKER))
+    return has_disclosure(comment.get("body"), (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER, ME_TOO_DISCLOSURE_MARKER))
 
 
 def looks_like_a_report(body):

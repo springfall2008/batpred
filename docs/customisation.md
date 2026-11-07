@@ -58,6 +58,10 @@ and predicted house load.
 
 _CAUTION: You must manually set any charging required on the inverter and if the charge window is disabled then no charging will take place._
 
+While the inverter's own charge window is running with a target above the reserve, Predbat shows the status as Charging (Hold charging once the target is reached) and treats it as a charge in progress:
+it keeps the target steady rather than changing it for a marginal gain, it does not reset the target to 100% (**switch.predbat_inverter_soc_reset**),
+and it does not freeze export in Demand mode (**switch.predbat_set_freeze_export_during_demand**), which would pause the charge.
+
 ### Predbat Control charge mode
 
 In **Control charge** mode Predbat will set the charge times and charge percentages according to the Best plan, charging can be enabled and disabled by Predbat.
@@ -437,6 +441,8 @@ The default value is 0.0p which means this feature is disabled and the battery w
 If you use **input_number.predbat_pv_metric10_weight** then you probably don't need to use this as the 10% forecast does the same thing better
 Do not use it if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
+While a charge is running, Predbat keeps its current target unless changing it is worth at least 0.5p (or this setting, if higher), so a near-tie does not move the target part way through a charge.
+This also applies in Control SOC only mode, where the inverter runs its own charge window and Predbat only sets the target.
 
 **input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets how much a forced export has to earn, in pence per slot (30 minutes) of export time, scaled down for exports at lower power.
 Every 5 minutes of a planned export has to earn its share of this, so an export is shortened, or dropped, where its later minutes would earn less than that.
@@ -585,6 +591,10 @@ you can increase set_reserve_min to a higher value, and then change it back afte
 (Obviously this is only any use if your inverter is wired to act as an Emergency Power Supply or whole-home backup 'island mode' on the GivEnergy AIO).
 
 **input_number.predbat_set_reserve_min_1** defines the same minimum battery reserve percentage for inverter 2. Likewise predbat_set_reserve_min_2 and set_reserve_min_3 are the reserve minimums for inverter 3 and 4.
+
+The lowest value each of these entities offers (its `min`) follows that inverter's floor: the higher of `battery_min_soc` (from `apps.yaml` or set automatically by an integration) and the lowest value the inverter's own reserve register accepts.
+The `min` moves back down when the floor is lowered, but Predbat never lowers the value itself: a value below the floor is raised to it, and stays there until you change it.
+With no `battery_min_soc` set and no minimum on the reserve register, the `min` stays at 0, although Predbat still raises a value below 4 to 4.
 
 Note that the **input_number.predbat_set_reserve_min**'s are used by Predbat to stop the battery SoC dropping below the specified level but are not used in planning battery charging.
 i.e. if you change a reserve min to a level higher than the current battery SoC then Predbat will not plan charging activity to increase the SoC to that level; you should set [manual charges](#manual-control) to increase the SoC level.
