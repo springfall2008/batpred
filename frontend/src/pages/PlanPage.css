@@ -11,6 +11,65 @@
   width: 100%;
 }
 
+.plan-icon-key {
+  padding: 1rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.plan-icon-key h2 {
+  margin: 0 0 1rem;
+  color: var(--color-text);
+  font-size: 1rem;
+}
+
+.plan-icon-key-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 1.5rem;
+}
+
+.plan-icon-key h3 {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+.plan-icon-key dl {
+  margin: 0;
+}
+
+.plan-icon-key-entry {
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.plan-icon-key dt {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.plan-icon-key dd {
+  margin: 0.15rem 0 0 2rem;
+  color: var(--color-text-muted);
+}
+
+.plan-icon-key-symbol {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  flex: 0 0 1.5rem;
+}
+
+.plan-key-manual-dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--color-text);
+}
+
 .plan-page-header {
   display: flex;
   align-items: center;

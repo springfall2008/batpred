@@ -496,6 +496,10 @@
   display: inline-block;
 }
 
+.plan-warning-flag {
+  color: #dc2626;
+}
+
 .plan-action-tooltip {
   position: absolute;
   bottom: calc(100% + 0.6rem);

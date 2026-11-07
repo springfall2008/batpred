@@ -140,6 +140,26 @@ function renderPlanTable(debugEnabled, selectedPlan = plan) {
   )
 }
 
+test('historical warnings show a flag and all errors in the action tooltip', () => {
+  const html = renderPlanTable(false, {
+    ...plan,
+    rows: [{
+      ...row,
+      time: '2020-01-01T12:00:00Z',
+      reasons: [
+        { code: 'demand_steady', params: {} },
+        { code: 'status_warning', params: { warnings: 'Warn: Sensor <unavailable>' } },
+        { code: 'status_warning', params: { warnings: 'Error: Inverter offline' } }
+      ]
+    }]
+  })
+  assert.match(html, /data-icon="flag"/)
+  assert.match(html, /class="[^"]*plan-warning-flag/)
+  const tooltip = html.match(/role="tooltip">(.*?)<\/span>/)?.[1]
+  assert.ok(tooltip?.includes('Warn: Sensor &lt;unavailable&gt;; Error: Inverter offline'))
+  assert.doesNotMatch(renderPlanTable(false), /data-icon="flag"/)
+})
+
 test('EV cells preserve uncertain energy alongside confirmed charging', () => {
   for (const [charging, uncertain, expected] of [
     [0, 2.63, '2.63'],
