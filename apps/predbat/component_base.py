@@ -85,6 +85,20 @@ def new_http_session(**kwargs):
     return factory(**kwargs)
 
 
+def _base_override(component, name):
+    """Return the per-instance override base.<name> of a component, or None when its base has none.
+
+    A mock base answers every attribute lookup, so on a mock base only an attribute that was
+    explicitly set on it counts; one it made up on the fly does not. A real base is read with a
+    normal lookup, so a class attribute or property works. A plain function rather than a method
+    so that test doubles borrowing ComponentBase.http_session without inheriting still work.
+    """
+    base = getattr(component, "base", None)
+    if base is None or (isinstance(base, NonCallableMock) and name not in vars(base)):
+        return None
+    return getattr(base, name, None)
+
+
 def writes(func):
     """Mark a component method as one that sends a write to the device or vendor.
 
@@ -186,11 +200,67 @@ class ComponentBase(ABC):
         instances in one process, or a test, uses this to give each instance its own sessions), then
         the process-wide factory from set_http_session_factory(), then aiohttp.ClientSession.
         """
-        factory = getattr(getattr(self, "base", None), "http_session_factory", None)
-        # A mock base answers every attribute, so a mock is never taken as a factory
-        if factory is not None and not isinstance(factory, NonCallableMock):
+        factory = _base_override(self, "http_session_factory")
+        if factory is not None:
             return factory(**kwargs)
         return new_http_session(**kwargs)
+
+    def mqtt_client(self, **kwargs):
+        """Return a new MQTT client for this component to use as an async context manager.
+
+        Takes the same keyword arguments as aiomqtt.Client (hostname, port, username, tls_context and
+        so on) and, by default, returns aiomqtt.Client(**kwargs), looked up when called so that code
+        patching aiomqtt.Client still takes effect. base.mqtt_client_factory is used instead when the
+        owning base has one set (a host running several PredBat instances in one process, or a test,
+        uses this to give each instance its own fake broker connection). aiomqtt is optional: without
+        it and without a factory this raises ImportError.
+        """
+        factory = _base_override(self, "mqtt_client_factory")
+        if factory is not None:
+            return factory(**kwargs)
+        try:
+            import aiomqtt
+        except ImportError as exc:
+            raise ImportError("MQTT support requires the 'aiomqtt' package: pip install aiomqtt") from exc
+        return aiomqtt.Client(**kwargs)
+
+    def _clock(self):
+        """Return base.component_clock when the owning base has one set, else None (an attribute a mock base only invents is ignored; one set explicitly is used)."""
+        return _base_override(self, "component_clock")
+
+    def monotonic(self):
+        """Return a monotonic time in seconds, for measuring intervals that must not follow wall-clock jumps.
+
+        Uses base.component_clock.monotonic() when the owning base has a clock set (an object with monotonic(),
+        time() and an async sleep(seconds); a test uses a virtual one so no real waiting happens),
+        else time.monotonic(), looked up when called.
+        """
+        clock = self._clock()
+        if clock is not None:
+            return clock.monotonic()
+        return time.monotonic()
+
+    def wall_time(self):
+        """Return the wall-clock time as seconds since the epoch (a float), for timestamps.
+
+        Uses base.component_clock.time() when the owning base has a clock set, else time.time(), looked up when called.
+        """
+        clock = self._clock()
+        if clock is not None:
+            return clock.time()
+        return time.time()
+
+    async def sleep(self, seconds):
+        """Sleep for the given number of seconds.
+
+        Awaits base.component_clock.sleep(seconds) when the owning base has a clock set, else asyncio.sleep(seconds),
+        looked up when called so that code patching asyncio.sleep still takes effect.
+        """
+        clock = self._clock()
+        if clock is not None:
+            await clock.sleep(seconds)
+        else:
+            await asyncio.sleep(seconds)
 
     @classmethod
     def write_methods(cls):
