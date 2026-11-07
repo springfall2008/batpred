@@ -302,6 +302,35 @@ def parse_display_flag(name, value):
     return value
 
 
+def parse_display_preference(name, value, default):
+    """Parse a cosmetic display preference, returning (value, error).
+
+    Unlike the role flag, a bad screen preference must never stop the component,
+    since that would take inverter control down with it. A 0/1 int (which
+    get_arg passes through unconverted) is read as false/true; anything else
+    unreadable falls back to the default and returns an error to log.
+
+    Strings from apps.yaml never reach the fallback: get_arg's bool handling
+    (resolve_arg) has already turned any string into true or false, without a
+    warning. The fallback covers values passed directly and non-string types.
+    """
+    if isinstance(value, int) and not isinstance(value, bool) and value in (0, 1):
+        return bool(value), None
+    try:
+        return parse_display_flag(name, value), None
+    except ValueError as error:
+        return default, str(error)
+
+
+def truncate_utf8(text, max_bytes):
+    """Cut text to at most max_bytes of UTF-8 without splitting a character.
+
+    The Hub decodes these strings into fixed byte buffers, so a character count
+    under-measures anything non-ASCII (a pound sign is two bytes).
+    """
+    return str(text).encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
+
+
 class GatewayMQTT(ComponentBase):
     """ESP32 Gateway MQTT component for PredBat.
 
@@ -392,9 +421,13 @@ class GatewayMQTT(ComponentBase):
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
-        self.gateway_display_enabled = parse_display_flag("gateway_display_enabled", kwargs.get("gateway_display_enabled", True))
+        self.gateway_display_enabled, display_error = parse_display_preference("gateway_display_enabled", kwargs.get("gateway_display_enabled", True), True)
+        if display_error:
+            self.log(f"Warn: GatewayMQTT: {display_error}; using true")
         self.gateway_display_visibility = kwargs.get("gateway_display_visibility")
-        self.gateway_live_display = parse_display_flag("gateway_live_display", kwargs.get("gateway_live_display", False))
+        self.gateway_live_display, live_error = parse_display_preference("gateway_live_display", kwargs.get("gateway_live_display", False), False)
+        if live_error:
+            self.log(f"Warn: GatewayMQTT: {live_error}; using false")
         self.gateway_live_display_binding = kwargs.get("gateway_live_display_binding")
         self._last_live_display_publish = 0
         self._last_live_binding = None
@@ -520,6 +553,7 @@ class GatewayMQTT(ComponentBase):
 
         # Predbat data publish state (price/timeline for device display)
         self._last_predbat_data = None
+        self._last_oversize_warn = 0
 
         # Track which inverter serials have received an inverter_reset command
         self._inverter_reset_done = set()
@@ -2938,9 +2972,9 @@ class GatewayMQTT(ComponentBase):
                     payload["live_display"] = {"v": 1, "enabled": True, "device_id": self.gateway_device_id, "available": False}
                 # Bound existing optional strings/matrices too: predbat_data's
                 # MQTT decoder receives a single chunk, not a reassembled blob.
-                payload["predbat_status"] = str(payload["predbat_status"])[:31]
-                payload["predbat_status_detail"] = str(payload["predbat_status_detail"])[:63]
-                payload["block_state"] = str(payload["block_state"])[:15]
+                payload["predbat_status"] = truncate_utf8(payload["predbat_status"], 31)
+                payload["predbat_status_detail"] = truncate_utf8(payload["predbat_status_detail"], 63)
+                payload["block_state"] = truncate_utf8(payload["block_state"], 15)
 
             # Live readings need a heartbeat even at genuine zero/unchanged SOC.
             if payload == self._last_predbat_data and (not live_enabled or time.time() - self._last_live_display_publish < 60):
@@ -2956,11 +2990,15 @@ class GatewayMQTT(ComponentBase):
                 payload["marginal_time_labels"] = []
                 payload_json = json.dumps(payload, separators=(",", ":"))
                 if len(payload_json.encode()) + len(topic.encode()) + 16 > 1400:
-                    self.log("Warn: Live Hub display packet exceeds 1400-byte limit; not published")
+                    # Rebuilt every cycle while it stays too big: warn at most every 15 minutes.
+                    if time.time() - self._last_oversize_warn >= 15 * 60:
+                        self._last_oversize_warn = time.time()
+                        self.log("Warn: Live Hub display packet exceeds 1400-byte limit; not published")
                     return
 
-            await self._publish_raw(topic, payload_json.encode(), retain=True)
-            self._last_predbat_data = dedup_payload  # store after the publish call completes
+            if not await self._publish_raw(topic, payload_json.encode(), retain=True):
+                return  # not sent (disconnected or blocked): leave dedup so it goes out next time
+            self._last_predbat_data = dedup_payload
             if live_enabled:
                 self._last_live_display_publish = time.time()
             self.log(f"Info: Published predbat_data: price={payload['current_price']}p avg={payload['avg_price']}p cost=£{payload['total_cost']}")
@@ -3244,7 +3282,10 @@ class GatewayMQTT(ComponentBase):
 
     def _live_display_binding(self):
         """Validate only the server-issued binding for this selected display role."""
-        return validated_binding(self.gateway_live_display_binding, self.gateway_device_id, self.gateway_inverter_serial, self.gateway_live_display)
+        # A screen turned off takes no feed: renewing the binding would keep the Hub
+        # waiting for data that _publish_raw will never send.
+        enabled = self.gateway_live_display is True and self.gateway_display_enabled is True
+        return validated_binding(self.gateway_live_display_binding, self.gateway_device_id, self.gateway_inverter_serial, enabled)
 
     async def _publish_display_binding(self, force=False):
         """Publish whitelist-only display metadata, never general config or control.
@@ -3302,12 +3343,16 @@ class GatewayMQTT(ComponentBase):
             topic: MQTT topic string.
             payload: Bytes to publish.
             retain: Whether to set the retain flag.
+
+        Returns:
+            True when the message was handed to the client, False when it was
+            blocked (display mode) or dropped (not connected).
         """
         if self.gateway_display_only and (not self.gateway_display_enabled or topic != f"{self._topic_base}/predbat_data"):
             self.log(f"Warn: GatewayMQTT: Display mode blocked publish to {topic}")
-            return
+            return False
         if not (self._mqtt_client and self._mqtt_connected):
-            return
+            return False
 
         if self._loop is not None and self._loop is not asyncio.get_running_loop():
             future = asyncio.run_coroutine_threadsafe(
@@ -3317,6 +3362,7 @@ class GatewayMQTT(ComponentBase):
             await asyncio.wrap_future(future)
         else:
             await self._mqtt_client.publish(topic, payload, qos=1, retain=retain)
+        return True
 
     def _update_display_health(self):
         """Report optional display connectivity separately from the component loop's health."""

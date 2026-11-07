@@ -1670,8 +1670,10 @@ class TestPlanRepublish:
 
         async def fake_publish_raw(topic, payload, retain=False):
             gw._published.append((topic, payload, retain))
+            return True
 
         gw._publish_raw = fake_publish_raw
+        gw._last_oversize_warn = 0
         return gw
 
     def _run(self, coro):
@@ -3169,8 +3171,10 @@ class TestPublishPredbatData:
 
         async def fake_publish_raw(topic, payload, retain=False):
             gw._published.append((topic, payload, retain))
+            return True
 
         gw._publish_raw = fake_publish_raw
+        gw._last_oversize_warn = 0
         return gw
 
     def _run(self, coro):
