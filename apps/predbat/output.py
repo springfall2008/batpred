@@ -2241,6 +2241,17 @@ class Output:
             )
         return rates
 
+    def over_cap_premium(self, over_cap_minutes, minute, car_energy):
+        """
+        The extra cost of the car's charging in minute when it is beyond the Octopus Intelligent cap: the gap from the
+        house rate to the peak rate, on the energy the car sensor measured, or on the dispatch's own energy for the
+        minute without one (car_energy None). Only energy already charged is costed, never what is still planned.
+        """
+        if minute not in over_cap_minutes:
+            return 0.0
+        energy = over_cap_minutes[minute] if car_energy is None else car_energy
+        return max(0.0, self.rate_max_base - self.rate_import.get(minute, 0)) * energy
+
     def today_cost(self, import_today, export_today, car_today, load_today, save=True):
         """
         Work out energy costs today (approx)
@@ -2296,6 +2307,13 @@ class Output:
                 )
             )
 
+        # Car charging beyond the Octopus Intelligent cap is billed at the peak rate while the house keeps its own,
+        # so the minutes gone beyond it carry the difference on top of the house rate the loops below charge
+        over_cap_minutes = {}
+        for car_n in range(min(self.num_cars, len(self.octopus_slots))):
+            for minute, kwh in self.octopus_over_cap_minutes(car_n, self.octopus_slots[car_n]).items():
+                over_cap_minutes[minute] = over_cap_minutes.get(minute, 0.0) + kwh
+
         for minute_back in range(60):
             minute = self.minutes_now - minute_back
             energy_import = self.get_from_incrementing(import_today, minute_back)
@@ -2322,6 +2340,9 @@ class Output:
                 hour_cost += self.rate_import.get(minute, 0) * energy_import
                 hour_cost_import += self.rate_import.get(minute, 0) * energy_import
                 hour_cost_car += self.rate_import.get(minute, 0) * energy_car
+                premium = self.over_cap_premium(over_cap_minutes, minute, energy_car if car_today else None)
+                hour_cost_car += premium
+                hour_cost += premium
 
             if self.rate_export:
                 hour_cost -= self.rate_export.get(minute, 0) * energy_export
@@ -2381,6 +2402,10 @@ class Output:
                 day_cost_import += self.rate_import.get(minute, 0) * energy
                 day_cost_nosc += self.rate_import.get(minute, 0) * energy
                 day_cost_car += self.rate_import.get(minute, 0) * car_energy
+                premium = self.over_cap_premium(over_cap_minutes, minute, car_energy if car_today else None)
+                day_cost_car += premium
+                day_cost += premium
+                day_cost_nosc += premium
 
             day_export += energy_export
             if self.rate_export:
@@ -2400,23 +2425,6 @@ class Output:
                 day_cost_time_import[stamp] = dp2(day_cost_import)
                 day_cost_time_export[stamp] = dp2(day_cost_export)
                 day_carbon_time[stamp] = dp2(carbon_g)
-
-        # Add beyond-cap IOG rate premium for day and hour car cost.
-        # The per-minute loops above charged car energy at house import rate (correct base).
-        # For IOG slots where average > house rate (beyond cap), add the difference.
-        for car_n in range(self.num_cars):
-            for slot in self.car_charging_slots[car_n]:
-                house_rate = self.rate_import.get(slot["start"], 0)
-                premium = max(0, slot.get("average", 0) - house_rate) * slot.get("kwh", 0)
-                if premium > 0:
-                    slot_start = slot["start"]
-                    if 0 <= slot_start < self.minutes_now:
-                        day_cost_car += premium
-                        day_cost += premium
-                        day_cost_nosc += premium
-                    if self.minutes_now - 60 <= slot_start < self.minutes_now:
-                        hour_cost_car += premium
-                        hour_cost += premium
 
         day_pkwh = self.rate_import.get(0, 0)
         day_car_pkwh = self.rate_import.get(0, 0)
