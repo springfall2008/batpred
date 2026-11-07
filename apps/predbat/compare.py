@@ -225,6 +225,9 @@ class Compare:
             entity_id = pb.resolve_arg("metric_octopus_import", tariff["metric_octopus_import"], indirect=False)
             if entity_id:
                 pb.rate_import = pb.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
+                # As fetch_sensor_data() does, so a feed still discounting a withdrawn dispatch matches the live rates
+                if pb.rate_import:
+                    pb.rate_import = pb.octopus_strip_withdrawn_feed_rates(pb.rate_import, save=False)
                 import_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Octopus entity id {}".format(tariff.get("id", ""), entity_id))
