@@ -113,6 +113,9 @@ def test_carbon(my_predbat=None):
         ("replicate_no_data", _test_carbon_replicate_no_data, "Replicate with no data at all"),
         ("replicate_full", _test_carbon_replicate_full_coverage, "Replicate with full coverage"),
         ("replicate_gap", _test_carbon_replicate_gap, "Replicate fills a gap in the forecast"),
+        ("fetch_short_warns", _test_fetch_short_forecast_warns, "Short API forecast warns once at fetch"),
+        ("fetch_full_quiet", _test_fetch_full_forecast_quiet, "Full API forecast fetches without a warning"),
+        ("intensity_warn_thin", _test_intensity_warn_only_when_thin, "Replication only warns once coverage is thin"),
         ("discovery_record", _test_carbon_discovery_record, "Carbon forecast record and its binding"),
         ("discovery_entity_only_when_published", _test_carbon_discovery_entity_only_when_published, "Binding claimed only once published"),
         ("discovery_none_without_postcode", _test_carbon_discovery_none_without_postcode, "No record without a postcode"),
@@ -999,6 +1002,91 @@ def _test_carbon_replicate_gap(my_predbat=None):
         my_predbat.forecast_minutes = saved_forecast_minutes
 
     print("  ✓ Gap filled correctly")
+    return 0
+
+
+def _carbon_forecast_points(start, hours):
+    """Half hourly forecast points in the component's published format, from start for the given number of hours."""
+    return [{"from": (start + timedelta(minutes=30 * slot)).strftime(TIME_FORMAT_HA), "to": (start + timedelta(minutes=30 * (slot + 1))).strftime(TIME_FORMAT_HA), "intensity": 100 + slot} for slot in range(int(hours * 2))]
+
+
+def _carbon_api_response(start, hours):
+    """A Carbon Intensity API response body holding hours of forecast from start."""
+    points = [{"from": (start + timedelta(minutes=30 * slot)).strftime("%Y-%m-%dT%H:%MZ"), "to": (start + timedelta(minutes=30 * (slot + 1))).strftime("%Y-%m-%dT%H:%MZ"), "intensity": {"forecast": 100 + slot}} for slot in range(int(hours * 2))]
+    return {"data": {"regionid": 11, "postcode": "BS16", "data": points}}
+
+
+def _fetch_with_response(json_data):
+    """Run one fetch_carbon_data() against a mocked API response, returning the API's log lines."""
+    api = MockCarbonAPI()
+    mock_session = create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=json_data))
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        run_async(api.fetch_carbon_data())
+    return api.log_messages
+
+
+def _test_fetch_short_forecast_warns(my_predbat=None):
+    """A fetch the API answers well short of 48 hours warns once, naming how far it reaches"""
+    now_utc = datetime.now(timezone.utc)
+    slot_start = now_utc.replace(minute=(now_utc.minute // 30) * 30, second=0, microsecond=0)
+    warns = [line for line in _fetch_with_response(_carbon_api_response(slot_start, 15)) if line.startswith("Warn")]
+    if len(warns) != 1 or "only reaches" not in warns[0]:
+        print(f"ERROR: Expected one short-forecast warning, got {warns}")
+        return 1
+    print("  ✓ Short API forecast warned at fetch time")
+    return 0
+
+
+def _test_fetch_full_forecast_quiet(my_predbat=None):
+    """A fetch covering the full 48 hours the API publishes logs no warning"""
+    now_utc = datetime.now(timezone.utc)
+    slot_start = now_utc.replace(minute=(now_utc.minute // 30) * 30, second=0, microsecond=0)
+    warns = [line for line in _fetch_with_response(_carbon_api_response(slot_start, 48)) if line.startswith("Warn")]
+    if warns:
+        print(f"ERROR: Expected no warning for a full forecast, got {warns}")
+        return 1
+    print("  ✓ Full API forecast fetched quietly")
+    return 0
+
+
+def _test_intensity_warn_only_when_thin(my_predbat=None):
+    """The per-cycle replication message is only a warning once the forecast covers less than a day of the plan (#5964)"""
+    saved_forecast_minutes = my_predbat.forecast_minutes
+    patched = {name: my_predbat.__dict__[name] for name in ("log", "get_state_wrapper") if name in my_predbat.__dict__}
+    logs = []
+    forecast = []
+    try:
+        my_predbat.forecast_minutes = 48 * 60
+        my_predbat.log = lambda message, *args, **kwargs: logs.append(str(message))
+        my_predbat.get_state_wrapper = lambda entity_id=None, default=None, attribute=None, **kwargs: forecast if attribute == "forecast" else None
+
+        # 44 hours left of a forecast that started 4 hours ago - the normal state between the component's polls
+        start = my_predbat.now_utc - timedelta(hours=4)
+        forecast[:] = _carbon_forecast_points(start, 48)
+        my_predbat.fetch_carbon_intensity("sensor.predbat_carbon_intensity")
+        lines = [line for line in logs if "Carbon intensity forecast only covers" in line]
+        if len(lines) != 1 or lines[0].startswith("Warn"):
+            print(f"ERROR: Expected one plain replication message for a 44 hour forecast, got {lines}")
+            return 1
+
+        # Only 12 hours left - the polls have been failing, so this is worth a warning
+        logs.clear()
+        forecast[:] = _carbon_forecast_points(my_predbat.now_utc - timedelta(hours=36), 48)
+        my_predbat.fetch_carbon_intensity("sensor.predbat_carbon_intensity")
+        lines = [line for line in logs if "Carbon intensity forecast only covers" in line]
+        if len(lines) != 1 or not lines[0].startswith("Warn"):
+            print(f"ERROR: Expected one replication warning for a 12 hour forecast, got {lines}")
+            return 1
+    finally:
+        my_predbat.forecast_minutes = saved_forecast_minutes
+        for name in ("log", "get_state_wrapper"):
+            if name in patched:
+                setattr(my_predbat, name, patched[name])
+            else:
+                my_predbat.__dict__.pop(name, None)
+
+    print("  ✓ Replication only warns once coverage is thin")
     return 0
 
 

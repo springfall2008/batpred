@@ -150,7 +150,7 @@ When adding a new doc page, add it to `mkdocs.yml`. The published site at <https
 <!-- gitnexus:start -->
 ## GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **batpred** (20066 symbols, 65406 relationships, 466 execution flows).
+This project is indexed by GitNexus as **batpred**. Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze --index-only` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? Bootstrap with `npx`, `bunx`, or `pnpm dlx` — e.g. `bunx gitnexus@latest analyze` (npm 11 npx crash; #1939).
 
