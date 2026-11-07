@@ -20,6 +20,7 @@ import {
   faClock,
   faCrosshairs,
   faGaugeSimpleHigh,
+  faFlag,
   faHouse,
   faPause,
   faPlay,
@@ -1729,6 +1730,11 @@ export default function PlanTable({
               const hasMultipleActions = actions.length > 1
 
               const reason = getReasonText(plan, row)
+              const warnings = row.reasons
+                ?.filter((entry) => entry.code === 'status_warning')
+                .map((entry) => entry.params.warnings)
+                .filter((warning): warning is string => typeof warning === 'string' && warning.length > 0)
+                .join('; ') ?? ''
 
               const isCurrent = index === currentRowIndex
 
@@ -1750,7 +1756,8 @@ export default function PlanTable({
 
               const actionTooltip = [
                 rateEvent?.description ?? '',
-                reason || 'No additional explanation is available for this slot.'
+                reason || 'No additional explanation is available for this slot.',
+                warnings
               ].filter(Boolean).join(' ')
 
               return (
@@ -1840,6 +1847,15 @@ export default function PlanTable({
 
                               <span>{rateEvent.label}</span>
                             </span>
+                          )}
+
+                          {warnings && (
+                            <FontAwesomeIcon
+                              icon={faFlag}
+                              className="plan-warning-flag"
+                              title={warnings}
+                              aria-label={warnings}
+                            />
                           )}
 
                           {manualOverride && (

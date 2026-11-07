@@ -3,6 +3,7 @@ import { useState } from 'react'
 import PlanSummary from '../components/PlanSummary'
 import PlanTable from '../components/PlanTable'
 import PlanVisual from '../components/PlanVisual'
+import PlanIconKey from '../components/PlanIconKey'
 
 import type { Plan, PlanOverrides } from '../types/plan'
 import { selectPlanView, shouldShowPlanDebug, type PlanView } from '../utils/plan'
@@ -97,6 +98,8 @@ export default function PlanPage({
           <p>Predbat calculates yesterday's views after enough history is available.</p>
         </section>
       )}
+
+      <PlanIconKey />
     </div>
   )
 }
