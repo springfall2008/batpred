@@ -174,6 +174,9 @@ class ActiveTestInverter:
         self.discharge_rate_notify = notify
 
 
+# Expected rates must be worked out the way execute.py writes them: apply_inverter_rates() truncates with int(), floating point
+# included, so 5200 * 0.7 / 2 (1819.9999999999998) is written as 1819, not 1820. Expect the truncated value, or choose inputs that
+# give exact values such as a power fraction of 0.5.
 def run_execute_test(
     my_predbat,
     name,
@@ -5354,7 +5357,8 @@ def run_execute_tests(my_predbat):
     # A forced export to 30% at 70% power on two 5 kWh inverters at 80%, with different export rates (inverter_limit_export).
     # The change is shared by export rate, so the 3 kW inverter is sent to 5% and the 1 kW one to 55%, and they still have to shed
     # 3.75 and 1.25 kWh. The planned 2800W (4000W x 0.7) is allocated by those needs: 2100 + 700. Shared by the equal charge
-    # rate it was [30, 30], needs of 2.5 kWh each, which gave [1800, 1000] (#4856 F2).
+    # rate it was [30, 30], needs of 2.5 kWh each, which gave [1800, 1000] (#4856 F2). The immediate export (discharge_start_service)
+    # is sent the same per-inverter targets, so an inverter that stops itself at its target stops at its own share, not at the fleet's 30%.
     failed |= run_execute_test(
         my_predbat,
         "mixed_fleet_export_target_follows_export_rate",
@@ -5373,7 +5377,7 @@ def run_execute_tests(my_predbat):
         set_export_window=True,
         set_export_low_power=True,
         assert_status="Exporting",
-        assert_immediate_soc_target=30,
+        assert_immediate_discharge_soc_target_array=[5, 55],
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
         assert_discharge_rate_array=[2100, 700],
     )
@@ -5413,6 +5417,7 @@ def run_execute_tests(my_predbat):
     # export rate the 3 kW inverter would shed 3.75 kWh, which takes it below its reserve, so it sheds only the 3.5 kWh it has room for and
     # the 1 kW inverter takes the other 0.25 kWh (1.5 kWh in all). The planned 2000W (4000W x 0.5) is allocated by those needs: 1400 + 600.
     # Equal rates, as before, gave needs of 2.5 kWh each and [1000, 1000]; without the redistribution the 1 kW inverter would shed only 1.25 kWh, giving [1473, 526].
+    # The immediate export targets are the same shares: 0.5 kWh of 5 = 10% (its reserve) and 2.5 kWh of 5 = 50%.
     failed |= run_execute_test(
         my_predbat,
         "mixed_fleet_export_target_reserve_redistributes",
@@ -5431,7 +5436,7 @@ def run_execute_tests(my_predbat):
         set_export_window=True,
         set_export_low_power=True,
         assert_status="Exporting",
-        assert_immediate_soc_target=30,
+        assert_immediate_discharge_soc_target_array=[10, 50],
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
         assert_discharge_rate_array=[1400, 600],
     )

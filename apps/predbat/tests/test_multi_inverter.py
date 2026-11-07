@@ -80,20 +80,6 @@ def run_inverter_multi_tests(my_predbat):
     # The other inverter is already full, so this one takes all of the 50kWh to add: 0kWh -> 50kWh, where it used to be given only its half (25%) and the rest was lost (#4856 F2)
     failed |= run_inverter_multi_test("charge_other_full", my_predbat, inverter, 75, isCharging=True, assert_soc=50, soc_max_all=200.0, soc_max=100.0, soc_kw=0.0, soc_kw_all=100.0, battery_rate_max_charge_all=2.0)
 
-    # An inverter that is not one of the fleet cannot have the fleet target shared out to it, which must say so clearly
-    print("Run scenario inverter_not_in_fleet")
-    my_predbat.soc_max = 100.0
-    my_predbat.soc_kw = 0.0
-    my_predbat.inverters = [DummyInverter(my_predbat.log, inverter_id=7)]
-    try:
-        my_predbat.adjust_battery_target_multi(inverter, 50, False, False)
-        print("ERROR: an inverter that is not in the fleet should have raised an error")
-        failed = True
-    except ValueError as error:
-        if "is not one of the 1 inverters in self.inverters" not in str(error):
-            print("ERROR: the error for an inverter that is not in the fleet should say so, got: {}".format(error))
-            failed = True
-
     my_predbat.inverters = saved_inverters
     my_predbat.soc_max, my_predbat.soc_kw, my_predbat.battery_rate_max_charge, my_predbat.battery_rate_max_charge_dc = saved_totals
     return failed

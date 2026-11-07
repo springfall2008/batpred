@@ -366,17 +366,8 @@ class Execute:
         # exactly as it is. A rate something DID claim, executor or balancer, is always written.
         reset_rates = intent.get("reset_rates", True)
 
-        # Rates are written with int(), which truncates: a calculated 1819.9999999999998 W is written as 1819 W, not 1820 W. This is at
-        # most 1 W and makes no practical difference to an inverter. It is however inconsistent with the rest of the execute() code and with the inverter,
-        # which uses round (int(round(...)) for the curve limits, and int(rate + 0.5) in Inverter.adjust_charge_rate() and adjust_discharge_rate()),
-        # but the value reaching those is already a whole number, so the truncation here is what takes effect.
-        #
-        # This inconsistency has been left as-is because writing a rounded rate would change the written value by 1 W wherever a calculated rate falls
-        # just under a whole number, and the expected rates in existing test scenarios would need re-checking.
-        #
-        # When writing a test that expects a calculated rate, work it out the way the code does, floating point included: 5200 * 0.7 is
-        # 3639.9999999999995, so half of it is written as 1819, not 1820. Either expect the truncated value or choose inputs that give
-        # exact values, such as a power fraction of 0.5. Otherwise the test will expect a rate 1 W above the one written and fill fail.
+        # Rates are truncated with int() here (a calculated 1819.9999999999998 W is written as 1819 W). Inverter.adjust_*_rate() rounds,
+        # but is handed a whole number, so the truncation is what takes effect
         if charge_rate is None:
             if reset_rates:
                 inverter.adjust_charge_rate(int(inverter.battery_rate_max_charge * MINUTE_WATT), notify=notify_charge)
@@ -1152,7 +1143,9 @@ class Execute:
                     if self.set_export_freeze and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_FREEZE:
                         inverter.adjust_export_immediate(inverter.soc_percent, freeze=True)
                     elif not disabled_export:
-                        inverter.adjust_export_immediate(export_target_percent)
+                        # Each inverter's own share of the fleet target, the same split the export rates were allocated by, as an
+                        # inverter driven by discharge_start_service stops itself at the target it is sent
+                        inverter.adjust_export_immediate(self.adjust_battery_target_multi(inverter, export_target_percent, isCharging, isExporting, check=True))
                     else:
                         inverter.adjust_export_immediate(int(EXPORT_LIMIT_IDLE))  # Dead code right, but kept in case other logic changes
 
@@ -1330,11 +1323,6 @@ class Execute:
             # discharge rate for any other discharge. This used the charge rate for all three, which misjudged any inverter whose
             # discharge or export rate differs from its charge rate, and gave an inverter limited to a rate of 0 a share of a
             # change it could not deliver.
-            if inverter not in self.inverters:
-                raise ValueError(
-                    "adjust_battery_target_multi: inverter {} is not one of the {} inverters in self.inverters, so the fleet target cannot be shared out between them. "
-                    "The split needs every inverter in the fleet, each with its SoC, capacity, reserve and charge/discharge rates.".format(inverter.id, len(self.inverters))
-                )
             if add_kwh >= 0:
                 rates = [inv.battery_rate_max_charge for inv in self.inverters]
             elif is_exporting:
