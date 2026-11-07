@@ -23,7 +23,7 @@ import aiohttp
 import argparse
 import json
 import os
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -249,7 +249,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
         self.debug_api("POST", url, body)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.post(url, json=body) as resp:
                     resp.raise_for_status()
                     data = await resp.json()
@@ -298,7 +298,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         for attempt in range(DEYE_RETRIES):
             try:
                 self.debug_api("POST", url, body)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.post(url, headers=self._auth_headers(), json=body) as resp:
                         if resp.status in (401, 403):
                             self.log(f"Warn: DEYE 401/403 on {endpoint_key}, attempt {attempt + 1}")
@@ -838,7 +838,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         url = f"{self.base_url}{path}"
         timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 # Two passes at most: the original call, then one retry after a refresh.
                 for attempt in range(2):
                     self.debug_api("GET", url)
@@ -877,6 +877,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         msg = str(data.get("msg", "")).lower()
         return any(marker in msg for marker in DEYE_BUSY_MARKERS)
 
+    @writes
     async def apply_dynamic_control(self, sn, schedule, current_soc, force=False):
         """Write the combined control payload, suppressing no-op writes via the applied-payload cache. Returns True if written."""
         desired = self.build_dynamic_payload(sn, schedule, current_soc)
@@ -1061,6 +1062,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 return sn
         return None
 
+    @writes
     async def apply_reserve_live(self, sn, reserve):
         """Write the reserve immediately via a forced control apply (freeze-charge relies on this taking effect at once)."""
         schedule = self.local_schedule.get(sn, {})
@@ -1070,6 +1072,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.control_active.add(sn)  # Predbat is now actively controlling this inverter
         return await self.apply_dynamic_control(sn, schedule, current_soc, force=True)
 
+    @writes
     async def apply_schedule(self, sn, force=False):
         """Recompute the schedule from HA control entities and push it for one inverter.
 
@@ -1144,6 +1147,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """Handle a select (time) change from Home Assistant."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a number change from Home Assistant; the reserve is additionally written live."""
         sn = self._sn_from_entity(entity_id)
@@ -1158,6 +1162,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             return
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a switch change from Home Assistant: the write button applies the schedule."""
         sn = self._sn_from_entity(entity_id)
@@ -1745,6 +1750,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.update_success_timestamp()
         return True
 
+    @writes
     async def _reconcile_control(self):
         """Re-apply the schedule of each inverter Predbat is already controlling.
 

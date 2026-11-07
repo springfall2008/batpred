@@ -20,8 +20,10 @@ from this class.
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from unittest.mock import NonCallableMock
 
 from utils import minutes_since_midnight
+import aiohttp
 import asyncio
 import math
 import time
@@ -38,6 +40,64 @@ ALIGN_MINUTE_OFFSET_SECONDS = 1
 # bounded by a monotonic deadline rather than by counting ticks, so `timeout` stays honest in
 # seconds however often the flag is checked.
 API_START_POLL_SECONDS = 0.1
+
+# Factory new_http_session() calls in place of aiohttp.ClientSession, or None for the default.
+# Set it with set_http_session_factory().
+_http_session_factory = None
+
+
+def set_http_session_factory(factory):
+    """Install the process-wide factory that new_http_session() (and so ComponentBase.http_session()) uses.
+
+    This is the fallback for every component in the process. A host running several PredBat
+    instances in one process, or a test that needs two components to have separate sessions, sets
+    base.http_session_factory instead: ComponentBase.http_session() prefers that over this global.
+
+    The factory is called with the same keyword arguments as aiohttp.ClientSession and must return
+    an object components can use as they use aiohttp.ClientSession: an async context manager with
+    close() and a closed attribute, and request methods returning aiohttp-style response context
+    managers (get(), post(), put(), patch(), delete(), request()), plus ws_connect() for the
+    components that open a websocket (Hypervolt). A test fake needs whatever subset the component
+    under test calls. The caller owns what it
+    returns and closes it exactly as it closes its own session today, so a factory that shares one
+    connection pool between components should hand out sessions that do not own the pool (for
+    example aiohttp.ClientSession(connector=shared, connector_owner=False)). Tests can use it to
+    give every component a fake session.
+
+    Pass None to restore the default, a new aiohttp.ClientSession per call.
+    """
+    global _http_session_factory
+    _http_session_factory = factory
+
+
+def new_http_session(**kwargs):
+    """Return a new HTTP session for the caller to own and close.
+
+    By default this is aiohttp.ClientSession(**kwargs), looked up when called so that code patching
+    aiohttp.ClientSession still takes effect. A factory installed with set_http_session_factory()
+    is used instead when set. This is the process-wide path and ignores base.http_session_factory;
+    components call self.http_session(), which honours that per-instance override first, and hand
+    that bound method to the API clients they own.
+    """
+    factory = _http_session_factory
+    if factory is None:
+        return aiohttp.ClientSession(**kwargs)
+    return factory(**kwargs)
+
+
+def writes(func):
+    """Mark a component method as one that sends a write to the device or vendor.
+
+    Only sets an attribute; the method itself is returned unchanged and behaves exactly as before.
+    ComponentBase.write_methods() lists the marked methods, so tests and hosts can see which
+    methods change device or account state without reading their code. Mark the method that issues
+    the write (a control call, or an event handler that sends one), not the loop that calls it, and
+    mark an override again: overriding a marked method without @writes unmarks it. The inverter,
+    gateway and car charger components are marked; a component with no marked method may still
+    write, so an empty listing is not proof that it sends none.
+    """
+    func.__predbat_writes__ = True
+    return func
 
 
 class ComponentBase(ABC):
@@ -116,6 +176,35 @@ class ComponentBase(ABC):
         required during initialisation.
         """
         pass
+
+    def http_session(self, **kwargs):
+        """Return a new HTTP session for this component to own and close.
+
+        Takes the same keyword arguments as aiohttp.ClientSession (timeout, headers and so on) and,
+        by default, returns aiohttp.ClientSession(**kwargs). The factory is chosen in this order:
+        base.http_session_factory when the owning base has one set (a host running several PredBat
+        instances in one process, or a test, uses this to give each instance its own sessions), then
+        the process-wide factory from set_http_session_factory(), then aiohttp.ClientSession.
+        """
+        factory = getattr(getattr(self, "base", None), "http_session_factory", None)
+        # A mock base answers every attribute, so a mock is never taken as a factory
+        if factory is not None and not isinstance(factory, NonCallableMock):
+            return factory(**kwargs)
+        return new_http_session(**kwargs)
+
+    @classmethod
+    def write_methods(cls):
+        """Return the sorted names of this class's methods marked with @writes.
+
+        An override is judged on its own: overriding a marked method without @writes unmarks it.
+        Only marked methods are listed: an empty result means none are marked, not that the
+        component never writes (see writes()).
+        """
+        names = []
+        for name in dir(cls):
+            if getattr(getattr(cls, name, None), "__predbat_writes__", False):
+                names.append(name)
+        return sorted(names)
 
     def dashboard_item(self, entity, state, attributes, app=None):
         """

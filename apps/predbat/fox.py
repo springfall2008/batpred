@@ -25,7 +25,7 @@ import aiohttp
 import json
 import argparse
 import random
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -1091,6 +1091,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.log(f"Fox: Warn: Failed to get device setting for {deviceSN} key {key}")
         return None
 
+    @writes
     async def set_device_setting(self, deviceSN, key, value):
         """
         Set device setting
@@ -1112,6 +1113,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             return False
         return True
 
+    @writes
     async def set_battery_charging_time(self, deviceSN, setting):
         """
         Set battery charging time
@@ -1350,6 +1352,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     entry["precision"] = prop["precision"]
                 self.device_settings.setdefault(deviceSN, {})[setting_key] = entry
 
+    @writes
     async def set_scheduler_enabled(self, deviceSN, enabled):
         """
         Set scheduler enabled/disabled
@@ -1410,6 +1413,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.device_scheduler[deviceSN] = dict(result, groups=groups)
         return groups
 
+    @writes
     async def set_scheduler(self, deviceSN, groups):
         """
         Set scheduler groups, also disables scheduler if no groups provided
@@ -1802,7 +1806,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         timeout = aiohttp.ClientTimeout(total=TIMEOUT)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 if post:
                     if datain:
                         async with session.post(url, headers=headers, json=datain) as response:
@@ -2091,6 +2095,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
                 self.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
 
+    @writes
     async def write_setting_from_event(self, entity_id, value, is_number=False):
         """
         Handle write events
@@ -2134,6 +2139,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.log("Warn: Fox: Unknown write event event for {} value {}".format(entity_id, value))
         await self.publish_data()
 
+    @writes
     async def select_event(self, entity_id, value):
         """
         Handle select events
@@ -2143,12 +2149,14 @@ class FoxAPI(ComponentBase, OAuthMixin):
         elif "_battery_schedule_" in entity_id:
             await self.write_battery_schedule_event(entity_id, value)
 
+    @writes
     async def number_event(self, entity_id, value):
         if "_setting_" in entity_id:
             await self.write_setting_from_event(entity_id, value, is_number=True)
         elif "_battery_schedule_" in entity_id:
             await self.write_battery_schedule_event(entity_id, value)
 
+    @writes
     async def switch_event(self, entity_id, service):
         if "_battery_schedule_" in entity_id:
             await self.write_battery_schedule_event(entity_id, service)
@@ -2187,6 +2195,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             minute = orig_minute
         return hour, minute
 
+    @writes
     async def write_battery_schedule_event(self, entity_id, value):
         """
         Handle battery schedule events
@@ -2302,6 +2311,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             return False
         return charge_power == 0 and discharge_power > 0
 
+    @writes
     async def apply_battery_schedule(self, serial):
         new_schedule = []
         fdPwr_max = self.fdpwr_max.get(serial, 8000)

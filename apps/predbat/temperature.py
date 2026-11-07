@@ -210,7 +210,7 @@ class TemperatureAPI(ComponentBase):
         for attempt in range(max_retries):
             try:
                 timeout = aiohttp.ClientTimeout(total=30)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.get(url) as response:
                         if response.status == 200:
                             data = await response.json()

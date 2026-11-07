@@ -21,7 +21,7 @@ from utils import calc_percent_limit, export_mode_of, export_target_of, export_p
 from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, MINUTE_WATT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_MONITOR
 import pytz as _pytz
 
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import charger_with_stub_car, inverter_record
 from live_display import live_display_payload, validated_binding, visibility_payload
 
@@ -759,6 +759,7 @@ class GatewayMQTT(ComponentBase):
             read_only = self.get_arg("set_read_only", False)
         return bool(read_only)
 
+    @writes
     async def _apply_ev_charging_state(self):
         """Reconcile the charger's reported session against the planned charge windows.
 
@@ -834,6 +835,7 @@ class GatewayMQTT(ComponentBase):
             self._ev_attempts[direction] += 1
             self._ev_last_attempt = time.time()
 
+    @writes
     async def _send_ev_command(self, charge_point_id, command):
         """Publish a single EV command to the shared device command topic.
 
@@ -3006,6 +3008,7 @@ class GatewayMQTT(ComponentBase):
         except Exception as e:
             self.log(f"Warn: Failed to publish predbat_data: {e}")
 
+    @writes
     async def _check_read_only_state(self):
         """Publish a set_read_only command whenever PredBat's read-only mode changes.
 
@@ -3054,6 +3057,7 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Warn: GatewayMQTT: gateway reports read_only={reported} but PredBat requested {requested}")
             self._read_only_mismatch_logged = True
 
+    @writes
     async def _check_inverter_resets(self):
         """Send inverter_reset for each configured inverter not yet reset in control mode.
 
@@ -3117,6 +3121,7 @@ class GatewayMQTT(ComponentBase):
                 serials.add(serial)
         return sorted(serials)
 
+    @writes
     async def _check_commanded_serials(self):
         """Send set_commanded_serials: the set of inverters PredBat drives through the hub.
 
@@ -3161,6 +3166,7 @@ class GatewayMQTT(ComponentBase):
         self._commanded_serials_sent_time = now
         self.log(f"Info: GatewayMQTT: set_commanded_serials sent: {', '.join(serials)}")
 
+    @writes
     async def _check_rate_caps(self):
         """Send set_rate_cap for each inverter whose charge/discharge rate cap the hub does not have yet.
 
@@ -3201,6 +3207,7 @@ class GatewayMQTT(ComponentBase):
             return True
         return plan_entries != self._last_published_plan
 
+    @writes
     async def publish_plan(self, plan_entries, timezone_str):
         """Build and publish an ExecutionPlan protobuf to the gateway.
 
@@ -3233,6 +3240,7 @@ class GatewayMQTT(ComponentBase):
         self._last_published_plan = plan_entries
         self.log(f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries)")
 
+    @writes
     async def _republish_plan_if_stale(self):
         """Re-publish the last plan periodically so its embedded timestamp stays fresh.
 
@@ -3260,6 +3268,7 @@ class GatewayMQTT(ComponentBase):
             self._command_id += 1
             return self._command_id
 
+    @writes
     async def publish_command(self, command, command_id=None, **kwargs):
         """Build and publish a JSON command to the gateway.
 
@@ -3535,6 +3544,7 @@ class GatewayMQTT(ComponentBase):
             self._staged = {kept_key: kept for kept_key, kept in staged.items() if kept_key != key}
         return True
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle number entity changes (e.g. charge rate, target SOC).
 
@@ -3595,6 +3605,7 @@ class GatewayMQTT(ComponentBase):
         self.log(f"Warn: GatewayMQTT: inverter {serial} has not reported its maximum rate — rate write of {power_w}W held until it does")
         return True
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle switch entity service calls (charge/discharge enable).
 
@@ -3644,6 +3655,7 @@ class GatewayMQTT(ComponentBase):
         await self._send_control(entity_id, f"set_{side}_enable", enable=is_on, serial=serial)
         self.log(f"Info: GatewayMQTT: {side.capitalize()} {'enabled' if is_on else 'disabled'}")
 
+    @writes
     async def _start_commit(self, serial):
         """Write what is staged for an inverter to the Hub, without making the caller wait.
 
@@ -3660,6 +3672,7 @@ class GatewayMQTT(ComponentBase):
             self._commit_tasks.add(task)
             task.add_done_callback(self._commit_tasks.discard)
 
+    @writes
     async def _commit_staged(self, serial):
         """Write each staged side of an inverter to the Hub. A side already being written is left to that commit."""
         suffix = _serial_suffix(serial)
@@ -3677,6 +3690,7 @@ class GatewayMQTT(ComponentBase):
             finally:
                 self._commit_inflight.discard(key)
 
+    @writes
     async def _commit_side(self, serial, side):
         """Send one staged window, and its enable, to the Hub.
 
@@ -3741,6 +3755,7 @@ class GatewayMQTT(ComponentBase):
                 self.log(f"Info: GatewayMQTT: {side} window {window} for {serial} published to the Hub without an ack; the next status frame shows whether it landed")
             return True
 
+    @writes
     async def _commit_failed(self, serial, side, entry, reason, window_refused=False):
         """Give up on a staged window: show the Hub's schedule again so the next cycle retries.
 
@@ -3766,6 +3781,7 @@ class GatewayMQTT(ComponentBase):
             self._inject_entities(self._last_status)
         return True
 
+    @writes
     async def _export_fail_safe(self, serial):
         """Turn scheduled export off after the Hub refused an export window (#5532)."""
         self.log(f"Warn: GatewayMQTT: turning off scheduled export for {serial} until its window is written")
@@ -3785,6 +3801,7 @@ class GatewayMQTT(ComponentBase):
         self._commit_tasks.add(task)
         task.add_done_callback(self._commit_tasks.discard)
 
+    @writes
     async def _send_and_await(self, entity_id, command, **kwargs):
         """Send a schedule-write command and wait for the Hub to apply it.
 
@@ -3859,6 +3876,7 @@ class GatewayMQTT(ComponentBase):
                 return None, None
             await _commit_pause()
 
+    @writes
     async def _send_control(self, entity_id, command, **kwargs):
         """Publish a control write once and let the hub's ack confirm it.
 
@@ -4213,7 +4231,7 @@ class GatewayMQTT(ComponentBase):
             self.log("Info: GatewayMQTT: Refreshing MQTT token")
 
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.post(url, headers=headers, json=payload) as response:
                     if response.status != 200:
                         self.log(f"Warn: GatewayMQTT: Token refresh HTTP {response.status}")

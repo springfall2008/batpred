@@ -51,7 +51,7 @@ from utils import (
     GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
     strptime_aware,
 )
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session
 from billing import BillingReader
 from mock_base import MockBase as SharedMockBase
 import aiohttp
@@ -521,12 +521,14 @@ class OctopusEnergyApiClient:
     dispatch queries, and saving session management.
     """
 
-    def __init__(self, api_key, log, timeout_in_seconds=20):
+    def __init__(self, api_key, log, timeout_in_seconds=20, session_factory=None):
         if api_key is None:
             raise Exception("OctopusAPI: API KEY is not set")
 
         self.api_key = api_key
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
         self.base_url = "https://api.octopus.energy"
         self.backend_url = "https://api.backend.octopus.energy"
 
@@ -544,7 +546,7 @@ class OctopusEnergyApiClient:
         if self.session is not None:
             return self.session
 
-        self.session = aiohttp.ClientSession(headers=self.default_headers, skip_auto_headers=["User-Agent"])
+        self.session = self._session_factory(headers=self.default_headers, skip_auto_headers=["User-Agent"])
         return self.session
 
 
@@ -739,7 +741,7 @@ class OctopusAPI(ComponentBase):
     def initialize(self, key, account_id, automatic):
         """Initialise the Octopus API component"""
         self.api_key = key
-        self.api = OctopusEnergyApiClient(key, self.log)
+        self.api = OctopusEnergyApiClient(key, self.log, session_factory=self.http_session)
         self.account_id = account_id
         # What Octopus actually billed, half-hour by half-hour, published as sensor.predbat_billing
         self.billing = BillingReader(self, "octopus_user", "billing")
@@ -2259,7 +2261,7 @@ class OctopusAPI(ComponentBase):
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=20)
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}) as response:
                         if response.status not in [200, 201]:
                             self.failures_total += 1
