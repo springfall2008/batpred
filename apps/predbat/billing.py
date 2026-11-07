@@ -20,11 +20,19 @@ half-hour whose buckets do not add up to its metered kWh is dropped rather than 
 figure is worse than none.
 """
 
+import asyncio
+import random
+import traceback
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 BILLING_DAYS = 7
 BILLING_REFRESH_MINUTES = 180
+# With plan_random_delay set (Predbat.com runs many accounts behind one address), the first read after a start is held
+# back by up to this many seconds, and each day's query after the first waits up to BILLING_DAY_PACE_SECONDS, so a
+# fleet restarted together doesn't send its whole first fill to Kraken at once
+BILLING_FIRST_READ_DELAY_SECONDS = 30 * 60
+BILLING_DAY_PACE_SECONDS = 60
 BILLING_ENTITY_SUFFIX = "billing"
 BILLING_SLOT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 BILLING_LEGS = ("import", "export")
@@ -311,6 +319,12 @@ class BillingReader:
         self.mpans = None
         # Per leg, the days (YYYY-MM-DD) read when already BILLING_SETTLE_DAYS old, which are not read again
         self.settled = {leg: [] for leg in BILLING_LEGS}
+        # Set by the owner from plan_random_delay: hold back the first read and pace the day queries in the background
+        self.random_delay = False
+        # When the first read after this start may go ahead, picked on the first due() check while random_delay is on
+        self.first_read_after = None
+        # The background read started by read() while random_delay is on, so a second one isn't started over it
+        self.task = None
 
     async def load(self):
         """Restore the cache, legs and last fetch time from storage, if any were saved."""
@@ -340,19 +354,65 @@ class BillingReader:
         blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "settled": self.settled, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
         await storage.save(self.storage_app, self.storage_name, blob, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=BILLING_DAYS * 2))
 
+    def running(self):
+        """True while a background read started by read() hasn't finished."""
+        return self.task is not None and not self.task.done()
+
     def due(self, now_utc):
-        """True when the billing has never been read, or was last read BILLING_REFRESH_MINUTES ago."""
+        """True when the billing has never been read, or was last read BILLING_REFRESH_MINUTES ago.
+
+        With random_delay on, the first read after a start also waits until a random moment up to
+        BILLING_FIRST_READ_DELAY_SECONDS after the first check, and nothing is due while a read is running.
+        """
+        if self.running():
+            return False
+        if self.random_delay:
+            if self.first_read_after is None:
+                delay = random.uniform(0, BILLING_FIRST_READ_DELAY_SECONDS)  # nosec B311 - jitter, not security
+                self.first_read_after = now_utc + timedelta(seconds=delay)
+                self.owner.log("Billing: holding the first billing read back by a random {:.1f} minutes".format(delay / 60))
+            if now_utc < self.first_read_after:
+                return False
         if self.fetched_at is None:
             return True
         return now_utc - self.fetched_at >= timedelta(minutes=BILLING_REFRESH_MINUTES)
 
-    async def refresh(self, query_fn, mpans, now_utc):
+    async def read(self, query_fn, mpans, now_utc, supplier, app):
+        """Refresh the billing and publish it.
+
+        With random_delay on the refresh paces its day queries, which can take many minutes, so it runs
+        as a background task instead and publishes when it finishes; the owner's run() carries on meanwhile.
+        """
+        if not self.random_delay:
+            await self.refresh(query_fn, mpans, now_utc)
+            self.publish(supplier, now_utc, app)
+            return
+        self.task = asyncio.ensure_future(self._paced_read(query_fn, mpans, now_utc, supplier, app))
+
+    async def _paced_read(self, query_fn, mpans, now_utc, supplier, app):
+        """The background half of read(): a paced refresh then a publish, logging anything that goes wrong."""
+        try:
+            await self.refresh(query_fn, mpans, now_utc, pace_seconds=BILLING_DAY_PACE_SECONDS)
+            self.publish(supplier, datetime.now(timezone.utc), app)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.owner.log("Error: Billing: the background billing read failed: {}".format(e))
+            self.owner.log("Error: " + traceback.format_exc())
+
+    def stop(self):
+        """Cancel a background read that is still running, when the owner stops."""
+        if self.running():
+            self.task.cancel()
+
+    async def refresh(self, query_fn, mpans, now_utc, pace_seconds=0):
         """Read every day in the window that is not complete yet, for each configured leg.
 
         mpans maps "import"/"export" to (account_id, mpan), or None when that leg isn't configured.
         query_fn(query, context) returns the GraphQL data, or None for a failed read; a failed read
         marks the leg False and leaves what was cached alone. A day read once it is BILLING_SETTLE_DAYS old
-        is settled and not read again, however much of it arrived. Returns True when new slots arrived.
+        is settled and not read again, however much of it arrived. With pace_seconds, each query after the
+        first waits a random 0 to pace_seconds first. Returns True when new slots arrived.
         """
         tz = _zone(self.owner.local_tz)
         changed = False
@@ -364,6 +424,7 @@ class BillingReader:
             self.cache = {}
             self.settled = {leg: [] for leg in BILLING_LEGS}
         self.mpans = meters
+        queried = False
         for leg in BILLING_LEGS:
             settled = [name for name in self.settled.get(leg) or [] if name in window]
             target = mpans.get(leg)
@@ -382,6 +443,9 @@ class BillingReader:
                     start_at=starts[0].strftime(BILLING_SLOT_FORMAT),
                     end_at=(starts[-1] + timedelta(minutes=30)).strftime(BILLING_SLOT_FORMAT),
                 )
+                if pace_seconds and queried:
+                    await asyncio.sleep(random.uniform(0, pace_seconds))  # nosec B311 - jitter, not security
+                queried = True
                 slots = parse_measurements(await query_fn(query, "billing-{}-{}".format(leg, day.isoformat())))
                 if slots is None:
                     ok = False

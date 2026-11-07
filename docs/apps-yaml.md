@@ -592,6 +592,9 @@ such as 30 or 36 if you have a small battery and thus don't need to forecast 2 d
 Can set the maximum number of seconds of delay when recalculating the plan after it expires. The exact delay will be between 0 and this value.
 The default is 0.
 
+When set above 0 it also spreads out the Octopus/Kraken billing reads shown in the History view: the first read after Predbat starts waits a random 0-30 minutes,
+and each day's billing query waits a further random 0-60 seconds, so many installations restarted together don't all query the supplier at once.
+
 ```yaml
   plan_random_delay: 30
 ```
