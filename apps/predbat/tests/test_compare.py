@@ -90,6 +90,7 @@ CALCULATE_PLAN_REBUILT = (
     "metric_load_divergence",
     "plan_last_duration_seconds",
     "pv_forecast_peak_step",
+    "charge_keep_target",
 )
 
 

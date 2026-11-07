@@ -68,6 +68,9 @@ class MockSunsynk(SunsynkAPI):
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
         self.base.args = {"user_id": "test-sunsynk-1"}
+        # A real (empty) apps.yaml: a MagicMock here answers .get() for every key, so
+        # set_arg_auto(overwrite=False) would read every setting as user-configured and bind nothing.
+        self.base.args_from_apps_yaml = {}
         # A real clock on the mock base, not a MagicMock attribute: ComponentBase.minutes_now
         # derives from base.now_utc (GH#4804), and MagicMock would answer that arithmetic with a
         # value of its own rather than failing. Tests wanting a particular time of day call
