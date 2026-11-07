@@ -114,6 +114,7 @@ INVERTER_WRITE_DEGRADED_INTERVAL = 300
 INVERTER_CLOCK_SKEW_RESTART_MINUTES = 30
 INVERTER_CLOCK_SKEW_WARN_MINUTES = 5
 INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES = 60  # Minimum gap between repeats of the moderate-skew warning, per inverter, so it doesn't fire every 5-minute cycle
+BATTERY_SIZE_RETRY_MINUTES = 60  # Gap between retries of a battery size estimate that found nothing today, so an overnight charge is used the same morning
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
 INVERTER_LIMIT_DEFAULT_W = 7500.0  # Standing inverter AC limit when the user has not configured inverter_limit
