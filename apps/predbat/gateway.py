@@ -556,7 +556,7 @@ class GatewayMQTT(ComponentBase):
         if hasattr(self.base, "register_hook"):
             self.base.register_hook("on_plan_executed", self._on_plan_executed)
 
-    def _on_plan_executed(self, charge_windows=None, charge_limits=None, export_windows=None, export_limits=None, charge_rate_w=0, discharge_rate_w=0, soc_max=10, reserve=0, timezone="Europe/London"):
+    def _on_plan_executed(self, charge_windows=None, charge_limits=None, export_windows=None, export_limits=None, charge_rate_w=0, discharge_rate_w=0, soc_max=10, reserve=0, best_soc_min=0, timezone="Europe/London"):
         """Handle plan execution hook — convert PredBat plan to gateway protobuf format.
 
         Called by the plugin system after execute_plan() completes. Converts
@@ -569,6 +569,8 @@ class GatewayMQTT(ComponentBase):
 
         # Reserve as a percentage — used to detect freeze charge (charge limit == reserve)
         reserve_percent = calc_percent_limit(reserve, soc_max)
+        # Lowest SoC a force export may reach: the reserve or best_soc_min, whichever is higher (as execute.py)
+        export_floor_percent = calc_percent_limit(max(reserve, best_soc_min), soc_max)
 
         # Convert charge windows to plan entries
         for i, window in enumerate(charge_windows or []):
@@ -626,7 +628,11 @@ class GatewayMQTT(ComponentBase):
                 # Low-power export: the planner encodes the chosen export rate in the limit and
                 # execute applies the same scaling (see plan.py / execute.py). With low power off
                 # there is no fraction, so this is full rate.
-                target_soc = export_target_of(limit)
+                # The planner uses 0 to mean "as far as allowed" (e.g. a manual export), so clamp to
+                # max(reserve, best_soc_min): the gateway applies this target as the device's own stop
+                # SoC and would otherwise drain below the user's minimum. execute.py floors the
+                # export at the same max(target, reserve, best_soc_min) for other inverters.
+                target_soc = max(export_target_of(limit), export_floor_percent)
                 export_power_w = round(discharge_rate_w * export_power_of(limit))
             start_minutes = window.get("start", 0)
             end_minutes = window.get("end", 0)
