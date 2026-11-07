@@ -4593,7 +4593,8 @@ class Octopus:
           the car charges or not (see dispatch_billing_window());
         - it is the half hour in progress: an earlier one was judged by the dispatch check while it ran;
         - the dispatch it was held for was last seen due to run past now (octopus_slots_held_until), so it was
-          withdrawn rather than ran to its end - not known after a restart, which keeps the hold as before;
+          withdrawn rather than ran to its end - restored after a restart only from a store saved in the same
+          half hour (see octopus_held_load()), and without one the hold is kept as before;
         - no planned dispatch reaches the half hour any more - one moved within it still prices it;
         - the car was never confirmed charging in it (dynamic_load_car_confirmed_periods), nor seen charging at
           any check while it was held (octopus_slots_held_charged): confirmation waits a few minutes into the
@@ -4712,10 +4713,31 @@ class Octopus:
 
     def octopus_held_state(self):
         """
-        The held half hours in a form storage can hold: per car, the absolute start of each half hour and the
-        source of the dispatch that ran in it.
+        The held half hours in a form storage can hold, keyed by car and the absolute start of each half hour:
+        - cars: the source of the dispatch that ran in it;
+        - until: when the dispatch it was held for was last seen due to end (octopus_slots_held_until);
+        - charged: the half hours the car was seen charging in while held (octopus_slots_held_charged).
+
+        until and charged are what octopus_held_withdrawn() needs to judge the half hour in progress, so a
+        restart in it neither keeps the rate of a dispatch Octopus withdraws after it nor lets go one the car
+        charged in before it. Empty when nothing is held, so an install with no dispatches never writes.
         """
-        return {str(car_n): {start.isoformat(): source for start, source in sorted(held.items())} for car_n, held in sorted(self.octopus_slots_held.items()) if held}
+        cars = {}
+        until = {}
+        charged = {}
+        for car_n, held in sorted(self.octopus_slots_held.items()):
+            if not held:
+                continue
+            cars[str(car_n)] = {start.isoformat(): source for start, source in sorted(held.items())}
+            held_until = {start.isoformat(): end.isoformat() for start, end in sorted(self.octopus_slots_held_until.get(car_n, {}).items()) if start in held}
+            if held_until:
+                until[str(car_n)] = held_until
+            held_charged = [start.isoformat() for start in sorted(self.octopus_slots_held_charged.get(car_n, set())) if start in held]
+            if held_charged:
+                charged[str(car_n)] = held_charged
+        if not cars:
+            return {}
+        return {"cars": cars, "until": until, "charged": charged}
 
     def octopus_held_save(self):
         """
@@ -4725,8 +4747,8 @@ class Octopus:
 
         Recorded as saved only once a write works: under the window rule the half hours can stay unchanged
         for hours after the last dispatch, so a failed write is retried each cycle rather than left unsaved
-        until they expire. It runs once a cycle, so it needs none of the throttle dynamic_load_car_save() has
-        against its 15 second poll.
+        until they expire. The state changes at most a few times a half hour, even from the 15 second poll,
+        so it needs none of the throttle dynamic_load_car_save() has against it.
         """
         state = self.octopus_held_state()
         if state == self.octopus_slots_held_saved:
@@ -4739,7 +4761,7 @@ class Octopus:
             # Expiry is on the real clock, as storage.load() checks it (see save_plan()). It only tidies up:
             # octopus_held_load() decides what is still current
             expiry = datetime.now(timezone.utc) + timedelta(minutes=30 + OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES)
-            if run_async(storage.save("predbat", "octopus_held", {"cars": state}, format="json", expiry=expiry)):
+            if run_async(storage.save("predbat", "octopus_held", state, format="json", expiry=expiry)):
                 self.octopus_slots_held_saved = state
             else:
                 self.log("Warn: Octopus Intelligent: failed to save the held dispatch half hours")
@@ -4750,6 +4772,11 @@ class Octopus:
         """
         Restore the held half hours saved by octopus_held_save(), at start up, taking only those still inside
         the hold of the billing rule in use.
+
+        A dispatch's end and whether the car charged are taken only for the half hour still in progress, the only
+        one octopus_held_withdrawn() judges: the store can be hours old, and under the window rule a day, and
+        an older record says nothing about the half hour now. A store saved before they were kept has neither,
+        so the half hour in progress keeps its hold as before.
         """
         storage = self.components.get_component("storage") if self.components else None
         if not storage or self.now_utc is None:
@@ -4782,9 +4809,43 @@ class Octopus:
                 if current:
                     held[start] = source
                     restored += 1
+        self.octopus_held_load_in_progress(data)
         self.octopus_slots_held_saved = self.octopus_held_state()
         if restored:
             self.log("Octopus Intelligent: restored {} held dispatch half hour(s) from storage".format(restored))
+
+    def octopus_held_load_in_progress(self, data):
+        """
+        Restore, from the store octopus_held_load() read, the dispatch end (octopus_slots_held_until) and the
+        car seen charging (octopus_slots_held_charged) of each restored half hour that is still in progress.
+        An entry that does not parse, or a dispatch end not after the start of its half hour, is skipped.
+        """
+        until_cars = data.get("until")
+        charged_cars = data.get("charged")
+        for car_n, held in self.octopus_slots_held.items():
+            in_progress = {start for start in held if start <= self.now_utc < start + timedelta(minutes=30)}
+            if not in_progress:
+                continue
+            periods = until_cars.get(str(car_n)) if isinstance(until_cars, dict) else None
+            if isinstance(periods, dict):
+                for start, end in periods.items():
+                    try:
+                        start = datetime.fromisoformat(start)
+                        end = datetime.fromisoformat(end)
+                        valid = start in in_progress and end > start
+                    except (ValueError, TypeError):
+                        continue
+                    if valid:
+                        self.octopus_slots_held_until.setdefault(car_n, {})[start] = end
+            starts = charged_cars.get(str(car_n)) if isinstance(charged_cars, dict) else None
+            if isinstance(starts, list):
+                for start in starts:
+                    try:
+                        start = datetime.fromisoformat(start)
+                    except (ValueError, TypeError):
+                        continue
+                    if start in in_progress:
+                        self.octopus_slots_held_charged.setdefault(car_n, set()).add(start)
 
     def octopus_held_dispatches(self, car_n, completed, planned):
         """
