@@ -2621,8 +2621,12 @@ giving a stable average that is robust to occasional outliers).
 
 The calculation is performed at most once per calendar day to avoid wasting compute resources.
 On subsequent Predbat cycles in the same day the stored sensor state is used instead.
+If the day's calculation finds no usable charge (it runs just after midnight UTC, before an overnight charge), it is retried hourly
+until it does, so that night's charge is used the same morning. The time of the last attempt is kept on the sensor as `last_attempt`.
 
 The resulting `battery_scaling` is clamped to the range [0.8, 1.0] if `soc_max` is configured.
+If `soc_max` is not set the estimate is used directly and stays an estimate: it is never written back as `soc_max`,
+so later days are measured afresh rather than held near the first figure.
 
 This is useful for batteries that degrade over time — the scaling will gradually reduce as the measured capacity drifts
 below the nominal figure, without needing any manual adjustment.
