@@ -6,13 +6,13 @@ Further details can be found in the [Predheat YouTube video](https://youtu.be/_-
 
 ## Operation
 
-The app runs every 5 minutes (by default) and will automatically update its prediction for the heating system for the next period, up to a maximum of 48 hours.
+The app runs every 5 minutes (by default) and will automatically update its prediction for the heating system for the next period, for `forecast_days` days (48 hours by default; longer forecasts depend on available weather data).
 
 The inputs are as follows
 
 - An external temperature sensor, can be a real one or one created by an Internet service
 - An internal temperature sensor, ideally from your home thermostat
-- The target temperature sensor, is what your home thermostat is set to.
+- A thermostat target-temperature sensor with historical setpoint data.
 - A heating energy sensor in kWh (not strictly required but needed to plot historical usage and calibrate)
 - The flow temperature setting of your heating, can be static or a sensor
 - Your current energy rates, either from the Octopus Energy plugin or hand-typed into the configuration
@@ -70,7 +70,7 @@ Set the external temperature sensor (**external_temperature**) either to a real 
 template:
   - sensor:
     - name: "external_temperature"
-      unit_of_measurement: 'c'
+      unit_of_measurement: '°C'
       state_class: measurement
       state: >
         {{ state_attr('weather.openweathermap', 'temperature') }}
@@ -80,10 +80,10 @@ Set **internal_temperature** to point to one or more internal temperature sensor
 
 The **weather** configuration points to the Open Weather Map sensor by default so should work as-is.
 
-Set the **target_temperature** to point to a sensor that indicates what your boiler thermostat is set to, or manually enter the temperature setting here.
+Set **target_temperature** to a sensor recording your thermostat setpoint. Predheat forecasts future targets using historical setpoints from **days_previous** (seven days ago by default), rather than reading the actual upcoming thermostat schedule. Manual overrides and recent schedule changes can therefore produce misleading forecasts. The current history-reading code expects an entity ID, not a fixed numerical temperature.
 
 Set **smart_thermostat** to True if your thermostat starts the boiler ahead of time for the new target temperature or False for regular options.
-When enabled, Predheat models each rise in the scheduled target temperature over the forecast as a pre-heat: it works out how long the heating takes to reach the new target, using only the heating period the rise belongs to (until the target next falls below the new value), and raises the target that much earlier.
+When enabled, Predheat models each rise in the historically inferred target temperature over the forecast as a pre-heat: it works out how long the heating takes to reach the new target, using only the heating period the rise belongs to (until the target next falls below the new value), and raises the target that much earlier.
 If the new target is not reached within its heating period the pre-heat starts as early as permitted, which is **smart_thermostat_max_minutes** when set or otherwise the length of that heating period.
 A pre-heat never lowers a higher target that is already scheduled, and never starts before the previous rise.
 
@@ -98,7 +98,7 @@ For example, for a thermostat that starts heating up to 60 minutes early:
     smart_thermostat_max_minutes: 60
 ```
 
-Set **heating_energy** To point to a sensor that indicates the energy consumed by your boiler/heat pump in kWh. If the sensor isn't accurate then use **heating_energy_scaling** to adjust it to the actual energy consumed.
+Set **heating_energy** to a cumulative kWh sensor measuring energy consumed by the boiler or heat pump, rather than instantaneous power or delivered thermal energy. Use **heating_energy_scaling** where a unit conversion or correction is required.
 You can also comment this line out if you don't have a sensor, but no historical cost information will be produced.
 
 Now you need to make a list of all your radiators in the house, measure them and look up their BTU output at Delta 50 and their volume in Litres. The links below may be useful for various standard radiators:
@@ -111,18 +111,15 @@ Now you need to make a list of all your radiators in the house, measure them and
 Add up all the BTUs and divide by 3.41 to gain the heat output in Watts and set that in **heat_output** configuration option.
 Add up all the litres of water, add in some extra for the piping and an expansion vessel if present (e.g. 5-10 litres) and set **heat_volume** accordingly.
 
-Set the **heat_max_power** and **heat_min_power** to the minimum and maximum power output of your boiler/heat pump in watts. This should be specified as the maximum output power
-and not the maximum input energy. E.g. a heat pump with a COP of 4 might output 7kW but could only consume 1.7kW.
+Set **heat_min_power** and **heat_max_power** to the minimum and maximum **thermal output** of the boiler or heat pump in watts, not electrical input. For example, a heat pump delivering 7 kW of heat at COP 4 consumes approximately 1.75 kW of electricity.
 
-Set **hysteresis** To the amount of hysteresis in degrees applied by your thermostat when turning it on, the default is 0.5
-Set **hysteresis_off** To the amount of hysteresis in degrees applied by your thermostat when turning it off, the default is 0.1
+Set **hysteresis** (default 0.5°C) to the amount above target at which the model turns heating **off**. Set **hysteresis_off** (default 0.1°C) to the amount below target at which heating turns **on**. These names are counterintuitive but reflect their use in the current simulation.
 
-Set **heating_cop** to the nominal COP of your system. For a gas boiler use 1.0 (as the efficiency will be based on flow temperature) or for a heat pump set it to the best value which is likely around 4.0 (it will be scaled down for cold weather).
+Set **heat_cop** to the maximum COP used by the model (not `heating_cop`). For a gas boiler, use 1.0; gas efficiency is adjusted separately. For a heat pump, use an appropriate best-case COP for your installation. Predheat scales this using **heat_pump_efficiency** according to outdoor temperature. The code default is 0.9, so heat-pump users should set this explicitly.
 
 Set **flow_temp** To the target flow temperature of your system, either via a sensor or as a fixed value. E.g. gas boilers are often set to say 60 or 70 degrees while heat pumps are much lower e.g. 30 or 40.
 
-Set **flow_difference_target** to be the difference in flow temperature (in vs out) where your heating system will run at full power if it is above. e.g.
-for gas boilers this may be something around 40 while on a heat pump, it could be much lower e.g. 10.
+Set **flow_difference_target** to the difference between the target flow temperature and Predheat's modelled heating-water temperature (`volume_temp`) at which the model reaches full heating power. This is **not** the measured flow-minus-return temperature difference. A boiler might use approximately 40°C, while a heat pump generally needs a smaller value.
 
 Set **volume_temp** If you have a sensor on your radiators which can confirm the water temperature, this must not be near the heat pump/boiler but instead as close to the
 interior temperature sensor as possible. If you do not have a sensor then instead PredHeat will calculate the next temperature and store it in **next_volume_temp** for use
@@ -139,18 +136,27 @@ Now comes the tricky part, we need to calculate the heat loss for your house:
 What will help here is historical temperature data, find a time period in the last few weeks when your heating was turned off (for a few hours beforehand) and the house is cooling down.
 Measure the number of degrees the house drops by in a given time period. Divide that figure (e.g. 1.5 degrees) by the time period e.g. (3 hours) and then again divide it by the
 average difference between the inside and outside temperature
-(e.g. 19 degrees inside, 9 degrees outside, so a temperature difference of 4 degrees) = 1.5 degrees / 3 hours / 10 degrees difference = 0.05. Set that figure to **heat_loss_degrees**.
+(e.g. 19 degrees inside, 9 degrees outside, so a temperature difference of 10 degrees) = 1.5 degrees / 3 hours / 10 degrees difference = 0.05. Set that figure to **heat_loss_degrees**.
 It may be best to compute this when it's cold out and if you have your heating turned off overnight.
 
 _Note in future versions of Predheat I might make this calculation automatic._
 
-Next, we need to work out the number of watts of heat loss in the house, this can be done by looking at the energy consumed when the heating comes on. Pick a period of heating,
-ideally from the time the temperature starts increasing for a complete hour of increase, looking at the increase in temperature in degrees,
-add to that static heat loss which is  heat_loss_degrees _(internal temp - external temp)_ 1 hour to get the total degrees accounted for.
-Now divide that by the external temperature difference again / (internal_temp - external_temp) and multiply the final figure by the energy your system consumed in Watts
-during that period (can be found either from your sensor or just by looking at your energy bill for the same 1 hour period).
+Next, estimate **heat_loss_watts**, the house's heat-loss coefficient in
+watts per °C of indoor/outdoor temperature difference (W/°C).
 
-The final figure should be the number of watts your house loses per 1 degree of external temperature difference and be set to **heat_loss_watts**
+A useful starting estimate is to find a period when the indoor temperature is
+approximately steady while heating is running. Divide the **thermal power
+delivered to the house** by the indoor/outdoor temperature difference, allowing
+for other heat gains where possible. For example, 3,000 W of heat maintaining
+20°C indoors when it is 10°C outside suggests approximately 300 W/°C,
+neglecting other gains.
+
+For heat pumps, electrical consumption is not thermal output: multiply
+electrical input by COP, or use a reliable measurement of delivered heat.
+If the room temperature is rising or falling, some energy is changing the
+building's stored heat, so this simple steady-state estimate is less reliable.
+Treat it as an initial calibration and compare predictions against several
+heating periods.
 
 Then you can set **heat_gain_static** to be the static heat output of other things in your house eg. computers and people. You can figure this out by looking at how many degrees of
 temperature difference your house can maintain without any heating and multiply up your heat loss watts figure by this.
