@@ -195,6 +195,8 @@ class Prediction(PredictionBatch):
             self.rate_import = base.rate_import
             self.rate_export = base.rate_export
             self.io_adjusted = base.io_adjusted
+            # Off trusts Intelligent dispatch rates in PV10 too, without touching io_adjusted itself (GH#5540)
+            self.octopus_intelligent_pv10_dispatch_gone = getattr(base, "octopus_intelligent_pv10_dispatch_gone", True)
             self.io_confirmed_credit = base.io_confirmed_credit
             # The tariff's own highest import rate, without event rewards - the floor for a dispatch that goes away
             self.rate_max = base.rate_import_tariff_max
@@ -579,8 +581,11 @@ class Prediction(PredictionBatch):
 
         rate_import = self.rate_import
         rate_export = self.rate_export
-        io_adjusted = self.io_adjusted
+
         io_confirmed_credit = self.io_confirmed_credit
+        # With the switch Off no minute is assumed gone in PV10. io_adjusted itself is kept for the rate replication,
+        # the IOG charge skew and the dynamic dispatch check, so only this local view is emptied.
+        io_adjusted = self.io_adjusted if getattr(self, "octopus_intelligent_pv10_dispatch_gone", True) else {}
 
         # Data structures creating during the prediction
         predict_soc = {}

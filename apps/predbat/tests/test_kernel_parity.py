@@ -797,6 +797,28 @@ def run_edge_case_tests(my_predbat):
                 pv90_step=pv90_step,
                 load90_step=load90_step,
             )
+        # switch.predbat_octopus_intelligent_pv10_dispatch_gone Off: both engines must trust the dispatch in PV10 (GH#5540)
+        my_predbat.rate_import_tariff_max = 50.0
+        my_predbat.octopus_intelligent_pv10_dispatch_gone = False
+        try:
+            failed |= dual_run(
+                "{}_scenario_{}_dispatch_gone_off".format(case_name, PV_SCENARIO_PV10),
+                my_predbat,
+                pv_step,
+                pv10_step,
+                load_step,
+                load10_step,
+                charge_limit[:],
+                [dict(window) for window in charge_window],
+                [],
+                [],
+                PV_SCENARIO_PV10,
+                my_predbat.forecast_minutes,
+                pv90_step=pv90_step,
+                load90_step=load90_step,
+            )
+        finally:
+            my_predbat.octopus_intelligent_pv10_dispatch_gone = True
         my_predbat.io_adjusted = {}
     return failed
 
