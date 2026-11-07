@@ -8818,6 +8818,7 @@ def run_gateway_tests(my_predbat=None):
     from tests.test_gateway_window_commit import TestHubWindowCommit
     from tests.test_gateway_commit import TestGatewayStaging, TestGatewayCommit
     from tests.test_gateway_display import TestGatewayDisplayOnly, TestIndependentVisibility
+    from tests.test_gateway_timeline import TestTimelineCodeContract, TestTimelineSlotCodes, TestTimelineSubPayload
     from tests.test_live_display import run_live_display_tests
 
     try:
@@ -8834,6 +8835,9 @@ def run_gateway_tests(my_predbat=None):
         TestHubWindowCommit,
         TestGatewayDisplayOnly,
         TestIndependentVisibility,
+        TestTimelineCodeContract,
+        TestTimelineSlotCodes,
+        TestTimelineSubPayload,
         TestProtobufDecode,
         TestPlanSerialization,
         TestCommandFormat,

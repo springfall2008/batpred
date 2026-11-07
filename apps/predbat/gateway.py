@@ -155,6 +155,48 @@ PLAN_MODE_AUTO = 0
 PLAN_MODE_CHARGE = 1
 PLAN_MODE_DISCHARGE = 2
 
+# Display timeline slot codes published in predbat_data "timeline"
+TIMELINE_IDLE = 0
+TIMELINE_CHARGE = 1
+TIMELINE_EXPORT = 2
+TIMELINE_SOLAR = 3
+TIMELINE_IMPORT = 4
+# Per-slot modifier published in "timeline_sub", saying how a charge or export slot is held.
+# Devices that do not read it draw the plain code, exactly as before.
+TIMELINE_SUB_NONE = 0  # Active charge/export, or a slot with no modifier
+TIMELINE_SUB_HOLD = 1  # Hold charging/exporting - target reached, battery held there
+TIMELINE_SUB_FREEZE = 2  # Freeze charging/exporting - battery frozen at its current level
+
+# Plan row raw state -> (timeline code, timeline_sub modifier)
+TIMELINE_STATE_CODES = {
+    "Chrg": (TIMELINE_CHARGE, TIMELINE_SUB_NONE),
+    "HoldChrg": (TIMELINE_CHARGE, TIMELINE_SUB_HOLD),
+    "FrzChrg": (TIMELINE_CHARGE, TIMELINE_SUB_FREEZE),
+    "Exp": (TIMELINE_EXPORT, TIMELINE_SUB_NONE),
+    "HoldExp": (TIMELINE_EXPORT, TIMELINE_SUB_HOLD),
+    "FrzExp": (TIMELINE_EXPORT, TIMELINE_SUB_FREEZE),
+}
+
+
+def timeline_slot_codes(state, pv_forecast):
+    """Return the (timeline, timeline_sub) display codes for one plan row.
+
+    Args:
+        state: Plan row raw state, e.g. "Chrg" or "HoldChrg".
+        pv_forecast: Forecast PV for the slot in kW.
+
+    Returns:
+        tuple: (code for "timeline", modifier for "timeline_sub").
+    """
+    if state in TIMELINE_STATE_CODES:
+        return TIMELINE_STATE_CODES[state]
+    try:
+        pv = float(pv_forecast or 0)
+    except (TypeError, ValueError):
+        pv = 0.0
+    return (TIMELINE_SOLAR if pv > 0.1 else TIMELINE_IMPORT), TIMELINE_SUB_NONE
+
+
 # GivEnergy holds the charge and discharge rates as a whole percent of nominal battery capacity,
 # rounded down - 1300W on a 13.41kWh battery reads back 1206W (#5324)
 GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY = 1
@@ -2780,7 +2822,8 @@ class GatewayMQTT(ComponentBase):
             cost_today = self.get_state_wrapper(self.prefix + ".cost_today")
             avg_price = self.get_state_wrapper(self.prefix + ".ppkwh_today")
 
-            timeline = [0] * 12  # 12 x 30-min slots, default idle
+            timeline = [TIMELINE_IDLE] * 12  # 12 x 30-min slots, default idle
+            timeline_sub = [TIMELINE_SUB_NONE] * 12  # Per-slot hold/freeze modifier for timeline
             block_soc = []  # SOC % values for current plan block only
             block_state_name = ""  # Current block state for display label
 
@@ -2789,15 +2832,6 @@ class GatewayMQTT(ComponentBase):
             if plan_raw and isinstance(plan_raw, dict) and "rows" in plan_raw:
                 rows = plan_raw["rows"]
                 now = datetime.datetime.now(self.local_tz)
-
-                state_map = {
-                    "Chrg": 1,
-                    "FrzChrg": 1,
-                    "HoldChrg": 1,
-                    "Exp": 2,
-                    "HoldExp": 2,
-                    "FrzExp": 2,
-                }
 
                 slot_idx = 0
                 for row in rows:
@@ -2810,16 +2844,11 @@ class GatewayMQTT(ComponentBase):
                         continue
 
                     state = row.get("state", "")
-                    code = state_map.get(state, 0)
-                    if code == 0:
-                        pv = float(row.get("pv_forecast", 0) or 0)
-                        if pv > 0.1:
-                            code = 3  # Solar
-                        else:
-                            code = 4  # Grid import (consuming)
+                    code, sub = timeline_slot_codes(state, row.get("pv_forecast", 0))
 
                     if slot_idx < 12:
                         timeline[slot_idx] = code
+                        timeline_sub[slot_idx] = sub
 
                     if slot_idx == 0:
                         block_state_name = state
@@ -2915,6 +2944,7 @@ class GatewayMQTT(ComponentBase):
                 "avg_price": round(float(avg_price or 0), 1),
                 "total_cost": round(float(cost_today or 0) / 100.0, 2),  # pence → pounds
                 "timeline": timeline,
+                "timeline_sub": timeline_sub,
                 "block_soc": block_soc,
                 "block_state": block_state_name,
                 "savings_yesterday": saving_yesterday,
