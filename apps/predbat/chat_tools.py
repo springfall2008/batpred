@@ -22,6 +22,7 @@ happens here.
 import aiohttp
 import asyncio
 import ipaddress
+import copy
 import json
 import os
 import re
@@ -32,7 +33,7 @@ from urllib.parse import urljoin, urlparse
 
 from ruamel.yaml import YAML
 
-from utils import ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, find_redacted_secret_overwrite, is_secret_key, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value
+from utils import ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, find_redacted_secret_overwrite, is_secret_key, mask_secret_args, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value
 
 DOCS_SITE_ROOT = "https://springfall2008.github.io/batpred/"
 DOCS_INDEX_URL = DOCS_SITE_ROOT + "search/search_index.json"
@@ -87,11 +88,11 @@ CHAT_TOOL_DEFS = [
     },
     {
         "name": "search_source",
-        "description": "Search Predbat's own installed source code with a Python regular expression. This is the exact version that is running. Search first, then read_source the interesting part.",
+        "description": "Search Predbat's own installed source code for literal text. This is the exact version that is running. Search first, then read_source the interesting part.",
         "parameters": {
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "Python regular expression to search for, case-insensitive"},
+                "pattern": {"type": "string", "description": "Literal text to search for, case-insensitive; regular expressions are not supported"},
                 "file": {"type": "string", "description": "Restrict the search to this file, relative to the install directory (optional)"},
                 "max_results": {"type": "integer", "description": "Maximum matches to return (default 20, maximum 100)"},
             },
@@ -396,16 +397,13 @@ def _iter_source_files(root):
 
 
 def search_source(pattern, file=None, max_results=20, root=None):
-    """Search Predbat's installed source for a regular expression."""
+    """Search Predbat's installed source for case-insensitive literal text."""
     root = os.path.realpath(root or source_root())
     if not isinstance(pattern, str) or not pattern:
         return {"success": False, "error": "'pattern' must be a non-empty string", "data": None}
     if len(pattern) > SOURCE_PATTERN_MAX:
         return {"success": False, "error": "'pattern' is longer than {} characters".format(SOURCE_PATTERN_MAX), "data": None}
-    try:
-        expression = re.compile(pattern, re.IGNORECASE)
-    except re.error as error:
-        return {"success": False, "error": "'pattern' is not a valid regular expression: {}".format(error), "data": None}
+    expression = re.compile(re.escape(pattern), re.IGNORECASE)
 
     limit = max(1, min(int(max_results or 20), SOURCE_MAX_RESULTS))
     if file:
@@ -676,6 +674,46 @@ def validate_apps_schema_type(key, value):
     return "'{}' expects apps.yaml type '{}', but the new value is a {}".format(key, spec.get("type"), type(value).__name__)
 
 
+def _protected_apps_values(value, path=()):
+    """Collect protected descendants by exact path so replacements cannot bypass write guards."""
+    protected = {}
+    if isinstance(value, dict):
+        for name, item in value.items():
+            child = path + (name,)
+            if is_secret_key(name) or is_endpoint_key(name):
+                protected[child] = item
+            else:
+                protected.update(_protected_apps_values(item, child))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            protected.update(_protected_apps_values(item, path + (index,)))
+    return protected
+
+
+def _preserve_apps_yaml(previous, value):
+    """Retain round-trip YAML nodes and comments while replacing ordinary container values."""
+    if type(previous) is type(value) and previous == value:
+        return copy.deepcopy(previous)
+    if isinstance(previous, dict) and isinstance(value, dict):
+        result = copy.deepcopy(previous)
+        for name in list(result):
+            if name not in value:
+                del result[name]
+        for name, item in value.items():
+            result[name] = _preserve_apps_yaml(previous[name], item) if name in previous else item
+        return result
+    if isinstance(previous, list) and isinstance(value, list):
+        result = copy.deepcopy(previous)
+        del result[len(value) :]
+        for index, item in enumerate(value):
+            if index < len(previous):
+                result[index] = _preserve_apps_yaml(previous[index], item)
+            else:
+                result.append(item)
+        return result
+    return value
+
+
 def set_apps_config(base, key, value, apps_yaml_path=APPS_YAML_PATH, backup_path=APPS_YAML_BACKUP_PATH):
     """Change one apps.yaml key and mirror it into the running config.
 
@@ -754,13 +792,20 @@ def set_apps_config(base, key, value, apps_yaml_path=APPS_YAML_PATH, backup_path
             "data": None,
         }
 
+    if _protected_apps_values(previous_value) != _protected_apps_values(value):
+        return {
+            "success": False,
+            "error": "This replacement would add, change or remove a credential or endpoint. Change the single ordinary setting instead, or edit apps.yaml directly.",
+            "data": None,
+        }
+
     try:
         shutil.copy2(apps_yaml_path, backup_path)
     except OSError as error:
         return {"success": False, "error": "Could not back up apps.yaml before saving: {}".format(error), "data": None}
 
     try:
-        update_nested_yaml_value(section, key, value)
+        update_nested_yaml_value(section, key, _preserve_apps_yaml(previous_value, value))
     except (KeyError, TypeError) as error:
         return {"success": False, "error": "Could not update '{}': {}".format(key, error), "data": None}
 
@@ -777,10 +822,11 @@ def set_apps_config(base, key, value, apps_yaml_path=APPS_YAML_PATH, backup_path
     # review).
     base._invalidate_log_secret_pattern()
 
-    description = "Changed apps.yaml key '{}' from {!r} to {!r}. {}".format(key, previous_value, value, APPS_YAML_RESTART_WARNING)
+    masked = mask_secret_args({"previous_value": previous_value, "new_value": value})
+    description = "Changed apps.yaml key '{}' from {!r} to {!r}. {}".format(key, masked["previous_value"], masked["new_value"], APPS_YAML_RESTART_WARNING)
     return {
         "success": True,
         "error": None,
-        "data": {"key": key, "previous_value": previous_value, "new_value": value, "backup": backup_path},
+        "data": {"key": key, **masked, "backup": backup_path},
         "description": description,
     }

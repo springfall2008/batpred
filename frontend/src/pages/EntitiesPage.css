@@ -1,0 +1,81 @@
+.app-content > main:has(> .entities-page) {
+  max-width: none;
+  margin-block: 0;
+  padding: 1.5rem clamp(0.75rem, 2vw, 2rem);
+}
+
+.entities-page { display: flex; flex-direction: column; gap: 1rem; width: 100%; min-width: 0; }
+.entities-page-header, .entities-toolbar, .entities-group > summary, .entity-row > summary { display: flex; align-items: center; }
+.entities-page-header { justify-content: space-between; gap: 1rem; }
+.entities-page-header h1, .entities-page-header p { margin: 0; }
+.entities-page-header h1 { color: var(--color-text); font-size: 1.5rem; }
+.entities-page-header p { margin-top: 0.2rem; color: var(--color-text-muted); font-size: 0.76rem; }
+
+.entities-page-header button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.entities-toolbar {
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+}
+
+.entities-toolbar > input {
+  flex: 1;
+  min-width: 10rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.entities-toolbar label { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.entities-toolbar > span { color: var(--color-text-muted); white-space: nowrap; }
+.entities-groups { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+.entities-group { overflow: hidden; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); box-shadow: var(--shadow-card); }
+.entities-group > summary { justify-content: space-between; padding: 0.8rem 1rem; color: var(--color-text); font-size: 0.85rem; cursor: pointer; }
+.entities-group > summary span { color: var(--color-text-muted); font-size: 0.7rem; }
+.entities-list { border-top: 1px solid var(--color-border); }
+.entity-row { border-bottom: 1px solid var(--color-border); }
+.entity-row:last-child { border-bottom: 0; }
+.entity-row > summary { display: grid; grid-template-columns: minmax(14rem, 1.5fr) minmax(8rem, 1fr) minmax(10rem, 0.7fr); gap: 1rem; padding: 0.7rem 1rem; cursor: pointer; }
+.entity-row > summary:hover { background: color-mix(in srgb, var(--color-current) 6%, transparent); }
+.entity-row > summary > span:first-child { display: flex; flex-direction: column; min-width: 0; }
+.entity-row strong { color: var(--color-text); font-size: 0.76rem; }
+.entity-row code { overflow: hidden; color: var(--color-text-muted); font-size: 0.65rem; text-overflow: ellipsis; white-space: nowrap; }
+.entity-row > summary > span:nth-child(2) { color: var(--color-text-secondary); font-size: 0.76rem; overflow-wrap: anywhere; }
+.entity-row time { color: var(--color-text-muted); font-size: 0.68rem; }
+.entity-details { padding: 0.75rem 1rem 1rem; background: var(--color-bg); }
+.entity-details dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 0.4rem 1rem; margin: 0 0 0.75rem; }
+.entity-details dl div { display: grid; grid-template-columns: minmax(7rem, 0.4fr) 1fr; gap: 0.5rem; min-width: 0; }
+.entity-details dt { color: var(--color-text-muted); font-size: 0.68rem; }
+.entity-details dd { margin: 0; color: var(--color-text); font: 0.68rem/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; overflow-wrap: anywhere; }
+.entity-details a { color: var(--color-current); font-size: 0.72rem; font-weight: 700; text-decoration: none; }
+.entities-error, .entities-empty { padding: 1rem; color: var(--color-text-muted); font-size: 0.78rem; }
+.entities-error { border: 1px solid var(--color-danger); border-radius: 8px; background: var(--color-surface); color: var(--color-danger); }
+
+@media (max-width: 700px) {
+  .entities-page-header, .entities-toolbar { align-items: stretch; flex-direction: column; }
+  .entities-toolbar label { white-space: normal; }
+  .entity-row > summary { grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem 0.75rem; }
+  .entity-row time { grid-column: 1 / -1; }
+}
