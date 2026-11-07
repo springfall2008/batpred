@@ -1576,6 +1576,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 discharge_rate_w=int(self.battery_rate_max_discharge * MINUTE_WATT),
                 soc_max=self.soc_max,
                 reserve=self.reserve,
+                best_soc_min=self.best_soc_min,
                 timezone=str(self.local_tz),
             )
 
