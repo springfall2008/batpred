@@ -174,6 +174,13 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - `snap_time_grid()` snaps times to a select's step.
 - Tests: `./run_all --test alphaess_control`
 
+### Sungrow (`sungrow.py`)
+
+- PR #5287, unverified on hardware. Control is external dispatch held by a heartbeat (10017); `decide_command()` writes one command a minute, and nothing is stored in the inverter unless `sungrow_forced_charge_schedule` is on. No Freeze Export, on purpose.
+- Battery ignores the plan: look for `Sungrow no longer holds` (heartbeat lapsed, re-taken next cycle), `held by sungrow_min_write_interval`, or `only accepts ...% for` (target outside 10001/10002's range, enforced from telemetry instead).
+- SoC scale (64 vs 640), 13140's unit and plant power sign are unconfirmed; a SoC ten times high needs a scale in `sungrow_const.py`.
+- `Sungrow cannot log in`: `login()` stops until restart after one refusal or three unanswered attempts, to avoid an account lockout. Password mode is unverified; ask for the `token placement confirmed` line.
+
 ### Ohme (`ohme.py`)
 
 - A vendored, version-pinned copy of `dan-r/ohmepy` (`VERSION` inline in `ohme.py`; upstream in `ohme/const.py`, so diff both). A `File "/config/ohme.py"` traceback is the vendored client, not the HA integration.
