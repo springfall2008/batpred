@@ -1036,16 +1036,22 @@ class GivTCPComponent(ComponentBase):
             # key in when they named nothing.
             self.set_arg_auto(key, self._per_endpoint_values(key, lambda n, domain=domain, key=key: self._entity_id(domain, n, key), n_inverters), overwrite=key not in GIVTCP_AUTO_CONFIG_USER_WINS_KEYS)
 
-        if "export_limit" in keys:
-            self._note_export_limit_mismatch()
+        # Not gated on the claim: in a mixed fleet the key stays unclaimed, yet an inverter that does
+        # report its limit can still show a hand-typed figure is stale
+        self._note_export_limit_mismatch(claimed="export_limit" in keys)
 
-    def _note_export_limit_mismatch(self):
+    def _note_export_limit_mismatch(self, claimed):
         """
         Say, once per inverter and value pair, when a numeric apps.yaml export_limit differs from the inverter's own.
 
         The apps.yaml value wins (GIVTCP_AUTO_CONFIG_USER_WINS_KEYS), so a limit changed on the
         inverter would otherwise go unnoticed behind an old hand-typed one. A sensor reference in
         apps.yaml is left alone - it is the user's chosen source, not a stale figure.
+
+        Each inverter is checked against its own reading, so a mixed fleet where only some report a
+        limit is covered too. The advice follows the claim: when every inverter reports one, deleting
+        the line hands the key to their own sensors; when not, deleting it would leave every inverter
+        unlimited, so the note asks for the figure to be corrected instead.
         """
         raw = (getattr(self.base, "args_from_apps_yaml", None) or {}).get("export_limit")
         if raw is None:
@@ -1057,10 +1063,14 @@ class GivTCPComponent(ComponentBase):
             except (ValueError, TypeError):
                 continue
             reported = self.rest[n].export_limit()
-            if reported is None or reported == configured or (n, configured, reported) in self.export_limit_mismatch_noted:
+            if reported is None or reported == configured or (n, configured, reported, claimed) in self.export_limit_mismatch_noted:
                 continue
-            self.export_limit_mismatch_noted.add((n, configured, reported))
-            self.log("Info: GivTCP: apps.yaml sets export_limit to {:.0f}W for inverter {} but the inverter reports {:.0f}W - keeping your apps.yaml value; remove export_limit from apps.yaml to use the inverter's own limit".format(configured, n, reported))
+            self.export_limit_mismatch_noted.add((n, configured, reported, claimed))
+            if claimed:
+                advice = "remove export_limit from apps.yaml to use the inverter's own limit"
+            else:
+                advice = "not every inverter reports its export limit, so set inverter {}'s apps.yaml entry to {:.0f} if the inverter's figure is right".format(n, reported)
+            self.log("Info: GivTCP: apps.yaml sets export_limit to {:.0f}W for inverter {} but the inverter reports {:.0f}W - keeping your apps.yaml value; {}".format(configured, n, reported, advice))
 
     def _discovery_descriptor(self, n, name, domain, access, attrs, max_battery_rate):
         """

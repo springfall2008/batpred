@@ -3077,6 +3077,7 @@ def test_export_limit_apps_yaml_value_wins(my_predbat=None):
     assert "sensor.predbat_givtcp_0_export_limit" in base.entities, "the sensor is still published when apps.yaml wins"
     notes = [m for m in messages if "export_limit" in m and "3600W" in m and "6000W" in m]
     assert len(notes) == 1, f"expected one note naming both export limits, got {messages}"
+    assert "remove export_limit" in notes[0], f"with the key claimed, removing the line hands it to the inverter's own sensor: {notes[0]}"
     print("PASS: the apps.yaml export_limit wins and a mismatch is noted")
     return 0
 
@@ -3095,6 +3096,44 @@ def test_export_limit_no_mismatch_note_when_values_agree(my_predbat=None):
     notes = [m for m in messages if "export_limit" in m and "reports" in m]
     assert not notes, f"no mismatch note expected when the values agree, got {notes}"
     print("PASS: no mismatch note when apps.yaml agrees with the inverter")
+    return 0
+
+
+def test_export_limit_mismatch_noted_in_a_mixed_fleet(my_predbat=None):
+    """
+    A stale apps.yaml export_limit is still noted when only some inverters report their own limit.
+
+    export_limit is claimed only when every inverter publishes it, so with one inverter that reports
+    6000W and one that reports nothing (GivTCP v2, three-phase) the key stays with apps.yaml. The
+    reporting inverter's figure still shows the hand-typed 3600W is stale, so the note fires for it -
+    but deleting the line would leave both inverters unlimited, not on their own limits, so the
+    advice is to correct the figure rather than to remove it.
+    """
+    base, component = _make_component(rest_urls=["http://a:6345", "http://b:6345"])
+    for n in (0, 1):
+        with open("cases/rest_v3.json", "r") as handle:
+            component.rest[n].inverter.rest_data = json.load(handle)
+    component.rest[0].inverter.rest_data["EA2303G082"]["Export_Limit"] = 6000
+    component.rest[1].inverter.rest_data["EA2303G082"].pop("Export_Limit", None)
+    _mark_discovered(component)
+    base.args_from_apps_yaml = {"export_limit": [3600, 5000]}
+    base.apps_yaml_override_warned = set()
+    base.args["export_limit"] = [3600, 5000]
+    messages = _capture_logs(component)
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    assert base.args.get("export_limit") == [3600, 5000], f"an unclaimed export_limit must be left as configured, got {base.args.get('export_limit')}"
+    notes = [m for m in messages if "export_limit" in m and "reports" in m]
+    assert len(notes) == 1, f"expected one note, for the inverter that reports a limit, got {notes}"
+    assert "3600W" in notes[0] and "6000W" in notes[0] and "inverter 0" in notes[0], notes[0]
+    assert "remove export_limit" not in notes[0], f"removing the line would leave every inverter unlimited, so the note must not advise it: {notes[0]}"
+    assert "6000" in notes[0].split("-", 1)[1], f"the advice should name the figure to set: {notes[0]}"
+
+    run_async(component.automatic_config())
+    notes = [m for m in messages if "export_limit" in m and "reports" in m]
+    assert len(notes) == 1, f"the note must not repeat on the next pass, got {notes}"
+    print("PASS: a stale export_limit is noted in a mixed fleet, with advice that holds there")
     return 0
 
 
@@ -3234,6 +3273,7 @@ def test_givtcp_component(my_predbat=None):
         ("export_limit_auto", test_export_limit_auto_configured_when_apps_yaml_is_silent, "export_limit auto-configured when apps.yaml is silent"),
         ("export_limit_user_wins", test_export_limit_apps_yaml_value_wins, "apps.yaml export_limit wins, mismatch noted"),
         ("export_limit_no_note", test_export_limit_no_mismatch_note_when_values_agree, "no mismatch note when values agree"),
+        ("export_limit_mixed_fleet", test_export_limit_mismatch_noted_in_a_mixed_fleet, "stale export_limit noted in a mixed fleet, advice holds there"),
     ]
 
     passed = 0

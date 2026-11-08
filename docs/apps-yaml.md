@@ -1835,7 +1835,9 @@ as `sensor.predbat_givtcp_<n>_export_limit` (from GivTCP's `Export_Limit`, which
 zero-export site) and points **export_limit** at it only when `apps.yaml` does not set one. If your
 `apps.yaml` value differs from what the inverter reports, the log says so once - delete the
 `export_limit` line to use the inverter's figure instead. GivTCP v2 and three-phase inverters do not
-report an export limit, so for those keep setting it by hand.
+report an export limit, so for those keep setting it by hand. If only some of your inverters report
+one, Predbat leaves **export_limit** entirely to `apps.yaml` (deleting it would make every inverter
+unlimited); the log still notes any inverter whose own figure differs, so you can correct its entry.
 
 Predbat also publishes the battery flows and the lifetime counters -
 `sensor.predbat_givtcp_<n>_battery_{charge,discharge}_today` and
