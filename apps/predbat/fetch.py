@@ -458,8 +458,6 @@ class Fetch:
             indices = [minute_previous + offset for offset in range(step)]
             load_yesterday, load_yesterday_raw = self.get_filtered_load_window(data, indices, step)
 
-        load_yesterday = max(0.0, load_yesterday - self.get_additional_load_history_energy(minute_previous, historical, step=step))
-
         # Apply base load
         base_load = self.base_load * step / 60.0
         if load_yesterday < base_load:
