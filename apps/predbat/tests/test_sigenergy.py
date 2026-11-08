@@ -331,6 +331,85 @@ def test_sigenergy_battery_max_power(my_predbat):
     return failed
 
 
+def test_sigenergy_battery_charge_discharge_split(my_predbat):
+    """Charge and discharge ceilings come from each module's own rating, so a battery rated to discharge
+    faster than it charges is not held to the charge figure on export (2 x 4.2 kW charge,
+    2 x 4.8 kW discharge, 10 kW inverter)."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    api.devices["sys1"] = [
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 4.2, "ratedDischargePower": 4.8}},
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 4.2, "ratedDischargePower": 4.8}},
+        {"deviceType": "Inverter", "attrMap": {"ratedActivePower": 10.0}},
+    ]
+    assert abs(api._get_battery_max_power_kw("sys1", "charge") - 8.4) < 1e-9, "Charge ceiling = sum of ratedChargePower"
+    assert abs(api._get_battery_max_power_kw("sys1", "discharge") - 9.6) < 1e-9, "Discharge ceiling = sum of ratedDischargePower"
+    assert abs(api._get_battery_max_power_kw("sys1") - 9.6) < 1e-9, "Overall ceiling = the larger of the two"
+
+    # Discharge rating above the inverter is capped at the inverter, as charge is
+    api.devices["sys2"] = [
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 4.2, "ratedDischargePower": 6.0}},
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 4.2, "ratedDischargePower": 6.0}},
+        {"deviceType": "Inverter", "attrMap": {"ratedActivePower": 10.0}},
+    ]
+    assert api._get_battery_max_power_kw("sys2", "discharge") == 10.0, "Discharge ceiling capped at inverter"
+
+    # A module that reports no discharge rating keeps today's behaviour: its charge rating stands in
+    api.devices["sys3"] = [
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 4.2}},
+        {"deviceType": "Inverter", "attrMap": {"ratedActivePower": 10.0}},
+    ]
+    assert abs(api._get_battery_max_power_kw("sys3", "discharge") - 4.2) < 1e-9, "No ratedDischargePower: charge rating used"
+
+    # The per-direction rate controls are bounded by their own direction's ceiling, so a 9.6 kW export
+    # rate written by Predbat is not clamped to the 8.4 kW charge figure
+    api.systems["sys1"] = {"systemName": "Home"}
+    charge_max = api._control_info("sys1", "charge", "rate")[7]
+    export_max = api._control_info("sys1", "export", "rate")[7]
+    assert charge_max == 8400, "Charge rate max = charge ceiling, got {}".format(charge_max)
+    assert export_max == 9600, "Export rate max = discharge ceiling, got {}".format(export_max)
+
+    # Published sensors: one per direction, plus battery_rate_max as the larger
+    api.systems["sys1"]["batteryCapacity"] = 16.0
+    api.energy_flow["sys1"] = {"batterySoc": 50.0}
+    run_async(api.publish_system_entities("sys1"))
+    slug = api._system_slug("sys1")
+    for leaf, expected in (("battery_rate_max", 9600), ("battery_charge_rate_max", 8400), ("battery_discharge_rate_max", 9600)):
+        key = "sensor.predbat_sigenergy_{}_{}".format(slug, leaf)
+        assert key in api.dashboard_items, "{} published".format(key)
+        assert api.dashboard_items[key]["state"] == expected, "{} = {}, got {}".format(leaf, expected, api.dashboard_items[key]["state"])
+
+    return failed
+
+
+def test_sigenergy_automatic_config_charge_discharge_limits(my_predbat):
+    """automatic_config wires inverter_limit_charge/_discharge to the per-direction sensors, and an
+    apps.yaml value for either still wins."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+
+    run_async(api.automatic_config())
+
+    assert api.set_args.get("inverter_limit_charge") == ["sensor.predbat_sigenergy_sig001_battery_charge_rate_max"], api.set_args.get("inverter_limit_charge")
+    assert api.set_args.get("inverter_limit_discharge") == ["sensor.predbat_sigenergy_sig001_battery_discharge_rate_max"], api.set_args.get("inverter_limit_discharge")
+
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+    api.base.args_from_apps_yaml = {"inverter_limit_discharge": 5000}
+    api.args["inverter_limit_discharge"] = 5000
+
+    run_async(api.automatic_config())
+
+    assert "inverter_limit_discharge" not in api.set_args, "apps.yaml inverter_limit_discharge kept, got {}".format(api.set_args.get("inverter_limit_discharge"))
+    assert api.args["inverter_limit_discharge"] == 5000
+
+    return failed
+
+
 def test_sigenergy_battery_capacity(my_predbat):
     """Test _get_battery_capacity_kwh falls back to device data."""
     failed = False
@@ -5292,6 +5371,8 @@ def run_sigenergy_tests(my_predbat):
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),
         ("build_tls_context", test_sigenergy_build_tls_context),
         ("battery_max_power", test_sigenergy_battery_max_power),
+        ("battery_charge_discharge_split", test_sigenergy_battery_charge_discharge_split),
+        ("automatic_config_charge_discharge_limits", test_sigenergy_automatic_config_charge_discharge_limits),
         ("options_time_format", test_sigenergy_options_time_format),
         ("update_control_time_validation", test_sigenergy_update_control_time_validation),
         ("set_operating_mode", test_sigenergy_set_operating_mode),
