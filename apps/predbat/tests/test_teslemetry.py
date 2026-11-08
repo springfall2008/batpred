@@ -74,6 +74,8 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.battery_type = None
         self.powerwall_3 = False
         self._reserve_band_warned = False
+        self._hold_level = None
+        self._hold_topping_up = False
         self.args_set = {}
         # OAuth state (production sets these via _init_oauth in initialize, which the mock bypasses).
         self.auth_method = "api_key"
@@ -1170,19 +1172,24 @@ def test_teslemetry_tbc_charging_below_target_enables_grid_at_the_real_reserve()
     assert api.evaluate_schedule_tbc(3 * 60, 40) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 15, "mode": "autonomous"}
 
 
-def test_teslemetry_tbc_at_target_holds_with_reserve_100_and_no_grid():
-    """At target it holds: reserve 100 stops discharge, grid charging off stops it importing to reach it."""
+def test_teslemetry_tbc_at_target_holds_on_the_target_with_no_grid():
+    """At target it holds on the reserve with grid charging off. Below the 81-99 band the target itself is
+    the reserve; it is never 100, which the Powerwall would fill from the grid whatever the grid flag says
+    (GH#6046)."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 70, "enable": 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 70) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 70, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_at_target_in_the_band_holds_at_80():
+    """A hold at a charge target in 81-96 uses 80, the highest reserve Tesla honours below the band, not 100 (GH#6046)."""
     api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1})
-    assert api.evaluate_schedule_tbc(3 * 60, 90) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 100, "mode": "autonomous"}
+    assert api.evaluate_schedule_tbc(3 * 60, 90) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 80, "mode": "autonomous"}
 
 
 def test_teslemetry_tbc_hold_deadband_survives_a_one_percent_sag():
     """A freeze charge whose SOC has sagged 1% below the written target still holds, rather than importing."""
-    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 85, "enable": 1})
-    assert api.evaluate_schedule_tbc(3 * 60, 84)["grid_charging"] is False
-    assert api.evaluate_schedule_tbc(3 * 60, 84)["reserve"] == 100
-    # Two points below the target is a real shortfall, not sensor sag, so charging resumes.
-    assert api.evaluate_schedule_tbc(3 * 60, 83)["grid_charging"] is True
+    api = _tbc_api(reserve=86)
+    assert api.evaluate_schedule_tbc(12 * 60, 85) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 80, "mode": "self_consumption"}
 
 
 def test_teslemetry_tbc_export_uses_the_real_reserve_not_the_export_target():
@@ -1270,15 +1277,60 @@ def test_teslemetry_tbc_charge_wins_over_an_overlapping_export():
     assert api.evaluate_schedule_tbc(3 * 60, 40)["grid_charging"] is True
 
 
-def test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off():
-    """Predbat's own reserve hold (soc+1) lands in the band Tesla rejects and must round UP, not down.
-
-    execute.py writes adjust_reserve(soc+1) under set_reserve_hold, so a battery at 85% asks for 86.
-    Snapping that to 80 would let it discharge 6% during a hold; 100 actually holds, and grid
-    charging off is what stops it importing to reach 100.
-    """
+def test_teslemetry_tbc_reserve_hold_in_the_band_holds_at_80_with_grid_off():
+    """A hold request in 81-96 is held at 80 with grid charging off, so the battery may drift down for house
+    load rather than fill to 100 from the grid (GH#6046)."""
     api = _tbc_api(reserve=86)
-    assert api.evaluate_schedule_tbc(12 * 60, 85) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 100, "mode": "self_consumption"}
+    assert api.evaluate_schedule_tbc(12 * 60, 86) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 80, "mode": "self_consumption"}
+
+
+def test_teslemetry_tbc_reserve_hold_tops_up_once_soc_falls_3_below_the_hold():
+    """Once the SOC falls more than SIGNAL_HOLD_TOP_UP_PERCENT below the hold level, reserve 100 with grid
+    charging on tops it back up."""
+    api = _tbc_api(reserve=86)
+    assert api.evaluate_schedule_tbc(12 * 60, 86)["reserve"] == 80
+    assert api.evaluate_schedule_tbc(12 * 60, 83.1)["reserve"] == 80
+    assert api.evaluate_schedule_tbc(12 * 60, 82.9) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 100, "mode": "self_consumption"}
+
+
+def test_teslemetry_tbc_reserve_hold_top_up_stops_at_the_hold_level():
+    """A top-up runs until the SOC is back at the hold level and no further, then returns to 80 with grid
+    charging off - hysteresis, so it does not flip between 80 and 100 just below the trigger."""
+    api = _tbc_api(reserve=86)
+    api.evaluate_schedule_tbc(12 * 60, 86)
+    assert api.evaluate_schedule_tbc(12 * 60, 82.5)["reserve"] == 100
+    assert api.evaluate_schedule_tbc(12 * 60, 83.5)["reserve"] == 100
+    assert api.evaluate_schedule_tbc(12 * 60, 85.9)["reserve"] == 100
+    assert api.evaluate_schedule_tbc(12 * 60, 86.0) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 80, "mode": "self_consumption"}
+
+
+def test_teslemetry_tbc_reserve_hold_level_survives_the_request_drifting_down():
+    """execute rewrites a freeze's reserve as the live SOC each cycle, so the request drifts down with the
+    battery. The hold level is the highest request since the hold began, or the top-up would never come."""
+    api = _tbc_api(reserve=86)
+    api.evaluate_schedule_tbc(12 * 60, 86.4)
+    for request, soc in ((85, 85.6), (84, 84.4), (83, 83.2)):
+        api.schedule["reserve"] = request
+        assert api.evaluate_schedule_tbc(12 * 60, soc)["reserve"] == 80
+    api.schedule["reserve"] = 82
+    assert api.evaluate_schedule_tbc(12 * 60, 82.9)["reserve"] == 100
+
+
+def test_teslemetry_tbc_reserve_hold_level_resets_once_the_request_leaves_the_band():
+    """A request of 80 or below ends the hold, so the next hold in the band starts from its own level."""
+    api = _tbc_api(reserve=90)
+    api.evaluate_schedule_tbc(12 * 60, 90)
+    api.schedule["reserve"] = 4
+    assert api.evaluate_schedule_tbc(12 * 60, 88)["reserve"] == 4
+    api.schedule["reserve"] = 84
+    assert api.evaluate_schedule_tbc(12 * 60, 82)["reserve"] == 80
+
+
+def test_teslemetry_tbc_reserve_hold_near_full_uses_100_with_grid_on():
+    """A hold request of SIGNAL_HOLD_ROUND_UP_PERCENT or more uses 100: the top-up to full is at most a few
+    percent, the smaller deviation from the plan. Grid charging is left on, as a 100% reserve imports anyway."""
+    api = _tbc_api(reserve=97)
+    assert api.evaluate_schedule_tbc(12 * 60, 97) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 100, "mode": "self_consumption"}
 
 
 def test_teslemetry_tbc_reserve_band_warning_logs_once():
@@ -1308,12 +1360,38 @@ def test_teslemetry_tbc_reserve_of_exactly_100_is_not_reported_as_the_rejected_b
     assert "86%" in warnings[0]
 
 
-def test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window():
-    """A hold reserve inside a charge window must not import to fill to 100 against the 0p band."""
-    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, reserve=86)
+def test_teslemetry_tbc_reserve_hold_in_a_charge_window_charges_with_grid_on():
+    """A band reserve inside a charge window never turns the charge off: the charge itself needs grid
+    charging on, and the reserve follows the same hold rule (here a top-up, the SOC being far below it)."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 95, "enable": 1}, reserve=86)
     state = api.evaluate_schedule_tbc(3 * 60, 40)
     assert state["reserve"] == 100
-    assert state["grid_charging"] is False
+    assert state["grid_charging"] is True
+
+
+def test_teslemetry_tbc_reserve_band_warning_says_which_way():
+    """The one-shot band diagnostic says what was done with the request instead, not only that it was rejected."""
+    api = _tbc_api(reserve=86)
+    api.evaluate_schedule_tbc(12 * 60, 86)
+    warnings = [msg for msg in api.log_messages if "81-99 band" in msg]
+    assert len(warnings) == 1
+    assert "80%" in warnings[0] and "86%" in warnings[0] and "3%" in warnings[0]
+
+
+def test_teslemetry_real_rate_reserve_hold_in_the_band_uses_the_same_rule():
+    """The real-rate path holds a band reserve the same way, never leaving the device to snap it."""
+    api = _tbc_api(reserve=86)
+    api.tbc_control = False
+    assert api.evaluate_schedule(12 * 60, 86)["reserve"] == 80
+    assert api.evaluate_schedule(12 * 60, 82.9)["reserve"] == 100
+
+
+def test_teslemetry_real_rate_charge_target_in_the_band_is_not_rounded_down():
+    """A real-rate charge window sends its target as the reserve. That is a charge, not a hold, and must not
+    be rounded down to 80, which would stop the charge short."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1})
+    api.tbc_control = False
+    assert api.evaluate_schedule(3 * 60, 50)["reserve"] == 90
 
 
 def test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band():
@@ -3450,7 +3528,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_signal_tariff_without_windows_is_flat_base()
     test_teslemetry_charge_window_accessor()
     test_teslemetry_tbc_charging_below_target_enables_grid_at_the_real_reserve()
-    test_teslemetry_tbc_at_target_holds_with_reserve_100_and_no_grid()
+    test_teslemetry_tbc_at_target_holds_on_the_target_with_no_grid()
+    test_teslemetry_tbc_at_target_in_the_band_holds_at_80()
     test_teslemetry_tbc_hold_deadband_survives_a_one_percent_sag()
     test_teslemetry_tbc_export_uses_the_real_reserve_not_the_export_target()
     test_teslemetry_tbc_export_stops_at_the_target()
@@ -3460,10 +3539,18 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_tbc_midnight_recommit_minute_stays_autonomous()
     test_teslemetry_tbc_mode_matches_the_pushed_tariff()
     test_teslemetry_tbc_charge_wins_over_an_overlapping_export()
-    test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off()
+    test_teslemetry_tbc_reserve_hold_in_the_band_holds_at_80_with_grid_off()
+    test_teslemetry_tbc_reserve_hold_tops_up_once_soc_falls_3_below_the_hold()
+    test_teslemetry_tbc_reserve_hold_top_up_stops_at_the_hold_level()
+    test_teslemetry_tbc_reserve_hold_level_survives_the_request_drifting_down()
+    test_teslemetry_tbc_reserve_hold_level_resets_once_the_request_leaves_the_band()
+    test_teslemetry_tbc_reserve_hold_near_full_uses_100_with_grid_on()
     test_teslemetry_tbc_reserve_band_warning_logs_once()
     test_teslemetry_tbc_reserve_of_exactly_100_is_not_reported_as_the_rejected_band()
-    test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window()
+    test_teslemetry_tbc_reserve_hold_in_a_charge_window_charges_with_grid_on()
+    test_teslemetry_tbc_reserve_band_warning_says_which_way()
+    test_teslemetry_real_rate_reserve_hold_in_the_band_uses_the_same_rule()
+    test_teslemetry_real_rate_charge_target_in_the_band_is_not_rounded_down()
     test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band()
     test_teslemetry_day_runs_groups_replicated_days()
     test_teslemetry_day_runs_all_identical_single_run()

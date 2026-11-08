@@ -132,12 +132,18 @@ SIGNAL_SELL_PRICES = {SIGNAL_CHEAP_TIER: 0.0, SIGNAL_BASE_TIER: 0.0, SIGNAL_PEAK
 SIGNAL_HOLD_DEADBAND_PERCENT = 1
 # The only reserve above 80 that Tesla still accepts: since firmware 25.18.4, 81-99 snap to 80.
 SIGNAL_HOLD_RESERVE = 100
-# Highest reserve below the snap band. A request above this is rounded UP to SIGNAL_HOLD_RESERVE
-# rather than left to be snapped down to 80 by the device: Predbat only asks for a reserve up here
-# when it wants a hold (execute.py writes soc+1 under set_reserve_hold), and 80 would not hold it.
-# Either way what Predbat models and what the battery honours must agree, which is the divergence
-# GH#4953/#4956 fixed for the reserve floor generally.
+# Highest reserve below the snap band. Predbat never sends a value in 81-99, so what it models never
+# depends on which way the device would snap it; _settable_reserve() picks 80 or 100 instead. Either way
+# what Predbat models and what the battery honours must agree, which is the divergence GH#4953/#4956
+# fixed for the reserve floor generally.
 SIGNAL_MAX_SETTABLE_RESERVE = 80
+# A hold request at or above this is sent as SIGNAL_HOLD_RESERVE: the battery is close to full, so the
+# top-up a 100% reserve makes from the grid is the smaller deviation from the plan (GH#6046).
+SIGNAL_HOLD_ROUND_UP_PERCENT = 97
+# A hold request in the band below that is held at SIGNAL_MAX_SETTABLE_RESERVE, letting the battery cover
+# the house, and topped back up to the hold level with SIGNAL_HOLD_RESERVE once the SOC falls more than
+# this many percent below it (GH#6046).
+SIGNAL_HOLD_TOP_UP_PERCENT = 3
 
 OPTIONS_TIME_FULL = ["{:02d}:{:02d}:00".format(hour, minute) for hour in range(24) for minute in range(60)]
 
@@ -231,6 +237,9 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.site_ratings = {}
         self.site_version = None
         self._reserve_band_warned = False
+        # The hold a band reserve is kept near, and whether a top-up towards it is running (_settable_reserve)
+        self._hold_level = None
+        self._hold_topping_up = False
         self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.schedule_loaded = False
@@ -777,8 +786,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return self.evaluate_schedule_tbc(minutes_now, soc)
         charge = self.schedule.get("charge", {})
         discharge = self.schedule.get("discharge", {})
-        reserve = self.schedule.get("reserve", 20)
         if self.in_window(minutes_now, charge):
+            # The charge target is a charge, not a hold, so it is sent as asked rather than through _settable_reserve
             target = int(charge.get("soc", 100))
             grid = soc < target
             return {"export_rule": "pv_only", "grid_charging": grid, "reserve": target, "mode": "backup"}
@@ -787,35 +796,60 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             if soc > target:
                 return {"export_rule": "battery_ok", "grid_charging": False, "reserve": target, "mode": "autonomous"}
             return {"export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
-        return {"export_rule": "pv_only", "grid_charging": True, "reserve": int(reserve), "mode": "self_consumption"}
+        reserve, band_grid = self._settable_reserve(self.schedule.get("reserve", 20), soc)
+        return {"export_rule": "pv_only", "grid_charging": True if band_grid is None else band_grid, "reserve": reserve, "mode": "self_consumption"}
 
-    def _settable_reserve(self, percent):
-        """Map a requested reserve onto one the Powerwall will actually hold.
+    def _settable_reserve(self, percent, soc):
+        """Map a requested reserve onto one the Powerwall will honour, as (reserve, grid_charging).
 
-        Since firmware 25.18.4 only 0-80 and exactly 100 are honoured; 81-99 are silently snapped
-        down to 80. A request in that band is Predbat asking to hold above 80 - execute.py writes
-        adjust_reserve(soc+1) under set_reserve_hold - and 80 would not hold it, leaving the battery
-        free to discharge back down to 80 during a window meant to keep SOC flat. So it rounds UP to
-        the one value above 80 that is honoured. Callers disable grid charging whenever this returns
-        SIGNAL_HOLD_RESERVE, which is what stops the device importing to reach it - including a
-        `set_reserve_min` anywhere in 81-99 (a plausible Powerwall value on its own), which lands here
-        too and then holds grid charging off in every state, permanently. A request of exactly 100 is
-        already honoured and passes through without a diagnostic; only a value the device would have
-        silently moved is logged, once rather than every cycle, so a user can see why nothing is
-        charging. It is a Warn rather than an Info because this path is on by default (GH#5186), so
-        it is reached by a plausible set_reserve_min rather than only by a trial opt-in; it stays
-        one-shot per instance, since the condition is a standing config value and not a per-cycle event.
+        Since firmware 25.18.4 only 0-80 and exactly 100 are honoured; 81-99 are snapped. A request in that
+        band is Predbat asking to hold above 80 - a freeze charge (execute.py writes the live SOC rounded
+        down under set_reserve_hold), a hold at a charge target, or a set_reserve_min up there. 100 is no
+        hold: a Powerwall meets a reserve above its SOC from the grid whatever the grid-charging flag says,
+        so it fills to full (GH#6046). So:
+
+        - SIGNAL_HOLD_ROUND_UP_PERCENT or more: SIGNAL_HOLD_RESERVE with grid charging on, as the top-up to
+          full is a few percent at most.
+        - Otherwise SIGNAL_MAX_SETTABLE_RESERVE with grid charging off, letting the battery cover the house,
+          until the SOC falls more than SIGNAL_HOLD_TOP_UP_PERCENT below the hold level. Then
+          SIGNAL_HOLD_RESERVE with grid charging on tops it up, until the SOC is back at the hold level.
+
+        The hold level is the highest request since the hold began, because execute rewrites a freeze's
+        reserve as the live SOC each cycle and the request falls with the battery - judged against the
+        request itself, the top-up would never come. A request of 80 or below, or at the round-up level,
+        ends the hold. grid_charging is None for a request passed through unchanged, leaving it to the caller.
+
+        A request moved off what was asked is logged once per instance rather than every cycle, since it
+        is usually a standing condition; exactly 100 is honoured as asked and logs nothing, so it cannot
+        burn the one-shot flag before the case the diagnostic exists for.
         """
         percent = int(percent)
-        if percent <= SIGNAL_MAX_SETTABLE_RESERVE:
-            return percent
-        # Exactly 100 is honoured by the device as asked, so it is not being changed under the
-        # caller's feet and warrants no diagnostic - and warning for it would burn the one-shot flag
-        # and silence the real 81-99 case later, which is the case the diagnostic exists for.
-        if percent < SIGNAL_HOLD_RESERVE and not self._reserve_band_warned:
+        if percent <= SIGNAL_MAX_SETTABLE_RESERVE or percent >= SIGNAL_HOLD_ROUND_UP_PERCENT:
+            self._hold_level = None
+            self._hold_topping_up = False
+            if percent <= SIGNAL_MAX_SETTABLE_RESERVE:
+                return percent, None
+            if percent < SIGNAL_HOLD_RESERVE and not self._reserve_band_warned:
+                self._reserve_band_warned = True
+                self.log("Warn: Teslemetry reserve request of {}% is in the 81-99 band Tesla rejects - using 100% instead, as the battery is nearly full".format(percent))
+            return SIGNAL_HOLD_RESERVE, True
+        if not self._reserve_band_warned:
             self._reserve_band_warned = True
-            self.log("Warn: Teslemetry reserve request of {}% is in the 81-99 band Tesla rejects - using 100% instead, which also disables grid charging until set_reserve_min moves out of that band".format(percent))
-        return SIGNAL_HOLD_RESERVE
+            self.log(
+                "Warn: Teslemetry reserve request of {}% is in the 81-99 band Tesla rejects - holding at {}% instead, and topping up from the grid with a 100% reserve whenever the battery falls more than {}% below {}%".format(
+                    percent, SIGNAL_MAX_SETTABLE_RESERVE, SIGNAL_HOLD_TOP_UP_PERCENT, percent
+                )
+            )
+        self._hold_level = max(self._hold_level or 0, percent)
+        soc = float(soc or 0)
+        if self._hold_topping_up:
+            if soc >= self._hold_level:
+                self._hold_topping_up = False
+        elif soc < self._hold_level - SIGNAL_HOLD_TOP_UP_PERCENT:
+            self._hold_topping_up = True
+        if self._hold_topping_up:
+            return SIGNAL_HOLD_RESERVE, True
+        return SIGNAL_MAX_SETTABLE_RESERVE, False
 
     def evaluate_schedule_tbc(self, minutes_now, soc):
         """Map the committed schedule to the device tuple under signal-tariff control (GH#4892).
@@ -835,29 +869,32 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         under this mode, since Tesla decides how much energy actually moves, and window length rather
         than a reserve floor is the lever for them.
 
-        Grid charging is enabled only while a charge is actually wanted and no hold is in force, so
-        no other state can import unexpectedly whatever the optimiser decides.
+        Grid charging is enabled only while a charge is actually wanted, or while _settable_reserve is
+        topping a hold in the snap band back up with a 100% reserve, so no other state can import
+        unexpectedly whatever the optimiser decides.
         """
         charge = self.schedule.get("charge", {})
         discharge = self.schedule.get("discharge", {})
-        reserve = self._settable_reserve(self.schedule.get("reserve", 20))
         if self.in_window(minutes_now, charge):
             target = int(charge.get("soc", 100))
             if soc >= target - SIGNAL_HOLD_DEADBAND_PERCENT:
-                # At (or effectively at) target: hold. Reserve 100 stops the discharge and grid
-                # charging off stops it importing to reach that reserve; solar may still charge,
-                # which is what a freeze charge wants.
-                return {"export_rule": "pv_only", "grid_charging": False, "reserve": SIGNAL_HOLD_RESERVE, "mode": "autonomous"}
-            # Charging. A reserve that came back as SIGNAL_HOLD_RESERVE is a hold request Predbat
-            # made in its own right, and must not be turned into an import up to 100% against the 0p
-            # band, so grid charging is suppressed in that case.
-            return {"export_rule": "pv_only", "grid_charging": reserve < SIGNAL_HOLD_RESERVE, "reserve": reserve, "mode": "autonomous"}
+                # At (or effectively at) target: hold on the reserve with grid charging off; solar may still
+                # charge, which is what a freeze charge wants. A target in the snap band is held by the same
+                # rule as a reserve request, as 100 would fill the battery from the grid (GH#6046).
+                hold = target if target > SIGNAL_MAX_SETTABLE_RESERVE else min(target, int(soc))
+                reserve, band_grid = self._settable_reserve(hold, soc)
+                return {"export_rule": "pv_only", "grid_charging": bool(band_grid), "reserve": reserve, "mode": "autonomous"}
+            # Charging: grid charging on for the tariff's cheap band to act on, at the reserve Predbat asked for
+            reserve, _ = self._settable_reserve(self.schedule.get("reserve", 20), soc)
+            return {"export_rule": "pv_only", "grid_charging": True, "reserve": reserve, "mode": "autonomous"}
+        reserve, band_grid = self._settable_reserve(self.schedule.get("reserve", 20), soc)
+        grid_charging = bool(band_grid)
         if self.in_window(minutes_now, discharge):
             target = int(discharge.get("soc", 10))
-            return {"export_rule": "battery_ok" if soc > target else "pv_only", "grid_charging": False, "reserve": reserve, "mode": "autonomous"}
+            return {"export_rule": "battery_ok" if soc > target else "pv_only", "grid_charging": grid_charging, "reserve": reserve, "mode": "autonomous"}
         charge_window, export_window = self._signal_windows(minutes_now)
         mode = "autonomous" if (charge_window or export_window) else "self_consumption"
-        return {"export_rule": "pv_only", "grid_charging": False, "reserve": reserve, "mode": mode}
+        return {"export_rule": "pv_only", "grid_charging": grid_charging, "reserve": reserve, "mode": mode}
 
     def publish_schedule_entities(self):
         """Publish the schedule entities from the pending schedule (pending == committed after boot/apply).
