@@ -2531,7 +2531,7 @@ def test_web_annual_post_numeric_coercion(my_predbat):
 
 
 def test_web_annual_routes_registered(my_predbat):
-    """Verify all nine Annual routes are registered, so a typo'd path cannot ship green."""
+    """Verify Annual routes and the modern UI entry point are registered."""
     failed = False
     print("**** Testing web_annual route registration ****")
 
@@ -2557,6 +2557,15 @@ def test_web_annual_routes_registered(my_predbat):
     missing = expected - registered
     if missing:
         print("  ERROR: missing route registrations: {}".format(missing))
+        failed = True
+
+    print("Test: the classic What If route remains available")
+    modern_interface = WebInterface(my_predbat, web_port=5057)
+    modern_app = aiohttp_web.Application()
+    modern_interface._register_annual_routes(modern_app)
+    modern_routes = {(route.method, route.resource.canonical): route.handler for route in modern_app.router.routes()}
+    if modern_routes[("GET", "/annual")] != modern_interface.annual_page.html_annual:
+        print("  ERROR: /annual should retain the classic page")
         failed = True
 
     return failed

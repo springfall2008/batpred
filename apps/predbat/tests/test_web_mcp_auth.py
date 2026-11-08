@@ -93,7 +93,11 @@ def test_mcp_register_returns_no_secret(my_predbat):
     print("**** Testing MCP dynamic client registration hands out no credential ****")
     server = make_server(my_predbat)
 
-    status, data = call(server.oauth_register, FakeJsonRequest({"client_name": "probe", "grant_types": ["client_credentials", "authorization_code"], "redirect_uris": ["https://example.com/cb"]}))
+    status, rejected = call(server.oauth_register, FakeJsonRequest({"grant_types": ["client_credentials", "authorization_code"]}))
+    if status != 400 or "client_secret" in rejected or TEST_SECRET in json.dumps(rejected):
+        print("  ERROR: registration did not safely reject unsupported grants")
+        failed = True
+    status, data = call(server.oauth_register, FakeJsonRequest({"client_name": "probe", "grant_types": ["authorization_code"], "redirect_uris": ["https://example.com/cb"]}))
     if status != 201:
         print("  ERROR: registration returned {} {}".format(status, data))
         failed = True
@@ -244,19 +248,23 @@ def test_mcp_scopes_enforced(my_predbat):
         """Call one tool over POST /mcp with the given bearer token; return (isError, error text)."""
         request = FakeJsonRequest({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": {}}}, headers={"Content-Type": "application/json", "Authorization": "Bearer " + bearer})
         status, data = call(server.html_mcp_post, request)
+        if "error" in data:
+            return status, True, json.dumps(data["error"])
         result = data.get("result", {})
         text = result.get("content", [{}])[0].get("text", "")
         return status, result.get("isError", False), text
 
     read_token = server.generate_access_token("reader", scopes=["mcp:read"])
     write_token = server.generate_access_token("writer", scopes=["mcp:write"])
+    control_token = server.generate_access_token("controller", scopes=["mcp:control"])
     for name in write_tools:
         print("Test: a read-only token cannot call {}".format(name))
         status, is_error, text = call_tool(read_token, name)
-        if status != 200 or not is_error or "scope" not in text:
+        if status != 403 or not is_error or "scope" not in text:
             print("  ERROR: {} with a read-only token gave {} {} {}".format(name, status, is_error, text[:200]))
             failed = True
-        for label, bearer in (("an mcp:write token", write_token), ("the legacy bearer token", TEST_SECRET)):
+        permitted_token = control_token if name == "set_plan_override" else write_token
+        for label, bearer in (("the required scope token", permitted_token), ("the legacy bearer token", TEST_SECRET)):
             print("Test: {} passes the scope check for {}".format(label, name))
             status, is_error, text = call_tool(bearer, name)
             if status != 200 or "scope" in text:
@@ -269,7 +277,7 @@ def test_mcp_scopes_enforced(my_predbat):
         status, is_error, text = call_tool(read_token, "test_unflagged_tool")
     finally:
         TOOL_DEFS.pop()
-    if not is_error or "scope" not in text:
+    if status != 403 or not is_error or "scope" not in text:
         print("  ERROR: an unflagged tool was open to a read-only token: {} {}".format(is_error, text[:200]))
         failed = True
 
@@ -282,7 +290,7 @@ def test_mcp_scopes_enforced(my_predbat):
     print("Test: a token with no MCP scope cannot call a read tool")
     none_token = server.generate_access_token("nobody", scopes=["other"])
     status, is_error, text = call_tool(none_token, "get_status")
-    if not is_error or "scope" not in text:
+    if status != 403 or not is_error or "scope" not in text:
         print("  ERROR: get_status with no MCP scope gave {} {}".format(is_error, text[:200]))
         failed = True
     return failed

@@ -6,6 +6,10 @@ Every entry is an observation from a past investigation, not a statement about c
 
 The file was compacted on 2026-11-05, from 730KB of per-issue detail down to the durable facts and pointers. If you need the full story behind an entry, the issue or PR it cites has it, and so does the last uncompacted version: `git show ea6ba38d:tools/debug-journal.md`.
 
+- **Modern charts waiting after startup (2026-10-29).** Distinguish slow HTTP from a quick `chart_data` response with `ready: false`: the latter means forecast data is not published yet. `ChartsPage` previously retried both ready and unready responses only every five minutes. Verify its readiness-dependent polling before investigating rendering performance; the regression tests use controlled responses and timers.
+- **Modern dashboard freshness (2026-10-29).** Plan JSON has its own `timestamp`; `power_flow.updated_at` is the last completed power refresh and is `None` until one completes. A successful HTTP response can therefore contain startup zero defaults or an old snapshot. Compare those source times, not the request time, before diagnosing a plan/live discrepancy; the refresh time does not prove each individual sensor is current.
+- **Modern UI ingress 502 after a cached response.** Supervisor's `Ingress error: Bad status line` with bytes `x\x9c\x03\x00\x00\x00\x00\x01` is an empty deflate stream, not a missing stylesheet or a stopped app. Enabling aiohttp `FileResponse` compression on a 304 or HEAD response can write compressed bytes after headers despite the body being forbidden, corrupting the next response on a reused connection. `UIFileResponse` suppresses compression for those responses; the raw HTTP regression in `test_web_modern_ui.py` checks connection reuse for both cache validators, HEAD, gzip and deflate.
+
 ## Replay the reporter's debug file
 
 `predbat_debug.yaml` is a full state dump the harness replays against the current tree:

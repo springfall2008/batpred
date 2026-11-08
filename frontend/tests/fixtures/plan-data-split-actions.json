@@ -1,0 +1,36 @@
+{
+  "unchanged": false,
+  "plan": {
+    "rows": [
+      {
+        "time": "2099-01-01T14:00:00Z",
+        "slot_minute": 840,
+        "import_rate": 0,
+        "export_rate": 12,
+        "import_rate_adjusted": 0,
+        "export_rate_adjusted": 12,
+        "state": "Exp",
+        "state_text": "Chrg&nearr;",
+        "state2_text": "Exp&searr;",
+        "state_target": "87",
+        "state_override": "",
+        "reasons": [],
+        "pv_forecast": 0.5,
+        "load_forecast": 0.3,
+        "soc_percent": 87,
+        "soc_change": 2,
+        "cost_change": -0.02,
+        "total_cost": 0.42,
+        "description": ""
+      }
+    ],
+    "reason_templates": {},
+    "currency_symbols": ["£", "p"],
+    "soc": 8.7,
+    "soc_max": 10,
+    "mode": "Control charge & discharge",
+    "num_cars": 0,
+    "car_charging_from_battery": false,
+    "car_energy_reported_load": false
+  }
+}

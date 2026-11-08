@@ -165,6 +165,14 @@ def test_routes_always_registered_handlers_404_unconfigured(my_predbat):
             if expected not in paths:
                 print("ERROR: route {} was not registered with a chat component present, got {}".format(expected, sorted(paths)))
                 failed = True
+
+        modern_interface = _make_web(my_predbat)
+        modern_app = aiohttp_web.Application()
+        modern_interface._register_chat_routes(modern_app)
+        modern_routes = {(route.method, route.resource.canonical): route.handler for route in modern_app.router.routes()}
+        if modern_routes[("GET", "/chat")] != modern_interface.chat_page.html_chat:
+            print("ERROR: /chat should retain the classic page")
+            failed = True
     finally:
         my_predbat.components = original_components
 
