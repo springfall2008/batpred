@@ -1449,6 +1449,8 @@ approval was lower than your maximum inverter power (check your install informat
 
 If you do not set an export limit then it is assumed to be unlimited (and thus limited by your inverter or PV system).
 
+With **givtcp_rest**, **ge_cloud** and some other integrations, Predbat reads the limit from the inverter itself when you do not set one - see the section for your integration.
+
 ### **battery_export_permitted**
 
 One per inverter (optional), an entity whose state is `on` or `off`.
@@ -1827,6 +1829,15 @@ repointing them at a sensor it has only just created would throw that history aw
 planning with no load model until the days build back up. This applies per setting, so naming one of
 the four by hand leaves the other three auto-configured. Everything else Predbat auto-configures here
 is read as a current value rather than as history, and anything you set for those is still overridden.
+
+**export_limit** is also left to you if you set it. Predbat publishes the inverter's own export limit
+as `sensor.predbat_givtcp_<n>_export_limit` (from GivTCP's `Export_Limit`, which is 0 for a
+zero-export site) and points **export_limit** at it only when `apps.yaml` does not set one. If your
+`apps.yaml` value differs from what the inverter reports, the log says so once - delete the
+`export_limit` line to use the inverter's figure instead. GivTCP v2 and three-phase inverters do not
+report an export limit, so for those keep setting it by hand. If only some of your inverters report
+one, Predbat leaves **export_limit** entirely to `apps.yaml` (deleting it would make every inverter
+unlimited); the log still notes any inverter whose own figure differs, so you can correct its entry.
 
 Predbat also publishes the battery flows and the lifetime counters -
 `sensor.predbat_givtcp_<n>_battery_{charge,discharge}_today` and
