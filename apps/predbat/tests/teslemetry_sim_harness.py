@@ -45,6 +45,10 @@ class HarnessTeslemetry(TeslemetryAPI):
         """Minutes since midnight on the simulated clock, in place of the wall clock."""
         return self.sim_now.hour * 60 + self.sim_now.minute
 
+    def _wall_clock(self):
+        """The simulated time, in place of the wall clock."""
+        return self.sim_now
+
     @property
     def storage(self):
         """The harness's storage, where the committed schedule is kept."""
@@ -110,8 +114,8 @@ class HoldResult:
 class TeslemetryHoldHarness:
     """One scripted run of a TESLA inverter driven by teslemetry against the fake Powerwall."""
 
-    def __init__(self, soc_percent, windows, reserve=4, capacity_kwh=13.5, load_w=None, pv_w=None, tbc_control=True, extra_args=None):
-        """soc_percent is the battery at the start, windows the scripted PlanWindow list, reserve Predbat's set_reserve_min."""
+    def __init__(self, soc_percent, windows, reserve=4, capacity_kwh=13.5, load_w=None, pv_w=None, tbc_control=True, extra_args=None, restart_at=None):
+        """soc_percent is the battery at the start, windows the scripted PlanWindow list, reserve Predbat's set_reserve_min; restart_at restarts teslemetry at that minute."""
         self.initial_soc_percent = soc_percent
         self.windows = windows
         self.reserve_min = reserve
@@ -120,6 +124,10 @@ class TeslemetryHoldHarness:
         self.pv_w = pv_w
         self.tbc_control = tbc_control
         self.extra_args = extra_args or {}
+        self.restart_at = restart_at
+        # The minute teslemetry's process started: its run() clock counts seconds from there
+        self.process_start = 0
+        self.storage = MemoryStorage()
         self.my_predbat = None
         self.teslemetry = None
         self.fake = None
@@ -140,7 +148,7 @@ class TeslemetryHoldHarness:
         """One minute: the battery runs on at its settings, then teslemetry's own loop runs as component_base does every 60 seconds."""
         self.teslemetry.sim_now = self.sim_time(minute)
         self.fake.advance(1)
-        run_async(self.teslemetry.run(60 * minute, False))
+        run_async(self.teslemetry.run(60 * (minute - self.process_start), False))
 
     def apply_plan(self):
         """Hand execute the scripted windows that have not ended yet, as a plan advanced to now would."""
@@ -161,6 +169,10 @@ class TeslemetryHoldHarness:
         """One 5-minute Predbat cycle ending at minute: teslemetry's loop each minute, then fetch, the scripted plan, execute."""
         for loop_minute in range(minute - 4, minute + 1):
             self.poll(loop_minute)
+        self.fetch_and_execute(minute)
+
+    def fetch_and_execute(self, minute):
+        """Predbat's part of a cycle at minute: fetch, the scripted plan, execute."""
         my_predbat = self.my_predbat
         my_predbat.update_time(print=False, now=self.sim_time(minute))
         my_predbat.fetch_inverter_data()
@@ -196,24 +208,42 @@ class TeslemetryHoldHarness:
         my_predbat.update_time(print=False, now=self.sim_time(start_minute))
 
         self.fake = FakeTeslemetry(clock=lambda: self.teslemetry.sim_now, capacity_kwh=self.capacity_kwh, soc_percent=self.initial_soc_percent, reserve=self.reserve_min, load_w=self.load_w, pv_w=self.pv_w)
-        self.teslemetry = HarnessTeslemetry(my_predbat, key="harness-key", automatic=True, tbc_control=self.tbc_control)
-        self.teslemetry.sim_now = self.sim_time(start_minute)
-        self.teslemetry.test_storage = MemoryStorage()
-        ha_interface.component = self.teslemetry
-
         with self.patched():
-            run_async(self.teslemetry.run(60 * start_minute, True))
+            self.start_teslemetry(start_minute)
             my_predbat.inverters = []
             my_predbat.fetch_inverter_data()
             self.apply_plan()
             status, _ = my_predbat.execute_plan()
             self.statuses.append((self.sim_time(start_minute), status))
 
+    def start_teslemetry(self, minute):
+        """Start a new teslemetry process at minute, on the harness's storage, and run its first cycle.
+
+        A restart is the same call again: the component is built afresh, as a process restart builds it, and only
+        what it saved to storage carries over.
+        """
+        self.process_start = minute
+        self.teslemetry = HarnessTeslemetry(self.my_predbat, key="harness-key", automatic=True, tbc_control=self.tbc_control)
+        self.teslemetry.sim_now = self.sim_time(minute)
+        self.teslemetry.test_storage = self.storage
+        self.my_predbat.ha_interface.component = self.teslemetry
+        run_async(self.teslemetry.run(0, True))
+
     def simulate(self, start_minute, end_minute):
         """Start up at start_minute, then step every 5 minutes up to end_minute; returns the HoldResult for the whole run."""
         self.startup(start_minute)
         with self.patched():
             for minute in range(start_minute + 5, end_minute + 1, 5):
+                if self.restart_at is not None and minute - 5 < self.restart_at <= minute:
+                    for loop_minute in range(minute - 4, self.restart_at):
+                        self.poll(loop_minute)
+                    self.fake.advance(1)
+                    self.start_teslemetry(self.restart_at)
+                    self.my_predbat.update_time(print=False, now=self.sim_time(minute))
+                    for loop_minute in range(self.restart_at + 1, minute + 1):
+                        self.poll(loop_minute)
+                    self.fetch_and_execute(minute)
+                    continue
                 self.step(minute)
         return self.result(start_minute, end_minute)
 

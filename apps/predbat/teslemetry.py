@@ -144,6 +144,10 @@ SIGNAL_HOLD_ROUND_UP_PERCENT = 97
 # the house, and topped back up to the hold level with SIGNAL_HOLD_RESERVE once the SOC falls more than
 # this many percent below it (GH#6046).
 SIGNAL_HOLD_TOP_UP_PERCENT = 3
+# The hold _settable_reserve() is keeping is saved so a restart keeps it, re-saved this often while a hold
+# runs, and trusted after a restart only if it is younger than HOLD_STATE_MAX_AGE_SECONDS.
+HOLD_STATE_REFRESH_SECONDS = 5 * 60
+HOLD_STATE_MAX_AGE_SECONDS = 30 * 60
 
 OPTIONS_TIME_FULL = ["{:02d}:{:02d}:00".format(hour, minute) for hour in range(24) for minute in range(60)]
 
@@ -240,6 +244,11 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         # The hold a band reserve is kept near, and whether a top-up towards it is running (_settable_reserve)
         self._hold_level = None
         self._hold_topping_up = False
+        # Which hold set the level ("reserve", or "target:<n>" for a hold at a charge target), whether the state
+        # has changed since it was saved, and when it was saved - so a restart can pick the hold up again
+        self._hold_kind = None
+        self._hold_dirty = False
+        self._hold_saved_at = None
         self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.schedule_loaded = False
@@ -711,6 +720,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             force = (seconds - self._last_forced_assert) >= FORCED_ASSERT_SECONDS
             tariff_ok = await self.sync_tariff(force=force)
             asserted = await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc), force=force)
+            await self.save_hold_state()
             if force and asserted and tariff_ok:
                 self._last_forced_assert = seconds
         return success
@@ -799,7 +809,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         reserve, band_grid = self._settable_reserve(self.schedule.get("reserve", 20), soc)
         return {"export_rule": "pv_only", "grid_charging": True if band_grid is None else band_grid, "reserve": reserve, "mode": "self_consumption"}
 
-    def _settable_reserve(self, percent, soc):
+    def _settable_reserve(self, percent, soc, kind="reserve"):
         """Map a requested reserve onto one the Powerwall will honour, as (reserve, grid_charging).
 
         Since firmware 25.18.4 only 0-80 and exactly 100 are honoured; 81-99 are snapped. A request in that
@@ -817,7 +827,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         The hold level is the highest request since the hold began, because execute rewrites a freeze's
         reserve as the live SOC each cycle and the request falls with the battery - judged against the
         request itself, the top-up would never come. A request of 80 or below, or at the round-up level,
-        ends the hold. grid_charging is None for a request passed through unchanged, leaving it to the caller.
+        ends the hold, and so does a change of kind - the committed reserve ("reserve") or a hold at a charge
+        target ("target:<n>") - so one hold's level never carries into another. The state is saved by
+        save_hold_state() so a restart keeps it. grid_charging is None for a request passed through
+        unchanged, leaving it to the caller.
 
         A request moved off what was asked is logged once per instance rather than every cycle, since it
         is usually a standing condition; exactly 100 is honoured as asked and logs nothing, so it cannot
@@ -825,8 +838,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         """
         percent = int(percent)
         if percent <= SIGNAL_MAX_SETTABLE_RESERVE or percent >= SIGNAL_HOLD_ROUND_UP_PERCENT:
-            self._hold_level = None
-            self._hold_topping_up = False
+            self._end_hold()
             if percent <= SIGNAL_MAX_SETTABLE_RESERVE:
                 return percent, None
             if percent < SIGNAL_HOLD_RESERVE and not self._reserve_band_warned:
@@ -840,6 +852,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
                     percent, SIGNAL_MAX_SETTABLE_RESERVE, SIGNAL_HOLD_TOP_UP_PERCENT, percent
                 )
             )
+        if kind != self._hold_kind:
+            self._end_hold()
+        before = (self._hold_kind, self._hold_level, self._hold_topping_up)
+        self._hold_kind = kind
         self._hold_level = max(self._hold_level or 0, percent)
         soc = float(soc or 0)
         if self._hold_topping_up:
@@ -847,9 +863,64 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
                 self._hold_topping_up = False
         elif soc < self._hold_level - SIGNAL_HOLD_TOP_UP_PERCENT:
             self._hold_topping_up = True
+        if (self._hold_kind, self._hold_level, self._hold_topping_up) != before:
+            self._hold_dirty = True
         if self._hold_topping_up:
             return SIGNAL_HOLD_RESERVE, True
         return SIGNAL_MAX_SETTABLE_RESERVE, False
+
+    def _end_hold(self):
+        """Forget the hold _settable_reserve() was keeping, marking the saved copy for clearing if there was one."""
+        if self._hold_kind is not None or self._hold_level is not None:
+            self._hold_dirty = True
+        self._hold_kind = None
+        self._hold_level = None
+        self._hold_topping_up = False
+
+    def _wall_clock(self):
+        """The current time, in UTC; the hold state's save stamps are taken from it."""
+        return datetime.now(timezone.utc)
+
+    async def save_hold_state(self):
+        """Save the hold _settable_reserve() is keeping, so a restart can pick it up (GH#6046).
+
+        Written when the state changed, and every HOLD_STATE_REFRESH_SECONDS while a hold runs so that the stamp
+        stays fresh through a long steady hold; an ended hold is saved as empty, so a restart cannot bring the old
+        level back. No-op without storage.
+        """
+        storage = self.storage
+        if not storage:
+            return
+        now = self._wall_clock().timestamp()
+        active = self._hold_kind is not None
+        refresh_due = active and (self._hold_saved_at is None or now - self._hold_saved_at >= HOLD_STATE_REFRESH_SECONDS)
+        if not self._hold_dirty and not refresh_due:
+            return
+        data = {"kind": self._hold_kind, "level": self._hold_level, "topping_up": self._hold_topping_up, "saved_at": now} if active else {}
+        await storage.save("teslemetry", "hold", data, format="json")
+        self._hold_dirty = False
+        self._hold_saved_at = now if active else None
+
+    async def load_hold_state(self):
+        """Restore a saved hold younger than HOLD_STATE_MAX_AGE_SECONDS; anything older, or missing, starts afresh.
+
+        The restored hold only applies while the requests after the restart are of the same kind, since
+        _settable_reserve() ends a hold on a change of kind.
+        """
+        storage = self.storage
+        data = await storage.load("teslemetry", "hold") if storage else None
+        if not isinstance(data, dict) or not data.get("kind") or not isinstance(data.get("level"), (int, float)) or not isinstance(data.get("saved_at"), (int, float)):
+            return
+        age = self._wall_clock().timestamp() - data["saved_at"]
+        if not 0 <= age <= HOLD_STATE_MAX_AGE_SECONDS:
+            self.log("Info: Teslemetry not restoring the saved reserve hold at {}%, as it was saved {} minutes ago".format(data["level"], int(age // 60)))
+            return
+        self._hold_kind = data["kind"]
+        self._hold_level = int(data["level"])
+        self._hold_topping_up = bool(data.get("topping_up"))
+        self._hold_saved_at = data["saved_at"]
+        self._hold_dirty = False
+        self.log("Info: Teslemetry restored the reserve hold at {}% ({}{})".format(self._hold_level, self._hold_kind, ", topping up" if self._hold_topping_up else ""))
 
     def evaluate_schedule_tbc(self, minutes_now, soc):
         """Map the committed schedule to the device tuple under signal-tariff control (GH#4892).
@@ -882,7 +953,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
                 # charge, which is what a freeze charge wants. A target in the snap band is held by the same
                 # rule as a reserve request, as 100 would fill the battery from the grid (GH#6046).
                 hold = target if target > SIGNAL_MAX_SETTABLE_RESERVE else min(target, int(soc))
-                reserve, band_grid = self._settable_reserve(hold, soc)
+                reserve, band_grid = self._settable_reserve(hold, soc, kind="target:{}".format(target))
                 return {"export_rule": "pv_only", "grid_charging": bool(band_grid), "reserve": reserve, "mode": "autonomous"}
             # Charging: grid charging on for the tariff's cheap band to act on, at the reserve Predbat asked for
             reserve, _ = self._settable_reserve(self.schedule.get("reserve", 20), soc)
@@ -940,6 +1011,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if self.last_soc is not None and not self._is_read_only():
             await self.sync_tariff()
             await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
+            await self.save_hold_state()
 
     async def save_schedule(self):
         """Persist the committed schedule via the Storage component (no-op when storage is unavailable)."""
@@ -958,6 +1030,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if isinstance(data, dict) and "charge" in data and "discharge" in data:
             self.schedule = data
         self.pending_schedule = copy.deepcopy(self.schedule)
+        await self.load_hold_state()
 
     def get_minutes_now(self):
         """Return minutes since local midnight from the live wall clock in the site's local timezone.

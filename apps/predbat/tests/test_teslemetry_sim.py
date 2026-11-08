@@ -21,9 +21,9 @@ FREEZE_START = 3 * 60
 FREEZE_END = 5 * 60 + 30
 
 
-def run_freeze(soc_percent, tbc_control=True):
-    """Freeze at soc_percent from 03:00 to 05:30; return the harness and the result over the freeze."""
-    harness = TeslemetryHoldHarness(soc_percent=soc_percent, windows=[PlanWindow(FREEZE_START, FREEZE_END)], tbc_control=tbc_control)
+def run_freeze(soc_percent, tbc_control=True, restart_at=None):
+    """Freeze at soc_percent from 03:00 to 05:30, restarting teslemetry at restart_at if given; return the harness and the result over the freeze."""
+    harness = TeslemetryHoldHarness(soc_percent=soc_percent, windows=[PlanWindow(FREEZE_START, FREEZE_END)], tbc_control=tbc_control, restart_at=restart_at)
     harness.simulate(FREEZE_START, FREEZE_END + 15)
     # From the first execute's write: before it the reserve is the cold-start one
     return harness, harness.result(FREEZE_START + 2, FREEZE_END)
@@ -76,6 +76,16 @@ def test_teslemetry_sim_freeze_in_the_band_tops_up_below_the_threshold():
             assert soc >= 86.0, "top-up stopped at {} with the SoC at {:.2f}%".format(when.strftime("%H:%M"), soc)
 
 
+def test_teslemetry_sim_freeze_in_the_band_survives_a_restart():
+    """A teslemetry restart part way through the drift (03:42, SoC ~84%) keeps the 86% hold level, so the top-up
+    still comes below 83% - rather than the hold restarting from 84% and the battery settling at 80%."""
+    harness, result = run_freeze(86, restart_at=FREEZE_START + 42)
+    assert result.soc_min >= 82.0, "after the restart the freeze fell to {:.1f}%\n{}".format(result.soc_min, describe(result))
+    restart = harness.sim_time(FREEZE_START + 42)
+    top_ups = [(when, soc_at(result, when)) for when, reserve in result.reserve_writes if reserve == 100 and when > restart]
+    assert top_ups and top_ups[0][1] < 83.0, "top-ups after the restart: {}\n{}".format(top_ups, describe(result))
+
+
 def test_teslemetry_sim_freeze_near_full_tops_up_to_100():
     """A freeze at 98% uses reserve 100: the top-up is under 0.3 kWh and the battery ends full."""
     _, result = run_freeze(98)
@@ -105,6 +115,7 @@ def run_teslemetry_sim_tests(my_predbat=None):
         test_teslemetry_sim_freeze_in_the_band_holds_near_its_level,
         test_teslemetry_sim_freeze_in_the_band_tops_up_only_what_the_house_used,
         test_teslemetry_sim_freeze_in_the_band_tops_up_below_the_threshold,
+        test_teslemetry_sim_freeze_in_the_band_survives_a_restart,
         test_teslemetry_sim_freeze_near_full_tops_up_to_100,
         test_teslemetry_sim_freeze_below_the_band_holds_flat,
         test_teslemetry_sim_real_rate_freeze_in_the_band_holds_near_its_level,
