@@ -1191,9 +1191,13 @@ def test_teslemetry_tbc_at_target_in_the_band_holds_at_80():
 
 
 def test_teslemetry_tbc_hold_deadband_survives_a_one_percent_sag():
-    """A freeze charge whose SOC has sagged 1% below the written target still holds, rather than importing."""
-    api = _tbc_api(reserve=86)
-    assert api.evaluate_schedule_tbc(12 * 60, 85) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 80, "mode": "self_consumption"}
+    """A freeze charge whose SOC has sagged 1% below the written target still holds, rather than importing; two
+    points below is a real shortfall, and charging resumes. Pins both sides of SIGNAL_HOLD_DEADBAND_PERCENT."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 85, "enable": 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 84)["grid_charging"] is False
+    assert api.evaluate_schedule_tbc(3 * 60, 84)["reserve"] == 80
+    # Two points below the target is a real shortfall, not sensor sag, so charging resumes.
+    assert api.evaluate_schedule_tbc(3 * 60, 83)["grid_charging"] is True
 
 
 def test_teslemetry_tbc_export_uses_the_real_reserve_not_the_export_target():

@@ -2051,6 +2051,31 @@ def test_reserve_full_only_above_80_inverter_types():
     return failed
 
 
+def test_reserve_full_only_above_80_reaches_the_inverter(my_predbat):
+    """The flag reaches a real Inverter from INVERTER_DEF: execute reads it bare, so a broken refresh_config() wiring
+    must fail here rather than silently let a Powerwall car hold feed the car."""
+    from inverter import Inverter
+
+    failed = False
+    orig_inverter_type = my_predbat.args.get("inverter_type")
+    orig_rest = my_predbat.args.get("givtcp_rest")
+    my_predbat.args["givtcp_rest"] = None
+    try:
+        for inverter_type, expected in (("TESLA", True), ("GE", False)):
+            my_predbat.args["inverter_type"] = [inverter_type]
+            inverter = Inverter(my_predbat, 0, quiet=True)
+            if inverter.inv_reserve_full_only_above_80 is not expected:
+                print("ERROR: {} inverter has inv_reserve_full_only_above_80 {}, expected {}".format(inverter_type, inverter.inv_reserve_full_only_above_80, expected))
+                failed = True
+    finally:
+        if orig_inverter_type is None:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = orig_inverter_type
+        my_predbat.args["givtcp_rest"] = orig_rest
+    return failed
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
@@ -2062,6 +2087,7 @@ def run_execute_tests(my_predbat):
     failed |= test_fetch_inverter_data_battery_export_not_permitted(my_predbat)
     failed |= test_reserve_above_soc_inverter_types()
     failed |= test_reserve_full_only_above_80_inverter_types()
+    failed |= test_reserve_full_only_above_80_reaches_the_inverter(my_predbat)
     if failed:
         return failed
 

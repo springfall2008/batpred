@@ -70,7 +70,7 @@ def hold_reserve_percent(inverter, target_percent, no_discharge=False):
     if inverter.inv_reserve_above_soc_charges_from_grid:
         live_percent = int(inverter.soc_kw / inverter.soc_max * 100.0) if inverter.soc_max > 0 else 0
         percent = min(target_percent, live_percent, 100)
-        if no_discharge and getattr(inverter, "inv_reserve_full_only_above_80", False) and percent > 80:
+        if no_discharge and inverter.inv_reserve_full_only_above_80 and percent > 80:
             return 100
         return percent
     return min(target_percent + 1, 100)
