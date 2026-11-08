@@ -64,7 +64,6 @@ import json
 import math
 import ssl
 import tempfile
-import time
 import traceback
 import os
 
@@ -148,6 +147,7 @@ SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used t
 SIGENERGY_RATED_ENERGY_AH_THRESHOLD = 100.0  # a ratedEnergy above this is Ah (e.g. 314), below it kWh (e.g. 9.04) - see _get_battery_capacity_kwh
 SIGENERGY_MQTT_PORT = 8883             # TLS MQTT port on the Sigenergy broker
 SIGENERGY_MQTT_RESUBSCRIBE_DELAY = 5   # seconds between cancelling and re-requesting the change push (see _mqtt_listener_loop)
+SIGENERGY_MQTT_RESTORE_TIMEOUT = 10  # maximum additional wait for interrupted subscription setup
 
 # MQTT topic patterns — format with app_key and system_id
 SIGENERGY_MQTT_TOPIC_CHANGE = "openapi/change/{app_key}/{system_id}"    # system data (device state)
@@ -505,7 +505,7 @@ class SigenergyAPI(ComponentBase):
 
         # Token state
         self.access_token = None
-        self.token_expires_at = 0.0  # UNIX timestamp
+        self.token_expires_at = 0.0  # monotonic time (see monotonic()), not a UNIX timestamp
 
         # Data stores keyed by systemId
         self.systems = {}         # systemId → system info dict
@@ -550,6 +550,7 @@ class SigenergyAPI(ComponentBase):
         # Background MQTT listener task
         self._mqtt_task = None
         self.last_mqtt_update = {}  # UNIX timestamp of last MQTT message received, keyed by system_id
+        self.last_mqtt_mono = {}  # monotonic time of the same message, for the freshness window (a wall-clock step must not change it)
         self.mqtt_data_lag = {}  # seconds between the last MQTT period reading (statisticsTime) and its arrival, keyed by system_id
         self._tls_context = None  # cached SSLContext built once on first use
 
@@ -575,7 +576,7 @@ class SigenergyAPI(ComponentBase):
         Returns:
             Access token string on success, None on failure.
         """
-        now = time.monotonic()
+        now = self.monotonic()
         if self.access_token and now < self.token_expires_at - SIGENERGY_TOKEN_EXPIRY_BUFFER:
             return self.access_token
 
@@ -594,7 +595,7 @@ class SigenergyAPI(ComponentBase):
                         if response.status != 200:
                             self.log("Warn: SigenergyAPI: Auth request returned HTTP {} (attempt {}/{})".format(response.status, attempt + 1, SIGENERGY_MAX_RETRIES))
                             if attempt < SIGENERGY_MAX_RETRIES - 1:
-                                await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                                await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
                                 continue
                             return None
                         try:
@@ -602,7 +603,7 @@ class SigenergyAPI(ComponentBase):
                         except Exception as e:
                             self.log("Warn: SigenergyAPI: Failed to decode auth response: {}".format(e))
                             if attempt < SIGENERGY_MAX_RETRIES - 1:
-                                await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                                await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
                                 continue
                             return None
 
@@ -629,11 +630,11 @@ class SigenergyAPI(ComponentBase):
             except asyncio.TimeoutError:
                 self.log("Warn: SigenergyAPI: Auth request timed out (attempt {}/{})".format(attempt + 1, SIGENERGY_MAX_RETRIES))
                 if attempt < SIGENERGY_MAX_RETRIES - 1:
-                    await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                    await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
             except Exception as e:
                 self.log("Warn: SigenergyAPI: Exception during authentication: {}".format(e))
                 if attempt < SIGENERGY_MAX_RETRIES - 1:
-                    await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                    await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
 
         self.access_token = None
         return None
@@ -644,11 +645,11 @@ class SigenergyAPI(ComponentBase):
 
     async def _enforce_rate_limit(self):
         """Sleep if necessary to respect the 10 req/min API limit."""
-        now = time.monotonic()
+        now = self.monotonic()
         elapsed = now - self._last_request_time
         if elapsed < SIGENERGY_MIN_REQUEST_INTERVAL:
-            await asyncio.sleep(SIGENERGY_MIN_REQUEST_INTERVAL - elapsed)
-        self._last_request_time = time.monotonic()
+            await self.sleep(SIGENERGY_MIN_REQUEST_INTERVAL - elapsed)
+        self._last_request_time = self.monotonic()
 
     async def _request(self, method, path, params=None, json_data=None, retries=SIGENERGY_MAX_RETRIES, log_response=True):
         """Perform an authenticated HTTP request with retry logic.
@@ -713,7 +714,7 @@ class SigenergyAPI(ComponentBase):
                                 # so retrying only spends rate-limited calls on the same refusal
                                 return None
                             if attempt < retries - 1:
-                                await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                                await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
                                 continue
                             return None
 
@@ -736,7 +737,7 @@ class SigenergyAPI(ComponentBase):
                                 if attempt < retries - 1:
                                     wait = SIGENERGY_RATE_LIMIT_BACKOFF[min(attempt, len(SIGENERGY_RATE_LIMIT_BACKOFF) - 1)]
                                     self.log("Warn: SigenergyAPI: Rate limited (1201) — waiting {}s before retry (attempt {}/{})".format(wait, attempt + 1, retries))
-                                    await asyncio.sleep(wait)
+                                    await self.sleep(wait)
                                     continue
                                 self.log("Warn: SigenergyAPI: Rate limited (1201) — giving up after {} attempts".format(retries))
                             return None
@@ -766,12 +767,12 @@ class SigenergyAPI(ComponentBase):
                 self.log("Warn: SigenergyAPI: Timeout on {} {} (attempt {}/{})".format(method, path, attempt + 1, retries))
                 record_api_call("sigenergy", False, "connection_error")
                 if attempt < retries - 1:
-                    await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                    await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
             except Exception as e:
                 self.log("Warn: SigenergyAPI: Exception on {} {}: {}\n{}".format(method, path, e, traceback.format_exc()))
                 record_api_call("sigenergy", False, "connection_error")
                 if attempt < retries - 1:
-                    await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                    await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
 
         return None
 
@@ -1420,7 +1421,7 @@ class SigenergyAPI(ComponentBase):
         """
         try:
             tls_context = self._build_tls_context()
-            async with aiomqtt.Client(
+            async with self.mqtt_client(
                 hostname=self.mqtt_host,
                 port=self.mqtt_port,
                 username=self.app_key,
@@ -1484,10 +1485,12 @@ class SigenergyAPI(ComponentBase):
         """
         # De-duplication: skip if identical command sent within the last 5 minutes
         command_hash = hash((active_mode, charging_power_kw, pv_power_kw, max_sell_power_kw, max_purchase_power_kw, charge_priority_type, discharge_priority_type))
-        last_hash, last_start_time = self._last_battery_command.get(system_id, (None, 0))
-        now_ts = int(time.time())
-        if last_hash == command_hash and (now_ts - last_start_time) < 300:
-            self.log("SigenergyAPI: Skipping duplicate battery command {} for system {} ({:.1f} min ago)".format(active_mode, system_id, (now_ts - last_start_time) / 60))
+        # The window is measured on the monotonic clock so a wall-clock step cannot stretch or shorten it
+        last_hash, last_sent = self._last_battery_command.get(system_id, (None, 0))
+        now_mono = self.monotonic()
+        now_ts = int(self.wall_time())  # wall time, because it goes in the command as its start time
+        if last_hash == command_hash and (now_mono - last_sent) < 300:
+            self.log("SigenergyAPI: Skipping duplicate battery command {} for system {} ({:.1f} min ago)".format(active_mode, system_id, (now_mono - last_sent) / 60))
             return True
 
         token = await self.get_access_token()
@@ -1514,7 +1517,7 @@ class SigenergyAPI(ComponentBase):
 
         ok = await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_COMMAND, payload)
         if ok:
-            self._last_battery_command[system_id] = (command_hash, now_ts)
+            self._last_battery_command[system_id] = (command_hash, now_mono)
         return ok
 
     @staticmethod
@@ -1594,7 +1597,7 @@ class SigenergyAPI(ComponentBase):
         for protocol in protocols:
             report["protocol"] = protocol.name
             try:
-                async with aiomqtt.Client(
+                async with self.mqtt_client(
                     hostname=self.mqtt_host,
                     port=self.mqtt_port,
                     username=self.app_key,
@@ -1636,7 +1639,7 @@ class SigenergyAPI(ComponentBase):
                     for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
                         await _publish(sub_topic, {"accessToken": token, "systemIdList": list(system_ids)})
 
-                    now_ts = int(time.time())
+                    now_ts = int(self.wall_time())
                     for sid in system_ids:
                         command = self._build_battery_command(sid, active_mode, duration_minutes, now_ts, charging_power_kw=charging_power_kw)
                         self.log("SigenergyAPI: Probe sending command {}".format(command))
@@ -1724,7 +1727,7 @@ class SigenergyAPI(ComponentBase):
             report["protocol"] = protocol.name
             pending = None
             try:
-                client = aiomqtt.Client(
+                client = self.mqtt_client(
                     hostname=self.mqtt_host,
                     port=self.mqtt_port,
                     username=self.app_key,
@@ -2105,6 +2108,41 @@ class SigenergyAPI(ComponentBase):
         """
         self.log("Warn: SigenergyAPI: MQTT alarm for system {}: {}".format(system_id, payload_list))
 
+    async def _restore_change_subscription(self, client, payload, cancelled_at):
+        """Best-effort bounded recovery of this connection's cancelled change push before disconnecting."""
+        async def restore():
+            """Keep the broker's resubscribe pause, then restore with the original connection and payload."""
+            remaining = max(0, cancelled_at + SIGENERGY_MQTT_RESUBSCRIBE_DELAY - self.monotonic())
+            if remaining:
+                await self.sleep(remaining)
+            await client.publish("openapi/subscription/change", payload=payload, qos=1)
+
+        try:
+            await asyncio.wait_for(restore(), timeout=SIGENERGY_MQTT_RESUBSCRIBE_DELAY + SIGENERGY_MQTT_RESTORE_TIMEOUT)
+        except asyncio.CancelledError:
+            self.log("Warn: SigenergyAPI: Change subscription restoration cancelled")
+            raise
+        except Exception as error:
+            # Exception text can contain credentials or payloads; only its class is diagnostic.
+            self.log("Warn: SigenergyAPI: Change subscription restoration failed ({})".format(type(error).__name__))
+
+    async def _request_mqtt_subscriptions(self, client, payload):
+        """Reset subscriptions without leaving the shared change push cancelled if setup is interrupted."""
+        change_pending = True
+        cancelled_at = None
+        try:
+            # The request may have reached the broker even when publishing raises or is cancelled.
+            await client.publish(SIGENERGY_MQTT_TOPIC_UNSUBSCRIBE_CHANGE, payload=payload, qos=1)
+            cancelled_at = self.monotonic()
+            await self.sleep(SIGENERGY_MQTT_RESUBSCRIBE_DELAY)
+            for topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
+                await client.publish(topic, payload=payload, qos=1)
+                if topic == "openapi/subscription/change":
+                    change_pending = False
+        finally:
+            if change_pending:
+                await self._restore_change_subscription(client, payload, self.monotonic() if cancelled_at is None else cancelled_at)
+
     async def _mqtt_listener_loop(self):
         """Persistent MQTT listener coroutine.
 
@@ -2136,7 +2174,7 @@ class SigenergyAPI(ComponentBase):
                 token = await self.get_access_token()
                 if not token:
                     self.log("Warn: SigenergyAPI: MQTT token refresh failed; retrying in {}s".format(reconnect_delay))
-                    await asyncio.sleep(reconnect_delay)
+                    await self.sleep(reconnect_delay)
                     continue
 
                 # Refresh system list for subscription if not yet known
@@ -2154,7 +2192,7 @@ class SigenergyAPI(ComponentBase):
                     topics.append(SIGENERGY_MQTT_TOPIC_ALARM.format(app_key=self.app_key, system_id=sid))
 
                 tls_context = self._build_tls_context()
-                async with aiomqtt.Client(
+                async with self.mqtt_client(
                     hostname=self.mqtt_host,
                     port=SIGENERGY_MQTT_PORT,
                     username=self.app_key,
@@ -2172,10 +2210,7 @@ class SigenergyAPI(ComponentBase):
                     # every connect a new registration, so the snapshot comes straight back. The two go on different
                     # topics, so their order isn't guaranteed - sent back to back, the cancel can land second and leave
                     # the system with no change subscription at all (seen on 2 of 29 live plants), hence the pause.
-                    await client.publish(SIGENERGY_MQTT_TOPIC_UNSUBSCRIBE_CHANGE, payload=sub_payload, qos=1)
-                    await asyncio.sleep(SIGENERGY_MQTT_RESUBSCRIBE_DELAY)
-                    for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
-                        await client.publish(sub_topic, payload=sub_payload, qos=1)
+                    await self._request_mqtt_subscriptions(client, sub_payload)
                     self.log("SigenergyAPI: MQTT subscriptions published for {} system(s)".format(len(system_id_list)))
 
                     async for message in client.messages:
@@ -2211,7 +2246,8 @@ class SigenergyAPI(ComponentBase):
                                 # self.systems, but ignore anything outside that list in case
                                 # a stray message arrives (e.g. system list changed mid-connection).
                                 continue
-                            self.last_mqtt_update[entry_sid] = time.time()
+                            self.last_mqtt_update[entry_sid] = self.wall_time()
+                            self.last_mqtt_mono[entry_sid] = self.monotonic()
                             value_dict = entry.get("value", {})
                             self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(safe_topic, entry_sid, msg_type, value_dict))
                             if msg_type == "period":
@@ -2243,17 +2279,17 @@ class SigenergyAPI(ComponentBase):
 
                 # Broker closed connection cleanly
                 self.log("Warn: SigenergyAPI: MQTT connection closed by broker — reconnecting in {}s".format(reconnect_delay))
-                await asyncio.sleep(reconnect_delay)
+                await self.sleep(reconnect_delay)
 
             except aiomqtt.MqttError as e:
                 self.log("Warn: SigenergyAPI: MQTT error: {} — reconnecting in {}s".format(e, reconnect_delay))
-                await asyncio.sleep(reconnect_delay)
+                await self.sleep(reconnect_delay)
             except asyncio.CancelledError:
                 self.log("SigenergyAPI: MQTT listener cancelled")
                 return
             except Exception as e:
                 self.log("Warn: SigenergyAPI: MQTT unexpected error ({}): {} — reconnecting in {}s".format(type(e).__name__, e, reconnect_delay))
-                await asyncio.sleep(reconnect_delay)
+                await self.sleep(reconnect_delay)
 
         self.log("SigenergyAPI: MQTT listener stopped")
 
@@ -3622,7 +3658,6 @@ class SigenergyAPI(ComponentBase):
 
         # Realtime data refresh — skip live power/SOC fetch when MQTT is providing fresh data
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
-            now_ts = time.time()
             energy_updated = False
             summary_updated = False
             history_updated = False
@@ -3634,10 +3669,11 @@ class SigenergyAPI(ComponentBase):
             refresh_summary = self._needs_refresh("daily_summary", SIGENERGY_POLL_INTERVAL / 60.0)
             refresh_history = self._needs_refresh("history_totals", SIGENERGY_POLL_INTERVAL / 60.0)
             for sid in list(self.systems.keys()):
-                last_update = self.last_mqtt_update.get(sid, 0)
-                mqtt_age = now_ts - last_update
+                # Age is measured on the monotonic clock so a wall-clock step cannot keep stale MQTT looking fresh
+                last_update = self.last_mqtt_mono.get(sid)
+                mqtt_age = self.monotonic() - last_update if last_update is not None else 0
                 # Arriving recently is not enough - the reading it carried must be recent too
-                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_MQTT_FRESH_SECONDS and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
+                mqtt_fresh = last_update is not None and mqtt_age < SIGENERGY_MQTT_FRESH_SECONDS and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
                 if mqtt_fresh:
                     # MQTT is genuinely keeping energy_flow live — worth persisting/re-timestamping.
                     self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))
