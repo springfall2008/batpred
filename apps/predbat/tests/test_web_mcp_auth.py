@@ -363,6 +363,77 @@ def test_mcp_authorise_page_escapes(my_predbat):
     return failed
 
 
+def test_mcp_base_url_behind_proxy(my_predbat):
+    """Behind a TLS-terminating proxy or tunnel the discovery documents advertise https, and tokens for that URL are accepted"""
+    failed = False
+    print("**** Testing MCP base URL behind a reverse proxy / Cloudflare Tunnel ****")
+    server = make_server(my_predbat)
+
+    def base(headers, host="predbat.example:8199"):
+        """Return get_base_url for a request with these headers and Host."""
+        request = FakeJsonRequest(headers=headers, method="GET")
+        request.host = host
+        return server.get_base_url(request)
+
+    print("Test: the discovery documents advertise https behind a tunnel")
+    tunnel = {"CF-Visitor": '{"scheme":"https"}', "X-Forwarded-Proto": "http"}
+    for handler in (server.oauth_metadata, server.oauth_metadata_mcp):
+        request = FakeJsonRequest(headers=tunnel, method="GET")
+        request.host = "mcp.example.com"
+        _, metadata = call(handler, request)
+        for key in ("issuer", "authorization_endpoint", "token_endpoint", "registration_endpoint"):
+            if not str(metadata.get(key, "")).startswith("https://mcp.example.com"):
+                print("  ERROR: {} {} is {}".format(handler.__name__, key, metadata.get(key)))
+                failed = True
+    request = FakeJsonRequest(headers=tunnel, method="GET")
+    request.host = "mcp.example.com"
+    _, resource_metadata = call(server.oauth_protected_resource_metadata, request)
+    if resource_metadata.get("resource") != "https://mcp.example.com" or resource_metadata.get("authorization_servers") != ["https://mcp.example.com"]:
+        print("  ERROR: protected resource metadata is {}".format(resource_metadata))
+        failed = True
+
+    print("Test: the /mcp challenge points at the https resource metadata behind a tunnel")
+    server.mcp_server = object()  # Only checked for presence before the Authorization header is read
+    for handler in (server.html_mcp_get, server.html_mcp_post):
+        request = FakeJsonRequest(headers=tunnel, method="GET")
+        request.host = "mcp.example.com"
+        response = asyncio.run(handler(request))
+        www_auth = response.headers.get("WWW-Authenticate", "")
+        if response.status != 401 or 'resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"' not in www_auth:
+            print("  ERROR: {} gave status {} with WWW-Authenticate {}".format(handler.__name__, response.status, www_auth))
+            failed = True
+
+    print("Test: tokens for the https resource, or its /mcp endpoint, are accepted; others are not")
+    for aud in ("https://mcp.example.com", "https://mcp.example.com/mcp", "https://mcp.example.com/", "http://mcp.example.com"):
+        token = server.generate_access_token("connector", resource=aud)
+        if not server.verify_access_token(token, expected_audience="https://mcp.example.com"):
+            print("  ERROR: token with audience {} was refused".format(aud))
+            failed = True
+    token = server.generate_access_token("connector", resource="https://other.example.com")
+    if server.verify_access_token(token, expected_audience="https://mcp.example.com"):
+        print("  ERROR: token for another server was accepted")
+        failed = True
+
+    print("Test: the base URL follows the proxy headers, and ignores bad ones")
+    cases = [
+        ("no proxy headers", {}, "predbat.example:8199", "http://predbat.example:8199"),
+        ("Cloudflare CF-Visitor", {"CF-Visitor": '{"scheme":"https"}', "X-Forwarded-Proto": "http"}, "mcp.example.com", "https://mcp.example.com"),
+        ("X-Forwarded-Proto", {"X-Forwarded-Proto": "https"}, "mcp.example.com", "https://mcp.example.com"),
+        ("X-Forwarded-Proto chain", {"X-Forwarded-Proto": "https, http"}, "mcp.example.com", "https://mcp.example.com"),
+        ("X-Forwarded-Host", {"X-Forwarded-Proto": "https", "X-Forwarded-Host": "mcp.example.com"}, "localhost:8199", "https://mcp.example.com"),
+        ("default port dropped", {"X-Forwarded-Proto": "https"}, "mcp.example.com:443", "https://mcp.example.com"),
+        ("bad CF-Visitor ignored", {"CF-Visitor": "not json"}, "predbat.example:8199", "http://predbat.example:8199"),
+        ("unknown scheme ignored", {"X-Forwarded-Proto": "javascript"}, "predbat.example:8199", "http://predbat.example:8199"),
+        ("injected host refused", {"X-Forwarded-Host": 'evil.com", x="'}, "predbat.example:8199", "http://localhost:8199"),
+    ]
+    for name, headers, host, expected in cases:
+        got = base(headers, host)
+        if got != expected:
+            print("  ERROR: {}: expected {} got {}".format(name, expected, got))
+            failed = True
+    return failed
+
+
 def run_web_mcp_auth_tests(my_predbat):
     """Run every MCP OAuth/authorisation test, returning True if any of them failed."""
     failed = False
@@ -372,4 +443,5 @@ def run_web_mcp_auth_tests(my_predbat):
     failed |= test_mcp_scopes_enforced(my_predbat)
     failed |= test_mcp_public_client_flow(my_predbat)
     failed |= test_mcp_authorise_page_escapes(my_predbat)
+    failed |= test_mcp_base_url_behind_proxy(my_predbat)
     return failed
