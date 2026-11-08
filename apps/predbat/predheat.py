@@ -133,6 +133,9 @@ class PredHeat:
         self.expose_config = base.expose_config
         self.get_services = base.get_services_wrapper
         self.run_every = base.run_every
+        self.schedule_initial_temperature = None
+        self.schedule_change_minutes = None
+        self.schedule_change_temperatures = []
         self.heat_pump_efficiency = HEAT_PUMP_EFFICIENCY.copy()
         self.gas_efficiency = GAS_EFFICIENCY.copy()
         self.delta_correction = DELTA_CORRECTION.copy()
