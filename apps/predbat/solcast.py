@@ -1955,6 +1955,12 @@ class SolarAPI(ComponentBase):
             has_band = any("pv_estimate10" in entry or "pv_estimate90" in entry for entry in pv_forecast_data)
             calibrate_band = not create_pv10 and has_band
 
+            # Calibration writes pv_estimateCL and the scaled pv_estimate10/pv_estimate90 back into each
+            # entry, so give it copies. The Solcast integration's entries are the HA state cache's own
+            # dicts, and left shared every later fetch of the same unchanged forecast started from the
+            # band it had already scaled and scaled it again - P90 doubled per fetch (#6049).
+            pv_forecast_data = [dict(entry) for entry in pv_forecast_data]
+
             # Run calibration on the data
             pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data = self.pv_calibration(
                 pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period, calibrate_band=calibrate_band
