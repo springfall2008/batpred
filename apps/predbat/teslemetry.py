@@ -134,10 +134,12 @@ SIGNAL_SELL_PRICES = {SIGNAL_CHEAP_TIER: 0.0, SIGNAL_BASE_TIER: 0.0, SIGNAL_PEAK
 SIGNAL_HOLD_DEADBAND_PERCENT = 1
 # The only reserve above 80 that Tesla still accepts: since firmware 25.18.4, 81-99 snap to 80.
 SIGNAL_HOLD_RESERVE = 100
-# Highest reserve below the snap band. Predbat never sends a value in 81-99, so what it models never
-# depends on which way the device would snap it; _settable_reserve() picks 80 or 100 instead. Either way
-# what Predbat models and what the battery honours must agree, which is the divergence GH#4953/#4956
-# fixed for the reserve floor generally.
+# Highest reserve below the snap band. A hold or reserve request in 81-99 goes through _settable_reserve(),
+# which sends 80 or 100 instead, so for those the device's snap direction does not matter. The real-rate
+# (teslemetry_tbc_control off) charge window is the exception: it sends its charge target as asked, so a
+# target in 81-99 still reaches the device and is snapped there - which way is not settled (see
+# set_backup_reserve). Either way what Predbat models and what the battery honours must agree, which is the
+# divergence GH#4953/#4956 fixed for the reserve floor generally.
 SIGNAL_MAX_SETTABLE_RESERVE = 80
 # A hold request at or above this is sent as SIGNAL_HOLD_RESERVE: the battery is close to full, so the
 # top-up a 100% reserve makes from the grid is the smaller deviation from the plan (GH#6046).
