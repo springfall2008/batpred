@@ -6,7 +6,13 @@ At a glance, the Predbat plan shows you the plan going forward for home demand, 
 
 ## Displaying the Predbat plan
 
-Firstly install the [HTML template card](https://github.com/PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card) in HACS:
+Firstly install the [HTML template card](https://github.com/PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card) from the [Marketplace](install.md#hacs-and-the-marketplace) on Home Assistant 2026.11 or newer:
+
+- Go to **Settings** → **Marketplace** and search for 'HTML'
+- Click on 'HTML Jinja2 Template card', select **Install**, check the version and select **Install** again
+- Reload your browser to load the new dashboard resource
+
+Or, on Home Assistant 2026.10 or older, install it in HACS:
 
 - In HACS, click on Frontend
 - Click the blue *Explore and download repositories* button and type 'HTML'
@@ -30,7 +36,7 @@ You should see something like this:
 
 ![image](images/predbat-html-plan.png)
 
-If you get an error 'Custom element doesn't exist: html-template-card' then you've not installed the Jinja2 template card correctly from HACS.
+If you get an error 'Custom element doesn't exist: html-template-card' then you've not installed the Jinja2 template card correctly from the Marketplace (or HACS).
 
 ## Understanding the Predbat plan
 
@@ -221,7 +227,7 @@ There's a further [explanation of the Predbat forecast and plan](faq.md#the-plan
 
 ## Customising and Reformatting the Predbat Plan
 
-A couple of additional independent front-end Home Assistant components have been created by the Predbat community, the 'Predbat Table Card' on HACS, that gives additional customisation and configuration options
+A couple of additional independent front-end Home Assistant components have been created by the Predbat community, the 'Predbat Table Card' in the [Marketplace](install.md#hacs-and-the-marketplace) (or HACS on Home Assistant 2026.10 or older), that gives additional customisation and configuration options
 to tailor how the Predbat plan looks and are highly recommended if you want to change the standard plan look and feel:
 
 - Change the sequence of columns and which columns are shown in the plan
@@ -260,4 +266,5 @@ See the [PV Card Preview repository](https://github.com/pacemaker82/PV-Card-Prev
 
 ![image](https://github.com/mimikm/Predbat-Card/blob/main/images/styles-light.png?raw=true)
 
-Install through HACS as a custom repository (Dashboard): `https://github.com/mimikm/Predbat-Card`
+Install it as a custom repository (Dashboard) with the link `https://github.com/mimikm/Predbat-Card`:
+on Home Assistant 2026.11 or newer use **Add from link** in the [Marketplace](install.md#hacs-and-the-marketplace), or on 2026.10 or older add it to HACS as a custom repository.
