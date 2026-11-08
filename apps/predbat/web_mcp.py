@@ -393,7 +393,7 @@ class PredbatMCPServer(ComponentBase):
         X-Forwarded-Host is used for the host when a proxy rewrites Host. Without these headers
         the result is unchanged from before: http://<Host header>.
         """
-        headers = getattr(request, "headers", None) or {}
+        headers = request.headers
         scheme = None
 
         cf_visitor = headers.get("CF-Visitor")
@@ -417,10 +417,10 @@ class PredbatMCPServer(ComponentBase):
         if forwarded_host:
             host = forwarded_host.split(",")[0].strip()
         if not host:
-            host = getattr(request, "host", None) or f"localhost:{self.mcp_port}"
+            host = request.host or f"localhost:{self.mcp_port}"
 
         # The host ends up in JSON and WWW-Authenticate headers, so refuse anything that is not a plain host[:port]
-        if not re.fullmatch(r"[A-Za-z0-9.\-]+(:\d+)?|\[[0-9A-Fa-f:.]+\](:\d+)?", host):
+        if not re.fullmatch(r"[A-Za-z0-9._\-]+(:\d+)?|\[[0-9A-Fa-f:.]+\](:\d+)?", host):
             host = f"localhost:{self.mcp_port}"
 
         # Drop the default port for the scheme so the URL matches the one the client used

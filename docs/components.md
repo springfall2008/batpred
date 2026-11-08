@@ -196,7 +196,9 @@ An OAuth token carries scopes. A token with only `mcp:read` can call the tools t
 
 Tokens are signed with a random key that Predbat creates on first start and keeps in its cache, so they survive a restart. Changing `mcp_secret` replaces the key, which revokes every token issued so far. After upgrading from a version before this change, each OAuth client has to authorise once more. A cloud-hosted client such as claude.ai connects from the internet rather than your home network, so read the security note above before you expose the port.
 
-The discovery documents name the server's base URL (`http://<host>:<port>`) as the protected resource, not `<base>/mcp`. Clients that insist the two match, such as Codex, are tracked in [#4799](https://github.com/springfall2008/batpred/issues/4799).
+Behind a reverse proxy or tunnel that terminates TLS, such as a Cloudflare Tunnel, Predbat itself is reached over plain http, so it takes the URL it advertises from the proxy's headers. The scheme comes from `CF-Visitor` (sent by Cloudflare), then from the first entry of `X-Forwarded-Proto`. The host comes from the first entry of `X-Forwarded-Host`, then from the `Host` header. If your proxy sends none of these, the discovery documents keep advertising `http://` and an https-only client such as claude.ai cannot authorise, so configure the proxy to pass `X-Forwarded-Proto`.
+
+The discovery documents name the server's base URL (`http://<host>:<port>`, or `https://<host>` behind a TLS proxy) as the protected resource, not `<base>/mcp`. Clients that insist the two match, such as Codex, are tracked in [#4799](https://github.com/springfall2008/batpred/issues/4799).
 
 #### Available commands (mcp)
 

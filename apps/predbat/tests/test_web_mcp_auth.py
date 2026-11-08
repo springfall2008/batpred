@@ -417,6 +417,7 @@ def test_mcp_base_url_behind_proxy(my_predbat):
     print("Test: the base URL follows the proxy headers, and ignores bad ones")
     cases = [
         ("no proxy headers", {}, "predbat.example:8199", "http://predbat.example:8199"),
+        ("underscore in Host kept", {}, "My_Predbat:8199", "http://My_Predbat:8199"),
         ("Cloudflare CF-Visitor", {"CF-Visitor": '{"scheme":"https"}', "X-Forwarded-Proto": "http"}, "mcp.example.com", "https://mcp.example.com"),
         ("X-Forwarded-Proto", {"X-Forwarded-Proto": "https"}, "mcp.example.com", "https://mcp.example.com"),
         ("X-Forwarded-Proto chain", {"X-Forwarded-Proto": "https, http"}, "mcp.example.com", "https://mcp.example.com"),
