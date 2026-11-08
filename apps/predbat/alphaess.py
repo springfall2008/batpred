@@ -40,7 +40,7 @@ import json
 import time
 import aiohttp
 from datetime import datetime
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from alphaess_const import (
     ALPHAESS_BASE_URL,
@@ -290,7 +290,7 @@ class AlphaESSAPI(ComponentBase):
         for attempt in range(ALPHAESS_RETRIES):
             try:
                 timeout = aiohttp.ClientTimeout(total=ALPHAESS_TIMEOUT)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     call = session.post(url, headers=self._headers(), json=body or {}) if method == "POST" else session.get(url, headers=self._headers(), params=params or {})
                     async with call as response:
                         if response.status != 200:
@@ -1173,14 +1173,17 @@ class AlphaESSAPI(ComponentBase):
                 window["enable"] = self._to_bool(value, window.get("enable", False))
             return
 
+    @writes
     async def select_event(self, entity_id, value):
         """Handle a select entity change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a number entity change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a switch entity service call."""
         await self._handle_control_event(entity_id, service)
@@ -1681,6 +1684,7 @@ class AlphaESSAPI(ComponentBase):
         else:
             self.write_burst_writes[key] = self.write_burst_writes.get(key, 0) + 1
 
+    @writes
     async def _write_payload(self, sn, direction, endpoint_key, payload, force=False):
         """Send one payload if it differs from the last applied one and pacing allows.
 
@@ -1836,6 +1840,7 @@ class AlphaESSAPI(ComponentBase):
             "ctrDisCycle": 1 if export_on else 0,
         }
 
+    @writes
     async def apply_settings(self, sn, schedule, force=False):
         """Build and send the settings for one inverter, gated independently per direction.
 
@@ -1867,6 +1872,7 @@ class AlphaESSAPI(ComponentBase):
         discharge_ok = await self._write_payload(sn, "discharge", "update_discharge_config", discharge_payload, force=force)
         return charge_ok and discharge_ok
 
+    @writes
     async def apply_schedule(self, sn, force=False):
         """Apply the locally held schedule for one inverter."""
         schedule = self.local_schedule.get(sn)
@@ -1874,6 +1880,7 @@ class AlphaESSAPI(ComponentBase):
             return False
         return await self.apply_settings(sn, schedule, force=force)
 
+    @writes
     async def _reconcile_control(self, sn):
         """Re-apply sn's schedule if Predbat already controls it, unforced.
 
@@ -1892,6 +1899,7 @@ class AlphaESSAPI(ComponentBase):
         except Exception as error:
             self.log("Warn: AlphaESS schedule apply failed for {}: {}".format(sn, error))
 
+    @writes
     async def _handle_control_event(self, entity_id, value):
         """Route one control-entity event to the right inverter and apply it.
 
@@ -1940,6 +1948,7 @@ class AlphaESSAPI(ComponentBase):
             return True, "AlphaESS has emailed a verification code to the registered owner of {}".format(sn)
         return False, "Could not request a verification code for {}: {}".format(sn, self.describe_code(code))
 
+    @writes
     async def bind_system(self, sn, code):
         """Bind a system to this AppID using the emailed verification code.
 
@@ -1954,6 +1963,7 @@ class AlphaESSAPI(ComponentBase):
             return True, "{} was already bound to this AppID".format(sn)
         return False, "Could not bind {}: {}".format(sn, self.describe_code(result))
 
+    @writes
     async def unbind_system(self, sn):
         """Unbind a system from this AppID.
 
@@ -1967,6 +1977,7 @@ class AlphaESSAPI(ComponentBase):
             return True, "{} was not bound to this AppID".format(sn)
         return False, "Could not unbind {}: {}".format(sn, self.describe_code(result))
 
+    @writes
     async def _handle_unbind_event(self, sn, value):
         """Drive the per-serial unbind toggle, following Sigenergy's offboard pattern.
 

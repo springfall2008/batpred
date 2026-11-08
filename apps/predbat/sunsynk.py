@@ -29,7 +29,7 @@ import time
 from datetime import datetime
 import aiohttp
 import yaml
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -400,7 +400,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         while attempt < SUNSYNK_RETRIES:
             self.debug_api(method, url, body if body is not None else params)
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.request(method, url, headers=headers, params=params, json=body) as response:
                         if response.status != 200:
                             self.log(f"Warn: Sunsynk {method} {path} returned HTTP {response.status}")
@@ -1201,6 +1201,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """Compare two settings payloads for change detection."""
         return dict(a or {}) == dict(b or {})
 
+    @writes
     async def apply_settings(self, sn, schedule, current_soc, force=False):
         """Read, modify and write the settings object for one inverter.
 
@@ -1559,6 +1560,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 window["enable"] = self._to_bool(value, window.get("enable", False))
             return
 
+    @writes
     async def apply_schedule(self, sn, force=False):
         """Apply the locally held schedule for one inverter."""
         schedule = self.local_schedule.get(sn)
@@ -1571,6 +1573,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """Return True when Predbat is in read-only mode and must not write to the inverter."""
         return self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on"
 
+    @writes
     async def _reconcile_control(self, sn):
         """Re-apply sn's schedule if Predbat already controls it, unforced (matches deye.py's _reconcile_control).
 
@@ -1588,6 +1591,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         except Exception as error:
             self.log(f"Warn: Sunsynk schedule apply failed for {sn}: {error}")
 
+    @writes
     async def _handle_control_event(self, entity_id, value):
         """Route one control-entity event to the right inverter and apply it."""
         sn = self._sn_from_entity(entity_id)
@@ -1615,14 +1619,17 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.update_local_schedule(sn, entity_id, value)
         await self.publish_schedule_settings_ha(sn)
 
+    @writes
     async def select_event(self, entity_id, value):
         """Handle a select entity change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a number entity change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a switch entity service call."""
         await self._handle_control_event(entity_id, service)
