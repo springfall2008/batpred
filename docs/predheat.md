@@ -115,7 +115,7 @@ Set **heat_min_power** and **heat_max_power** to the minimum and maximum **therm
 
 Set **hysteresis** (default 0.5°C) to the amount above target at which the model turns heating **off**. Set **hysteresis_off** (default 0.1°C) to the amount below target at which heating turns **on**. These names are counterintuitive but reflect their use in the current simulation.
 
-Set **heat_cop** to the maximum COP used by the model (not `heating_cop`). For a gas boiler, use 1.0; gas efficiency is adjusted separately. For a heat pump, use an appropriate best-case COP for your installation. Predheat scales this using **heat_pump_efficiency** according to outdoor temperature. The code default is 0.9, so heat-pump users should set this explicitly.
+Set **heat_cop** to the maximum COP used by the model. For a gas boiler, use 1.0; gas efficiency is adjusted separately. For a heat pump, use an appropriate best-case COP for your installation. Predheat scales this using **heat_pump_efficiency** according to outdoor temperature. The code default is 0.9, so heat-pump users should set this explicitly.
 
 Set **flow_temp** To the target flow temperature of your system, either via a sensor or as a fixed value. E.g. gas boilers are often set to say 60 or 70 degrees while heat pumps are much lower e.g. 30 or 40.
 
