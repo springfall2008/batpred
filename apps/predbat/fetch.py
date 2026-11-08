@@ -1486,6 +1486,8 @@ class Fetch:
         self.load_minutes_age = 0
         self.load_forecast = {}
         self.load_forecast_array = []
+        self.house_load_additional_forecast_adjust = {}
+        self.house_load_additional_forecasts = {}
         # The PV forecasts are not reset here: fetch_pv_forecast_and_dawn() below replaces all three
         # at once, and until then a debug dump taken mid-fetch keeps last cycle's forecast rather
         # than capturing it empty (#4317)
@@ -1523,6 +1525,10 @@ class Fetch:
 
         # Fetch extra load forecast
         self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc, load_ml_forecast)
+
+        # Fetch named additional load forecast deltas
+        self.house_load_additional_forecast_adjust, self.house_load_additional_forecasts = self.fetch_additional_load_forecast()
+        self.publish_additional_load_forecasts()
 
         # Load previous load data
         if self.get_arg("ge_cloud_data", False):
@@ -4828,6 +4834,7 @@ class Fetch:
         self.manual_freeze_export_times = self.manual_times("manual_freeze_export")
         self.manual_demand_times = self.manual_times("manual_demand")
         self.manual_api = self.api_select_update("manual_api")
+        self.load_forecast_delta_api = self.api_select_update("load_forecast_delta_api")
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
         self.manual_load_adjust = self.manual_rates("manual_load_adjust", default_rate=self.get_arg("manual_load_value"))
