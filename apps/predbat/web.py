@@ -24,7 +24,7 @@ import os
 import os.path
 import sys
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import shutil
 import html as html_module
@@ -58,6 +58,7 @@ from web_helper import (
     get_component_edit_modal_css,
     get_entity_modal_js,
     get_component_edit_modal_js,
+    get_discovery_modal_js,
     get_logfile_js,
     get_entity_toggle_js,
     get_entity_control_css,
@@ -68,12 +69,14 @@ from web_helper import (
     get_browse_css,
     get_entity_detailed_row_js,
     get_internals_css,
+    get_kraken_key_page_html,
     get_internals_js,
     get_dashboard_css,
     get_dashboard_collapsible_js,
 )
 
 from utils import (
+    strptime_aware,
     calc_percent_limit,
     str2time,
     dp0,
@@ -110,119 +113,231 @@ from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, 
 DEBUG_HISTORY_DOWNLOAD_MAX = 16
 
 
-def state_as_of_slots(records, slots):
+# The /entity history table has a row per half hour, each expanding to the 5-minute slots inside it
+HISTORY_TABLE_ROW_MINUTES = 30
+HISTORY_TABLE_SLOT_MINUTES = 5
+
+# Where the Components page's discovery pop-up shows each record container (coordinator.CONTAINER_SPEC)
+# and sub-record (SECTION_SPEC): in the at-a-glance summary, in this order, or only in the folded full
+# record. Fields inside a container need no entry here - the summary renders whatever a container holds.
+# A container this page has never been told about still reaches the summary (see
+# _discovery_glance_html), but test_component_discovery_places_every_container fails until it is placed.
+DISCOVERY_GLANCE_CONTAINERS = ("hardware_ids", "account_ids", "info", "ratings", "coverage", "tariff", "capabilities")
+DISCOVERY_FOLDED_CONTAINERS = ("entities",)
+
+# Status-map entries (Coordinator._component_status) for a component with nothing to show, in words:
+# the short form for a card's Discovery line, and a sentence for the pop-up. A load_error entry is filed
+# whether or not the component ever had a reporter - there is no instance left to ask - so its sentence
+# must not claim one was expected (storage, web and db can fail to load too).
+DISCOVERY_STATUS_TEXT = {"no_report": "has not reported yet", "not_started": "not started", "load_error": "failed to load"}
+DISCOVERY_STATUS_SENTENCE = {
+    "no_report": "This component has not reported yet.",
+    "not_started": "This component has not started, so it has not reported yet.",
+    "load_error": "This component failed to load.",
+}
+
+
+def history_value_at(records, stamps, when):
     """
-    Resolve each slot to the state in effect at it - the most recent record at or before the slot.
+    Return the value an entity held at an instant - its most recent record at or before it - or "-" before its first.
 
-    records must be a list of (timestamp, value) ordered oldest first. Returns
-    {slot: (value, changed, prev_value)} where value is "-" for slots preceding the first record and
-    changed marks a slot whose value differs from the one shown at the previous slot.
+    records is a list of (timestamp, value) ordered oldest first, stamps the same timestamps alone, for bisecting.
     """
-    filled = {}
-    last_value = None
-    previous = None
-    index = 0
-
-    for slot in sorted(slots):
-        while index < len(records) and records[index][0] <= slot:
-            last_value = records[index][1]
-            index += 1
-        value = last_value if last_value is not None else "-"
-        filled[slot] = (value, value != "-" and value != previous, previous)
-        previous = value
-
-    return filled
+    index = bisect.bisect_right(stamps, when)
+    return records[index - 1][1] if index else "-"
 
 
-def build_entity_history_table_data(entity_selections, entity_data_fetch):
+def history_period_kind(records, stamps, start, end):
     """
-    Resolve the /entity history table's 30-minute rows and their 5-minute detail slots.
+    Classify what an entity did over the period (start, end].
+
+    Returns "changed" when it left the period on a different value from the one it entered with, "reverted"
+    when it left on the same value but held another somewhere inside, and None when it held one value
+    throughout. An entity's first record is where its history starts, not a change.
+    """
+    first = bisect.bisect_right(stamps, start)
+    last = bisect.bisect_right(stamps, end)
+    if first == last:
+        return None
+    entered = records[first - 1][1] if first else records[first][1]
+    if records[last - 1][1] != entered:
+        return "changed"
+    if any(value != entered for _, value in records[first:last]):
+        return "reverted"
+    return None
+
+
+def floor_to_history_slot(when):
+    """Round a UTC instant down to its 5-minute slot. Every UTC offset is a multiple of 15 minutes, so this is a local 5-minute mark too."""
+    return when.replace(minute=when.minute - when.minute % HISTORY_TABLE_SLOT_MINUTES, second=0, microsecond=0)
+
+
+def floor_to_local_half_hour(when, local_tz):
+    """Round an instant down to the start of its half hour on the local clock, returned in UTC (so UTC+05:45 rows start on :00 and :30 too)."""
+    local = when.astimezone(local_tz)
+    return local.replace(minute=local.minute - local.minute % HISTORY_TABLE_ROW_MINUTES, second=0, microsecond=0).astimezone(timezone.utc)
+
+
+def build_entity_history_table_data(entity_selections, entity_data_fetch, local_tz=timezone.utc):
+    """
+    Build the /entity history table: 30-minute rows, newest first, each expanding to its 5-minute slots.
 
     entity_selections: list of {"entity_id": ..., "attribute": ...} (attribute may be None for state)
     entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now(), i.e. [[record, ...]]
+    local_tz: the timezone rows are laid out on and labelled in - HA/DB history is UTC
 
-    Every slot reports the state as of its own timestamp. Summarising a window by the last sample
-    taken inside it instead let a momentary blip stand for the whole window - one stray "Lost"
-    record at 21:57 made the entire 21:30 row read "Lost" - and that value then carried forward
-    into every later slot that had no sample of its own, turning a blip into hours of downtime.
+    Every cell shows the value at the time on its left, never a sample taken inside its period: summarising
+    a window by its last sample let one stray "Lost" record at 21:57 make a whole row read "Lost", and that
+    carried forward into every later row. A cell's colour says what happened since the slot before it, so a
+    row covers its own line and the detail slots it expands to: "changed" (pink) when the value moved and
+    stayed moved, "reverted" (blue) when it moved and came back. A change therefore marks the row it
+    happened in, and expanding that row shows the 5-minute slot it happened at.
 
-    Returns (entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min):
-      entity_filled_30min / entity_filled_5min: one dict per selection, {slot: (value, changed, prev_value)}
-      sorted_timestamps_30min: the 30-min row timestamps, newest first
-      all_display_slots_5min: the 5-min slots covering each 30-min row's own window (offsets 0 to +25)
+    A row is headed by the newest slot of its half hour - the half-hour mark that ends it, or for the
+    newest row the newest record's own time - and expands to the slots before it within that half hour. Heading
+    rows by their oldest slot hid the latest value under the top row and made an expanded table read
+    17:30, 17:55, 17:50 ... rather than newest to oldest all the way down.
+
+    Rows run without gaps from the first record to the newest across all selections, and never past it -
+    the newest is normally the current state get_history_with_now() appends, so nothing in the future shows.
+
+    Returns a list of rows, newest first:
+      {"time": datetime, "cells": [(value, kind), ...], "details": [{"time": datetime, "cells": [...]}, ...]}
+    with a cell per selection, kind being "changed", "reverted" or None, and details newest first.
     """
+    slot = timedelta(minutes=HISTORY_TABLE_SLOT_MINUTES)
+    row_length = timedelta(minutes=HISTORY_TABLE_ROW_MINUTES)
     entity_records = []
-    all_timestamps_30min = set()
-    following_timestamps_30min = set()
+    all_stamps = []
 
     for selection in entity_selections:
-        entity_id = selection["entity_id"]
         attribute = selection["attribute"]
-        history = entity_data_fetch[entity_id]
+        history = entity_data_fetch.get(selection["entity_id"])
         records = []
+        for item in (history[0] if history else None) or []:
+            if "last_updated" not in item:
+                continue
+            try:
+                last_updated_stamp = str2time(item["last_updated"]).astimezone(timezone.utc)
+            except (ValueError, TypeError):
+                continue
+            all_stamps.append(last_updated_stamp)
 
-        if history and len(history) >= 1:
-            history = history[0]
-            if history:
-                for item in history:
-                    if "last_updated" not in item:
-                        continue
-                    try:
-                        last_updated_stamp = str2time(item["last_updated"])
-                    except (ValueError, TypeError):
-                        continue
+            if attribute:
+                attributes = item.get("attributes")
+                # A record with no attributes at all says nothing about this one, rather than that it became None
+                if not isinstance(attributes, dict):
+                    continue
+                state = attributes.get(attribute, None)
+            else:
+                state = item.get("state", None)
 
-                    # Get state or attribute value
-                    if attribute:
-                        state = item.get("attributes", {}).get(attribute, None)
-                    else:
-                        state = item.get("state", None)
+            if state is None:
+                state = "None"
+            records.append((last_updated_stamp, state))
 
-                    if state is None:
-                        state = "None"
-
-                    records.append((last_updated_stamp, state))
-
-                    # A record makes the window it landed in a row, so activity is always on screen
-                    minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
-                    rounded_minutes_30 = (minutes // 30) * 30
-                    window_start = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
-                    all_timestamps_30min.add(window_start)
-
-                    # A row reports the state at its own start, so a change part way through a window
-                    # first shows in the NEXT row. An entity that only records on a change leaves that
-                    # window empty, and without a row there the change was hidden as "unchanged" until
-                    # the next record - which was then flagged as the change, hours late.
-                    following_timestamps_30min.add(window_start + timedelta(minutes=30))
-
-        # str2time is only reliable for ordering once parsed - the raw strings mix UTC history with
-        # the local-time "now" record get_history_with_now() appends
+        # The raw strings mix UTC history with the local-time "now" record get_history_with_now() appends
         records.sort(key=lambda record: record[0])
-        entity_records.append(records)
+        entity_records.append((records, [record[0] for record in records]))
 
-    # Never add a row beyond the newest record, that would be a row in the future
-    newest_record = max((records[-1][0] for records in entity_records if records), default=None)
-    for following in following_timestamps_30min:
-        if following <= newest_record:
-            all_timestamps_30min.add(following)
+    if not all_stamps:
+        return []
 
-    # Sort timestamps in reverse chronological order
-    sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
+    def cells_for(when, period_start, period_end):
+        """Each selection's value at when, and what it did over (period_start, period_end]."""
+        return [(history_value_at(records, stamps, when), history_period_kind(records, stamps, period_start, period_end)) for records, stamps in entity_records]
 
-    # Detail slots are the 5-min marks INSIDE each row's own half hour, so expanding a row explains
-    # that row rather than describing the preceding half hour
-    all_display_slots_5min = set()
-    for ts_30 in sorted_timestamps_30min:
-        for offset in range(0, 30, 5):
-            all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
+    # A record shows from the first slot at or after it. The table ends on the newest record's own time rather
+    # than the slot before it: that record is normally the current state, and waiting for the next 5-minute
+    # mark left it off the table for up to 5 minutes.
+    oldest = min(all_stamps)
+    newest = max(all_stamps)
+    first_slot = floor_to_history_slot(oldest)
+    if first_slot < oldest:
+        first_slot += slot
+    first_slot = min(first_slot, newest)
 
-    entity_filled_30min = []
-    entity_filled_5min = []
-    for records in entity_records:
-        entity_filled_30min.append(state_as_of_slots(records, sorted_timestamps_30min))
-        entity_filled_5min.append(state_as_of_slots(records, all_display_slots_5min))
+    # Each row covers the half hour (row_end - row_length, row_end], the first being the one holding first_slot
+    rows = []
+    row_end = floor_to_local_half_hour(first_slot, local_tz)
+    if row_end < first_slot:
+        row_end += row_length
+    while row_end - row_length < newest:
+        row_start = row_end - row_length
+        row_time = min(row_end, newest)
+        details = []
+        detail_time = floor_to_history_slot(row_time)
+        if detail_time == row_time:
+            detail_time -= slot
+        while detail_time > row_start and detail_time >= first_slot:
+            details.append({"time": detail_time.astimezone(local_tz), "cells": cells_for(detail_time, detail_time - slot, detail_time)})
+            detail_time -= slot
+        rows.append({"time": row_time.astimezone(local_tz), "cells": cells_for(row_time, row_start, row_time), "details": details})
+        row_end += row_length
 
-    return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
+    rows.reverse()
+    return rows
+
+
+def history_row_shown(rows, index):
+    """
+    Decide whether a build_entity_history_table_data() row is shown in the /entity table and its CSV.
+
+    Only a pure duplicate is hidden: a row holding the same values as the row before it, with nothing
+    changing during it. The newest and oldest rows are always kept. A row that merely reads differently
+    from the one before it is kept even though nothing changed inside its own half hour - hiding it left
+    "N unchanged slots" holding a value the row beneath them never showed, and lost the value from the
+    CSV, which has no detail rows to find it in.
+    """
+    if index == 0 or index == len(rows) - 1:
+        return True
+    row = rows[index]
+    if any(kind for _, kind in row["cells"]):
+        return True
+    return [value for value, _ in row["cells"]] != [value for value, _ in rows[index + 1]["cells"]]
+
+
+def render_entity_history_rows(rows, num_cols):
+    """
+    Render the /entity history table body from build_entity_history_table_data() rows.
+
+    Each 30-minute row is clickable and followed by its hidden 5-minute detail rows. Pure duplicate rows
+    (see history_row_shown()) are folded into an "N unchanged slots hidden" separator, so the table
+    opens on its changes.
+    """
+    cell_classes = {"changed": ' class="changed-cell"', "reverted": ' class="reverted-cell"'}
+    text = ""
+    row_index = 0
+    skipped_count = 0
+
+    for i, row in enumerate(rows):
+        if not history_row_shown(rows, i):
+            skipped_count += 1
+            continue
+
+        if skipped_count > 0:
+            col_span = 1 + num_cols
+            text += f'<tr class="gap-row"><td colspan="{col_span}" style="text-align:center; font-style:italic; font-size:0.85em; color:var(--text-secondary,#888); border-top:2px dashed #aaa; border-bottom:2px dashed #aaa; padding:4px;">— {skipped_count} unchanged slot{"s" if skipped_count != 1 else ""} hidden —</td></tr>\n'
+            skipped_count = 0
+
+        # Main 30-minute row (clickable)
+        text += f'<tr class="history-row" onclick="toggleDetailRow({row_index})" id="row_{row_index}">'
+        text += f"<td>▶ {row['time'].strftime(TIME_FORMAT)}</td>"
+        for value, kind in row["cells"]:
+            text += f"<td{cell_classes.get(kind, '')}>{html_module.escape(str(value))}</td>"
+        text += "</tr>\n"
+
+        # Detail rows: the earlier 5-minute slots of the half hour leading up to this row, newest first
+        for detail in row["details"]:
+            text += f'<tr class="detail-row" id="detail_{row_index}">'
+            text += f"<td>  {detail['time'].strftime(TIME_FORMAT)}</td>"
+            for value, kind in detail["cells"]:
+                text += f"<td{cell_classes.get(kind, '')}>{html_module.escape(str(value))}</td>"
+            text += "</tr>\n"
+
+        row_index += 1
+
+    return text
 
 
 def split_entities_for_charting(entities, entity_data_fetch):
@@ -540,6 +655,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/dash_content", self.html_dash_content)
         app.router.add_get("/components", self.html_components)
         app.router.add_get("/discovery", self.html_discovery)
+        app.router.add_get("/component_discovery", self.html_component_discovery)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
         app.router.add_get("/component_config", self.html_component_config)
@@ -568,6 +684,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
         app.router.add_get("/api/plan_data", self.html_api_plan_data)
+        app.router.add_get("/api/plan_history", self.html_api_plan_history)
         app.router.add_get("/api/log", self.html_api_get_log)
         app.router.add_get("/api/entities", self.html_api_get_entities)
         app.router.add_post("/api/login", self.html_api_login)
@@ -577,6 +694,8 @@ class WebInterface(ComponentBase):
         app.router.add_get("/internals", self.html_internals)
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
+        app.router.add_get("/kraken_key", self.html_kraken_key)
+        app.router.add_post("/api/kraken_key", self.html_api_kraken_key)
         app.router.add_get("/api/status", self.html_api_get_status)
         app.router.add_get("/metrics", metrics_handler)
         app.router.add_get("/metrics/json", metrics_json_handler)
@@ -626,7 +745,8 @@ class WebInterface(ComponentBase):
         text = ""
         attributes = {}
         if from_db:
-            history = self.get_history_wrapper(entity, 1, required=False)
+            # Untracked: a tracked entity is re-read every 2 minutes until restart, and the entity pages call this for every entity they list
+            history = self.get_history_wrapper(entity, 1, required=False, tracked=False)
             if history and len(history) >= 1:
                 history = history[0]
                 if history:
@@ -1267,20 +1387,26 @@ class WebInterface(ComponentBase):
     async def get_history_with_now(self, entity_id, days, attribute=None):
         """
         Get history for an entity including the current state
+
+        The current state is stamped at the real time, not now_utc - that is the start of the 5-minute
+        cycle, so it could land before records HA had already made since. Asked for the whole state
+        (attribute=None) it carries the current attributes too, so an attribute read from it is current
+        rather than missing.
         """
         history = copy.deepcopy(self.get_history_wrapper(entity_id, days, required=False, tracked=False))  # Copy to avoid modifying original history
         current_value = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
         if current_value is not None:
-            if not history:
-                history = [[]]
-                if attribute:
-                    history[0].append({"attributes": {attribute: current_value}, "last_updated": (self.now_now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
-                else:
-                    history[0].append({"state": current_value, "last_updated": (self.now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
             if attribute:
-                history[0].append({"attributes": {attribute: current_value}, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
+                current = {"attributes": {attribute: current_value}}
             else:
-                history[0].append({"state": current_value, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
+                current = {"state": current_value}
+                current_state = self.get_state_wrapper(entity_id, raw=True)
+                if isinstance(current_state, dict) and isinstance(current_state.get("attributes"), dict):
+                    current["attributes"] = current_state["attributes"]
+            now = self.now_utc_exact
+            if not history:
+                history = [[dict(current, last_updated=(now - timedelta(days=days)).strftime(TIME_FORMAT_HA))]]
+            history[0].append(dict(current, last_updated=now.strftime(TIME_FORMAT_HA)))
 
         return history
 
@@ -1539,6 +1665,7 @@ class WebInterface(ComponentBase):
                 body.dark-mode .reverted-cell { background-color: #0d2e4a; color: #90caff; }
                 </style>
                 """
+                text += '<p style="font-size:0.9em;">Each row shows the value at its time. <span class="changed-cell" style="padding:0 4px;">Changed</span> during the half hour up to it, <span class="reverted-cell" style="padding:0 4px;">changed and changed back</span>. Click a row to see the 5-minute slots before it.</p>\n'
                 text += '<button onclick="downloadEntityCSV()" style="margin-bottom: 10px; padding: 7px 14px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">&#11015; Download CSV</button>\n'
                 text += "<table>\n"
 
@@ -1555,83 +1682,13 @@ class WebInterface(ComponentBase):
                     text += f"<th>{friendly_name}{attr_display}{unit_display}</th>"
                 text += "</tr>\n"
 
-                # Collect and bucket history data for all entities (both 30-min summary and 5-min detail)
-                entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, _ = build_entity_history_table_data(entity_selections, entity_data_fetch)
-
-                # Pre-compute per-row cell classes so we can decide which rows to show
-                num_cols = len(entity_selections)
-                row_data = []  # list of (timestamp_30, [(value, cell_class), ...], has_highlight)
-                for timestamp_30 in sorted_timestamps_30min:
-                    cells = []
-                    has_highlight = False
-                    for filled_30, filled_5 in zip(entity_filled_30min, entity_filled_5min):
-                        value, is_changed, prev_value = filled_30.get(timestamp_30, ("-", False, None))
-                        if is_changed:
-                            cell_class = ' class="changed-cell"'
-                            has_highlight = True
-                        else:
-                            # Flag a row that held its value at both ends but moved somewhere inside its own half hour
-                            sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(5, 30, 5)]
-                            if any(v != value for v in sub_vals):
-                                cell_class = ' class="reverted-cell"'
-                                has_highlight = True
-                            else:
-                                cell_class = ""
-                        cells.append((value, cell_class))
-                    row_data.append((timestamp_30, cells, has_highlight))
-
-                # Build table rows — skip unchanged rows (except the oldest), inserting gap rows on skips
-                row_index = 0
-                oldest_idx = len(row_data) - 1
-                skipped_count = 0
-                prev_row_ts = None  # Previous row_data entry (visible or skipped) — for detecting history gaps
-                for i, (timestamp_30, cells, has_highlight) in enumerate(row_data):
-                    is_oldest = i == oldest_idx
-
-                    # Count slots absent from history entirely (gap between consecutive row_data entries).
-                    # Using prev_row_ts (not prev visible ts) avoids double-counting rows already
-                    # incremented via skipped_count += 1 below.
-                    if prev_row_ts is not None:
-                        gap_minutes = int((prev_row_ts - timestamp_30).total_seconds() / 60)
-                        missing_slots = max(0, (gap_minutes // 30) - 1)
-                        skipped_count += missing_slots
-
-                    prev_row_ts = timestamp_30
-
-                    if not has_highlight and not is_oldest:
-                        skipped_count += 1
-                        continue
-
-                    # If we skipped rows (present-but-unchanged OR absent from history), emit a gap separator
-                    if skipped_count > 0:
-                        col_span = 1 + num_cols
-                        text += f'<tr class="gap-row"><td colspan="{col_span}" style="text-align:center; font-style:italic; font-size:0.85em; color:var(--text-secondary,#888); border-top:2px dashed #aaa; border-bottom:2px dashed #aaa; padding:4px;">— {skipped_count} unchanged slot{"s" if skipped_count != 1 else ""} hidden —</td></tr>\n'
-                        skipped_count = 0
-
-                    # Main 30-minute row (clickable)
-                    text += f'<tr class="history-row" onclick="toggleDetailRow({row_index})" id="row_{row_index}">'
-                    text += f"<td>▶ {timestamp_30.strftime(TIME_FORMAT)}</td>"
-                    for value, cell_class in cells:
-                        text += f"<td{cell_class}>{value}</td>"
-                    text += "</tr>\n"
-
-                    # Detail rows: the remaining 5-minute slots inside this row's own half hour,
-                    # newest first to match the table's ordering (the row itself covers offset 0)
-                    for offset in range(25, 0, -5):
-                        detail_time = timestamp_30 + timedelta(minutes=offset)
-                        text += f'<tr class="detail-row" id="detail_{row_index}">'
-                        text += f"<td>  {detail_time.strftime(TIME_FORMAT)}</td>"
-                        for filled in entity_filled_5min:
-                            value, is_changed, prev_value = filled.get(detail_time, ("-", False, None))
-                            cell_class = ' class="changed-cell"' if is_changed else ""
-                            text += f"<td{cell_class}>{value}</td>"
-                        text += "</tr>\n"
-
-                    row_index += 1
+                # 30-minute rows with their 5-minute detail slots, laid out on the local clock
+                history_rows = build_entity_history_table_data(entity_selections, entity_data_fetch, local_tz=self.local_tz)
+                text += render_entity_history_rows(history_rows, len(entity_selections))
 
                 text += "</table><br>\n"
 
-                # Build CSV data for download (all 30-min slots, unfiltered, with carry-forward values)
+                # Build CSV data for download - the same rows the table shows, without the pure duplicates
                 csv_col_headers = ["Time"]
                 for sel in entity_selections:
                     sel_eid = sel["entity_id"]
@@ -1643,12 +1700,9 @@ class WebInterface(ComponentBase):
                     sel_attr_disp = f" - {sel_attr}" if sel_attr else ""
                     csv_col_headers.append(f"{sel_friendly}{sel_attr_disp}{sel_unit_disp}")
                 csv_all_rows = []
-                for ts in sorted_timestamps_30min:
-                    row_vals = [ts.strftime(TIME_FORMAT)]
-                    for filled_30 in entity_filled_30min:
-                        val, _, _ = filled_30.get(ts, ("-", False, None))
-                        row_vals.append(str(val))
-                    csv_all_rows.append(row_vals)
+                for index, history_row in enumerate(history_rows):
+                    if history_row_shown(history_rows, index):
+                        csv_all_rows.append([history_row["time"].strftime(TIME_FORMAT)] + [str(value) for value, _ in history_row["cells"]])
                 csv_data_json = json.dumps({"headers": csv_col_headers, "rows": csv_all_rows})
                 text += f"<script>var csvData = {csv_data_json};\n"
                 text += """function downloadEntityCSV() {
@@ -2016,9 +2070,6 @@ var options = {
             text += "    title: {{ text: '{}' }},\n".format(yaxis_name)
             text += "    decimalsInFloat: 2\n"
             text += "  },\n"
-        text += "  title: {\n"
-        text += "    text: '{}'\n".format(chart_name)
-        text += "  },\n"
         text += "  legend: {\n"
         text += "    position: 'top',\n"
         text += "    formatter: function(seriesName, opts) {\n"
@@ -2047,7 +2098,24 @@ var options = {
         text += "    }\n"
         text += "   ]\n"
         text += "  }\n"
-        text += "}\n"
+        # The semicolon is required: the title script below starts with '(', and without it the browser parses
+        # 'var options = {...}(function() {...})()' as one statement calling the options object, which throws
+        # 'TypeError: ... is not a function' and leaves every chart blank (#6015).
+        text += "};\n"
+        # The title is an HTML heading above the chart, not an ApexCharts title: ApexCharts binds drag-to-zoom to the
+        # whole chart SVG, so a drag (or a touch-scroll on mobile) anywhere in a title band inside it - including the
+        # gap between the title text and the toolbar - zoomed the chart (#5979). Outside the SVG it cannot start a zoom,
+        # and it picks up the page's own heading style. The wrapper div keeps it on its own line, as h2 is inline here.
+        # The title goes in via a JSON string and textContent, so a friendly name with a quote or markup in it is safe.
+        chart_title_js = json.dumps(str(chart_name)).replace("<", "\\u003c")
+        text += "(function() {\n"
+        text += "  var container = document.getElementById('{}');\n".format(tagname)
+        text += "  var heading = document.createElement('h2');\n"
+        text += "  heading.textContent = {};\n".format(chart_title_js)
+        text += "  var wrapper = document.createElement('div');\n"
+        text += "  wrapper.appendChild(heading);\n"
+        text += "  container.parentNode.insertBefore(wrapper, container);\n"
+        text += "})();\n"
         # getElementById (not a '#id' CSS selector) - tagname can be unit-derived (e.g. "chart_%")
         # and '%' is not a valid unescaped CSS identifier character, which would throw in querySelector
         text += "var chart = new ApexCharts(document.getElementById('{}'), options);\n".format(tagname)
@@ -2641,9 +2709,40 @@ chart.render();
             return web.json_response({"unchanged": True, "overrides_hash": overrides_hash})
 
         # Build full response with data
-        response_data = {"unchanged": False, "plan": plan_json, "yesterday": yesterday_json, "baseline": baseline_json, "overrides": overrides, "overrides_hash": overrides_hash}
+        response_data = {
+            "unchanged": False,
+            "plan": plan_json,
+            "yesterday": yesterday_json,
+            "baseline": baseline_json,
+            "overrides": overrides,
+            "overrides_hash": overrides_hash,
+            "history_days": self.history_day_names(),
+            "history_day_events": self.history_day_events(),
+        }
 
         return web.json_response(response_data)
+
+    def history_day_names(self):
+        """The dates (YYYY-MM-DD, oldest first) the History view's day picker can show, from predbat.plan_history."""
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        return sorted(days) if isinstance(days, dict) else []
+
+    def history_day_events(self):
+        """The recorded events (saving session, free electricity, Axle) on each older History day that had any, as {date: [labels]}."""
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        if not isinstance(days, dict):
+            return {}
+        return {day: plan["history_events"] for day, plan in days.items() if isinstance(plan, dict) and plan.get("history_events")}
+
+    async def html_api_plan_history(self, request):
+        """
+        JSON API - Return the History view's plan JSON for one older day (?date=YYYY-MM-DD), or 404
+        """
+        day = request.rel_url.query.get("date", "")
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        if not isinstance(days, dict) or day not in days:
+            return web.json_response({"error": "no history for date"}, status=404)
+        return web.json_response(days[day])
 
     async def html_plan(self, request):
         """
@@ -2669,6 +2768,9 @@ chart.render();
         text += '<span id="planTimestamp" style="margin-left: 16px; font-size: 13px; color: #666;"></span>'
         text += '<label id="debugToggleLabel" style="margin-left: auto;"><input type="checkbox" id="debugToggle" onchange="onDebugToggleChange()"> Show Debug</label>'
         text += "</div>"
+
+        # Day picker for the History view, filled in by renderHistoryPicker()
+        text += '<div id="historyPicker" style="display:none; margin-bottom: 10px; gap: 6px; flex-wrap: wrap;"></div>'
 
         # Add plan container
         text += '<div id="planContainer"></div>'
@@ -2724,6 +2826,8 @@ chart.render();
         text += f"window.baselineData = {json.dumps(baseline_json)};"
         text += f"window.overridesData = {json.dumps(overrides)};"
         text += f"window.overridesHash = {json.dumps(overrides_hash)};"
+        text += f"window.historyDays = {json.dumps(self.history_day_names())};"
+        text += f"window.historyDayEvents = {json.dumps(self.history_day_events())};"
         text += "</script>"
 
         # Include renderer JavaScript (which declares newestDataTimestamp variable)
@@ -3267,9 +3371,11 @@ chart.render();
         soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
         # What earlier plans predicted for now, shifted forward by the horizon they were made at, so
         # each lands on the moment it was forecasting and can be read straight against Actual.
+        # Pruned to today like the chart's other series - unpruned, the 7-day history this is read from
+        # stretched the Battery chart back across the whole week.
         soc_best_history = self.get_history_with_now_attrs(self.prefix + ".soc_kw_best", 7)
-        soc_kw_best_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60)
-        soc_kw_best_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8)
+        soc_kw_best_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=True, offset_minutes=60)
+        soc_kw_best_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=True, offset_minutes=60 * 8)
         soc_kw_best10 = self.get_entity_results(self.prefix + ".soc_kw_best10")
         soc_kw_base10 = self.get_entity_results(self.prefix + ".soc_kw_base10")
         charge_limit_kw = self.get_entity_results(self.prefix + ".charge_limit_kw")
@@ -3470,8 +3576,6 @@ chart.render();
 
             # Sort timestamps and calculate deltas to get energy per interval
             if load_ml_forecast_energy:
-                from datetime import datetime
-
                 sorted_timestamps = sorted(load_ml_forecast_energy.keys())
                 prev_energy = 0
                 prev_timestamp = None
@@ -3482,8 +3586,8 @@ chart.render();
                     # Calculate actual interval in hours between this and previous timestamp
                     if prev_timestamp:
                         # Parse timestamps and calculate difference in hours
-                        curr_dt = datetime.strptime(timestamp, TIME_FORMAT)
-                        prev_dt = datetime.strptime(prev_timestamp, TIME_FORMAT)
+                        curr_dt = strptime_aware(timestamp, TIME_FORMAT)
+                        prev_dt = strptime_aware(prev_timestamp, TIME_FORMAT)
                         interval_hours = (curr_dt - prev_dt).total_seconds() / 3600.0
                         load_ml_forecast_power[timestamp] = dp4(energy_delta / interval_hours)
 
@@ -5129,7 +5233,8 @@ chart.render();
         """
         Return the discovery catalogue as an HTML page
 
-        Redacted by default - what a debug dump would carry - with ?raw=1 for the unredacted view.
+        The published catalogue by default - what a debug dump would carry, email addresses scrubbed -
+        with ?raw=1 for the view with email addresses left in. Identifiers are published in both.
         Reads the coordinator directly rather than parsing sensor.predbat_discovery's attributes
         back out: that entity deliberately carries only a summary, and the coordinator is the
         better coupling anyway (see Coordinator.publish()).
@@ -5173,7 +5278,7 @@ chart.render();
         text += "</div>\n"
 
         if raw:
-            text += "<div class='discovery-warning'><strong>Raw view.</strong> Serial numbers, MPANs and account identifiers are shown unredacted - this view is <strong>not safe to share</strong>. Use the redacted view for anything you post in a bug report.</div>\n"
+            text += "<div class='discovery-warning'><strong>Raw view.</strong> Email addresses are shown unredacted - this view is <strong>not safe to share</strong>. Use the default view for anything you post in a bug report.</div>\n"
 
         conflicts = catalogue.get("observations", {}).get("conflicts", [])
         if conflicts:
@@ -5210,6 +5315,155 @@ chart.render();
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    def _discovery_status_map(self):
+        """The catalogue's per-component status map, or {} when there is no catalogue to read."""
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return {}
+        try:
+            return coordinator.catalogue().get("components", {})
+        except Exception as e:
+            self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+            return {}
+
+    def _discovery_status_text(self, status):
+        """One component's status-map entry in words: what it reported, or why it has nothing to show."""
+        if status.get("status") != "ok":
+            return DISCOVERY_STATUS_TEXT.get(status.get("status"), str(status.get("status")))
+        counts = status.get("counts") or {}
+        parts = ["{} {}".format(count, section[:-1] if count == 1 and section.endswith("s") else section) for section, count in counts.items()]
+        return ", ".join(parts) if parts else "nothing reported"
+
+    def _discovery_label(self, key):
+        """A field name as a label: underscores become spaces, and the name is otherwise as reported."""
+        return html_module.escape(str(key).replace("_", " "))
+
+    def _discovery_chips_html(self, items, off=()):
+        """Render values as chips, struck through for any in `off`. Values are escaped."""
+        return "".join("<span class='discovery-chip{}'>{}</span>".format(" discovery-chip-off" if item in off else "", html_module.escape(str(item))) for item in items)
+
+    def _discovery_glance_value_html(self, value):
+        """Render one summary value: a list as chips, a mapping as labelled rows, anything else as plain text."""
+        if isinstance(value, dict):
+            return self._discovery_fields_html(value)
+        if isinstance(value, list):
+            if all(not isinstance(item, (dict, list)) for item in value):
+                return self._discovery_chips_html(value)
+            return self._discovery_value_html(value)
+        return html_module.escape(str(value))
+
+    def _discovery_glance_html(self, record):
+        """Render one record's at-a-glance summary: what it is, how big it is, and what it does.
+
+        Built by rule from the record's own shape, never from a list of field names, so a field a
+        reporter adds later appears here with no change to this page. Identity containers come
+        first (serial, account ids, model, firmware), then the record's own top-level facts and
+        lists (type, composition, functions, flags), then its sizes and the rest of the summary
+        containers in DISCOVERY_GLANCE_CONTAINERS order, then any container this page has never
+        been told about, and finally "Predbat controls": the entities it can write to. Field names
+        are shown with underscores as spaces; values are shown as reported.
+        """
+        placed = set(DISCOVERY_GLANCE_CONTAINERS) | set(DISCOVERY_FOLDED_CONTAINERS)
+        identity = ("hardware_ids", "account_ids", "info")
+        rows = []
+
+        def add_container(container):
+            """Add one summary row per key of a mapping-valued container."""
+            for key, value in container.items():
+                rows.append((self._discovery_label(key), self._discovery_glance_value_html(value)))
+
+        for name in identity:
+            if isinstance(record.get(name), dict):
+                add_container(record[name])
+        for key, value in record.items():
+            if key in ("device_id", "source") or key in placed or isinstance(value, dict):
+                continue
+            rows.append((self._discovery_label(key), self._discovery_glance_value_html(value)))
+        for name in DISCOVERY_GLANCE_CONTAINERS:
+            value = record.get(name)
+            if name in identity or not isinstance(value, dict):
+                continue
+            if name == "capabilities":
+                rows.append((self._discovery_label(name), self._discovery_chips_html([str(key).replace("_", " ") for key in value], off={str(key).replace("_", " ") for key, flag in value.items() if not flag})))
+            else:
+                add_container(value)
+        for key, value in record.items():
+            if key not in placed and isinstance(value, dict):
+                add_container(value)
+        entities = record.get("entities")
+        if isinstance(entities, dict):
+            controls = [str(key).replace("_", " ") for key, descriptor in entities.items() if isinstance(descriptor, dict) and descriptor.get("access") == "rw"]
+            if controls:
+                rows.append(("Predbat controls", self._discovery_chips_html(controls)))
+
+        text = "<table class='discovery-glance'>\n"
+        for label, value in rows:
+            text += "<tr><td>{}</td><td>{}</td></tr>\n".format(label, value)
+        text += "</table>\n"
+        return text
+
+    def _discovery_component_html(self, catalogue, name):
+        """Render the Components page pop-up body for one component: its status, then each record it reported.
+
+        Each record gets the at-a-glance summary, with the full record (entities included) folded
+        beneath it. Reads the published catalogue, so this shows what a debug dump would carry.
+        """
+        from components import COMPONENT_LIST
+
+        display_name = COMPONENT_LIST.get(name, {}).get("name", name)
+        text = "<h2 class='discovery-modal-title'>{} · discovery</h2>\n".format(html_module.escape(str(display_name)))
+
+        status = catalogue.get("components", {}).get(name)
+        if status is None:
+            text += "<div class='discovery-meta'>This component has no discovery reporter.</div>\n"
+        elif status.get("status") == "ok":
+            meta = []
+            reported_at = status.get("reported_at")
+            if reported_at:
+                try:
+                    meta.append("Reported {}".format(format_time_ago(datetime.fromisoformat(reported_at)).lower()))
+                except (TypeError, ValueError):
+                    meta.append("Reported {}".format(reported_at))
+            if "automatic" in status:
+                meta.append("automatic: {}".format("yes" if status["automatic"] else "no"))
+            meta.append(self._discovery_status_text(status))
+            text += "<div class='discovery-meta'>{}</div>\n".format(html_module.escape(" · ".join(meta)))
+        else:
+            sentence = DISCOVERY_STATUS_SENTENCE.get(status.get("status"), "This component's discovery status is {}.".format(status.get("status")))
+            text += "<div class='discovery-meta'>{}</div>\n".format(html_module.escape(sentence))
+
+        meta_keys = ("schema_version", "generated", "components", "observations")
+        for section, records in catalogue.items():
+            if section in meta_keys or not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict) or record.get("source") != name:
+                    continue
+                text += "<div class='discovery-card'>\n"
+                text += "<div class='discovery-card-title'>{}<span class='discovery-source'>{}</span></div>\n".format(
+                    html_module.escape(str(record.get("device_id", "(no device_id)"))), html_module.escape(section[:-1] if section.endswith("s") else section)
+                )
+                text += self._discovery_glance_html(record)
+                text += "<details><summary>Full record</summary>\n{}</details>\n".format(self._discovery_record_html(record))
+                text += "</div>\n"
+
+        text += "<p><a href='./discovery'>Open the full discovery page &rarr;</a></p>\n"
+        return text
+
+    async def html_component_discovery(self, request):
+        """Return one component's discovery info as an HTML fragment, for the Components page pop-up."""
+        name = str(request.query.get("name", ""))
+        coordinator = self._coordinator()
+        catalogue = None
+        if coordinator is not None:
+            try:
+                catalogue = coordinator.catalogue()
+            except Exception as e:
+                self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+        if catalogue is None:
+            return web.Response(content_type="text/html", text="<div class='discovery-empty'>Discovery is not available - no component coordinator is running yet.</div>\n")
+        return web.Response(content_type="text/html", text=self._discovery_component_html(catalogue, name))
+
     async def html_components(self, request):
         """
         Return the Components view as an HTML page showing status of all components
@@ -5222,6 +5476,11 @@ chart.render();
         text += get_component_edit_modal_css()
         text += get_entity_modal_js()
         text += get_component_edit_modal_js()
+        text += get_discovery_css()
+        text += get_discovery_modal_js()
+
+        # Discovery status per component: the ones listed here get an info button (see html_component_discovery)
+        discovery_status = self._discovery_status_map()
 
         # Get all component information
         all_components = self.base.components.get_all()
@@ -5244,7 +5503,7 @@ chart.render();
                 disabled_components.append(component_name)
 
         # Add heading with checkbox and totals on the same line
-        text += "<div style='display: flex; align-items: center; margin-bottom: 15px;'>\n"
+        text += "<div style='display: flex; flex-wrap: wrap; align-items: center; gap: 8px 0; margin-bottom: 15px;'>\n"
         text += "<h2 style='margin: 0; margin-right: 20px;'>Component Status</h2>\n"
         text += "<label style='cursor: pointer; margin-right: 20px; white-space: nowrap;'>\n"
         text += "<input type='checkbox' id='showDisabledCheckbox' onclick='toggleDisabledComponents()' style='margin-right: 8px;'>\n"
@@ -5309,6 +5568,10 @@ chart.render();
             # Add edit button for all components
             text += f'<button class="edit-button" onclick="showComponentEditModal(\'{component_name}\')" title="Edit component configuration">&#9998;</button>\n'
 
+            # Add a discovery info button for every component the catalogue has a status for
+            if component_name in discovery_status:
+                text += f'<button class="info-button" onclick="showDiscoveryModal(\'{component_name}\')" title="Show what this component discovered">&#9432;</button>\n'
+
             text += f"</div>\n"
 
             # Component details
@@ -5326,6 +5589,11 @@ chart.render();
             if error_count is not None:
                 error_class = "error-count-high" if error_count > 0 else "error-count-none"
                 text += f'<p><strong>Error Count:</strong> <span class="{error_class}">{error_count}</span></p>\n'
+
+            # Summarise what the component discovered; the summary opens the same pop-up as the info button
+            if component_name in discovery_status:
+                discovery_text = html_module.escape(self._discovery_status_text(discovery_status[component_name]))
+                text += f'<p><strong>Discovery:</strong> <span class="discovery-summary-link" onclick="showDiscoveryModal(\'{component_name}\')">{discovery_text}</span></p>\n'
 
             # Show args and their current values
             args_info = component_info.get("args", {})
@@ -5410,6 +5678,14 @@ chart.render();
             </table>
         </div>
         <div id="entityEmptyState" class="entity-empty-state" style="display: none;">No entities found</div>
+    </div>
+</div>
+
+<!-- Discovery Modal -->
+<div id="discoveryModal" class="entity-modal">
+    <div class="entity-modal-content">
+        <span class="entity-modal-close" onclick="closeDiscoveryModal()">&times;</span>
+        <div id="discoveryModalBody"></div>
     </div>
 </div>
 
@@ -6041,6 +6317,61 @@ document.addEventListener('DOMContentLoaded', function() {
         text += get_metrics_dashboard_body(data_json)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    async def html_kraken_key(self, request):
+        """
+        Return the Kraken API key generator page (Advanced -> Kraken API Key)
+
+        No auto-refresh: a refresh would wipe a token the user has just pasted.
+        """
+        self.default_page = "./kraken_key"
+        text = self.get_header("Predbat Kraken API Key", refresh=0)
+        text += "<body>\n"
+        text += get_kraken_key_page_html()
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text, headers={"Cache-Control": "no-store"})
+
+    async def html_api_kraken_key(self, request):
+        """
+        Check an account's Kraken API key, or generate a new one, using a token pasted from the user's browser.
+
+        Body: {"provider": "eon"|"edf", "token": "...", "action": "check"|"generate"}. The token and the key are
+        passed straight through and never logged or kept; responses are marked no-store.
+        """
+        # Imported here so the Kraken code is only loaded when someone uses this page
+        import kraken_key
+        from kraken import KRAKEN_BASE_URLS
+
+        headers = {"Cache-Control": "no-store"}
+        try:
+            data = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return web.json_response({"status": "error", "error": "Invalid request"}, status=400, headers=headers)
+        if not isinstance(data, dict):
+            return web.json_response({"status": "error", "error": "Invalid request"}, status=400, headers=headers)
+
+        provider = data.get("provider")
+        base_url = KRAKEN_BASE_URLS.get(provider) if isinstance(provider, str) else None
+        if not base_url:
+            return web.json_response({"status": "error", "error": "Choose E.ON Next or EDF"}, status=400, headers=headers)
+        token = kraken_key.normalise_kraken_token(data.get("token"))
+        if not token:
+            return web.json_response({"status": "error", "error": "Paste the token from your browser first"}, status=400, headers=headers)
+
+        action = data.get("action")
+        if action == "check":
+            result = await kraken_key.check_kraken_key(base_url, token, session_factory=self.http_session)
+        elif action == "generate":
+            result = await kraken_key.generate_kraken_key(base_url, token, session_factory=self.http_session)
+        else:
+            return web.json_response({"status": "error", "error": "Unknown action"}, status=400, headers=headers)
+
+        # Outcome only - never the token or the key
+        if result.get("status") == "generated":
+            self.log("Web: Kraken API key generated for {} (sign-in check {})".format(provider, "passed" if result.get("verified") else "failed"))
+        elif result.get("status") == "error":
+            self.log("Warn: Web: Kraken API key {} for {} failed: {}".format(action, provider, result.get("error")))
+        return web.json_response(result, headers=headers)
 
     async def html_internals(self, request):
         """

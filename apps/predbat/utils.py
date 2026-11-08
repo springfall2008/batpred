@@ -21,6 +21,7 @@ import array
 import ctypes
 import os
 from datetime import datetime, timedelta, timezone, time
+from email.utils import parsedate_to_datetime
 from io import StringIO
 from functools import lru_cache
 from const import (
@@ -277,7 +278,10 @@ class MinuteArray:
 
 
 # Predbat member variables never included in a debug dump or served over MCP - live object
-# graphs, the HA interface, loaded secrets and the URL caches. Shared with is_debug_excluded_key().
+# graphs, the HA interface, loaded secrets, the URL caches, locks (which can't be serialised) and
+# log-repeat bookkeeping. Shared with is_debug_excluded_key(). io_slot_log_gate keys its history by
+# tuples, which a dump writes as YAML sequences that cannot be loaded back as dict keys, so a dump
+# carrying it cannot be replayed (#5569) - and a replay has no use for which log lines were already written.
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -298,6 +302,8 @@ DEBUG_EXCLUDE_LIST = [
     "github_url_cache",
     "octopus_url_cache",
     "secrets",
+    "status_lock",
+    "io_slot_log_gate",
 ]
 
 
@@ -382,20 +388,25 @@ def _mask_secrets_in_place(value):
             _mask_secrets_in_place(entry)
 
 
-def load_secrets(log=None):
+def load_secrets(log=None, secrets_file=None):
     """
     Load secrets from secrets.yaml file
-    Priority: PREDBAT_SECRETS_FILE env var, ./secrets.yaml, /config/secrets.yaml
+    Priority: secrets_file argument (else PREDBAT_SECRETS_FILE env var), ./secrets.yaml, /config/secrets.yaml
+
+    A caller that passes secrets_file has already resolved it (Hass.__init__ reads
+    PREDBAT_SECRETS_FILE once per instance), so the environment is only consulted here
+    when no path is given.
     """
     import yaml
 
     log = log or (lambda message, **kwargs: print(message))
     secrets = {}
+    preferred_location = secrets_file if secrets_file is not None else os.getenv("PREDBAT_SECRETS_FILE")
     secrets_file = None
 
     # Try loading from different locations in priority order
     possible_locations = [
-        os.getenv("PREDBAT_SECRETS_FILE"),
+        preferred_location,
         "secrets.yaml",
         "/homeassistant/secrets.yaml",
         "/conf/secrets.yaml",
@@ -437,7 +448,7 @@ def load_secrets(log=None):
     return secrets
 
 
-def load_apps_yaml(apps_file=None, log=None):
+def load_apps_yaml(apps_file=None, log=None, secrets_file=None):
     """
     Load an apps.yaml-format file and return its pred_bat section, with !secret references resolved
 
@@ -446,28 +457,45 @@ def load_apps_yaml(apps_file=None, log=None):
     for a malformed file and KeyError when the pred_bat section is missing, leaving the caller to
     decide whether that is fatal.
 
+    apps_file and secrets_file default to $PREDBAT_APPS_FILE / $PREDBAT_SECRETS_FILE when not given.
+
     Returns (args, secrets).
     """
     import yaml
 
     log = log or (lambda message, **kwargs: print(message))
-    secrets = load_secrets(log=log)
+    secrets = load_secrets(log=log, secrets_file=secrets_file)
+
+    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+    log(f"Loading {apps_file}", quiet=False)
+    with open(apps_file, "r") as stream:
+        config = yaml.load(stream, Loader=secret_yaml_loader(secrets, log))  # nosec B506 - a SafeLoader subclass
+    return config["pred_bat"], secrets
+
+
+def secret_yaml_loader(secrets, log):
+    """
+    Return a yaml.SafeLoader subclass that resolves !secret against the given secrets dict
+
+    A new class per call, so the !secret constructor is never registered on the process-wide
+    yaml.SafeLoader that every other yaml.safe_load() uses. A missing secret logs a warning and
+    resolves to None. Use as yaml.load(stream, Loader=secret_yaml_loader(secrets, log)).
+    """
+    import yaml
 
     def secret_constructor(loader, node):
-        """YAML constructor for the !secret tag, resolving against the secrets just loaded."""
+        """YAML constructor for the !secret tag, resolving against the given secrets."""
         secret_key = loader.construct_scalar(node)
         if secret_key in secrets:
             return secrets[secret_key]
         log(f"Warn: Secret '{secret_key}' not found in secrets.yaml")
         return None
 
-    yaml.add_constructor("!secret", secret_constructor, Loader=yaml.SafeLoader)
+    class SecretYamlLoader(yaml.SafeLoader):
+        pass
 
-    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
-    log(f"Loading {apps_file}", quiet=False)
-    with open(apps_file, "r") as stream:
-        config = yaml.safe_load(stream)
-    return config["pred_bat"], secrets
+    SecretYamlLoader.add_constructor("!secret", secret_constructor)
+    return SecretYamlLoader
 
 
 def mask_secret_args(args):
@@ -912,6 +940,10 @@ def get_now_from_cumulative(data, minutes_now, backwards):
 def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, prune_future_days=0, prune_past_days=0, intermediate=False, offset_minutes=0):
     """
     Remove data from before today
+
+    offset_minutes shifts each point forward (a prediction recorded at 10:00 about 11:00 is plotted at
+    11:00), and pruning judges a point by that shifted time, so a prediction made yesterday that lands
+    today is kept.
     """
     results = {}
     last_time = None
@@ -927,10 +959,10 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             for i in range(1, seconds_gap // int(group * 60)):
                 new_time = last_time + timedelta(seconds=i * group * 60) + timedelta(minutes=offset_minutes)
                 results[new_time.isoformat()] = prev_value
-        if not prune or (timekey > (midnight_utc - timedelta(days=prune_past_days))):
+        new_time = timekey + timedelta(minutes=offset_minutes)
+        if not prune or (new_time > (midnight_utc - timedelta(days=prune_past_days))):
             if prune_future and (timekey > (now_utc + timedelta(days=prune_future_days))):
                 continue
-            new_time = timekey + timedelta(minutes=offset_minutes)
             results[new_time.isoformat()] = data[key]
             last_time = timekey
             prev_value = data[key]
@@ -1358,13 +1390,17 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
 
 def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
     """
-    Keep one payment method variant when Octopus returns overlapping rows for the same window.
+    Keep one payment method variant when an Octopus or Kraken REST endpoint returns overlapping rows for the same window.
 
     The REST tariff endpoints return a DIRECT_DEBIT row and a NON_DIRECT_DEBIT row covering the
     same validity window. minute_data() writes each row over its range, so whichever row comes last
     in the response wins, and that order is not stable across periods. Rows with no payment_method
     (Agile, day/night) are left untouched, and so is a response that never mentions the preferred
     method, which keeps single-variant tariffs behaving exactly as before.
+
+    The Kraken component (EDF, E.ON) also relies on this when it picks its standing charge: the
+    DIRECT_DEBIT and NON_DIRECT_DEBIT rows of a period tie on valid_from, the first one listed wins
+    a tie, and EDF lists the NON_DIRECT_DEBIT row first (GH#5502).
     """
     if not rates:
         return rates
@@ -1559,7 +1595,10 @@ def minute_data(
             minutes_to = int(timed_to.total_seconds() / 60)
             minutes_delta = (timed_to.total_seconds() - timed.total_seconds()) / 60.0
 
-        if minutes < newest_age:
+        # Backwards history is oldest first, so on a tie (several changes in the same minute) the later item is the
+        # newest and wins. Forward data is left alone: with smoothing the first two items always share a minute
+        # (each item's start is the previous item's time), and a tie there must not change the tail fill.
+        if minutes < newest_age or (backwards and minutes == newest_age):
             newest_age = minutes
             newest_state = state
 
@@ -1992,6 +2031,20 @@ def minutes_since_midnight(now, midnight):
     return int((now - midnight).total_seconds() / 60 / PREDICT_STEP) * PREDICT_STEP
 
 
+def next_aligned_run(run_every, now=None):
+    """
+    The first moment after now on a run_every-second boundary of the host's local wall clock, timezone-aware
+
+    Aware, so the scheduler can keep it in UTC: a naive "02:00" worked out at 01:55 BST on the night the clocks
+    go back would mean 02:00 GMT, an hour and five minutes later (#5770). now defaults to the host clock.
+    """
+    if now is None:
+        now = datetime.now().astimezone()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    seconds_now = (now - midnight).seconds
+    return midnight + timedelta(seconds=seconds_now + run_every - seconds_now % run_every)
+
+
 def minutes_since_yesterday(now):
     """
     Calculate the number of minutes since 23:59 yesterday
@@ -2050,16 +2103,31 @@ def minutes_to_time(updated, now):
     return minutes
 
 
+def strptime_aware(time_str, time_format):
+    """
+    Parse a time string with a format that ends in a UTC offset (%z), raising ValueError when the
+    string has no offset.
+
+    Up to Python 3.14 strptime raises for a missing %z offset; from 3.15 it returns a naive
+    datetime instead, which then fails later when compared with an aware one. Checking the result
+    keeps the same behaviour on every version.
+    """
+    tdata = datetime.strptime(time_str, time_format)
+    if tdata.tzinfo is None:
+        raise ValueError("time data {!r} has no UTC offset for format {!r}".format(time_str, time_format))
+    return tdata
+
+
 def str2time_strptime(time_str):
     """
     Parse a timezone-aware time string into a datetime using strptime (legacy implementation)
     """
     if "." in time_str:
-        tdata = datetime.strptime(time_str, TIME_FORMAT_SECONDS)
+        tdata = strptime_aware(time_str, TIME_FORMAT_SECONDS)
     elif "T" in time_str:
-        tdata = datetime.strptime(time_str, TIME_FORMAT)
+        tdata = strptime_aware(time_str, TIME_FORMAT)
     else:
-        tdata = datetime.strptime(time_str, TIME_FORMAT_OCTOPUS)
+        tdata = strptime_aware(time_str, TIME_FORMAT_OCTOPUS)
     return tdata
 
 
@@ -2680,29 +2748,162 @@ HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
 # still picked up within the hour.
 TOKEN_MINT_BACKOFF_BASE_SECONDS = 300
 TOKEN_MINT_BACKOFF_MAX_SECONDS = 3600
-# Bound the exponent so a long block cannot grow 2 ** block_count without limit; the delay
+# A mint refused with KT-CT-1199 ("Too many requests") is a per-key limit on obtainKrakenToken,
+# and an hourly retry has been seen to keep it tripped for days (4 Nov 2026 onwards). Keep
+# doubling past the hour for that refusal, up to this cap, so the key gets a real rest.
+TOKEN_MINT_RATE_LIMIT_BACKOFF_MAX_SECONDS = 4 * 3600
+# After a rate limit (KT-CT-1199, HTTP 429 or an edge/WAF block) the Kraken-based components pause
+# their GraphQL queries rather than sending the rest of the poll into the same limit. The pause
+# doubles per consecutive rate limit, capped so a limit that lifts is picked up within the half
+# hour. The base matches the two minute dispatch poll, so the first rate limit skips one poll.
+GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS = 120
+GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS = 1800
+# Bound the exponent so a long run of refusals cannot grow 2 ** count without limit; the delay
 # is capped well before this, so the clamp only stops the arithmetic running away.
-TOKEN_MINT_BACKOFF_MAX_DOUBLINGS = 16
-# While suppressed the mint makes no request and so logs nothing, which leaves a reader of a
-# short log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason
-# at most this often.
-TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS = 600
+BACKOFF_MAX_DOUBLINGS = 16
+# While backing off nothing is sent and so nothing is logged, which leaves a reader of a short
+# log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason at most
+# this often.
+BACKOFF_LOG_INTERVAL_SECONDS = 600
+# Kraken's GraphQL error code for "Too many requests"
+KRAKEN_RATE_LIMIT_ERROR_CODE = "KT-CT-1199"
 
 
-def token_mint_backoff_seconds(block_count):
-    """Backoff delay in seconds after this many consecutive CDN blocks on a token mint.
+def exponential_backoff_seconds(count, base_seconds, max_seconds):
+    """Backoff delay in seconds after this many consecutive failures.
 
-    Doubles per consecutive block from TOKEN_MINT_BACKOFF_BASE_SECONDS, capped at
-    TOKEN_MINT_BACKOFF_MAX_SECONDS so a block that lifts is still picked up within the hour.
+    Doubles per consecutive failure from base_seconds, capped at max_seconds.
 
     Args:
-        block_count: Number of consecutive blocks so far, 1 for the first.
+        count: Number of consecutive failures so far, 1 for the first.
+        base_seconds: Delay after the first failure.
+        max_seconds: Longest delay returned.
 
     Returns:
         int: Delay in seconds.
     """
-    exponent = min(max(block_count - 1, 0), TOKEN_MINT_BACKOFF_MAX_DOUBLINGS)
-    return min(TOKEN_MINT_BACKOFF_BASE_SECONDS * (2**exponent), TOKEN_MINT_BACKOFF_MAX_SECONDS)
+    exponent = min(max(count - 1, 0), BACKOFF_MAX_DOUBLINGS)
+    return min(base_seconds * (2**exponent), max_seconds)
+
+
+class Backoff:
+    """Exponential backoff after consecutive refusals - a rate limit or a CDN/WAF block.
+
+    Shared by every Kraken-based token mint and GraphQL cooldown so the schedule, the cap and
+    the clock live in one place. Each consecutive refusal doubles the wait from base_seconds,
+    capped at max_seconds; a Retry-After from the server lengthens it within the same cap.
+    Times are aware UTC, so a clock change cannot stretch or shorten a wait. Logging is left to
+    the caller, whose wording and prefix differ: start() returns the delay, due_reminder() says
+    when to repeat the reason, and clear() returns how many refusals it cleared.
+
+    Attributes:
+        count: Consecutive refusals so far, 0 when not backing off.
+        until: Aware UTC time the backoff ends, or None.
+        reason: How the last request was refused, for the log.
+        started_at: Aware UTC time of the first refusal in this run, or None.
+    """
+
+    def __init__(self, base_seconds, max_seconds):
+        """Create an inactive backoff with the given schedule."""
+        self.base_seconds = base_seconds
+        self.max_seconds = max_seconds
+        self.count = 0
+        self.until = None
+        self.logged_at = None
+        self.reason = None
+        self.started_at = None
+
+    def start(self, reason, retry_after=None, max_seconds=None):
+        """Record another refusal and start (or extend) the backoff.
+
+        Args:
+            reason: How the request was refused, e.g. "rate limited" or "edge/WAF blocked".
+            retry_after: Seconds the server asked us to wait, or None.
+            max_seconds: A cap for this refusal in place of the schedule's own, or None.
+
+        Returns:
+            int: The delay in seconds.
+        """
+        cap = max_seconds if max_seconds is not None else self.max_seconds
+        self.count += 1
+        delay = exponential_backoff_seconds(self.count, self.base_seconds, cap)
+        if retry_after:
+            delay = min(max(delay, retry_after), cap)
+        now = datetime.now(timezone.utc)
+        if self.started_at is None:
+            self.started_at = now
+        self.until = now + timedelta(seconds=delay)
+        self.logged_at = now
+        self.reason = reason
+        return delay
+
+    def active(self):
+        """Return True while the backoff is running."""
+        return self.until is not None and datetime.now(timezone.utc) < self.until
+
+    def due_reminder(self):
+        """Return True, at most every BACKOFF_LOG_INTERVAL_SECONDS, when the caller should repeat why it is backing off."""
+        now = datetime.now(timezone.utc)
+        if self.logged_at and (now - self.logged_at).total_seconds() < BACKOFF_LOG_INTERVAL_SECONDS:
+            return False
+        self.logged_at = now
+        return True
+
+    def clear(self):
+        """End the backoff after a success.
+
+        Returns:
+            int: How many consecutive refusals were cleared, 0 if it was not backing off.
+        """
+        count = self.count
+        self.count = 0
+        self.until = None
+        self.logged_at = None
+        self.reason = None
+        self.started_at = None
+        return count
+
+
+def is_kraken_rate_limit_error(errors):
+    """Return True if a GraphQL errors list carries Kraken's rate limit code (KT-CT-1199).
+
+    Args:
+        errors: The "errors" list from a GraphQL response body, or anything else.
+
+    Returns:
+        bool: True if any error is a rate limit.
+    """
+    if not isinstance(errors, list):
+        return False
+    return any(isinstance(error, dict) and isinstance(error.get("extensions"), dict) and error["extensions"].get("errorCode") == KRAKEN_RATE_LIMIT_ERROR_CODE for error in errors)
+
+
+def parse_retry_after(value, now=None):
+    """Parse an HTTP Retry-After header into seconds to wait.
+
+    The header is either a whole number of seconds or an HTTP date. Anything else - a missing
+    header, a negative number, garbage - returns None so the caller falls back to its own schedule.
+
+    Args:
+        value: The header value, or None when the header is absent.
+        now: The current time as an aware datetime, defaulting to now in UTC. Only used for the date form.
+
+    Returns:
+        int or None: Seconds to wait, 0 for a date already passed, None if the header is unusable.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return int(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when is None or when.tzinfo is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    return max(int((when - now).total_seconds()), 0)
 
 
 def is_edge_block_body(text):
@@ -3074,3 +3275,43 @@ def allocate_export_rates(needs, max_rates, p_fleet):
             remaining = 0.0
 
     return alloc
+
+
+# What the Octopus Energy integration's device_type attribute names a charger and a car as (BottlecapDave #1917)
+INTELLIGENT_DEVICE_TYPE_CHARGER = "ELECTRIC_VEHICLE_CHARGERS"
+INTELLIGENT_DEVICE_TYPE_CAR = "ELECTRIC_VEHICLES"
+
+
+def intelligent_device_is_charger(dispatch_attribute, target_attribute=None):
+    """Is a car's Octopus Intelligent device its charger (True), the car itself (False), or can that not be told (None)?
+
+    dispatch_attribute(name) reads an attribute of the car's dispatch sensor, target_attribute(name) one of its
+    Intelligent charge target entity, when there is one. Checked in order:
+
+    - is_charger on the dispatch sensor, published by Predbat's own Octopus and Kraken components.
+    - device_type, which the Octopus Energy integration puts on the charge target entity (and is read from the
+      dispatch sensor too).
+    - Failing both, which size the integration's dispatch sensor fills in: only the charge point's power for a
+      charger, only the battery size for a car.
+    """
+    is_charger = dispatch_attribute("is_charger")
+    if isinstance(is_charger, (bool, int, float)):
+        return bool(is_charger)
+    if isinstance(is_charger, str) and is_charger.strip().lower() not in ("", "unknown", "unavailable", "none"):
+        # The strings get_arg() and the charger control read as true
+        return is_charger.strip().lower() in ("on", "true", "yes", "enabled", "enable", "connected")
+    for read in (target_attribute, dispatch_attribute):
+        if read is None:
+            continue
+        device_type = read("device_type")
+        if device_type == INTELLIGENT_DEVICE_TYPE_CHARGER:
+            return True
+        if device_type == INTELLIGENT_DEVICE_TYPE_CAR:
+            return False
+    size = dispatch_attribute("vehicle_battery_size_in_kwh")
+    rate = dispatch_attribute("charge_point_power_in_kw")
+    if rate is not None and size is None:
+        return True
+    if size is not None and rate is None:
+        return False
+    return None

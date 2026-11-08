@@ -57,7 +57,7 @@ def test_find_charge_window(my_predbat):
     old_combine_charge = my_predbat.combine_charge_slots
     old_combine_export = my_predbat.combine_export_slots
     old_combine_thresh = my_predbat.combine_rate_threshold
-    old_manual_all_times = my_predbat.manual_all_times
+    old_manual_charge_times = my_predbat.manual_charge_times
     old_charge_slot_split = my_predbat.charge_slot_split
     old_export_slot_split = my_predbat.export_slot_split
     old_plan_interval = my_predbat.plan_interval_minutes
@@ -182,12 +182,12 @@ def test_find_charge_window(my_predbat):
     print("Test find_charge_window: manual_all_times split at plan_interval_minutes (Path D)")
     my_predbat.plan_interval_minutes = 30
     my_predbat.charge_slot_split = 30
-    my_predbat.manual_all_times = [0]   # start minute is a manual time
+    my_predbat.manual_charge_times = [0]   # start minute is a manual time
     rates_d = {m: low_rate for m in range(0, 120, 5)}
 
     s, e, _ = my_predbat.find_charge_window(rates_d, 0, thresh_lo, find_high=False)
     failed |= _assert_window("path D manual split", s, e, _, 0, 30)
-    my_predbat.manual_all_times = []
+    my_predbat.manual_charge_times = []
 
     # -----------------------------------------------------------------------
     # Test: Path E — alternate_rate_boundary splits export window
@@ -247,6 +247,22 @@ def test_find_charge_window(my_predbat):
     if e3 != scan_end:
         print("ERROR: path J no pv_light_dark: expected window to run uninterrupted to {}, got end={}".format(scan_end, e3))
         failed = 1
+
+    # Light -> dark is not dawn. calc_dawn latches each day light from dawn to midnight, then resets to
+    # dark, so an overnight cheap window (e.g. 23:30-05:30) sees a light -> dark step at 00:00. Splitting
+    # there cut the window in two in the dark, and an export slot covering the whole 23:30-00:00 piece
+    # was then allowed into the cheap period despite combine_charge_slots. Only the dark -> light step
+    # at dawn may split the window.
+    print("Test find_charge_window: light -> dark at the midnight latch reset does not split (Path J)")
+    pv_light_dark_mid = {}
+    for m in range(0, 60, 5):
+        pv_light_dark_mid[m] = 1  # previous day, latched light until midnight
+    for m in range(60, 120, 5):
+        pv_light_dark_mid[m] = 0  # after midnight, dark until dawn
+    for m in range(120, scan_end, 5):
+        pv_light_dark_mid[m] = 1  # dawn
+    s4, e4, _ = my_predbat.find_charge_window(rates_j, 0, thresh_lo, find_high=False, pv_light_dark=pv_light_dark_mid)
+    failed |= _assert_window("path J midnight reset (no split in the dark, split at dawn)", s4, e4, _, 0, 120)
 
     # -----------------------------------------------------------------------
     # Test: 24-hour export cap (Path E first condition)
@@ -348,7 +364,7 @@ def test_find_charge_window(my_predbat):
     my_predbat.combine_charge_slots = old_combine_charge
     my_predbat.combine_export_slots = old_combine_export
     my_predbat.combine_rate_threshold = old_combine_thresh
-    my_predbat.manual_all_times = old_manual_all_times
+    my_predbat.manual_charge_times = old_manual_charge_times
     my_predbat.charge_slot_split = old_charge_slot_split
     my_predbat.export_slot_split = old_export_slot_split
     my_predbat.plan_interval_minutes = old_plan_interval
@@ -547,8 +563,8 @@ def test_calc_pv_light_dark(my_predbat):
 def test_fetch_pv_forecast_and_dawn(my_predbat):
     """
     Regression test for #4699: calc_pv_light_dark() must see the freshly-fetched PV forecast, not
-    the empty dict fetch_sensor_data() resets pv_forecast_minute to at the top of each cycle. The
-    original bug was an ordering mistake between two separate lines in fetch_sensor_data() - the
+    whatever pv_forecast_minute held before it (an empty dict when #4699 was fixed; last cycle's
+    forecast since #4317 stopped fetch_sensor_data() resetting it). The original bug was an ordering mistake between two separate lines in fetch_sensor_data() - the
     forecast was fetched further down, after the dawn split had already run against the stale
     reset. fetch_pv_forecast_and_dawn() now does both as one call, so this test exercises that real
     method (mocking only fetch_pv_forecast, its one external dependency) rather than reimplementing
@@ -566,8 +582,8 @@ def test_fetch_pv_forecast_and_dawn(my_predbat):
     my_predbat.plan_interval_minutes = 30
     my_predbat.combine_charge_slots = True
     my_predbat.minutes_now = 30
-    # Simulate the state fetch_sensor_data() resets to at the top of each cycle, before this call
-    my_predbat.pv_forecast_minute = {}
+    # Last cycle's forecast, all dark, so a split computed from it instead of the fetch shows up
+    my_predbat.pv_forecast_minute = {m: 0.0 for m in range(0, 60, 5)}
 
     fetched_forecast = {}
     for m in range(0, 30, 5):

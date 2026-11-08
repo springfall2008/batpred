@@ -415,6 +415,22 @@ class GivTCPRest:
         value = self.inverter_details().get("Invertor_Max_Inv_Rate", None)
         return float(value) if value is not None else None
 
+    def export_limit(self):
+        """
+        The inverter's grid export limit in W, or None if GivTCP does not report one.
+
+        GivTCP publishes holding register 26 (grid_port_max_power_output) as Export_Limit in the
+        inverter detail block. It is absent on GivTCP v2 and on three-phase models, whose limit
+        lives in a different register GivTCP does not read. A 0 is a real zero-export limit, not
+        a missing reading - the gateway reads the same register the same way - so it is returned
+        as 0 rather than treated as falsy.
+        """
+        value = self.inverter_details().get("Export_Limit", None)
+        try:
+            return float(value) if value is not None else None
+        except (ValueError, TypeError):
+            return None
+
     def in_calibration(self):
         """
         Whether the battery is currently being calibrated, during which Predbat cannot function.
@@ -530,7 +546,20 @@ class GivTCPRest:
             self.base.log("Error: GivTCP: Exception raised {}".format(e))
 
         if r and (r.status_code == 200):
-            return r.json()
+            # GivTCP can answer 200 with an empty or non-JSON body while it starts up (#2828), and a proxy
+            # can answer with an error page. Treat anything that is not a JSON object as a failed read, so
+            # read_data() retries it like a non-200 instead of the error escaping GivTCPComponent.run()
+            try:
+                data = r.json()
+            except ValueError as e:
+                data = None
+                reason = "a body that is not JSON ({})".format(e)
+            else:
+                reason = "JSON that is not an object"
+            if isinstance(data, dict):
+                return data
+            self.base.log('Warn: GivTCP: Inverter {} REST GET {} returned {}: "{}"'.format(self.inverter.id, url, reason, str(r.text)[:100]))
+            return None
         else:
             return None
 
