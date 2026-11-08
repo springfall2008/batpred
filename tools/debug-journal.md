@@ -608,8 +608,8 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 ### iBoost (`plan.py`)
 
 - The modes are not exclusive, despite the docs: `iboost_smart` builds a plan whatever `iboost_solar` says, with no PV input, booking cheap slots up to `iboost_max_energy` (with an `iboost_forecast`, only the demand shortfall plus optional fills), so solar diverts little (GH#5454, open). `iboost_rate_threshold` goes down to -10.
-- Test trap: the smart tests use a flat rate and cannot expose averaging or priority bugs. The duplicate-slot guard tested a stale variable and never fired, so overlapping windows double-booked slots; PR #4756 keys it on the grid cell and skips only the booked cell, which moved the `iboost_smart2`/`iboost_smart3` goldens.
-- Tests: `./run_all --test iboost_smart`
+- The duplicate-slot guard tested a stale variable and never fired, so overlapping windows double-booked slots; PR #4756 keys it on the grid cell and skips only the booked cell, which moved the `iboost_smart2`/`iboost_smart3` goldens. Overlap and priority cases need non-flat rates (`set_rate_profile` in `test_iboost.py`).
+- Tests: `./run_all --test iboost_smart --test iboost_forecast`
 
 ### Component auto-config gate (`components.py`)
 
