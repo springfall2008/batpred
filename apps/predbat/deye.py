@@ -955,10 +955,16 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """Publish monitoring sensors for each inverter."""
         for sn in self.device_list:
             values = self.device_values.get(sn, {})
-            units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "temperature": "°C"}
-            for leaf, unit in units.items():
+            # (unit, HA device_class) per telemetry leaf; all are instantaneous readings, so state_class measurement.
+            telemetry = {"soc": ("%", "battery"), "battery_power": ("W", "power"), "grid_power": ("W", "power"), "pv_power": ("W", "power"), "load_power": ("W", "power"), "temperature": ("°C", "temperature")}
+            for leaf, (unit, device_class) in telemetry.items():
                 if leaf in values:
-                    self.dashboard_item(self._sensor_name(sn, leaf), state=values[leaf], attributes={"unit_of_measurement": unit, "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"}, app="deye")
+                    self.dashboard_item(
+                        self._sensor_name(sn, leaf),
+                        state=values[leaf],
+                        attributes={"unit_of_measurement": unit, "device_class": device_class, "state_class": "measurement", "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"},
+                        app="deye",
+                    )
 
             # Capacity is published whenever ANY source has it — config/battery when the
             # model serves it, otherwise the value derived from device/latest. Without
@@ -979,11 +985,14 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             # Daily energy counters feed Predbat's load/import/export history learning. They
             # reset at midnight; minute_data/clean_incrementing_reverse absorb that (see
             # DEYE_ENERGY_KEYS for why the Daily registers are used over the Total* ones).
+            # total_increasing, not total: HA reads a total_increasing drop as a new meter cycle,
+            # whereas a plain total (no last_reset) would record the midnight reset as negative
+            # energy. measurement is rejected by the Energy dashboard.
             for leaf, value in self.device_energy.get(sn, {}).items():
                 self.dashboard_item(
                     self._sensor_name(sn, leaf),
                     state=value,
-                    attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "measurement", "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"},
+                    attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"},
                     app="deye",
                 )
 
