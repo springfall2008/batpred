@@ -206,6 +206,79 @@ def test_real_publisher_is_opt_in_parked_bounded_and_heartbeats():
     assert json.loads(data)["live_display"]["available"]
 
 
+def test_screen_off_revokes_the_live_binding():
+    """With the screen turned off the Hub is told to drop the feed, not to keep waiting for it."""
+    gw = published_gateway()
+    assert gw._live_display_binding()["enabled"] is True
+    gw.gateway_display_enabled = False
+    assert gw._live_display_binding() == {"enabled": False}
+
+
+def test_status_strings_fit_the_firmware_buffers_in_bytes():
+    """A pound sign is two bytes: strings are cut by UTF-8 bytes, never mid-character."""
+    from gateway import truncate_utf8
+
+    assert truncate_utf8("£" * 40, 63) == "£" * 31
+    assert truncate_utf8("abc", 15) == "abc"
+    assert truncate_utf8("a" + "£" * 10, 4) == "a£"
+    gw = published_gateway()
+    real = gw.get_state_wrapper
+
+    def states(entity_id, default=None, attribute=None):
+        """Return long non-ASCII status text, and the fixture's state otherwise."""
+        if entity_id == "predbat.status":
+            return "£" * 50 if attribute is None else "£" * 80 if attribute == "detail" else default
+        return real(entity_id, default, attribute)
+
+    gw.get_state_wrapper = states
+    with clock_at(gw, NOW):
+        asyncio.run(gw._publish_predbat_data())
+    payload = json.loads(gw._published[0][1])
+    assert len(payload["predbat_status"].encode("utf-8")) <= 31
+    assert len(payload["predbat_status_detail"].encode("utf-8")) <= 63
+    assert payload["predbat_status"] == "£" * 15
+
+
+def test_unsent_predbat_data_is_not_deduplicated():
+    """A publish dropped while disconnected must go out again once connected."""
+    gw = published_gateway()
+    sent = []
+    connected = [False]
+
+    async def raw(topic, payload, retain=False):
+        """Drop the publish while disconnected, as _publish_raw does."""
+        if not connected[0]:
+            return False
+        sent.append(payload)
+        return True
+
+    gw._publish_raw = raw
+    with clock_at(gw, NOW):
+        asyncio.run(gw._publish_predbat_data())
+        assert gw._last_predbat_data is None and not sent
+        connected[0] = True
+        asyncio.run(gw._publish_predbat_data())
+    assert len(sent) == 1 and gw._last_predbat_data is not None
+
+
+def test_oversized_packet_warns_at_most_every_15_minutes():
+    """A packet that stays over 1400 bytes is not re-logged every cycle."""
+    gw = published_gateway()
+    gw._topic_base = "predbat/devices/" + DEVICE + "/" + "x" * 1400
+
+    def warnings():
+        """Count the oversize warnings logged so far."""
+        return sum("exceeds 1400-byte limit" in str(c.args[0]) for c in gw.log.call_args_list if c.args)
+
+    for offset in (0, 60, 120):
+        with clock_at(gw, NOW + offset):
+            asyncio.run(gw._publish_predbat_data())
+    assert not gw._published and warnings() == 1
+    with clock_at(gw, NOW + 15 * 60):
+        asyncio.run(gw._publish_predbat_data())
+    assert warnings() == 2
+
+
 def write_wire_fixture(path, backend_path=None):
     """Export actual publisher/config bytes, optionally starting from SaaS output."""
     gw = published_gateway()
@@ -258,6 +331,10 @@ def run_live_display_tests():
     test_real_publisher_is_opt_in_parked_bounded_and_heartbeats()
     test_server_binding_validation_and_metadata_publisher()
     test_invalid_binding_fails_closed_and_failed_publish_retries()
+    test_screen_off_revokes_the_live_binding()
+    test_status_strings_fit_the_firmware_buffers_in_bytes()
+    test_unsent_predbat_data_is_not_deduplicated()
+    test_oversized_packet_warns_at_most_every_15_minutes()
 
 
 if __name__ == "__main__":

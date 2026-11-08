@@ -25,8 +25,14 @@ from unittest.mock import NonCallableMock
 from utils import minutes_since_midnight
 import aiohttp
 import asyncio
+import math
 import time
 import traceback
+
+# A component whose COMPONENT_LIST entry sets "align_minute" runs this many seconds past each
+# wall-clock minute boundary, rather than every 60 seconds from whenever its process started. The
+# margin makes sure a minute-resolution clock read inside run() has already moved on to the new minute.
+ALIGN_MINUTE_OFFSET_SECONDS = 1
 
 # Components typically come up in milliseconds, so the previous 1s poll spent nearly all of a
 # start-up wait asleep after the component was already live. Polling ten times a second makes
@@ -171,6 +177,8 @@ class ComponentBase(ABC):
         # constructed through the registry; a component built directly (the standalone CLI
         # harnesses) keeps this class-name fallback instead.
         self.component_name = self.__class__.__name__
+        # Overridden from the registry entry's "align_minute" by Components.initialize(); see start().
+        self.align_minute = False
         self.initialize(**kwargs)
 
     @abstractmethod
@@ -508,29 +516,45 @@ class ComponentBase(ABC):
         - Run the main processing loop until api_stop is True
         - Clean up resources before exiting
 
+        After startup the loop runs every 60 seconds counted from process start, which is cheap
+        and spreads components across the minute, but drifts later by each run()'s own duration.
+        A component whose registry entry sets "align_minute" instead runs ALIGN_MINUTE_OFFSET_SECONDS
+        past every wall-clock minute boundary, skipping any boundary a slow run() overran, and its
+        run() is passed seconds in whole-minute steps so interval checks inside it keep their period.
         """
         seconds = 0
         first = True
         next_retry = 0  # When to next attempt self.run() during startup backoff
         backoff_interval = 60  # Start with 60 seconds between attempts
         max_backoff = 128 * 60  # Maximum 128 minutes between attempts
+        next_aligned_run = 0  # align_minute only: wall-clock time of the next run
+        last_run_seconds = 0  # align_minute only: the seconds the last run() was given
+        last_run_monotonic = time.monotonic()  # align_minute only: when the last run() started
         while not self.api_stop and not self.fatal_error:
             try:
                 # Check if it's time to run
                 should_run = False
+                run_seconds = seconds
                 if first:
                     # During startup, only run when we've reached the next retry time
                     if seconds >= next_retry:
                         should_run = True
                         backoff_interval = min(backoff_interval * 2, max_backoff)
                         next_retry = seconds + backoff_interval
+                elif self.align_minute:
+                    if time.time() >= next_aligned_run:
+                        should_run = True
+                        elapsed_minutes = max(1, int(round((time.monotonic() - last_run_monotonic) / 60.0)))
+                        run_seconds = last_run_seconds + 60 * elapsed_minutes
                 else:
                     # After startup, run every 60 seconds
                     if seconds % 60 == 0:
                         should_run = True
 
                 if should_run:
-                    task = asyncio.ensure_future(self.run(seconds, first))
+                    last_run_seconds = run_seconds
+                    last_run_monotonic = time.monotonic()
+                    task = asyncio.ensure_future(self.run(run_seconds, first))
                     try:
                         run_result = await asyncio.wait_for(asyncio.shield(task), timeout=self.run_timeout)
                     except asyncio.TimeoutError:
@@ -564,13 +588,26 @@ class ComponentBase(ABC):
                 self.count_errors += 1
 
             seconds += 5
-            await asyncio.sleep(5)
+            if self.align_minute and not first:
+                # Scheduled here rather than after run() so a run() that raised still moves it on.
+                # Sleeping at most 5 seconds keeps a stop() as responsive as the default loop.
+                now = time.time()
+                if now >= next_aligned_run:
+                    next_aligned_run = self.next_aligned_run_time(now)
+                await asyncio.sleep(min(5, next_aligned_run - now))
+            else:
+                await asyncio.sleep(5)
 
         self.log(f"{self.__class__.__name__}: Finalizing...")
         await self.final()
 
         self.api_started = False
         self.log(f"{self.__class__.__name__}: Stopped")
+
+    @staticmethod
+    def next_aligned_run_time(now):
+        """Return the first wall-clock time after now that is ALIGN_MINUTE_OFFSET_SECONDS past a minute boundary."""
+        return (math.floor((now - ALIGN_MINUTE_OFFSET_SECONDS) / 60) + 1) * 60 + ALIGN_MINUTE_OFFSET_SECONDS
 
     async def final(self):
         """

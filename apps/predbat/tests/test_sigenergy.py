@@ -1846,6 +1846,49 @@ def test_sigenergy_apply_controls_export_mode(my_predbat):
     return failed
 
 
+def test_sigenergy_apply_controls_duration_rounds_up(my_predbat):
+    """A command sent seconds past the minute still runs to the window's end.
+
+    The device times the end from startTime (now), so rounding the remaining time down cut every
+    window short by the seconds the run landed past the minute - a run at 16:00:01 into a 16:00-16:30
+    window asked for 29 minutes and stopped at 16:29:01.
+    """
+    failed = False
+    fixed_now = datetime(2026, 11, 5, 16, 0, 1, tzinfo=timezone.utc)
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now.astimezone(tz) if tz else fixed_now
+
+    for window, soc, expected_mode in (("export", 80.0, SIGENERGY_ACTIVE_MODE_DISCHARGE), ("charge", 50.0, SIGENERGY_ACTIVE_MODE_CHARGE)):
+        api = MockSigenergyAPI()
+        system_id = "SIG001"
+        api.systems[system_id] = {"systemName": "Home", "batteryCapacity": 10.0}
+        api.devices[system_id] = [{"deviceType": "Battery", "attrMap": {"ratedChargePower": 3.0}}]
+        api.energy_flow[system_id] = {"batterySoc": soc}
+        api.controls[system_id] = {
+            "charge": {"enable": window == "charge", "start_time": "16:00:00", "end_time": "16:30:00", "target_soc": 90, "rate": 3000},
+            "export": {"enable": window == "export", "start_time": "16:00:00", "end_time": "16:30:00", "target_soc": 10, "rate": 3000},
+            "reserve": 10,
+        }
+
+        commands_sent = []
+
+        async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None, **kwargs):
+            commands_sent.append((active_mode, duration_min))
+            return True
+
+        api.send_battery_command = mock_send_battery_command
+
+        with patch("sigenergy.datetime", _FixedDatetime):
+            ok = run_async(api.apply_controls(system_id))
+        assert ok is True, "apply_controls {} returned True".format(window)
+        assert commands_sent == [(expected_mode, 30)], "{} window 16:00-16:30 at 16:00:01 must ask for 30 minutes, got {}".format(window, commands_sent)
+
+    return failed
+
+
 def test_sigenergy_apply_controls_freeze_export_no_window(my_predbat):
     """Test apply_controls sends Self-Consumption Grid for a freeze export left by execute.py."""
     failed = False
@@ -1894,12 +1937,16 @@ def test_sigenergy_apply_controls_freeze_export_no_window(my_predbat):
     assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF, "selfConsumption sent for freeze export with a discharge hold, got {}".format(bat_cmds[0][2])
     assert bat_cmds[0][4] == 0, "charging power pinned to 0 for freeze export with a discharge hold, got {}".format(bat_cmds[0][4])
 
-    # A discharge hold on its own, with charging still allowed, is not a freeze and must not be
-    # capped — the bidirectional power cannot express "charge allowed, discharge blocked"
+    # A discharge hold on its own - the state execute.py leaves for "Hold for car" or an iBoost
+    # hold in demand: export rate 0, charge rate still at maximum. Plain self-consumption would
+    # let the battery discharge into the car, which is what the hold exists to stop, so the
+    # bidirectional power is pinned to 0. That also stops surplus PV charging the battery for
+    # the length of the hold, which the power cannot avoid ("charge allowed, discharge blocked"
+    # has no expression on this API) and is the lesser cost.
     bat_cmds = run_case(3000, 0)
     assert len(bat_cmds) >= 1, "send_battery_command called for a discharge hold alone"
     assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF, "selfConsumption sent for a discharge hold alone, got {}".format(bat_cmds[0][2])
-    assert bat_cmds[0][4] is None, "no charging power cap sent for a discharge hold alone, got {}".format(bat_cmds[0][4])
+    assert bat_cmds[0][4] == 0, "charging power pinned to 0 for a discharge hold alone, got {}".format(bat_cmds[0][4])
 
     # A normal demand period with both rates live stays in demand
     bat_cmds = run_case(3000, 3000)
@@ -5937,6 +5984,7 @@ def run_sigenergy_tests(my_predbat):
         ("apply_controls_eco_mode", test_sigenergy_apply_controls_eco_mode),
         ("apply_controls_deduplication", test_sigenergy_apply_controls_deduplication),
         ("apply_controls_export_mode", test_sigenergy_apply_controls_export_mode),
+        ("apply_controls_duration_rounds_up", test_sigenergy_apply_controls_duration_rounds_up),
         ("apply_controls_freeze_export_no_window", test_sigenergy_apply_controls_freeze_export_no_window),
         ("publish_mqtt_success", test_sigenergy_publish_mqtt_success),
         ("redact", test_sigenergy_redact),

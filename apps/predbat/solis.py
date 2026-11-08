@@ -12,6 +12,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import re
 import time
 import copy
@@ -512,7 +513,7 @@ class SolisAPIError(Exception):
 class SolisAPI(ComponentBase, OAuthMixin):
     """Solis Cloud API integration component"""
 
-    def initialize(self, api_key=None, api_secret=None, inverter_sn=None, automatic=False, base_url=SOLIS_BASE_URL, control_enable=True, auth_method=None, access_token=None, token_expires_at=None, token_hash=None, nominal_voltage=None):
+    def initialize(self, api_key=None, api_secret=None, inverter_sn=None, automatic=False, base_url=SOLIS_BASE_URL, control_enable=True, auth_method=None, access_token=None, token_expires_at=None, token_hash=None, nominal_voltage=None, parallel_slaves=None, parallel_slot_current_max=None):
         """Initialise the Solis API component"""
         self.api_key = api_key
         self.api_secret = api_secret
@@ -553,6 +554,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
             configured_pack_v = None
         self.nominal_pack_voltage = configured_pack_v
         self.control_enable = control_enable
+        # Parallel groups (issue #5556): each master's slot current is shared by the whole group, so its
+        # slots are written with the group's total, up to a limit only the user can vouch for
+        self.parallel_slaves = self.parse_parallel_slaves(parallel_slaves)
+        self.parallel_slot_current_max = self.parse_parallel_slot_current_max(parallel_slot_current_max)
+        self.parallel_slaves_warned = set()  # Slaves, and masters not in TOU V2 mode, already warned about
+        if self.parallel_slot_current_max is not None and not self.parallel_slaves:
+            self.log("Warn: Solis API: solis_parallel_slot_current_max is set but solis_parallel_slaves is not, so it does nothing")
 
         # Handle inverter SN configuration - can be None, a single string, or a list of strings
         if inverter_sn is None:
@@ -608,6 +616,92 @@ class SolisAPI(ComponentBase, OAuthMixin):
         case-insensitive search and returns the canonical (API-casing) SN, or None if not found.
         """
         return next((sn for sn in self.inverter_sn if sn.lower() == sn_from_entity_id.lower()), None)
+
+    def parse_parallel_slaves(self, parallel_slaves):
+        """solis_parallel_slaves from apps.yaml as {master serial: [slave serials]}, or {} when unset or unreadable.
+
+        Each master's serial maps to one slave serial or a list of them. Serials are kept as strings, so
+        an all-digit serial written unquoted still matches; they are matched to the inverters ignoring case.
+        """
+        if not parallel_slaves:
+            return {}
+        if not isinstance(parallel_slaves, dict):
+            self.log(f"Warn: Solis API: solis_parallel_slaves must map each master's serial number to its slave serial number(s), ignoring {parallel_slaves!r}")
+            return {}
+        groups = {}
+        for master, slaves in parallel_slaves.items():
+            slaves = slaves if isinstance(slaves, (list, tuple)) else [slaves]
+            members = []
+            for slave in slaves:
+                if slave is not None and str(slave).lower() != str(master).lower() and str(slave).lower() not in [member.lower() for member in members]:
+                    members.append(str(slave))
+            if members:
+                groups[str(master)] = members
+            else:
+                self.log(f"Warn: Solis API: solis_parallel_slaves gives master {master} no slave other than itself, ignoring it")
+        return groups
+
+    def parse_parallel_slot_current_max(self, value):
+        """solis_parallel_slot_current_max from apps.yaml in amps, or None when unset or not a positive number."""
+        if value is None:
+            return None
+        try:
+            amps = float(value) if not isinstance(value, bool) else 0
+        except (TypeError, ValueError):
+            amps = 0
+        if not math.isfinite(amps) or amps <= 0:
+            self.log(f"Warn: Solis API: solis_parallel_slot_current_max must be a current in amps above 0, ignoring {value!r}")
+            return None
+        return amps
+
+    def parallel_group_slaves(self, inverter_sn):
+        """The slaves sharing inverter_sn's slot current, as found among the inverters - [] unless it is a configured parallel master.
+
+        A slave that is not one of the inverters is warned about once and left out, so the group's total
+        is never made up from a schedule Predbat does not hold.
+        """
+        for master, slaves in self.parallel_slaves.items():
+            if master.lower() != inverter_sn.lower():
+                continue
+            found = []
+            for slave in slaves:
+                slave_sn = self.find_inverter_by_sn(slave)
+                if slave_sn is None:
+                    if slave not in self.parallel_slaves_warned:
+                        self.parallel_slaves_warned.add(slave)
+                        self.log(f"Warn: Solis API: solis_parallel_slaves lists {slave} as a slave of {inverter_sn}, but it is not one of the inverters ({', '.join(self.inverter_sn)}), leaving it out")
+                    continue
+                if slave_sn not in found:
+                    found.append(slave_sn)
+            return found
+        return []
+
+    def parallel_slot_current(self, inverter_sn, slot, direction, current):
+        """The current to write to a slot of inverter_sn: its own, plus, on a parallel master, each slave's for the same slot and direction.
+
+        Predbat plans each inverter of a parallel group at its own rate and sets each one's slots to match,
+        but only the master's slot current counts, and the group shares it (issue #5556): writing the
+        master's own share alone halves a pair's rate. A slave's current is only added while its slot is
+        enabled in the same direction, as a held or idle slave draws nothing.
+        """
+        total = float(current)
+        for slave_sn in self.parallel_group_slaves(inverter_sn):
+            slave_slot = self.charge_discharge_time_windows.get(slave_sn, {}).get(slot) or {}
+            if slave_slot.get(f"{direction}_enable", 0):
+                try:
+                    total += float(slave_slot.get(f"{direction}_current", 0) or 0)
+                except (TypeError, ValueError):
+                    pass
+        return total
+
+    def inverters_masters_last(self):
+        """The inverters with every parallel master after the rest, so a master's own share is decoded once its slaves' currents are known."""
+        return sorted(self.inverter_sn, key=lambda serial: bool(self.parallel_group_slaves(serial)))
+
+    def parallel_master_share(self, inverter_sn, slot, direction, register_current):
+        """inverter_sn's own share of a slot current read back from its register: the value less what parallel_slot_current() adds for its slaves, never below 0A."""
+        current = float(register_current) if register_current else 0.0
+        return max(0.0, current - self.parallel_slot_current(inverter_sn, slot, direction, 0))
 
     # ==================== Authentication Methods ====================
 
@@ -1010,6 +1104,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
     async def decode_time_windows_v2(self, inverter_sn):
         # Reads the new split registers and puts them into the same format as decode_time_windows
         result = {}
+        # A parallel master's slot current is the whole group's (issue #5556). Its own share is what is left once
+        # the slaves' currents are taken off, the same ones parallel_slot_current() adds back on the next write, so
+        # an unchanged schedule decodes to an unchanged register. Not the total, which that write would add the
+        # slaves' shares to again, and not an even split, as each member is planned at its own rate and an idle
+        # slave adds nothing. The slaves are decoded first (see inverters_masters_last()); one not yet decoded
+        # adds nothing either way
         for slot_index in range(1, 7):  # Slots 1-6
             charge_current_cid = SOLIS_CID_CHARGE_CURRENT[slot_index - 1]
             discharge_current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot_index - 1]
@@ -1039,8 +1139,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             discharge_end = discharge_parts[1] if len(discharge_parts) > 1 else "00:00"
 
             result[slot_index] = {
-                "charge_current": float(charge_current) if charge_current else 0.0,
-                "discharge_current": float(discharge_current) if discharge_current else 0.0,
+                "charge_current": self.parallel_master_share(inverter_sn, slot_index, "charge", charge_current),
+                "discharge_current": self.parallel_master_share(inverter_sn, slot_index, "discharge", discharge_current),
                 "charge_start_time": charge_start,
                 "charge_end_time": charge_end,
                 "discharge_start_time": discharge_start,
@@ -1230,7 +1330,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.log(f"Solis API: In a charge slot at its target SOC on {inverter_sn}, setting storage mode to 'Self-Use - No Grid Charging' so it holds without importing")
         await self.set_storage_mode_if_needed(inverter_sn, "Self-Use - No Grid Charging")
 
-    def slot_current_limits(self, inverter_sn, include_probed=True):
+    def slot_current_limits(self, inverter_sn, include_probed=True, group=False):
         """The most a V2 slot current may be set to in each direction, with every input that decided it.
 
         The cap starts from the battery limit register (CID 7224 charge, 7226 discharge - read as is,
@@ -1254,6 +1354,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
         "<direction>" (the cap); plus "rated" (None when the size is unknown) and "rated_capped"
         (whether the rated current lowered a cap). include_probed=False leaves the measured ceiling
         out, which is what the probe itself starts from.
+
+        group=True gives the caps of the slot itself rather than of this inverter's share of it, for
+        writing and probing: on a parallel master (solis_parallel_slaves) the slot current is the whole
+        group's (issue #5556), so the battery-side cap is solis_parallel_slot_current_max when set, and the
+        rated current is the group's. It adds "parallel_slaves", the slaves sharing the slot. What Predbat
+        plans with stays per inverter (slot_power_limits()), as each member is planned on its own.
         """
         values = self.cached_values.get(inverter_sn, {})
         limits = {}
@@ -1271,6 +1377,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
             limits[direction] = base
 
         rated = self.get_rated_current(inverter_sn)
+        slaves = self.parallel_group_slaves(inverter_sn) if group else []
+        if slaves:
+            limits["parallel_slaves"] = tuple(slaves)
+            if self.parallel_slot_current_max is not None:
+                for direction in ("charge", "discharge"):
+                    limits[direction + "_battery"] = self.parallel_slot_current_max
+                    limits[direction] = self.parallel_slot_current_max
+            ratings = [self.get_rated_current(sn) for sn in [inverter_sn] + slaves]
+            rated = None if None in ratings else sum(ratings)
         limits["rated"] = rated
         probed = self.slot_current_probed.get(inverter_sn, {}) if include_probed else {}
         for direction in ("charge", "discharge"):
@@ -1305,13 +1420,21 @@ class SolisAPI(ComponentBase, OAuthMixin):
             inputs = [f"register {register}A" if register is not None else f"register not read, default {limits[direction + '_base']}A"]
             if probed is not None:
                 inputs.append(f"probed max {probed}A")
+            if limits.get("parallel_slaves") and limits[direction + "_battery"] != limits[direction + "_base"]:
+                inputs.append(f"solis_parallel_slot_current_max {limits[direction + '_battery']}A")
+                if source in ("register", "default"):
+                    source = "parallel group limit"
             parts.append(f"{direction} {cap}A from the {source} ({', '.join(inputs)})")
         if limits["rated"] is not None:
             superseded = ", not used once probed" if limits.get("charge_probed") is not None and limits.get("discharge_probed") is not None else ""
-            rated_text = f"rated {limits['rated']}A from {detail.get('power')}{detail.get('powerStr') or 'kW'} at {self.get_nominal_voltage(inverter_sn)}V{superseded}"
+            if limits.get("parallel_slaves"):
+                rated_text = f"rated {limits['rated']}A for the group{superseded}"
+            else:
+                rated_text = f"rated {limits['rated']}A from {detail.get('power')}{detail.get('powerStr') or 'kW'} at {self.get_nominal_voltage(inverter_sn)}V{superseded}"
         else:
             rated_text = "rated current unknown"
-        return f"Solis API: Slot current limits for {inverter_sn}: {', '.join(parts)}; {rated_text}"
+        group_text = f" for its parallel group with {', '.join(limits['parallel_slaves'])}" if limits.get("parallel_slaves") else ""
+        return f"Solis API: Slot current limits for {inverter_sn}{group_text}: {', '.join(parts)}; {rated_text}"
 
     def slot_power_limits(self, inverter_sn):
         """The most each direction's slot can be set to, in watts - what Predbat should plan with.
@@ -1368,6 +1491,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             try:
                 entry = {direction: float(probed[direction]) for direction in ("charge", "discharge")}
                 entry["probed_at"] = probed.get("probed_at")
+                if probed.get("upper") is not None:
+                    entry["upper"] = {direction: float(probed["upper"][direction]) for direction in ("charge", "discharge")}
             except (AttributeError, KeyError, TypeError, ValueError):
                 self.log("Warn: Solis API: Ignoring an unreadable probed slot current limit for {}: {}".format(inverter_sn, probed))
                 continue
@@ -1385,13 +1510,37 @@ class SolisAPI(ComponentBase, OAuthMixin):
     def slot_probe_due(self, inverter_sn):
         """Whether this inverter's slot current ceiling needs probing: never learned, or learned over SOLIS_SLOT_PROBE_REFRESH_SECONDS ago."""
         probed = self.slot_current_probed.get(inverter_sn)
-        if not probed:
+        if not probed or self.slot_probe_upper_changed(inverter_sn):
             return True
         try:
             probed_at = datetime.fromisoformat(probed.get("probed_at"))
         except (TypeError, ValueError):
             return True  # No usable time, so its age is unknown
         return (self.now_utc_exact - probed_at).total_seconds() >= SOLIS_SLOT_PROBE_REFRESH_SECONDS
+
+    def slot_probe_upper(self, inverter_sn, group=True):
+        """The most the probe may try in each direction: the battery-side caps of the slot (see slot_current_limits())."""
+        limits = self.slot_current_limits(inverter_sn, include_probed=False, group=group)
+        return {direction: limits[direction + "_battery"] for direction in ("charge", "discharge")}
+
+    def slot_probe_upper_changed(self, inverter_sn):
+        """Whether the known ceiling was probed against a different upper limit than applies now, so it must be probed afresh.
+
+        A ceiling found at the old upper limit says nothing about what lies above it: a parallel master probed
+        at its own 135A before solis_parallel_slot_current_max raised it to 270A would otherwise hold the group
+        at 135A for up to a day, and a re-check would climb from there 1A at a time (issue #5556). A ceiling
+        saved before the upper limit was recorded was probed against the inverter's own caps.
+        """
+        probed = self.slot_current_probed.get(inverter_sn)
+        if not probed:
+            return False
+        # Unread registers give the default caps, which say nothing about what the ceiling was probed against
+        limits = self.slot_current_limits(inverter_sn, include_probed=False)
+        if limits["charge_register"] is None or limits["discharge_register"] is None:
+            return False
+        saved = probed.get("upper") or self.slot_probe_upper(inverter_sn, group=False)
+        current = self.slot_probe_upper(inverter_sn)
+        return any(float(saved[direction]) != float(current[direction]) for direction in ("charge", "discharge"))
 
     def find_probe_slot(self, inverter_sn):
         """A slot Predbat does not drive with neither its charge nor discharge enabled, or None - the highest is used first."""
@@ -1531,7 +1680,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             return
         if not self.is_battery_inverter(inverter_sn) or not self.is_tou_v2_mode(inverter_sn):
             return
-        limits = self.slot_current_limits(inverter_sn, include_probed=False)
+        limits = self.slot_current_limits(inverter_sn, include_probed=False, group=True)
         if limits["charge_register"] is None or limits["discharge_register"] is None:
             return  # The probe starts from the registers, so wait until they have been read
         slot = self.find_probe_slot(inverter_sn)
@@ -1551,7 +1700,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # A first probe starts at the battery-side cap, not the rated estimate, which can be below
         # what the inverter really takes; a re-check starts at the known ceiling, so an unchanged
         # one costs two writes rather than a fresh search
-        known = self.slot_current_probed.get(inverter_sn) or {}
+        known = {} if self.slot_probe_upper_changed(inverter_sn) else self.slot_current_probed.get(inverter_sn) or {}
         starts = {direction: known.get(direction, limits[direction + "_battery"]) for direction in ("charge", "discharge")}
         self.log(f"Solis API: {'Re-checking' if known else 'Probing'} the slot current ceiling on {inverter_sn} using disabled slot {slot}, starting at charge {starts['charge']}A and discharge {starts['discharge']}A (battery limits {limits['charge_battery']}A/{limits['discharge_battery']}A)")
         probed = {}
@@ -1570,6 +1719,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.slot_probe_failures.pop(inverter_sn, None)
         self.slot_probe_retry_at.pop(inverter_sn, None)
         probed["probed_at"] = self.now_utc_exact.isoformat()
+        probed["upper"] = {direction: limits[direction + "_battery"] for direction in ("charge", "discharge")}
         self.slot_current_probed[inverter_sn] = probed
         self.log(f"Solis API: Slot current ceiling on {inverter_sn} is charge {probed['charge']}A, discharge {probed['discharge']}A")
         await self.save_slot_current_probes()
@@ -1603,7 +1753,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 # rated power - CID 7224/7226 are battery limits, and a 3.6kW inverter reading 100A
                 # there refused every 100A write and left its discharge slot at 0A (issue #5187).
                 # Every input is logged whenever the result changes, so a refused write can be traced.
-                limits = self.slot_current_limits(inverter_sn)
+                # On a parallel master the slot is the whole group's (issue #5556), so its caps are the group's
+                limits = self.slot_current_limits(inverter_sn, group=True)
                 self.log_slot_current_limits(inverter_sn, limits)
                 charge_current = limits["charge_base"]
                 discharge_current = limits["discharge_base"]
@@ -1631,6 +1782,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     if not slot_data.get("discharge_enable", 0):
                         slot_data["discharge_start_time"] = "00:00"
                         slot_data["discharge_end_time"] = "00:00"
+
+                # On a parallel master the slot carries the whole group's current, so the 0A rule below goes by that
+                charge_current = self.parallel_slot_current(inverter_sn, 1, "charge", charge_current)
 
                 # Whether slot 1 is a charge slot open now with the battery at its target
                 holding = self.is_holding_in_charge_slot(inverter_sn, time_windows.get(1))
@@ -1707,7 +1861,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         # Check and write charge current if changed
                         if "charge_current" in slot_data:
                             current_cid = SOLIS_CID_CHARGE_CURRENT[slot - 1]
-                            new_current = min(float(slot_data['charge_current']), max_charge_current_amps)
+                            new_current = min(self.parallel_slot_current(inverter_sn, slot, "charge", slot_data['charge_current']), max_charge_current_amps)
                             cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, max_charge_current_amps))
                             if round(cached_current, 1) != round(new_current, 1):
                                 result = await self.read_and_write_cid(inverter_sn, current_cid, new_current, field_description=f"charge slot {slot} current")
@@ -1749,7 +1903,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         # Check and write discharge current if changed
                         if "discharge_current" in slot_data:
                             current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot - 1]
-                            new_current = min(float(slot_data['discharge_current']), max_discharge_current_amps)
+                            new_current = min(self.parallel_slot_current(inverter_sn, slot, "discharge", slot_data['discharge_current']), max_discharge_current_amps)
                             cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, max_discharge_current_amps))
                             if round(cached_current, 1) != round(new_current, 1):
                                 result = await self.read_and_write_cid(inverter_sn, current_cid, new_current, field_description=f"discharge slot {slot} current")
@@ -1781,6 +1935,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
             else:
                 # V1 mode: Handle SOC values separately (global CIDs) and time/current via CID 103
                 success = True
+                # The parallel group's total is only written in TOU V2 mode (issue #5556)
+                if self.parallel_group_slaves(inverter_sn) and inverter_sn not in self.parallel_slaves_warned:
+                    self.parallel_slaves_warned.add(inverter_sn)
+                    self.log(f"Warn: Solis API: {inverter_sn} is a parallel master in solis_parallel_slaves, but is not in TOU V2 mode, so its slots carry only its own current")
                 slots_to_check = range(1, 7)
 
                 # V1 mode does not have a target SOC, so we need to figure out if we are in any of the slots or not
@@ -4756,7 +4914,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
     async def clear_read_only_schedules(self):
         """Disable timed charge/export using fresh registers, preserving battery protection limits."""
         async with self.schedule_control_lock():
-            devices = [sn for sn in self.inverter_sn if self.is_battery_inverter(sn)]
+            devices = [sn for sn in self.inverters_masters_last() if self.is_battery_inverter(sn)]
             if not devices:
                 raise SolisAPIError("No battery inverter available for schedule cleanup")
             for sn in devices:
@@ -4924,7 +5082,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # A TOU mode never read, or last read over a day ago, is read every 5 minutes until one read succeeds. A read that
         # changes the mode re-reads the slot registers in the new layout, retried on the same grid until that read succeeds too
         if not first and (seconds % 300 == 0):
-            for sn in self.inverter_sn:
+            for sn in self.inverters_masters_last():
                 if self.datalogger_offline(sn) or not self.is_battery_inverter(sn):
                     continue
                 if self.tou_v2_mode_due(sn):
@@ -4941,7 +5099,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         # Infrequent polling (every 60 minutes)
         if first or (seconds % 3600 == 0):
-            for sn in self.inverter_sn:
+            for sn in self.inverters_masters_last():
                 if self.datalogger_offline(sn):
                     poll_success = False
                     continue
@@ -5089,6 +5247,8 @@ SOLIS_CLI_CONFIG_KEYS = {
     "inverter_sn": "solis_inverter_sn",
     "base_url": "solis_base_url",
     "nominal_voltage": "solis_nominal_voltage",
+    "parallel_slaves": "solis_parallel_slaves",
+    "parallel_slot_current_max": "solis_parallel_slot_current_max",
 }
 
 # The OAuth refresh settings, which are not Solis component args: oauth_mixin reads
@@ -5227,7 +5387,7 @@ async def test_solis_api(solis_args, write=False, user_id=None, supabase_url=Non
             if dump_raw:
                 print(f"Reading the limit and slot current CIDs on {device_sn} one at a time...")
                 await read_limit_registers(solis_api, device_sn)
-            print("  " + solis_api.describe_slot_current_limits(device_sn, solis_api.slot_current_limits(device_sn)))
+            print("  " + solis_api.describe_slot_current_limits(device_sn, solis_api.slot_current_limits(device_sn, group=True)))
 
     if probe_ceiling:
         # The same probe Predbat runs on discovery, with only its own writes enabled; the CLI has no
@@ -5240,7 +5400,7 @@ async def test_solis_api(solis_args, write=False, user_id=None, supabase_url=Non
             finally:
                 solis_api.control_enable = False
             print(f"CEILING: {sn} {solis_api.slot_current_probed.get(sn) or 'nothing learned'}")
-            print("  " + solis_api.describe_slot_current_limits(sn, solis_api.slot_current_limits(sn)))
+            print("  " + solis_api.describe_slot_current_limits(sn, solis_api.slot_current_limits(sn, group=True)))
     print("Run completed successfully")
 
     await solis_api.final()

@@ -20,7 +20,7 @@ A separate metadata-only publisher constructs a fixed device `/config` topic
 and whitelist-only `{live_display: binding}` body. It requires strict display
 role, valid paired device identity and matching topic base. It publishes on
 reconnect and every 60 seconds, sending `{enabled:false}` when live opt-in is
-absent/off/invalid. These sends are deliberately **non-retained**: replacing the
+absent/off/invalid, or when the screen is turned off (`gateway_display_enabled: false`). These sends are deliberately **non-retained**: replacing the
 shared topic's retained full configuration would erase passive cutover intent,
 mesh keys or other desired settings. Only this display metadata bypasses battery
 write gating; no bus/control configuration is accepted and generic raw config
@@ -111,7 +111,10 @@ visibility metadata, fresh for 120 seconds, every 60 seconds and on reconnect.
 No physical control fields use this path.
 
 Explicit Cloud false retains a metadata-only component for reconnect delivery,
-blocks the final display-data sink, and disables the external measured feed.
+blocks the final display-data sink, and disables the external measured feed: the
+`/config` publisher sends `live_display: {enabled:false}`, so the Hub drops the feed
+straight away instead of waiting for its lease to run out. A live feed that stops when
+the screen is turned off is therefore expected.
 Default-unset Cloud has no optional Gateway component. Firmware persists false
 independently of the unchanged 150-second external feed lease. A saved preference
 is not evidence that an offline Hub applied it. These changes do not implement
