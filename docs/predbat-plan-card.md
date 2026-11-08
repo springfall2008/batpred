@@ -69,6 +69,12 @@ Battery SoC symbols:
 - &rarr; - Current SoC expected to remain level
 - &searr; - Current SoC expected to fall
 - &nearr; - Current SoC expected to rise
+- &#9888; - The slot is inside an active [weather alert](apps-yaml.md#weather-alert-system), so Predbat will try to keep the battery at or above the alert's `keep` percentage
+- &#9998; - A [manual SoC target](customisation.md#manual-control) (minimum SoC, set with **select.predbat_manual_soc**) applies to the slot
+- &#11015; - A [manual SoC maximum](customisation.md#manual-control) (SoC ceiling, set with **select.predbat_manual_soc_max**) applies to the slot
+
+On the plan in the Predbat web interface, where you can click the SoC % cell to set or clear a manual SoC target or maximum, the cell also repeats the override after the SoC value:
+a 'Forced' (&#8526;) for a manual SoC target and a second down arrow (&#11015;) for a manual SoC maximum.
 
 Cost symbols:
 
@@ -146,6 +152,8 @@ If the solar diverter is planned to be on in that slot then the kWh will be colo
 together with an arrow pointing up, to the right or downwards to indicate whether the battery SoC is increasing, remaining constant or decreasing during the time slot.<BR>
 The 'SoC %' can be read in conjunction with the 'Limit %'; the SoC column gives the estimated SoC at the beginning of the slot,
 the Limit column the estimated SoC at the end of the slot.<BR>
+A warning triangle (&#9888;) before the arrow means the slot is inside an active [weather alert](apps-yaml.md#weather-alert-system),
+a pencil (&#9998;) means a manual SoC target applies to the slot, and a down arrow (&#11015;) means a manual SoC maximum applies to it.<BR>
 If the SoC is 50% or greater it will be coloured Green, 20% or greater, Yellow, and if less than 20%, Orangey-Red.
 
 - **Cost** - The estimated cost in pence for the time slot together with an arrow indicating whether the total cost today is increasing, staying flat or decreasing.<BR>
