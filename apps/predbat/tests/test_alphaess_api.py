@@ -22,7 +22,7 @@ from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_r
 class MockAlphaESS(AlphaESSAPI):
     """Test double: build an AlphaESSAPI without the full component lifecycle."""
 
-    def __init__(self, app_id="alphatestappid00000", app_secret="secret0000000000", inverter_sn=None, control_enable=True, automatic=False):  # cspell:disable-line
+    def __init__(self, app_id="alphatestappid00000", app_secret="secret0000000000", inverter_sn=None, control_enable=True, automatic=False, startup_write_delay=0, hold_power=100, shutdown_mode="none"):  # cspell:disable-line
         """Set up a minimal AlphaESSAPI instance for tests, bypassing ComponentBase.__init__."""
         self.prefix = "predbat"
         self.log_messages = []
@@ -50,6 +50,9 @@ class MockAlphaESS(AlphaESSAPI):
             automatic=automatic,
             control_enable=control_enable,
             api_delay=0,
+            startup_write_delay=startup_write_delay,
+            hold_power=hold_power,
+            shutdown_mode=shutdown_mode,
         )
 
     def set_mock_clock(self, minutes_now):
