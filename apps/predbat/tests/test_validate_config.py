@@ -395,6 +395,14 @@ def test_validate_config(my_predbat):
         expect_errors=["charge_rate"],
     )
 
+    print("  [sensor_list blank_entries] inverter_mode None entry passes (GE Cloud full power eco inverter has no inverter_mode)")
+    _run(
+        my_predbat,
+        {"inverter_mode": [None, "switch.predbat_gecloud_test_enable_eco_mode"], "num_inverters": 2},
+        extra_states={"switch.predbat_gecloud_test_enable_eco_mode": "on"},
+        expect_clean=["inverter_mode"],
+    )
+
     print("  [sensor_list modify] sensor.predbat_ prefix is exempt from modify restriction")
     _run(
         my_predbat,

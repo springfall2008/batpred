@@ -2759,6 +2759,10 @@ HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
 # still picked up within the hour.
 TOKEN_MINT_BACKOFF_BASE_SECONDS = 300
 TOKEN_MINT_BACKOFF_MAX_SECONDS = 3600
+# A mint refused with KT-CT-1199 ("Too many requests") is a per-key limit on obtainKrakenToken,
+# and an hourly retry has been seen to keep it tripped for days (4 Nov 2026 onwards). Keep
+# doubling past the hour for that refusal, up to this cap, so the key gets a real rest.
+TOKEN_MINT_RATE_LIMIT_BACKOFF_MAX_SECONDS = 4 * 3600
 # After a rate limit (KT-CT-1199, HTTP 429 or an edge/WAF block) the Kraken-based components pause
 # their GraphQL queries rather than sending the rest of the poll into the same limit. The pause
 # doubles per consecutive rate limit, capped so a limit that lifts is picked up within the half
@@ -2807,6 +2811,7 @@ class Backoff:
         count: Consecutive refusals so far, 0 when not backing off.
         until: Aware UTC time the backoff ends, or None.
         reason: How the last request was refused, for the log.
+        started_at: Aware UTC time of the first refusal in this run, or None.
     """
 
     def __init__(self, base_seconds, max_seconds):
@@ -2817,22 +2822,27 @@ class Backoff:
         self.until = None
         self.logged_at = None
         self.reason = None
+        self.started_at = None
 
-    def start(self, reason, retry_after=None):
+    def start(self, reason, retry_after=None, max_seconds=None):
         """Record another refusal and start (or extend) the backoff.
 
         Args:
             reason: How the request was refused, e.g. "rate limited" or "edge/WAF blocked".
             retry_after: Seconds the server asked us to wait, or None.
+            max_seconds: A cap for this refusal in place of the schedule's own, or None.
 
         Returns:
             int: The delay in seconds.
         """
+        cap = max_seconds if max_seconds is not None else self.max_seconds
         self.count += 1
-        delay = exponential_backoff_seconds(self.count, self.base_seconds, self.max_seconds)
+        delay = exponential_backoff_seconds(self.count, self.base_seconds, cap)
         if retry_after:
-            delay = min(max(delay, retry_after), self.max_seconds)
+            delay = min(max(delay, retry_after), cap)
         now = datetime.now(timezone.utc)
+        if self.started_at is None:
+            self.started_at = now
         self.until = now + timedelta(seconds=delay)
         self.logged_at = now
         self.reason = reason
@@ -2861,6 +2871,7 @@ class Backoff:
         self.until = None
         self.logged_at = None
         self.reason = None
+        self.started_at = None
         return count
 
 

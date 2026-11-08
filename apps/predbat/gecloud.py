@@ -370,6 +370,25 @@ def classify_ge_failure(data, endpoint=None):
     return {"code": code, "message": ge_code_message(data, code), "reason": reason, "retry": retry}
 
 
+def register_ids_to_int(registers):
+    """
+    A device's registers with their ids back as the integers the GE Cloud API uses.
+
+    The settings are stored as JSON, which can only hold string keys, so a restored "17" would
+    never match the API's register id 17: the control registers would never be read again, and
+    a full read would add a second entry beside each one rather than replace it.
+    """
+    if not isinstance(registers, dict):
+        return {}
+    result = {}
+    for key, register in registers.items():
+        try:
+            result[int(key)] = register
+        except (TypeError, ValueError):
+            result[key] = register
+    return result
+
+
 def format_ge_endpoint(endpoint, serial="", setting_id="", uuid="", meter_ids="", start_time="", end_time="", command=""):
     """Fill an endpoint template's placeholders, giving the request path that is sent and logged (#5777)."""
     return endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
@@ -2842,7 +2861,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             self.log("GECloud: No valid settings found in storage cache, will read all registers")
             return
         # Only the devices found now, or departed hardware would be saved back to the cache forever
-        self.settings = {device: settings for device, settings in cached_settings.items() if device in self.device_list}
+        self.settings = {device: register_ids_to_int(settings) for device, settings in cached_settings.items() if device in self.device_list}
         self.settings_from_cache = bool(self.settings)
         stamps = await self.storage.load("gecloud", "settings_read")
         self.settings_read_stamps = {}

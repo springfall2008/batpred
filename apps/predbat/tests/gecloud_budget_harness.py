@@ -102,8 +102,8 @@ class MemoryStorage:
         self.data = {}
 
     async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
-        """Keep a copy of the data."""
-        self.data[(module, filename)] = copy.deepcopy(data)
+        """Keep a copy of the data - through JSON when that is the format, as the real storage does, so integer dict keys come back as strings."""
+        self.data[(module, filename)] = json.loads(json.dumps(data)) if format == "json" else copy.deepcopy(data)
         return True
 
     async def load(self, module, filename):
@@ -194,12 +194,13 @@ class DayResult:
 class GECloudBudgetHarness:
     """One scenario's simulated day against the fake GE Cloud."""
 
-    def __init__(self, scenario, template_path=RANDOM_TEMPLATE, storage=None, extra_args=None):
-        """scenario is one entry from load_scenarios(); template_path is the debug dump the random scenarios build on; storage and extra_args (apps.yaml) are optional."""
+    def __init__(self, scenario, template_path=RANDOM_TEMPLATE, storage=None, extra_args=None, read_timeouts=None):
+        """scenario is one entry from load_scenarios(); template_path is the debug dump the random scenarios build on; storage, extra_args (apps.yaml) and read_timeouts (setting ids whose reads time out) are optional."""
         self.scenario = scenario
         self.template_path = template_path
         self.test_storage = storage
         self.extra_args = extra_args or {}
+        self.read_timeouts = set(read_timeouts or ())
         self.my_predbat = None
         self.gecloud = None
         self.fake = None
@@ -360,6 +361,7 @@ class GECloudBudgetHarness:
         self.fake = FakeGECloud(battery_kwh=battery["soc_max_kwh"], rate_w=rate_w, clock=lambda: self.gecloud.sim_now)
         self.fake.scenario_id = self.scenario["id"]
         self.fake.soc_percent = battery["initial_soc_percent"]
+        self.fake.read_timeouts = set(self.read_timeouts)
         # The apps.yaml settings components.py would pass to the component
         self.gecloud = HarnessGECloud(my_predbat, ge_cloud_direct=True, api_key="harness-key", automatic=True, poll_settings=my_predbat.args.get("ge_cloud_poll_settings", False))
         self.gecloud.sim_now = self.midnight

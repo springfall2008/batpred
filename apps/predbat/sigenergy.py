@@ -3121,6 +3121,18 @@ class SigenergyAPI(ComponentBase):
                 new_mode = "freeze_export_hold"
                 active_mode = SIGENERGY_ACTIVE_MODE_SELF
                 charge_power_kw = 0
+        elif export_rate_w == 0:
+            # A discharge hold on its own: "Hold for car" or an iBoost hold in demand. execute.py
+            # writes the export rate to 0 for these (no timed pause on SIGCLOUD) and leaves the
+            # charge rate at maximum, so plain self-consumption would ignore the hold and let the
+            # battery discharge into the car. Pin the bidirectional power to 0, the same lever as
+            # freeze_charge, so the battery holds its SoC. That also stops surplus PV charging the
+            # battery for the length of the hold - "charge allowed, discharge blocked" has no
+            # expression on this API - which costs far less than draining the battery into a car.
+            duration_min = 720
+            new_mode = "discharge_hold"
+            active_mode = SIGENERGY_ACTIVE_MODE_SELF
+            charge_power_kw = 0
         else:
             duration_min = 720
             new_mode = "eco"

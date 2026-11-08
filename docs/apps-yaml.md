@@ -594,6 +594,9 @@ such as 30 or 36 if you have a small battery and thus don't need to forecast 2 d
 Can set the maximum number of seconds of delay when recalculating the plan after it expires. The exact delay will be between 0 and this value.
 The default is 0.
 
+When set above 0 it also spreads out the Octopus/Kraken billing reads shown in the History view: the first read after Predbat starts waits a random 0-30 minutes,
+and each day's billing query waits a further random 0-60 seconds, so many installations restarted together don't all query the supplier at once.
+
 ```yaml
   plan_random_delay: 30
 ```
@@ -1240,7 +1243,7 @@ Edit if necessary if you have non-standard sensor names:
 
 - **load_today** - Entity name for the house load in kWh today (must be incrementing)
 - **load_power** - Current load power sensor in W (used with load_power_fill_enable to improve load_today data accuracy)
-- **load_power_fill_enable** - When true (default), uses load_power data to fill gaps and smooth load_today sensor data. Set to false to disable this feature.
+- **load_power_fill_enable** - When true (default), uses load_power to smooth load_today sensor data that moves in coarse steps, and to fill gaps where load_today lost readings. Set to false to disable this feature.
 - **import_today** - Imported energy today in kWh (incrementing)
 - **export_today** - Exported energy today in kWh (incrementing)
 - **pv_today** - PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
@@ -1355,8 +1358,8 @@ the lowest day's historical load will be discarded.
 - **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap (that's filled with average data), the default is 30.
 To disable, set it to 1440.
 
-- **load_power_fill_enable** (default true) helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
-out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
+- **load_power_fill_enable** (default true) helps to improve the accuracy of historical load data by using instantaneous power readings to smooth
+out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). Where load_today is only waiting for its next step, it decides how much energy was used and load_power only when, so a power sensor that is somewhat off calibration doesn't change your load totals; load_power only adds energy where load_today lost readings and never made them up, and for the time since load_today's last step. A load_power that is more than about twice off can be mistaken for lost readings. This preprocessing happens before
 the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
 
 - **load_history_fill_enable** (default true) fills the days before your load_today sensor's history starts from the history of Predbat's own `predbat.load_energy_h0`
@@ -1478,6 +1481,9 @@ This can be used if you need Predbat to cap your inverter battery rate (e.g. due
 By default Predbat will normally configure all timed charges or discharges to be at the inverter's maximum rate and these options enable you to reduce that maximum rate.
 [Low rate charging](customisation.md#inverter-control-options) could also be used to slow down Predbat's charge rate whilst still meeting the battery plan.
 
+With more than one inverter, these rates also decide how the fleet's SoC target is shared between the inverters. Each inverter is given a share of the energy to charge in proportion to its charge rate, or of the energy to discharge in proportion to its discharge rate, so the inverters finish together.
+An inverter that is full (or at its reserve) is held there and the others take its share. Forced exports are shared by **inverter_limit_export** instead, see below.
+
 ### **inverter_limit_export**
 
 An optional list of values with one entry per inverter.
@@ -1496,6 +1502,9 @@ while still allowing the battery to discharge at full rate during ECO mode to co
 
 If not set, the value defaults to `inverter_limit_discharge` (or the inverter maximum if that is also not set).
 Predbat will also use this rate when modelling the plan so the prediction accurately reflects the capped export rate.
+
+With more than one inverter, a forced export's fleet SoC target is shared between the inverters in proportion to this rate, so a lower limit on one inverter gives it less to export and a higher per-inverter target SoC.
+An inverter that reaches its reserve stops there and the others export the rest.
 
 ### **inverter_limit_charge_dc**
 
