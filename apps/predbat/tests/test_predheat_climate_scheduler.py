@@ -104,7 +104,12 @@ def test_predheat_climate_scheduler(my_predbat):
             "weekday": [{"time": "06:00", "temp": 19}],
             "weekend": [{"time": "00:15", "temp": 16}],
         }
-        heat, _, _ = make(local(2026, 11, 6, 23, 30), response(nodes, "5/2"), days=4, scheduler_settings={"workdays": ["mon", "tue", "wed", "thu", "fri"]},)
+        heat, _, _ = make(
+            local(2026, 11, 6, 23, 30),
+            response(nodes, "5/2"),
+            days=4,
+            scheduler_settings={"workdays": ["mon", "tue", "wed", "thu", "fri"]},
+        )
         values(heat, [(0, 20), (44, 20), (45, 16), (3269, 16), (3270, 19)])
 
     def configurable_workdays():
@@ -171,11 +176,14 @@ def test_predheat_climate_scheduler(my_predbat):
         cases = [
             ("service exception", RuntimeError("unavailable")),
             ("missing workdays", {}),
-            ("invalid workdays", {"workdays": ["noday"]}),
-            ("invalid Workday setting", {
-                "workdays": ["mon", "tue", "wed", "thu", "fri"],
-                "use_workday_integration": "yes",
-            }),
+            ("invalid workdays", {"workdays": ["invalid"]}),
+            (
+                "invalid Workday setting",
+                {
+                    "workdays": ["mon", "tue", "wed", "thu", "fri"],
+                    "use_workday_integration": "yes",
+                },
+            ),
         ]
         for name, scheduler_settings in cases:
             heat, calls, _ = make(
@@ -185,15 +193,8 @@ def test_predheat_climate_scheduler(my_predbat):
             )
             assert heat.schedule_change_minutes is None, name
             values(heat, [(0, 17.5), (120, 17.5)])
-            assert any(
-                service == "climate_scheduler/get_settings"
-                for service, _ in calls
-            ), name
-            assert not any(
-                service == "workday/check_date"
-                for service, _ in calls
-            ), name
-
+            assert any(service == "climate_scheduler/get_settings" for service, _ in calls), name
+            assert not any(service == "workday/check_date" for service, _ in calls), name
 
     def individual():
         nodes = {

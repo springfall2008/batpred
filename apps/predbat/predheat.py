@@ -418,9 +418,7 @@ class PredHeat:
         use_workday_integration = False
         if mode == "5/2":
             try:
-                settings_response = self.call_service(
-                    "climate_scheduler/get_settings", return_response=True
-                )
+                settings_response = self.call_service("climate_scheduler/get_settings", return_response=True)
             except Exception as exc:
                 self.log("Predheat: Cannot fetch Climate Scheduler settings: {}".format(exc))
                 return
@@ -432,11 +430,7 @@ class PredHeat:
 
             configured = settings.get("workdays")
             valid_days = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
-            if not (
-                isinstance(configured, list)
-                and configured
-                and all(isinstance(day, str) and day.lower() in valid_days for day in configured)
-            ):
+            if not (isinstance(configured, list) and configured and all(isinstance(day, str) and day.lower() in valid_days for day in configured)):
                 self.log("Predheat: Invalid Climate Scheduler workdays; using history")
                 return
 
@@ -445,7 +439,6 @@ class PredHeat:
             if not isinstance(use_workday_integration, bool):
                 self.log("Predheat: Invalid Climate Scheduler Workday setting; using history")
                 return
-
 
         # Preserve the live setpoint, including a manual override,
         # until the next scheduled temperature change.
