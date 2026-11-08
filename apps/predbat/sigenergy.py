@@ -1853,15 +1853,26 @@ class SigenergyAPI(ComponentBase):
                 return device["status"]
         return "Unknown"
 
-    def _get_battery_max_power_kw(self, system_id):
-        """Return the combined rated charge/discharge power in kW for a system."""
-        # Prefer device-level ratedChargePower
+    def _get_battery_max_power_kw(self, system_id, direction=None):
+        """Return the combined rated battery power in kW for a system, capped at the inverter rating.
+
+        direction "charge" sums the modules' ratedChargePower and "discharge" their ratedDischargePower,
+        which can be higher (a Sigenergy 8 kWh module is rated 4.2 kW charge, 4.8 kW discharge). A module
+        reporting no discharge rating falls back to its charge rating. With no direction, the larger of the
+        two is returned - the battery_rate_max that bounds both.
+        """
+        if direction is None:
+            return max(self._get_battery_max_power_kw(system_id, "charge"), self._get_battery_max_power_kw(system_id, "discharge"))
         power = 0.0
         inverter_power = self._get_inverter_max_power_kw(system_id)
         for device in self.devices.get(system_id, []):
             if device.get("deviceType") == SIGENERGY_DEVICE_BATTERY:
                 attr = device.get("attrMap", {})
-                power += _safe_float(attr.get("ratedChargePower", 0))
+                charge_kw = _safe_float(attr.get("ratedChargePower", 0))
+                if direction == "discharge":
+                    power += _safe_float(attr.get("ratedDischargePower", 0)) or charge_kw
+                else:
+                    power += charge_kw
 
         # Fallback: inverter rated power
         # Also cap battery power at inverter power
@@ -2324,6 +2335,8 @@ class SigenergyAPI(ComponentBase):
         capacity_kwh = self._get_battery_capacity_kwh(system_id)
         battery_soc_kwh = round(battery_soc_pct * capacity_kwh / 100.0, 3)
         battery_max_kw = self._get_battery_max_power_kw(system_id)
+        battery_charge_max_kw = self._get_battery_max_power_kw(system_id, "charge")
+        battery_discharge_max_kw = self._get_battery_max_power_kw(system_id, "discharge")
         inverter_max_kw = self._get_inverter_max_power_kw(system_id)
 
         # --- Battery SOC (kWh) ---
@@ -2470,6 +2483,26 @@ class SigenergyAPI(ComponentBase):
             },
             app="sigenergy",
         )
+        self.dashboard_item(
+            "sensor.{}_sigenergy_{}_battery_charge_rate_max".format(self.prefix, slug),
+            state=round(battery_charge_max_kw * 1000),
+            attributes={
+                "friendly_name": "Sigenergy {} Battery Max Charge Power".format(system_name),
+                "unit_of_measurement": "W",
+                "device_class": "power",
+            },
+            app="sigenergy",
+        )
+        self.dashboard_item(
+            "sensor.{}_sigenergy_{}_battery_discharge_rate_max".format(self.prefix, slug),
+            state=round(battery_discharge_max_kw * 1000),
+            attributes={
+                "friendly_name": "Sigenergy {} Battery Max Discharge Power".format(system_name),
+                "unit_of_measurement": "W",
+                "device_class": "power",
+            },
+            app="sigenergy",
+        )
 
         # --- Inverter limit (W) ---
         self.dashboard_item(
@@ -2605,6 +2638,8 @@ class SigenergyAPI(ComponentBase):
             "soc_max": sensor("battery_capacity", "kWh"),
             "battery_power": sensor("battery_power", "W"),
             "battery_rate_max": sensor("battery_rate_max", "W"),
+            "inverter_limit_charge": sensor("battery_charge_rate_max", "W"),
+            "inverter_limit_discharge": sensor("battery_discharge_rate_max", "W"),
             "inverter_limit": sensor("inverter_limit", "W"),
             "export_limit": sensor("export_limit", "W"),
             "battery_min_soc": sensor("battery_reserve_min", "%"),
@@ -2713,6 +2748,11 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("soc_max", ["sensor.{}_sigenergy_{}_battery_capacity".format(self.prefix, s) for s in slugs])
         self.set_arg("battery_power", ["sensor.{}_sigenergy_{}_battery_power".format(self.prefix, s) for s in slugs])
         self.set_arg("battery_rate_max", ["sensor.{}_sigenergy_{}_battery_rate_max".format(self.prefix, s) for s in slugs])
+        # The modules are rated separately to charge and discharge, and discharge can be the higher, so
+        # battery_rate_max is the larger and each direction's rating goes to inverter_limit_charge/_discharge.
+        # overwrite=False so a limit stated in apps.yaml still wins.
+        self.set_arg_auto("inverter_limit_charge", ["sensor.{}_sigenergy_{}_battery_charge_rate_max".format(self.prefix, s) for s in slugs], overwrite=False)
+        self.set_arg_auto("inverter_limit_discharge", ["sensor.{}_sigenergy_{}_battery_discharge_rate_max".format(self.prefix, s) for s in slugs], overwrite=False)
         self.set_arg("inverter_limit", ["sensor.{}_sigenergy_{}_inverter_limit".format(self.prefix, s) for s in slugs])
         # An export_limit the user wrote in apps.yaml wins - the sensor reads 99999 until the plant has reported its limit
         self.set_arg_auto("export_limit", ["sensor.{}_sigenergy_{}_export_limit".format(self.prefix, s) for s in slugs], overwrite=False)
@@ -2798,7 +2838,7 @@ class SigenergyAPI(ComponentBase):
             max_value = 100
             default = 100 if direction == "charge" else 0
         elif field == "rate":
-            battery_max_w = round(self._get_battery_max_power_kw(system_id) * 1000)
+            battery_max_w = round(self._get_battery_max_power_kw(system_id, "discharge" if direction == "export" else "charge") * 1000)
             min_value = 0
             max_value = battery_max_w if battery_max_w > 0 else 10000
             default = max_value
@@ -3044,7 +3084,6 @@ class SigenergyAPI(ComponentBase):
 
         flow = self.energy_flow.get(system_id, {})
         battery_soc_pct = _safe_float(flow.get("batterySoc", 50))
-        battery_max_kw = self._get_battery_max_power_kw(system_id)
 
         now = datetime.now(self.local_tz)
 
@@ -3052,12 +3091,14 @@ class SigenergyAPI(ComponentBase):
         charge_start_str = self.controls[system_id].get("charge", {}).get("start_time", "00:00:00")
         charge_end_str = self.controls[system_id].get("charge", {}).get("end_time", "00:00:00")
         charge_target_soc = _safe_int(self.controls[system_id].get("charge", {}).get("target_soc", 100), 100)
-        charge_rate_w = _safe_int(self.controls[system_id].get("charge", {}).get("rate", round(battery_max_kw * 1000)), round(battery_max_kw * 1000))
+        charge_max_w = round(self._get_battery_max_power_kw(system_id, "charge") * 1000)
+        export_max_w = round(self._get_battery_max_power_kw(system_id, "discharge") * 1000)
+        charge_rate_w = _safe_int(self.controls[system_id].get("charge", {}).get("rate", charge_max_w), charge_max_w)
         export_enable = self.controls[system_id].get("export", {}).get("enable", False)
         export_start_str = self.controls[system_id].get("export", {}).get("start_time", "00:00:00")
         export_end_str = self.controls[system_id].get("export", {}).get("end_time", "00:00:00")
         export_target_soc = _safe_int(self.controls[system_id].get("export", {}).get("target_soc", 0), 0)
-        export_rate_w = _safe_int(self.controls[system_id].get("export", {}).get("rate", round(battery_max_kw * 1000)), round(battery_max_kw * 1000))
+        export_rate_w = _safe_int(self.controls[system_id].get("export", {}).get("rate", export_max_w), export_max_w)
         reserve_soc = _safe_int(self.controls[system_id].get("reserve", 10), 10)
         charge_power_kw = None
         charge_priority_type=None
@@ -3862,13 +3903,15 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             e = (now + timedelta(minutes=offset_end_min)).strftime("%H:%M:%S")
             return s, e
 
-        battery_max_w = round(sig._get_battery_max_power_kw(sid) * 1000) or 5000
+        # Each window uses its own direction's ceiling, as apply_controls does, so the test asks for what the plant accepts
+        charge_max_w = round(sig._get_battery_max_power_kw(sid, "charge") * 1000) or 5000
+        export_max_w = round(sig._get_battery_max_power_kw(sid, "discharge") * 1000) or 5000
 
         if test_mode == "eco":
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
-                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": charge_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": export_max_w},
             }
             print("+ Configured for ECO mode (no active windows)")
 
@@ -3876,8 +3919,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             cs, ce = _window(-30, 120)
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": 95, "rate": battery_max_w},
-                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": 95, "rate": charge_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": export_max_w},
             }
             print("+ Configured for CHARGE mode ({} - {}, target 95%)".format(cs, ce))
 
@@ -3886,8 +3929,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             target = round(battery_soc_pct)  # same as current = freeze
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": target, "rate": battery_max_w},
-                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": target, "rate": charge_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": export_max_w},
             }
             print("+ Configured for FREEZE CHARGE mode ({} - {}, target=current {:.0f}%)".format(cs, ce, battery_soc_pct))
 
@@ -3895,8 +3938,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             es, ee = _window(-30, 120)
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
-                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": 15, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": charge_max_w},
+                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": 15, "rate": export_max_w},
             }
             print("+ Configured for EXPORT mode ({} - {}, target 15%)".format(es, ee))
 
@@ -3905,8 +3948,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             target = min(100, round(battery_soc_pct) + 10)  # above current = freeze
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
-                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": target, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": charge_max_w},
+                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": target, "rate": export_max_w},
             }
             print("+ Configured for FREEZE EXPORT mode ({} - {}, current {:.0f}% target {}%)".format(es, ee, battery_soc_pct, target))
 
