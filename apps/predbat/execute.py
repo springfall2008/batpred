@@ -53,7 +53,7 @@ CHARGE_SIDE_STATES = set(CHARGE_STATE_PRECEDENCE)
 EXPORT_SIDE_STATES = set(EXPORT_STATE_PRECEDENCE)
 
 
-def hold_reserve_percent(inverter, target_percent):
+def hold_reserve_percent(inverter, target_percent, no_discharge=False):
     """Reserve percent that holds an inverter's battery at target_percent.
 
     Most inverters only stop discharging at the reserve, so one above the target keeps the SoC from
@@ -61,10 +61,18 @@ def hold_reserve_percent(inverter, target_percent):
     Powerwall does, even with grid charging disallowed) would turn that into a grid import, and each
     cycle's rounded-up SoC would ratchet the reserve higher again, so it never gets a reserve above
     the SoC rounded down.
+
+    A Powerwall also honours no reserve between 80 and 100 (inv_reserve_full_only_above_80, GH#6046), and
+    its component holds a request up there near the requested level, letting the battery give up a few
+    percent first. no_discharge is for a hold that must not discharge at all - the battery must not feed
+    the car - and above 80% it asks for 100 on such an inverter, accepting a grid top-up to full instead.
     """
     if inverter.inv_reserve_above_soc_charges_from_grid:
         live_percent = int(inverter.soc_kw / inverter.soc_max * 100.0) if inverter.soc_max > 0 else 0
-        return min(target_percent, live_percent, 100)
+        percent = min(target_percent, live_percent, 100)
+        if no_discharge and getattr(inverter, "inv_reserve_full_only_above_80", False) and percent > 80:
+            return 100
+        return percent
     return min(target_percent + 1, 100)
 
 
@@ -1066,7 +1074,7 @@ class Execute:
                                     if discharge_rate is None:
                                         discharge_rate = 0
                                     if self.set_reserve_enable:
-                                        inverter.adjust_reserve(hold_reserve_percent(inverter, inverter.soc_percent))
+                                        inverter.adjust_reserve(hold_reserve_percent(inverter, inverter.soc_percent, no_discharge=True))
                                         resetReserve = False
                                 if hold_applied:
                                     self.log("Disabling battery discharge whilst car {} is charging".format(car_n))

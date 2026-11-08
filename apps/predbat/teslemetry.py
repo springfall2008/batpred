@@ -80,7 +80,8 @@ POWERWALL_CHARGE_PER_UNIT_W = 5000
 
 # The TESLA INVERTER_DEF row's behaviour, stated in every discovery record so the record alone rebuilds
 # the row (coordinator.inverter_definition()). A reserve set above the live SoC is met from the grid,
-# hence reserve_above_soc_charges_from_grid.
+# hence reserve_above_soc_charges_from_grid; and no reserve between 80 and 100 is honoured, hence
+# reserve_full_only_above_80 (GH#6046).
 TESLA_CAPABILITIES = {
     "support_charge_freeze": True,
     "support_discharge_freeze": False,
@@ -90,6 +91,7 @@ TESLA_CAPABILITIES = {
     "charge_control_immediate": False,
     "target_soc_used_for_discharge": True,
     "reserve_above_soc_charges_from_grid": True,
+    "reserve_full_only_above_80": True,
 }
 # max/min_site_meter_power_ac report "no limit" as +/-1e9
 SITE_METER_UNLIMITED = 1_000_000
@@ -797,19 +799,22 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         charge = self.schedule.get("charge", {})
         discharge = self.schedule.get("discharge", {})
         if self.in_window(minutes_now, charge):
-            # The charge target is a charge, not a hold, so it is sent as asked rather than through _settable_reserve
+            # The charge target is a charge, not a hold, so it is sent as asked rather than through _settable_reserve,
+            # and the state change ends any hold
+            self._end_hold()
             target = int(charge.get("soc", 100))
             grid = soc < target
             return {"export_rule": "pv_only", "grid_charging": grid, "reserve": target, "mode": "backup"}
         if self.in_window(minutes_now, discharge):
+            self._end_hold()
             target = int(discharge.get("soc", 10))
             if soc > target:
                 return {"export_rule": "battery_ok", "grid_charging": False, "reserve": target, "mode": "autonomous"}
             return {"export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
-        reserve, band_grid = self._settable_reserve(self.schedule.get("reserve", 20), soc)
+        reserve, band_grid = self._settable_reserve(self.schedule.get("reserve", 20), soc, kind="idle")
         return {"export_rule": "pv_only", "grid_charging": True if band_grid is None else band_grid, "reserve": reserve, "mode": "self_consumption"}
 
-    def _settable_reserve(self, percent, soc, kind="reserve"):
+    def _settable_reserve(self, percent, soc, kind):
         """Map a requested reserve onto one the Powerwall will honour, as (reserve, grid_charging).
 
         Since firmware 25.18.4 only 0-80 and exactly 100 are honoured; 81-99 are snapped. A request in that
@@ -827,8 +832,9 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         The hold level is the highest request since the hold began, because execute rewrites a freeze's
         reserve as the live SOC each cycle and the request falls with the battery - judged against the
         request itself, the top-up would never come. A request of 80 or below, or at the round-up level,
-        ends the hold, and so does a change of kind - the committed reserve ("reserve") or a hold at a charge
-        target ("target:<n>") - so one hold's level never carries into another. The state is saved by
+        ends the hold, and so does a change of kind - the control state the request came from ("idle",
+        "export", "charging") or a hold at a charge target ("target:<n>") - so one hold's level never carries
+        into another, even when execute's reset leaves the request in the band (a set_reserve_min up there). The state is saved by
         save_hold_state() so a restart keeps it. grid_charging is None for a request passed through
         unchanged, leaving it to the caller.
 
@@ -956,13 +962,14 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
                 reserve, band_grid = self._settable_reserve(hold, soc, kind="target:{}".format(target))
                 return {"export_rule": "pv_only", "grid_charging": bool(band_grid), "reserve": reserve, "mode": "autonomous"}
             # Charging: grid charging on for the tariff's cheap band to act on, at the reserve Predbat asked for
-            reserve, _ = self._settable_reserve(self.schedule.get("reserve", 20), soc)
+            reserve, _ = self._settable_reserve(self.schedule.get("reserve", 20), soc, kind="charging")
             return {"export_rule": "pv_only", "grid_charging": True, "reserve": reserve, "mode": "autonomous"}
-        reserve, band_grid = self._settable_reserve(self.schedule.get("reserve", 20), soc)
-        grid_charging = bool(band_grid)
         if self.in_window(minutes_now, discharge):
+            reserve, band_grid = self._settable_reserve(self.schedule.get("reserve", 20), soc, kind="export")
             target = int(discharge.get("soc", 10))
-            return {"export_rule": "battery_ok" if soc > target else "pv_only", "grid_charging": grid_charging, "reserve": reserve, "mode": "autonomous"}
+            return {"export_rule": "battery_ok" if soc > target else "pv_only", "grid_charging": bool(band_grid), "reserve": reserve, "mode": "autonomous"}
+        reserve, band_grid = self._settable_reserve(self.schedule.get("reserve", 20), soc, kind="idle")
+        grid_charging = bool(band_grid)
         charge_window, export_window = self._signal_windows(minutes_now)
         mode = "autonomous" if (charge_window or export_window) else "self_consumption"
         return {"export_rule": "pv_only", "grid_charging": grid_charging, "reserve": reserve, "mode": mode}

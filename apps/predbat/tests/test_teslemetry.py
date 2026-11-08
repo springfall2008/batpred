@@ -1482,7 +1482,7 @@ def test_teslemetry_tbc_hold_state_is_saved_on_change_and_refreshed_while_held()
     api.evaluate_schedule_tbc(12 * 60, 86)
     run_async(api.save_hold_state())
     first = storage.saved[("teslemetry", "hold")]
-    assert first["level"] == 86 and first["kind"] == "reserve" and first["topping_up"] is False
+    assert first["level"] == 86 and first["kind"] == "idle" and first["topping_up"] is False
     api.clock_now = HOLD_T0 + timedelta(seconds=HOLD_STATE_REFRESH_SECONDS - 60)
     api.evaluate_schedule_tbc(12 * 60, 85.5)
     run_async(api.save_hold_state())
@@ -1506,6 +1506,69 @@ def test_teslemetry_tbc_hold_state_is_cleared_when_the_hold_ends():
     restarted = _hold_api(storage, reserve=84, now=HOLD_T0 + timedelta(minutes=5))
     run_async(restarted.load_schedule())
     assert restarted.evaluate_schedule_tbc(12 * 60, 82.9)["reserve"] == 80
+
+
+def test_teslemetry_tbc_hold_restarts_when_the_control_state_changes():
+    """A change of control state ends the hold, even when the request stays in the band. Here set_reserve_min is
+    85, so execute's reset after a freeze at 90 still asks for 85; once the charge is over the hold is 85's, not
+    the freeze's 90."""
+    W = {"start_time": "12:00:00", "end_time": "13:00:00", "soc": 95, "enable": 1}
+    api = _tbc_api(reserve=90)
+    api.evaluate_schedule_tbc(11 * 60, 90)
+    api.schedule["reserve"] = 85
+    api.schedule["charge"] = dict(W)
+    api.evaluate_schedule_tbc(12 * 60 + 5, 70)
+    api.schedule["charge"]["enable"] = 0
+    assert api.evaluate_schedule_tbc(13 * 60 + 5, 86.5)["reserve"] == 80
+
+
+def test_teslemetry_tbc_hold_restarts_after_an_export():
+    """An export between two holds in the band ends the first: the second is held near its own level."""
+    api = _tbc_api(reserve=90)
+    api.evaluate_schedule_tbc(11 * 60, 90)
+    api.schedule["reserve"] = 85
+    api.schedule["discharge"] = {"start_time": "12:00:00", "end_time": "13:00:00", "soc": 20, "enable": 1}
+    api.evaluate_schedule_tbc(12 * 60 + 5, 88)
+    api.schedule["discharge"]["enable"] = 0
+    assert api.evaluate_schedule_tbc(13 * 60 + 5, 86.5)["reserve"] == 80
+
+
+def test_teslemetry_real_rate_charge_window_ends_the_hold():
+    """The real-rate charge window sends its target as asked rather than through the hold rule, so it ends the
+    hold itself: a later hold at 88 is held near 88, not topped up towards the freeze's 90 before it."""
+    api = _tbc_api(reserve=90)
+    api.tbc_control = False
+    api.evaluate_schedule(11 * 60, 90)
+    api.schedule["charge"] = {"start_time": "12:00:00", "end_time": "13:00:00", "soc": 95, "enable": 1}
+    api.evaluate_schedule(12 * 60 + 5, 70)
+    api.schedule["charge"]["enable"] = 0
+    api.schedule["reserve"] = 88
+    assert api.evaluate_schedule(13 * 60 + 5, 86.5)["reserve"] == 80
+
+
+def test_teslemetry_real_rate_export_window_ends_the_hold():
+    """The real-rate export window ends the hold the same way."""
+    api = _tbc_api(reserve=90)
+    api.tbc_control = False
+    api.evaluate_schedule(11 * 60, 90)
+    api.schedule["discharge"] = {"start_time": "12:00:00", "end_time": "13:00:00", "soc": 20, "enable": 1}
+    api.evaluate_schedule(12 * 60 + 5, 88)
+    api.schedule["discharge"]["enable"] = 0
+    api.schedule["reserve"] = 88
+    assert api.evaluate_schedule(13 * 60 + 5, 86.5)["reserve"] == 80
+
+
+def test_teslemetry_real_rate_charge_window_clears_the_saved_hold():
+    """Ending the hold in a real-rate window also clears the saved copy, so a restart cannot bring it back."""
+    storage = FakeStorage()
+    api = _hold_api(storage, reserve=90)
+    api.tbc_control = False
+    api.evaluate_schedule(11 * 60, 90)
+    run_async(api.save_hold_state())
+    api.schedule["charge"] = {"start_time": "12:00:00", "end_time": "13:00:00", "soc": 95, "enable": 1}
+    api.evaluate_schedule(12 * 60 + 5, 70)
+    run_async(api.save_hold_state())
+    assert not storage.saved[("teslemetry", "hold")]
 
 
 def test_teslemetry_real_rate_reserve_hold_in_the_band_uses_the_same_rule():
@@ -3689,6 +3752,11 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_tbc_hold_state_from_another_kind_of_hold_is_not_used()
     test_teslemetry_tbc_hold_state_is_saved_on_change_and_refreshed_while_held()
     test_teslemetry_tbc_hold_state_is_cleared_when_the_hold_ends()
+    test_teslemetry_tbc_hold_restarts_when_the_control_state_changes()
+    test_teslemetry_tbc_hold_restarts_after_an_export()
+    test_teslemetry_real_rate_charge_window_ends_the_hold()
+    test_teslemetry_real_rate_export_window_ends_the_hold()
+    test_teslemetry_real_rate_charge_window_clears_the_saved_hold()
     test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band()
     test_teslemetry_day_runs_groups_replicated_days()
     test_teslemetry_day_runs_all_identical_single_run()
