@@ -122,19 +122,26 @@ If this is your situation, create a template sensor in Home Assistant that combi
 This is often normal behaviour for coarse or infrequently changing house energy load sensors!
 
 With the Predbat configuration **load_power_fill_enable** set to the default value of 'true', on every 5 minute Predbat cycle it scans your historic house load sensor for stretches of at least **load_filter_threshold** duration (default = plan_interval_minutes = 30 minutes) where the house load didn't move while load_power recorded consumption.
-When predbat finds a period where there is no change in house load energy it fills those stretches by integrating the house load power sensor to fill the gap, and logs the above warning every time it finds one.
+Predbat works out the size of your counter's steps (for example 0.1 kWh) from its history, and treats a flat stretch in one of two ways:
+
+- If the power sensor shows no more than about two steps' worth of energy over it, the counter is just waiting for its next step, which holds that energy. Predbat spreads that step back over the stretch in the shape of the power sensor, so the history shows the load when it happened rather than in one jump. The counter decides how much energy was used, the power sensor only when, as power sensors are often off calibration or miss a constant load the counter includes.
+- If the power sensor shows much more than that, readings were lost (or the power sensor reads more than about twice the real load). Whatever the counter made up afterwards is spread back over the stretch, and only what it never made up is filled from the power sensor.
+
+Predbat logs the above warning, with the step size it found, every time it fills one.
 
 The log line immediately after the warning names the exact window: "Zero load period starting at *timestamp* (N minutes) for M minutes with base value V" and you can check your load_today helper's history at that time to confirm this behaviour.
 
 There are two scenarios where these warnings are often logged:
 
-- A long region with base value 0.0 — the part of the history window before/around when you first setup Predbat or your house load helper started counting. This is normal for a fresh counter; it ages out as days_previous history accumulates in Home Assistant.
+- A long region with base value 0.0 — the part of the history window before/around when you first setup Predbat or your house load helper started counting. This is normal for a fresh counter and is left as it is; it ages out as days_previous history accumulates in Home Assistant.
 - ~30-40 minute flat plateaus (e.g. "for 34 minutes with base value 1.9"): a daily load energy counter that steps in 0.1 kWh increments only moves that often at low load — at 200 W base load overnight for example, one 0.1kWh step takes 30 minutes, so the counter reads constant for half an hour while the power sensor shows the real draw.
 
 What you can do
 
-Doing nothing is fine: the fill reconstructs the missing consumption and the plan is using it, so it is self-healing rather than an error.
-If you want the log file to be quiet: set load_power_fill_enable: false in apps.yaml or increase load_filter_threshold.  See [load filtering in apps.yaml](apps-yaml.md#load-filtering) for more details. The trade-off is that genuine gaps in your load_today sensor will no longer be auto-filled.
+Doing nothing is fine: the fill reshapes your counter's own readings and only adds energy where readings were genuinely lost, so it is self-healing rather than an error.
+If you want the log file to be quiet: set load_power_fill_enable: false in apps.yaml or increase load_filter_threshold.  See [load filtering in apps.yaml](apps-yaml.md#load-filtering) for more details. The trade-off is a more step-shaped load history from a coarse counter, and genuine gaps in your load_today sensor no longer being filled from the power sensor.
+
+Before the #5855 fix, this fill also added the power sensor's energy on top of the counter's step, so each stretch was counted twice and a coarse counter's history could read up to about twice the real load.
 
 ## I have a second solar array that Predbat doesn't manage as an inverter - how do I include its generation?
 

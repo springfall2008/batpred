@@ -592,6 +592,9 @@ such as 30 or 36 if you have a small battery and thus don't need to forecast 2 d
 Can set the maximum number of seconds of delay when recalculating the plan after it expires. The exact delay will be between 0 and this value.
 The default is 0.
 
+When set above 0 it also spreads out the Octopus/Kraken billing reads shown in the History view: the first read after Predbat starts waits a random 0-30 minutes,
+and each day's billing query waits a further random 0-60 seconds, so many installations restarted together don't all query the supplier at once.
+
 ```yaml
   plan_random_delay: 30
 ```
@@ -910,6 +913,14 @@ Keep `solis_api_key` and `solis_api_secret` in `secrets.yaml` rather than in `ap
 - `solis_cloud_pv_load_ignore` - Optional, defaults to false. When set to `true`, Predbat will override the **solis_automatic** setting and use the **load_today**, **load_power**, **pv_today** and **pv_load** sensors configured in `apps.yaml`.<BR>
 This can be useful if the Solis cloud data in the does not accurately reflect your house PV and load (e.g. multiple inverters that share load or PV inverter and micro-inverters) and you want to use a custom sensors.  All other sensors will use either the `apps.yaml` entries or the Solis Cloud entities depending upon **solis_automatic**.
 - `solis_nominal_voltage` - Optional, your battery's nominal pack voltage (e.g. cell count x nominal cell voltage per cell - **not** the live/resting battery voltage reported by the inverter, which varies with charge state). The inverter stores its charge and discharge limits as currents, so this is the voltage Predbat uses to convert them to watts: it sets the `battery_capacity` sensor, the max charge/discharge power and slot power sensors, and hence `battery_rate_max`. Without it, Predbat infers the voltage instead: on an LV pack it classifies the pack from the BMS-requested charge voltage the inverter reports (48V below 55V, 51.2V at or above it), and on an HV pack it continues to use the live reading. The LV result is fixed across polls, so nothing drifts as the battery charges and discharges, but it is an inference rather than a stated figure, so `battery_capacity` is flagged unreliable (a `reliable: false` attribute, plus a log warning). Set this option for an accurate figure - and note that on an HV pack it is the only way to stop the derived watt values moving with state of charge. `soc_max` must still be set manually either way (see below), the `battery_capacity` sensor is informational only and is not auto-bound to it.
+- `solis_parallel_slaves` - Optional, for inverters wired in parallel (master and slave) on one battery bank. Maps each master's serial number to its slave's serial number, or a list of them; quote serial numbers that are all digits. On such a pair the master's charge and discharge slot current is the whole group's, shared between the inverters, so when Predbat sets the master's slots it adds each slave's planned current for the same slot to the master's own. Each inverter is still planned at its own rate. Every slave must also be one of the inverters Predbat controls (see `solis_inverter_sn`), and this only applies in TOU V2 mode (inverters with six charge and discharge slots).
+- `solis_parallel_slot_current_max` - Optional, used with `solis_parallel_slaves`: the most, in amps, that the master's slot current may be set to for the whole group. Without it the master's slots stay capped at its own battery limit (CID 7224/7226), however many inverters share them, and without `solis_parallel_slaves` it does nothing. Set it from your **battery bank's** rated maximum continuous charge and discharge current, never from the sum of the inverters' ratings: two inverters can draw more than a shared bank can safely take. Predbat also checks the slot accepts it by probing, as it does for every inverter's slot current, and uses the lower figure.
+
+```yaml
+  solis_parallel_slaves:
+    "MASTER_SERIAL": "SLAVE_SERIAL"
+  solis_parallel_slot_current_max: 270
+```
 
 #### Important notes (Solis)
 
@@ -1230,7 +1241,7 @@ Edit if necessary if you have non-standard sensor names:
 
 - **load_today** - Entity name for the house load in kWh today (must be incrementing)
 - **load_power** - Current load power sensor in W (used with load_power_fill_enable to improve load_today data accuracy)
-- **load_power_fill_enable** - When true (default), uses load_power data to fill gaps and smooth load_today sensor data. Set to false to disable this feature.
+- **load_power_fill_enable** - When true (default), uses load_power to smooth load_today sensor data that moves in coarse steps, and to fill gaps where load_today lost readings. Set to false to disable this feature.
 - **import_today** - Imported energy today in kWh (incrementing)
 - **export_today** - Exported energy today in kWh (incrementing)
 - **pv_today** - PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
@@ -1345,8 +1356,8 @@ the lowest day's historical load will be discarded.
 - **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap (that's filled with average data), the default is 30.
 To disable, set it to 1440.
 
-- **load_power_fill_enable** (default true) helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
-out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
+- **load_power_fill_enable** (default true) helps to improve the accuracy of historical load data by using instantaneous power readings to smooth
+out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). Where load_today is only waiting for its next step, it decides how much energy was used and load_power only when, so a power sensor that is somewhat off calibration doesn't change your load totals; load_power only adds energy where load_today lost readings and never made them up, and for the time since load_today's last step. A load_power that is more than about twice off can be mistaken for lost readings. This preprocessing happens before
 the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
 
 - **load_history_fill_enable** (default true) fills the days before your load_today sensor's history starts from the history of Predbat's own `predbat.load_energy_h0`
@@ -1468,6 +1479,9 @@ This can be used if you need Predbat to cap your inverter battery rate (e.g. due
 By default Predbat will normally configure all timed charges or discharges to be at the inverter's maximum rate and these options enable you to reduce that maximum rate.
 [Low rate charging](customisation.md#inverter-control-options) could also be used to slow down Predbat's charge rate whilst still meeting the battery plan.
 
+With more than one inverter, these rates also decide how the fleet's SoC target is shared between the inverters. Each inverter is given a share of the energy to charge in proportion to its charge rate, or of the energy to discharge in proportion to its discharge rate, so the inverters finish together.
+An inverter that is full (or at its reserve) is held there and the others take its share. Forced exports are shared by **inverter_limit_export** instead, see below.
+
 ### **inverter_limit_export**
 
 An optional list of values with one entry per inverter.
@@ -1486,6 +1500,9 @@ while still allowing the battery to discharge at full rate during ECO mode to co
 
 If not set, the value defaults to `inverter_limit_discharge` (or the inverter maximum if that is also not set).
 Predbat will also use this rate when modelling the plan so the prediction accurately reflects the capped export rate.
+
+With more than one inverter, a forced export's fleet SoC target is shared between the inverters in proportion to this rate, so a lower limit on one inverter gives it less to export and a higher per-inverter target SoC.
+An inverter that reaches its reserve stops there and the others export the rest.
 
 ### **inverter_limit_charge_dc**
 
@@ -2621,8 +2638,12 @@ giving a stable average that is robust to occasional outliers).
 
 The calculation is performed at most once per calendar day to avoid wasting compute resources.
 On subsequent Predbat cycles in the same day the stored sensor state is used instead.
+If the day's calculation finds no usable charge (it runs just after midnight UTC, before an overnight charge), it is retried hourly
+until it does, so that night's charge is used the same morning. The time of the last attempt is kept on the sensor as `last_attempt`.
 
 The resulting `battery_scaling` is clamped to the range [0.8, 1.0] if `soc_max` is configured.
+If `soc_max` is not set the estimate is used directly and stays an estimate: it is never written back as `soc_max`,
+so later days are measured afresh rather than held near the first figure.
 
 This is useful for batteries that degrade over time — the scaling will gradually reduce as the measured capacity drifts
 below the nominal figure, without needing any manual adjustment.

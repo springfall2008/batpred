@@ -196,6 +196,10 @@ def test_fetch_pv_forecast_no_relative_time():
     assert pv_forecast_minute90[60] == pv_forecast_minute[60], f"Expected forecast90 minute 60 to fall back to p50 {pv_forecast_minute[60]}, got {pv_forecast_minute90[60]}"
     assert pv_forecast_minute90[120] == pv_forecast_minute[120], f"Expected forecast90 minute 120 to fall back to p50 {pv_forecast_minute[120]}, got {pv_forecast_minute90[120]}"
 
+    # A missing relative_time is expected (no PV forecast source configured), so nothing should be logged
+    parse_warnings = [msg for msg in fetch.log_messages if "Unable to parse relative_time" in msg]
+    assert not parse_warnings, f"Expected no relative_time warning when the attribute is missing, got {parse_warnings}"
+
     print(f"✓ Forecast data used with no offset (relative_time missing)")
     print(f"✓ pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
     print("Test 2 PASSED")
@@ -248,6 +252,10 @@ def test_fetch_pv_forecast_invalid_relative_time():
     # No forecast90 was published, so pv_forecast_minute90 must fall back to a copy of the p50 series
     assert pv_forecast_minute90[0] == pv_forecast_minute[0], f"Expected forecast90 minute 0 to fall back to p50 {pv_forecast_minute[0]}, got {pv_forecast_minute90[0]}"
     assert pv_forecast_minute90[120] == pv_forecast_minute[120], f"Expected forecast90 minute 120 to fall back to p50 {pv_forecast_minute[120]}, got {pv_forecast_minute90[120]}"
+
+    # A relative_time that is present but unparseable should still be warned about
+    parse_warnings = [msg for msg in fetch.log_messages if "Unable to parse relative_time" in msg]
+    assert len(parse_warnings) == 1, f"Expected one relative_time warning for an invalid value, got {parse_warnings}"
 
     print(f"✓ Forecast data used with no offset (invalid relative_time)")
     print(f"✓ pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")

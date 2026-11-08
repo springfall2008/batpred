@@ -119,6 +119,7 @@ coro
 corruptleg
 corruptplans
 cprofile
+CREAT
 creds
 crosscharge
 ctrdis
@@ -804,6 +805,7 @@ workstreams
 worktree
 writeonly
 wrongsha
+WRONLY
 wwxxabcdefyyzz
 x1
 xaxis

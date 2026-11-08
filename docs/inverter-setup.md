@@ -61,6 +61,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Solis Cloud](#solis-cloud) | Predbat | [solis_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solis_cloud.yaml) |
    | [Solis Hybrid inverters (Firmware before FB00)](#solis-inverters-before-fb00) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis_fb00.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis_fb00.yaml) |
+   | [Solis Local](#solis-local) | [Pho3niX90's Modbus integration](https://github.com/Pho3niX90/solis_modbus) | [solis_local.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solis_local.yaml) |
    | [Sunsynk Cloud](#sunsynk-cloud) | Predbat | See [apps.yaml](apps-yaml.md#sunsynk-cloud-api) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
@@ -2806,7 +2807,8 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 
 1. Install PredBat as per the [Installation Summary](installation-summary.md)
 
-2. Ensure that you have the Solax Modbus integration running and select the inverter type **Solis FB00** (not **Solis**).
+2. Install wills106's [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) and select the inverter type **Solis FB00** (not **Solis**).
+   This is the integration the `GS_fb00` inverter type and its template are written and tested for: Predbat's freeze, hold and export control relies on the entities it creates, in particular the Energy Storage Control Switch (see step 5).
    There are a number of entities which this integration disables by default that you will need to enable via the Home Assistant GUI:
 
    | Name                         | Description     |
@@ -2840,6 +2842,10 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
    So for example, if the inverter minimum SoC is set to 20%, predbat_set_reserve_min must be set to at least 21%. If this is not done then when Predbat sets the reserve SoC, the instruction will be rejected by the inverter and Predbat will error.
 
 7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
+
+## Solis local
+
+Uses a custom inverter definition to integrate locally via [Pho3niX90's modbus integration](https://github.com/Pho3niX90/solis_modbus).
 
 ## Sunsynk Cloud
 
@@ -3105,7 +3111,7 @@ Keep the token in `secrets.yaml` rather than in `apps.yaml` - see [Storing secre
 
 Copy the template [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) over the top of your `apps.yaml` and edit for your system. See [Tesla Powerwall Teslemetry API](components.md#tesla-powerwall-teslemetry-api-teslemetry) for details.
 
-`teslemetry_tbc_control` is on by default - that is the default *within* this beta component, which as a whole is still covered by the beta warning above; it is not a statement that the control path has graduated. Predbat pushes a control-signal tariff (0p over the charge window, 100p over the export window, 50p import elsewhere) and switches the Powerwall to Time-Based Control, so Tesla's own Opticaster runs the charge at full rate rather than the slower reserve-driven charge. While it is on, Predbat's charge and export target percentages are advisory, because Tesla decides how much energy actually moves. Grid charging under this mode is enabled only inside a charge window that is below target and whose reserve resolves below 100% - it is off outside a charge window entirely (including the demand and export states). One known limitation: the reserve resolves to 100% not only when Predbat is deliberately holding the battery there, but also whenever it asks for anything in the 81-99% band, which Powerwall firmware since 25.18.4 will not hold below 100% - so a `set_reserve_min` anywhere from 81 to 99 (a plausible value in its own right) leaves grid charging disabled in every state, permanently, with only a one-off log line to explain why. This is deliberate: on a Powerwall, grid-charging up to a 100% reserve triggers the slow throttled charge this mode exists to avoid. To opt out, set `teslemetry_tbc_control: False`: Predbat then pushes your real import/export rates and drives the charge through the backup reserve instead - slower, but the charge and export targets are enforced.
+`teslemetry_tbc_control` is on by default - that is the default *within* this beta component, which as a whole is still covered by the beta warning above; it is not a statement that the control path has graduated. Predbat pushes a control-signal tariff (0p over the charge window, 100p over the export window once it has started, 50p import elsewhere) and switches the Powerwall to Time-Based Control, so Tesla's own Opticaster runs the charge at full rate rather than the slower reserve-driven charge. When neither window is in the tariff it is a flat 50p, which gives Time-Based Control no reason to cover house load from the battery, so in that state Predbat uses Self-Powered mode instead and switches back to Time-Based Control as soon as a window is committed. Expect the Tesla app to move between the two modes during the day. While it is on, Predbat's charge and export target percentages are advisory, because Tesla decides how much energy actually moves. Grid charging under this mode is enabled only inside a charge window that is below target and whose reserve resolves below 100% - it is off outside a charge window entirely (including the demand and export states). One known limitation: the reserve resolves to 100% not only when Predbat is deliberately holding the battery there, but also whenever it asks for anything in the 81-99% band, which Powerwall firmware since 25.18.4 will not hold below 100% - so a `set_reserve_min` anywhere from 81 to 99 (a plausible value in its own right) leaves grid charging disabled in every state, permanently, with only a one-off log line to explain why. This is deliberate: on a Powerwall, grid-charging up to a 100% reserve triggers the slow throttled charge this mode exists to avoid. To opt out, set `teslemetry_tbc_control: False`: Predbat then pushes your real import/export rates and drives the charge through the backup reserve instead - slower, but the charge and export targets are enforced.
 
 ### How Predbat holds a Powerwall
 

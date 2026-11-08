@@ -39,6 +39,7 @@ from const import (
     CAR_MANUAL_SOC_IDLE_MINUTES,
     CAR_MANUAL_SOC_RATE_MARGIN,
     CAR_MANUAL_SOC_ENERGY_SLACK,
+    CARBON_WARN_COVERAGE_HOURS,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -49,6 +50,7 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import ast
 import copy
+import math
 
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
@@ -468,13 +470,48 @@ class Fetch:
 
         return load_yesterday, load_yesterday_raw
 
+    def load_counter_quantum(self, load_minutes, max_minute):
+        """
+        Work out the step a load counter moves in (0.01 kWh, 0.1 kWh, ...) from the gaps between the levels it
+        sits at: interpolation between readings smooths the steps but keeps the flat stretches. The levels sit
+        on the counter's grid, so the step is the greatest common divisor of the gaps between them (two flat
+        stretches can be several steps apart). Only gaps seen at least twice count: a counter that only sits
+        still where it stalled has a few one-off gaps that say nothing about its step. Returns 0 when there are
+        none - a counter that doesn't keep sitting still between steps is as fine as the history can show.
+        """
+        levels = []
+        minute = 0
+        while minute < max_minute:
+            value = load_minutes.get(minute, 0)
+            run_end = minute
+            while run_end < max_minute and load_minutes.get(run_end + 1, 0) == value:
+                run_end += 1
+            if run_end > minute:
+                levels.append(value)
+            minute = run_end + 1
+        gaps = {}
+        for newer, older in zip(levels, levels[1:]):
+            gap = int(round((newer - older) * 10000))
+            if gap > 0:
+                gaps[gap] = gaps.get(gap, 0) + 1
+        repeated = [gap for gap, count in gaps.items() if count >= 2]
+        divisor = 0
+        for gap in repeated:
+            divisor = math.gcd(divisor, gap)
+        return divisor / 10000.0
+
     def fill_load_from_power(self, load_minutes, load_power_data):
         """
         This function helps to deal with load sensors which don't increment very often leading to poor quality load data
         For example if its in kWh units then it might take many hours to increment.
         Predbat actually wants a much more real time estimate, but integrating power sensors alone leads to drift over time.
 
-        Strategy: Divide data into 30-minute periods. For each period:
+        Strategy:
+        0. Flat runs of the load sensor while power shows consumption (a counter that moves in coarse steps,
+           or stalled and caught up) are taken with the rise after them and the counter's own rise is spread
+           over them in the shape of the power. The load sensor decides how much energy, the power only when
+           (#5855), so the total is the load sensor's.
+        Then divide data into 30-minute periods. For each period:
         1. Calculate total load consumed (difference between start and end of period)
         2. Integrate power data over that period
         3. Scale power data to match the total load
@@ -535,40 +572,100 @@ class Fetch:
                     period_start = None
                 last_value = current_value
 
-        # Check final period
-        if period_start is not None and period_start < max_minute:
-            period_length = max_minute - period_start + 1
-            # Only consider it zero load if it exceeds the gap_size threshold
-            if period_length >= gap_size:
-                has_power = any(load_power_data.get(m, 0) > 0 for m in range(period_start, max_minute + 1))
-                if has_power and last_value == 0:
-                    zero_periods.append((period_start, max_minute, last_value))
+        # A flat run that reaches the oldest minute never closes above (the value past max_minute defaults to the run's own), and
+        # widening below can't walk a closed run into it, so it is never filled here. That is deliberate: the history starts at 0,
+        # so a flat run there can't tell a counter that didn't exist yet from one that stalled, and is left for the history and gap fillers
 
         # Fill zero periods with integrated power data
         if zero_periods:
-            self.log("Warn: Found {} periods of zero load with power data, filling using power integration".format(len(zero_periods)))
-            # Print the first 5 periods for debugging
-            for _i, (period_start, period_end, base_value) in enumerate(zero_periods[:5]):
-                start_timestamp = self.now_utc - timedelta(minutes=period_start)
-                self.log("Zero load period starting at {} ({} minutes) for {} minutes with base value {}".format(start_timestamp.strftime(TIME_FORMAT), period_start, period_end - period_start + 1, base_value))
+            # Work on the whole flat run: detection leaves out the minutes at either edge that still hold the
+            # plateau value, and filling inside them alone would let the series step backwards
+            flat_runs = []
+            for period_start, period_end, base_value in zero_periods:
+                while period_start > 0 and load_minutes.get(period_start - 1, 0) == base_value:
+                    period_start -= 1
+                while period_end < max_minute and load_minutes.get(period_end + 1, 0) == base_value:
+                    period_end += 1
+                flat_runs.append((period_start, period_end, base_value))
 
-            for period_start, period_end, _base_value in zero_periods:
-                # Integrate power data over this period
-                # First calculate total energy consumed in this period
-                total_energy = 0
-                for minute in range(period_start, period_end + 1):
-                    power = load_power_data.get(minute, 0)
-                    total_energy += power / 60.0 / 1000.0
+            # A flat run is the load sensor standing still while the power shows consumption. Whether energy is
+            # missing depends on how coarse the sensor is: a counter that moves in steps of quantum kWh can sit
+            # still for up to a step's worth of use, and then its next step holds that energy, so adding the
+            # power's energy on top as well counts it twice (#5855). Only a flat run holding well over a step's
+            # worth of power has lost readings.
+            quantum = self.load_counter_quantum(load_minutes, max_minute)
+            filled_runs = []
+            lift_after = {}
+            for period_start, period_end, base_value in flat_runs:
+                # The value at a minute is the reading at that time, so the energy up to it is the power of the
+                # minutes after the run's oldest reading: period_end itself is the starting point
+                run_energy = sum(max(load_power_data.get(minute, 0), 0) for minute in range(period_start, period_end)) / 60.0 / 1000.0
+                if run_energy <= 0:
+                    continue
 
-                amount_to_fill = 0
-                for minute in range(period_end, period_start, -1):
-                    power = max(load_power_data.get(minute, 0), 0)
-                    energy = power / 60.0 / 1000.0
-                    amount_to_fill += energy
-                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
-                # Fill to start
-                for minute in range(period_start, -1, -1):
-                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
+                segment_start = period_start
+                if period_start == 0:
+                    # Up to now: not counted yet, so the power's energy is all there is
+                    run_share, ramp_rise, lift = run_energy, 0.0, 0.0
+                elif run_energy <= 2 * quantum:
+                    # A step's worth or less: the counter's next step holds it, and the counter decides how much.
+                    # Take the rise up to one step (spread over the reporting interval by the interpolation)
+                    while segment_start > 0 and load_minutes.get(segment_start - 1, 0) > load_minutes.get(segment_start, 0) and load_minutes.get(segment_start, 0) - base_value < quantum - 1e-6:
+                        segment_start -= 1
+                    rise = load_minutes.get(segment_start, 0) - base_value
+                    ramp_energy = sum(max(load_power_data.get(minute, 0), 0) for minute in range(segment_start, period_start)) / 60.0 / 1000.0
+                    if rise <= 0:
+                        continue
+                    run_share = rise * run_energy / (run_energy + ramp_energy)
+                    ramp_rise, lift = rise - run_share, 0.0
+                else:
+                    # Readings were lost. Whatever the counter made up afterwards - the rise much steeper than the
+                    # power explains - belongs to the run; only what it never made up is filled from the power
+                    ramp_energy = 0.0
+                    while segment_start > 0:
+                        increase = load_minutes.get(segment_start - 1, 0) - load_minutes.get(segment_start, 0)
+                        step_energy = max(load_power_data.get(segment_start - 1, 0), 0) / 60.0 / 1000.0
+                        if increase <= 2 * step_energy + 0.0005:
+                            break
+                        ramp_energy += step_energy
+                        segment_start -= 1
+                    rise = load_minutes.get(segment_start, 0) - base_value
+                    caught_up = max(rise - ramp_energy, 0.0)
+                    run_share = max(caught_up, run_energy)
+                    ramp_rise, lift = rise - caught_up, run_share - caught_up
+
+                # Ramp the run by the power up to its share, then the rise after it up to its own share
+                energy_so_far = 0.0
+                for minute in range(period_end, period_start - 1, -1):
+                    if minute < period_end:
+                        energy_so_far += max(load_power_data.get(minute, 0), 0) / 60.0 / 1000.0
+                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + base_value + run_share * energy_so_far / run_energy - load_minutes.get(minute, 0)
+                if segment_start < period_start:
+                    ramp_power = [max(load_power_data.get(minute, 0), 0) for minute in range(segment_start, period_start)]
+                    ramp_total = sum(ramp_power)
+                    so_far = 0.0
+                    for minute in range(period_start - 1, segment_start - 1, -1):
+                        so_far += ramp_power[minute - segment_start] if ramp_total > 0 else 1
+                        share = so_far / (ramp_total if ramp_total > 0 else len(ramp_power))
+                        new_load_minutes[minute] = new_load_minutes.get(minute, 0) + base_value + run_share + ramp_rise * share - load_minutes.get(minute, 0)
+                if lift > 0 and segment_start > 0:
+                    lift_after[segment_start - 1] = lift_after.get(segment_start - 1, 0) + lift
+                filled_runs.append((period_start, period_end, base_value, run_share if period_start == 0 else lift))
+
+            # Apply the lifts in one pass from the oldest minute to now
+            if lift_after:
+                lift_total = 0
+                for minute in range(max_minute, -1, -1):
+                    lift_total += lift_after.get(minute, 0)
+                    if lift_total:
+                        new_load_minutes[minute] = new_load_minutes.get(minute, 0) + lift_total
+
+            if filled_runs:
+                self.log("Warn: Found {} periods of zero load with power data, filling using power integration (load sensor steps {} kWh)".format(len(filled_runs), dp4(quantum)))
+                # Print the first 5 periods for debugging
+                for period_start, period_end, base_value, added in filled_runs[:5]:
+                    start_timestamp = self.now_utc - timedelta(minutes=period_start)
+                    self.log("Zero load period starting at {} ({} minutes) for {} minutes with base value {}, {} kWh added from load_power".format(start_timestamp.strftime(TIME_FORMAT), period_start, period_end - period_start + 1, base_value, dp4(added)))
 
         # Process in 30-minute periods
         period_length = 30
@@ -1349,6 +1446,16 @@ class Fetch:
                 self.log("Warn: manual_soc_max target {}% at minute {} is below the manual_soc/alert floor {}% for the same minute - ignoring the ceiling there".format(self.all_active_keep_max[minute], minute, floor_value))
                 del self.all_active_keep_max[minute]
 
+    @property
+    def manual_all_times(self):
+        """
+        Every slot under a manual charge, export, demand or freeze override, which the optimiser leaves alone.
+
+        Derived from the per-type manual time lists rather than stored, so it can never disagree with them: not
+        after a reset, nor in a compare run, nor when a debug dump is replayed with one of the lists edited.
+        """
+        return self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
+
     def fetch_sensor_data(self, save=True):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
@@ -1641,6 +1748,7 @@ class Fetch:
                 self.log("Octopus Intelligent: dispatch minutes no car needs changed to {}".format(len(self.octopus_surplus)))
                 octopus_surplus_changed = True
             import_rates = self.dynamic_load_car_strip_feed_rates(import_rates)
+            import_rates = self.octopus_strip_withdrawn_feed_rates(import_rates, save=save)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True, use_future=True)
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
@@ -2571,11 +2679,15 @@ class Fetch:
         if pv_forecastHIST_packed_ld is None:
             pv_forecastHIST_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecastMAX")
         relative_time = self.get_state_wrapper(entity_id=entity_id, attribute="relative_time")
-        try:
-            relative_time = strptime_aware(relative_time, TIME_FORMAT)
-        except (ValueError, TypeError):
-            self.log(f"Warn: Unable to parse relative_time from PV forecast sensor: {relative_time}, using midnight UTC as fallback")
+        if relative_time is None:
+            # No PV forecast source configured (or it has not published yet) - midnight UTC is the correct default
             relative_time = self.midnight_utc
+        else:
+            try:
+                relative_time = strptime_aware(relative_time, TIME_FORMAT)
+            except (ValueError, TypeError):
+                self.log(f"Warn: Unable to parse relative_time from PV forecast sensor: {relative_time}, using midnight UTC as fallback")
+                relative_time = self.midnight_utc
 
         # Convert keys to integers and values to floats
         pv_forecast_packed = {}
@@ -2994,6 +3106,9 @@ class Fetch:
         alt_rate_min = min(alt_rates.values()) if alt_rates else 0
         alt_rate_threshold = abs(alt_rate_max - alt_rate_min) * 0.1
 
+        # Looked up for every minute below, so taken once rather than rebuilt from the per-type lists each time
+        manual_all_times = set(self.manual_all_times)
+
         stop_at = self.forecast_minutes + self.minutes_now + 12 * 60
         # Scan for lower rate start and end
         while minute < stop_at and not (minute >= (self.forecast_minutes + self.minutes_now) and (rate_low_start < 0)):
@@ -3012,7 +3127,7 @@ class Fetch:
                 pv_boundary = True
             if minute in rates:
                 rate = rates[minute]
-                if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)) or (minute in self.manual_all_times) or (rate_low_start in self.manual_all_times):
+                if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)) or (minute in manual_all_times) or (rate_low_start in manual_all_times):
                     rate_diff = abs(rate - rate_low_rate)
                     if (rate_low_start >= 0) and rate_diff > self.combine_rate_threshold:
                         # Refuse mixed rates that are different by more than threshold
@@ -3026,7 +3141,7 @@ class Fetch:
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if (rate_low_start in self.manual_all_times or minute in self.manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.plan_interval_minutes):
+                    if (rate_low_start in manual_all_times or minute in manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.plan_interval_minutes):
                         # Manual slot
                         rate_low_end = minute
                         break
@@ -4359,7 +4474,10 @@ class Fetch:
                 carbon_data, _ = minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
                 carbon_data, carbon_replicated = self.carbon_replicate(carbon_data)
                 if carbon_replicated:
-                    self.log("Warn: Carbon intensity forecast only covers {} hours of the {} hour plan, replicating it forward to cover the rest".format(dp1(min(carbon_replicated) / 60), dp1(self.forecast_minutes / 60)))
+                    # Coverage shrinks every cycle between the component's ~4 hourly polls, so only warn once it is thin
+                    covered_hours = min(carbon_replicated) / 60
+                    severity = "Warn: " if covered_hours < CARBON_WARN_COVERAGE_HOURS else ""
+                    self.log("{}Carbon intensity forecast only covers {} hours of the {} hour plan, replicating it forward to cover the rest".format(severity, dp1(covered_hours), dp1(self.forecast_minutes / 60)))
 
         entity_id = self.prefix + ".carbon_now"
         state = self.get_state_wrapper(entity_id=entity_id)
@@ -4755,7 +4873,6 @@ class Fetch:
         self.manual_freeze_charge_times = self.manual_times("manual_freeze_charge")
         self.manual_freeze_export_times = self.manual_times("manual_freeze_export")
         self.manual_demand_times = self.manual_times("manual_demand")
-        self.manual_all_times = self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
         self.manual_api = self.api_select_update("manual_api")
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))

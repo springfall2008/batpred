@@ -174,6 +174,9 @@ class ActiveTestInverter:
         self.discharge_rate_notify = notify
 
 
+# Expected rates must be worked out the way execute.py writes them: apply_inverter_rates() truncates with int(), floating point
+# included, so 5200 * 0.7 / 2 (1819.9999999999998) is written as 1819, not 1820. Expect the truncated value, or choose inputs that
+# give exact values such as a power fraction of 0.5.
 def run_execute_test(
     my_predbat,
     name,
@@ -2373,6 +2376,9 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
+    # Changed for #4856 F2: the fleet target is 8 kWh, and the fleet is at 5.5 kWh now, so 2.5 kWh must be added.
+    # Inverter 0 is already full (5.0 of 5.0 kWh), so inverter 1 takes all of it: 0.5 + 2.5 = 3.0 kWh = 60%, and the fleet reaches 8 kWh.
+    # This used to give inverter 1 only its rate share (1.25 kWh, 35%) and lose inverter 0's share, leaving the fleet short of the target at 6.75 kWh.
     failed |= run_execute_test(
         my_predbat,
         "charge_imbalance7",
@@ -2384,8 +2390,8 @@ def run_execute_tests(my_predbat):
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
-        assert_soc_target_array=[100, 35],
-        assert_immediate_soc_target_array=[100, 35],
+        assert_soc_target_array=[100, 60],
+        assert_immediate_soc_target_array=[100, 60],
         soc_kw=5.5,
         soc_kw_array=[5, 0.5],
     )
@@ -2973,6 +2979,81 @@ def run_execute_tests(my_predbat):
         reserve_max=90,
         has_timed_pause=False,
         soc_kw_array=[5, 4],
+    )
+    if failed:
+        return failed
+
+    # Hold charging above the reserve with no target SoC stops the charge, as the freeze service ignores the reserve
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_above_target_no_target_soc",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        has_target_soc=False,
+        has_timed_pause=False,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_reserve_array=[51, 51],
+        assert_immediate_charge_soc_target_array=[0, 0],
+        assert_immediate_charge_soc_freeze_array=[False, False],
+    )
+    if failed:
+        return failed
+
+    # At the reserve with no target SoC there is nothing above it to hand to the house, so it still freezes
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_at_reserve_no_target_soc",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=5.1,
+        has_target_soc=False,
+        has_timed_pause=False,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_reserve_array=[51, 51],
+        assert_immediate_charge_soc_target_array=[50, 50],
+        assert_immediate_charge_soc_freeze_array=[True, True],
+    )
+    if failed:
+        return failed
+
+    # With a target SoC the freeze at the target is unchanged
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_above_target_with_target_soc",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        has_target_soc=True,
+        has_timed_pause=False,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=100,
+        assert_reserve_array=[51, 51],
+        assert_immediate_charge_soc_target_array=[50, 50],
+        assert_immediate_charge_soc_freeze_array=[True, True],
     )
     if failed:
         return failed
@@ -5287,6 +5368,95 @@ def run_execute_tests(my_predbat):
         # Inverter 0 holds via pause mode so its reserve is untouched; inverter 1 has no timed
         # pause, so the hold is carried by reserve at soc_percent + 1 instead.
         assert_reserve_array=[0, 51],
+    )
+    if failed:
+        return failed
+
+    # A forced export to 30% at 70% power on two 5 kWh inverters at 80%, with different export rates (inverter_limit_export).
+    # The change is shared by export rate, so the 3 kW inverter is sent to 5% and the 1 kW one to 55%, and they still have to shed
+    # 3.75 and 1.25 kWh. The planned 2800W (4000W x 0.7) is allocated by those needs: 2100 + 700. Shared by the equal charge
+    # rate it was [30, 30], needs of 2.5 kWh each, which gave [1800, 1000] (#4856 F2). The immediate export (discharge_start_service)
+    # is sent the same per-inverter targets, so an inverter that stops itself at its target stops at its own share, not at the fleet's 30%.
+    failed |= run_execute_test(
+        my_predbat,
+        "mixed_fleet_export_target_follows_export_rate",
+        export_window_best=export_window_best_alloc,
+        export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 30, 0.7)],
+        assert_force_export=True,
+        soc_kw=8.0,
+        soc_kw_array=[4.0, 4.0],
+        soc_max=10.0,
+        soc_max_array=[5.0, 5.0],
+        battery_max_rate=2600,
+        battery_max_rate_array=[2600, 2600],
+        battery_max_export_rate_array=[3000, 1000],
+        reserve=0,  # no reserve, so the only limit on each inverter is its export rate (the harness default of 1 kWh would hold the 3 kW inverter at its 0.5 kWh reserve first)
+        set_charge_window=True,
+        set_export_window=True,
+        set_export_low_power=True,
+        assert_status="Exporting",
+        assert_immediate_discharge_soc_target_array=[5, 55],
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_discharge_rate_array=[2100, 700],
+    )
+    if failed:
+        return failed
+
+    # The same fleet with equal export rates but different charge/discharge rates: a forced export ignores the discharge rate,
+    # so the inverters share the change equally (both to 30%, needs of 2.5 kWh each) and the planned 2600W (5200W x 0.5) is
+    # split 1300 + 1300. Had the discharge rate been used they would have been sent to 5% and 55%, giving [1950, 650].
+    failed |= run_execute_test(
+        my_predbat,
+        "mixed_fleet_export_target_ignores_discharge_rate",
+        export_window_best=export_window_best_alloc,
+        export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 30, 0.5)],
+        assert_force_export=True,
+        soc_kw=8.0,
+        soc_kw_array=[4.0, 4.0],
+        soc_max=10.0,
+        soc_max_array=[5.0, 5.0],
+        battery_max_rate=2600,
+        battery_max_rate_array=[3000, 1000],
+        battery_max_export_rate_array=[2600, 2600],
+        reserve=0,  # no reserve, so the only limit on each inverter is its export rate (the harness default of 1 kWh would hold the 3 kW inverter at its 0.5 kWh reserve first)
+        set_charge_window=True,
+        set_export_window=True,
+        set_export_low_power=True,
+        assert_status="Exporting",
+        assert_immediate_soc_target=30,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_charge_rate_array=[3000, 1000],  # not under test: the harness sets charge and discharge rates from battery_max_rate_array together
+        assert_discharge_rate_array=[1300, 1300],
+    )
+    if failed:
+        return failed
+
+    # A forced export to 30% on two 5 kWh inverters at 80% with a 10% reserve (0.5 kWh each) and export rates of 3 kW / 1 kW. Shared by
+    # export rate the 3 kW inverter would shed 3.75 kWh, which takes it below its reserve, so it sheds only the 3.5 kWh it has room for and
+    # the 1 kW inverter takes the other 0.25 kWh (1.5 kWh in all). The planned 2000W (4000W x 0.5) is allocated by those needs: 1400 + 600.
+    # Equal rates, as before, gave needs of 2.5 kWh each and [1000, 1000]; without the redistribution the 1 kW inverter would shed only 1.25 kWh, giving [1473, 526].
+    # The immediate export targets are the same shares: 0.5 kWh of 5 = 10% (its reserve) and 2.5 kWh of 5 = 50%.
+    failed |= run_execute_test(
+        my_predbat,
+        "mixed_fleet_export_target_reserve_redistributes",
+        export_window_best=export_window_best_alloc,
+        export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 30, 0.5)],
+        assert_force_export=True,
+        soc_kw=8.0,
+        soc_kw_array=[4.0, 4.0],
+        soc_max=10.0,
+        soc_max_array=[5.0, 5.0],
+        reserve=1,
+        battery_max_rate=2600,
+        battery_max_rate_array=[2600, 2600],
+        battery_max_export_rate_array=[3000, 1000],
+        set_charge_window=True,
+        set_export_window=True,
+        set_export_low_power=True,
+        assert_status="Exporting",
+        assert_immediate_discharge_soc_target_array=[10, 50],
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_discharge_rate_array=[1400, 600],
     )
     if failed:
         return failed

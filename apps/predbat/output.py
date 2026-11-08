@@ -74,6 +74,13 @@ REASON_TEMPLATES = {
     "status_warning": "Predbat reported a problem during this slot: {warnings}",
 }
 
+# The plan is scored against the expected forecast and its PV10 and PV90 alternatives, but the table shows only
+# the expected one (#5871). A row carries the other scenarios' values as positional lists in this order, with the
+# order and the scenario names published once per plan rather than repeated on every row.
+PLAN_SCENARIO_FIELDS = ["soc_percent", "pv_forecast", "load_forecast", "cost_change", "total_cost"]
+# PV10 is the low solar, high use case and PV90 the high solar, low use one
+PLAN_SCENARIO_NAMES = {"10": "Pessimistic", "90": "Optimistic"}
+
 
 def yesterday_slot_is_exporting(slot_status):
     """True when a historical ``predbat.status`` string (already lower-cased) represents export
@@ -1278,9 +1285,68 @@ class Output:
         charge_rate_now_curve = min(charge_rate_now_curve, charge_rate_limit)
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None):
+    def plan_scenario_sources(self):
+        """
+        The final plan's PV10 and PV90 runs to show beside the expected one (#5871), keyed by scenario.
+
+        Each entry is (soc by minute, metric by minute, PV step, load step). The PV and load come from the same step
+        arrays the plan's scenario runs used, not the caller's, so a row never pairs a scenario's SoC with PV it
+        wasn't simulated against. A scenario the plan is not scored
+        against is left out: PV10 at a zero weight (its run is still made, for the Best10 chart), and PV90 at a zero
+        weight, when it is not run and its SoC series is empty.
+        """
+        sources = {}
+        if self.predict_soc_best10 and self.pv_metric10_weight > 0:
+            sources["10"] = (self.predict_soc_best10, self.predict_metric_best10, self.pv_forecast_minute10_step, self.load_minutes_step10)
+        if self.predict_soc_best90:
+            sources["90"] = (self.predict_soc_best90, self.predict_metric_best90, self.pv_forecast_minute90_step, self.load_minutes_step90)
+        return sources
+
+    def plan_row_scenarios(self, scenario_sources, minute_relative_start, minute_relative_slot_end, expected):
+        """
+        A plan row's values under each other scenario, in PLAN_SCENARIO_FIELDS order (#5871).
+
+        expected is the row's own values in the same order. A scenario whose values all match them, at the
+        precision the table shows, is left out, so rows where the scenarios agree carry nothing extra.
+        Returns a dict keyed by scenario, or None when every scenario matches.
+        """
+        result = {}
+        for key, (soc, metric, pv_step, load_step) in scenario_sources.items():
+            pv = 0.0
+            load = 0.0
+            for offset in range(minute_relative_start, minute_relative_slot_end, PREDICT_STEP):
+                pv += pv_step.get(offset, 0.0)
+                load += load_step.get(offset, 0.0)
+            metric_start = metric.get(minute_relative_start, 0.0)
+            metric_end = metric.get(minute_relative_slot_end, metric_start)
+            # + 0.0 turns a rounded -0.0 into 0.0, so it compares equal and reads cleanly
+            values = [calc_percent_limit(soc.get(minute_relative_start, 0.0), self.soc_max), dp2(pv) + 0.0, dp2(load) + 0.0, dp2((metric_end - metric_start) / 100.0) + 0.0, dp2(metric_start / 100.0) + 0.0]
+            if values != expected:
+                result[key] = values
+        return result or None
+
+    def plan_scenario_soc_title(self, soc_percent, row_scenarios):
+        """
+        A title attribute listing a plan row's SoC in every scenario, one per line (#5871).
+
+        Returns "" when the row carries no scenarios or every scenario shows the same SoC. The web UI builds the same
+        tooltip, and those for the PV, load, cost and total cells, with scenarioTitle() in web_helper.py.
+        """
+        if not row_scenarios:
+            return ""
+        socs = [("Expected", soc_percent)] + [(PLAN_SCENARIO_NAMES[key], scenario[0]) for key, scenario in sorted(row_scenarios.items())]
+        if all(value == soc_percent for _, value in socs):
+            return ""
+        # One scenario per line - &#10; is a line break inside a title attribute
+        return ' title="' + "&#10;".join("{} {}%".format(label, value) for label, value in socs) + '"'
+
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None, show_scenarios=False):
         """
         Publish the current plan in HTML format
+
+        show_scenarios adds the final plan's PV10 and PV90 outcomes to each row: a SoC tooltip in the HTML, and
+        per-row lists in the JSON that the web UI turns into tooltips (#5871). Only the live plan passes it - the History, compare and debug-pass
+        tables have no matching scenario runs.
 
         car_hold_minutes, when given, is the set of plan minutes whose recorded status was "Hold for car":
         the Yesterday actual-history table shows measured SoC, so its car icon comes from what happened
@@ -1315,6 +1381,10 @@ class Output:
         car_total = 0
         raw_plan = {}
         raw_plan["rows"] = []
+        scenario_sources = self.plan_scenario_sources() if show_scenarios else {}
+        if scenario_sources:
+            raw_plan["scenario_fields"] = PLAN_SCENARIO_FIELDS
+            raw_plan["scenario_names"] = {key: PLAN_SCENARIO_NAMES[key] for key in scenario_sources}
 
         import_cost_threshold = self.rate_import_cost_threshold
         export_cost_threshold = self.rate_export_cost_threshold
@@ -1491,6 +1561,10 @@ class Output:
             metric_start = self.predict_metric_best.get(minute_relative_start, 0.0)
             metric_end = self.predict_metric_best.get(minute_relative_slot_end, metric_start)
             metric_change = metric_end - metric_start
+            row_scenarios = None
+            if scenario_sources:
+                row_expected = [soc_percent, raw_pv_forecast, raw_load_forecast, dp2(metric_change / 100.0), dp2(metric_start / 100.0)]
+                row_scenarios = self.plan_row_scenarios(scenario_sources, minute_relative_start, minute_relative_slot_end, row_expected)
 
             # Raw state for raw plan
             raw_state = "Demand"
@@ -1964,7 +2038,9 @@ class Output:
                 html += "<td id=car bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             if self.iboost_enable:
                 html += "<td bgcolor=" + iboost_color + ">" + iboost_amount_str + " </td>"
-            html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
+            # Only the SoC cell carries the scenario tooltip in the HTML, where it is repeated on every row; the web
+            # UI builds tooltips for the other cells from the row's JSON (#5871)
+            html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + self.plan_scenario_soc_title(soc_percent, row_scenarios) + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "<td id=cost bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
             html += "<td id=total_cost bgcolor=#FFFFFF>" + str(total_str) + "</td>"
             if self.carbon_enable:
@@ -2061,6 +2137,8 @@ class Output:
             json_row["soc_sym"] = soc_sym
             json_row["cost_change"] = dp2(metric_change / 100.0)
             json_row["total_cost"] = dp2(metric_start / 100.0)
+            if row_scenarios:
+                json_row["scenarios"] = row_scenarios
             if self.carbon_enable:
                 json_row["carbon_intensity"] = carbon_intensity
                 json_row["carbon_change"] = carbon_change
@@ -2203,6 +2281,32 @@ class Output:
             )
         return rates
 
+    def over_cap_premium(self, over_cap_minutes, minute, car_energy):
+        """
+        The extra cost of the car's charging in minute when it is beyond the Octopus Intelligent cap: the gap from the
+        house rate to the peak rate, on the energy the car sensor measured, or on the dispatch's own energy for the
+        minute without one (car_energy None). Only energy already charged is costed, never what is still planned.
+        """
+        if minute not in over_cap_minutes:
+            return 0.0
+        energy = over_cap_minutes[minute] if car_energy is None else car_energy
+        return max(0.0, self.rate_max_base - self.rate_import.get(minute, 0)) * energy
+
+    def car_outside_clamp_energy(self, energy_import, energy_export, load_energy, car_energy):
+        """
+        A minute's import, export and load as the supply meter sees them, and the car energy imported from the grid.
+
+        With the charger outside the CT clamp (car_energy_reported_load off) the import and load sensors miss the car,
+        but the meter bills it. The car sits between the clamp and the meter, so what the clamp counts as export goes
+        into the car first, as the prediction treats it, and only the rest is imported. Inside the clamp the sensors
+        already have the car, so they are returned as they are and all the car's energy counts as imported.
+        """
+        if self.car_energy_reported_load or car_energy <= 0:
+            return energy_import, energy_export, load_energy, car_energy
+        car_from_export = min(car_energy, energy_export)
+        car_import = car_energy - car_from_export
+        return energy_import + car_import, energy_export - car_from_export, load_energy + car_energy, car_import
+
     def today_cost(self, import_today, export_today, car_today, load_today, save=True):
         """
         Work out energy costs today (approx)
@@ -2258,6 +2362,13 @@ class Output:
                 )
             )
 
+        # Car charging beyond the Octopus Intelligent cap is billed at the peak rate while the house keeps its own,
+        # so the minutes gone beyond it carry the difference on top of the house rate the loops below charge
+        over_cap_minutes = {}
+        for car_n in range(min(self.num_cars, len(self.octopus_slots))):
+            for minute, kwh in self.octopus_over_cap_minutes(car_n, self.octopus_slots[car_n]).items():
+                over_cap_minutes[minute] = over_cap_minutes.get(minute, 0.0) + kwh
+
         for minute_back in range(60):
             minute = self.minutes_now - minute_back
             energy_import = self.get_from_incrementing(import_today, minute_back)
@@ -2273,6 +2384,8 @@ class Output:
             else:
                 energy_export = 0
 
+            energy_import, energy_export, load_energy, car_import = self.car_outside_clamp_energy(energy_import, energy_export, load_energy, energy_car)
+
             hour_energy += energy_import - energy_export
             hour_energy_import += energy_import
             hour_energy_export += energy_export
@@ -2284,6 +2397,9 @@ class Output:
                 hour_cost += self.rate_import.get(minute, 0) * energy_import
                 hour_cost_import += self.rate_import.get(minute, 0) * energy_import
                 hour_cost_car += self.rate_import.get(minute, 0) * energy_car
+                premium = self.over_cap_premium(over_cap_minutes, minute, car_import if car_today else None)
+                hour_cost_car += premium
+                hour_cost += premium
 
             if self.rate_export:
                 hour_cost -= self.rate_export.get(minute, 0) * energy_export
@@ -2331,6 +2447,7 @@ class Output:
                 energy_export = self.get_from_incrementing(export_today, minute_back)
             else:
                 energy_export = 0
+            energy, energy_export, load_energy, car_import = self.car_outside_clamp_energy(energy, energy_export, load_energy, car_energy)
             day_energy += energy
             day_energy_export += energy_export
             day_energy_total += energy - energy_export
@@ -2343,6 +2460,10 @@ class Output:
                 day_cost_import += self.rate_import.get(minute, 0) * energy
                 day_cost_nosc += self.rate_import.get(minute, 0) * energy
                 day_cost_car += self.rate_import.get(minute, 0) * car_energy
+                premium = self.over_cap_premium(over_cap_minutes, minute, car_import if car_today else None)
+                day_cost_car += premium
+                day_cost += premium
+                day_cost_nosc += premium
 
             day_export += energy_export
             if self.rate_export:
@@ -2362,23 +2483,6 @@ class Output:
                 day_cost_time_import[stamp] = dp2(day_cost_import)
                 day_cost_time_export[stamp] = dp2(day_cost_export)
                 day_carbon_time[stamp] = dp2(carbon_g)
-
-        # Add beyond-cap IOG rate premium for day and hour car cost.
-        # The per-minute loops above charged car energy at house import rate (correct base).
-        # For IOG slots where average > house rate (beyond cap), add the difference.
-        for car_n in range(self.num_cars):
-            for slot in self.car_charging_slots[car_n]:
-                house_rate = self.rate_import.get(slot["start"], 0)
-                premium = max(0, slot.get("average", 0) - house_rate) * slot.get("kwh", 0)
-                if premium > 0:
-                    slot_start = slot["start"]
-                    if 0 <= slot_start < self.minutes_now:
-                        day_cost_car += premium
-                        day_cost += premium
-                        day_cost_nosc += premium
-                    if self.minutes_now - 60 <= slot_start < self.minutes_now:
-                        hour_cost_car += premium
-                        hour_cost += premium
 
         day_pkwh = self.rate_import.get(0, 0)
         day_car_pkwh = self.rate_import.get(0, 0)
@@ -4271,14 +4375,31 @@ class Output:
             costs[minute] = cost
         return costs
 
-    def history_row_kwh(self, incrementing, status_offset, view_minutes):
-        """Predbat's recorded kWh for each History row from an incrementing energy series, or None when there is none."""
-        if not incrementing:
-            return None
-        rows = {}
+    def history_row_meter_kwh(self, status_offset, view_minutes):
+        """Predbat's recorded import and export kWh for each History row as the supply meter saw them, or None for one with no sensor.
+
+        A car outside the CT clamp is added from its own sensor the way today_cost() costs it (car_outside_clamp_energy()),
+        so the rows match the supplier's metered kWh, which include the car.
+        """
+        if not self.import_today:
+            return None, None
+        car_today = self.car_charging_energy if self.num_cars > 0 else None
+        import_rows = {}
+        export_rows = {}
         for minute in range(0, view_minutes, self.plan_interval_minutes):
-            rows[minute] = sum(self.get_from_incrementing(incrementing, status_offset - offset - 1) for offset in range(minute, min(minute + self.plan_interval_minutes, view_minutes)))
-        return rows
+            import_kwh = 0.0
+            export_kwh = 0.0
+            for offset in range(minute, min(minute + self.plan_interval_minutes, view_minutes)):
+                index = status_offset - offset - 1
+                energy_import = self.get_from_incrementing(self.import_today, index)
+                energy_export = self.get_from_incrementing(self.export_today, index) if self.export_today else 0.0
+                car_energy = self.get_from_incrementing(car_today, index) if car_today else 0.0
+                energy_import, energy_export, _, _ = self.car_outside_clamp_energy(energy_import, energy_export, 0.0, car_energy)
+                import_kwh += energy_import
+                export_kwh += energy_export
+            import_rows[minute] = import_kwh
+            export_rows[minute] = export_kwh
+        return import_rows, export_rows if self.export_today else None
 
     @staticmethod
     def history_events(rate_import_replicated, rate_export_replicated, offset):
@@ -4366,6 +4487,7 @@ class Output:
         boundaries = self.history_day_boundaries(view_midnight_utc, view_minutes)
         array = self.history_cumulative_array(data, status_offset, view_minutes, boundaries)
         costs = self.history_row_costs(array, view_minutes, 0.0 if import_only else self.metric_standing_charge, boundaries)
+        import_kwh, export_kwh = self.history_row_meter_kwh(status_offset, view_minutes)
         attach_billing(
             plan_json,
             billing,
@@ -4375,8 +4497,8 @@ class Output:
             self.metric_standing_charge,
             events,
             import_only,
-            self.history_row_kwh(self.import_today, status_offset, view_minutes),
-            None if import_only else self.history_row_kwh(self.export_today, status_offset, view_minutes),
+            import_kwh,
+            None if import_only else export_kwh,
         )
 
     def local_midnight_utc(self, day):
