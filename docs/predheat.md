@@ -186,9 +186,7 @@ setpoint applies until the next scheduled temperature change.
 
 If Climate Scheduler is unavailable, its schedule is disabled or invalid, or a
 required Workday lookup fails, Predheat falls back to its existing historical
-setpoint prediction. Nodes marked as **no change** are ignored. An HVAC-off
-schedule node cannot be represented by a target temperature alone, so Predheat
-also falls back to history instead of attempting to model such a schedule.
+setpoint prediction.
 
 ### Weather Compensation
 
