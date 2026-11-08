@@ -48,6 +48,7 @@ class ActiveTestInverter:
         self.inv_has_charge_enable_time = True
         self.inv_has_timed_pause = True
         self.inv_reserve_above_soc_charges_from_grid = False
+        self.inv_reserve_full_only_above_80 = False
         self.inv_has_discharge_enable_time = True
         self.inv_has_ge_eco_toggle = False
         self.inv_has_ge_inverter_mode = False
@@ -235,6 +236,7 @@ def run_execute_test(
     has_timed_pause=True,
     has_timed_pause_array=None,
     reserve_above_soc_charges_from_grid=False,
+    reserve_full_only_above_80=False,
     has_target_soc=True,
     has_charge_enable_time=True,
     has_ge_eco_toggle=False,
@@ -349,6 +351,7 @@ def run_execute_test(
         inverter.battery_rate_max_export = inv_export_w / 1000.0 / 60.0
         inverter.inv_has_timed_pause = has_timed_pause_array[inverter.id] if has_timed_pause_array else has_timed_pause
         inverter.inv_reserve_above_soc_charges_from_grid = reserve_above_soc_charges_from_grid
+        inverter.inv_reserve_full_only_above_80 = reserve_full_only_above_80
         inverter.inv_has_target_soc = has_target_soc
         inverter.inv_has_charge_enable_time = has_charge_enable_time
         inverter.inv_has_ge_eco_toggle = has_ge_eco_toggle
@@ -2038,6 +2041,43 @@ def test_reserve_above_soc_inverter_types():
     return failed
 
 
+def test_reserve_full_only_above_80_inverter_types():
+    """Only the Powerwall, whose firmware honours no backup reserve between 80 and 100 (GH#6046), opts in."""
+    from config import INVERTER_DEF
+
+    failed = False
+    opted_in = sorted(name for name, idef in INVERTER_DEF.items() if idef.get("reserve_full_only_above_80", False))
+    if opted_in != ["TESLA"]:
+        print("ERROR: reserve_full_only_above_80 should be set for TESLA only, got {}".format(opted_in))
+        failed = True
+    return failed
+
+
+def test_reserve_full_only_above_80_reaches_the_inverter(my_predbat):
+    """The flag reaches a real Inverter from INVERTER_DEF: execute reads it bare, so a broken refresh_config() wiring
+    must fail here rather than silently let a Powerwall car hold feed the car."""
+    from inverter import Inverter
+
+    failed = False
+    orig_inverter_type = my_predbat.args.get("inverter_type")
+    orig_rest = my_predbat.args.get("givtcp_rest")
+    my_predbat.args["givtcp_rest"] = None
+    try:
+        for inverter_type, expected in (("TESLA", True), ("GE", False)):
+            my_predbat.args["inverter_type"] = [inverter_type]
+            inverter = Inverter(my_predbat, 0, quiet=True)
+            if inverter.inv_reserve_full_only_above_80 is not expected:
+                print("ERROR: {} inverter has inv_reserve_full_only_above_80 {}, expected {}".format(inverter_type, inverter.inv_reserve_full_only_above_80, expected))
+                failed = True
+    finally:
+        if orig_inverter_type is None:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = orig_inverter_type
+        my_predbat.args["givtcp_rest"] = orig_rest
+    return failed
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
@@ -2048,6 +2088,8 @@ def run_execute_tests(my_predbat):
     failed |= test_inverter_reads_battery_export_permitted(my_predbat)
     failed |= test_fetch_inverter_data_battery_export_not_permitted(my_predbat)
     failed |= test_reserve_above_soc_inverter_types()
+    failed |= test_reserve_full_only_above_80_inverter_types()
+    failed |= test_reserve_full_only_above_80_reaches_the_inverter(my_predbat)
     if failed:
         return failed
 
@@ -4669,6 +4711,62 @@ def run_execute_tests(my_predbat):
         soc_kw=1,
         assert_immediate_soc_target=10,
         assert_reserve=11,
+    )
+    # A Powerwall honours no reserve between 80 and 100 (GH#6046), so a car hold above 80% asks for 100: the battery
+    # is topped up from the grid rather than allowed to run into the car
+    failed |= run_execute_test(
+        my_predbat,
+        "car2_powerwall_above_80_holds_at_100",
+        car_slot=charge_window_best_slot,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold for car",
+        assert_pause_discharge=False,
+        assert_discharge_rate=0,
+        has_timed_pause=False,
+        soc_kw=8.6,
+        assert_immediate_soc_target=86,
+        assert_reserve=100,
+        reserve_above_soc_charges_from_grid=True,
+        reserve_full_only_above_80=True,
+    )
+    # At or below 80% the Powerwall honours the reserve, so the car hold is the SoC rounded down as before
+    failed |= run_execute_test(
+        my_predbat,
+        "car2_powerwall_below_80_holds_at_soc",
+        car_slot=charge_window_best_slot,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold for car",
+        assert_pause_discharge=False,
+        assert_discharge_rate=0,
+        has_timed_pause=False,
+        soc_kw=6.0,
+        assert_immediate_soc_target=60,
+        assert_reserve=60,
+        reserve_above_soc_charges_from_grid=True,
+        reserve_full_only_above_80=True,
+    )
+    # A freeze is not a car hold: above 80% it still asks for the SoC, leaving the device component to hold it
+    # near that level (teslemetry's band rule) rather than fill it to 100
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_powerwall_above_80_asks_for_soc",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=8.6,
+        assert_pause_discharge=False,
+        assert_status="Freeze charging",
+        assert_discharge_rate=0,
+        assert_reserve=86,
+        assert_soc_target=100,
+        assert_immediate_soc_target=86,
+        has_timed_pause=False,
+        reserve_above_soc_charges_from_grid=True,
+        reserve_full_only_above_80=True,
     )
     failed |= run_execute_test(
         my_predbat,

@@ -587,6 +587,9 @@ class Inverter:
         # True when a reserve above the SoC makes the battery charge from the grid to reach it, so a
         # hold on reserve must not lead the SoC. Defaults False so an inverter type has to opt in.
         self.inv_reserve_above_soc_charges_from_grid = INVERTER_DEF[self.inverter_type].get("reserve_above_soc_charges_from_grid", False)
+        # True when no reserve between 80 and 100 is honoured (a Powerwall, GH#6046), so above 80% a hold that must not
+        # discharge at all can only ask for 100. Defaults False so an inverter type has to opt in.
+        self.inv_reserve_full_only_above_80 = INVERTER_DEF[self.inverter_type].get("reserve_full_only_above_80", False)
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
         self.inv_charge_time_entity_is_option = INVERTER_DEF[self.inverter_type]["charge_time_entity_is_option"]
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]
