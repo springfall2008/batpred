@@ -104,7 +104,7 @@ def test_predheat_climate_scheduler(my_predbat):
             "weekday": [{"time": "06:00", "temp": 19}],
             "weekend": [{"time": "00:15", "temp": 16}],
         }
-        heat, _, _ = make(local(2026, 11, 6, 23, 30), response(nodes, "5/2"), days=4)
+        heat, _, _ = make(local(2026, 11, 6, 23, 30), response(nodes, "5/2"), days=4, scheduler_settings={"workdays": ["mon", "tue", "wed", "thu", "fri"]},)
         values(heat, [(0, 20), (44, 20), (45, 16), (3269, 16), (3270, 19)])
 
     def configurable_workdays():
@@ -134,7 +134,10 @@ def test_predheat_climate_scheduler(my_predbat):
             local(2026, 11, 6, 23, 30),
             response(nodes, "5/2"),
             days=4,
-            scheduler_settings={"use_workday_integration": True},
+            scheduler_settings={
+                "workdays": ["mon", "tue", "wed", "thu", "fri"],
+                "use_workday_integration": True,
+            },
             workday_dates={"2026-11-07"},
         )
         values(heat, [(0, 20), (44, 20), (45, 21), (1484, 21), (1485, 17), (2925, 17)])
@@ -151,11 +154,46 @@ def test_predheat_climate_scheduler(my_predbat):
         heat, _, _ = make(
             local(2026, 11, 6, 23, 30),
             response(nodes, "5/2"),
-            scheduler_settings={"use_workday_integration": True},
+            scheduler_settings={
+                "workdays": ["mon", "tue", "wed", "thu", "fri"],
+                "use_workday_integration": True,
+            },
             workday_dates=RuntimeError("unavailable"),
         )
         assert heat.schedule_change_minutes is None
         values(heat, [(0, 17.5), (120, 17.5)])
+
+    def settings_failure():
+        nodes = {
+            "weekday": [{"time": "00:15", "temp": 21}],
+            "weekend": [{"time": "00:15", "temp": 17}],
+        }
+        cases = [
+            ("service exception", RuntimeError("unavailable")),
+            ("missing workdays", {}),
+            ("invalid workdays", {"workdays": ["noday"]}),
+            ("invalid Workday setting", {
+                "workdays": ["mon", "tue", "wed", "thu", "fri"],
+                "use_workday_integration": "yes",
+            }),
+        ]
+        for name, scheduler_settings in cases:
+            heat, calls, _ = make(
+                local(2026, 11, 6, 23, 30),
+                response(nodes, "5/2"),
+                scheduler_settings=scheduler_settings,
+            )
+            assert heat.schedule_change_minutes is None, name
+            values(heat, [(0, 17.5), (120, 17.5)])
+            assert any(
+                service == "climate_scheduler/get_settings"
+                for service, _ in calls
+            ), name
+            assert not any(
+                service == "workday/check_date"
+                for service, _ in calls
+            ), name
+
 
     def individual():
         nodes = {
@@ -272,6 +310,7 @@ def test_predheat_climate_scheduler(my_predbat):
         check("weekday/weekend across Monday", weekdays)
         check("custom manually selected workdays", configurable_workdays)
         check("Workday future dates and holidays", workday_holidays)
+        check("Climate Scheduler settings failure fallback", settings_failure)
         check("Workday service failure fallback", workday_failure)
         check("individual days across midnight", individual)
         check("numeric live setpoint", numeric_live)
