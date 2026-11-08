@@ -1375,6 +1375,7 @@ class SharedMemoryConfigTests(DaemonPathsTestCase):
         self.assertEqual(sorted(servers), ["gitnexus", "shared-memory"])
         self.assertEqual(servers["shared-memory"], {"type": "http", "url": self.URL, "headers": {"Authorization": f"Bearer {self.TOKEN}"}})
 
+    @unittest.skipIf(sys.platform == "win32", "POSIX file modes not supported on Windows")
     def test_the_config_holding_the_token_is_owner_only(self):
         self.write_env(f"AGENT_MEMORY_URL={self.URL}\nAGENT_MEMORY_TOKEN={self.TOKEN}\n")
         self.write_config()
