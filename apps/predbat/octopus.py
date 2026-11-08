@@ -4149,7 +4149,8 @@ class Octopus:
         Split a car slot wherever the import rate changes, as (start, end, kwh, rate) chunks.
 
         For a slot billed at the normal tariff rate rather than a dispatch rate - a charger's own
-        schedule (see DISPATCH_SOURCE_CHARGER_SCHEDULE). Such a session commonly runs for hours and
+        schedule (see DISPATCH_SOURCE_CHARGER_SCHEDULE), or a BOOST / bump-charge dispatch
+        (dispatch_billed_off_peak() returns False for both, #6048). Such a session commonly runs for hours and
         crosses rate bands, so pricing all of it at the rate it starts on would give the car a rate
         of its own that differs from the house rate for the rest of the slot (car_charge_slot_rate()).
         kWh is apportioned to each chunk by its share of the slot's duration.
@@ -4177,7 +4178,7 @@ class Octopus:
         what the rates are built from - so it can only price a slot on the previous cycle's rate_import:
         empty on the first cycle after a restart, a day out on the first after midnight, and behind
         whenever new rates arrive. An Intelligent slot does not care, it is priced at the dispatch
-        rate. A charger schedule is priced at the tariff, so each of its slots is split and priced
+        rate. A charger schedule, BOOST or bump-charge slot is priced at the tariff, so each of its slots is split and priced
         again here, once the rates are known.
 
         Done in place rather than by building the slots again, so that what dynamic_load_car_check()
@@ -4375,11 +4376,16 @@ class Octopus:
             # kWh is apportioned to each chunk by its share of the slot's duration - an
             # approximation (real draw isn't perfectly uniform across the slot).
             # Marked so reprice_charger_schedule_slots() can find them again once this cycle's rates are built
-            charger_schedule = source == DISPATCH_SOURCE_CHARGER_SCHEDULE
+            # A BOOST or bump-charge dispatch is billed at the tariff, not the off-peak rate
+            # (dispatch_billed_off_peak() returns False for both), so like a charger schedule it
+            # is priced on the tariff split wherever the rate changes (#6048): such a session
+            # commonly runs for hours across rate bands, and pricing all of it at the rate its
+            # start minute lands on would freeze a cheap start rate for the whole slot.
+            tariff_rate_slot = source == DISPATCH_SOURCE_CHARGER_SCHEDULE or source in ("BOOST", "bump-charge")
             slot_minutes = end_minutes - start_minutes
 
             chunks = [(start_minutes, end_minutes, kwh, self.rate_import.get(start_minutes, self.rate_min_base))]
-            if charger_schedule:
+            if tariff_rate_slot:
                 chunks = self.split_slot_by_rate(start_minutes, end_minutes, kwh)
             elif capped:
                 low_runs = self.minute_runs(start_minutes, end_minutes, budget_minutes)
@@ -4430,7 +4436,7 @@ class Octopus:
                         new_slot["cost"] = dp2(new_slot["average"] * kwh)
                         new_slot["soc"] = dp2(car_soc)
                         new_slot["octopus"] = True
-                        if charger_schedule:
+                        if tariff_rate_slot:
                             new_slot["tariff_rate"] = True
                         new_slots.append(new_slot)
 
@@ -4443,7 +4449,7 @@ class Octopus:
                             new_slot["cost"] = 0.0
                             new_slot["soc"] = dp2(car_soc)
                             new_slot["octopus"] = True
-                            if charger_schedule:
+                            if tariff_rate_slot:
                                 new_slot["tariff_rate"] = True
                             new_slots.append(new_slot)
 
@@ -4457,7 +4463,7 @@ class Octopus:
                         new_slot["cost"] = dp2(new_slot["average"] * kwh)
                         new_slot["soc"] = dp2(car_soc)
                         new_slot["octopus"] = True
-                        if charger_schedule:
+                        if tariff_rate_slot:
                             new_slot["tariff_rate"] = True
                         new_slots.append(new_slot)
         return new_slots
