@@ -2758,7 +2758,7 @@ APPS_SCHEMA = {
     "soc_max": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
     "soc_max_fallback": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
     "reserve": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
-    "inverter_mode": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
+    "inverter_mode": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters", "blank_entries": True},
     "inverter_time": {"type": "sensor_list", "sensor_type": "string", "entries": "num_inverters"},
     "inverter_type": {"type": "string_list", "entries": "num_inverters"},
     "charge_start_time": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},

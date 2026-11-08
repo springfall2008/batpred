@@ -227,6 +227,8 @@ class FakeGECloud:
         self.meter_total = {"solar": 1000.0, "grid": {"import": 2000.0, "export": 500.0}, "battery": {"charge": 800.0, "discharge": 800.0}, "consumption": 2500.0, "ac_charge": 600.0}
         self.calls = []
         self.scenario_id = 0
+        # Setting ids whose reads time out on the device (GivEnergy code -1), on every attempt
+        self.read_timeouts = set()
 
     def register_count(self):
         """The number of registers gecloud reads on each sweep (write-only ones are never read)."""
@@ -322,6 +324,8 @@ class FakeGECloud:
     def respond(self, endpoint, params, body):
         """The (status, data) for a matched request."""
         if endpoint == GE_API_INVERTER_READ_SETTING:
+            if int(params["setting_id"]) in self.read_timeouts:
+                return 200, {"value": -1, "message": "Device timeout"}
             return 200, {"value": self.register_values[int(params["setting_id"])]}
         if endpoint == GE_API_INVERTER_WRITE_SETTING:
             setting_id = int(params["setting_id"])
