@@ -38,7 +38,7 @@ from tests.test_kernel_static_cache import run_kernel_static_cache_tests
 from tests.test_execute import run_execute_tests
 from tests.test_execute_multi_inverter_status import test_multi_inverter_status
 from tests.test_load_car_energy import test_load_car_energy_warns_when_configured_entity_has_no_data
-from tests.test_predheat import test_predheat, test_predheat_smart_thermostat, test_predheat_optional_energy_history
+from tests.test_predheat import test_predheat, test_predheat_smart_thermostat, test_predheat_optional_energy_history, test_predheat_volume_temp
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_charge_hold import run_charge_hold_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_slot_max_default_tests
@@ -127,6 +127,7 @@ from tests.test_secrets import run_secrets_tests
 from tests.test_env_config import run_env_config_tests
 from tests.test_ge_cloud import test_ge_cloud
 from tests.test_teslemetry import test_teslemetry
+from tests.test_teslemetry_sim import run_teslemetry_sim_tests
 from tests.test_compare import test_compare
 from tests.test_gateway import run_gateway_tests
 from tests.test_axle import test_axle
@@ -193,6 +194,8 @@ from tests.test_minute_array import test_minute_array
 from tests.test_minute_data import test_minute_data, test_minute_data_load, test_minute_data_no_smoothing_backwards, test_minute_data_no_smoothing_forward
 from tests.test_minute_data_import_export import test_minute_data_import_export
 from tests.test_faq_recorder_config import test_faq_recorder_config
+from tests.test_docs_marketplace import test_docs_marketplace
+from tests.test_plan_card_soc_symbols import test_plan_card_soc_symbols
 from tests.test_minute_data_state import test_minute_data_state
 from tests.test_minute_data_copy import run_minute_data_copy_tests
 from tests.test_format_time_ago import test_format_time_ago
@@ -531,6 +534,7 @@ def main():
         ("predheat", test_predheat, "Predheat scheduler and predheat_enable gate tests (#4670)", False),
         ("predheat_smart_thermostat", test_predheat_smart_thermostat, "Predheat smart thermostat pre-heat window tests", False),
         ("predheat_optional_energy_history", test_predheat_optional_energy_history, "Predheat without optional energy history tests", False),
+        ("predheat_volume_temp", test_predheat_volume_temp, "Predheat volume temperature initialisation tests", False),
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
@@ -552,6 +556,8 @@ def main():
         ("minute_data_load", test_minute_data_load, "Minute data load tests", False),
         ("minute_data_import_export", test_minute_data_import_export, "Minute data import/export tests", False),
         ("faq_recorder_config", test_faq_recorder_config, "FAQ recorder filter example matches the entities Predbat reads history for", False),
+        ("docs_marketplace", test_docs_marketplace, "Docs and templates cover the Marketplace wherever they give HACS install steps", False),
+        ("plan_card_soc_symbols", test_plan_card_soc_symbols, "Plan card SoC symbol legend explains every symbol the plan shows on the SoC % cell", False),
         ("minute_data_no_smoothing_backwards", test_minute_data_no_smoothing_backwards, "Minute data no-smoothing backwards tests", False),
         ("minute_data_no_smoothing_forward", test_minute_data_no_smoothing_forward, "Minute data no-smoothing forward tests", False),
         ("get_now_cumulative", test_get_now_from_cumulative, "Get now from cumulative tests", False),
@@ -779,6 +785,7 @@ def main():
         # GE Cloud unit tests
         ("ge_cloud", test_ge_cloud, "GE Cloud comprehensive tests (API, devices, EVC, inverter ops, events, publishing, config, downloads, cache)", False),
         ("teslemetry", test_teslemetry, "Teslemetry Tesla Powerwall component tests (data path, control, tariff)", False),
+        ("teslemetry_sim", run_teslemetry_sim_tests, "Teslemetry simulated Powerwall: execute to device over a freeze charge (GH#6046)", False),
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
         # currency symbol tests
         ("currency_icon_lookup", test_currency_icon_lookup, "Currency icon lookup tests", False),

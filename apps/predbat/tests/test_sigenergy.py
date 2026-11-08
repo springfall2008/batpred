@@ -1816,12 +1816,16 @@ def test_sigenergy_apply_controls_freeze_export_no_window(my_predbat):
     assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF, "selfConsumption sent for freeze export with a discharge hold, got {}".format(bat_cmds[0][2])
     assert bat_cmds[0][4] == 0, "charging power pinned to 0 for freeze export with a discharge hold, got {}".format(bat_cmds[0][4])
 
-    # A discharge hold on its own, with charging still allowed, is not a freeze and must not be
-    # capped — the bidirectional power cannot express "charge allowed, discharge blocked"
+    # A discharge hold on its own - the state execute.py leaves for "Hold for car" or an iBoost
+    # hold in demand: export rate 0, charge rate still at maximum. Plain self-consumption would
+    # let the battery discharge into the car, which is what the hold exists to stop, so the
+    # bidirectional power is pinned to 0. That also stops surplus PV charging the battery for
+    # the length of the hold, which the power cannot avoid ("charge allowed, discharge blocked"
+    # has no expression on this API) and is the lesser cost.
     bat_cmds = run_case(3000, 0)
     assert len(bat_cmds) >= 1, "send_battery_command called for a discharge hold alone"
     assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF, "selfConsumption sent for a discharge hold alone, got {}".format(bat_cmds[0][2])
-    assert bat_cmds[0][4] is None, "no charging power cap sent for a discharge hold alone, got {}".format(bat_cmds[0][4])
+    assert bat_cmds[0][4] == 0, "charging power pinned to 0 for a discharge hold alone, got {}".format(bat_cmds[0][4])
 
     # A normal demand period with both rates live stays in demand
     bat_cmds = run_case(3000, 3000)

@@ -1476,7 +1476,8 @@ class Output:
 
             in_alert = self.alert_active_keep.get(minute, 0) > 0
             in_manual_soc = self.manual_soc_keep.get(minute, 0) > 0
-            in_manual_soc_max = self.manual_soc_max_keep.get(minute, 0) > 0
+            # A 0% ceiling is a real target (empty the battery), so mark by presence rather than value
+            in_manual_soc_max = minute in self.manual_soc_max_keep
 
             pv_forecast = 0
             load_forecast = 0

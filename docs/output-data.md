@@ -45,14 +45,23 @@ This will give you a simple Predbat control and output dashboard that you can th
 You can also create a dashboard page that's dynamically generated to automatically include all the Predbat control and output entities,
 so when new entities are added in future Predbat releases, you don't have to edit the dashboard.
 
-Firstly you need to install HACS if it isn't already installed, and then install two HACS front-end components:
+Firstly you need to install two front-end (Dashboard) components from the [Marketplace](install.md#hacs-and-the-marketplace) (or from HACS on Home Assistant 2026.10 or older):
 
 - Auto Entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities))
 automatically generates a list of entities that match a wildcard expression
 - Lovelace Collapsable Cards ([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards))
 wraps the entity lists within a drop-down toggle
 
-Installation steps:
+Installation steps on Home Assistant 2026.11 or newer, using the Marketplace:
+
+- Go to **Settings** → **Marketplace**
+- Select **Add from link** in the upper-right corner, enter `https://github.com/RossMcMillan92/lovelace-collapsable-cards` under 'GitHub link' and select **Add**
+(if asked for the Type, choose 'Dashboard' and select **Add** again)
+- Open the 'collapsable cards' repository page, select **Install**, check the version and select **Install** again
+- Search for 'auto-entities', open its repository page, then select **Install** and **Install** again
+- Reload your browser to load the new dashboard resources
+
+Installation steps on Home Assistant 2026.10 or older, using HACS:
 
 - Click the HACS icon on the left-hand side panel
 - Click the three dots in the top right corner then 'Custom Repositories'
