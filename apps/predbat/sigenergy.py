@@ -3867,13 +3867,15 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             e = (now + timedelta(minutes=offset_end_min)).strftime("%H:%M:%S")
             return s, e
 
-        battery_max_w = round(sig._get_battery_max_power_kw(sid) * 1000) or 5000
+        # Each window uses its own direction's ceiling, as apply_controls does, so the test asks for what the plant accepts
+        charge_max_w = round(sig._get_battery_max_power_kw(sid, "charge") * 1000) or 5000
+        export_max_w = round(sig._get_battery_max_power_kw(sid, "discharge") * 1000) or 5000
 
         if test_mode == "eco":
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
-                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": charge_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": export_max_w},
             }
             print("+ Configured for ECO mode (no active windows)")
 
@@ -3881,8 +3883,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             cs, ce = _window(-30, 120)
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": 95, "rate": battery_max_w},
-                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": 95, "rate": charge_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": export_max_w},
             }
             print("+ Configured for CHARGE mode ({} - {}, target 95%)".format(cs, ce))
 
@@ -3891,8 +3893,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             target = round(battery_soc_pct)  # same as current = freeze
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": target, "rate": battery_max_w},
-                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": target, "rate": charge_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": export_max_w},
             }
             print("+ Configured for FREEZE CHARGE mode ({} - {}, target=current {:.0f}%)".format(cs, ce, battery_soc_pct))
 
@@ -3900,8 +3902,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             es, ee = _window(-30, 120)
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
-                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": 15, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": charge_max_w},
+                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": 15, "rate": export_max_w},
             }
             print("+ Configured for EXPORT mode ({} - {}, target 15%)".format(es, ee))
 
@@ -3910,8 +3912,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             target = min(100, round(battery_soc_pct) + 10)  # above current = freeze
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
-                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": target, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": charge_max_w},
+                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": target, "rate": export_max_w},
             }
             print("+ Configured for FREEZE EXPORT mode ({} - {}, current {:.0f}% target {}%)".format(es, ee, battery_soc_pct, target))
 

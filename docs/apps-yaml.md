@@ -1481,6 +1481,8 @@ This can be used if you need Predbat to cap your inverter battery rate (e.g. due
 By default Predbat will normally configure all timed charges or discharges to be at the inverter's maximum rate and these options enable you to reduce that maximum rate.
 [Low rate charging](customisation.md#inverter-control-options) could also be used to slow down Predbat's charge rate whilst still meeting the battery plan.
 
+Some cloud integrations set these for you from the inverter's own reported ratings: SolisCloud and Sigenergy Cloud in automatic mode both set `inverter_limit_charge` and `inverter_limit_discharge` separately, with `battery_rate_max` as the larger of the two, so a battery that discharges faster than it charges is planned at both rates. A value you set in `apps.yaml` takes precedence.
+
 With more than one inverter, these rates also decide how the fleet's SoC target is shared between the inverters. Each inverter is given a share of the energy to charge in proportion to its charge rate, or of the energy to discharge in proportion to its discharge rate, so the inverters finish together.
 An inverter that is full (or at its reserve) is held there and the others take its share. Forced exports are shared by **inverter_limit_export** instead, see below.
 
