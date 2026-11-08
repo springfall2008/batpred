@@ -1,0 +1,323 @@
+{
+  "source": "Sanitised official GivEnergy Cloud observations, 30 October 2026. Not a calibrated site-load oracle. Export pairs exceed alignment limit and must be rejected. Three-phase records are already aggregate-shaped, without per-phase channels.",
+  "shared_meter": [
+    {
+      "scenario": "both_batteries_charging",
+      "source_skew_seconds": 16.0,
+      "devices": {
+        "inverter_a": {
+          "time": "2026-10-27T00:04:39Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -12614
+          },
+          "inverter": {
+            "power": -2553
+          },
+          "consumption": 10065
+        },
+        "inverter_b": {
+          "time": "2026-10-27T00:04:23Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -12542
+          },
+          "inverter": {
+            "power": -2590
+          },
+          "consumption": 9951
+        }
+      }
+    },
+    {
+      "scenario": "both_batteries_charging",
+      "source_skew_seconds": 15.0,
+      "devices": {
+        "inverter_a": {
+          "time": "2026-10-27T00:14:42Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -12807
+          },
+          "inverter": {
+            "power": -2561
+          },
+          "consumption": 10247
+        },
+        "inverter_b": {
+          "time": "2026-10-27T00:14:27Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -12775
+          },
+          "inverter": {
+            "power": -2577
+          },
+          "consumption": 10207
+        }
+      }
+    },
+    {
+      "scenario": "both_batteries_charging",
+      "source_skew_seconds": 15.0,
+      "devices": {
+        "inverter_a": {
+          "time": "2026-10-27T00:39:51Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -5615
+          },
+          "inverter": {
+            "power": -2574
+          },
+          "consumption": 3041
+        },
+        "inverter_b": {
+          "time": "2026-10-27T00:39:36Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -5600
+          },
+          "inverter": {
+            "power": -2561
+          },
+          "consumption": 3038
+        }
+      }
+    },
+    {
+      "scenario": "both_batteries_supplying_load",
+      "source_skew_seconds": 0.0,
+      "devices": {
+        "inverter_a": {
+          "time": "2026-10-27T06:56:56Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -91
+          },
+          "inverter": {
+            "power": 2285
+          },
+          "consumption": 2276
+        },
+        "inverter_b": {
+          "time": "2026-10-27T06:56:56Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -64
+          },
+          "inverter": {
+            "power": 1691
+          },
+          "consumption": 1783
+        }
+      }
+    },
+    {
+      "scenario": "both_batteries_supplying_load",
+      "source_skew_seconds": 0.0,
+      "devices": {
+        "inverter_a": {
+          "time": "2026-10-27T06:57:11Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": 38
+          },
+          "inverter": {
+            "power": 2208
+          },
+          "consumption": 2261
+        },
+        "inverter_b": {
+          "time": "2026-10-27T06:57:11Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": 51
+          },
+          "inverter": {
+            "power": 1766
+          },
+          "consumption": 1831
+        }
+      }
+    },
+    {
+      "scenario": "export_clipping",
+      "source_skew_seconds": 112.0,
+      "devices": {
+        "inverter_a": {
+          "time": "2026-10-27T19:05:20Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": 3315
+          },
+          "inverter": {
+            "power": 2226
+          },
+          "consumption": 0
+        },
+        "inverter_b": {
+          "time": "2026-10-27T19:03:28Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": 3432
+          },
+          "inverter": {
+            "power": 2232
+          },
+          "consumption": 0
+        }
+      }
+    },
+    {
+      "scenario": "export_clipping",
+      "source_skew_seconds": 112.0,
+      "devices": {
+        "inverter_a": {
+          "time": "2026-10-27T19:10:22Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": 3424
+          },
+          "inverter": {
+            "power": 2216
+          },
+          "consumption": 0
+        },
+        "inverter_b": {
+          "time": "2026-10-27T19:08:30Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": 3362
+          },
+          "inverter": {
+            "power": 2232
+          },
+          "consumption": 0
+        }
+      }
+    },
+    {
+      "scenario": "idle_import",
+      "source_skew_seconds": 16.0,
+      "devices": {
+        "inverter_a": {
+          "time": "2026-10-27T01:45:15Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -7430
+          },
+          "inverter": {
+            "power": 1
+          },
+          "consumption": 7486
+        },
+        "inverter_b": {
+          "time": "2026-10-27T01:44:59Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -7435
+          },
+          "inverter": {
+            "power": 23
+          },
+          "consumption": 7475
+        }
+      }
+    },
+    {
+      "scenario": "idle_import",
+      "source_skew_seconds": 16.0,
+      "devices": {
+        "inverter_a": {
+          "time": "2026-10-27T01:55:19Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -7515
+          },
+          "inverter": {
+            "power": 1
+          },
+          "consumption": 7537
+        },
+        "inverter_b": {
+          "time": "2026-10-27T01:55:03Z",
+          "status": "NORMAL",
+          "grid": {
+            "power": -7565
+          },
+          "inverter": {
+            "power": 18
+          },
+          "consumption": 7611
+        }
+      }
+    }
+  ],
+  "three_phase": [
+    {
+      "alias": "three_phase_a",
+      "model": "GIV-3HY-11",
+      "phase_count": 3,
+      "samples": [
+        {
+          "source_offset_seconds": 0,
+          "power_W": {
+            "grid_power": 28.0,
+            "inverter_power": 4553.0,
+            "consumption_power": 4525.0,
+            "solar_power": 4595.0,
+            "battery_power": -1.7
+          }
+        },
+        {
+          "source_offset_seconds": 152,
+          "power_W": {
+            "grid_power": 37,
+            "inverter_power": 4464,
+            "consumption_power": 4427,
+            "solar_power": 4461,
+            "battery_power": -1.6
+          }
+        },
+        {
+          "source_offset_seconds": 305,
+          "power_W": {
+            "grid_power": -84,
+            "inverter_power": 4329,
+            "consumption_power": 4413,
+            "solar_power": 4330,
+            "battery_power": 0.3
+          }
+        }
+      ]
+    },
+    {
+      "alias": "three_phase_b",
+      "model": "GIV-3HY-11",
+      "phase_count": 3,
+      "samples": [
+        {
+          "source_offset_seconds": 0,
+          "power_W": {
+            "grid_power": 0.0,
+            "inverter_power": 2266.0,
+            "consumption_power": 2266.0,
+            "solar_power": 7441.0,
+            "battery_power": -4764.3
+          }
+        },
+        {
+          "source_offset_seconds": 618,
+          "power_W": {
+            "grid_power": 54,
+            "inverter_power": 2584,
+            "consumption_power": 2530,
+            "solar_power": 7086,
+            "battery_power": -4070.1
+          }
+        }
+      ]
+    }
+  ]
+}

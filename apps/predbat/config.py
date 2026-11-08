@@ -2734,6 +2734,7 @@ APPS_SCHEMA = {
     "ge_cloud_inverter_control": {"type": "boolean"},
     "ge_cloud_poll_settings": {"type": "boolean"},
     "ge_cloud_automatic_shared_ct": {"type": "boolean"},
+    "ge_cloud_shared_meter_history": {"type": "boolean"},
     "ge_cloud_automatic_split_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_pv": {"type": "boolean"},
     "num_inverters": {"type": "integer", "zero": False},
