@@ -816,6 +816,13 @@ def run_embedding_lifecycle_tests(my_predbat):
     engine.initialize_state()
     failed = _check(failed, engine.started_time == 123 and engine.update_time.call_count == 2 and engine.reset.call_count == 1, "headless state: initial clock, reset, then fresh clock")
     failed = _check(failed, "synthetic-private" not in str(engine.args_from_apps_yaml) and engine.apps_yaml_override_warned == set(), "headless state: original args are masked per engine")
+    # Follow the documented prerequisites with the actual clock and reset methods.
+    engine = object.__new__(PredBat)
+    engine.args = {"prefix": "test", "api_key": "synthetic-private"}
+    engine.log = Mock()
+    engine.initialize_state()
+    failed = _check(failed, isinstance(engine.started_time, datetime) and engine.log.called, "headless state: args and logging support real clock and reset without adapters")
+    failed = _check(failed, engine.prefix == "test" and not engine.plan_valid, "headless state: real reset initialises configuration and plan state")
     for age, execute_ok in ((5, True), (6, True), (6, False)):
         my_predbat.plan_valid = True
         my_predbat.calculate_plan_every = 10

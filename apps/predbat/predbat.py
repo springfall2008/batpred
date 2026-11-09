@@ -1528,6 +1528,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         values from an external snapshot can pass False to leave scheduled accumulators alone,
         while still reusing a fresh plan. It does not change execution or the read-only gate.
         timings, if supplied, accumulates plan_s and execute_s seconds, including failed stages.
+        plan_s includes plan persistence; execute_s includes post-run bookkeeping (plugin hooks,
+        savings, status recording and cleanup), not just physical execution.
         Returns None if planning is refused, otherwise {recomputed, executed}. A refused execution
         returns executed=False and does not run bookkeeping. Existing timer callers ignore it.
         """
@@ -2437,7 +2439,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         Shared by normal startup and headless hosts. Call once per build, never between warm
         cycles: reset discards the plan and run state. The host then attaches its adapters,
         calls initialize_config(), completes discovery, calls finalize_config() and load_plan().
-        This method starts no components, plugins, timers or connections.
+        Populate args and provide log() before calling this method; update_time() logs during
+        state preparation. This method starts no components, plugins, timers or connections.
         """
         # Snapshot of apps.yaml exactly as the user wrote it, before Predbat's own defaulting
         # (auto_config/load_user_config) or any component's automatic_config() touches self.args -

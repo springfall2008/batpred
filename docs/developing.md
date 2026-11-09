@@ -1186,7 +1186,9 @@ to AI coding assistants such as Claude Code. If you change how the tests are run
 A host that supplies its own state, storage and component adapters can use the same
 startup stages as `initialize()` without starting the normal components or timers:
 
-1. Construct `PredBat` and call `initialize_state()` once for the new engine.
+1. Construct `PredBat`, populate its `args` configuration dictionary and provide a working
+   `log()` function, then call `initialize_state()` once for the new engine. These are
+   prerequisites for state initialisation, before the remaining adapters are attached.
 2. Attach the host's HA interface, storage, components and optional plugin adapter.
 3. Call `initialize_config()`, then complete the host's component discovery.
 4. Call `finalize_config(schedule_retry=False)`. An optional `before_validate(engine)`
@@ -1204,7 +1206,9 @@ make an engine safe for concurrent calls.
 `update_pred()` owns planning, execution, late replanning and bookkeeping. It returns
 `None` when planning is refused, otherwise a dictionary containing `recomputed` and
 `executed`. A failed execution skips bookkeeping. An optional `timings` dictionary
-accumulates `plan_s` and `execute_s`, including time spent in failed stages.
+accumulates `plan_s` and `execute_s`, including time spent in failed stages. `plan_s`
+includes plan persistence; `execute_s` includes post-run bookkeeping (plugin hooks,
+savings, status recording and cleanup), as well as physical execution.
 
 `scheduled_bookkeeping` defaults to `scheduled`. A host that reseeds accounting values
 from an external snapshot can set it to `False` to avoid advancing scheduled totals
