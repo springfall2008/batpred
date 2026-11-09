@@ -142,12 +142,14 @@ The following `apps.yaml` configuration items are pre-defined with regular expre
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
 ```
 
-*Note:* if your Octopus Intelligent device is an **Ohme charger**, these defaults won't work. For Ohme devices the Octopus Energy integration does not create the
+*Note:* if your Octopus Intelligent device is an **Ohme charger**, these defaults won't work as they stand. For Ohme devices the Octopus Energy integration does not create the
 [charge target or target time entities](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/), and its 'intelligent dispatching' sensor never turns on.
-Predbat then logs `Regular expression argument: octopus_ready_time unable to match ..., now will disable` (and the same for `octopus_charge_limit`) and has no Octopus slots,
-ready time or charge limit for the car. Remove these three entries from `apps.yaml` and use the [Ohme car charger direct integration](#ohme-car-charger-direct-integration) instead,
-with `ohme_automatic_octopus_intelligent: true` if Predbat has no [Octopus direct connection](energy-rates.md#octopus-energy-direct) of its own to detect your tariff from.
-Alternatively, let Predbat plan the charging itself (Predbat-led) using the Home Assistant Ohme integration's sensors - see [Ohme HA in-built integration](devices.md#ohme-ha-in-built-integration).
+Predbat then logs `Regular expression argument: octopus_ready_time unable to match ..., now will disable` (and the same for `octopus_charge_limit`) and has no planned slots,
+ready time or charge limit for the car.
+If Predbat has an [Octopus direct connection](energy-rates.md#octopus-energy-direct) of its own, remove all three entries from `apps.yaml`, as the Octopus component sets them for you.
+If it does not, use the [Ohme car charger direct integration](#ohme-car-charger-direct-integration) with `ohme_automatic: true` and `ohme_automatic_octopus_intelligent: true`, remove `octopus_ready_time` and `octopus_charge_limit`, and keep `octopus_intelligent_slot`.
+Predbat then takes the planned slots from Ohme. For the slots already used it reads the `completed_dispatches` attribute of the 'intelligent dispatching' sensor, so it does not matter that the sensor never turns on - see [Completed slots on Octopus Intelligent](#completed-slots-on-octopus-intelligent).
+Without an Octopus direct connection you can instead remove all three entries and let Predbat plan the charging itself (Predbat-led) using the settings in [Ohme HA in-built integration](devices.md#ohme-ha-in-built-integration), rather than the Octopus Intelligent example there.
 
 - **octopus_intelligent_slot** - Points to the Octopus Energy integration 'intelligent dispatching' sensor in the Octopus Energy integration that indicates
 whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
