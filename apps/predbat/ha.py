@@ -20,7 +20,7 @@ HAHistory for automatic entity history tracking and pruning.
 import os
 from datetime import timedelta, datetime, timezone
 import asyncio
-from aiohttp import ClientSession, WSMsgType
+from aiohttp import WSMsgType
 import array
 import bisect
 import json
@@ -589,7 +589,7 @@ class HAInterface(ComponentBase):
 
             url = "{}/api/websocket".format(self.ha_url)
             self.log("Info: Start socket for url {}".format(url))
-            async with ClientSession() as session:
+            async with self.http_session() as session:
                 try:
                     async with session.ws_connect(url) as websocket:
                         await websocket.send_json({"type": "auth", "access_token": self.ha_key})
@@ -976,7 +976,7 @@ class HAInterface(ComponentBase):
         self.db_mirror_list[sensor.lower()] = True
 
         if (self.db_primary or force_db) and self.db_enable:
-            return self.db_manager.get_history_db(sensor, now, days=days)
+            return self.db_manager.get_history_db(sensor, now, days=days, from_time=from_time)
 
         if from_time:
             start = from_time

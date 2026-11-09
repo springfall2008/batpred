@@ -2316,6 +2316,9 @@ INVERTER_DEF = {
         "target_soc_used_for_discharge": True,
         # A Powerwall charges from the grid to reach a backup reserve above its SoC, even with grid charging disallowed
         "reserve_above_soc_charges_from_grid": True,
+        # ...and since firmware 25.18.4 honours no backup reserve between 80 and 100, so above 80% a hold that must
+        # not discharge at all (a car hold) can only ask for 100 (GH#6046)
+        "reserve_full_only_above_80": True,
     },
     "EnphaseCloud": {
         "name": "EnphaseCloud",

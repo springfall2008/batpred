@@ -13,7 +13,7 @@ There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a
 
 - [What is Home Assistant from Smart Home Junkie](https://www.youtube.com/watch?v=Frd-C7ZeZAo)
 - [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA)
-- [Installing HACS from Speak to the Geek](https://www.youtube.com/watch?v=TL2eqsjhmTE)
+- [Installing HACS from Speak to the Geek](https://www.youtube.com/watch?v=TL2eqsjhmTE) (Home Assistant 2026.10 or older only, see [HACS and the Marketplace](#hacs-and-the-marketplace))
 - [Setting up the Energy dashboard for GivEnergy inverters from Speak to the Geek](https://www.youtube.com/watch?v=YPPpwTKIz7M)
 - [Power Flow Card Plus from Speak to the Geek](https://www.youtube.com/watch?v=C4Zh35E9wJE)
 
@@ -22,6 +22,22 @@ If you get stuck, please read the [FAQs](faq.md) and if necessary raise a [GitHu
 ## Home Assistant Pre-requisites
 
 Ensure that the computer (or VM) that is running your Home Assistant has sufficient memory. Predbat (and in particular LoadML if you are using it) can be quite resource intensive and it's recommended that your HA computer has at least 3 GB of memory allocated. If Predbat doesn't have sufficient memory then it can crash with few diagnostics.
+
+## HACS and the Marketplace
+
+Several of the integrations and dashboard cards used with Predbat are community projects that aren't part of Home Assistant itself.
+Where you get them from depends on your Home Assistant version:
+
+- **Home Assistant 2026.11 or newer** - community projects come from the built-in **Marketplace**, under **Settings** → **Marketplace**. There is nothing extra to install.
+  Search for a project by name, open its page, select **Install**, check the version and select **Install** again.
+  To add a project that isn't in the catalogue (a custom repository), select **Add from link** in the upper-right corner, enter the GitHub link, and select **Add**.
+- **Home Assistant 2026.10 or older** - the same projects come from HACS (the Home Assistant Community Store), which you need to install first (see the Speak to the Geek video above).
+
+The Marketplace replaced HACS in Home Assistant 2026.11 and uses the same catalogue, so anything you downloaded with HACS stays installed and keeps getting updates after you upgrade.
+HACS can't be installed on Home Assistant 2026.11 or newer. See [HACS and the Marketplace](https://hacs.xyz/docs/marketplace/) and the
+[Marketplace documentation](https://www.home-assistant.io/integrations/marketplace/) for details.
+
+Where these docs say to install something "from the Marketplace", use HACS instead if you are on Home Assistant 2026.10 or older.
 
 ## Inverter Control install
 
@@ -44,12 +60,11 @@ If you have a [different inverter](inverter-setup.md) then you will need to use 
 You will need a method of editing configuration files within your Home Assistant environment.
 
 There are several ways to achieve this in Home Assistant, but two of the simplest are to use either the File Editor or Studio Code Server apps.
-Whichever you use is a personal preference. File Editor is a bit simpler, Studio Code Server is more powerful
-but does require HACS (the Home Assistant Community Store) to be installed first.
+Whichever you use is a personal preference. File Editor is a bit simpler, Studio Code Server is more powerful.
+Both are apps installed from **Settings** → **Apps**, so neither needs HACS or the Marketplace.
 
 If you do not have one of these file editors already installed in Home Assistant:
 
-- For Studio Code Server you will need to install HACS first (see Speak To The Geek video linked above)
 - Go to Settings / Apps / Install app (bottom right)
 - Scroll down the app list, to find either 'File editor' or 'Studio Code Server' as appropriate, click on the app, click 'INSTALL'
 - Once the editor has been installed, ensure that the 'Start on boot' option is turned on, and click 'START' to start the app
@@ -98,6 +113,9 @@ Installation instructions can be found at [https://github.com/nipar4/predbat_add
 ## Predbat Installation Into Appdaemon
 
 Installing HACS, Appdaemon and then Predbat within Appdaemon has been deprecated, please swap to either the Predbat app or Docker installation methods.
+
+From Home Assistant 2026.11 HACS has been replaced by the built-in [Marketplace](#hacs-and-the-marketplace), which no longer manages AppDaemon apps:
+an existing Predbat install inside AppDaemon keeps running, but it stops receiving updates through the Marketplace and Home Assistant raises a repair for it.
 
 The process to [upgrade from Predbat within Appdaemon to Predbat App](#upgrading-from-appdaemon-to-predbat-app) is described below.
 

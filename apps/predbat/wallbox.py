@@ -32,7 +32,7 @@ from typing import Optional
 
 import aiohttp
 
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session, writes
 from coordinator import charger_with_stub_car
 from mock_base import MockBase
 from predbat_metrics import record_api_call
@@ -282,9 +282,11 @@ def basic_auth_header(username, password):
 class WallboxTransport:
     """Owns the Wallbox tokens and performs every HTTP call."""
 
-    def __init__(self, log, username, password):
+    def __init__(self, log, username, password, session_factory=None):
         """Store the credentials and start with no token."""
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
         self.username = username
         self.password = password
         self.token = None
@@ -325,7 +327,7 @@ class WallboxTransport:
                 bad credentials, and an empty response body is accepted.
         """
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._session_factory() as session:
                 async with session.request(method, url, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
                     status = response.status
                     if status == 429:
@@ -522,7 +524,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         if not username or not password:
             self.log("Error: wallbox: wallbox_username and wallbox_password must both be set")
             return
-        self.transport = WallboxTransport(self.log, username, password)
+        self.transport = WallboxTransport(self.log, username, password, self.http_session)
 
     def entity_prefix(self, charger):
         """Return the entity name prefix for a charger, e.g. predbat_wallbox_12345."""
@@ -839,6 +841,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         """Queue a select change for the run loop."""
         self.queued_events.append((self.select_event_handler, entity_id, value))
 
+    @writes
     async def switch_event_handler(self, entity_id, service):
         """Pause/resume or lock/unlock in response to a charger switch."""
         if await self.charger_control_guest_event(entity_id, service):
@@ -864,6 +867,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
             self.log("Info: wallbox: {} {}".format("locking" if turn_on else "unlocking", charger.name))
             await self.transport.set_locked(self.api_id(charger), turn_on)
 
+    @writes
     async def number_event_handler(self, entity_id, value):
         """Set the maximum charging current, clamped to what the charger allows."""
         if not entity_id.endswith("_max_charging_current"):
@@ -881,6 +885,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         self.log("Info: wallbox: setting {} maximum charging current to {}A".format(charger.name, amps))
         await self.transport.set_max_charging_current(self.api_id(charger), amps)
 
+    @writes
     async def select_event_handler(self, entity_id, value):
         """Set the Eco-Smart mode on a charger that supports it."""
         if not entity_id.endswith("_eco_smart") or value not in ECO_SMART_OPTIONS:
@@ -981,6 +986,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         """Has the charger been paused, or started charging, against what Predbat set - e.g. from the Wallbox app."""
         return charger.paused if charge else charger.charging
 
+    @writes
     async def charger_control_send(self, charger, charge, car_n):
         """Resume a paused charger inside a window, pause a charging one outside.
 
@@ -1003,6 +1009,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
                 await self.charger_control_save()
             await self.transport.pause(self.api_id(charger))
 
+    @writes
     async def charger_control_release_one(self, charger, charge):
         """Release one charger: resume it if Predbat paused it and it is still paused, then hand it back to its own schedule.
 
