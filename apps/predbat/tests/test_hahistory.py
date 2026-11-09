@@ -1097,7 +1097,7 @@ class ScriptedHAInterface:
 
 def test_hahistory_empty_vs_failed_reads(my_predbat=None):
     """An empty history read is cached and rechecked every HISTORY_EMPTY_RECHECK_SECONDS from the last check; a failed read is never cached"""
-    from ha import HISTORY_EMPTY_RECHECK_SECONDS, HISTORY_EMPTY_OVERLAP_SECONDS, HISTORY_EMPTY_FULL_RECHECK_SECONDS
+    from ha import HISTORY_EMPTY_RECHECK_SECONDS, HISTORY_EMPTY_OVERLAP_SECONDS
 
     print("\n=== Testing HAHistory empty vs failed reads ===")
     failed = 0
@@ -1174,18 +1174,6 @@ def test_hahistory_empty_vs_failed_reads(my_predbat=None):
         check(from_time is not None and abs(from_time.timestamp() - (checked_epoch - HISTORY_EMPTY_OVERLAP_SECONDS)) < 1, "recheck reads from the last check less the overlap")
     check(ha_history.history_checked[empty_id] > checked_epoch, "an empty recheck moves the check time on")
 
-    # Every HISTORY_EMPTY_FULL_RECHECK_SECONDS the recheck reads the whole window instead, so a record that reached
-    # the database later than the overlap (stamped before every recheck window) is still found in the end
-    full_epoch = ha_history.history_checked[empty_id] - HISTORY_EMPTY_FULL_RECHECK_SECONDS - 60
-    ha_history.history_checked[empty_id] = full_epoch
-    ha_history.history_full_checked[empty_id] = full_epoch
-    ha.get_history_calls = []
-    run_async(refresh())
-    empty_calls = calls_for(ha, empty_id)
-    check(len(empty_calls) == 1 and empty_calls[0]["from_time"] is None, "a recheck reads the whole window once HISTORY_EMPTY_FULL_RECHECK_SECONDS have passed")
-    check(ha_history.history_full_checked[empty_id] > full_epoch, "an empty full read moves the full check time on")
-    check(ha_history.history_full_checked[empty_id] == ha_history.history_checked[empty_id], "...and the check time with it")
-
     # A failed recheck leaves the check time where it was, so the next refresh asks again for the same span
     checked_epoch = ha_history.history_checked[empty_id] - HISTORY_EMPTY_RECHECK_SECONDS - 60
     ha_history.history_checked[empty_id] = checked_epoch
@@ -1205,7 +1193,7 @@ def test_hahistory_empty_vs_failed_reads(my_predbat=None):
     ha.get_history_calls = []
     run_async(refresh())
     check(len(ha_history.history_data[empty_id]) == 1, "a recheck that finds a record stores it")
-    check(empty_id not in ha_history.history_checked and empty_id not in ha_history.history_full_checked, "a store with history drops its check times")
+    check(empty_id not in ha_history.history_checked, "a store with history drops its check time")
     check(ha_history.get_history(empty_id, days=11)[0][0]["state"] == "on", "the found record is served from the cache")
     ha.get_history_calls = []
     run_async(refresh())
