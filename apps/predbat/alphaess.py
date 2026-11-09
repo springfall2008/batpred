@@ -40,10 +40,11 @@ import json
 import time
 import aiohttp
 from datetime import datetime
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from alphaess_const import (
     ALPHAESS_BASE_URL,
+    ALPHAESS_MIN_SOC_PERCENT,
     ALPHAESS_ENDPOINTS,
     ALPHAESS_RETURN_CODES,
     ALPHAESS_CODE_OK,
@@ -289,7 +290,7 @@ class AlphaESSAPI(ComponentBase):
         for attempt in range(ALPHAESS_RETRIES):
             try:
                 timeout = aiohttp.ClientTimeout(total=ALPHAESS_TIMEOUT)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     call = session.post(url, headers=self._headers(), json=body or {}) if method == "POST" else session.get(url, headers=self._headers(), params=params or {})
                     async with call as response:
                         if response.status != 200:
@@ -1172,14 +1173,17 @@ class AlphaESSAPI(ComponentBase):
                 window["enable"] = self._to_bool(value, window.get("enable", False))
             return
 
+    @writes
     async def select_event(self, entity_id, value):
         """Handle a select entity change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a number entity change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a switch entity service call."""
         await self._handle_control_event(entity_id, service)
@@ -1370,7 +1374,7 @@ class AlphaESSAPI(ComponentBase):
         """
         window = schedule.get("export", {}) or {}
         enabled = bool(window.get("enable"))
-        reserve = self._clamp_percent(schedule.get("reserve", 0))
+        reserve = self._clamp_percent(schedule.get("reserve", 0), low=ALPHAESS_MIN_SOC_PERCENT)
 
         # The working AlphaESS no-discharge primitive is the charge profile built by
         # build_charge_payload, not an empty discharge programme. Leave discharge time
@@ -1404,7 +1408,7 @@ class AlphaESSAPI(ComponentBase):
             "timeDise1": end1,
             "timeDisf2": start2,
             "timeDise2": end2,
-            "batUseCap": self._clamp_percent(window.get("soc", reserve)) if enabled else reserve,
+            "batUseCap": self._clamp_percent(window.get("soc", reserve), low=ALPHAESS_MIN_SOC_PERCENT) if enabled else reserve,
         }
 
     @staticmethod
@@ -1680,6 +1684,7 @@ class AlphaESSAPI(ComponentBase):
         else:
             self.write_burst_writes[key] = self.write_burst_writes.get(key, 0) + 1
 
+    @writes
     async def _write_payload(self, sn, direction, endpoint_key, payload, force=False):
         """Send one payload if it differs from the last applied one and pacing allows.
 
@@ -1754,7 +1759,7 @@ class AlphaESSAPI(ComponentBase):
         chargeLimit is documented as [10,100] and anything outside gets 6001, so it is
         clamped to 10 at the bottom rather than passed through as Predbat's 0.
         """
-        entry = {"beginTime": start, "endTime": end, "chargeLimit": self._clamp_percent(soc, low=10, high=100)}
+        entry = {"beginTime": start, "endTime": end, "chargeLimit": self._clamp_percent(soc, low=ALPHAESS_MIN_SOC_PERCENT, high=100)}
         if power > 0:
             entry["chargePower"] = int(power)
         return entry
@@ -1782,7 +1787,7 @@ class AlphaESSAPI(ComponentBase):
             hold_charge = self._hold_charge_window(sn, schedule)
         charge = hold_charge or (schedule.get("charge", {}) or {})
         export = schedule.get("export", {}) or {}
-        reserve = schedule.get("reserve", 10)
+        reserve = schedule.get("reserve", ALPHAESS_MIN_SOC_PERCENT)
         charge_rate = self._as_float(charge.get("power"), 0.0)
         export_rate = self._as_float(export.get("power"), 0.0)
         charge_on = bool(charge.get("enable")) and charge_rate > 0
@@ -1790,7 +1795,7 @@ class AlphaESSAPI(ComponentBase):
         (charge_start, charge_end), _ = self._snapped_periods(sn, "charge", charge.get("start"), charge.get("end"), charge_on)
         if window_is_empty(charge_start, charge_end):
             charge_on = False
-        charge_list = [self._periodic_entry(charge_start, charge_end, charge.get("soc", 100), charge_rate)] if charge_on else [self._periodic_entry(ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED, 10, 0)]
+        charge_list = [self._periodic_entry(charge_start, charge_end, charge.get("soc", 100), charge_rate)] if charge_on else [self._periodic_entry(ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED, ALPHAESS_MIN_SOC_PERCENT, 0)]
 
         # While the hold charge profile is active it is the whole control action. Suppress
         # any export schedule and leave discharge time control in demand mode; AlphaESS
@@ -1835,6 +1840,7 @@ class AlphaESSAPI(ComponentBase):
             "ctrDisCycle": 1 if export_on else 0,
         }
 
+    @writes
     async def apply_settings(self, sn, schedule, force=False):
         """Build and send the settings for one inverter, gated independently per direction.
 
@@ -1866,6 +1872,7 @@ class AlphaESSAPI(ComponentBase):
         discharge_ok = await self._write_payload(sn, "discharge", "update_discharge_config", discharge_payload, force=force)
         return charge_ok and discharge_ok
 
+    @writes
     async def apply_schedule(self, sn, force=False):
         """Apply the locally held schedule for one inverter."""
         schedule = self.local_schedule.get(sn)
@@ -1873,6 +1880,7 @@ class AlphaESSAPI(ComponentBase):
             return False
         return await self.apply_settings(sn, schedule, force=force)
 
+    @writes
     async def _reconcile_control(self, sn):
         """Re-apply sn's schedule if Predbat already controls it, unforced.
 
@@ -1891,6 +1899,7 @@ class AlphaESSAPI(ComponentBase):
         except Exception as error:
             self.log("Warn: AlphaESS schedule apply failed for {}: {}".format(sn, error))
 
+    @writes
     async def _handle_control_event(self, entity_id, value):
         """Route one control-entity event to the right inverter and apply it.
 
@@ -1939,6 +1948,7 @@ class AlphaESSAPI(ComponentBase):
             return True, "AlphaESS has emailed a verification code to the registered owner of {}".format(sn)
         return False, "Could not request a verification code for {}: {}".format(sn, self.describe_code(code))
 
+    @writes
     async def bind_system(self, sn, code):
         """Bind a system to this AppID using the emailed verification code.
 
@@ -1953,6 +1963,7 @@ class AlphaESSAPI(ComponentBase):
             return True, "{} was already bound to this AppID".format(sn)
         return False, "Could not bind {}: {}".format(sn, self.describe_code(result))
 
+    @writes
     async def unbind_system(self, sn):
         """Unbind a system from this AppID.
 
@@ -1966,6 +1977,7 @@ class AlphaESSAPI(ComponentBase):
             return True, "{} was not bound to this AppID".format(sn)
         return False, "Could not unbind {}: {}".format(sn, self.describe_code(result))
 
+    @writes
     async def _handle_unbind_event(self, sn, value):
         """Drive the per-serial unbind toggle, following Sigenergy's offboard pattern.
 

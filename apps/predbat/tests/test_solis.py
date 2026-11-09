@@ -20,7 +20,7 @@ from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU
 from solis import SOLIS_CID_TOU_V2_MODE, SOLIS_CID_LIST_TOU_V2
 from solis import SOLIS_CID_ALLOW_EXPORT, SOLIS_ALLOW_EXPORT_ON, SOLIS_ALLOW_EXPORT_OFF, SOLIS_CID_BATTERY_RESERVE_SOC
 from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, SOLIS_CID_BATTERY_RECOVERY_SOC, SOLIS_CID_DISCHARGE_SOC
-from solis import SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_DISCHARGE_CURRENT
+from solis import SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_DISCHARGE_CURRENT, SOLIS_CID_DISCHARGE_TIME
 from solis import SOLIS_CID_POWER_LIMIT, SOLIS_BIT_BACKUP_MODE
 from solis import SOLIS_READ_ENDPOINT, SOLIS_READ_BATCH_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_INVERTER_LIST_ENDPOINT, SOLIS_INVERTER_DETAIL_ENDPOINT
 from solis import get_solis_mode_enum, compute_solis_mode_value
@@ -76,6 +76,9 @@ class MockSolisAPI(SolisAPI):
         # No wall-clock pause in tests; the settle re-read itself is asserted by the tests that
         # care about it, and every other test would just be waiting for nothing.
         self.verify_settle_seconds = 0
+        self.control_event_loop = None
+        self.read_only_reset_error = ""
+        self.read_only_reset_progress = 0.0
         self.detail_summary_logged = {}
         self.slot_limits_logged = {}
         self.response_observer = None
@@ -87,6 +90,9 @@ class MockSolisAPI(SolisAPI):
         self.slot_probe_retry_at = {}
         self.mode_asserted_for = {}
         self.control_enable = True
+        self.parallel_slaves = {}
+        self.parallel_slot_current_max = None
+        self.parallel_slaves_warned = set()
         self.configured_inverter_sn = []
         self.inverter_sn = []
 
@@ -106,6 +112,8 @@ class MockSolisAPI(SolisAPI):
         self.datalogger_offline_until = {}
         self.datalogger_cooldown_code = {}
         self.automatic_config_done = False
+        self.tou_v2_mode_saved = None
+        self.time_windows_reload_pending = set()
 
         # Timezone for now_utc_exact property (from ComponentBase)
         self.local_tz = datetime.now().astimezone().tzinfo
@@ -2285,7 +2293,10 @@ def run_solis_tests(my_predbat):
     """
     failed = False
 
+    from tests.test_solis_handover import run_solis_handover_tests
+
     try:
+        failed |= run_solis_handover_tests()
         # Run tests
         failed |= test_oauth_bearer_headers()
         failed |= test_solis_not_activated_without_credentials()
@@ -2315,6 +2326,11 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_settles_on_a_pv_only_fleet())
         failed |= asyncio.run(test_discovery_cache_lets_a_restart_configure_without_the_api())
         failed |= asyncio.run(test_successful_discovery_is_cached_and_session_reused())
+        failed |= asyncio.run(test_failed_tou_mode_read_is_retried_and_saved())
+        failed |= asyncio.run(test_saved_tou_mode_is_used_without_reading())
+        failed |= asyncio.run(test_successful_tou_mode_read_is_not_polled_again())
+        failed |= asyncio.run(test_tou_mode_older_than_a_day_is_read_again())
+        failed |= asyncio.run(test_tou_mode_change_retries_a_failed_slot_register_read())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
@@ -2363,6 +2379,11 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_v2_slot_currents_capped_at_inverter_rating())
         failed |= asyncio.run(test_v1_slot_currents_capped_at_inverter_rating())
         failed |= asyncio.run(test_slot_currents_uncapped_when_inverter_size_unknown())
+        failed |= asyncio.run(test_parallel_master_writes_the_group_current())
+        failed |= test_parallel_config_parsing()
+        failed |= asyncio.run(test_parallel_master_probed_afresh_at_the_group_limit())
+        failed |= asyncio.run(test_parallel_group_edges())
+        failed |= asyncio.run(test_parallel_probe_upper_saved_and_loaded())
         failed |= asyncio.run(test_control_write_failure_withholds_success_timestamp())
         failed |= asyncio.run(test_control_write_success_updates_success_timestamp())
         failed |= asyncio.run(test_storage_mode_failure_does_not_fail_control_write())
@@ -3678,6 +3699,314 @@ async def test_v1_slot_currents_capped_at_inverter_rating():
 
     print("PASSED: V1 currents encoded at the 75A rating")
     return False
+
+
+def _parallel_api(slave_current=135, slave_enable=1, group=True, group_max=270.0, probed=270.0):
+    """A V2 MockSolisAPI for the issue #5556 pair: two 6kW inverters in parallel on 51.2V, each reading 135A battery limits.
+
+    Both are planned to discharge 135A in slot 1; MASTER's slot current is the one the pair shares.
+    probed is MASTER's measured slot ceiling (None for none), recorded as probed against the group limit.
+    """
+    api = MockSolisAPI()
+    api._test_v2_mode = True
+    api._mock_storage_mode = True
+    master, slave = "MASTER01", "SLAVE01"
+    api.inverter_sn = [slave, master]
+    for sn, current, enable in ((master, 135, 1), (slave, slave_current, slave_enable)):
+        api.inverter_details[sn] = {"power": 6, "powerStr": "kW", "batteryAcvSet": 57.6}
+        api.cached_values[sn] = {SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "135", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT: "135", SOLIS_CID_DISCHARGE_CURRENT[0]: "0"}
+        api.charge_discharge_time_windows[sn] = {
+            1: {
+                "charge_enable": 0,
+                "charge_start_time": "00:00",
+                "charge_end_time": "00:00",
+                "charge_soc": 100,
+                "charge_current": 0,
+                "discharge_enable": enable,
+                "discharge_start_time": "16:00",
+                "discharge_end_time": "19:00",
+                "discharge_soc": 20,
+                "discharge_current": current,
+            }
+        }
+    if group:
+        api.parallel_slaves = api.parse_parallel_slaves({master: slave})
+        api.parallel_slot_current_max = group_max
+    if probed is not None:
+        upper = group_max if group and group_max else 135.0
+        api.slot_current_probed[master] = {"charge": probed, "discharge": probed, "probed_at": "2026-11-01T00:00:00+00:00", "upper": {"charge": upper, "discharge": upper}}
+        # The slave's slots take its full 135A on its own, as the master's did before it led a group
+        api.slot_current_probed[slave] = {"charge": 135.0, "discharge": 135.0, "probed_at": "2026-11-01T00:00:00+00:00"}
+    return api, master, slave
+
+
+def _written_for(api, sn, cid):
+    """The last value written to cid on inverter sn, or None."""
+    values = [c["value"] for c in api.read_and_write_cid_calls if c["cid"] == cid and c["inverter_sn"] == sn]
+    return values[-1] if values else None
+
+
+async def test_parallel_master_writes_the_group_current():
+    """Issue #5556: a parallel master's slot current is shared by the group, so it is written with every member's share."""
+    print("\n=== Test: parallel master writes the group's slot current ===")
+    failed = False
+    cid = SOLIS_CID_DISCHARGE_CURRENT[0]
+
+    # Full rate on both: the master's slot gets 270A, which the pair shares as 135A each; the slave keeps its own 135A
+    api, master, slave = _parallel_api()
+    for sn in api.inverter_sn:
+        assert await api.write_time_windows_if_changed(sn) is True
+    if _written_for(api, master, cid) != "270.0" or _written_for(api, slave, cid) != "135.0":
+        print(f"ERROR: expected master 270.0A and slave 135.0A, got {_written_for(api, master, cid)} and {_written_for(api, slave, cid)}")
+        failed = True
+    if not any("Slot current limits for MASTER01 for its parallel group with SLAVE01" in m and "solis_parallel_slot_current_max 270.0A" in m for m in api.log_messages):
+        print(f"ERROR: the group limits should be logged, got {[m for m in api.log_messages if 'Slot current limits' in m]}")
+        failed = True
+
+    # A part rate is summed too, rather than halved
+    api, master, slave = _parallel_api(slave_current=50)
+    api.charge_discharge_time_windows[master][1]["discharge_current"] = 50
+    assert await api.write_time_windows_if_changed(master) is True
+    if _written_for(api, master, cid) != "100.0":
+        print(f"ERROR: two 50A shares should write 100.0A on the master, got {_written_for(api, master, cid)}")
+        failed = True
+
+    # A slave whose slot is not discharging adds nothing
+    api, master, slave = _parallel_api(slave_enable=0)
+    assert await api.write_time_windows_if_changed(master) is True
+    if _written_for(api, master, cid) != "135.0":
+        print(f"ERROR: an idle slave should add nothing, got {_written_for(api, master, cid)}")
+        failed = True
+
+    # The total never goes past the group limit the user set
+    api, master, slave = _parallel_api(group_max=200.0, probed=200.0)
+    assert await api.write_time_windows_if_changed(master) is True
+    if _written_for(api, master, cid) != "200.0":
+        print(f"ERROR: the group total should be capped at 200.0A, got {_written_for(api, master, cid)}")
+        failed = True
+
+    # Without solis_parallel_slot_current_max the master's own 135A limit still binds - nothing is assumed about the bank
+    api, master, slave = _parallel_api(group_max=None, probed=135.0)
+    assert await api.write_time_windows_if_changed(master) is True
+    if _written_for(api, master, cid) != "135.0":
+        print(f"ERROR: without a group limit the master's own cap should bind, got {_written_for(api, master, cid)}")
+        failed = True
+
+    # Without solis_parallel_slaves nothing changes
+    api, master, slave = _parallel_api(group=False, probed=135.0)
+    assert await api.write_time_windows_if_changed(master) is True
+    if _written_for(api, master, cid) != "135.0":
+        print(f"ERROR: an ungrouped inverter writes its own current, got {_written_for(api, master, cid)}")
+        failed = True
+
+    # Each member is still planned at its own rate: the group limit only applies to the slot write
+    api, master, slave = _parallel_api()
+    planned = api.slot_power_limits(master)
+    if planned != api.slot_power_limits(slave) or planned["discharge"] != int(135 * api.get_nominal_voltage(master)):
+        print(f"ERROR: the master should be planned at its own 135A, got {planned} against the slave's {api.slot_power_limits(slave)}")
+        failed = True
+
+    if not failed:
+        print("PASSED: parallel master writes the group's slot current")
+    return failed
+
+
+def test_parallel_config_parsing():
+    """solis_parallel_slaves and solis_parallel_slot_current_max are read leniently, and a bad value is warned about and ignored."""
+    print("\n=== Test: parallel group configuration ===")
+    failed = False
+    api = MockSolisAPI()
+    cases = [
+        ({"MASTER01": "SLAVE01"}, {"MASTER01": ["SLAVE01"]}),
+        ({"MASTER01": ["SLAVE01", "SLAVE02"]}, {"MASTER01": ["SLAVE01", "SLAVE02"]}),
+        ({1234567: 7654321}, {"1234567": ["7654321"]}),
+        ({"MASTER01": "master01"}, {}),
+        (None, {}),
+    ]
+    for value, expected in cases:
+        got = api.parse_parallel_slaves(value)
+        if got != expected:
+            print(f"ERROR: parse_parallel_slaves({value!r}) gave {got}, expected {expected}")
+            failed = True
+    if api.parse_parallel_slaves(["SLAVE01"]) != {} or not any("solis_parallel_slaves must map" in m for m in api.log_messages):
+        print("ERROR: a list instead of a mapping should be warned about and ignored")
+        failed = True
+    for value, expected in ((270, 270.0), ("270", 270.0), (None, None), (0, None), ("lots", None)):
+        got = api.parse_parallel_slot_current_max(value)
+        if got != expected:
+            print(f"ERROR: parse_parallel_slot_current_max({value!r}) gave {got}, expected {expected}")
+            failed = True
+
+    # A slave that is not one of the inverters is left out, warned about once; serials match ignoring case
+    api, master, slave = _parallel_api()
+    api.parallel_slaves = api.parse_parallel_slaves({"master01": ["slave01", "MISSING9"]})
+    for _ in range(2):
+        found = api.parallel_group_slaves(master)
+    if found != [slave] or len([m for m in api.log_messages if "MISSING9" in m]) != 1:
+        print(f"ERROR: expected [{slave}] and one warning about MISSING9, got {found} and {[m for m in api.log_messages if 'MISSING9' in m]}")
+        failed = True
+    if api.parallel_group_slaves(slave) != []:
+        print("ERROR: a slave is not a master of anything")
+        failed = True
+
+    if not failed:
+        print("PASSED: parallel group configuration")
+    return failed
+
+
+async def test_parallel_group_edges():
+    """Issue #5556 edges: charging is summed too, a slave listed twice counts once, the decoded share is split, and the 0A rule and V1 see the group."""
+    print("\n=== Test: parallel group edges ===")
+    failed = False
+
+    # Charging is summed the same way as discharging
+    api, master, slave = _parallel_api()
+    for sn in (master, slave):
+        api.charge_discharge_time_windows[sn][1].update({"charge_enable": 1, "charge_start_time": "02:00", "charge_end_time": "05:00", "charge_current": 120, "discharge_enable": 0})
+    assert await api.write_time_windows_if_changed(master) is True
+    if _written_for(api, master, SOLIS_CID_CHARGE_CURRENT[0]) != "240.0":
+        print(f"ERROR: two 120A charge shares should write 240.0A, got {_written_for(api, master, SOLIS_CID_CHARGE_CURRENT[0])}")
+        failed = True
+
+    # A slave listed twice, in any case, is counted once
+    api, master, slave = _parallel_api(group_max=400.0, probed=400.0)
+    api.parallel_slaves = api.parse_parallel_slaves({master: [slave, slave.lower()]})
+    assert await api.write_time_windows_if_changed(master) is True
+    if _written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0]) != "270.0":
+        print(f"ERROR: a duplicated slave should count once, got {_written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0])}")
+        failed = True
+
+    # After a restart the master's register holds the group's total; its own share is that less the slave's enabled
+    # current, so the first write finds nothing to change - with equal shares, unequal ones, or an idle slave
+    for master_register, slave_register, slave_enable, expected in (("270", "135", "1", 135.0), ("185", "50", "1", 135.0), ("135", "50", "0", 135.0)):
+        api, master, slave = _parallel_api()
+        for sn, register in ((master, master_register), (slave, slave_register)):
+            api.cached_values[sn][SOLIS_CID_DISCHARGE_CURRENT[0]] = register
+            api.cached_values[sn][SOLIS_CID_DISCHARGE_ENABLE_BASE] = "1" if sn == master else slave_enable
+            api.cached_values[sn][SOLIS_CID_DISCHARGE_TIME[0]] = "16:00-19:00"
+        # Slaves first, as run_cycle() decodes them
+        await api.decode_time_windows_v2(slave)
+        await api.decode_time_windows_v2(master)
+        share = api.charge_discharge_time_windows[master][1]["discharge_current"]
+        if share != expected:
+            print(f"ERROR: master register {master_register}A with the slave at {slave_register}A (enable {slave_enable}) should decode a {expected}A share, got {share}")
+            failed = True
+        assert await api.write_time_windows_if_changed(master) is True
+        if _written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0]) is not None:
+            print(f"ERROR: an unchanged schedule (master {master_register}A, slave {slave_register}A) should not be rewritten, wrote {_written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0])}")
+            failed = True
+
+    # A slave not yet decoded counts for nothing either way: the master keeps the register's value, and writing it back changes nothing
+    api, master, slave = _parallel_api()
+    api.charge_discharge_time_windows.pop(slave)
+    api.cached_values[master].update({SOLIS_CID_DISCHARGE_CURRENT[0]: "185", SOLIS_CID_DISCHARGE_ENABLE_BASE: "1", SOLIS_CID_DISCHARGE_TIME[0]: "16:00-19:00"})
+    await api.decode_time_windows_v2(master)
+    if api.charge_discharge_time_windows[master][1]["discharge_current"] != 185.0:
+        print(f"ERROR: with the slave not yet decoded the master should keep 185A, got {api.charge_discharge_time_windows[master][1]['discharge_current']}")
+        failed = True
+    assert await api.write_time_windows_if_changed(master) is True
+    if _written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0]) is not None:
+        print(f"ERROR: with the slave not yet decoded the master's 185A should not be rewritten, wrote {_written_for(api, master, SOLIS_CID_DISCHARGE_CURRENT[0])}")
+        failed = True
+
+    # The first poll decodes parallel masters after their slaves, whatever order the inverters are listed in
+    api, master, slave = _parallel_api()
+    api.inverter_sn = [master, slave]
+    if api.inverters_masters_last() != [slave, master]:
+        print(f"ERROR: a parallel master should come after its slave, got {api.inverters_masters_last()}")
+        failed = True
+
+    # With the master's own charge share at 0A but the slave charging, the group is charging: not the 0A Feed-in rule
+    api, master, slave = _parallel_api()
+    api.charge_discharge_time_windows[master][1].update({"charge_enable": 1, "charge_start_time": "02:00", "charge_end_time": "05:00", "charge_current": 0, "discharge_enable": 0})
+    api.charge_discharge_time_windows[slave][1].update({"charge_enable": 1, "charge_start_time": "02:00", "charge_end_time": "05:00", "charge_current": 120, "discharge_enable": 0})
+    assert await api.write_time_windows_if_changed(master) is True
+    modes = [c["mode"] for c in api.set_storage_mode_calls if c["inverter_sn"] == master]
+    if modes != ["Self-Use"]:
+        print(f"ERROR: the master should stay in Self-Use while the group charges, got {modes}")
+        failed = True
+
+    # In V1 mode the group is not applied, and that is warned about once
+    api, master, slave = _parallel_api()
+    api._test_v2_mode = False
+    api._test_now_utc_exact = datetime(2026, 11, 1, 12, 0, tzinfo=api.local_tz)
+    for _ in range(2):
+        await api.write_time_windows_if_changed(master)
+    if len([m for m in api.log_messages if "is not in TOU V2 mode" in m]) != 1:
+        print(f"ERROR: expected one V1 warning, got {[m for m in api.log_messages if 'TOU V2' in m]}")
+        failed = True
+
+    # A bad group limit is ignored
+    for value in ("inf", "nan", True):
+        if api.parse_parallel_slot_current_max(value) is not None:
+            print(f"ERROR: {value!r} should not be taken as a group limit")
+            failed = True
+
+    if not failed:
+        print("PASSED: parallel group edges")
+    return failed
+
+
+async def test_parallel_probe_upper_saved_and_loaded():
+    """The upper limit a ceiling was probed against survives a restart, and a malformed one drops that entry."""
+    print("\n=== Test: probe upper limit saved and loaded ===")
+    failed = False
+    upper = {"charge": 270.0, "discharge": 270.0}
+    saved = {"MASTER01": {"charge": 270, "discharge": 270, "probed_at": "2026-11-01T00:00:00+00:00", "upper": upper}, "OTHER01": {"charge": 60, "discharge": 60, "probed_at": "2026-11-01T00:00:00+00:00", "upper": "junk"}}
+    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): saved}), loaded=False)
+    await api.load_slot_current_probes()
+    if api.slot_current_probed.get("MASTER01", {}).get("upper") != upper:
+        print(f"ERROR: the upper limit should be loaded, got {api.slot_current_probed.get('MASTER01')}")
+        failed = True
+    if "OTHER01" in api.slot_current_probed:
+        print("ERROR: an entry with a malformed upper limit should be ignored")
+        failed = True
+    if not failed:
+        print("PASSED: probe upper limit saved and loaded")
+    return failed
+
+
+async def test_parallel_master_probed_afresh_at_the_group_limit():
+    """A master whose ceiling was probed at its own 135A is probed again from the group limit once one is set, not climbed 1A at a time."""
+    print("\n=== Test: parallel master probed afresh at the group limit ===")
+    failed = False
+    api, master, slave = _parallel_api(probed=None)
+    api.slot_current_probes_loaded = True
+    # Probed yesterday against the master's own 135A limit, before the ceiling recorded what it was probed against
+    api._test_now_utc_exact = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+    api.slot_current_probed[master] = {"charge": 135.0, "discharge": 135.0, "probed_at": "2026-11-01T11:00:00+00:00"}
+    for slot in range(2, 7):
+        api.charge_discharge_time_windows[master][slot] = {"charge_enable": 0, "discharge_enable": 0, "charge_current": 50.0, "discharge_current": 50.0}
+    inverter = _ProbeInverter(api, ceiling=270)
+
+    if not api.slot_probe_due(master):
+        print("ERROR: the group limit should make the master's 135A ceiling due for probing")
+        failed = True
+    await api.ensure_slot_current_probed(master)
+    probed = api.slot_current_probed.get(master, {})
+    if (probed.get("charge"), probed.get("discharge"), probed.get("upper")) != (270.0, 270.0, {"charge": 270.0, "discharge": 270.0}):
+        print(f"ERROR: expected 270A both ways probed against 270A, got {probed}")
+        failed = True
+    first = [value for cid, value in inverter.writes if cid == SOLIS_CID_DISCHARGE_CURRENT[5]][:1]
+    if first != ["270.0"] and first != ["270"]:
+        print(f"ERROR: the probe should start at the group limit, got {first}")
+        failed = True
+    if api.slot_probe_due(master):
+        print("ERROR: once probed at the group limit the master is not due again")
+        failed = True
+
+    # An ungrouped inverter's old ceiling, saved without its upper limit, is not probed again
+    if api.slot_probe_upper_changed(slave):
+        print("ERROR: an inverter outside a group keeps its saved ceiling")
+        failed = True
+    api.slot_current_probed[slave] = {"charge": 120.0, "discharge": 120.0, "probed_at": "2026-11-01T11:00:00+00:00"}
+    if api.slot_probe_upper_changed(slave) or api.slot_probe_due(slave):
+        print("ERROR: an old ceiling probed at the inverter's own limits is still current")
+        failed = True
+
+    if not failed:
+        print("PASSED: parallel master probed afresh at the group limit")
+    return failed
 
 
 async def test_slot_currents_uncapped_when_inverter_size_unknown():
@@ -6195,6 +6524,7 @@ async def test_slot_registers_are_re_read_while_a_window_is_live():
     sn = "INV001"
     api = _make_run_api(configured_sns=[sn])
     api.inverter_sn = [sn]
+    api.tou_v2_mode_saved = {sn: {"value": "43605", "read_at": datetime(2026, 8, 26, 23, 0, tzinfo=api.local_tz).isoformat()}}  # Startup read the TOU mode, so it is not read again
     api._test_v2_mode = True
     api._test_now_utc_exact = datetime(2026, 8, 26, 23, 35, tzinfo=api.local_tz)
     api.charge_discharge_time_windows[sn] = {1: {"charge_enable": 1, "charge_start_time": "23:30", "charge_end_time": "23:45"}}
@@ -7073,13 +7403,14 @@ async def test_slot_probe_finds_exact_ceiling():
 
     probed = dict(api.slot_current_probed.get(sn, {}))
     probed_at = probed.pop("probed_at", None)
-    assert probed == {"charge": 60.0, "discharge": 60.0} and probed_at, f"expected 60A both ways with a probe time, got {api.slot_current_probed.get(sn)}"
+    upper = {"charge": 100.0, "discharge": 100.0}
+    assert probed == {"charge": 60.0, "discharge": 60.0, "upper": upper} and probed_at, f"expected 60A both ways, probed against the 100A battery limits, with a probe time, got {api.slot_current_probed.get(sn)}"
     discharge_cid = SOLIS_CID_DISCHARGE_CURRENT[5]
     discharge_writes = [value for cid, value in inverter.writes if cid == discharge_cid]
     assert discharge_writes == ["100", "95", "90", "85", "80", "75", "70", "65", "60", "61", "60.5", "50"], f"expected 100 (the battery limit), down 5 to 60, up to 61, a half amp at 60.5, then restore 50; got {discharge_writes}"
     assert {cid for cid, _ in inverter.writes} == {SOLIS_CID_CHARGE_CURRENT[5], discharge_cid}, f"only disabled slot 6 may be written, got {inverter.writes}"
     assert inverter.registers[discharge_cid] == "50" and inverter.registers[SOLIS_CID_CHARGE_CURRENT[5]] == "50", "slot 6 must be restored in both directions"
-    assert storage.contents.get(("solis", "slot_current_limits")) == {sn: {"charge": 60.0, "discharge": 60.0, "probed_at": probed_at}}, f"the ceiling should be saved, got {storage.contents}"
+    assert storage.contents.get(("solis", "slot_current_limits")) == {sn: {"charge": 60.0, "discharge": 60.0, "probed_at": probed_at, "upper": upper}}, f"the ceiling should be saved, got {storage.contents}"
 
     # The learned ceiling now caps every slot write, and the limits line says where it came from
     limits = api.slot_current_limits(sn)
@@ -9060,6 +9391,255 @@ async def test_discovery_cache_lets_a_restart_configure_without_the_api():
 
     if not failed:
         print("PASSED: a restart with no API access configures from the cached inverter list")
+    return failed
+
+
+def _tou_mode_api(storage, sn, tou_reads, slot_read_failures=0):
+    """Return a run() API with storage whose CID 6798 reads follow tou_reads, a list of values or None (a timed-out read) used in turn.
+
+    The first slot_read_failures reads of the V2 slot registers fail, as a timeout does.
+
+    The real is_tou_v2_mode() is bound in place of MockSolisAPI's, so the mode comes from the cached register.
+    """
+    api = _storage_api(storage)
+    api.configured_inverter_sn = [sn]
+    api.is_tou_v2_mode = SolisAPI.is_tou_v2_mode.__get__(api)
+
+    async def mock_get_inverter_list():
+        """Discovery finds the one inverter."""
+        return [{"sn": sn}]
+
+    async def mock_poll_inverter_data(inverter_sn, cids, batch=True):
+        """Answer CID 6798 from tou_reads, failing the way a timeout does (cache left alone) for None."""
+        api.poll_inverter_data_calls.append((inverter_sn, cids))
+        if cids == [SOLIS_CID_TOU_V2_MODE]:
+            value = tou_reads.pop(0)
+            if value is None:
+                return False
+            api.cached_values.setdefault(inverter_sn, {})[SOLIS_CID_TOU_V2_MODE] = value
+        if cids == SOLIS_CID_LIST_TOU_V2 and failures_left[0] > 0:
+            failures_left[0] -= 1
+            return False
+        return True
+
+    failures_left = [slot_read_failures]
+    api.get_inverter_list = mock_get_inverter_list
+    api.poll_inverter_data = mock_poll_inverter_data
+    return api
+
+
+async def test_failed_tou_mode_read_is_retried_and_saved():
+    """A TOU mode read that times out at startup is polled again, and a good read is saved.
+
+    The flag was read once at startup with the result unchecked, so a timeout left a V2 inverter driven with
+    V1 registers it ignores, and no charge or export ran until the next restart (two nights on one site).
+    """
+    failed = False
+    print("\n=== Test: a failed TOU mode read is retried and saved ===")
+    sn = "INV001"
+    storage = _FakeStorage()
+    api = _tou_mode_api(storage, sn, [None, None, "43605"])
+
+    def tou_polls():
+        """The CID 6798 reads made so far."""
+        return [call for call in api.poll_inverter_data_calls if call[1] == [SOLIS_CID_TOU_V2_MODE]]
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        if api.is_tou_v2_mode(sn):
+            print("ERROR: with no read and nothing saved the mode should default to standard")
+            failed = True
+        if not any("Could not read the time of use mode of inverter {}, treating it as standard mode".format(sn) in m for m in api.log_messages):
+            print("ERROR: expected a warning that the default is in use, got {}".format(api.log_messages))
+            failed = True
+
+        await api.run(60, False)
+        if len(tou_polls()) != 1:
+            print("ERROR: off the 5 minute boundary the TOU mode should not be polled, got {}".format(tou_polls()))
+            failed = True
+
+        await api.run(300, False)  # Times out again
+        await api.run(600, False)  # Reads V2
+        if len(tou_polls()) != 3:
+            print("ERROR: expected the TOU mode polled at startup and on each 5 minute boundary until read, got {}".format(tou_polls()))
+            failed = True
+        if not api.is_tou_v2_mode(sn):
+            print("ERROR: once read, the inverter should be in V2 mode")
+            failed = True
+        if storage.contents.get(("solis", "tou_v2_mode"), {}).get(sn, {}).get("value") != "43605":
+            print("ERROR: expected the read TOU mode to be saved, got {}".format(storage.contents.get(("solis", "tou_v2_mode"))))
+            failed = True
+        if api.decode_time_windows_v2_calls != [sn] or (sn, SOLIS_CID_LIST_TOU_V2) not in api.poll_inverter_data_calls:
+            print("ERROR: a change to V2 should re-read and decode the V2 slot registers, got decodes {}".format(api.decode_time_windows_v2_calls))
+            failed = True
+
+        await api.run(900, False)
+        if len(tou_polls()) != 3:
+            print("ERROR: once read, the TOU mode should not be polled again, got {}".format(tou_polls()))
+            failed = True
+
+    if not failed:
+        print("PASSED: a failed TOU mode read is retried until it succeeds, and the result saved")
+    return failed
+
+
+async def test_saved_tou_mode_is_used_without_reading():
+    """A TOU mode read under a day ago by an earlier run is used by a restart without reading CID 6798 again."""
+    failed = False
+    print("\n=== Test: a saved TOU mode is used without reading ===")
+    sn = "INV001"
+    storage = _FakeStorage({("solis", "tou_v2_mode"): {sn: {"value": "43605", "read_at": (datetime.now(UTC) - timedelta(hours=2)).isoformat()}}})
+    api = _tou_mode_api(storage, sn, [])  # Any CID 6798 read would pop from an empty list and raise
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        await api.run(300, False)
+
+    tou_polls = [call for call in api.poll_inverter_data_calls if call[1] == [SOLIS_CID_TOU_V2_MODE]]
+    if tou_polls:
+        print("ERROR: a saved TOU mode should not be read again, got {}".format(tou_polls))
+        failed = True
+    if not api.is_tou_v2_mode(sn):
+        print("ERROR: the saved V2 mode should be in use")
+        failed = True
+    if not any("Inverter {} is in Time of Use V2 mode".format(sn) in m for m in api.log_messages):
+        print("ERROR: startup should report the saved V2 mode, got {}".format(api.log_messages))
+        failed = True
+    if api.decode_time_windows_v2_calls != [sn] or api.decode_time_windows_calls:
+        print("ERROR: startup should decode the V2 slot registers once, got v2 {} v1 {}".format(api.decode_time_windows_v2_calls, api.decode_time_windows_calls))
+        failed = True
+
+    if not failed:
+        print("PASSED: a saved TOU mode is used without reading it again")
+    return failed
+
+
+async def test_tou_mode_older_than_a_day_is_read_again():
+    """A TOU mode read over a day ago is read again, keeping the old value in use until a read succeeds.
+
+    This is what clears a wrong saved value, or picks up a firmware upgrade, without anyone touching storage.
+    """
+    failed = False
+    print("\n=== Test: a TOU mode older than a day is read again ===")
+    sn = "INV001"
+    now = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+    storage = _FakeStorage({("solis", "tou_v2_mode"): {sn: {"value": "43605", "read_at": (now - timedelta(hours=25)).isoformat()}}})
+    api = _tou_mode_api(storage, sn, [None, "0", "0"])
+    api._test_now_utc_exact = now
+
+    def tou_polls():
+        """The CID 6798 reads made so far."""
+        return [call for call in api.poll_inverter_data_calls if call[1] == [SOLIS_CID_TOU_V2_MODE]]
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)  # The re-read times out
+        if len(tou_polls()) != 1:
+            print("ERROR: a TOU mode read over a day ago should be read again at startup, got {}".format(tou_polls()))
+            failed = True
+        if not api.is_tou_v2_mode(sn):
+            print("ERROR: a failed re-read must keep the last value read in use")
+            failed = True
+        if not any("Could not re-read the time of use mode of inverter {}, keeping Time of Use V2 mode".format(sn) in m for m in api.log_messages):
+            print("ERROR: expected a warning that the last value read is kept, got {}".format(api.log_messages))
+            failed = True
+
+        api.decode_time_windows_calls = []
+        await api.run(300, False)  # The inverter now reports standard mode
+        if api.is_tou_v2_mode(sn):
+            print("ERROR: the newly read standard mode should replace the old V2 value")
+            failed = True
+        if api.decode_time_windows_calls != [sn]:
+            print("ERROR: a change to standard mode should re-read and decode the V1 window register, got {}".format(api.decode_time_windows_calls))
+            failed = True
+        saved = storage.contents[("solis", "tou_v2_mode")][sn]
+        if saved != {"value": "0", "read_at": now.isoformat()}:
+            print("ERROR: expected the new value saved with its read time, got {}".format(saved))
+            failed = True
+
+        # A pod that stays up is read again once the value is a day old, and not before
+        api._test_now_utc_exact = now + timedelta(hours=23)
+        await api.run(600, False)
+        if len(tou_polls()) != 2:
+            print("ERROR: a TOU mode read under a day ago should not be read again, got {}".format(tou_polls()))
+            failed = True
+        api._test_now_utc_exact = now + timedelta(hours=24)
+        await api.run(900, False)
+        if len(tou_polls()) != 3:
+            print("ERROR: a running pod should read the TOU mode again once it is a day old, got {}".format(tou_polls()))
+            failed = True
+
+    if not failed:
+        print("PASSED: a TOU mode older than a day is read again, keeping the old value until a read succeeds")
+    return failed
+
+
+async def test_tou_mode_change_retries_a_failed_slot_register_read():
+    """A TOU mode change whose slot register re-read fails is retried on the next 5 minute boundary until it decodes.
+
+    The flag read marks the mode current, so without its own retry a failed re-read straight after it left the slots
+    decoded in the old layout for the rest of the run, as the hourly poll only decodes on the first cycle.
+    """
+    failed = False
+    print("\n=== Test: a TOU mode change retries a failed slot register read ===")
+    sn = "INV001"
+    storage = _FakeStorage()
+    api = _tou_mode_api(storage, sn, [None, "43605"], slot_read_failures=1)
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)  # Flag read times out, standard mode assumed
+        await api.run(300, False)  # Flag reads V2, the V2 slot register read fails
+        if api.decode_time_windows_v2_calls:
+            print("ERROR: a failed slot register read should not decode, got {}".format(api.decode_time_windows_v2_calls))
+            failed = True
+        if sn not in api.time_windows_reload_pending:
+            print("ERROR: a failed slot register read after a mode change should stay pending")
+            failed = True
+
+        await api.run(600, False)  # The retry reads and decodes them
+        if api.decode_time_windows_v2_calls != [sn]:
+            print("ERROR: the retry should decode the V2 slot registers once, got {}".format(api.decode_time_windows_v2_calls))
+            failed = True
+        if sn in api.time_windows_reload_pending:
+            print("ERROR: a decoded reload should no longer be pending")
+            failed = True
+
+        slot_polls = len([call for call in api.poll_inverter_data_calls if call[1] == SOLIS_CID_LIST_TOU_V2])
+        await api.run(900, False)
+        if len([call for call in api.poll_inverter_data_calls if call[1] == SOLIS_CID_LIST_TOU_V2]) != slot_polls:
+            print("ERROR: once decoded, the slot registers should not be re-read for the mode change again")
+            failed = True
+
+    if not failed:
+        print("PASSED: a TOU mode change retries a failed slot register read until it decodes")
+    return failed
+
+
+async def test_successful_tou_mode_read_is_not_polled_again():
+    """A TOU mode read that succeeds at startup is saved and not polled again on the 5 minute grid."""
+    failed = False
+    print("\n=== Test: a successful TOU mode read is not polled again ===")
+    sn = "INV001"
+    storage = _FakeStorage()
+    api = _tou_mode_api(storage, sn, ["43605"])
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        await api.run(300, False)
+
+    tou_polls = [call for call in api.poll_inverter_data_calls if call[1] == [SOLIS_CID_TOU_V2_MODE]]
+    if len(tou_polls) != 1:
+        print("ERROR: expected only the startup TOU mode read, got {}".format(tou_polls))
+        failed = True
+    saved = storage.contents.get(("solis", "tou_v2_mode"), {}).get(sn, {})
+    if saved.get("value") != "43605" or not saved.get("read_at"):
+        print("ERROR: expected the TOU mode to be saved with its read time, got {}".format(storage.contents.get(("solis", "tou_v2_mode"))))
+        failed = True
+    if any("Could not read the time of use mode" in m for m in api.log_messages):
+        print("ERROR: a successful read should not warn, got {}".format(api.log_messages))
+        failed = True
+
+    if not failed:
+        print("PASSED: a successful TOU mode read is saved and not polled again")
     return failed
 
 

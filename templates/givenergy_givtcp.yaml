@@ -198,6 +198,8 @@ pred_bat:
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
+  # With givtcp_rest set, Predbat reads this from the inverter (sensor.predbat_givtcp_0_export_limit),
+  # so leave it commented out. A value set here wins over the inverter's own, so only set it to override
   #export_limit:
   #  - 3600
   #  - 3600

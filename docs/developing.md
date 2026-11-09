@@ -41,7 +41,7 @@ The whole cycle for one change, from reopening your environment to a pushed bran
 | 12. Open the pull request | Use the link that the push prints. Check that base is `springfall2008/batpred` `main`, compare is your branch, and the Commits and Files changed tabs list only your own work. First run `git log --oneline upstream/main..HEAD`, which lists the commits the PR will contain. See [raising the pull request](#raising-the-pull-request) |
 | 13. Later pushes to the same branch | The Sync Changes button in the Source Control view, or `git push` |
 | 14. If the pull request has conflicts | `git fetch upstream`, then `git merge upstream/main`, fix the clashes, run the tests again, then `git push`. See [if there are conflicts](#if-there-are-conflicts) |
-| 15. After the pull request is merged | `git switch main`, `git pull`, `git fetch upstream`, `git merge --ff-only upstream/main`, `git push origin main`, then `git branch -d my-change-name`. See [after your pull request is merged](#after-your-pull-request-is-merged) |
+| 15. After the pull request is merged | `git switch main`, `git pull`, `git fetch upstream`, `git merge --ff-only upstream/main`, `git push origin main`, `git branch -d my-change-name` and then `git fetch --prune`. See [after your pull request is merged](#after-your-pull-request-is-merged) |
 
 ## Setting up your development environment
 
@@ -189,9 +189,8 @@ Python files in `apps/predbat/`, so the changes you save are used the next time 
 Before you start:
 
 - The scripts expect the Predbat app's configuration folder to be available on your computer under `/Volumes`. Home Assistant 2026.2 renamed the folder
-  `addon_configs` to `app_configs`: `standalone` checks for `/Volumes/app_configs/6adb4f0d_predbat` first and then for `/Volumes/addon_configs/6adb4f0d_predbat`, but
-  `deploy` and `standalone_ha` only use the `addon_configs` path. If you use another type of computer, or your folder is called something else, edit the paths in the scripts.
-- `standalone` needs an `apps_direct.yaml` file in that folder. What it needs to contain is not documented here yet.
+  `addon_configs` to `app_configs`: The scripts check for `/Volumes/app_configs/6adb4f0d_predbat` first (the new pathname) and then for `/Volumes/addon_configs/6adb4f0d_predbat`. If you use another type of computer, or your folder is called something else, edit the paths in the scripts.
+- `standalone` needs an `apps_direct.yaml` file in that folder. What it needs to contain (over and above a standard `apps.yaml`) is not documented here yet.
 - The standalone scripts don't set up the Python environment, so first run `source setup.csh` in the `coverage/` directory (see
   [setting up the Python environment](#setting-up-the-python-environment)).
 - Stop the Predbat app in Home Assistant while you test with one of the standalone scripts, as two copies of Predbat controlling the same inverter will conflict.
@@ -628,6 +627,8 @@ Then delete the finished branch. The **Delete branch** button on the merged pull
 If git refuses with "not fully merged", it is because the pull request was merged as a single new commit, so git can't see that your commits are in `main`.
 Check that the pull request shows as merged, then use `git branch -D my-change-name`.
 
+Deleting the branch on GitHub doesn't remove your Codespace's record of it (`origin/my-change-name`). Tidy that too with `git fetch --prune`, after which `git branch -r` no longer lists it. To delete the branch on your fork from the terminal instead of using the button, run `git push origin --delete my-change-name`.
+
 You can then start the next change from [creating a branch](#creating-a-branch).
 
 ## Code layout
@@ -842,7 +843,7 @@ Everything here is run from the `coverage/` directory. Scripts that don't set up
 
 | Script | What it does |
 | --- | --- |
-| `run_profile` \* | Profiles the planning of one debug dump: `./run_profile cases/predbat_debug_agile1.yaml`. With no arguments it lists the `cases/predbat_debug_*.yaml` files. Options: `-v` (or `--view`) opens the result in snakeviz (`pip install snakeviz`), `-s` chooses the sort order (`cumulative`, `time`, `calls` or `ncalls`), `-n` sets how many functions to show, and `-o` chooses the output file. The usage text that the script prints mentions a `--time` option, but `-s time` is the one that works |
+| `run_profile` \* | Profiles the planning of one debug dump: `./run_profile cases/predbat_debug_agile1.yaml`. With no arguments it lists the `cases/predbat_debug_*.yaml` files. Options: `-v` (or `--view`) opens the result in snakeviz (`pip install snakeviz`), `-s` chooses the sort order (`cumulative`, `time`, `calls` or `ncalls`), `-n` sets how many functions to show, and `-o` chooses the output file |
 | `profile_debug.py` \* | The Python script behind `run_profile`. It runs `unit_test.py --debug_file` under cProfile, saves `<name>_profile.prof`, and prints the slowest functions |
 | `run_random` | Sets up the environment, runs the scenarios in `cases/random_scenarios.yaml` (using `agile1` as the template), writes `random_results.json`, and compares it with the stored `cases/random_results.json`. See [random-scenarios.md](random-scenarios.md) |
 | `run_random_profile` | Sets up the environment, profiles random scenario 0 sorted by time within each function, and saves the top 500 functions in `profile_cprofile.log` |

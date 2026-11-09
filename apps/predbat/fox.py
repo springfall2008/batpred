@@ -25,7 +25,7 @@ import aiohttp
 import json
 import argparse
 import random
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -1066,7 +1066,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         unavailable = self.device_settings_unavailable.setdefault(deviceSN, [])
         if key_lower not in unavailable:
             unavailable.append(key_lower)
-        self.log(f"Fox: Warn: Setting {key} is not supported by device {deviceSN}, will not read or write it again")
+        self.log(f"Info: Fox: Setting {key} is not supported by device {deviceSN}, will not read or write it again")
         if key_lower in FOX_SETTINGS_DEFAULTS:
             self.device_settings.setdefault(deviceSN, {})[key] = dict(FOX_SETTINGS_DEFAULTS[key_lower])
 
@@ -1091,12 +1091,13 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.log(f"Fox: Warn: Failed to get device setting for {deviceSN} key {key}")
         return None
 
+    @writes
     async def set_device_setting(self, deviceSN, key, value):
         """
         Set device setting
         """
         if self.is_setting_unavailable(deviceSN, key):
-            self.log(f"Fox: Warn: Ignoring write to unsupported setting {key} for device {deviceSN}")
+            self.log(f"Info: Fox: Ignoring write to unsupported setting {key} for device {deviceSN}")
             return True
 
         SET_DEVICE_SETTING = "/op/v0/device/setting/set"
@@ -1112,6 +1113,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             return False
         return True
 
+    @writes
     async def set_battery_charging_time(self, deviceSN, setting):
         """
         Set battery charging time
@@ -1350,6 +1352,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     entry["precision"] = prop["precision"]
                 self.device_settings.setdefault(deviceSN, {})[setting_key] = entry
 
+    @writes
     async def set_scheduler_enabled(self, deviceSN, enabled):
         """
         Set scheduler enabled/disabled
@@ -1410,6 +1413,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.device_scheduler[deviceSN] = dict(result, groups=groups)
         return groups
 
+    @writes
     async def set_scheduler(self, deviceSN, groups):
         """
         Set scheduler groups, also disables scheduler if no groups provided
@@ -1763,10 +1767,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
         Retry wrapper
         """
         retries = 0
+        attempts = 0
         self.last_unsupported = False
         self.log("Fox: API Requesting {} {} - data {}".format("POST" if post else "GET", path, datain))
 
         while retries < FOX_RETRIES:
+            attempts += 1
             result, allow_retry = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
                 return result
@@ -1780,7 +1786,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
             retries += 1
             await asyncio.sleep(retries * random.random())
-        self.log("Fox: API Response failed after {} retries for {}".format(FOX_RETRIES, path))
+        self.log("Fox: API Response failed after {} attempts for {}".format(attempts, path))
         return result
 
     async def request_get_func(self, path, post=False, datain=None, _retry_after_refresh=False):
@@ -1800,7 +1806,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         timeout = aiohttp.ClientTimeout(total=TIMEOUT)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 if post:
                     if datain:
                         async with session.post(url, headers=headers, json=datain) as response:
@@ -1863,9 +1869,11 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     await asyncio.sleep(5 * 60)
                     return None, False
                 elif errno in FOX_SETTINGS_UNSUPPORTED_ERRNO:
-                    # Unsupported function code
+                    # Unsupported function code - expected for a setting a model lacks, where the caller
+                    # caches it via mark_setting_unavailable() and never asks again (#3880)
                     self.last_unsupported = True
-                    self.log(f"Warn: Fox: Unsupported function code {msg}:{errno} from {url}")
+                    level = "Info" if "/device/setting/" in url else "Warn"
+                    self.log(f"{level}: Fox: Unsupported function code {msg}:{errno} from {url}")
                     return None, False
                 elif errno in [40257]:
                     # Invalid parameter
@@ -2087,6 +2095,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
                 self.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
 
+    @writes
     async def write_setting_from_event(self, entity_id, value, is_number=False):
         """
         Handle write events
@@ -2130,6 +2139,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.log("Warn: Fox: Unknown write event event for {} value {}".format(entity_id, value))
         await self.publish_data()
 
+    @writes
     async def select_event(self, entity_id, value):
         """
         Handle select events
@@ -2139,12 +2149,14 @@ class FoxAPI(ComponentBase, OAuthMixin):
         elif "_battery_schedule_" in entity_id:
             await self.write_battery_schedule_event(entity_id, value)
 
+    @writes
     async def number_event(self, entity_id, value):
         if "_setting_" in entity_id:
             await self.write_setting_from_event(entity_id, value, is_number=True)
         elif "_battery_schedule_" in entity_id:
             await self.write_battery_schedule_event(entity_id, value)
 
+    @writes
     async def switch_event(self, entity_id, service):
         if "_battery_schedule_" in entity_id:
             await self.write_battery_schedule_event(entity_id, service)
@@ -2183,6 +2195,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             minute = orig_minute
         return hour, minute
 
+    @writes
     async def write_battery_schedule_event(self, entity_id, value):
         """
         Handle battery schedule events
@@ -2298,6 +2311,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             return False
         return charge_power == 0 and discharge_power > 0
 
+    @writes
     async def apply_battery_schedule(self, serial):
         new_schedule = []
         fdPwr_max = self.fdpwr_max.get(serial, 8000)
@@ -2591,8 +2605,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
         user-authored free text that can hold a street address (get_device_list()'s own sample
         holds one), and the info container's guards - a length cap and no "@" - would let an
         address straight into a debug dump users post publicly. Neither identifier describes the
-        hardware; a station ID, if one is ever wanted, belongs in account_ids, which is
-        pseudonymised.
+        hardware; a station ID, if one is ever wanted, belongs in account_ids, the container for
+        account and site identifiers.
 
         No battery capacity is reported. A real batteryList mixes control units that carry no
         capacity (bcu, ivu) with bmu entries carrying one in Wh, and the per-entry figures cannot

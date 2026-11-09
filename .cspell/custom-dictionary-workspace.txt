@@ -38,6 +38,7 @@ armhf
 armv
 ASHP
 asn
+asname
 astimezone
 asyncio
 atfork
@@ -118,6 +119,7 @@ coro
 corruptleg
 corruptplans
 cprofile
+CREAT
 creds
 crosscharge
 ctrdis
@@ -187,6 +189,7 @@ ecosmart
 Eddi
 eddis
 edfenergy
+edfgb
 efgh
 elif
 elinter
@@ -216,6 +219,7 @@ enphaseenergy
 Enpower
 entityfilter
 entrez
+eonnext
 epod
 epvtoday
 errno
@@ -272,6 +276,7 @@ geseriale
 getaffinity
 getall
 getattr
+getmembers
 getrusage
 Ginlong
 githubusercontent
@@ -409,6 +414,7 @@ maxrss
 maxsoc
 mbat
 mbuhansen
+mdi
 mdlrc
 measurand
 measurands
@@ -421,6 +427,7 @@ metricmid
 microinverters
 middlebox
 middleboxes
+middot
 milli
 minb
 minmax
@@ -444,6 +451,7 @@ monokai
 Mosquitto
 mousedown
 mpan
+mpans
 mppt
 mprn
 mpxn
@@ -583,6 +591,7 @@ reactivepower
 readback
 readbacks
 reasoncodes
+rebooked
 recp
 redownload
 Referer
@@ -595,6 +604,7 @@ remainings
 remotecontrol
 renderable
 replayer
+repr
 resetmidnight
 resultid
 resultmid
@@ -736,6 +746,7 @@ tunables
 twinx
 typecode
 typecodes
+tzdata
 tzfile
 tzpath
 tzset
@@ -788,9 +799,12 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+workstream
+workstreams
 worktree
 writeonly
 wrongsha
+WRONLY
 wwxxabcdefyyzz
 x1
 xaxis
