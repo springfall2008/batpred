@@ -28,6 +28,7 @@ import aiohttp
 import asyncio
 import math
 import time
+import math
 import traceback
 
 # A component whose COMPONENT_LIST entry sets "align_minute" runs this many seconds past each
@@ -84,6 +85,37 @@ def new_http_session(**kwargs):
     if factory is None:
         return aiohttp.ClientSession(**kwargs)
     return factory(**kwargs)
+
+
+def telemetry_number(value):
+    """Return a finite numeric measurement, never a boolean or coerced missing default."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def telemetry_time(value, unit="seconds"):
+    """Decode an aware ISO time or an epoch measurement, returning None when unknown.
+
+    unit is seconds, milliseconds or auto (milliseconds for epochs at least 10**11).
+    This parses provenance only; freshness thresholds and clock-skew policy belong to hosts.
+    """
+    try:
+        if isinstance(value, str) and not value.isdigit():
+            stamp = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+            return stamp if stamp.utcoffset() is not None else None
+        number = telemetry_number(value)
+        if number is None or number <= 0:
+            return None
+        if unit == "milliseconds" or (unit == "auto" and number >= 10**11):
+            number /= 1000
+        return datetime.fromtimestamp(number, timezone.utc)
+    except (ValueError, TypeError, OverflowError, OSError):
+        return None
 
 
 def _base_override(component, name):

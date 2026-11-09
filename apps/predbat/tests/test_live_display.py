@@ -90,6 +90,7 @@ def test_explicit_shared_ct_aggregation():
 def test_raw_capture_does_not_inherit_old_fields():
     """Exercise the actual fetch method: normal control merge stays, display rejects it."""
     component = provider()
+    component.telemetry_observer = None
     raw = copy.deepcopy(component.live_display_samples["inv001"])
     raw["battery"]["percent"] = None
     component.async_get_inverter_data_retry = AsyncMock(return_value=raw)
