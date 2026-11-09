@@ -26,6 +26,8 @@ ROW_DEFAULTS = {
     "charge_discharge_with_rate": False,
     "target_soc_used_for_discharge": True,
     "rate_step_percent_of_capacity": 0,
+    "reserve_above_soc_charges_from_grid": False,
+    "reserve_full_only_above_80": False,
 }
 
 # Row fields the record is not expected to rebuild: the display name, and two fields nothing reads
@@ -82,7 +84,7 @@ def validated_inverters(report):
     return records
 
 
-def assert_definition_complete(record, write_and_poll_sleep, except_fields=()):
+def assert_definition_complete(record, write_and_poll_sleep, except_fields=(), write_max_retry=None, write_backoff=False):
     """Fail unless the record alone rebuilds its INVERTER_DEF row: no gaps, and every applicable field equal.
 
     except_fields names row fields the record deliberately describes differently (spec D13: the GE family's
@@ -90,7 +92,7 @@ def assert_definition_complete(record, write_and_poll_sleep, except_fields=()):
     differ - an exception that no longer applies fails, so it is removed once the row is fixed.
     """
     inverter_type = record["inverter_type"]
-    definition, gaps, not_applicable = inverter_definition(record, write_and_poll_sleep)
+    definition, gaps, not_applicable = inverter_definition(record, write_and_poll_sleep, write_max_retry=write_max_retry, write_backoff=write_backoff)
     assert not gaps, "{} record cannot rebuild these INVERTER_DEF fields: {}".format(inverter_type, gaps)
     stale = [field for field in except_fields if definition.get(field) == row_value(inverter_type, field)]
     assert not stale, "{} exceptions no longer needed - the record now matches the row: {}".format(inverter_type, stale)

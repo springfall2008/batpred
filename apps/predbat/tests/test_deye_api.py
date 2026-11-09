@@ -64,6 +64,7 @@ class MockDeye(DeyeAPI):
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
         self.base.args = {"user_id": "test-deye-1"}
+        self.base.oauth_refresh_provider = None  # As on the real base: no host hook
         # A real clock on the mock base, not a MagicMock attribute: ComponentBase.minutes_now
         # derives from base.now_utc (GH#4804), and MagicMock would answer that arithmetic with a
         # value of its own rather than failing. Tests wanting a particular time of day call

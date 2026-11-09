@@ -42,6 +42,11 @@ DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
 # How long a half hour an Octopus Intelligent planned dispatch ran in keeps the dispatch rate after it ends,
 # while waiting for Octopus to list it as a completed dispatch - seen to take 15 to 60 minutes (GH#5520)
 OCTOPUS_DISPATCH_HOLD_MINUTES = 90
+# For this many minutes into the half hour after a held one, a car seen charging is taken for the tail of
+# the charge before it rather than an unlisted smart charge: car_charging_now can lag a car that stopped at the boundary while
+# Octopus still reports the smart charge in progress (GH#5884). One cycle, so a car that really charges on is held
+# at the next one
+OCTOPUS_DISPATCH_TAIL_MINUTES = 5
 # The same hold under the window billing rule (E.ON Next Drive Smart, GH#5521): the supplier bills every half hour a
 # planned dispatch was in force off-peak and never lists the ones the car did not charge in, so the hold is the
 # record - kept for a day, so today's cost and the hours either side of midnight are priced from it
@@ -114,6 +119,7 @@ INVERTER_WRITE_DEGRADED_INTERVAL = 300
 INVERTER_CLOCK_SKEW_RESTART_MINUTES = 30
 INVERTER_CLOCK_SKEW_WARN_MINUTES = 5
 INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES = 60  # Minimum gap between repeats of the moderate-skew warning, per inverter, so it doesn't fire every 5-minute cycle
+BATTERY_SIZE_RETRY_MINUTES = 60  # Gap between retries of a battery size estimate that found nothing today, so an overnight charge is used the same morning
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
 INVERTER_LIMIT_DEFAULT_W = 7500.0  # Standing inverter AC limit when the user has not configured inverter_limit
@@ -132,6 +138,12 @@ CAR_MANUAL_SOC_IDLE_MINUTES = 12 * 60
 CAR_MANUAL_SOC_RATE_MARGIN = 1.1
 CAR_MANUAL_SOC_ENERGY_SLACK = 0.1
 CAR_CHARGING_LIMIT_UNCAPPED = 9999.0  # Model-facing car charge limit (kWh) that makes predict()'s fill clamp inert - larger than any real car battery (#4967)
+# The carbon component polls the Carbon Intensity API about every 4 hours for the 48 hours it publishes, so the
+# forecast's reach decays below a 48 hour plan between polls as a matter of course. A fresh fetch reaching less than
+# CARBON_FETCH_SHORT_HOURS is a genuine API shortfall and warns once per fetch; the per-cycle replication only warns
+# once the forecast covers less than CARBON_WARN_COVERAGE_HOURS of the plan (#5964)
+CARBON_FETCH_SHORT_HOURS = 47
+CARBON_WARN_COVERAGE_HOURS = 24
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
 # How far ahead a manual override may be placed. The two horizons differ on purpose: a manual
 # charge/export/freeze/demand slot is bounded by the plan, since Predbat can only act on a slot the
@@ -237,3 +249,6 @@ STATUS_STATE_MAX_LENGTH = 255
 # A log text that repeats (an API response, an Intelligent slot list) is logged in full again after this long, so
 # the full text is never only in a rotated-out log file; in between it is logged as one short line
 REPEAT_FULL_LOG_SECONDS = 3600
+
+# The default mcp_secret. It is published in the source and the docs, so the MCP server refuses to run with it (#5847)
+MCP_DEFAULT_SECRET = "predbat_mcp_secret"

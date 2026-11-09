@@ -20,11 +20,19 @@ from this class.
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from unittest.mock import NonCallableMock
 
 from utils import minutes_since_midnight
+import aiohttp
 import asyncio
+import math
 import time
 import traceback
+
+# A component whose COMPONENT_LIST entry sets "align_minute" runs this many seconds past each
+# wall-clock minute boundary, rather than every 60 seconds from whenever its process started. The
+# margin makes sure a minute-resolution clock read inside run() has already moved on to the new minute.
+ALIGN_MINUTE_OFFSET_SECONDS = 1
 
 # Components typically come up in milliseconds, so the previous 1s poll spent nearly all of a
 # start-up wait asleep after the component was already live. Polling ten times a second makes
@@ -32,6 +40,78 @@ import traceback
 # bounded by a monotonic deadline rather than by counting ticks, so `timeout` stays honest in
 # seconds however often the flag is checked.
 API_START_POLL_SECONDS = 0.1
+
+# Factory new_http_session() calls in place of aiohttp.ClientSession, or None for the default.
+# Set it with set_http_session_factory().
+_http_session_factory = None
+
+
+def set_http_session_factory(factory):
+    """Install the process-wide factory that new_http_session() (and so ComponentBase.http_session()) uses.
+
+    This is the fallback for every component in the process. A host running several PredBat
+    instances in one process, or a test that needs two components to have separate sessions, sets
+    base.http_session_factory instead: ComponentBase.http_session() prefers that over this global.
+
+    The factory is called with the same keyword arguments as aiohttp.ClientSession and must return
+    an object components can use as they use aiohttp.ClientSession: an async context manager with
+    close() and a closed attribute, and request methods returning aiohttp-style response context
+    managers (get(), post(), put(), patch(), delete(), request()), plus ws_connect() for the
+    components that open a websocket (Hypervolt). A test fake needs whatever subset the component
+    under test calls. The caller owns what it
+    returns and closes it exactly as it closes its own session today, so a factory that shares one
+    connection pool between components should hand out sessions that do not own the pool (for
+    example aiohttp.ClientSession(connector=shared, connector_owner=False)). Tests can use it to
+    give every component a fake session.
+
+    Pass None to restore the default, a new aiohttp.ClientSession per call.
+    """
+    global _http_session_factory
+    _http_session_factory = factory
+
+
+def new_http_session(**kwargs):
+    """Return a new HTTP session for the caller to own and close.
+
+    By default this is aiohttp.ClientSession(**kwargs), looked up when called so that code patching
+    aiohttp.ClientSession still takes effect. A factory installed with set_http_session_factory()
+    is used instead when set. This is the process-wide path and ignores base.http_session_factory;
+    components call self.http_session(), which honours that per-instance override first, and hand
+    that bound method to the API clients they own.
+    """
+    factory = _http_session_factory
+    if factory is None:
+        return aiohttp.ClientSession(**kwargs)
+    return factory(**kwargs)
+
+
+def _base_override(component, name):
+    """Return the per-instance override base.<name> of a component, or None when its base has none.
+
+    A mock base answers every attribute lookup, so on a mock base only an attribute that was
+    explicitly set on it counts; one it made up on the fly does not. A real base is read with a
+    normal lookup, so a class attribute or property works. A plain function rather than a method
+    so that test doubles borrowing ComponentBase.http_session without inheriting still work.
+    """
+    base = getattr(component, "base", None)
+    if base is None or (isinstance(base, NonCallableMock) and name not in vars(base)):
+        return None
+    return getattr(base, name, None)
+
+
+def writes(func):
+    """Mark a component method as one that sends a write to the device or vendor.
+
+    Only sets an attribute; the method itself is returned unchanged and behaves exactly as before.
+    ComponentBase.write_methods() lists the marked methods, so tests and hosts can see which
+    methods change device or account state without reading their code. Mark the method that issues
+    the write (a control call, or an event handler that sends one), not the loop that calls it, and
+    mark an override again: overriding a marked method without @writes unmarks it. The inverter,
+    gateway and car charger components are marked; a component with no marked method may still
+    write, so an empty listing is not proof that it sends none.
+    """
+    func.__predbat_writes__ = True
+    return func
 
 
 class ComponentBase(ABC):
@@ -63,6 +143,12 @@ class ComponentBase(ABC):
     # 10 for the GivEnergy types (GivTCP and GE Cloud override it). See coordinator.inverter_definition().
     WRITE_AND_POLL_SLEEP = 2
 
+    # How inverter.py retries a write that did not stick. None and False leave inverter.py's own
+    # defaults in place; a component whose INVERTER_DEF row sets write_max_retry/write_backoff (only
+    # GWMQTT) overrides these so its discovery record can rebuild the row.
+    WRITE_MAX_RETRY = None
+    WRITE_BACKOFF = False
+
     # Declared on the class, not only assigned in __init__, so they exist even on a component built
     # without it - the test harnesses construct components with Cls.__new__(Cls) to exercise one
     # method in isolation. refresh_discovery() must not be able to raise on such an instance: an
@@ -91,6 +177,8 @@ class ComponentBase(ABC):
         # constructed through the registry; a component built directly (the standalone CLI
         # harnesses) keeps this class-name fallback instead.
         self.component_name = self.__class__.__name__
+        # Overridden from the registry entry's "align_minute" by Components.initialize(); see start().
+        self.align_minute = False
         self.initialize(**kwargs)
 
     @abstractmethod
@@ -102,6 +190,91 @@ class ComponentBase(ABC):
         required during initialisation.
         """
         pass
+
+    def http_session(self, **kwargs):
+        """Return a new HTTP session for this component to own and close.
+
+        Takes the same keyword arguments as aiohttp.ClientSession (timeout, headers and so on) and,
+        by default, returns aiohttp.ClientSession(**kwargs). The factory is chosen in this order:
+        base.http_session_factory when the owning base has one set (a host running several PredBat
+        instances in one process, or a test, uses this to give each instance its own sessions), then
+        the process-wide factory from set_http_session_factory(), then aiohttp.ClientSession.
+        """
+        factory = _base_override(self, "http_session_factory")
+        if factory is not None:
+            return factory(**kwargs)
+        return new_http_session(**kwargs)
+
+    def mqtt_client(self, **kwargs):
+        """Return a new MQTT client for this component to use as an async context manager.
+
+        Takes the same keyword arguments as aiomqtt.Client (hostname, port, username, tls_context and
+        so on) and, by default, returns aiomqtt.Client(**kwargs), looked up when called so that code
+        patching aiomqtt.Client still takes effect. base.mqtt_client_factory is used instead when the
+        owning base has one set (a host running several PredBat instances in one process, or a test,
+        uses this to give each instance its own fake broker connection). aiomqtt is optional: without
+        it and without a factory this raises ImportError.
+        """
+        factory = _base_override(self, "mqtt_client_factory")
+        if factory is not None:
+            return factory(**kwargs)
+        try:
+            import aiomqtt
+        except ImportError as exc:
+            raise ImportError("MQTT support requires the 'aiomqtt' package: pip install aiomqtt") from exc
+        return aiomqtt.Client(**kwargs)
+
+    def _clock(self):
+        """Return base.component_clock when the owning base has one set, else None (an attribute a mock base only invents is ignored; one set explicitly is used)."""
+        return _base_override(self, "component_clock")
+
+    def monotonic(self):
+        """Return a monotonic time in seconds, for measuring intervals that must not follow wall-clock jumps.
+
+        Uses base.component_clock.monotonic() when the owning base has a clock set (an object with monotonic(),
+        time() and an async sleep(seconds); a test uses a virtual one so no real waiting happens),
+        else time.monotonic(), looked up when called.
+        """
+        clock = self._clock()
+        if clock is not None:
+            return clock.monotonic()
+        return time.monotonic()
+
+    def wall_time(self):
+        """Return the wall-clock time as seconds since the epoch (a float), for timestamps.
+
+        Uses base.component_clock.time() when the owning base has a clock set, else time.time(), looked up when called.
+        """
+        clock = self._clock()
+        if clock is not None:
+            return clock.time()
+        return time.time()
+
+    async def sleep(self, seconds):
+        """Sleep for the given number of seconds.
+
+        Awaits base.component_clock.sleep(seconds) when the owning base has a clock set, else asyncio.sleep(seconds),
+        looked up when called so that code patching asyncio.sleep still takes effect.
+        """
+        clock = self._clock()
+        if clock is not None:
+            await clock.sleep(seconds)
+        else:
+            await asyncio.sleep(seconds)
+
+    @classmethod
+    def write_methods(cls):
+        """Return the sorted names of this class's methods marked with @writes.
+
+        An override is judged on its own: overriding a marked method without @writes unmarks it.
+        Only marked methods are listed: an empty result means none are marked, not that the
+        component never writes (see writes()).
+        """
+        names = []
+        for name in dir(cls):
+            if getattr(getattr(cls, name, None), "__predbat_writes__", False):
+                names.append(name)
+        return sorted(names)
 
     def dashboard_item(self, entity, state, attributes, app=None):
         """
@@ -171,6 +344,12 @@ class ComponentBase(ABC):
         Retrieve a configuration argument from the base system.
         """
         return self.base.get_arg(arg, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index, domain=domain, can_override=can_override, required_unit=required_unit)
+
+    def car_rate_capped(self, car_n, rate):
+        """
+        Return rate (kW) limited to car car_n's own maximum charge rate (car_charging_max_rate), as Fetch caps it.
+        """
+        return self.base.car_rate_capped(car_n, rate)
 
     def update_success_timestamp(self):
         """Update the last success timestamp to the current time"""
@@ -337,29 +516,45 @@ class ComponentBase(ABC):
         - Run the main processing loop until api_stop is True
         - Clean up resources before exiting
 
+        After startup the loop runs every 60 seconds counted from process start, which is cheap
+        and spreads components across the minute, but drifts later by each run()'s own duration.
+        A component whose registry entry sets "align_minute" instead runs ALIGN_MINUTE_OFFSET_SECONDS
+        past every wall-clock minute boundary, skipping any boundary a slow run() overran, and its
+        run() is passed seconds in whole-minute steps so interval checks inside it keep their period.
         """
         seconds = 0
         first = True
         next_retry = 0  # When to next attempt self.run() during startup backoff
         backoff_interval = 60  # Start with 60 seconds between attempts
         max_backoff = 128 * 60  # Maximum 128 minutes between attempts
+        next_aligned_run = 0  # align_minute only: wall-clock time of the next run
+        last_run_seconds = 0  # align_minute only: the seconds the last run() was given
+        last_run_monotonic = time.monotonic()  # align_minute only: when the last run() started
         while not self.api_stop and not self.fatal_error:
             try:
                 # Check if it's time to run
                 should_run = False
+                run_seconds = seconds
                 if first:
                     # During startup, only run when we've reached the next retry time
                     if seconds >= next_retry:
                         should_run = True
                         backoff_interval = min(backoff_interval * 2, max_backoff)
                         next_retry = seconds + backoff_interval
+                elif self.align_minute:
+                    if time.time() >= next_aligned_run:
+                        should_run = True
+                        elapsed_minutes = max(1, int(round((time.monotonic() - last_run_monotonic) / 60.0)))
+                        run_seconds = last_run_seconds + 60 * elapsed_minutes
                 else:
                     # After startup, run every 60 seconds
                     if seconds % 60 == 0:
                         should_run = True
 
                 if should_run:
-                    task = asyncio.ensure_future(self.run(seconds, first))
+                    last_run_seconds = run_seconds
+                    last_run_monotonic = time.monotonic()
+                    task = asyncio.ensure_future(self.run(run_seconds, first))
                     try:
                         run_result = await asyncio.wait_for(asyncio.shield(task), timeout=self.run_timeout)
                     except asyncio.TimeoutError:
@@ -393,13 +588,26 @@ class ComponentBase(ABC):
                 self.count_errors += 1
 
             seconds += 5
-            await asyncio.sleep(5)
+            if self.align_minute and not first:
+                # Scheduled here rather than after run() so a run() that raised still moves it on.
+                # Sleeping at most 5 seconds keeps a stop() as responsive as the default loop.
+                now = time.time()
+                if now >= next_aligned_run:
+                    next_aligned_run = self.next_aligned_run_time(now)
+                await asyncio.sleep(min(5, next_aligned_run - now))
+            else:
+                await asyncio.sleep(5)
 
         self.log(f"{self.__class__.__name__}: Finalizing...")
         await self.final()
 
         self.api_started = False
         self.log(f"{self.__class__.__name__}: Stopped")
+
+    @staticmethod
+    def next_aligned_run_time(now):
+        """Return the first wall-clock time after now that is ALIGN_MINUTE_OFFSET_SECONDS past a minute boundary."""
+        return (math.floor((now - ALIGN_MINUTE_OFFSET_SECONDS) / 60) + 1) * 60 + ALIGN_MINUTE_OFFSET_SECONDS
 
     async def final(self):
         """

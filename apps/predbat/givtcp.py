@@ -60,7 +60,9 @@ GIVTCP_PAUSE_MODES = ["Disabled", "PauseCharge", "PauseDischarge", "PauseBoth"]
 #
 # These inverters accept the write and report success, but it never persists, so the caller sees a
 # permanent mismatch and rewrites every cycle. Not publishing the entity at all is what stops that:
-# Inverter.adjust_force_export already leaves a target it cannot read alone.
+# Inverter.adjust_force_export already leaves a target it cannot read alone. automatic_config() also
+# leaves discharge_target_soc unclaimed for these models, so nothing is bound to an entity that is
+# never published.
 DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
 
 # The same inverters identified from Invertor_Type, which is what GivTCP v3 actually reports in
@@ -78,6 +80,23 @@ DISCHARGE_TARGET_UNSUPPORTED_TYPES = (
     frozenset({"gen", "1", "hybrid"}),
     frozenset({"gen", "2", "hybrid"}),
 )
+
+
+def discharge_target_unsupported(rest):
+    """
+    Whether this inverter has no working Discharge_Target_SOC_1 register (#4517, #5679).
+
+    Matches both the raw GivTCP model code and the readable Invertor_Type, using the two tables
+    above. publish_data() uses it to withhold the entity, and automatic_config() to leave
+    discharge_target_soc unclaimed, so the two cannot disagree about which inverters have it.
+    """
+    rest_data = rest.inverter.rest_data
+    if not rest_data:
+        return False
+    inverter_model = rest_data.get("raw", {}).get("invertor", {}).get("model", "")
+    inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
+    return inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
+
 
 # Control.Mode values. Predbat only ever writes Eco or Timed Export, but the inverter reports the
 # others, and an option list that omitted them could not represent the mode the inverter is in.
@@ -130,6 +149,7 @@ GIVTCP_SENSORS = {
     "inverter_time": {"icon": "mdi:clock-outline"},
     "battery_rate_max": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:battery-arrow-up"},
     "inverter_limit": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:transmission-tower"},
+    "export_limit": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:transmission-tower-export"},
     "battery_calibration": {"icon": "mdi:battery-sync"},
     "battery_soh": {"icon": "mdi:battery-heart-variant"},
     "battery_dod": {"icon": "mdi:battery-arrow-down-outline"},
@@ -198,6 +218,7 @@ GIVTCP_FRIENDLY_NAMES = {
     "inverter_time": "Inverter Time",
     "battery_rate_max": "Battery Max Rate",
     "inverter_limit": "Inverter Limit",
+    "export_limit": "Export Limit",
     "battery_calibration": "Battery Calibration",
     "battery_soh": "Battery State of Health",
     "battery_dod": "Battery Depth of Discharge",
@@ -233,6 +254,7 @@ GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS = [
     "battery_temperature",
     "inverter_time",
     "inverter_limit",
+    "export_limit",
     "battery_calibration",
     # The day's energy totals. Claimed through the same "only if every inverter published it" gate
     # as the rest: a GivTCP that reports no Energy block would otherwise point these at entities
@@ -262,8 +284,13 @@ GIVTCP_ENERGY_TODAY_FIELDS = {
 # (soc_max, the controls, the power figures) is read as a current value, where a repoint costs
 # nothing, so those keep overwriting as before.
 #
-# Applied per key, so naming one of the four by hand does not opt the other three out.
-GIVTCP_AUTO_CONFIG_USER_WINS_KEYS = tuple(GIVTCP_ENERGY_TODAY_FIELDS)
+# export_limit joins them for a different reason: installs set up from the template carry a
+# hand-typed export_limit, and that stays authoritative until the user deletes the line - the
+# inverter's own reading only fills the key in when apps.yaml is silent. automatic_config() notes
+# when the two disagree so a stale value can be spotted.
+#
+# Applied per key, so naming one of these by hand does not opt the others out.
+GIVTCP_AUTO_CONFIG_USER_WINS_KEYS = tuple(GIVTCP_ENERGY_TODAY_FIELDS) + ("export_limit",)
 
 # Everything else the Energy block carries, as key -> (section, field). From the same snapshot at no
 # extra cost, and published but NOT auto-configured: Predbat has no apps.yaml key that consumes a
@@ -470,6 +497,9 @@ class GivTCPComponent(ComponentBase):
         # publish_data() runs every poll; the unsupported-model notice is per inverter and only
         # worth saying once rather than every 60 seconds for the life of the process
         self.discharge_target_warned = {}
+        # (inverter, apps.yaml value, reported value) mismatches of export_limit already logged, so
+        # each re-run of automatic_config() does not repeat the note
+        self.export_limit_mismatch_noted = set()
 
     async def _run_blocking(self, func, *args):
         """Run one of GivTCPRest's blocking (requests + time.sleep) calls off the event loop."""
@@ -665,8 +695,7 @@ class GivTCPComponent(ComponentBase):
                 # Publishing one would restart the every-cycle rewrite loop of #4517, because the write
                 # reports success and then silently fails to persist.
                 inverter_model = rest.inverter.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
-                inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
-                model_unsupported = inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
+                model_unsupported = discharge_target_unsupported(rest)
                 if not rest.rest_v3:
                     # v2 has no /setDischargeTarget - see GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
                     pass
@@ -794,6 +823,12 @@ class GivTCPComponent(ComponentBase):
                 if max_inverter_rate:
                     self.dashboard_item(self._entity_id("sensor", n, "inverter_limit"), state=max_inverter_rate, attributes=self._attributes(n, "inverter_limit"), app="givtcp")
                     published.add("inverter_limit")
+
+                # "is not None", not truthiness: 0 is a zero-export site and must be published as such
+                export_limit = rest.export_limit()
+                if export_limit is not None:
+                    self.dashboard_item(self._entity_id("sensor", n, "export_limit"), state=export_limit, attributes=self._attributes(n, "export_limit"), app="givtcp")
+                    published.add("export_limit")
 
                 # Always published, unlike the values above: "not calibrating" is a real answer that
                 # Predbat needs, and an absent entity would be indistinguishable from one
@@ -958,10 +993,10 @@ class GivTCPComponent(ComponentBase):
         else:
             self.log("Info: GivTCP: Enable_Charge_Target is not reported by every inverter - leaving charge_limit_enable to your apps.yaml config")
 
-        if all(self.rest[n].rest_v3 for n in discovered):
+        if all(self.rest[n].rest_v3 and not discharge_target_unsupported(self.rest[n]) for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
         else:
-            self.log("Info: GivTCP: the export target register needs GivTCP v3 on every inverter - leaving discharge_target_soc to your apps.yaml config")
+            self.log("Info: GivTCP: the export target register needs GivTCP v3 and a model that supports it on every inverter - leaving discharge_target_soc to your apps.yaml config")
 
         if not all(self.rest[n].rest_v3 for n in discovered):
             self.log("Info: GivTCP: pause control needs GivTCP v3 on every inverter - leaving pause_mode/pause_start_time/pause_end_time to your apps.yaml config")
@@ -1000,6 +1035,42 @@ class GivTCPComponent(ComponentBase):
             # themselves in place, so its recorded history survives - set_arg_auto still fills the
             # key in when they named nothing.
             self.set_arg_auto(key, self._per_endpoint_values(key, lambda n, domain=domain, key=key: self._entity_id(domain, n, key), n_inverters), overwrite=key not in GIVTCP_AUTO_CONFIG_USER_WINS_KEYS)
+
+        # Not gated on the claim: in a mixed fleet the key stays unclaimed, yet an inverter that does
+        # report its limit can still show a hand-typed figure is stale
+        self._note_export_limit_mismatch(claimed="export_limit" in keys)
+
+    def _note_export_limit_mismatch(self, claimed):
+        """
+        Say, once per inverter and value pair, when a numeric apps.yaml export_limit differs from the inverter's own.
+
+        The apps.yaml value wins (GIVTCP_AUTO_CONFIG_USER_WINS_KEYS), so a limit changed on the
+        inverter would otherwise go unnoticed behind an old hand-typed one. A sensor reference in
+        apps.yaml is left alone - it is the user's chosen source, not a stale figure.
+
+        Each inverter is checked against its own reading, so a mixed fleet where only some report a
+        limit is covered too. The advice follows the claim: when every inverter reports one, deleting
+        the line hands the key to their own sensors; when not, deleting it would leave every inverter
+        unlimited, so the note asks for the figure to be corrected instead.
+        """
+        raw = (getattr(self.base, "args_from_apps_yaml", None) or {}).get("export_limit")
+        if raw is None:
+            return
+        for n in self.discovered:
+            configured = raw[n] if isinstance(raw, list) and n < len(raw) else (None if isinstance(raw, list) else raw)
+            try:
+                configured = float(configured)
+            except (ValueError, TypeError):
+                continue
+            reported = self.rest[n].export_limit()
+            if reported is None or reported == configured or (n, configured, reported, claimed) in self.export_limit_mismatch_noted:
+                continue
+            self.export_limit_mismatch_noted.add((n, configured, reported, claimed))
+            if claimed:
+                advice = "remove export_limit from apps.yaml to use the inverter's own limit"
+            else:
+                advice = "not every inverter reports its export limit, so set inverter {}'s apps.yaml entry to {:.0f} if the inverter's figure is right".format(n, reported)
+            self.log("Info: GivTCP: apps.yaml sets export_limit to {:.0f}W for inverter {} but the inverter reports {:.0f}W - keeping your apps.yaml value; {}".format(configured, n, reported, advice))
 
     def _discovery_descriptor(self, n, name, domain, access, attrs, max_battery_rate):
         """
@@ -1140,6 +1211,9 @@ class GivTCPComponent(ComponentBase):
             max_inverter_rate = rest.max_inverter_rate()
             if max_inverter_rate:
                 ratings["inverter_limit"] = max_inverter_rate
+            export_limit = rest.export_limit()
+            if export_limit is not None:
+                ratings["export_limit"] = export_limit
 
             inverters.append(
                 inverter_record(

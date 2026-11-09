@@ -268,7 +268,8 @@ SUNSYNK_MAX_SOLAR_FIELD = "solarMaxSellPower"  # settings, watts
 SUNSYNK_EQUIP_MODE_FIELD = "equipMode"  # inverter list ("M1"/"S2") and settings ("1"/"0")
 SUNSYNK_PARALLEL_FIELD = "parallel"  # settings, "1" on every member of a parallel group
 SUNSYNK_BMS_CURRENT_FIELD = "bmsCurrent"  # battery realtime, amps, positive while charging
-SUNSYNK_BMS_LINK_FIELDS = ("bmsVolt", "bmsSoc")  # battery realtime, 0 on a unit with no BMS link
+SUNSYNK_BMS_VOLT_FIELD = "bmsVolt"  # battery realtime, volts at the BMS
+SUNSYNK_BMS_LINK_FIELDS = (SUNSYNK_BMS_VOLT_FIELD, "bmsSoc")  # battery realtime, 0 on a unit with no BMS link
 SUNSYNK_PARALLEL_SUMMED_POWER = ("grid_power", "load_power", "pv_power")
 SUNSYNK_PARALLEL_SUMMED_ENERGY = ("pv_today", "import_today", "export_today", "load_today")
 # Leaf -> integrator total for a group's battery energy.
