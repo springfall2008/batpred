@@ -33,6 +33,7 @@ from datetime import datetime, timedelta
 
 import pytz
 
+from const import TIME_FORMAT
 from utils import MinuteArray
 
 UTC = pytz.UTC
@@ -547,6 +548,79 @@ def _test_yesterday_factor_read_at_yesterday_end_on_clock_change(my_predbat, fai
     return failed
 
 
+def _run_comparison_at(my_predbat, now_local):
+    """Run load_today_comparison at now_local with a constant 0.1 kWh per 5 minutes, returning the midnight_utc it used."""
+    names = (
+        "car_charging_hold",
+        "car_charging_energy",
+        "iboost_energy_subtract",
+        "iboost_energy_today",
+        "base_load",
+        "load_forecast_only",
+        "days_previous",
+        "days_previous_weight",
+        "load_minutes_age",
+        "load_scaling",
+        "load_scaling_dynamic",
+        "manual_load_adjust",
+        "now_utc",
+        "midnight_utc",
+        "minutes_now",
+        "local_tz",
+    )
+    saved = {name: getattr(my_predbat, name) for name in names}
+    try:
+        my_predbat.car_charging_hold = False
+        my_predbat.car_charging_energy = None
+        my_predbat.iboost_energy_subtract = False
+        my_predbat.iboost_energy_today = None
+        my_predbat.base_load = 0.0
+        my_predbat.load_forecast_only = False
+        my_predbat.days_previous = [1]
+        my_predbat.days_previous_weight = [1.0]
+        my_predbat.load_minutes_age = 1
+        my_predbat.load_scaling = 1.0
+        my_predbat.load_scaling_dynamic = {}
+        my_predbat.manual_load_adjust = {}
+        my_predbat.local_tz = pytz.timezone("Europe/London")
+        my_predbat.now_utc = now_local
+        my_predbat.midnight_utc = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        my_predbat.minutes_now = int((now_local - my_predbat.midnight_utc).total_seconds() / 60)
+        midnight_utc = my_predbat.midnight_utc
+        my_predbat.load_today_comparison(build_cumulative(0.02, 3000), {}, {}, build_cumulative(0.0, 3000), minutes_now=my_predbat.minutes_now, step=5, save=True)
+        return midnight_utc
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def _test_clock_change_day_edges(my_predbat, failed):
+    """GH#5760: the spring day starts an hour into the plan axis, and the row loop stops where yesterday's data runs out."""
+    print("  test: load_today_comparison covers the real day either side of a clock change (GH#5760)")
+    london = pytz.timezone("Europe/London")
+
+    # 12:00 BST on the spring change day: 23 real hours of 0.02 kWh per minute. Counting from minute 0 would add an hour (28.8)
+    _run_comparison_at(my_predbat, london.normalize(london.localize(datetime(2027, 3, 28, 12, 0))))
+    actual = my_predbat.dashboard_values[my_predbat.prefix + ".load_energy_actual"]["state"]
+    if abs(actual - 27.6) > 0.001:
+        print("  ERROR: expected 27.6 kWh for the 23-hour spring day, got {}".format(actual))
+        failed = True
+    else:
+        print("  PASS: spring day counted from its real start")
+
+    # 00:30 BST before the autumn change: rows after minute 1465 would read yesterday's data beyond the point it exists
+    midnight_utc = _run_comparison_at(my_predbat, london.normalize(london.localize(datetime(2026, 10, 25, 0, 30))))
+    results = my_predbat.dashboard_values[my_predbat.prefix + ".load_energy_predicted"]["attributes"]["results"]
+    last_kept = (midnight_utc + timedelta(minutes=1465)).strftime(TIME_FORMAT)
+    first_dropped = (midnight_utc + timedelta(minutes=1470)).strftime(TIME_FORMAT)
+    if last_kept not in results or first_dropped in results:
+        print("  ERROR: expected the rows to end at {}, last row was {}".format(last_kept, max(results)))
+        failed = True
+    else:
+        print("  PASS: rows stop where yesterday's data runs out")
+    return failed
+
+
 def test_load_today_comparison(my_predbat):
     """
     Unit tests for load_today_comparison() covering the None-guard fix
@@ -565,5 +639,6 @@ def test_load_today_comparison(my_predbat):
     failed = _test_load_scaling_dynamic_and_manual_adjust_applied_to_predicted(my_predbat, failed) or failed
     failed = _test_predicted_today_stable_across_the_day(my_predbat, failed) or failed
     failed = _test_yesterday_factor_read_at_yesterday_end_on_clock_change(my_predbat, failed) or failed
+    failed = _test_clock_change_day_edges(my_predbat, failed) or failed
 
     return failed

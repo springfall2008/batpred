@@ -3171,6 +3171,11 @@ class Output:
         day_start_minute = self.clock_change_minutes_today()
         day_end_minute = local_day_end_minute(self.now_utc, self.local_tz)
         for minute in range(day_start_minute, day_end_minute, step):
+            # Just before an autumn change the day's extra hour can reach beyond a day ahead of now, where a same-time-yesterday
+            # read has no data and would wrap round to two days back, so those rows are left out (GH#5760)
+            if minute + step - 1 - minutes_now > 24 * 60:
+                continue
+
             import_value_today = 0
             load_value_today = 0
             load_value_today_raw = 0
