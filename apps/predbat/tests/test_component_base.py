@@ -1586,83 +1586,6 @@ def test_component_base_write_methods_components(my_predbat):
     return False
 
 
-class _FakeClock:
-    """One clock behind time.time(), time.monotonic() and asyncio.sleep(), so a test can see which wall-clock second each run() lands on."""
-
-    def __init__(self, now):
-        self.now = now
-
-    def time(self):
-        return self.now
-
-    def monotonic(self):
-        return self.now
-
-    async def sleep(self, delay, result=None):
-        """Advance the clock by the whole delay at once, then yield to the event loop."""
-        self.now += max(delay, 0)
-        await _original_sleep(0)
-        return result
-
-
-def test_component_base_align_minute(my_predbat):
-    """A component whose registry entry sets align_minute runs just after each wall-clock minute boundary.
-
-    The default loop counts 5 second sleeps from process start, so its runs fall wherever the pod's start
-    put them and slip by each run()'s own duration. A component acting on minute-resolution windows (the
-    Teslemetry signal tariff) wants its run in the first second or so of the minute instead. A slow run()
-    must not drift the later runs off the boundary, and run()'s seconds must step in whole minutes so the
-    interval checks inside run() (e.g. a 120 second poll) keep their period.
-    """
-    print("\n*** Test: ComponentBase align_minute runs on the minute boundary ***")
-    base_epoch = 1800000000  # a whole minute
-    clock = _FakeClock(base_epoch + 37.5)
-    runs = []
-
-    class AlignedComponent(ComponentBase):
-        def initialize(self, **kwargs):
-            pass
-
-        async def run(self, seconds, first):
-            runs.append((clock.now - base_epoch, seconds, first))
-            # Each run costs 7 seconds of API calls, except the third, which overruns the next boundary
-            clock.now += 70 if len(runs) == 3 else 7
-            return True
-
-    async def run_test():
-        with patch("asyncio.sleep", side_effect=clock.sleep), patch("component_base.time", SimpleNamespace(time=clock.time, monotonic=clock.monotonic)):
-            component = AlignedComponent(MockBase())
-            component.align_minute = True
-            task = asyncio.create_task(component.start())
-            for _ in range(10000):
-                if len(runs) >= 5:
-                    break
-                await _original_sleep(0)
-            await component.stop()
-            await task
-
-    asyncio.run(run_test())
-
-    assert len(runs) >= 5, "Expected at least 5 runs, got {}".format(runs)
-    times = [run[0] for run in runs[:5]]
-    seconds = [run[1] for run in runs[:5]]
-    firsts = [run[2] for run in runs[:5]]
-    assert firsts == [True, False, False, False, False], firsts
-    # The startup run is immediate; every later one is 1 second past a boundary, and the 70 second
-    # third run skips the boundary it overran rather than running late at 191.
-    assert times == [37.5, 61, 121, 241, 301], times
-    assert seconds == [0, 60, 120, 240, 300], seconds
-    print("PASS: aligned runs land at :01 and seconds step in whole minutes")
-    return False
-
-
-def test_component_base_align_minute_defaults_off(my_predbat):
-    """A component built without the registry (the standalone CLI harnesses) keeps the default free-running loop."""
-    component = TestComponent(MockBase())
-    assert component.align_minute is False, component.align_minute
-    return False
-
-
 # Constructors that must only be called through ComponentBase.http_session() / mqtt_client(), so a
 # host or a test can inject the client for one component instance.
 CLIENT_CONSTRUCTORS = {("aiohttp", "ClientSession"): "self.http_session()", ("aiomqtt", "Client"): "self.mqtt_client()"}
@@ -1762,6 +1685,83 @@ def test_component_base_no_direct_client_construction(my_predbat):
     return False
 
 
+class _FakeClock:
+    """One clock behind time.time(), time.monotonic() and asyncio.sleep(), so a test can see which wall-clock second each run() lands on."""
+
+    def __init__(self, now):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+    def monotonic(self):
+        return self.now
+
+    async def sleep(self, delay, result=None):
+        """Advance the clock by the whole delay at once, then yield to the event loop."""
+        self.now += max(delay, 0)
+        await _original_sleep(0)
+        return result
+
+
+def test_component_base_align_minute(my_predbat):
+    """A component whose registry entry sets align_minute runs just after each wall-clock minute boundary.
+
+    The default loop counts 5 second sleeps from process start, so its runs fall wherever the pod's start
+    put them and slip by each run()'s own duration. A component acting on minute-resolution windows (the
+    Teslemetry signal tariff) wants its run in the first second or so of the minute instead. A slow run()
+    must not drift the later runs off the boundary, and run()'s seconds must step in whole minutes so the
+    interval checks inside run() (e.g. a 120 second poll) keep their period.
+    """
+    print("\n*** Test: ComponentBase align_minute runs on the minute boundary ***")
+    base_epoch = 1800000000  # a whole minute
+    clock = _FakeClock(base_epoch + 37.5)
+    runs = []
+
+    class AlignedComponent(ComponentBase):
+        def initialize(self, **kwargs):
+            pass
+
+        async def run(self, seconds, first):
+            runs.append((clock.now - base_epoch, seconds, first))
+            # Each run costs 7 seconds of API calls, except the third, which overruns the next boundary
+            clock.now += 70 if len(runs) == 3 else 7
+            return True
+
+    async def run_test():
+        with patch("asyncio.sleep", side_effect=clock.sleep), patch("component_base.time", SimpleNamespace(time=clock.time, monotonic=clock.monotonic)):
+            component = AlignedComponent(MockBase())
+            component.align_minute = True
+            task = asyncio.create_task(component.start())
+            for _ in range(10000):
+                if len(runs) >= 5:
+                    break
+                await _original_sleep(0)
+            await component.stop()
+            await task
+
+    asyncio.run(run_test())
+
+    assert len(runs) >= 5, "Expected at least 5 runs, got {}".format(runs)
+    times = [run[0] for run in runs[:5]]
+    seconds = [run[1] for run in runs[:5]]
+    firsts = [run[2] for run in runs[:5]]
+    assert firsts == [True, False, False, False, False], firsts
+    # The startup run is immediate; every later one is 1 second past a boundary, and the 70 second
+    # third run skips the boundary it overran rather than running late at 191.
+    assert times == [37.5, 61, 121, 241, 301], times
+    assert seconds == [0, 60, 120, 240, 300], seconds
+    print("PASS: aligned runs land at :01 and seconds step in whole minutes")
+    return False
+
+
+def test_component_base_align_minute_defaults_off(my_predbat):
+    """A component built without the registry (the standalone CLI harnesses) keeps the default free-running loop."""
+    component = TestComponent(MockBase())
+    assert component.align_minute is False, component.align_minute
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -1805,9 +1805,9 @@ def test_component_base_all(my_predbat):
         ("clock_unrelated", test_component_base_ignores_unrelated_clock_attribute, "a base with its own unrelated clock attribute is ignored and real time is used"),
         ("clock_isolated", test_component_base_clock_isolated_per_instance, "two instances' clocks are separate"),
         ("override_on_mock_base", test_component_base_override_on_mock_base, "an explicitly set override on a mock base is used, a made-up one is ignored"),
-        ("no_direct_clients", test_component_base_no_direct_client_construction, "components and their clients build HTTP sessions and MQTT clients only through the factories"),
         ("write_methods", test_component_base_write_methods, "@writes marks a method and write_methods lists exactly the marked ones"),
         ("write_methods_components", test_component_base_write_methods_components, "component writer methods are listed and readers are not"),
+        ("no_direct_clients", test_component_base_no_direct_client_construction, "components and their clients build HTTP sessions and MQTT clients only through the factories"),
     ]
 
     failed = []
