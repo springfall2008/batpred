@@ -264,6 +264,42 @@ def test_api_check_failure_never_logs_the_token(web):
     assert TOKEN not in text and "test-payload" not in text, text
 
 
+def test_api_uses_the_web_interface_session_factory(web):
+    """Check and generate reach Kraken on a session from the owning base's http_session_factory, not the global one."""
+    from component_base import set_http_session_factory
+
+    check_session = fake_kraken_session([(200, {"data": {"viewer": {"liveSecretKey": None}}})])
+    generate_session = fake_kraken_session([(200, {"data": {"regenerateSecretKey": {"key": NEW_KEY}}}), (200, {"data": {"obtainKrakenToken": {"token": "t"}}})])
+    # One session per request: the check, then the regenerate and its sign-in check
+    sessions = [check_session, generate_session, generate_session]
+    trap_made = []
+
+    def trap_factory(**kwargs):
+        trap_made.append(kwargs)
+        return MagicMock()
+
+    base_calls = []
+
+    def base_factory(**kwargs):
+        base_calls.append(kwargs)
+        return sessions.pop(0)
+
+    web.base.http_session_factory = base_factory
+    set_http_session_factory(trap_factory)
+    try:
+        with patch("aiohttp.ClientSession", side_effect=AssertionError("the default session must not be built")):
+            status, data, _ = post_api(web, {"provider": "eon", "token": TOKEN, "action": "check"})
+            assert status == 200 and data == {"status": "none"}, data
+            assert len(check_session.requests) == 1, "the check should have been made on the base factory's session"
+            status, data, _ = post_api(web, {"provider": "eon", "token": TOKEN, "action": "generate"})
+            assert status == 200 and data["status"] == "generated", data
+    finally:
+        set_http_session_factory(None)
+        del web.base.http_session_factory
+    assert trap_made == [], "the global factory must not be used when the base has its own"
+    assert generate_session.requests, "the key generation should have been made on the base factory's session"
+
+
 def post_api(web, body):
     """Call the API handler and return (status, parsed JSON body, response)."""
     response = asyncio.run(web.html_api_kraken_key(FakePostRequest(body)))
@@ -287,7 +323,7 @@ def test_api_check_uses_the_provider_base_url(web):
         status, data, response = post_api(web, {"provider": "eon", "token": f"JWT {TOKEN}", "action": "check"})
 
     assert status == 200 and data == {"status": "none"}, data
-    check.assert_awaited_once_with(KRAKEN_BASE_URLS["eon"], TOKEN)
+    check.assert_awaited_once_with(KRAKEN_BASE_URLS["eon"], TOKEN, session_factory=web.http_session)
     assert response.headers.get("Cache-Control") == "no-store"
 
 

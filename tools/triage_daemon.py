@@ -63,6 +63,21 @@ Setup (one-time, on whichever always-on machine will run this):
    falsely against an Ollama model regardless of the real (near-zero) spend
    (issue #4881); --max-turns is the limit that still holds for them.
 
+6. Optional - shared team memory. To give every flow the `shared-memory`
+   MCP server (https://github.com/springfall2008/agent-memory-supabase),
+   put the BOT's credentials in ~/predbat-triage-bot/agent-memory.env
+   (mode 0600), or pass --memory_env <path>:
+
+       AGENT_MEMORY_URL=https://<project-ref>.supabase.co/functions/v1/agent-memory
+       AGENT_MEMORY_TOKEN=amm_...
+
+   Use a token for a bot member granted the open-source scope only - the
+   server enforces that grant, so a prompt-injected run can't reach any
+   other scope. The daemon reads these two values from that file and
+   nowhere else: an AGENT_MEMORY_* exported in the operator's shell (say a
+   personal all-scopes token) is ignored and stripped from the claude
+   environment. Without the file, flows run without the memory tools.
+
 What it does per new issue: syncs the dedicated clone to origin/main,
 empties the scratch directory used for issue attachments, then runs
 `claude -p "/issue-triage <number> scratch=<dir>"` (the skill at
@@ -151,6 +166,13 @@ _GITNEXUS_RUNNER_WARNED = False
 # carries unrelated servers and a bot session has no business reaching those; scoping the
 # subprocess to this one server is what makes lifting the blanket mcp__* denial safe.
 MCP_CONFIG_FILE = BASE_DIR / "mcp-gitnexus.json"
+# The shared team memory (agent-memory-supabase), added to that same config when credentials are
+# present. Read from this file only - outside the clone, because sync_repo() resets and cleans it
+# - and never from the daemon's own environment, so a personal all-scopes token exported in the
+# operator's shell cannot reach a bot session. Overridden by --memory_env.
+MEMORY_ENV_FILE = BASE_DIR / "agent-memory.env"
+MEMORY_SERVER = "shared-memory"
+MEMORY_ENV_KEYS = ("AGENT_MEMORY_URL", "AGENT_MEMORY_TOKEN")
 # Set from --ollama/--ollama_review by main() - see effective_ollama_model() for how the
 # two interact. OLLAMA_BASE_URL is Ollama's own Claude Code compatible endpoint
 # (https://docs.ollama.com/integrations/claude-code); a :cloud-suffixed model is still
@@ -311,6 +333,10 @@ _ALLOWED_TOOLS_NON_GH = [
     # operator's other MCP servers out of a bot session: --strict-mcp-config stops them being
     # loaded at all, and under dontAsk anything not named here is denied even if one were.
     "mcp__gitnexus__*",
+    # The shared team memory: recall what earlier runs and maintainers learnt, store what this
+    # run learns. Named server, not mcp__*. delete and prune are carved back out in
+    # _DISALLOWED_TOOLS_BASE - a bot run should add to the memory, never remove from it.
+    f"mcp__{MEMORY_SERVER}__*",
     # Write is what makes shell redirection work: `printf ... > file` is refused with a Bash
     # grant alone and permitted once Write is present (checked both ways). Every flow holding
     # this already has clone-wide Edit, so it is not new reach - it is the same reach without
@@ -357,6 +383,10 @@ _DISALLOWED_TOOLS_BASE = [
     "Bash(gh auth*)",
     "Bash(gh secret*)",
     "Bash(gh api*)",
+    # Shared memory is add-and-amend only for the bot. Soft deletes are recoverable by an admin,
+    # but a prompt-injected run could still blank out what maintainers rely on.
+    f"mcp__{MEMORY_SERVER}__delete",
+    f"mcp__{MEMORY_SERVER}__prune",
 ]
 DISALLOWED_TOOLS = ",".join(_DISALLOWED_TOOLS_BASE)
 # The PR flow needs to push its branch and open the PR - carve those three back out of
@@ -998,28 +1028,77 @@ def install_push_guard():
     hook_path.chmod(0o755)
 
 
-def write_mcp_config():
-    """Write the one-server MCP config every flow is pinned to.
+def read_memory_env(path=None):
+    """Return {AGENT_MEMORY_URL, AGENT_MEMORY_TOKEN} from the memory credentials file, or None.
 
-    Generated rather than checked in: the gitnexus executable is wherever this machine put
-    it. A missing binary leaves the file absent, the flags unset, and the flows running
-    exactly as they did before - degraded, not broken.
+    Only the file is consulted - deliberately not os.environ - so the operator's own token can
+    never stand in for the bot's. A missing file is the normal "no shared memory" case and is
+    silent; a present-but-unusable one says why, since that is a setup mistake.
     """
+    path = Path(path) if path else MEMORY_ENV_FILE
+    if not path.exists():
+        return None
+    values = {}
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        key, sep, value = line.partition("=")
+        if not sep or key.strip() not in MEMORY_ENV_KEYS:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        values[key.strip()] = value
+    url, token = values.get("AGENT_MEMORY_URL", ""), values.get("AGENT_MEMORY_TOKEN", "")
+    if not url.startswith(("https://", "http://")) or not token.startswith("amm_"):
+        print(f"[triage] {path} needs AGENT_MEMORY_URL=https://... and AGENT_MEMORY_TOKEN=amm_... - flows will run without shared memory", flush=True)
+        return None
+    if path.stat().st_mode & 0o077:
+        print(f"[triage] warning: {path} holds a token and is readable by other users - chmod 600 it", flush=True)
+    return {"AGENT_MEMORY_URL": url, "AGENT_MEMORY_TOKEN": token}
+
+
+def write_mcp_config(memory_env_path=None):
+    """Write the MCP config every flow is pinned to: gitnexus, plus shared memory when configured.
+
+    Generated rather than checked in: the gitnexus executable is wherever this machine put it,
+    and the memory token is a secret. Each server is optional; with neither, the file is
+    absent, the flags unset, and the flows running exactly as they did before - degraded, not
+    broken. The file holds the bot's memory token, so it is written owner-only.
+    """
+    servers = {}
     executable = shutil.which("gitnexus")
-    if not executable:
-        # Delete rather than merely decline to write: claude_mcp_args() keys off the file
-        # existing, so a config left over from when gitnexus was installed would keep being
-        # passed with --strict-mcp-config, pointing every flow at a command that is gone.
-        MCP_CONFIG_FILE.unlink(missing_ok=True)
+    if executable:
+        servers["gitnexus"] = {"command": executable, "args": ["mcp"]}
+    else:
         print("[triage] gitnexus not on PATH - flows will run without the MCP tools CLAUDE.md expects", flush=True)
+    memory = read_memory_env(memory_env_path)
+    if memory:
+        servers[MEMORY_SERVER] = {"type": "http", "url": memory["AGENT_MEMORY_URL"], "headers": {"Authorization": f"Bearer {memory['AGENT_MEMORY_TOKEN']}"}}
+        print(f"[triage] shared memory enabled ({memory['AGENT_MEMORY_URL']})", flush=True)
+    if not servers:
+        # Delete rather than merely decline to write: claude_mcp_args() keys off the file
+        # existing, so a config left over from when a server was available would keep being
+        # passed with --strict-mcp-config, pointing every flow at servers that are gone.
+        MCP_CONFIG_FILE.unlink(missing_ok=True)
         return False
     BASE_DIR.mkdir(parents=True, exist_ok=True)
-    MCP_CONFIG_FILE.write_text(json.dumps({"mcpServers": {"gitnexus": {"command": executable, "args": ["mcp"]}}}, indent=2))
+    # Create owner-only from the start and replace atomically: never a moment where the token
+    # sits in a world-readable file, nor a half-written config a flow could start against.
+    tmp = MCP_CONFIG_FILE.with_name(MCP_CONFIG_FILE.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(json.dumps({"mcpServers": servers}, indent=2))
+    os.replace(tmp, MCP_CONFIG_FILE)
     return True
 
 
 def claude_mcp_args():
-    """Pin a claude invocation to the gitnexus server and nothing else.
+    """Pin a claude invocation to the daemon's own servers (gitnexus, shared memory) and nothing else.
 
     --strict-mcp-config is the load-bearing half: without it the subprocess inherits every
     server in the operator's own configuration, which for a bot session is far too much.
@@ -1037,6 +1116,12 @@ def refresh_gitnexus_index():
     hour rebuilding an index for a tree that had not changed. Failures are reported and
     ignored - a stale index degrades a flow's answers, a raised exception would stop the
     daemon, and check=False keeps this from becoming the latter.
+
+    --index-only, because a plain analyze also rewrites tracked files - the GitNexus section
+    of AGENTS.md and CLAUDE.md, and the skills under .claude/skills/gitnexus/ - undoing the
+    markdownlint fixes main carries. That left every flow starting on a dirty clone, and
+    unfinished_cleanup_reason() took those six files for unpushed fixes: PR #5997's cleanup
+    pushed its commit on 2026-11-06 and was still marked BOT_FAILED.
     """
     global _GITNEXUS_RUNNER_WARNED
     if not GITNEXUS_RUNNER.exists():
@@ -1057,7 +1142,7 @@ def refresh_gitnexus_index():
     if GITNEXUS_HEAD_FILE.exists() and GITNEXUS_HEAD_FILE.read_text().strip() == head:
         return
     print(f"[triage] gitnexus: re-analyzing at {head[:8] or 'unknown'}", flush=True)
-    result = subprocess.run(["node", str(GITNEXUS_RUNNER), "analyze"], cwd=str(CLONE_DIR), capture_output=True, text=True, check=False)
+    result = subprocess.run(["node", str(GITNEXUS_RUNNER), "analyze", "--index-only"], cwd=str(CLONE_DIR), capture_output=True, text=True, check=False)
     if result.returncode == 0:
         BASE_DIR.mkdir(parents=True, exist_ok=True)
         GITNEXUS_HEAD_FILE.write_text(head)
@@ -1150,6 +1235,11 @@ def claude_env(review_only=False):
     # against Claude Code 2.1.283). Assigned rather than setdefault: it is a correctness guard,
     # not a tuning knob, so an exported value must not turn backgrounding back on.
     env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+    # The bot's memory token travels only in the generated MCP config. Anything AGENT_MEMORY_*
+    # inherited from the operator's shell is theirs, and a bot run has no use for it.
+    for key in list(env):
+        if key.startswith("AGENT_MEMORY_"):
+            del env[key]
     model = effective_ollama_model(review_only)
     if not model:
         return env
@@ -2260,6 +2350,11 @@ def parse_args():
         metavar="MODEL",
         help="Like --ollama, but only for the read-only/review-ish flows - first-pass " "triage, follow-up review, PR review, PR cleanup. PR creation (/issue-pr, the " "flow that writes the actual fix) still runs on the default Claude model.",
     )
+    parser.add_argument(
+        "--memory_env",
+        metavar="PATH",
+        help=f"File holding the bot's AGENT_MEMORY_URL and AGENT_MEMORY_TOKEN for the shared-memory MCP server (default {MEMORY_ENV_FILE}). " "Only this file is read - AGENT_MEMORY_* in the environment is ignored. Absent: flows run without shared memory.",
+    )
     return parser.parse_args()
 
 
@@ -2276,7 +2371,7 @@ def main():
     elif OLLAMA_REVIEW_MODEL:
         print(f"[triage] using Ollama model {OLLAMA_REVIEW_MODEL!r} via {OLLAMA_BASE_URL} for review flows only (PR creation still uses Claude)", flush=True)
 
-    write_mcp_config()
+    write_mcp_config(args.memory_env)
     state = load_state()
     while True:
         try:
