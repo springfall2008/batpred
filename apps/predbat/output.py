@@ -4393,7 +4393,9 @@ class Output:
         sources.append(("binary_sensor." + self.prefix + "_rate_override_export", "manual"))
         spans = []
         for entity_id, default_tag in sources:
-            history = self.get_history_wrapper(entity_id=entity_id, days=days, required=False)
+            # tracked=False: read only when the History view is rebuilt. Tracking would add these rarely-changing
+            # entities to HAHistory's 2-minute refresh, which re-reads a day (or the whole window, while empty) each time
+            history = self.get_history_wrapper(entity_id=entity_id, days=days, required=False, tracked=False)
             if not history or not history[0]:
                 continue
             on_since = None

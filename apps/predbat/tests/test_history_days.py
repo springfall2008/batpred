@@ -782,6 +782,39 @@ def _test_older_days_mark_rate_overrides(my_predbat, failed):
     return failed
 
 
+def _test_recorded_events_read_untracked(my_predbat, failed):
+    """The event entities are read with tracked=False, so they never join HAHistory's 2-minute refresh."""
+    print("history_days: recorded events are read untracked")
+    reads = []
+
+    def _recording(entity_id, days=30, required=True, tracked=True):
+        """Record each read's tracked flag; no history."""
+        reads.append((entity_id, tracked))
+        return None
+
+    saved_args = {name: my_predbat.args.get(name) for name in EVENT_ARGS}
+    my_predbat.args.update(EVENT_ARGS)
+    my_predbat.get_history_wrapper = _recording
+    try:
+        my_predbat.history_recorded_events(2)
+    finally:
+        del my_predbat.get_history_wrapper
+        for name, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(name, None)
+            else:
+                my_predbat.args[name] = value
+    want = set(EVENT_ARGS.values()) | {"binary_sensor." + my_predbat.prefix + "_rate_override_import", "binary_sensor." + my_predbat.prefix + "_rate_override_export"}
+    if {entity_id for entity_id, _ in reads} != want:
+        print("ERROR: should read {}, read {}".format(sorted(want), sorted(entity_id for entity_id, _ in reads)))
+        failed = True
+    tracked = [entity_id for entity_id, is_tracked in reads if is_tracked]
+    if tracked:
+        print("ERROR: event entities should be read with tracked=False, tracked: {}".format(tracked))
+        failed = True
+    return failed
+
+
 def run_history_days_tests(my_predbat):
     """Run the History replay and 7-day History tests."""
     failed = False
@@ -806,4 +839,5 @@ def run_history_days_tests(my_predbat):
     failed = _test_yesterday_marks_recorded_events(my_predbat, failed)
     failed = _test_rate_override_sensors(my_predbat, failed)
     failed = _test_older_days_mark_rate_overrides(my_predbat, failed)
+    failed = _test_recorded_events_read_untracked(my_predbat, failed)
     return failed
