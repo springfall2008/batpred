@@ -1583,103 +1583,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         timed("execute_s", self._post_run_bookkeeping, status, status_extra, bookkeeping, recompute)
         return {"recomputed": recompute, "executed": True}
 
-    def _post_run_bookkeeping(self, status, status_extra, scheduled, recompute):
+    def update_savings_totals(self, scheduled):
+        """Publish savings totals, advancing the daily ledger only when scheduled and eligible.
+
+        Uses the same state reads and last_updated marker as the complete update cycle.
+        Unrelated scheduled housekeeping is not run here.
         """
-        Post-run bookkeeping shared by every successful update cycle: plugin hooks, iBoost model
-        state, register-write counters, control interference, savings totals, car SoC, holiday
-        countdown, debug capture, status recording, component health, tariff comparison and
-        memory cleanup.
-        """
-
-        # Notify listeners that plan has been executed (consumed by gateway, plugins, etc.)
-        if self.plugin_system:
-            self.plugin_system.call_hooks(
-                "on_plan_executed",
-                charge_windows=self.charge_window_best,
-                charge_limits=self.charge_limit_best,
-                export_windows=self.export_window_best,
-                export_limits=self.export_limits_best,
-                charge_rate_w=int(self.battery_rate_max_charge * MINUTE_WATT),
-                discharge_rate_w=int(self.battery_rate_max_discharge * MINUTE_WATT),
-                soc_max=self.soc_max,
-                reserve=self.reserve,
-                best_soc_min=self.best_soc_min,
-                timezone=str(self.local_tz),
-            )
-
-        # iBoost solar diverter model update state, only on 5 minute intervals
-        if self.iboost_enable and scheduled:
-            if self.iboost_energy_today:
-                # If we have a realtime sensor just use that data
-                self.iboost_next = self.iboost_today
-            elif recompute and (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every):
-                # Reset at midnight
-                self.iboost_next = 0
-            # Save next iBoost model value
-            self.expose_config("iboost_today", self.iboost_next)
-            self.log("iBoost model today updated to {}".format(self.iboost_next))
-
-        # Update register writes counter
-        previous_inverter_writes = self.load_previous_value_from_ha(self.prefix + ".inverter_register_writes")
-        try:
-            previous_inverter_writes = int(previous_inverter_writes)
-        except (ValueError, TypeError):
-            previous_inverter_writes = 0
-        for id in self.count_inverter_writes.keys():
-            previous_inverter_writes += self.count_inverter_writes[id]
-            self.count_inverter_writes[id] = 0
-
-        self.dashboard_item(
-            self.prefix + ".inverter_register_writes",
-            state=dp2(previous_inverter_writes),
-            attributes={
-                "friendly_name": "Total register writes (all inverters)",
-                "state_class": "measurement",
-                "unit_of_measurement": "writes",
-                "icon": "mdi:counter",
-            },
-        )
-        self.log("Total inverter register writes now {}".format(previous_inverter_writes))
-
-        # Control interference detection. Restored once per process from the entity's own
-        # attributes so the 24h window survives a pod restart - without this "3 in 24h"
-        # silently means "3 since the last restart".
-        now_ts = time.time()
-        if not self.control_ledger_restored:
-            self.control_ledger.restore(self.load_previous_value_from_ha(self.prefix + ".control_conflicts", attribute="events"))
-            self.control_ledger_restored = True
-        # prune() and recent_events() are NOT the same filter and neither can stand in for the
-        # other. prune() maintains the durable store, dropping only what has genuinely aged out;
-        # a future-dated event (a clock behind NTP) stays, because the clock corrects and the
-        # history must survive until it does. recent_events() is what can be JUDGED right now, so
-        # it is what the count and the sustained list are built from. The "events" attribute
-        # publishes the stored list, because that attribute IS the store restore() reads back -
-        # publishing only the events it can judge would delete the rest on the next run.
-        self.control_ledger.prune(now_ts)
-        conflict_events = self.control_ledger.recent_events(now_ts)
-        sustained = self.control_ledger.sustained_controls(conflict_events)
-        self.dashboard_item(
-            self.prefix + ".control_conflicts",
-            state=len(conflict_events),
-            attributes={
-                "friendly_name": "Settings changed outside Predbat (24h)",
-                "state_class": "measurement",
-                "unit_of_measurement": "changes",
-                "icon": "mdi:account-alert",
-                # Newest 20, but explicitly NOT purely by time - see newest_events(). This
-                # attribute is the durable store restore() reads back, and on a pod whose clock is
-                # behind, the event just detected carries a small "at" and looks like the oldest
-                # thing here, so any by-time cap would discard exactly the one that cannot be
-                # recovered from anywhere else.
-                "events": self.control_ledger.newest_events(20),
-                "sustained": sustained,
-            },
-        )
-        if conflict_events:
-            self.log("Control interference: {} change(s) in the last 24h, sustained on {}".format(len(conflict_events), sustained or "nothing"))
-
-        self.publish_control_failures(now_ts)
-
         if self.calculate_savings:
             # Get current totals
             savings_total_predbat = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat")
@@ -1823,6 +1732,105 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                         "last_updated": savings_total_last_updated,
                     },
                 )
+
+    def _post_run_bookkeeping(self, status, status_extra, scheduled, recompute):
+        """
+        Post-run bookkeeping shared by every successful update cycle: plugin hooks, iBoost model
+        state, register-write counters, control interference, savings totals, car SoC, holiday
+        countdown, debug capture, status recording, component health, tariff comparison and
+        memory cleanup.
+        """
+
+        # Notify listeners that plan has been executed (consumed by gateway, plugins, etc.)
+        if self.plugin_system:
+            self.plugin_system.call_hooks(
+                "on_plan_executed",
+                charge_windows=self.charge_window_best,
+                charge_limits=self.charge_limit_best,
+                export_windows=self.export_window_best,
+                export_limits=self.export_limits_best,
+                charge_rate_w=int(self.battery_rate_max_charge * MINUTE_WATT),
+                discharge_rate_w=int(self.battery_rate_max_discharge * MINUTE_WATT),
+                soc_max=self.soc_max,
+                reserve=self.reserve,
+                best_soc_min=self.best_soc_min,
+                timezone=str(self.local_tz),
+            )
+
+        # iBoost solar diverter model update state, only on 5 minute intervals
+        if self.iboost_enable and scheduled:
+            if self.iboost_energy_today:
+                # If we have a realtime sensor just use that data
+                self.iboost_next = self.iboost_today
+            elif recompute and (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every):
+                # Reset at midnight
+                self.iboost_next = 0
+            # Save next iBoost model value
+            self.expose_config("iboost_today", self.iboost_next)
+            self.log("iBoost model today updated to {}".format(self.iboost_next))
+
+        # Update register writes counter
+        previous_inverter_writes = self.load_previous_value_from_ha(self.prefix + ".inverter_register_writes")
+        try:
+            previous_inverter_writes = int(previous_inverter_writes)
+        except (ValueError, TypeError):
+            previous_inverter_writes = 0
+        for id in self.count_inverter_writes.keys():
+            previous_inverter_writes += self.count_inverter_writes[id]
+            self.count_inverter_writes[id] = 0
+
+        self.dashboard_item(
+            self.prefix + ".inverter_register_writes",
+            state=dp2(previous_inverter_writes),
+            attributes={
+                "friendly_name": "Total register writes (all inverters)",
+                "state_class": "measurement",
+                "unit_of_measurement": "writes",
+                "icon": "mdi:counter",
+            },
+        )
+        self.log("Total inverter register writes now {}".format(previous_inverter_writes))
+
+        # Control interference detection. Restored once per process from the entity's own
+        # attributes so the 24h window survives a pod restart - without this "3 in 24h"
+        # silently means "3 since the last restart".
+        now_ts = time.time()
+        if not self.control_ledger_restored:
+            self.control_ledger.restore(self.load_previous_value_from_ha(self.prefix + ".control_conflicts", attribute="events"))
+            self.control_ledger_restored = True
+        # prune() and recent_events() are NOT the same filter and neither can stand in for the
+        # other. prune() maintains the durable store, dropping only what has genuinely aged out;
+        # a future-dated event (a clock behind NTP) stays, because the clock corrects and the
+        # history must survive until it does. recent_events() is what can be JUDGED right now, so
+        # it is what the count and the sustained list are built from. The "events" attribute
+        # publishes the stored list, because that attribute IS the store restore() reads back -
+        # publishing only the events it can judge would delete the rest on the next run.
+        self.control_ledger.prune(now_ts)
+        conflict_events = self.control_ledger.recent_events(now_ts)
+        sustained = self.control_ledger.sustained_controls(conflict_events)
+        self.dashboard_item(
+            self.prefix + ".control_conflicts",
+            state=len(conflict_events),
+            attributes={
+                "friendly_name": "Settings changed outside Predbat (24h)",
+                "state_class": "measurement",
+                "unit_of_measurement": "changes",
+                "icon": "mdi:account-alert",
+                # Newest 20, but explicitly NOT purely by time - see newest_events(). This
+                # attribute is the durable store restore() reads back, and on a pod whose clock is
+                # behind, the event just detected carries a small "at" and looks like the oldest
+                # thing here, so any by-time cap would discard exactly the one that cannot be
+                # recovered from anywhere else.
+                "events": self.control_ledger.newest_events(20),
+                "sustained": sustained,
+            },
+        )
+        if conflict_events:
+            self.log("Control interference: {} change(s) in the last 24h, sustained on {}".format(len(conflict_events), sustained or "nothing"))
+
+        self.publish_control_failures(now_ts)
+
+        self.update_savings_totals(scheduled)
 
         # Car SoC increment
         if scheduled:
