@@ -27,7 +27,9 @@ from zoneinfo import ZoneInfo
 
 import pytz
 
-from utils import clock_change_minutes, start_of_local_day
+import re
+
+from utils import clock_change_minutes, local_day_end_minute, start_of_local_day
 
 LONDON = pytz.timezone("Europe/London")
 PER_MINUTE = 0.01
@@ -84,6 +86,15 @@ def _test_helpers():
     for now, tz, expected in cases:
         got = clock_change_minutes(now, tz)
         failed |= _check("clock_change_minutes at {} in {} is {}".format(now, tz, expected), got == expected, "got {}".format(got))
+    for now, expected in (
+        (_london(datetime(2026, 10, 25, 0, 30)), 1500),
+        (_london(datetime(2026, 10, 25, 2, 0)), 1440),
+        (_london(datetime(2027, 3, 28, 0, 30)), 1380),
+        (_london(datetime(2027, 3, 28, 3, 0)), 1440),
+        (_london(datetime(2026, 10, 26, 2, 0)), 1440),
+    ):
+        got = local_day_end_minute(now, LONDON)
+        failed |= _check("local_day_end_minute at {} is {}".format(now, expected), got == expected, "got {}".format(got))
     start = start_of_local_day(date(2026, 10, 25), azores)
     failed |= _check("Azores autumn day starts at the first 00:00 (UTC+0)", start.utcoffset() == timedelta(0), "got {}".format(start))
     start = start_of_local_day(date(2027, 3, 14), havana)
@@ -133,6 +144,86 @@ def _test_today_cost(my_predbat):
         failed |= _check("{} cost_today covers the real day ({} kWh, {}p)".format(label, expected_import, expected_cost), abs(cost_value - expected_cost) < 0.01, "got {}".format(cost_value))
         midnight_line = next((line for line in logged if line.startswith("Battery level now")), "")
         failed |= _check("{} battery level read at the real midnight".format(label), "at midnight 2.0kWh" in midnight_line, "log: {}".format(midnight_line))
+    return failed
+
+
+def _test_load_today_comparison(my_predbat):
+    """load_today_comparison() counts today's actual load from the real start of the day, adds no forecast from before
+    midnight_utc, and waits for three real hours of data before trusting the divergence."""
+    print("clock change day: load_today_comparison")
+    failed = False
+    names = (
+        "car_charging_hold",
+        "car_charging_energy",
+        "iboost_energy_subtract",
+        "iboost_energy_today",
+        "base_load",
+        "load_forecast_only",
+        "days_previous",
+        "days_previous_weight",
+        "load_minutes_age",
+        "calculate_inday_adjustment",
+        "metric_inday_adjust_damping",
+        "manual_load_adjust",
+        "load_scaling",
+        "load_scaling_dynamic",
+        "log",
+    )
+    saved = {name: getattr(my_predbat, name, None) for name in names}
+    saved_history = my_predbat.__dict__.get("get_history_wrapper")
+    logged = []
+    try:
+        my_predbat.car_charging_hold = False
+        my_predbat.car_charging_energy = None
+        my_predbat.iboost_energy_subtract = False
+        my_predbat.iboost_energy_today = None
+        my_predbat.base_load = 0.0
+        my_predbat.load_forecast_only = False
+        my_predbat.days_previous = [1]
+        my_predbat.days_previous_weight = [1.0]
+        my_predbat.load_minutes_age = 3
+        my_predbat.calculate_inday_adjustment = True
+        my_predbat.metric_inday_adjust_damping = 1.0
+        my_predbat.manual_load_adjust = {}
+        my_predbat.load_scaling = 1.0
+        my_predbat.load_scaling_dynamic = {}
+        my_predbat.log = lambda msg, *a, **kw: logged.append(msg)
+        my_predbat.get_history_wrapper = lambda entity_id, **kw: None
+        # Autumn, 02:00 GMT: 180 real minutes since midnight at 0.02 kWh a minute, earlier days at 0.01
+        _set_clock(my_predbat, datetime(2026, 10, 25, 2, 0))
+        per_minute = {minute_back: (0.02 if minute_back < 180 else 0.01) for minute_back in range(4 * 24 * 60)}
+        total = sum(per_minute.values())
+        load_minutes = {}
+        running = total
+        for minute_back in range(4 * 24 * 60 + 1):
+            load_minutes[minute_back] = running
+            running -= per_minute.get(minute_back, 0.0)
+        # A load forecast with nothing in it but tonight's last hour (plan minutes 1380-1439)
+        load_forecast = {}
+        cumulative = 0.0
+        for minute in range(0, 2 * 24 * 60):
+            load_forecast[minute] = cumulative
+            if 1380 <= minute < 1440:
+                cumulative += 0.1
+        my_predbat.load_today_comparison(load_minutes, load_forecast, {}, {}, minutes_now=my_predbat.minutes_now, save=True)
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+        if saved_history is None:
+            my_predbat.__dict__.pop("get_history_wrapper", None)
+        else:
+            my_predbat.get_history_wrapper = saved_history
+    actual_line = next((line for line in logged if line.startswith("Today's actual load so far")), "")
+    predicted_line = next((line for line in logged if line.startswith("Today's predicted so far")), "")
+    divergence_line = next((line for line in logged if line.startswith("Today's load divergence")), "")
+    actual = float(re.search(r"so far ([\d.]+)kWh", actual_line).group(1)) if actual_line else None
+    forecast_extra = float(re.search(r"and ([\d.]+)kWh forecast extra", predicted_line).group(1)) if predicted_line else None
+    divergence = float(re.search(r"divergence ([\d.]+)%", divergence_line).group(1)) if divergence_line else None
+    # 180 real minutes at 0.02 is 3.6 kWh (each 5-minute bucket reads from a minute earlier, so the first one takes 4 of
+    # yesterday's minutes at 0.01, as on any day); the 120 minutes of the plan axis alone would give 2.4
+    failed |= _check("autumn actual load so far covers the 180 real minutes (~3.6 kWh)", actual is not None and abs(actual - 3.6) < 0.1, "log: {}".format(actual_line))
+    failed |= _check("no forecast added for the hour before midnight_utc", forecast_extra is not None and forecast_extra < 0.001, "log: {}".format(predicted_line))
+    failed |= _check("divergence measured once three real hours of data exist", divergence is not None and divergence > 100.5, "log: {}".format(divergence_line))
     return failed
 
 
@@ -246,6 +337,7 @@ def test_clock_change_day(my_predbat):
     try:
         failed |= _test_helpers()
         failed |= _test_today_cost(my_predbat)
+        failed |= _test_load_today_comparison(my_predbat)
         failed |= _test_fetch_load_today(my_predbat)
         failed |= _test_predheat(my_predbat)
         failed |= _test_load_ml_baseline()

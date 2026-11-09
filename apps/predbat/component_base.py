@@ -479,7 +479,7 @@ class ComponentBase(ABC):
     def minutes_since_day_start(self):
         """Real minutes since the start of today, for reading history keyed by real minutes back from now; minutes_now on any day but a clock-change one (GH#5760)."""
         now_utc = self.base.now_utc
-        return minutes_since_midnight(now_utc, now_utc.replace(hour=0, minute=0, second=0, microsecond=0)) - clock_change_minutes(now_utc, self.local_tz)
+        return minutes_since_midnight(now_utc, now_utc.replace(hour=0, minute=0, second=0, microsecond=0)) - clock_change_minutes(now_utc, self.base.local_tz)
 
     @property
     def plan_interval_minutes(self):

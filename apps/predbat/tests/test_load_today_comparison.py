@@ -513,11 +513,13 @@ def _test_yesterday_factor_read_at_yesterday_end_on_clock_change(my_predbat, fai
     prefix = my_predbat.prefix
 
     def _stamp(when_utc):
+        """Format a UTC time as Home Assistant history stamps it."""
         return when_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
     history = [[{"state": str(value), "last_updated": _stamp(when)} for when, value in [(datetime(2026, 10, 24, 12, 0), 120.0), (datetime(2026, 10, 24, 22, 59), 150.0), (datetime(2026, 10, 24, 23, 59), 80.0)]]]
 
     def _get_history_wrapper(entity_id, days=30, required=True, tracked=True):
+        """Return the canned history for the entity under test."""
         return history if entity_id == prefix + ".load_inday_adjustment" else None
 
     try:

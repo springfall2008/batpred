@@ -2056,6 +2056,20 @@ def clock_change_minutes(now, local_tz):
     return int((now_local.utcoffset() - day_start.utcoffset()).total_seconds() // 60)
 
 
+def local_day_end_minute(now, local_tz):
+    """
+    Where the end of today in local_tz falls, in minutes from Predbat's midnight_utc (now with the clock set to 00:00)
+
+    1440 on most days. On a clock-change day it is the real length of the day measured from midnight_utc: before an
+    autumn change (midnight_utc still on summer time) the day has an extra hour to run, so 1500; before a spring change,
+    1380; once the change has happened midnight_utc moves with it and it is 1440 again (GH#5760).
+    """
+    now_local = now.astimezone(local_tz)
+    midnight = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = start_of_local_day(now_local.date() + timedelta(days=1), local_tz)
+    return int((day_end - midnight).total_seconds() // 60)
+
+
 def minutes_since_midnight(now, midnight):
     """
     Compute minutes from midnight to now, floored to a PREDICT_STEP boundary

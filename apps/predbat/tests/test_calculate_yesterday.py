@@ -2340,6 +2340,7 @@ def _test_clock_change_reads_yesterday_final_value(my_predbat, failed):
     entity_id = my_predbat.prefix + ".cost_yesterday"
 
     def _stamp(when_utc):
+        """Format a UTC time as Home Assistant history stamps it."""
         return when_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
     cases = [
@@ -2369,6 +2370,7 @@ def _test_clock_change_reads_yesterday_final_value(my_predbat, failed):
             base_history = _make_history_mock(my_predbat, now_local)
 
             def _get_history_wrapper(entity_id, days=30, required=True, tracked=True, history=history, base_history=base_history):
+                """Return the canned history for the entity under test."""
                 if entity_id == my_predbat.prefix + ".cost_today":
                     return history
                 return base_history(entity_id, days=days, required=required, tracked=tracked)
