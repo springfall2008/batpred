@@ -1023,6 +1023,17 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: a held span cut by the end of the plan should be one HoldChrg span of 2, got {}".format(row and (row["state"], row["rowspan_state"])))
         failed = True
 
+    # A freeze window is never split: SoC below the reserve in its first row and above it after (solar during
+    # a daytime freeze) would otherwise read as charge-then-hold, because the freeze target is the reserve
+    my_predbat.charge_limit_best = [my_predbat.reserve]
+    my_predbat.predict_soc_best = {minute: 0.3 if minute < interval else 5.0 for minute in range(0, my_predbat.forecast_minutes + interval + 5, 5)}
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or row["state"] != "FrzChrg" or row["rowspan_state"] != 4:
+        print("ERROR: a freeze window with SoC rising above the reserve should be one FrzChrg span of 4, got {}".format(row and (row["state"], row["rowspan_state"])))
+        failed = True
+    my_predbat.charge_limit_best = [10.0]
+
     if not failed:
         print("All plan why-reason tests passed")
     return failed
