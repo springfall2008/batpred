@@ -800,6 +800,8 @@ class OctopusAPI(ComponentBase):
         self.device_fetched_at = None
         self.sensor_updated_at = None
         self.automatic = automatic
+        # The tariff keys automatic_config() last ran with; None until it has run (GH#5994)
+        self.automatic_config_tariff_keys = None
         self.commands = []
         self.mpan = None
         self.tou_samples = None
@@ -905,9 +907,12 @@ class OctopusAPI(ComponentBase):
             if await self.async_get_account(self.account_id):
                 self.tariff_fetched_at = datetime.now()
 
+        tariffs_changed = False
         if tariff_due or first:
             # Rebuild tariff structure from account_data (no API call, needed after cache load)
+            tariff_keys_before = set(self.tariffs)
             await self.async_find_tariffs()
+            tariffs_changed = set(self.tariffs) != tariff_keys_before
 
         if device_due:
             # 10-minute API refresh for saving sessions
@@ -915,8 +920,10 @@ class OctopusAPI(ComponentBase):
             self.get_saving_session_data()
             self.device_fetched_at = datetime.now()
 
-        if device_due or first:
-            # Download rate data into tariff structure (uses storage cache, needed after cache load)
+        if device_due or first or tariffs_changed:
+            # Download rate data into tariff structure (uses storage cache, needed after cache load). Also on a cycle that
+            # found new tariffs, so their rates are there as soon as they are wired - e.g. the first successful account fetch
+            # after a failed one at startup, which would otherwise wait for the next device refresh (GH#5994)
             await self.fetch_tariffs(self.tariffs)
 
         if sensor_due:
@@ -1122,7 +1129,6 @@ class OctopusAPI(ComponentBase):
             return self.tariffs
 
         now = datetime.now()
-        old_tariff_keys = set(self.tariffs.keys())
 
         tariffs = {}
         gas = self.account_data.get("account", {}).get("gasAgreements", [])
@@ -1216,10 +1222,16 @@ class OctopusAPI(ComponentBase):
                     tariffs["gas"]["standing"] = self.tariffs.get("gas", {}).get("standing", None)
         self.tariffs = tariffs
 
-        # Re-run automatic config if tariff structure changed (e.g. export agreement became active)
+        # Re-run automatic config if the tariff structure has changed (e.g. an export agreement became active) since
+        # automatic_config() last ran. Comparing with the tariffs it was given, not the previous fetch, also wires the rates
+        # when the first account fetch failed: the first-cycle configure then ran with no tariffs, and the later empty ->
+        # populated change must still reconfigure, or every plan fails with "Import rates are all zero" until a restart
+        # (GH#5994). Until it has run at all - on a healthy boot the first fetch comes before run()'s first-cycle configure -
+        # there is nothing to compare with, and that configure follows anyway.
         new_tariff_keys = set(self.tariffs.keys())
-        if old_tariff_keys and new_tariff_keys != old_tariff_keys and self.automatic:
-            self.log("OctopusAPI: Tariff structure changed from {} to {}, reconfiguring".format(old_tariff_keys, new_tariff_keys))
+        configured_keys = self.automatic_config_tariff_keys
+        if self.automatic and configured_keys is not None and new_tariff_keys != configured_keys:
+            self.log("OctopusAPI: Tariff structure changed from {} to {}, reconfiguring".format(configured_keys, new_tariff_keys))
             self.automatic_config(self.tariffs)
             self.refresh_discovery()
 
@@ -1673,6 +1685,7 @@ class OctopusAPI(ComponentBase):
         Automatic configuration of entities
         """
         self.log("OctopusAPI: Automatic configuration of entities")
+        self.automatic_config_tariff_keys = set(tariffs)
         self.set_arg("octopus_saving_session", self.get_entity_name("binary_sensor", "saving_session"))
         self.set_arg("octopus_saving_session_join", self.get_entity_name("select", "saving_session_join"))
         self.set_arg("octopus_free_electricity", self.get_entity_name("sensor", "free_electricity"))
