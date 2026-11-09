@@ -4,14 +4,28 @@ Provides the Hass class that emulates the AppDaemon interface for standalone
 execution, including YAML configuration loading, secret management, log
 rotation, scheduled callback execution, and file change detection for
 development hot-reload.
+
+Despite the "outside AppDaemon" framing (legacy naming, kept for history), this
+IS the class predbat.PredBat actually inherits from in every currently
+supported install path - the Predbat app/addon and Docker both run this
+standalone-style loader, not a real appdaemon package. The genuinely
+AppDaemon-hosted install method has been retired (docs/install.md); there is
+no appdaemon dependency anywhere in this repo, and no conditional import
+branches to a different hass module. So Hass.log() below - and the write-time
+secret redaction in it (GH#4770) - is not a partial mitigation that misses an
+AppDaemon-hosted population still running elsewhere: there is no such
+population left to miss. Flagging this explicitly because the class/module
+docstrings alone would lead a reviewer to (reasonably) suspect the opposite.
 """
 
-import io
 import yaml
 import sys
 import asyncio
 import os
 import subprocess
+
+from log_secrets import LogRedaction
+from utils import redact_log_line
 
 
 def write_git_version_marker():
@@ -37,8 +51,9 @@ def write_git_version_marker():
 write_git_version_marker()
 
 import predbat
+from utils import load_apps_yaml, predbat_log_count, predbat_log_name, rotate_predbat_logs
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from multiprocessing import set_start_method
 import concurrent.futures
 import threading
@@ -48,14 +63,15 @@ import traceback
 def check_modified(py_files, start_time):
     """
     Check if .py file was changed since we started
+
+    start_time is a time.time() timestamp, compared with each file's mtime as it is: a naive local time would
+    repeat an hour when the clocks go back, and a file written before a restart in that hour would look newer (#5770)
     """
 
     # Check the last modified timestamp of each .py file
     for file_path in py_files:
         if os.path.exists(file_path):
-            last_modified = os.path.getmtime(file_path)
-            last_modified_timestamp = datetime.fromtimestamp(last_modified)
-            if last_modified_timestamp > start_time:
+            if os.path.getmtime(file_path) > start_time:
                 print("File {} was modified".format(file_path))
                 return True
         else:
@@ -64,12 +80,15 @@ def check_modified(py_files, start_time):
     return False
 
 
-def resolve_apps_yaml_path():
+def resolve_apps_yaml_path(apps_file=None):
     """
     Resolve the one real apps.yaml path this instance is actually configured to use, using the
     same PREDBAT_APPS_FILE resolution applied when the config itself is loaded.
+
+    Pass the instance's own apps_file (Hass.apps_file) so the answer is per instance; with no
+    argument it falls back to the process environment.
     """
-    return os.path.abspath(os.getenv("PREDBAT_APPS_FILE", "apps.yaml"))
+    return os.path.abspath(apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml"))
 
 
 def collect_watch_files(roots, apps_file_path):
@@ -87,7 +106,7 @@ def collect_watch_files(roots, apps_file_path):
     py_files = []
     seen_files = set()
     for root_dir in roots:
-        for root, dirs, files in os.walk(root_dir):
+        for root, _dirs, files in os.walk(root_dir):
             for file in files:
                 if file.startswith("."):
                     continue
@@ -111,7 +130,7 @@ def collect_watch_files(roots, apps_file_path):
 
 async def main():
     print("**** Starting Standalone Predbat ****")
-    start_time = datetime.now()
+    start_time = time.time()
 
     try:
         p_han = predbat.PredBat()
@@ -133,12 +152,17 @@ async def main():
     #
 
     # List of root directories to search
+    # HA changed terminology from 'addons' to 'apps' in HA 2026.2 with 'addon_configs' becoming 'app_configs' but retained
+    # the old directory names for transition
+    #
+    # At present have not changed Predbat directory call in order to not break installations that are still using an older HA supervisor
+    # Propose in Feb 2027 that Predbat be changed to use the new directory call
     roots = [".", "/addon"]
 
     # Find all .py files in the directory hierarchy, plus the one real apps.yaml this
     # instance is actually configured to use (not any file that merely happens to share
     # that name elsewhere in the tree - see #4397/#4396)
-    py_files = collect_watch_files(roots, resolve_apps_yaml_path())
+    py_files = collect_watch_files(roots, resolve_apps_yaml_path(p_han.apps_file))
 
     print("Watching {} for changes".format(py_files))
 
@@ -164,18 +188,26 @@ if __name__ == "__main__":
     sys.exit(0)
 
 
-class Hass:
+class Hass(LogRedaction):
     """Standalone mode wrapper emulating the AppDaemon interface.
 
     Enables PredBat to run outside Home Assistant/AppDaemon with YAML
     config loading, secret management, log rotation, scheduled callbacks,
     and file change detection for development hot-reload.
+
+    log()'s credential-redaction cache lives in LogRedaction (log_secrets.py) rather
+    than here, so it carries its own state and needs nothing from this __init__
+    (GH#5169).
     """
 
     def log(self, msg, quiet=True):
         """
         Log a message to the logfile
         """
+        # Redacted here, at the point the line is written, not at serve/download time: some users
+        # copy predbat.log directly off a Samba share exposing the addon's config directory,
+        # bypassing every HTTP/MCP endpoint a download-time scrub could sit behind (GH#4770).
+        msg = redact_log_line(str(msg), self._log_secret_pattern())
         message = "{}: {}\n".format(datetime.now(), msg)
         self.logfile.write(message)
         self.logfile.flush()
@@ -183,21 +215,17 @@ class Hass:
         if not quiet or msg_lower.startswith("error") or msg_lower.startswith("warn") or msg_lower.startswith("info"):
             print(message, end="")
 
-        # maximum number of historic logfiles to retain
-        max_logs = 9
+        # Total logfiles to keep including the live one, so max_logs rotated copies.
+        max_logs = predbat_log_count(self.args) - 1
 
         log_size = self.logfile.tell()
         if log_size > 10000000 and threading.current_thread() is threading.main_thread():
             # Only rotate from the main thread to avoid race conditions with
             # component threads that also call log().
-            for num_logs in range(max_logs - 1, 0, -1):
-                filename = "predbat." + format(num_logs) + ".log"
-                if os.path.isfile(filename):
-                    newfile = "predbat." + format(num_logs + 1) + ".log"
-                    os.rename(filename, newfile)
+            rotate_predbat_logs(max_logs)
 
             self.logfile.close()
-            os.rename("predbat.log", "predbat.1.log")
+            os.rename("predbat.log", predbat_log_name(1))
             self.logfile = open("predbat.log", "w")
 
     async def run_in_executor(self, callback, *args):
@@ -241,60 +269,16 @@ class Hass:
             t.join(5 * 60)
         self.logfile.close()
 
-    def load_secrets(self):
-        """
-        Load secrets from secrets.yaml file
-        Priority: PREDBAT_SECRETS_FILE env var, ./secrets.yaml, /config/secrets.yaml
-        """
-        secrets = {}
-        secrets_file = None
-
-        # Try loading from different locations in priority order
-        possible_locations = [
-            os.getenv("PREDBAT_SECRETS_FILE"),
-            "secrets.yaml",
-            "/homeassistant/secrets.yaml",
-            "/conf/secrets.yaml",
-            "/config/secrets.yaml",
-        ]
-
-        for location in possible_locations:
-            if location and os.path.isfile(location):
-                secrets_file = location
-                break
-
-        if secrets_file:
-            self.log(f"Loading secrets from {secrets_file}", quiet=False)
-            try:
-                with io.open(secrets_file, "r") as stream:
-                    secrets = yaml.safe_load(stream) or {}
-                    # Check for debug logging option
-                    if secrets.get("logger") == "debug":
-                        self.log(f"Info: Secrets loaded from {secrets_file}", quiet=False)
-            except yaml.YAMLError as exc:
-                self.log(f"Error: Failed to load secrets from {secrets_file}: {exc}", quiet=False)
-            except Exception as exc:
-                self.log(f"Error: Failed to open secrets file {secrets_file}: {exc}", quiet=False)
-        else:
-            self.log("Info: No secrets.yaml file found", quiet=False)
-
-        return secrets
-
-    def secret_constructor(self, loader, node):
-        """
-        YAML constructor for !secret tag
-        """
-        secret_key = loader.construct_scalar(node)
-        if secret_key in self.secrets:
-            return self.secrets[secret_key]
-        else:
-            self.log(f"Warn: Secret '{secret_key}' not found in secrets.yaml")
-            return None
-
-    def __init__(self):
+    def __init__(self, apps_file=None, secrets_file=None):
         """
         Start Predbat
+
+        apps_file / secrets_file override $PREDBAT_APPS_FILE / $PREDBAT_SECRETS_FILE for this
+        instance only. The environment is read once, here, and the values kept on the instance,
+        so several engines in one process can each load their own configuration.
         """
+        self.apps_file = apps_file if apps_file is not None else os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+        self.secrets_file = secrets_file if secrets_file is not None else os.getenv("PREDBAT_SECRETS_FILE")
         self.args = {}
         self.run_list = []
         self.threads = []
@@ -303,22 +287,16 @@ class Hass:
 
         self.logfile = open("predbat.log", "a")
 
-        # Load secrets first
-        self.secrets = self.load_secrets()
+        # Load apps.yaml (resolving !secret) through the shared loader
+        try:
+            self.args, self.secrets = load_apps_yaml(apps_file=self.apps_file, log=self.log, secrets_file=self.secrets_file)
+        except yaml.YAMLError as exc:
+            print(exc)
+            sys.exit(1)
 
-        # Register custom YAML constructor for !secret tag
-        yaml.add_constructor("!secret", self.secret_constructor, Loader=yaml.SafeLoader)
-
-        # Open YAML file apps.yaml and read it
-        apps_file = os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
-        self.log(f"Loading {apps_file}", quiet=False)
-        with io.open(apps_file, "r") as stream:
-            try:
-                config = yaml.safe_load(stream)
-                self.args = config["pred_bat"]
-            except yaml.YAMLError as exc:
-                print(exc)
-                sys.exit(1)
+        # Both args and secrets have just been populated, so the redaction pattern built from them
+        # (GH#4770) is stale - drop it so the next log() call rebuilds from the loaded config.
+        self._invalidate_log_secret_pattern()
 
     def run_every(self, callback, next_time, run_every, **kwargs):
         """
@@ -327,12 +305,17 @@ class Hass:
         self.run_list.append({"callback": callback, "next_time": next_time, "run_every": run_every, "kwargs": kwargs})
         return True
 
-    async def timer_tick(self):
+    async def timer_tick(self, now=None):
         """
         Timer tick function, executes tasks at the correct time
+
+        Due times are kept in UTC: the local wall clock repeats an hour when the clocks go back, and a due time
+        compared with it would then stall every task for up to an hour (#5770). A naive due time, as some callers
+        pass, is read as the host's local time once and kept in UTC from then on; now likewise.
         """
-        now = datetime.now()
+        now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         for item in self.run_list:
+            item["next_time"] = item["next_time"].astimezone(timezone.utc)
             if now > item["next_time"]:
                 try:
                     item["callback"](None)

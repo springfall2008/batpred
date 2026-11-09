@@ -4,7 +4,7 @@ This document describes the Predbat configuration items in Home Assistant that y
 
 All of these settings are entities that can be configured directly in Home Assistant (unlike the '[apps.yaml](apps-yaml.md)' configuration items that have to be edited with a file editor).
 
-Note the default values of the settings inside Home Assistant are set inside Predbat, but the default can be overridden by setting its value in apps.yaml prior to starting Predbat for the first time.
+Note the default values of the settings inside Home Assistant are set inside Predbat, but the default can be overridden by setting its value in `apps.yaml` prior to starting Predbat for the first time.
 
 See [Displaying output data](output-data.md)
 for information on how to view and edit these entities within
@@ -58,6 +58,10 @@ and predicted house load.
 
 _CAUTION: You must manually set any charging required on the inverter and if the charge window is disabled then no charging will take place._
 
+While the inverter's own charge window is running with a target above the reserve, Predbat shows the status as Charging (Hold charging once the target is reached) and treats it as a charge in progress:
+it keeps the target steady rather than changing it for a marginal gain, it does not reset the target to 100% (**switch.predbat_inverter_soc_reset**),
+and it does not freeze export in Demand mode (**switch.predbat_set_freeze_export_during_demand**), which would pause the charge.
+
 ### Predbat Control charge mode
 
 In **Control charge** mode Predbat will set the charge times and charge percentages according to the Best plan, charging can be enabled and disabled by Predbat.
@@ -93,7 +97,7 @@ hidden option is pinned to its default and cannot be overridden from `apps.yaml`
 Currently behind this toggle:
 
 - **switch.predbat_calculate_second_pass** - the full second-pass optimisation
-- **switch.predbat_calculate_pv90_plan** - the PV90% upside scenario
+- **switch.predbat_calculate_pv90_plan** - the optimistic (PV90%) scenario
 
 ## Performance related
 
@@ -106,7 +110,7 @@ E.g. a value of 10 or 15 minutes should also give good results.
 If you have performance problems, turn On **switch.predbat_performance_tweaks** to reveal the two switches that cost the most planning time. Both are On by
 default because both improve the plan; turn them Off to buy the time back:
 
-- **switch.predbat_calculate_pv90_plan** - simulating the third (sunny) scenario is the larger of the two costs
+- **switch.predbat_calculate_pv90_plan** - simulating the third (optimistic) scenario is the larger of the two costs
 - **switch.predbat_calculate_second_pass** - re-optimises every window in the plan rather than just the near-term ones
 
 As a rough guide, on a 20-scenario benchmark of one-day plans, turning both Off returns planning time to about three quarters of what it takes with them On.
@@ -143,7 +147,7 @@ Higher numbers will reduce battery cycles at the expense of using higher energy 
 In theory, if you have a 9.5kWh battery and think it will last say 6000 complete cycles and it cost you £4000, then each full charge and discharge cycle is 19kWh
 and so the cost per complete cycle is £4000 / 19 / 6000 = 3.5p.
 
-Taking the 3.5p per cycle example, if you set predbat_metric_battery_cycle to 1.75 (half of 3.5) then Predbat will apply the "virtual cost" of 1.75p
+Taking this full cycle example, if you set predbat_metric_battery_cycle to 3.5 then Predbat will apply the "virtual cost" of 3.5p
 to every kWh of charge and discharge of the battery.
 This cost will be included in Predbat's cost optimisation plan when it decides whether to charge, discharge the battery or let the house run on grid import.<BR>
 _NB: For clarity and to re-emphasise, the "virtual cost" will be applied to BOTH the cost calculation for charging AND for discharging the battery._
@@ -159,7 +163,11 @@ Figures of around 0p-2p are recommended, the default is 0p per kWh.
 **input_number.predbat_metric_battery_value_scaling** (_expert mode_) A percentage value that can be used to scale the value of the energy in the battery at the end of the plan.
 The battery value is accounted for in the optimisations at the lowest future import rate including charging and inverter losses.
 A value of 1.0 (the default) means no change to this, while lower than 1.0 means to value future battery levels less,
-greater than 1.0 will value it more (and hence hold more charge at the end of the plan).
+greater than 1.0 will value it more (and hence hold more charge at the end of the plan).<BR>
+_NB: Take care reducing this below 1.0 if your export rate is close to your cheapest import rate._ Predbat only holds charge rather than exporting it while
+the stored energy is worth more than exporting it would earn. That margin is narrow on a flat export tariff - for example a 10.54p cheapest import against a
+12p export leaves only about 1%, so any value below roughly 0.99 makes Predbat export the battery whenever it can, even though the round trip actually loses
+money. If you see exports you cannot explain, check this setting is at its default before looking elsewhere (see issue #4840).
 
 **input_number.predbat_metric_battery_value_export_scaling** (_expert mode_) Discounts that end-of-plan battery value when you would not be able to sell
 the surplus for what it cost to buy. Valuing the battery at the lowest future import rate assumes the energy can always be redeployed, which holds while
@@ -182,10 +190,38 @@ This setting will not impact the real calculated costs and is only used for plan
 
 ## Scaling and weight options
 
+### Expected, pessimistic and optimistic scenarios
+
+Predbat doesn't plan against a single forecast. It simulates three futures and scores each candidate plan on a weighted blend of them:
+
+| Scenario | Solar forecast | Household load | Weight |
+|---|---|---|---|
+| **Expected** (central) | the median (PV50) forecast | `load_scaling` | whatever the other two leave |
+| **Pessimistic** | the 10% (PV10) forecast | `load_scaling10` | `pv_metric10_weight` (default 0.15) |
+| **Optimistic** | the 90% (PV90) forecast | `load_scaling90` | `pv_metric90_weight` (default 0.15) |
+
+The pessimistic scenario also charges the battery more slowly (`charge_scaling10`). The setting names keep the `10` and `90` they were introduced with,
+after the solar percentiles, but each scenario covers load as well as solar: the pessimistic one is a cloudier day with a busier house, the optimistic one
+a sunnier day with a quieter house. **After dark the solar forecasts are all zero, so the optimistic scenario differs from the expected one only in its load** -
+overnight it simply means "the house uses less". The pessimistic scenario keeps two further differences after dark: it still charges more slowly, and its
+forced exports are assumed to stop where the expected plan's exports end, rather than at the export target being tried.
+
+The three load scalings are each applied to your historical load directly; they do not multiply each other. So if you raise `load_scaling` above its default,
+consider raising `load_scaling90` (and `load_scaling10`) with it, to keep the gap between the scenarios about what the defaults give. With the defaults the
+optimistic load is about 86% of the expected one (0.9 against 1.05). With `load_scaling` at 1.2 the same ratio means a `load_scaling90` of about 1.03, whereas
+leaving it at 0.9, or the 0.7 it used to default to, makes the optimistic evening far quieter than the expected one. At 15% weight that can be enough for
+the plan to export in the evening on the strength of the optimistic case, and then import at the peak rate in the expected one (issues #5566, #5943).
+
+### Scaling options
+
 **switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
 If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
 If the load remains high for two checks in a row, this prediction is extended into the following slot too, so the plan stays up to date across the slot boundary.
-If car charging is planned but the load indicates that the car is not charging then Predbat will assume the car will no longer charge during this slot thus allowing the plan to include potential export.
+When **load_power** is set in apps.yaml, a high reading is only acted on if the live load power confirms it (at least 90% of the battery rate). Load energy sensors that only move in whole kWh, such as Solis, otherwise make each step look like a 12kW spike; the cost is that a genuine high load your load power sensor under-reads is ignored too. If the load power sensor has no reading, the energy sensor is used on its own as before.
+
+Checking Octopus Intelligent slots against whether the car is actually charging is a separate switch, **switch.predbat_octopus_intelligent_dynamic** - see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car).<BR>
+Whether or not this switch is On, if **car_charging_now** reports your car charging but no charging slot covers the current time, Predbat predicts the car's load at **input_number.predbat_car_charging_rate** until the end of the current slot, with the battery held for the car (unless **switch.predbat_car_charging_from_battery** is On) and no export planned over it. With the switch On, that load is also taken out of the recent-load reading above, so it is not counted twice.<BR>
+This is used only for the plan; it is never added as a car charging slot, so it does not turn on **binary_sensor.predbat_car_charging_slot**.
 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
 For example, a value of 0.95 would be 95% and indicate charging at 5% slower than reported.
@@ -197,10 +233,10 @@ The default is 1.0, i.e. no scaling.
 You can try [computing your discharge curve](apps-yaml.md#battery-chargedischarge-curves) and check recommendations for changing this figure in the logfile.
 The default is 1.05, i.e. battery discharges at 5% more power than the inverter reports.
 
-**input_number.predbat_charge_scaling10** (_expert mode_) is a percentage factor applied to the battery charge rate specifically for the PV10% pessimistic scenario.
-This allows the PV10% prediction to model a slower battery charge rate to account for worst-case conditions (e.g. cold weather, battery degradation).
-For example, a value of 0.8 (the default) means the PV10% scenario assumes the battery will only charge at 80% of its normal rate.
-This setting only affects the PV10% scenario calculations and does not change the actual charge rate commands sent to your inverter.
+**input_number.predbat_charge_scaling10** (_expert mode_) is a percentage factor applied to the battery charge rate specifically for the pessimistic (PV10%) scenario.
+This allows the pessimistic prediction to model a slower battery charge rate to account for worst-case conditions (e.g. cold weather, battery degradation).
+For example, a value of 0.8 (the default) means the pessimistic scenario assumes the battery will only charge at 80% of its normal rate.
+This setting only affects the pessimistic scenario calculations and does not change the actual charge rate commands sent to your inverter.
 Use a lower value to be more pessimistic about charging capability in the worst-case scenario. The valid range is 0.1 to 1.0.
 
 **switch.predbat_battery_capacity_nominal** - When set to On, Predbat uses the reported battery size from the GivTCP 'Battery Nominal Capacity' field rather than from the normal GivTCP reported 'Battery Capacity kWh' size.
@@ -208,15 +244,21 @@ If your battery size is reported wrongly maybe try turning this on and see if it
 
 **input_number.predbat_load_scaling** is a percentage Scaling factor applied to the historical load, increase this if you want to be more pessimistic on future consumption.
 Use 1.0 to use exactly the previous load data. A value of 1.1 for example would add 10% to the historical load. The default value is 1.05 to add 5% scaling.
-Note that the output data entity predbat.load_energy_h0 will be scaled accordingly.
+The output data entity predbat.load_energy_h0 is not scaled; it reports today's load as measured.
 
-**input_number.predbat_load_scaling10** is a percentage Scaling factor applied to historical load only for the PV10% scenario (this is in addition to load_scaling above).
-This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central scenario unchanged.
-The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
+**input_number.predbat_load_scaling10** is a percentage Scaling factor applied to historical load only for the pessimistic (PV10%) scenario.
+Like `load_scaling90` below it is applied to the historical load directly, in place of `load_scaling` rather than on top of it.
+This can be used to make the pessimistic scenario take into account extra load usage while leaving the expected scenario unchanged.
+The default is 1.1, meaning the pessimistic scenario uses 110% of your historical load. This will only have an impact if the PV 10% weighting is non-zero.
 
-**input_number.predbat_load_scaling90** (_expert mode_) is a percentage Scaling factor applied to historical load only for the PV90% upside scenario, exactly
+**input_number.predbat_load_scaling90** (_expert mode_) is a percentage Scaling factor applied to historical load only for the optimistic (PV90%) scenario, exactly
 like `load_scaling10` above but discounting the load instead of adding to it. It is an absolute multiplier of the historical load - it does not compose with
-`load_scaling`. The default is 0.7, meaning the PV90% scenario uses 70% of your raw historical load regardless of what `load_scaling` itself is set to.
+`load_scaling`. The default is 0.9, meaning the optimistic scenario uses 90% of your raw historical load regardless of what `load_scaling` itself is set to.
+Overnight there is no solar, so the optimistic scenario differs from the expected one only in this lower load (see
+[Expected, pessimistic and optimistic scenarios](#expected-pessimistic-and-optimistic-scenarios) for keeping it in step with `load_scaling`). A deeper discount (the default used to be 0.7)
+made the plan sell the battery too early in the evening and then buy back at the peak rate before the off-peak period started (issue #5566).
+Predbat stores this setting's value whenever expert mode is on and keeps a stored value over a new default, so an install that has had expert mode on
+at any time before this change stays at 0.7 until you set it to 0.9 yourself.
 This will only have an impact if the PV 90% weighting is non-zero (see `pv_metric90_weight` and `switch.predbat_calculate_pv90_plan` below).<BR>
 Because the three load scalings are independent, some combinations would otherwise invert a scenario - a `load_scaling` set below `load_scaling90` would give
 the PV90% case _more_ load than the central case, making it a second downside case rather than the intended upside one. To prevent that, Predbat clamps the
@@ -239,20 +281,26 @@ See also [PV configuration options in apps.yaml](apps-yaml.md#solcast-solar-fore
 **input_number.predbat_pv_scaling** is a percentage scaling factor applied to PV data, decrease this if you want to be more pessimistic on PV production vs Solcast.<BR>
 Use 1.0 to accurately apply the Solcast forecast generation data. A value of 0.9, for instance, would reduce 10% from the Solcast generation forecast.
 
-**input_number.predbat_pv_metric10_weight** is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the Solcast 10% PV scenario in calculating solar generation.
+**input_number.predbat_pv_metric10_weight** is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the pessimistic scenario, which uses the Solcast 10% PV forecast.
 Use 0.0 to disable using the PV 10% in Predbat's forecast of solar generation.
 A value of 0.1 assumes that 1 in every 10 times we will get the Solcast 10% scenario, and 9 in every 10 times we will get the 'median' Solcast forecast.<BR>
 Predbat estimates solar generation for each half-hour slot to be a pv_metric10_weight weighting of the Solcast 10% PV forecast to the Solcast Median forecast.<BR>
 A value of 0.15 (the default) is recommended. Do not enter a value above 1.0 (e.g. 30 for "30%") - Predbat will clamp it back into range and log a warning, but the resulting plan is likely to look very wrong in the meantime.
 
-**switch.predbat_calculate_pv90_plan** (_performance tweaks_) enables the PV90% upside scenario described below - it is **On by default**.
+When Predbat scores a forced export in the PV10% scenario it assumes the export stops at the target it would send to your inverter - the battery
+level the central forecast reaches by the end of that export - rather than draining the battery as far as the export rate allows.
+This matches what really happens: if the battery is lower than planned when the export starts, it reaches its target sooner, and the next replan
+shortens it. It lets Predbat keep some battery back from an evening export to cover a higher-load evening, where the central forecast alone would
+have exported it all. The PV90% scenario is not limited this way, as on a sunnier day a replan would export more rather than less.
+
+**switch.predbat_calculate_pv90_plan** (_performance tweaks_) enables the optimistic (PV90%) scenario described below - it is **On by default**.
 Turn it Off (after turning on **switch.predbat_performance_tweaks** to reveal it) and the PV90% scenario is not simulated at all, saving that
 planning time, regardless of what `pv_metric90_weight` is set to.
-The two settings that tune it (`pv_metric90_weight` and `load_scaling90`) remain expert-mode only, so everyone running the PV90% scenario is using the same
-values and their results are comparable.
+The two settings that tune it (`pv_metric90_weight` and `load_scaling90`) remain expert-mode only, so everyone running the PV90% scenario without expert
+mode (and without setting them in `apps.yaml`) is using the shipped defaults and their results are comparable.
 
-**input_number.predbat_pv_metric90_weight** (_expert mode_) is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the Solcast 90% PV scenario in calculating solar generation.
-It is the upside mirror of `pv_metric10_weight` above: where the PV10% scenario models a cloudier, higher-load day, the PV90% scenario models a sunnier day
+**input_number.predbat_pv_metric90_weight** (_expert mode_) is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the optimistic scenario, which uses the Solcast 90% PV forecast.
+It is the mirror of `pv_metric10_weight` above: where the pessimistic scenario models a cloudier, higher-load day, the optimistic scenario models a sunnier day
 (the 90% PV forecast) combined with a lower household load (see `load_scaling90` above).
 Predbat blends the three simulated futures into one metric, so a value of 0.1 assumes that 1 in every 10 times we will get the Solcast 90% scenario.
 
@@ -260,13 +308,23 @@ Predbat blends the three simulated futures into one metric, so a value of 0.1 as
 running weight to 0.0 regardless of this setting, so no PV90% simulation is run and the plan is exactly as it would be without this setting. Giving weight to
 the possibility of a better-than-forecast day makes Predbat somewhat less willing to charge from the grid, since it now prices in a chance of more free solar
 than the central forecast predicts.
+It does not plan a forced export on that chance alone: an export must also pay in the central forecast (see `metric_min_improvement_export`).
 If `pv_metric10_weight` and `pv_metric90_weight` together exceed 1.0 they are scaled back proportionally so the central scenario is never given a negative weighting.
 
 **switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use your historical solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
 This can be useful to adjust for your systems real performance.<BR>
+The comparison is made against the forecast your solar provider gave, recorded in `sensor.predbat_pv_forecast_h0_uncalibrated`, rather than against Predbat's own calibrated figure,
+so the scaling factor settles on the full measured ratio of actual to forecast generation.<BR>
+Until that sensor has a week of history, for example just after upgrading, the older days are read from `sensor.predbat_pv_forecast_h0` instead.<BR>
+The history is scaled by `pv_scaling` before the comparison, so both sides are on the same basis - to sanity-check the calibration factor by hand, divide your actual generation by the raw provider forecast **multiplied by** `pv_scaling`
+(equivalently, divide your actual-over-raw ratio by `pv_scaling`); comparing against the raw figure on its own leaves your answer out by a factor of `pv_scaling`.<BR>
+When your forecast provider supplies its own 10% and 90% figures (Solcast, or Open-Meteo's ensemble), they are scaled by the same calibration as the central forecast, so they keep the provider's spread around it.<BR>
 Do not use if you are using the [Solcast integration and have turned on the integration's auto dampening](https://github.com/BJReplay/ha-solcast-solar?tab=readme-ov-file#dampening-configuration).<BR>
-Predbat relies upon your solar generation being accurate so if your export generation can be curtailed by your solar inverter or your electricity supplier in periods when there is excess electricity in the grid,
-then you must turn PV calibration Off as otherwise Predbat will model the chopped solar generation as a PV calibration factor and will significantly reduce your forecast PV generation, leading to a very inaccurate plan.
+PV production calibration relies upon your actual solar generation reflecting the maximum your panels could produce. If your inverter can curtail or clip your solar generation, either through export limits (including zero-export setups) where generation is throttled because your battery is full and there is nowhere for the excess to go, or under instruction from your electricity supplier in periods when there is excess electricity in the grid,
+then you must turn PV calibration Off. Otherwise, Predbat will model the chopped solar generation as a PV calibration factor and will significantly reduce your forecast PV generation, leading to a very inaccurate plan.<BR>
+Clipping at your inverter's own limit, where your panels can produce more than the inverter can pass, is handled automatically and does not need calibration turned off:
+generation at the inverter limit (`inverter_limit` for a hybrid inverter, or `pv_ac_limit` for an AC-coupled system) under a higher forecast is taken as the forecast having been right, rather than as the forecast being too high,
+so the forecast keeps the excess and Predbat can plan to make room in the battery for it. This relies on `inverter_limit` and `pv_ac_limit` being set correctly for your system.
 
 Note: If you change the PV calibration enable switch (to On or Off), you will need to restart Predbat for the change to take effect.
 
@@ -293,14 +351,16 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **input_number.predbat_car_charging_loss** - percentage energy lost when charging the car
 - **switch.predbat_octopus_intelligent_charging** - controls whether Octopus Intelligent (via the Octopus Energy integration) controls the car charging or Predbat plans the car charging
 - **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) - used with Octopus Intelligent to prevent Predbat from assuming the car will be charging when the car is unplugged
+- **switch.predbat_octopus_intelligent_dynamic** (_expert mode_) - On by default: cancels Octopus Intelligent slots, and their cheap rate, while the car is in a dispatch but not charging (from **car_charging_now**, or the house load when the car is inside the CT clamp), see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car)
+- **switch.predbat_octopus_intelligent_trust_slots** (_expert mode_) - when Off, Octopus Intelligent slots are assumed not to happen until the car is seen charging in one, see [Car charging](car-charging.md)
 - **binary_sensor.predbat_car_charging_slot** - set to On by Predbat when the car should be charged (Predbat-led charging)
 - **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
-- **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots
+- **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots in time order (default On)
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
-- **switch.predbat_car_charging_from_battery** - prevent the car from draining the home battery when charging
-- **switch.predbat_car_charging_manual_soc** - ignore the **car_charging_soc** car SoC sensor set in `apps.yaml` (car 0)
+- **switch.predbat_car_charging_from_battery** - when On, allows the car to drain the home battery when charging; when Off (the default), Predbat holds the battery while the car charges
+- **switch.predbat_car_charging_manual_soc** - ignore the **car_charging_soc** car SoC sensor set in `apps.yaml` and use the manual SoC instead (car 0)
 - **switch.predbat_car_charging_manual_soc_1/2/3** - ignore the **car_charging_soc** car SoC sensor for cars 1/2/3
-- **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC in kWh (car 0, used if car SoC sensor is not available)
+- **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC in kWh (car 0), used when the switch above is on, or when **car_charging_soc** is not set for the car and its charger has energy and plugged-in (**car_charging_plugged**) sensors. Otherwise, with a car SoC sensor, it shows the sensor's reading
 - **input_number.predbat_car_charging_manual_soc_kwh_1/2/3** - manually maintained car SoC in kWh for cars 1/2/3
 
 ## Calculation options
@@ -339,14 +399,17 @@ By default with this option On the latest export slots of the same value will be
 
 **switch.predbat_export_more_solar** When turned On, late in the planning stage Predbat will try enabling Freeze Export on every otherwise Idle slot that has predicted solar generation. With Freeze Export the battery is not charged from the surplus solar, so that solar is exported to the grid instead.
 
-This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour.
+This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour. If you turn this on when it cannot have any effect - **switch.predbat_set_export_freeze** is off, your inverter does not support freeze export, or **select.predbat_mode** is not _Control charge & discharge_ - Predbat will log a warning saying so.
 
 ## Battery margins and metrics options
 
-**input_number.predbat_best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep the battery above for the Predbat plan.
-This is a soft constraint only that's used for longer-term planning and is ignored for the forthcoming first 4 hours of the plan.
-As this is not used for short-term planning your SoC can drop below this - use **input_number.predbat_best_soc_min** if you want to force all charges to be above a set level.
+**input_number.predbat_best_soc_keep** is the battery level in kWh that Predbat will try to keep the battery above in the plan.
+This is a soft constraint: for each hour the planned SoC spends below it, the plan is charged the shortfall in kWh times the import rate at that time, scaled by **input_number.predbat_best_soc_keep_weight**. The plan only goes below it when doing so saves more than that.
+It is an absolute level, not an amount above your reserve, so a value at or below your battery's reserve level (in kWh) has no effect.
+The charge fades in over the first 4 hours of the plan, so the next few hours are planned mostly on cost. The exception is once a planned forced export has started - from then on it applies in full, which stops an evening export from taking the battery below this level.
+As it is a soft constraint your SoC can still drop below it - use **input_number.predbat_best_soc_min** if you want to force all charges to be above a set level.
 It's usually good to have best_soc_keep set to 0kWh to use your entire battery, values above zero will end up costing more money but will ensure you have some spare battery kept back for emergency use.
+A value a little above your reserve (for example the reserve plus 0.3-0.5kWh) is usually enough to stop an evening export emptying the battery and leaving the house importing at the peak rate.
 
 **input_number.predbat_best_soc_keep_weight** (_expert_mode_) Is used to tune how strongly you want the keep metric to apply.
 A value of 0 would essentially ignore keep while higher values will make it more important to always stay above your keep threshold even if it costs
@@ -359,7 +422,7 @@ minimum force export level also (set to 0 if you want to skip some slots).
 If you set this to a non-zero value you will need to use the low rate threshold to control which slots you charge from or you may charge all the time.
 
 **input_number.predbat_best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
-A value of 0kWh (the default) disables this feature.
+A value of 0kWh (the default) disables this feature. Be careful setting this feature on as it will constrain charging in the Predbat plan and may result in charging or grid usage in expensive rate periods.
 
 **input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or export slots into a single larger average rate slot.
 The default is 0p which disables this feature and all rate changes result in a new slot.
@@ -377,13 +440,21 @@ The default value is 0.0p which means this feature is disabled and the battery w
 If you use **input_number.predbat_pv_metric10_weight** then you probably don't need to use this as the 10% forecast does the same thing better
 Do not use it if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
+While a charge is running, Predbat keeps its current target unless changing it is worth at least 0.5p (or this setting, if higher), so a near-tie does not move the target part way through a charge.
+This also applies in Control SOC only mode, where the inverter runs its own charge window and Predbat only sets the target.
 
-**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced export for.
-A value of 0.1p is the default which prevents any marginal exports as they must be worth at least 0.1 pence for a slot (less for shorter slots).
-If you increase this value (e.g. you only want to force export if very profitable), then exports will become less common.
-The value is in pence per slot of export time.
+**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets how much a forced export has to earn, in pence per slot (30 minutes) of export time, scaled down for exports at lower power.
+Every 5 minutes of a planned export has to earn its share of this, so an export is shortened, or dropped, where its later minutes would earn less than that.
+For example at 0.5p each extra 5 minutes of export must earn about 0.08p, and at 3p about 0.5p.
+A value of 0.1p is the default, which only removes export that earns almost nothing.
+If you increase this value (e.g. you only want to force export if it is clearly profitable), then exports will become shorter and less common.
+An export that is already running is not shortened by this setting.<BR>
+An export also has to earn this in the central (nominal) forecast on its own, not just in the plan's blend of the central forecast with the PV10 and PV90 scenarios.
+That is measured on the plan metric - cost, less the value of what is left in the battery, plus carbon, battery cycles and self sufficiency - but leaving out the `best_soc_keep` penalty,
+which a slow or freeze export can lower without saving anything.
+So an export that only pays if solar turns out much better (PV90) or worse (PV10) than forecast is not planned.
 
-**input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum pence cost improvement it's worth doing an export freeze for.
+**input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum improvement, in the central forecast, it's worth doing an export freeze for.
 A value of 0.1p is the default which prevents any marginal freezes as they must be worth at least 0.1 pence for a slot duration (less for shorter slots).
 If you increase this value (e.g. you only want to freeze export if very profitable), then freeze exports will become less common.
 The value is in pence per slot of export time.
@@ -405,6 +476,22 @@ and determine the threshold above which a slot can be considered a potential exp
 If rate_high_threshold is set to a non-zero value this will set the threshold above future average export rates as the minimum export rate to consider exporting for,
 e.g. setting to 1.2 = 20% above average rate.<BR>
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
+
+Both thresholds, automatic or set by you, ignore an event price that is above the tariff's own rate (an Octopus saving session
+or Axle event reward): those slots count at the tariff's own rate when the thresholds are worked out, so the event does not
+stretch the range and pull ordinary-price slots in or out. A free or discounted import session still counts as a cheap slot,
+and a rate override you put on an event slot (rates_import_override, rates_export_override or a manual rate) is kept.
+The event rates themselves are still used when planning.
+
+In automatic mode (rate_low_threshold 0), when a saving session or Axle event pays more for export, or charges more for
+import, than the tariff's most expensive import rate, the plan is also offered every import slot priced no higher than that
+rate before the last such event starts. The battery can then be charged ahead of the event to export into it or to cover the
+house through it. The low rate sensors (`binary_sensor.predbat_low_rate_slot` and the `predbat.low_rate_*` sensors) and
+car charging plans still use only the tariff's own cheap slots.
+
+Predbat does not widen a rate_low_threshold you set for an event. With a manual threshold it will not charge the battery
+above that threshold ahead of an event, even when doing so would make money. Set rate_low_threshold to 0 (automatic) if
+you want those pre-event charges.
 
 **input_number.predbat_metric_future_rate_offset_import** (_expert mode_) Default 0p/kWh. Sets a pence per kWh offset to apply to future import energy rates that are
 not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm.
@@ -452,15 +539,29 @@ as otherwise the low power charge may not reach the charge target in time.
 The minimum requested charge rate used in this mode is 400 watts (subject to inverter/battery minimum rate limits).
 This setting is off by default.
 
-Low-power charging is skipped for any charge window that overlaps with forecast solar production, the full charge rate is used instead.
-Throttling the charge rate while the sun is shining would cap how much solar reaches the battery, the surplus would be exported at the
-export rate and the charge target then made up from grid import later, which costs more than the full rate charge Predbat planned for.
+Low-power charging is skipped for any charge window whose forecast solar production averages above **input_number.predbat_low_power_pv_threshold_w**,
+the full charge rate is used instead. Throttling the charge rate while the sun is shining would cap how much solar reaches the battery, the surplus
+would be exported at the export rate and the charge target then made up from grid import later, which costs more than the full rate charge Predbat
+planned for. A long charge window is also split at dawn so its dark, PV-free portion stays on low power even if the window continues on into daylight.
+This skipping can be turned off with **switch.predbat_set_charge_low_power_solar_full_rate** if it does not suit your tariff.
 
 The YouTube video [low power charging and charging curve](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
 explains how the low-power charging works and shows how Predbat automatically creates it.
 
 **input_number.predbat_charge_low_power_margin** (requires **switch.predbat_set_charge_low_power** to be turned On) Controls how many minutes before the completion time to target finishing charging,
 this defaults to 10 but can be changed between 0 and 30.
+
+**input_number.predbat_low_power_pv_threshold_w** (requires **switch.predbat_set_charge_low_power** to be turned On) The average forecast solar power, in Watts,
+above which a charge window (or the daylight portion of one split at dawn) is considered bright enough to abandon low-power charging for. This is an absolute
+figure rather than a percentage of your system's forecast peak, since a heavily overcast day's own peak is much lower than a clear day's - a percentage would
+make the threshold effectively different day to day. Defaults to 150W; increase it if low-power charging is being abandoned on days with only a trickle of solar,
+decrease it if a genuinely sunny window is still being throttled.
+
+**switch.predbat_set_charge_low_power_solar_full_rate** (requires **switch.predbat_set_charge_low_power** to be turned On) When turned On (the default) a charge
+window with solar forecast above the threshold above charges at the full rate rather than a throttled one, so the solar goes into the battery instead of being
+exported and bought back later. Turn it Off if you want low-power charging to apply during daylight anyway - worthwhile when the import in that window is free or
+very cheap, since the solar the throttled rate spills then costs nothing to replace. Be aware that on a sunny day this can export or clip a significant amount of
+solar, so leave it On unless you specifically want the slow charge.
 
 **switch.predbat_set_reserve_enable** (_expert_mode_) When turned On (the default) the battery reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit.
@@ -490,6 +591,10 @@ you can increase set_reserve_min to a higher value, and then change it back afte
 
 **input_number.predbat_set_reserve_min_1** defines the same minimum battery reserve percentage for inverter 2. Likewise predbat_set_reserve_min_2 and set_reserve_min_3 are the reserve minimums for inverter 3 and 4.
 
+The lowest value each of these entities offers (its `min`) follows that inverter's floor: the higher of `battery_min_soc` (from `apps.yaml` or set automatically by an integration) and the lowest value the inverter's own reserve register accepts.
+The `min` moves back down when the floor is lowered, but Predbat never lowers the value itself: a value below the floor is raised to it, and stays there until you change it.
+With no `battery_min_soc` set and no minimum on the reserve register, the `min` stays at 0, although Predbat still raises a value below 4 to 4.
+
 Note that the **input_number.predbat_set_reserve_min**'s are used by Predbat to stop the battery SoC dropping below the specified level but are not used in planning battery charging.
 i.e. if you change a reserve min to a level higher than the current battery SoC then Predbat will not plan charging activity to increase the SoC to that level; you should set [manual charges](#manual-control) to increase the SoC level.
 
@@ -506,19 +611,25 @@ A value of 0 applies no limit.
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
 When enabled, balance inverters try to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
 
-If you do use Predbat's balance inverter function then be aware that Predbat will start repeatedly and rapidly updating your inverter settings to keep the inverters in balance with each other.
-This can be a problem with inverters that have a [limited life-span flash memory](caution.md#flash-memory).
-If available, you are strongly recommended to turn on "real time registers" using `switch.givtcp_xxxx_real_time_control` for GivEnergy inverters controlled via GivTCP, or an equivalent function for your inverter.
+Balancing runs as part of Predbat's normal control cycle rather than on a timer of its own, and it adjusts
+the charge and discharge rates Predbat was already going to set rather than overriding them afterwards.
+Rate changes below 5% of the inverter's maximum are not written at all, so balancing only writes a register
+when it genuinely changes what the inverter is doing.
 
-The `apps.yaml` contains a setting **balance_inverters_seconds** which defines how often to run the balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
+If your inverter has a [limited life-span flash memory](caution.md#flash-memory) and the option is available,
+you are still recommended to turn on "real time registers" using `switch.givtcp_xxxx_real_time_control` for
+GivEnergy inverters controlled via GivTCP, or the equivalent for your inverter.
 
 Turn On **switch.predbat_balance_inverters_enable** to enable this feature. It is Off by default. When turned on a number of other balance controls and configurations are made available:
 
-- **switch.predbat_balance_inverters_charge** - Is used to toggle on/off balancing while the batteries are charging
-- **switch.predbat_balance_inverters_discharge** - Is used to toggle on/off balancing while the batteries are discharging
-- **switch.predbat_balance_inverters_crosscharge** - Is used to toggle on/off balancing when the batteries are cross charging
+- **switch.predbat_balance_inverters_crosscharge** - Toggles stopping one inverter charging from another when the fleet is in Eco/Demand mode. **On by default** - this is the case worth correcting, because that energy makes a round trip through two batteries for no benefit
+- **switch.predbat_balance_inverters_charge** - Toggles balancing the batteries' SoC while they are charging. Off by default
+- **switch.predbat_balance_inverters_discharge** - Toggles balancing the batteries' SoC while they are discharging. Off by default
 - **input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SoC during charge before balancing, default is 1%
 - **input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SoC during discharge before balancing, default is 1%
+
+Equal SoC across the batteries is not in itself worth much, which is why the two SoC balancing switches are
+off by default. They remain fully functional if you want them.
 
 ## Freeze Export during Demand
 
@@ -537,8 +648,13 @@ When the Freeze Export override is active, [Predbat status](what-does-predbat-do
 
 ## Cloud coverage and load variance
 
-By default Predbat tries to model passing clouds by modulating the PV forecast data on a 5-minute interval up and down while retaining the same predicted total.
-The amount of modulation depends on the difference between the PV50% (default) and PV10% scenario produced by Solcast.
+By default Predbat tries to model passing clouds by modulating the PV forecast data on a 5-minute interval up and down while retaining the same predicted total over each half-hour.
+
+Each scenario is modulated toward the next forecast percentile above it: the PV10% scenario reaches up toward PV50%, PV50% reaches up toward PV90%, and PV90% - having no percentile above it - reaches toward a continuation of its own band, capped at your DC array size (see **pv_array_kwp** in [apps.yaml settings](apps-yaml.md)) plus 20% for cloud-edge enhancement.
+
+How many of each half-hour's six 5-minute steps are raised rather than lowered follows the shape of your own forecast band. Solcast's downside is typically about twice its upside, giving four steps raised and two lowered, which lets the peaks reach PV90% while the troughs still fall far enough to matter. The PV10% scenario takes the opposite pattern, so it dips exactly where PV50% peaks and both directions are covered within the same 5 minutes.
+
+If your forecast source publishes no PV90% data, Predbat falls back to the older model, which modulates by a single figure derived from the gap between the PV50% and PV10% forecasts.
 
 You can disable this feature (_expert mode only_) using **switch.predbat_metric_cloud_enable**.
 
@@ -547,102 +663,77 @@ The amount of modulation depends on the standard deviation of your load predicti
 
 You can disable this feature (_expert mode only_) using **switch.metric_load_divergence_enable**.
 
-## iBoost model options
+## iBoost
 
-Predbat has an 'iBoost model' that can be used to model using excess solar energy to heat hot water (or similar) instead of it being exported to the grid.
-
-This model can be used to control any solar diverter device, for example, an iBoost (e.g. using a Fingerbot or similar device to physically press the 'boost' button on the iBoost),
-a MyEnergy Eddi (using the MyEnergy integration), or it can be used with a high-power smart switch to turn on the hot water cylinder immersion heater when there is excess solar.
-
-So although Predbat refers to controlling an iBoost, you are not limited to just an iBoost device when using this model within Predbat.
-
-To turn the model on, **switch.predbat_iboost_enable** needs to be turned On (default is Off).
-
-The predicted output from the iBoost solar diverter model is returned in **predbat.iboost_best** and is populated in the 'iBoost' column of the [Predbat plan](predbat-plan-card.md).
+Predbat has an 'iBoost model' that, instead of exporting excess solar to the grid, can divert power towards an external energy sink. Although Predbat refers to this feature as 'iBoost', the model can be used to control any resistive device. This is typically a water heater, via an iBoost, Fingerbot, MyEnergy Eddi, or any high-power smart switch, provided the device is ultimately controlled by a thermostat.
 
 ### iBoost basic configuration
 
-When you turn on predbat_iBoost_enable the following additional Home Assistant entities are created by Predbat:
+- **switch.predbat_iboost_enable** Whether Predbat should use the model - default False.
 
-- **input_number.predbat_iboost_max_energy** Sets the maximum energy in kWh that the solar diverter can consume during a day before turning off - default 3kWh.
+- **input_number.predbat_iboost_max_energy** Sets the daily maximum energy in kWh that the solar diverter should consume before turning off - default 3.
 
 - **input_number.predbat_iboost_max_power** Sets the maximum power in watts that the solar diverter will consume - default 2400.
 
-- **input_number.predbat_iboost_min_power** Sets the minimum power in watts that the solar diverter will consume - default 500.
+- **input_number.predbat_iboost_min_power** Sets the minimum power in watts that the solar diverter will consume. Note that this should only differ from input_number.predbat_iboost_max_power if the heating load being controlled is analogue. If the heating load is purely off/on, as when controlled via a high-power smart switch, the two values should be identical - default 500.
 
-- **input_number.predbat_iboost_value_scaling** Sets how to account for the value of iBoost units of energy.
-The default value of 0.75 means that each kWh of energy diverted is accounted for as 0.75 times The lowest future import rate.
+- **input_number.predbat_iboost_value_scaling** Sets how to account for the value of iBoost energy. The value is multiplied by the lowest future import rate to determine the value of each kWh of diverted energy. A higher setting will generate plans with more solar diversion while a lower setting will generate less. A setting of 0 means units are assumed to have zero value, and all diverted energy should be ignored in planning - default 0.75.
 
-Higher values will generate plans with more solar diversion while lower values will generate less.
-A value of 0 means all diverted energy should be ignored in planning (assumed to be zero value).
+- **switch.predbat_iboost_energy_subtract** Whether energy reported by the **iboost_energy_today** sensor (configured in `apps.yaml`) will be subtracted from historical load data to improve prediction accuracy. If using PredAI, this data should also be subtracted inside the PredAI configuration - default True.
 
-- **switch.predbat_iboost_energy_subtract** When turned On (the default) energy reported by the **iboost_energy_today** sensor configured in `apps.yaml` will be subtracted from your historical load data to improve the accuracy of predictions.
-If you are using PredAI you will also need to subtract this data inside the PredAI configuration.
+- **switch.predbat_iboost_on_export** Whether iBoost will run when the battery is forced to export to the grid - default False.
 
-Different boost modes can be selected:
+- **switch.predbat_iboost_prevent_discharge** Stops the battery from discharging to the diverter when iBoost is active. Not recommended when iBoost solar mode is enabled as battery discharge will be prevented during excess solar periods. This could cause additional imports due to passing clouds - default False.
+
+- **switch.predbat_iboost_smart** Whether Predbat will pick the lowest import rate slots within the forecast horizon (48 hours by default) to achieve the desired energy for each day, as specified by **input_number.predbat_iboost_max_energy**. Can be combined with the Solar and Battery modes - default False.
+
+- **input_number.predbat_iboost_smart_min_length** Sets the minimum iBoost duration in minutes. Must be a multiple of the slot duration. Increasing this slot size could increase costs, depending on tariff - default 30.
 
 ### iBoost modes
 
 #### Solar
 
-- **switch.predbat_iboost_solar** When turned On, Predbat assumes the diverter will use solar power to boost the hot water heating.
-- **switch.predbat_iboost_solar_excess** When turned Off (the default) will allow any solar power to be diverted while if enabled only excess power (power that would otherwise be exported) will be used.
-- By default iboost will not run the battery is in force export mode unless you turn on **switch.predbat_iboost_on_export**.
+- **switch.predbat_iboost_solar** Whether Predbat assumes the diverter will use solar power - default True.
 
-- **input_number.predbat_iboost_min_soc** sets the minimum home battery SoC percentage that must be in the battery before the solar diverter is turned on.
-The default is 0 meaning hot water heating can occur regardless of what SoC level the battery is at.
+- **switch.predbat_iboost_solar_excess** Whether the diverter is restricted to excess solar power (power that would otherwise be exported). When False, any solar power may be diverted, not just excess - default False.
+
+- **input_number.predbat_iboost_min_soc** Sets the minimum battery SoC (percentage) required for the solar diverter to turn on. If 0, diversion can occur regardless of battery level - default 0.
 
 #### Battery
 
-- **switch.predbat_iboost_charging** If set to On, the diverter will operate when the battery is charging (can be combined with solar)
+- **switch.predbat_iboost_charging** Whether the diverter will operate when the battery is charging. This can be combined with solar - default False.
 
 #### Energy rates only
 
-If both of the above are Off, but iBoost is turned On then boost will happen solely based on energy rates (see below).
-
-- **switch.predbat_iboost_smart** Will pick the lowest import rate slots within 24 hours to achieve the desired energy as specified by **input_number.predbat_iboost_max_energy**.
-
-Only slots at or below the rate threshold will be selected.
-
-Note this option only applies when iboost_solar and iboost battery are both Off.
-
-- **input_number.predbat_iboost_smart_min_length** Sets the minimum slot length in minutes to iBoost (only applies for energy rate only modes).
-The default is 30 minutes but can be set in multiples of the slot duration (default 30 minutes). Increasing this slot size could increase costs depending on your tariff.
-
-- **switch.predbat_iboost_on_export** If set to On allows iBoost to run even if the battery is forced to export to the grid, otherwise it won't run in these circumstances.
-
-- **switch.predbat_iboost_prevent_discharge** When set to On will stop your battery from discharging when iBoost is active and thus prevent your battery from draining to the diverter.
-This switch will work in all modes and is not recommended to be used when iBoost Solar is On as it will prevent your battery from discharging during excess solar periods
-which could cause additional imports due to passing clouds.
+If **switch.predbat_iboost_enable** is True, but **switch.predbat_iboost_solar** and **switch.predbat_iboost_charging** are both False, then iBoost is solely based on energy rates.
 
 ### iBoost energy rate filtering
 
-- **input_number.predbat_iboost_rate_threshold** Sets the maximum import rate (in pence) that the diverter will trigger on, defaults to 100.
-- **input_number.predbat_iboost_rate_threshold_export** Sets the maximum export rate (in pence) that the diverter will trigger on, defaults to 100.
+Import/export rate thresholds can be set to restrict slot selection.
 
-- **switch.predbat_iboost_gas** When turned On will control the diverter to only operate when import electric rates are lower than gas rates.
-- **switch.predbat_iboost_gas_export** When turned On will control the diverter to only operate when export electric rates are lower than gas rates.
+- **input_number.predbat_iboost_rate_threshold** Sets the maximum import rate (in pence) that the diverter will trigger on - default 100.
 
-These can be useful if you have the choice to heat your hot water by immersion heater or by gas boiler.
+- **input_number.predbat_iboost_rate_threshold_export** Sets the maximum export rate (in pence) that the diverter will trigger on - default 100.
 
-Note: Gas rates have to be configured in `apps.yaml` using **metric_octopus_gas** or **rates_gas** depending upon whether you are using the Octopus Integration or not.
+Gas rates can be considered if iBoost is used for heating water, and the system has the option of using either a gas boiler or immersion heater to do so. Gas rates have to be configured in `apps.yaml` using either **metric_octopus_gas** or **rates_gas** depending upon whether the Octopus Integration is used.
 
-- **input_number.predbat_iboost_gas_scale** Sets the scaling of the gas rates (set in `apps.yaml`)used before comparing with electric rates, to account for gas boiler losses and efficiency.
+- **switch.predbat_iboost_gas** Whether the diverter will only operate when electricity import rates are lower than gas rates - default False.
 
-It should be set to the reciprocal of the boiler efficiency, i.e. for an 80% efficient gas boiler, set to 1.25.
+- **switch.predbat_iboost_gas_export** Whether the diverter will only operate when electricity export rates are lower than gas rates - default False.
 
-### iBoost control
+- **input_number.predbat_iboost_gas_scale** Allows gas rates (set in `apps.yaml`) to be scaled before comparison with electric rates, to account for lower gas boiler efficiency. Should be set to the reciprocal of the boiler efficiency, i.e. 1.25 for an 80% efficient gas boiler - default 1.0.
 
 ### iBoost output data
 
-You will see **input_number.predbat_iboost_today** entity which tracks the estimated kWh consumed by the solar diverter during the day, and resets at midnight every night.
+When switch.predbat_iboost_enable is turned On, Predbat creates the configuration entities in the sections above. When it is turned Off, those entities are kept but their friendly names are prefixed with "[Disabled]" and they are omitted from the generated dashboard. The predbat.iboost_best and binary_sensor.predbat_iboost_active entities are published on every plan publish regardless of the switch, showing 0 kWh and off when iBoost is disabled. The iBoost column of the Predbat plan only appears when switch.predbat_iboost_enable is True.
 
-The **binary_sensor.predbat_iboost_active** entity will be turned On when the solar diverter should be active and can be used for automations to trigger the immersion heater boost.
+- **predbat.iboost_best** The predicted output from the iBoost solar diverter model. Used to populate the 'iBoost' column of the [Predbat plan](predbat-plan-card.md).
 
-The attributes within this sensor include 'solar' which includes Solar diversion should be active and 'full' which indicates iBoost should run at maximum rate (could be
-during a charge cycle or grid import).
+- **input_number.predbat_iboost_today** Tracks the estimated kWh consumed by the solar diverter during the day. Resets at midnight unless an iboost_energy_today feedback sensor is configured, in which case it tracks that sensor and follows its reset behaviour.
 
-Example template automation for controlling the solar diverter:
+- **binary_sensor.predbat_iboost_active** Whether the solar diverter should be active. Used to trigger automations for the heating load. The 'solar' attribute indicates solar diversion should be active, and the 'full' attribute indicates iBoost should run at maximum rate (could be during a charge cycle or grid import).
+
+### Example solar diverter automation
 
 ```yaml
 alias: Solar Diverter
@@ -668,9 +759,11 @@ action:
 mode: single
 ```
 
-If you have an incrementing sensor that tracks the solar diverter energy usage then to make your predictions more accurate you should set the **iboost_energy_today** sensor in
-`apps.yaml` to point to it, and optionally set **iboost_energy_scaling** if the sensor isn't in kWh (e.g. set to 0.001 if the sensor is in Watts).
-The sensor should be an incrementing sensor which can reset at midnight or not.
+### iBoost energy usage feedback
+
+To make predictions more accurate, the **iboost_energy_today** sensor in `apps.yaml` can be set to an incrementing sensor that tracks solar diverter energy usage. It does not need to reset at midnight, but it may do so.
+
+Optionally, also set **iboost_energy_scaling** if the sensor isn't in kWh (i.e. set to 0.001 to convert from Watts).
 
 ## Holiday mode
 
@@ -729,7 +822,7 @@ Selected slots will be shown in the list in square brackets, and you can cancel 
 
 When you use the Manual Control features you can select the day and time from the next 48 hours, the overrides will be removed once their time slot expires (they do not repeat).
 
-The **off** option at the bottom of the list will cancel all selected force charges.
+The **off** option at the top of the list will cancel all selected force charges.
 
 ![image](images/manual_select.png)
 
@@ -783,9 +876,9 @@ the rate selected will be that configured in **input_number.predbat_manual_expor
 
 Similar to manual_import_rates, if this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM=rate e.g. 12:30=29.5
 
-The **select.predbat_manual_load_adjust** selector is used to make adjustments to the predicted load in kWh for a slot, the load adjustment amount will be that configured in **input_number.predbat_manual_load_value** (default 0.5kWh)
+The **select.predbat_manual_load_adjust** selector is used to make positive or negative adjustments to the predicted load in kWh for a slot, the load adjustment amount will be that configured in **input_number.predbat_manual_load_value** (default 0.5kWh)
 which can be adjusted prior to making a selection.
-Predbat will add the adjustment amount to the kWh predicted load for those slots.
+Predbat will add the adjustment amount (which can be positive or negative) to the kWh predicted load for those slots.
 
 If this selector is used in an automation you can set the time and kWh load adjustment amount together by making a selection in the format HH:MM=adjustment e.g. 12:30=0.5
 
@@ -803,6 +896,18 @@ If this selector is used in an automation you can set the time and SoC together 
 
 The manual SoC target works in conjunction with the [weather alert system](apps-yaml.md#weather-alert-system) - if both are active at the same time, the higher SoC target will be used.
 
+The **select.predbat_manual_soc_max** selector is the opposite of **select.predbat_manual_soc**: it sets a _maximum_ SoC ceiling for a specific time instead of a minimum floor.
+This is useful for a periodic calibration discharge - some batteries benefit from occasionally being run down close to empty just before a known cheap import slot (e.g. an Octopus Intelligent Go midnight slot), so the BMS can re-anchor its SoC estimate, and then Predbat can immediately recharge cheaply. See issue [#1578](https://github.com/springfall2008/batpred/issues/1578) for the discussion that led to this.
+
+The SoC ceiling percentage will be that configured in **input_number.predbat_manual_soc_max_value** (default 0%) which can be adjusted prior to making a selection.
+A ceiling of 0% is a real target meaning empty the battery as far as the reserve and the inverter allow, not 'no ceiling' - to remove a ceiling, clear the selection instead.
+
+For example, to run the battery down to 4% by 00:00 (just ahead of a midnight cheap slot), set **input_number.predbat_manual_soc_max_value** to 4 and select the 00:00 slot on **select.predbat_manual_soc_max**. Predbat will plan discharging so the battery is at or below that ceiling by that time, preferring to use the energy against load or export rather than simply forcing a fixed-duration export block, so it stays coordinated with the rest of the plan (car charging, existing charge/export windows, etc).
+
+If a manual SoC target (floor) and a manual SoC maximum (ceiling) ever apply to the same time and the ceiling is below the floor, that is a contradiction - the floor wins and the conflicting ceiling is dropped, with a warning logged.
+
+If this selector is used in an automation you can set the time and SoC together by making a selection in the format HH:MM=percentage e.g. 00:00=4
+
 ## Manual API
 
 **select.predbat_manual_api** enables you to overwrite configuration entries normally set in `apps.yaml`, e.g. from an automation.
@@ -818,6 +923,8 @@ This is described in detail in [Manual API](manual-api.md) and is mentioned here
 This file contains a full export of your current Predbat config and is extremely useful to enable recreating your setup to diagnose issues. Any sensitive information such as Solcast or GivEnergy Cloud API keys are automatically removed.
 
 Predbat automatically turns this switch back Off after 2 hours if it's still on, to bound the raw disk writes it triggers if left on by accident - if you need a longer debug session than that, you'll need to turn it back On again.
+
+**Note:** The **Create**/**Download** links on the web interface's **Debug** panel (including `predbat_debug.yaml`, `predbat.log`, and the debug history archive) only work from a web browser. The HA Companion app's built-in browser does not save files when you tap them - it just displays the raw content on screen instead. If you're on the Companion app, browse to the `debug/` folder under your Predbat config directory directly (e.g. with the File editor or Samba add-on) and pick the file up from there instead.
 
 The following automation might be useful to automatically turn off Predbat debug mode sooner than that, after turning it on to capture the debug logs:
 
@@ -854,11 +961,17 @@ mode: single
 Turning on `switch.predbat_debug_enable` only captures debug information from the moment you switch it on - not much help if you have already noticed a problem and want to see what Predbat was doing an hour or two ago. Predbat also keeps a small rolling history of debug snapshots automatically, independent of that switch, so there is always some recent history to look back at:
 
 - **switch.predbat_debug_history_enable** - turns the rolling history off entirely when off (default on). `debug_history_force_capture` still works even while this is off.
-- **input_number.predbat_debug_history_count** - how many snapshots to retain (default 15, minimum 1 - use the enable switch above to turn the feature off, not a count of 0).
+- **input_number.predbat_debug_history_count** - how many snapshots to retain (default 15, minimum 1 - use the enable switch above to turn the feature off, not a count of 0 - maximum 500).
 - **input_number.predbat_debug_history_interval** - how many hours between automatic snapshots (default 3). With the defaults, 15 snapshots at 3-hourly intervals covers just under 48 hours.
 - **switch.predbat_debug_history_force_capture** - turn this on to trigger an immediate snapshot rather than waiting for the next scheduled one, useful from an automation that has just spotted something worth investigating. Predbat resets the switch back off itself once the snapshot has been taken, and still takes the snapshot even if `debug_history_enable` is off.
 
-Retained snapshots can all be downloaded together as a single `.tgz` archive from a link on the web interface's dashboard **Debug** panel, or individually from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
+The retained window is simply `debug_history_count` x `debug_history_interval`, so a longer window can be had either by keeping more snapshots or by spacing them further apart. If you are chasing something intermittent that only shows up on the odd night, 336 snapshots at a 1-hour interval covers a fortnight, and 112 snapshots at 3-hourly covers the same fortnight for a third of the disk space.
+
+_CAUTION: each snapshot is a complete debug dump rather than a delta, roughly 2MB-5MB of YAML apiece depending on your system's configuration (so a 15-snapshot history measures around 30MB-75MB on disk), which puts the 500-snapshot maximum of the order of 1GB-2.5GB retained in the `debug/` folder. Raise the count only as far as the window you actually need, and put it back to the default once your investigation is finished - especially on an SD-card based install, where the write volume matters as much as the space._
+
+The most recent 16 retained snapshots can be downloaded together as a single gzip tarball from the **Download recent** link on the web interface's dashboard **Debug** panel. That archive is built in memory, so it is deliberately capped rather than bundling the whole retained history - with the count raised for a long investigation, use the plan's **History** view to download individual snapshots, or copy them straight out of the `debug/` folder over a Samba share. It downloads as `predbat_debug_history.tgz.dmp` - open it with `tar xzf predbat_debug_history.tgz.dmp`; the contents are an ordinary gzip tarball, only the filename differs from a `.tgz`. The trailing `.dmp` is there because some browsers unpack downloads by extension, and a history that arrives unpacked is both too large for GitHub's 25MB attachment limit and a file type GitHub will not accept, where the archive itself compresses down a great deal. Individual snapshots can also be downloaded from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
+
+Each snapshot is written as a plain `predbat_debug_<timestamp>.yaml.txt` file into the same `debug/` folder as the `switch.predbat_debug_enable` output described above - useful in its own right (a full rolling history sitting on disk, not just what the switch happened to catch), and it's the way to get a snapshot to attach to a GitHub issue from the HA Companion app, where the archive/single-file download links above don't work (see the note above). The contents are ordinary YAML; the `.txt` on the end is there because GitHub refuses to accept a `.yaml` file as an issue attachment, so a snapshot picked up from `debug/` can be attached to a bug report as-is with no renaming. These files are pruned in step with the ring buffer itself, so there are never more of them on disk than `debug_history_count` snapshots. Snapshots written by a version before this naming change (`predbat_debug_<timestamp>.yaml`) still download and are still pruned normally, but they keep the old plain-`.yaml` name on disk until that happens, so they need renaming to `.yaml.txt` before GitHub will accept them as an attachment.
 
 ## Updating Predbat
 
@@ -869,4 +982,4 @@ These are described in detail in [Updating Predbat](install.md#predbat-built-in-
 - **select.predbat_update** - List of Predbat software versions you can select to update Predbat to
 - **switch.predbat_auto_update** - When On, Predbat will automatically update itself as new releases are published on GitHub.
 
-Advanced: set `predbat_repository` in `apps.yaml` (format `owner/repo`) to source **main** updates from a fork instead of the default upstream repository. Versioned release options still use the official upstream repository.
+Advanced: the `predbat_repository` and `predbat_branch` settings in `apps.yaml` change where **main** is downloaded from and add branches to this drop-down, to test a fork or a branch. See [predbat_repository](apps-yaml.md#predbat_repository) and [predbat_branch](apps-yaml.md#predbat_branch). Versioned release options still use the official upstream repository.

@@ -42,6 +42,20 @@ def _make_api(my_predbat, day_rate, night_rate):
     return api
 
 
+def _make_day_night_fetch(day_rows, night_rows):
+    """Build a fetch_url_cached stub serving the given raw day and night rate rows."""
+
+    async def mock_fetch(url, **kwargs):
+        """Return the day or night rows depending on which rate endpoint was requested."""
+        if "day-unit-rates" in url:
+            return day_rows
+        if "night-unit-rates" in url:
+            return night_rows
+        return []
+
+    return mock_fetch
+
+
 def _extract_schedule(mdata):
     """Return a sorted list of (start_hour, start_min, end_hour, end_min, rate) tuples from mdata."""
     result = []
@@ -409,6 +423,74 @@ async def test_octopus_day_night_rates(my_predbat):
         failed = True
     else:
         print("PASS: async_update_intelligent_devices proceeds for IOG-only tariff code (no INTELLI substring)")
+
+    # ------------------------------------------------------------------
+    # Test 11: has_six_hour_cap — detects the IOG-SMB tariff variant that
+    # Octopus enforces its 6-hour (12-slot) Intelligent cap on. Older
+    # INTELLI-VAR and non-SMB IOG tariffs are not capped by default.
+    # ------------------------------------------------------------------
+    print("\n*** Test 11: has_six_hour_cap detects IOG-SMB tariff codes ***")
+    six_hour_cap_cases = [
+        ("E-1R-IOG-SMB-TOU-25-12-12-H", True),
+        ("E-1R-INTELLI-VAR-25-01-01-H", False),
+        ("E-1R-IOG-FIX-12M-24-04-01-H", False),
+        ("E-1R-GO-VAR-22-10-14-H", False),
+        ("", False),
+        (None, False),
+    ]
+    case_failed = False
+    for tariff_code, expected in six_hour_cap_cases:
+        actual = OctopusAPI.has_six_hour_cap(tariff_code)
+        if actual != expected:
+            print(f"ERROR: has_six_hour_cap({tariff_code!r}) returned {actual}, expected {expected}")
+            failed = True
+            case_failed = True
+    if not case_failed:
+        print("PASS: has_six_hour_cap correctly classifies IOG-SMB and non-capped tariff codes")
+
+    # ------------------------------------------------------------------
+    # Test 12: A Flexible dual-register tariff (E-2R-*) returns a DIRECT_DEBIT and a
+    # NON_DIRECT_DEBIT row for the same validity window on both the day and night
+    # endpoints. The day/night path builds its own rows and so never reaches the
+    # payment method filter applied at get_octopus_rates_direct; _get_rate_for_time
+    # keeps the first match on a valid_from tie, so the variant used would otherwise
+    # depend on the order the API happened to return the rows in. Values are the live
+    # E-2R-VAR-22-11-01-A rows for the current window.
+    # ------------------------------------------------------------------
+    print("\n*** Test 12: Overlapping payment methods → direct debit rate used ***")
+    day_direct_debit = 32.65227
+    day_non_direct_debit = 34.454385
+    night_direct_debit = 13.69662
+    night_non_direct_debit = 14.45304
+
+    def _payment_method_row(value, method):
+        """Build one open-ended day or night rate row carrying the given payment method."""
+        return {"valid_from": "2026-05-01T00:00:00+0000", "valid_to": None, "value_inc_vat": value, "payment_method": method}
+
+    for direct_debit_first in (False, True):
+        order = "direct debit first" if direct_debit_first else "non-direct-debit first"
+        day_rows12 = [_payment_method_row(day_direct_debit, "DIRECT_DEBIT"), _payment_method_row(day_non_direct_debit, "NON_DIRECT_DEBIT")]
+        night_rows12 = [_payment_method_row(night_direct_debit, "DIRECT_DEBIT"), _payment_method_row(night_non_direct_debit, "NON_DIRECT_DEBIT")]
+        if not direct_debit_first:
+            day_rows12.reverse()
+            night_rows12.reverse()
+
+        api12 = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
+        api12.fetch_url_cached = _make_day_night_fetch(day_rows12, night_rows12)
+
+        with patch.object(type(api12), "now_utc_exact", new_callable=PropertyMock) as mock_now:
+            mock_now.return_value = _NOW
+            mdata12 = await api12.async_get_day_night_rates(base_url, tariff_code="E-2R-VAR-22-11-01-A")
+
+        rates_used = set(entry["value_inc_vat"] for entry in mdata12)
+        if not rates_used:
+            print(f"ERROR: No schedule produced with {order}")
+            failed = True
+        elif rates_used != {day_direct_debit, night_direct_debit}:
+            print(f"ERROR: {order}: expected only the direct debit rates {{{day_direct_debit}, {night_direct_debit}}}, got {sorted(rates_used)}")
+            failed = True
+        else:
+            print(f"PASS: {order} → direct debit day {day_direct_debit} / night {night_direct_debit} used")
 
     # ------------------------------------------------------------------
     if failed:

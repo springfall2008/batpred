@@ -941,29 +941,58 @@ function toggleValue(rowId) {
     updateChangeCounter();
 }
 
-function editValue(rowId) {
+async function revealSecretValue(row, attribute, path) {
+    // The page serves credentials masked, so a data-secret row's original is the placeholder,
+    // not the key - fetch the real value once and make it the row's original, so the input
+    // offers the real key and saving it unchanged is not seen as a change
+    try {
+        const response = await fetch('./apps_value?path=' + encodeURIComponent(path));
+        const result = await response.json();
+        if (!result.success) {
+            showMessage(result.message, 'error');
+            return false;
+        }
+        row.dataset[attribute] = result.value;
+        delete row.dataset.secret;
+        // A credential is text whatever it looks like - revealed marks the row so the editor
+        // neither offers the entity dropdown for a dotted key nor saves a digit-only one as a number
+        row.dataset.revealed = '1';
+        return true;
+    } catch (error) {
+        showMessage('Could not load the value to edit: ' + error.message, 'error');
+        return false;
+    }
+}
+
+async function editValue(rowId) {
     const row = document.getElementById('row_' + rowId);
     const valueCell = document.getElementById('value_' + rowId);
     const argName = row.dataset.argName;
+    if (row.dataset.secret === '1' && !(await revealSecretValue(row, 'originalValue', argName))) {
+        return;
+    }
     const originalValue = row.dataset.originalValue;
 
     // Check if there's a pending change, use that value instead of original
     const currentValue = pendingChanges[argName] ? pendingChanges[argName].newValue : originalValue;
 
     // Check if this is an entity string (contains dots)
-    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+    if (row.dataset.revealed !== '1' && currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown
         showEntityDropdown(rowId, currentValue);
     } else {
         // Show regular text input for non-entity values
         valueCell.innerHTML = `
-            <input type="text" class="edit-input" id="input_${rowId}" value="${currentValue}">
+            <input type="text" class="edit-input" id="input_${rowId}">
             <button class="save-button" onclick="saveValue(${rowId})">Apply</button>
             <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
         `;
 
-        // Focus the input field
-        document.getElementById('input_' + rowId).focus();
+        // Set as a property rather than written into the markup, so a value holding a quote
+        // (ordinary in a password) cannot end the attribute early and be saved back truncated
+        const input = document.getElementById('input_' + rowId);
+        input.value = currentValue;
+        input.focus();
     }
 }
 
@@ -974,9 +1003,10 @@ function getDisplayValueEntity(entityId) {
         const entityState = allStates[entityId];
         const state = entityState.state || '';
         const unit = entityState.unit_of_measurement || '';
-        return `${entityId} = ${state} ${unit}`;
+        return escapeHtml(`${entityId} = ${state} ${unit}`);
     }
-    return entityId; // Fallback to just the entity ID if no state found
+    // Every caller assigns the result to innerHTML, and a revealed credential can hold < or &
+    return escapeHtml(entityId); // Fallback to just the entity ID if no state found
 }
 
 function cancelEdit(rowId) {
@@ -1048,7 +1078,7 @@ function saveValue(rowId) {
     }
 
     // Determine if this is an entity or numerical value
-    let valueType = determineValueType(originalValue);
+    let valueType = row.dataset.revealed === '1' ? 'string' : determineValueType(originalValue);
     if (valueType === 'numerical' && newValue !== originalValue) {
         if (!typeIsNumerical(newValue)) {
             showMessage('Invalid number format', 'error');
@@ -1637,29 +1667,34 @@ function toggleNestedValue(rowId) {
     updateChangeCounter();
 }
 
-function editNestedValue(rowId) {
+async function editNestedValue(rowId) {
     const row = document.getElementById('nested_row_' + rowId);
     const valueCell = document.getElementById('nested_value_' + rowId);
     const nestedPath = row.dataset.nestedPath;
+    if (row.dataset.secret === '1' && !(await revealSecretValue(row, 'nestedOriginal', nestedPath))) {
+        return;
+    }
     const originalValue = row.dataset.nestedOriginal;
 
     // Check if there's a pending change, use that value instead of original
     const currentValue = pendingChanges[nestedPath] ? pendingChanges[nestedPath].newValue : originalValue;
 
     // Check if this is an entity string (contains dots)
-    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+    if (row.dataset.revealed !== '1' && currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown for nested values
         showNestedEntityDropdown(rowId, currentValue);
     } else {
         // Replace the value cell content with an input field for non-entity values
         valueCell.innerHTML = `
-            : <input type="text" class="edit-input" id="nested_input_${rowId}" value="${currentValue}">
+            : <input type="text" class="edit-input" id="nested_input_${rowId}">
             <button class="save-button" onclick="saveNestedValue(${rowId})">Apply</button>
             <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
         `;
 
-        // Focus the input field
-        document.getElementById('nested_input_' + rowId).focus();
+        // Set as a property rather than written into the markup - see editValue()
+        const input = document.getElementById('nested_input_' + rowId);
+        input.value = currentValue;
+        input.focus();
     }
 }
 
@@ -1693,7 +1728,7 @@ function saveNestedValue(rowId) {
     }
 
     // Determine the value type and validate accordingly
-    let valueType = determineValueType(originalValue);
+    let valueType = row.dataset.revealed === '1' ? 'string' : determineValueType(originalValue);
     if (valueType === 'numerical' && newValue !== originalValue) {
         if (!typeIsNumerical(newValue)) {
             showMessage('Invalid number format', 'error');
@@ -1727,6 +1762,186 @@ function saveNestedValue(rowId) {
     updateChangeCounter();
 }
 
+// Counter used to give each pending addition a unique key, as several can target the same list
+let addCounter = 0;
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function deleteNestedValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+
+    // Keyed separately from an edit of the same value, so that undoing the deletion does not
+    // also silently undo a pending edit - the server applies edits before any deletion
+    pendingChanges[nestedPath + '#delete'] = {
+        rowId: rowId,
+        originalValue: row.dataset.nestedOriginal,
+        newValue: '',
+        type: 'delete',
+        isNested: true,
+        path: nestedPath
+    };
+
+    row.classList.add('row-deleted');
+    setDeleteButtonState(rowId, true);
+    updateChangeCounter();
+}
+
+function undoDeleteNestedValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+
+    delete pendingChanges[nestedPath + '#delete'];
+    row.classList.remove('row-deleted');
+    setDeleteButtonState(rowId, false);
+    updateChangeCounter();
+}
+
+function setDeleteButtonState(rowId, deleted) {
+    // The button is looked up by id rather than by class, as a row holding a nested table
+    // also contains the delete buttons of all of its children
+    const button = document.getElementById('delete_button_' + rowId);
+    if (!button) return;
+    if (deleted) {
+        button.textContent = 'Undo';
+        button.setAttribute('onclick', 'undoDeleteNestedValue(' + rowId + ')');
+    } else {
+        button.textContent = 'Delete';
+        button.setAttribute('onclick', 'deleteNestedValue(' + rowId + ')');
+    }
+}
+
+function hideAddDialog() {
+    const overlay = document.querySelector('.add-overlay');
+    if (overlay) {
+        overlay.remove();
+    }
+}
+
+// Show a dialog collecting one or more fields, calling onConfirm with an id -> value object
+function showAddDialog(title, help, fields, onConfirm) {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirmation-overlay add-overlay';
+
+    let fieldsHtml = '';
+    fields.forEach(field => {
+        if (field.type === 'textarea') {
+            fieldsHtml += `<label class="add-dialog-label" for="add_field_${field.id}">${field.label}</label>
+                           <textarea class="add-dialog-input" id="add_field_${field.id}" rows="5"></textarea>`;
+        } else {
+            fieldsHtml += `<label class="add-dialog-label" for="add_field_${field.id}">${field.label}</label>
+                           <input type="text" class="add-dialog-input" id="add_field_${field.id}">`;
+        }
+    });
+
+    overlay.innerHTML = `
+        <div class="confirmation-dialog">
+            <h3>${title}</h3>
+            <p>${help}</p>
+            ${fieldsHtml}
+            <div class="confirmation-buttons">
+                <button class="cancel-button-dialog" onclick="hideAddDialog()">Cancel</button>
+                <button class="confirm-button" id="addDialogConfirm">Add</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // Pre-fill any defaults, which cannot go in the markup above as they may contain newlines
+    fields.forEach(field => {
+        document.getElementById('add_field_' + field.id).value = field.value || '';
+    });
+
+    document.getElementById('addDialogConfirm').onclick = () => {
+        const values = {};
+        for (const field of fields) {
+            values[field.id] = document.getElementById('add_field_' + field.id).value;
+        }
+        if (onConfirm(values)) {
+            hideAddDialog();
+        }
+    };
+
+    document.getElementById('add_field_' + fields[0].id).focus();
+}
+
+// Insert a pending row above the add button and register the change, returning the change key
+function registerPendingAdd(anchorId, path, valueText, nameHtml, valueHtml) {
+    addCounter += 1;
+    const changeKey = path + '#' + addCounter;
+
+    pendingChanges[changeKey] = {
+        rowId: null,
+        originalValue: '',
+        newValue: valueText,
+        type: 'add',
+        isNested: true,
+        path: path,
+        pendingRowId: addCounter
+    };
+
+    const anchor = document.getElementById('add_anchor_' + anchorId);
+    const row = document.createElement('tr');
+    row.id = 'pending_row_' + addCounter;
+    row.className = 'row-added';
+    row.dataset.changeKey = changeKey;
+    row.innerHTML = `<td>${nameHtml}</td><td>${valueHtml}</td>` +
+                    `<td><button class="cancel-button" onclick="cancelPendingAdd(${addCounter})">Remove</button></td>`;
+    anchor.parentNode.insertBefore(row, anchor);
+
+    updateChangeCounter();
+    return changeKey;
+}
+
+function cancelPendingAdd(pendingRowId) {
+    const row = document.getElementById('pending_row_' + pendingRowId);
+    if (!row) return;
+    delete pendingChanges[row.dataset.changeKey];
+    row.remove();
+    updateChangeCounter();
+}
+
+function addListItem(listPath, argName, anchorId) {
+    // compare_list entries need at least a name and an id, so offer them as a starting point
+    const template = (argName === 'compare_list') ? 'name: My Tariff\\nid: my_tariff' : '';
+    const help = (argName === 'compare_list')
+        ? 'Enter the new tariff to compare, one <b>setting: value</b> per line. A <b>name</b> and a unique <b>id</b> are required.'
+        : 'Enter the new entry in YAML format - a single value, or one <b>setting: value</b> per line.';
+
+    showAddDialog('Add entry to ' + listPath, help, [{id: 'value', label: 'New entry', type: 'textarea', value: template}], (values) => {
+        const valueText = values.value;
+        if (!valueText.trim()) {
+            showMessage('Value cannot be empty', 'error');
+            return false;
+        }
+        registerPendingAdd(anchorId, listPath + '[]', valueText, '+ ', '<pre>' + escapeHtml(valueText) + '</pre>');
+        return true;
+    });
+}
+
+function addDictKey(dictPath, anchorId) {
+    showAddDialog('Add setting to ' + dictPath, 'Enter the name of the new setting and its value.',
+                  [{id: 'key', label: 'Setting name', type: 'text'}, {id: 'value', label: 'Value', type: 'text'}], (values) => {
+        const key = values.key.trim();
+        const valueText = values.value;
+        if (!key.match(/^[A-Za-z0-9_-]+$/)) {
+            showMessage('Setting name must contain only letters, numbers, dashes or underscores', 'error');
+            return false;
+        }
+        if (!valueText.trim()) {
+            showMessage('Value cannot be empty', 'error');
+            return false;
+        }
+        registerPendingAdd(anchorId, dictPath + '.' + key, valueText, '<b>' + escapeHtml(key) + ': </b>', escapeHtml(valueText));
+        return true;
+    });
+}
+
 function markNestedRowAsChanged(rowId) {
     const row = document.getElementById('nested_row_' + rowId);
     row.classList.add('row-changed');
@@ -1743,7 +1958,20 @@ function discardAllChanges() {
     for (const pathOrArgName in pendingChanges) {
         const change = pendingChanges[pathOrArgName];
 
-        if (change.isNested) {
+        if (change.type === 'delete') {
+            // Restore a row marked for deletion
+            const row = document.getElementById('nested_row_' + change.rowId);
+            if (row) {
+                row.classList.remove('row-deleted');
+            }
+            setDeleteButtonState(change.rowId, false);
+        } else if (change.type === 'add') {
+            // Drop the preview row of a pending addition
+            const row = document.getElementById('pending_row_' + change.pendingRowId);
+            if (row) {
+                row.remove();
+            }
+        } else if (change.isNested) {
             // Handle nested values
             const row = document.getElementById('nested_row_' + change.rowId);
             const valueCell = document.getElementById('nested_value_' + change.rowId);
@@ -1801,7 +2029,10 @@ function discardAllChanges() {
     return text
 
 
-def get_html_config_css():
+def get_filter_css():
+    """
+    Return the CSS for the filter box, shared by the Config and Apps pages
+    """
     text = """
         <style>
         .filter-container {
@@ -1823,6 +2054,13 @@ def get_html_config_css():
             border-color: #555;
         }
         </style>
+    """
+    return text
+
+
+def get_html_config_css():
+    text = get_filter_css()
+    text += """
         <script>
         // Save and restore filter value between page loads
         function saveFilterValue() {
@@ -1870,6 +2108,69 @@ def get_html_config_css():
     return text
 
 
+def get_apps_filter_js():
+    """
+    Return the client-side row filter for the apps.yaml page filter box
+    """
+    text = """
+        <script>
+        // Save and restore the filter value between page loads, as the apps page auto-refreshes
+        function saveAppsFilterValue() {
+            localStorage.setItem('appsFilterValue', document.getElementById('appsFilter').value);
+        }
+
+        function restoreAppsFilterValue() {
+            const savedFilter = localStorage.getItem('appsFilterValue');
+            if (savedFilter) {
+                document.getElementById('appsFilter').value = savedFilter;
+                filterApps();
+            }
+        }
+
+        function filterApps() {
+            const filterValue = document.getElementById('appsFilter').value.toLowerCase();
+            const rows = document.querySelectorAll('tr[data-arg-name], tr[data-nested-path]');
+
+            // Save filter value for persistence
+            saveAppsFilterValue();
+
+            rows.forEach(function(row) {
+                // A nested row's path starts with the name of the setting it sits under, so a
+                // match on a setting keeps everything nested below it visible with no extra work
+                const path = (row.getAttribute('data-nested-path') || row.getAttribute('data-arg-name') || '').toLowerCase();
+                let matched = path.includes(filterValue);
+                if (!matched) {
+                    // Only match the value of a leaf row - a parent's value cell holds the text of
+                    // every row nested below it, so matching it would show the whole subtree
+                    const valueCell = row.children[1];
+                    if (valueCell && !valueCell.querySelector('tr')) {
+                        matched = valueCell.textContent.toLowerCase().includes(filterValue);
+                    }
+                }
+                row.style.display = matched ? '' : 'none';
+            });
+
+            // Re-show the parents of every row left visible, so a match nested inside a setting
+            // whose own name does not match is still reachable
+            rows.forEach(function(row) {
+                if (row.style.display === 'none') {
+                    return;
+                }
+                let parent = row.parentElement ? row.parentElement.closest('tr[data-arg-name], tr[data-nested-path]') : null;
+                while (parent) {
+                    parent.style.display = '';
+                    parent = parent.parentElement ? parent.parentElement.closest('tr[data-arg-name], tr[data-nested-path]') : null;
+                }
+            });
+        }
+
+        // Register event to restore filter value after page load
+        document.addEventListener('DOMContentLoaded', restoreAppsFilterValue);
+        </script>
+    """
+    return text
+
+
 def get_apps_css():
     text = """
 <style>
@@ -1889,6 +2190,57 @@ def get_apps_css():
 
 .edit-button:hover {
     background-color: #45a049;
+}
+
+.delete-button, .add-button {
+    color: white;
+    border: none;
+    padding: 4px 8px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 12px;
+    margin: 2px 2px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+
+.delete-button {
+    background-color: #dc3545;
+}
+
+.delete-button:hover {
+    background-color: #c82333;
+}
+
+.add-button {
+    background-color: #17a2b8;
+}
+
+.add-button:hover {
+    background-color: #138496;
+}
+
+.add-dialog-label {
+    display: block;
+    font-weight: bold;
+    margin-top: 10px;
+}
+
+.add-dialog-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 13px;
+}
+
+body.dark-mode .add-dialog-input {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+    border: 1px solid #555;
 }
 
 .edit-input {
@@ -2101,6 +2453,29 @@ body.dark-mode .toggle-button::before {
 .row-changed {
     background-color: #fff3cd !important;
     border-left: 4px solid #ffc107 !important;
+}
+
+/* Rows pending deletion or addition */
+.row-deleted {
+    background-color: #f8d7da !important;
+    border-left: 4px solid #dc3545 !important;
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+.row-added {
+    background-color: #d4edda !important;
+    border-left: 4px solid #28a745 !important;
+}
+
+body.dark-mode .row-deleted {
+    background-color: #3f1e1e !important;
+    border-left: 4px solid #dc3545 !important;
+}
+
+body.dark-mode .row-added {
+    background-color: #1e3f20 !important;
+    border-left: 4px solid #28a745 !important;
 }
 
 /* Dark mode save controls styles */
@@ -2497,12 +2872,14 @@ def get_components_css():
 <style>
 .components-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    /* min() so the 400px column floor never exceeds a phone's width */
+    grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr));
     gap: 20px;
     margin: 20px 0;
 }
 
 .component-card {
+    min-width: 0;
     border: 2px solid #ddd;
     border-radius: 8px;
     padding: 20px;
@@ -2567,7 +2944,7 @@ def get_components_css():
     color: #333;
 }
 
-.restart-button, .edit-button {
+.restart-button, .edit-button, .info-button {
     color: white;
     border: none;
     padding: 6px 12px;
@@ -2598,6 +2975,14 @@ def get_components_css():
 
 .edit-button:hover {
     background-color: #F57C00;
+}
+
+.info-button {
+    background-color: #00897B;
+}
+
+.info-button:hover {
+    background-color: #00695C;
 }
 
 .component-details {
@@ -2806,7 +3191,7 @@ body.dark-mode .error-count-high {
     font-weight: bold;
 }
 
-body.dark-mode .restart-button, body.dark-mode .edit-button {
+body.dark-mode .restart-button, body.dark-mode .edit-button, body.dark-mode .info-button {
     color: white;
 }
 
@@ -2831,16 +3216,32 @@ body.dark-mode .edit-button:hover {
     background-color: #F57C00;
 }
 
+body.dark-mode .info-button {
+    background-color: #00897B;
+}
+
+body.dark-mode .info-button:hover {
+    background-color: #00695C;
+}
+
 /* Responsive design */
 @media (max-width: 768px) {
+    /* minmax(0, 1fr), not 1fr: a 1fr track grows to its widest content and pushed cards off screen */
     .components-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
     }
 
+    /* The name on its own line, then the status and buttons on one wrapping row beneath it */
     .component-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 5px;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 6px;
+    }
+
+    .component-header h3 {
+        flex-basis: 100%;
     }
 
     .args-table {
@@ -2850,6 +3251,289 @@ body.dark-mode .edit-button:hover {
     .args-table th,
     .args-table td {
         padding: 6px;
+    }
+}
+</style>
+"""
+    return text
+
+
+def get_discovery_css():
+    """
+    Return CSS for the discovery catalogue page
+    """
+    text = """
+<style>
+.discovery-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin: 12px 0 20px 0;
+}
+
+.discovery-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.discovery-count {
+    background: #eceff1;
+    border-radius: 12px;
+    padding: 3px 10px;
+    font-size: 0.85em;
+    white-space: nowrap;
+}
+
+body.dark-mode .discovery-count {
+    background: #37474f;
+    color: #eee;
+}
+
+.discovery-toggle {
+    margin-left: auto;
+    padding: 6px 14px;
+    border-radius: 4px;
+    text-decoration: none;
+    background: #1976D2;
+    color: #fff;
+    white-space: nowrap;
+}
+
+.discovery-toggle:hover {
+    background: #1565C0;
+}
+
+.discovery-warning {
+    border-left: 5px solid #d32f2f;
+    background: #ffebee;
+    color: #b71c1c;
+    padding: 10px 14px;
+    border-radius: 4px;
+    margin-bottom: 18px;
+}
+
+body.dark-mode .discovery-warning {
+    background: #4a1c1c;
+    color: #ffcdd2;
+}
+
+.discovery-conflicts {
+    border-left: 5px solid #f57c00;
+    background: #fff8e1;
+    color: #6d4c00;
+    padding: 10px 14px;
+    border-radius: 4px;
+    margin-bottom: 18px;
+}
+
+body.dark-mode .discovery-conflicts {
+    background: #4a3c1c;
+    color: #ffe082;
+}
+
+.discovery-clear {
+    border-left: 5px solid #4CAF50;
+    background: #e8f5e9;
+    color: #1b5e20;
+    padding: 10px 14px;
+    border-radius: 4px;
+    margin-bottom: 18px;
+}
+
+body.dark-mode .discovery-clear {
+    background: #1b3a1e;
+    color: #c8e6c9;
+}
+
+.discovery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 18px;
+    margin-bottom: 26px;
+}
+
+.discovery-card {
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    padding: 16px;
+    background: #fff;
+    color: #333;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+}
+
+body.dark-mode .discovery-card {
+    background: #2c2c2c;
+    color: #eee;
+    border-color: #555;
+}
+
+.discovery-card-title {
+    font-weight: bold;
+    font-size: 1.05em;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.discovery-source {
+    background: #1976D2;
+    color: #fff;
+    border-radius: 10px;
+    padding: 2px 9px;
+    font-size: 0.75em;
+    font-weight: normal;
+}
+
+.discovery-field {
+    margin: 3px 0;
+    line-height: 1.45;
+}
+
+.discovery-key {
+    color: #555;
+    font-weight: 600;
+}
+
+body.dark-mode .discovery-key {
+    color: #bbb;
+}
+
+.discovery-nested {
+    margin-left: 16px;
+    border-left: 2px solid #e0e0e0;
+    padding-left: 10px;
+}
+
+body.dark-mode .discovery-nested {
+    border-left-color: #555;
+}
+
+.discovery-token {
+    font-family: monospace;
+    background: #f1f1f1;
+    border-radius: 3px;
+    padding: 0 4px;
+}
+
+body.dark-mode .discovery-token {
+    background: #3a3a3a;
+}
+
+.discovery-raw {
+    background: #f6f6f6;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 12px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    white-space: pre;
+}
+
+body.dark-mode .discovery-raw {
+    background: #1e1e1e;
+    color: #ddd;
+    border-color: #555;
+}
+
+.discovery-empty {
+    padding: 20px;
+    background: #f5f5f5;
+    border-radius: 6px;
+    color: #555;
+}
+
+body.dark-mode .discovery-empty {
+    background: #333;
+    color: #ccc;
+}
+
+/* The Components page's per-component discovery pop-up (see get_discovery_modal_js) */
+.discovery-modal-title {
+    margin: 0 0 4px 0;
+}
+
+.discovery-meta {
+    color: #666;
+    font-size: 0.9em;
+    margin: 0 0 12px 0;
+}
+
+body.dark-mode .discovery-meta {
+    color: #aaa;
+}
+
+.discovery-glance {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 12px 0;
+    font-size: 0.92em;
+}
+
+.discovery-glance td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #eee;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+.discovery-glance td:first-child {
+    color: #666;
+    width: 35%;
+}
+
+body.dark-mode .discovery-glance td {
+    border-bottom-color: #444;
+}
+
+body.dark-mode .discovery-glance td:first-child {
+    color: #aaa;
+}
+
+.discovery-chip {
+    display: inline-block;
+    background: #E0F2F1;
+    color: #00695C;
+    border-radius: 10px;
+    padding: 2px 8px;
+    margin: 2px 4px 2px 0;
+    font-size: 0.88em;
+}
+
+.discovery-chip-off {
+    background: #eee;
+    color: #999;
+    text-decoration: line-through;
+}
+
+body.dark-mode .discovery-chip {
+    background: #004D40;
+    color: #B2DFDB;
+}
+
+body.dark-mode .discovery-chip-off {
+    background: #3a3a3a;
+    color: #888;
+}
+
+.discovery-summary-link {
+    color: #00695C;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+body.dark-mode .discovery-summary-link {
+    color: #80CBC4;
+}
+
+@media (max-width: 768px) {
+    .discovery-grid {
+        grid-template-columns: 1fr;
     }
 }
 </style>
@@ -3450,6 +4134,41 @@ window.onclick = function(event) {
         closeEntityModal();
     }
 }
+</script>
+"""
+    return text
+
+
+def get_discovery_modal_js():
+    """
+    Return JavaScript for the Components page's discovery pop-up, filled from /component_discovery
+    """
+    text = """
+<script>
+async function showDiscoveryModal(name) {
+    const modal = document.getElementById('discoveryModal');
+    const body = document.getElementById('discoveryModalBody');
+    body.innerHTML = '<p>Loading...</p>';
+    modal.style.display = 'block';
+    try {
+        const response = await fetch('./component_discovery?name=' + encodeURIComponent(name));
+        body.innerHTML = await response.text();
+    } catch (error) {
+        console.error('Error fetching discovery info:', error);
+        body.innerHTML = '<p style="color: red;">Error loading discovery info</p>';
+    }
+}
+
+function closeDiscoveryModal() {
+    document.getElementById('discoveryModal').style.display = 'none';
+}
+
+// Close when clicking outside the pop-up. addEventListener, not window.onclick, which the entity modal already owns.
+window.addEventListener('click', function(event) {
+    if (event.target === document.getElementById('discoveryModal')) {
+        closeDiscoveryModal();
+    }
+});
 </script>
 """
     return text
@@ -5288,7 +6007,13 @@ function initializeCodeMirror() {
                     cm.replaceSelection('  ', 'end', '+input');
                 }
             },
-            'Ctrl-Space': 'autocomplete'
+            'Ctrl-Space': 'autocomplete',
+            'Ctrl-F': 'findPersistent',
+            'Cmd-F': 'findPersistent',
+            'Ctrl-G': 'findNext',
+            'Cmd-G': 'findNext',
+            'Shift-Ctrl-G': 'findPrev',
+            'Shift-Cmd-G': 'findPrev'
         }
     });
 
@@ -6440,19 +7165,22 @@ def get_plan_css():
         closeDropdowns();
     }
 
-    // Handle SOC override
-    function handleSocOverride(time, dropdownId, isClear) {
+    // Handle SOC override (isMax selects the manual_soc_max ceiling instead of the manual_soc floor)
+    function handleSocOverride(time, dropdownId, isClear, isMax) {
+        const inputPrefix = isMax ? 'socmax_' : 'soc_';
+        const overrideKey = isMax ? 'manual_soc_max' : 'manual_soc';
+
         // Get the SOC value from the input field (unless clearing)
         let value = null;
         if (!isClear && dropdownId) {
-            const inputElement = document.getElementById('soc_' + dropdownId);
+            const inputElement = document.getElementById(inputPrefix + dropdownId);
             if (inputElement) {
                 value = inputElement.value;
             }
         } else if (isClear) {
             // When clearing, we need to find the actual stored SOC for this time
             const minutesFromMidnight = getMinutesFromTimeString(time);
-            const override = window.overridesData.manual_soc.find(r => r.minutes === minutesFromMidnight);
+            const override = window.overridesData[overrideKey].find(r => r.minutes === minutesFromMidnight);
             if (override) {
                 value = override.target;
             } else {
@@ -6461,7 +7189,7 @@ def get_plan_css():
         }
 
         // Construct the action string the server expects
-        const action = isClear ? 'Clear SOC' : 'Set SOC';
+        const action = isMax ? (isClear ? 'Clear SOC Max' : 'Set SOC Max') : (isClear ? 'Clear SOC' : 'Set SOC');
 
         // Create a form data object to send the override parameters
         const formData = new FormData();
@@ -6479,10 +7207,11 @@ def get_plan_css():
             if (data.success) {
                 // Show success message
                 const messageElement = document.createElement('div');
+                const label = isMax ? 'SOC max' : 'SOC';
                 if (isClear) {
-                    messageElement.textContent = `SOC override cleared for ${time}`;
+                    messageElement.textContent = `${label} override cleared for ${time}`;
                 } else {
-                    messageElement.textContent = `SOC target set to ${value}% for ${time}`;
+                    messageElement.textContent = `${label} target set to ${value}% for ${time}`;
                 }
                 messageElement.style.position = 'fixed';
                 messageElement.style.top = '65px';
@@ -6536,6 +7265,9 @@ def get_plan_renderer_js():
     <script>
     // State variables
     let currentView = 'plan';
+    // The History view's chosen older day (YYYY-MM-DD), or null for the default yesterday + today
+    let historyDay = null;
+    window.historyDayData = window.historyDayData || {};
     let newestDataTimestamp = null;  // Track the newest data timestamp we've seen
     let updateIntervalId = null;
     let dropdownCounter = 0;
@@ -6642,6 +7374,8 @@ def get_plan_renderer_js():
                 iboost: 'Energy planned for the solar diverter (iBoost, MyEnergi Eddi, etc) this slot.',
                 soc: 'Estimated battery state of charge at the start of this slot.',
                 cost: 'Estimated cost (or saving) for this slot.',
+                billed: 'What your supplier billed for this slot (hover for the rate buckets). Blank until they publish it, usually 1-2 days later.',
+                billing_diff: 'Billed less the Cost column: red when you were billed more than Predbat recorded, green when less. The standing charge is left out of both.',
                 total: 'Running total cost for today so far, at the start of this slot.',
                 co2_rate: 'Estimated carbon intensity of the grid at the start of this slot.',
                 co2_total: 'Estimated cumulative carbon footprint at the start of this slot.',
@@ -6653,6 +7387,9 @@ def get_plan_renderer_js():
                 const attrs = extraAttrs ? ` ${extraAttrs.trim()}` : '';
                 return `<th${attrs}${titleAttr}><b>${innerHtml}</b></th>`;
             }
+
+            // Billing columns appear on a History view only once the supplier's half-hourly bill is attached
+            const hasBilling = jsonData.rows.some(r => r.billed !== undefined);
 
             // Render header
             html += '<tr>';
@@ -6677,6 +7414,10 @@ def get_plan_renderer_js():
             }
             html += th('soc', 'SoC %');
             html += th('cost', 'Cost');
+            if (hasBilling) {
+                html += th('billed', 'Billed');
+                html += th('billing_diff', 'Diff');
+            }
             html += th('total', 'Total');
             if (jsonData.carbon_enable) {
                 html += th('co2_rate', 'CO2 g/kWh');
@@ -6786,17 +7527,17 @@ def get_plan_renderer_js():
                 if (row.pv_forecast >= 0.1) {
                     pvText += '&#9728;';
                 }
-                html += `<td id=pv bgcolor=${row.pv_color || '#FFFFFF'}>${pvText}</td>`;
+                html += `<td id=pv bgcolor=${row.pv_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'pv_forecast', row.pv_forecast)}>${pvText}</td>`;
 
                 // Load forecast (with 10% value in brackets if debug mode)
                 if (editable) {
-                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5, row.slot_minute);
+                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5, row.slot_minute, scenarioTitle(jsonData, row, 'load_forecast', row.load_forecast));
                 } else {
                     let loadText = row.load_forecast !== undefined ? row.load_forecast : '';
                     if (showDebug && row.load_forecast10 > 0) {
                         loadText += ` (${row.load_forecast10})`;
                     }
-                    html += `<td id=load bgcolor=${row.load_color || '#FFFFFF'}>${loadText}</td>`;
+                    html += `<td id=load bgcolor=${row.load_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'load_forecast', row.load_forecast)}>${loadText}</td>`;
                 }
 
                 // Clipped (only if debug)
@@ -6813,7 +7554,9 @@ def get_plan_renderer_js():
 
                 // Car charging (conditional)
                 if (jsonData.num_cars > 0) {
-                    const carVal = row.car_charging > 0 ? row.car_charging : '&#9866;';
+                    // A slot dynamic load cancelled (car not charging) still shows its kWh, with a "?"
+                    const carCancelled = row.car_charging_cancelled > 0 ? `${row.car_charging_cancelled}?` : '';
+                    const carVal = row.car_charging > 0 ? (carCancelled ? `${row.car_charging} +${carCancelled}` : row.car_charging) : (carCancelled || '&#9866;');
                     html += `<td id=car bgcolor=${row.car_color || '#FFFFFF'}>${carVal}</td>`;
                 }
 
@@ -6826,9 +7569,9 @@ def get_plan_renderer_js():
                 // SOC
                 const socSym = row.soc_sym || (row.soc_change > 0 ? '&nearr;' : (row.soc_change < 0 ? '&searr;' : '&rarr;'));
                 if (editable) {
-                    html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides, row.slot_minute);
+                    html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides, row.slot_minute, scenarioTitle(jsonData, row, 'soc_percent', row.soc_percent));
                 } else {
-                    html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}>${row.soc_percent}${socSym}</td>`;
+                    html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'soc_percent', row.soc_percent)}>${row.soc_percent}${socSym}</td>`;
                 }
 
                 // Cost change
@@ -6841,11 +7584,43 @@ def get_plan_renderer_js():
                 } else {
                     costStr = '&rarr;';
                 }
-                html += `<td id=cost bgcolor=${row.cost_color || '#FFFFFF'}>${costStr}</td>`;
+                html += `<td id=cost bgcolor=${row.cost_color || '#FFFFFF'}${scenarioTitle(jsonData, row, 'cost_change', costChange)}>${costStr}</td>`;
+
+                // What the supplier billed, and how far it is from Predbat's own cost
+                if (hasBilling) {
+                    const minor = jsonData.currency_symbols[1];
+                    let billedStr = '&mdash;';
+                    let billedTitle = '';
+                    if (row.billed !== null && row.billed !== undefined) {
+                        billedStr = `${Math.round(row.billed * 100)} ${minor}`;
+                        billedTitle = Object.entries(row.billed_buckets || {}).map(([label, bucket]) => `${label}: ${bucket.kwh} kWh ${Math.round(bucket.cost * 100)}${minor}`).join('\\n');
+                        if (row.billing_pending_export) {
+                            // Import billed, export not published yet: the import charge alone, so no Diff
+                            billedStr += ` <span style="font-size: 11px;" title="Import only: the export for this slot hasn't been billed yet, so there is no Diff">(import, export not billed yet)</span>`;
+                        }
+                    }
+                    if (row.billing_event) {
+                        billedStr += ` <span style="font-size: 11px;" title="${escapeAttr(row.billing_event + ' in this slot: the bill may not show it the way Predbat priced it')}">(${row.billing_event})</span>`;
+                    }
+                    html += `<td id=billed bgcolor=${row.billing_event ? '#FFF2B0' : '#EEF6FF'} title="${escapeAttr(billedTitle)}">${billedStr}</td>`;
+
+                    let diffStr = '&mdash;';
+                    let diffColor = '#FFFFFF';
+                    if (row.billing_diff !== null && row.billing_diff !== undefined) {
+                        const diffPence = Math.round(row.billing_diff * 100);
+                        diffStr = diffPence > 0 ? `+${diffPence} ${minor}` : `${diffPence} ${minor}`;
+                        if (row.billing_diff > 0 && diffPence !== 0) {
+                            diffColor = '#F4C7C3';
+                        } else if (row.billing_diff < 0 && diffPence !== 0) {
+                            diffColor = '#C8F0C8';
+                        }
+                    }
+                    html += `<td id=billing_diff bgcolor=${diffColor}>${diffStr}</td>`;
+                }
 
                 // Total cost
                 const totalCost = row.total_cost ? `${jsonData.currency_symbols[0]}${row.total_cost.toFixed(2)}` : '';
-                html += `<td id=total_cost bgcolor=#FFFFFF>${totalCost}</td>`;
+                html += `<td id=total_cost bgcolor=#FFFFFF${scenarioTitle(jsonData, row, 'total_cost', row.total_cost || 0)}>${totalCost}</td>`;
 
                 // Carbon (conditional)
                 if (jsonData.carbon_enable) {
@@ -6909,9 +7684,14 @@ def get_plan_renderer_js():
                 // Empty cell for SOC change
                 html += '<td></td>';
 
+                // Billing columns are summarised in the strip above the table
+                if (hasBilling) {
+                    html += '<td></td><td></td>';
+                }
+
                 // Total cost
                 const totalCostStr = totals.total_cost >= 0 ?
-                    `${jsonData.currency_symbols[0]}${totals.total_cost}` :
+                    `${jsonData.currency_symbols[0]}${totals.total_cost.toFixed(2)}` :
                     `-${jsonData.currency_symbols[0]}${Math.abs(totals.total_cost).toFixed(2)}`;
                 html += `<td bgcolor=#FFFFFF><b>${totalCostStr}</b></td>`;
 
@@ -7028,10 +7808,12 @@ def get_plan_renderer_js():
                 return entry.params && entry.params[key] !== undefined ? entry.params[key] : match;
             });
         });
-        // A split cell's first half is always a demand_before_export_* code paired with the export
+        // A split cell's first half is always a demand_before_export_* or hold_for_car_before_export code paired with the export
         // reason as its second half - prefix "Then" (no comma) so the two read as one narrative
-        // instead of two disconnected sentences.
-        if (reasons.length === 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && reasons[0].code.indexOf('demand_before_export_') === 0) {
+        // instead of two disconnected sentences. Length is >= 2 rather than == 2 because a history
+        // slot that held more than one state appends a mixed_slot_states note after the pair, and
+        // that must not cost the narrative its "Then".
+        if (reasons.length >= 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && (reasons[0].code.indexOf('demand_before_export_') === 0 || reasons[0].code === 'hold_for_car_before_export')) {
             rendered[1] = 'Then ' + rendered[1].charAt(0).toLowerCase() + rendered[1].slice(1);
         }
         return rendered.filter(Boolean).join(' ');
@@ -7148,7 +7930,49 @@ def get_plan_renderer_js():
     }
 
     // Render load cell with dropdown for load adjustments
-    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue, slotMinute) {
+    // Tooltip listing one plan cell's value in every scenario the plan was scored against (#5871). name is the
+    // field's name in jsonData.scenario_fields and expected the cell's own value; empty when the row has no
+    // scenarios or every scenario has the same value for this cell.
+    function scenarioTitle(jsonData, row, name, expected) {
+        if (!row.scenarios || !jsonData.scenario_fields) {
+            return '';
+        }
+        // Positions come from the published field order, so the row lists can change shape without breaking this
+        const field = jsonData.scenario_fields.indexOf(name);
+        if (field < 0) {
+            return '';
+        }
+        const keys = Object.keys(row.scenarios).sort();
+        if (keys.every(key => row.scenarios[key][field] === expected)) {
+            return '';
+        }
+        const format = (value) => {
+            if (name === 'soc_percent') {
+                return `${value}%`;
+            }
+            if (name === 'pv_forecast' || name === 'load_forecast') {
+                return `${Number(value).toFixed(2)} kWh`;
+            }
+            if (name === 'cost_change') {
+                // Written as the Cost column is ("+5 p"); + 0 turns a rounded -0 into 0
+                const pence = Math.round(value * 100) + 0;
+                return `${pence >= 0 ? '+' : ''}${pence} ${jsonData.currency_symbols[1]}`;
+            }
+            // Written as this view's Total column is
+            return `${jsonData.currency_symbols[0]}${Number(value).toFixed(2)}`;
+        };
+        // The text goes inside a double-quoted attribute, so escape it (a currency symbol could carry a quote)
+        const escape = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const parts = [escape(`Expected ${format(expected)}`)];
+        for (const key of keys) {
+            const label = (jsonData.scenario_names && jsonData.scenario_names[key]) || `PV${key}`;
+            parts.push(escape(`${label} ${format(row.scenarios[key][field])}`));
+        }
+        // One scenario per line - &#10; is a line break inside a title attribute
+        return ` title="${parts.join('&#10;')}"`;
+    }
+
+    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue, slotMinute, titleAttr = '') {
         const dropdownId = `dropdown_${dropdownCounter++}`;
         const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_load_adjust.some(r => r.minutes === minutesFromMidnight);
@@ -7161,7 +7985,8 @@ def get_plan_renderer_js():
 
         const defaultLoadValue = manualLoadValue !== undefined ? manualLoadValue : 0.5;
         let html = `<td id=load data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
-        html += `${displayValue}${isOverride ? ' &#8526;' : ''}`;
+        // The scenario tooltip sits on the value, not the cell, so it doesn't cover the override menu
+        html += `<span${titleAttr}>${displayValue}</span>${isOverride ? ' &#8526;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += '<label>Adjust load (kWh):</label>';
@@ -7174,21 +7999,29 @@ def get_plan_renderer_js():
         return html;
     }
 
-    // Render SOC cell with dropdown for manual SOC targets
-    function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides, slotMinute) {
+    // Render SOC cell with dropdown for manual SOC targets (minimum floor and maximum ceiling)
+    function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides, slotMinute, titleAttr = '') {
         const dropdownId = `dropdown_${dropdownCounter++}`;
         const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_soc.some(r => r.minutes === minutesFromMidnight);
+        const isOverrideMax = overrides.manual_soc_max.some(r => r.minutes === minutesFromMidnight);
 
         let html = `<td id=soc data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
-        html += `${socValue}${socSym}${isOverride ? ' &#8526;' : ''}`;
+        // The scenario tooltip sits on the value, not the cell, so it doesn't cover the override menu
+        html += `<span${titleAttr}>${socValue}${socSym}</span>${isOverride ? ' &#8526;' : ''}${isOverrideMax ? ' &#11015;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
-        html += '<label>Target SOC (%):</label>';
+        html += '<label>Minimum SOC (%):</label>';
         html += `<input type="number" id="soc_${dropdownId}" value="${socValue}" step="1" min="0" max="100">`;
         html += `<button onclick="handleSocOverride('${timeDisplay}', '${dropdownId}')">Set Target</button>`;
         if (isOverride) {
             html += `<a onclick="handleSocOverride('${timeDisplay}', null, true)">Clear</a>`;
+        }
+        html += '<label>Maximum SOC (%):</label>';
+        html += `<input type="number" id="socmax_${dropdownId}" value="${socValue}" step="1" min="0" max="100">`;
+        html += `<button onclick="handleSocOverride('${timeDisplay}', '${dropdownId}', false, true)">Set Max</button>`;
+        if (isOverrideMax) {
+            html += `<a onclick="handleSocOverride('${timeDisplay}', null, true, true)">Clear</a>`;
         }
         html += '</div></div></td>';
         return html;
@@ -7350,14 +8183,8 @@ def get_plan_renderer_js():
 
     // Update timestamp display
     function updateTimestampDisplay() {
-        let timestamp = null;
-        if (currentView === 'plan' && window.planData) {
-            timestamp = window.planData.timestamp;
-        } else if (currentView === 'yesterday' && window.yesterdayData) {
-            timestamp = window.yesterdayData.timestamp;
-        } else if (currentView === 'baseline' && window.baselineData) {
-            timestamp = window.baselineData.timestamp;
-        }
+        const data = currentViewData();
+        const timestamp = data ? data.timestamp : null;
 
         const timestampElement = document.getElementById('planTimestamp');
         if (timestampElement) {
@@ -7401,6 +8228,9 @@ def get_plan_renderer_js():
             }
         });
 
+        // The History view's day picker
+        renderHistoryPicker();
+
         // Show/hide debug toggle based on view
         const debugToggleLabel = document.getElementById('debugToggleLabel');
         if (debugToggleLabel) {
@@ -7425,20 +8255,8 @@ def get_plan_renderer_js():
         // Only allow debug mode for the plan view
         const showDebug = (currentView === 'plan' && debugToggle) ? debugToggle.checked : false;
 
-        let data, timestamp, overrides;
-        if (currentView === 'plan') {
-            data = window.planData;
-            timestamp = data ? data.timestamp : null;
-            overrides = window.overridesData || {};
-        } else if (currentView === 'yesterday') {
-            data = window.yesterdayData;
-            timestamp = data ? data.timestamp : null;
-            overrides = {};
-        } else {
-            data = window.baselineData;
-            timestamp = data ? data.timestamp : null;
-            overrides = {};
-        }
+        const data = currentViewData();
+        const overrides = currentView === 'plan' ? (window.overridesData || {}) : {};
 
         if (!data) {
             if (currentView === 'plan') {
@@ -7448,17 +8266,19 @@ def get_plan_renderer_js():
                 // which it can't do without the recorded history of predbat.cost_today - say so rather
                 // than sitting on a loading message that will never go away
                 container.innerHTML = '<h2>No data for this view yet</h2>' +
-                    '<p>This view is computed about once an hour from what actually happened yesterday, ' +
-                    'so it stays empty for the first hour after Predbat starts.</p>' +
+                    '<p>This view is computed from what actually happened, on the first plan update after Predbat starts ' +
+                    'and again as each plan slot ends, so it should fill in within a few minutes.</p>' +
                     '<p>If it never fills in, Predbat could not read the history of <b>predbat.cost_today</b> ' +
                     'from Home Assistant. Check that the Home Assistant recorder is storing the Predbat entities ' +
                     '(see the recorder notes in the FAQ) and look for <i>Calculate yesterday</i> warnings in the Predbat log.</p>';
             }
+            // A warning raised for another view does not apply to this one
+            checkStaleness(null);
             return;
         }
 
-        // Check for stale data
-        checkStaleness(timestamp);
+        // Check for stale data - an older History day is a fixed record, never stale
+        checkStaleness(currentView === 'yesterday' && historyDay ? null : data);
 
         // Render table
         const editable = (currentView === 'plan');
@@ -7466,7 +8286,7 @@ def get_plan_renderer_js():
         // its rows are entirely in the past, unlike the live Plan view which is mostly
         // future predictions with no corresponding capture.
         const showHistoryLinks = (currentView === 'yesterday');
-        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
+        container.innerHTML = (currentView === 'yesterday' ? renderBillingSummary(data) : '') + renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
         setSelectedTimeOverrides(getSelectedTimeOverrides());
 
         // Apply dark mode colors if needed
@@ -7476,17 +8296,114 @@ def get_plan_renderer_js():
         adjustResponsiveSizes();
     }
 
-    // Check if data is stale (>15 minutes old)
-    function checkStaleness(timestamp) {
+    // How old a view's data may get before it is reported stale, when the data does not say. Each dataset
+    // carries refresh_minutes, the longest Predbat should take to republish it (the plan once per re-plan,
+    // the history views once per completed plan slot), and is stale a run (5 minutes) after that.
+    const STALE_MINUTES_DEFAULT = {plan: 15, yesterday: 60, baseline: 60};
+
+    // The data the current view shows
+    function currentViewData() {
+        if (currentView === 'yesterday' && historyDay) {
+            return window.historyDayData[historyDay] || null;
+        }
+        return currentView === 'plan' ? window.planData : (currentView === 'yesterday' ? window.yesterdayData : window.baselineData);
+    }
+
+    // Day picker under the History button: the older days Predbat has rebuilt, oldest first, then the default view
+    function renderHistoryPicker() {
+        const picker = document.getElementById('historyPicker');
+        if (!picker) return;
+        const days = window.historyDays || [];
+        if (currentView === 'yesterday' && days.length > 0) {
+            if (historyDay && !days.includes(historyDay)) {
+                historyDay = null;
+            }
+            const buttonStyle = 'padding: 4px 10px; border-radius: 3px; font-size: 13px; border: 1px solid #ddd; cursor: pointer;';
+            // A day with a saving session, free electricity or Axle event gets a dot: its bill may not match Predbat's pricing
+            const eventMark = (labels) => (labels && labels.length) ? ` <span style="color: #C08000;" title="${escapeAttr(labels.join(', ') + ' on this day: the bill may not show it the way Predbat priced it')}">&#9679;</span>` : '';
+            const dayEvents = window.historyDayEvents || {};
+            let html = '';
+            for (const day of days) {
+                const label = new Date(day + 'T12:00:00').toLocaleDateString([], {weekday: 'short', day: 'numeric', month: 'short'});
+                const selected = historyDay === day;
+                html += `<button class="history-day-button" onclick="selectHistoryDay('${day}')" style="${buttonStyle} background-color: ${selected ? '#4CAF50' : '#f0f0f0'}; color: ${selected ? 'white' : 'black'};">${label}${eventMark(dayEvents[day])}</button>`;
+            }
+            const latest = historyDay === null;
+            html += `<button class="history-day-button" onclick="selectHistoryDay(null)" style="${buttonStyle} background-color: ${latest ? '#4CAF50' : '#f0f0f0'}; color: ${latest ? 'white' : 'black'};">Yesterday + today${eventMark((window.yesterdayData || {}).history_events)}</button>`;
+            picker.innerHTML = html;
+            picker.style.display = 'flex';
+        } else {
+            picker.innerHTML = '';
+            picker.style.display = 'none';
+        }
+    }
+
+    // Show one older day (fetched once, on demand) or, with null, the default yesterday + today view
+    async function selectHistoryDay(day) {
+        historyDay = day;
+        renderHistoryPicker();
+        if (day && !window.historyDayData[day]) {
+            try {
+                const response = await fetch('./api/plan_history?date=' + encodeURIComponent(day));
+                if (response.ok) {
+                    window.historyDayData[day] = await response.json();
+                }
+            } catch (error) {
+                console.error('Error fetching history day:', error);
+            }
+        }
+        refreshPlan();
+    }
+
+    // The strip above a History view: the day's Predbat cost against what the supplier billed
+    function renderBillingSummary(jsonData) {
+        const summary = jsonData && jsonData.billing_summary;
+        if (!summary) return '';
+        const major = (jsonData.currency_symbols && jsonData.currency_symbols[0]) || '';
+        const money = value => (value === null || value === undefined) ? '&mdash;' : (value < 0 ? `-${major}${Math.abs(value).toFixed(2)}` : `${major}${value.toFixed(2)}`);
+        const kwh = pair => (pair && pair[0] !== null && pair[1] !== null) ? `${pair[0]} vs ${pair[1]}` : (pair && pair[1] !== null ? `? vs ${pair[1]}` : '&mdash;');
+        const diffColor = summary.diff > 0.005 ? '#b00' : (summary.diff < -0.005 ? '#080' : 'inherit');
+        const supplier = summary.supplier ? summary.supplier.charAt(0).toUpperCase() + summary.supplier.slice(1) : 'supplier';
+        let complete = '';
+        if (summary.billed_until) {
+            const when = new Date(summary.billed_until);
+            if (!isNaN(when.getTime())) {
+                complete = `billed to ${when.toLocaleString([], {weekday: 'short', hour: '2-digit', minute: '2-digit'})}`;
+                if (summary.missing_slots > 0) {
+                    complete += ` (${summary.missing_slots} slot${summary.missing_slots === 1 ? '' : 's'} before that not billed yet, shown as &mdash;)`;
+                }
+            }
+        }
+        const tile = (label, value, style) => `<div style="border: 1px solid #ccc; border-radius: 4px; padding: 6px 10px; font-size: 12px;">${label}<b style="display: block; font-size: 15px; ${style || ''}">${value}</b></div>`;
+        let html = '<div class="billing-summary" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px;">';
+        html += tile('Predbat cost', money(summary.predbat_cost));
+        html += tile(`Billed (${escapeAttr(supplier)})`, money(summary.billed_cost));
+        html += tile('Difference', (summary.diff > 0 ? '+' : '') + money(summary.diff), `color: ${diffColor};`);
+        html += tile('Import kWh', kwh(summary.import_kwh));
+        html += tile('Export kWh', kwh(summary.export_kwh));
+        html += tile('Standing charge', `${money(summary.standing_predbat)} vs ${money(summary.standing_billed)}`);
+        html += '</div>';
+        const pending = summary.export_pending_slots > 0 ? `${summary.export_pending_slots} slot${summary.export_pending_slots === 1 ? '' : 's'} billed for import only (export not billed yet), left out of these totals` : '';
+        const notes = [complete, pending, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
+        html += `<p style="font-size: 12px; margin: 0 0 8px 0; opacity: 0.8;">${notes.join(' &middot; ')}</p>`;
+        return html;
+    }
+
+    // Show the stale warning when the view's data is older than it should be; with no data, hide it
+    function checkStaleness(data) {
         const staleWarning = document.getElementById('staleWarning');
-        if (!timestamp || !staleWarning) return;
+        if (!staleWarning) return;
+        if (!data || !data.timestamp) {
+            staleWarning.style.display = 'none';
+            return;
+        }
 
-        const dataTime = new Date(timestamp);
-        const now = new Date();
-        const ageMs = now - dataTime;
-        const isStale = ageMs > 900000; // 15 minutes in milliseconds
-
-        if (isStale) {
+        // Never under 15 minutes, the limit before views had their own: a slow run or plan_random_delay can push a
+        // 5-minute re-plan past 10 minutes without anything being wrong
+        const limitMinutes = data.refresh_minutes ? Math.max(data.refresh_minutes + 5, 15) : (STALE_MINUTES_DEFAULT[currentView] || 15);
+        const ageMs = new Date() - new Date(data.timestamp);
+        if (ageMs > limitMinutes * 60000) {
+            staleWarning.textContent = '\u26A0\uFE0F Plan data is stale (last updated over ' + limitMinutes + ' minutes ago)';
             staleWarning.style.display = 'block';
         } else {
             staleWarning.style.display = 'none';
@@ -7516,10 +8433,8 @@ def get_plan_renderer_js():
             // Check if server says data is unchanged
             if (data.unchanged === true) {
                 // Data hasn't changed, no need to update
-                // Still check staleness based on plan data timestamp
-                if (window.planData && window.planData.timestamp) {
-                    checkStaleness(window.planData.timestamp);
-                }
+                // Still check staleness, against the data the current view shows
+                checkStaleness(currentViewData());
 
                 // Hide error message
                 const errorDiv = document.getElementById('planError');
@@ -7535,6 +8450,23 @@ def get_plan_renderer_js():
             window.baselineData = data.baseline;
             window.overridesData = data.overrides;
             window.overridesHash = data.overrides_hash;
+            if (Array.isArray(data.history_days)) {
+                // Older days are rebuilt as new billing lands, so drop what was fetched and re-read the one on show
+                window.historyDayData = {};
+                window.historyDays = data.history_days;
+                window.historyDayEvents = data.history_day_events || {};
+                if (historyDay && window.historyDays.includes(historyDay)) {
+                    try {
+                        const dayResponse = await fetch('./api/plan_history?date=' + encodeURIComponent(historyDay));
+                        if (dayResponse.ok) {
+                            window.historyDayData[historyDay] = await dayResponse.json();
+                        }
+                    } catch (error) {
+                        console.error('Error refreshing history day:', error);
+                    }
+                }
+                renderHistoryPicker();
+            }
 
             // Update newestDataTimestamp to the newest timestamp from the data we just received
             const timestamps = [];
@@ -7605,7 +8537,7 @@ def get_plan_renderer_js():
     return text
 
 
-def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon, refresh=0, codemirror=False):
+def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon, refresh=0, codemirror=False, chat_enabled=False):
     """
     Return the HTML header for a page
     """
@@ -7617,7 +8549,15 @@ def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, 
     text += """
 <script>
 // Apply dark mode immediately before CSS is parsed to prevent flash of white
-if (localStorage.getItem('darkMode') === 'true') {
+// Falls back to the OS/browser prefers-color-scheme setting when the user hasn't made an explicit choice (batpred#4800)
+function getDarkModePreference() {
+    const storedDarkMode = localStorage.getItem('darkMode');
+    if (storedDarkMode !== null) {
+        return storedDarkMode === 'true';
+    }
+    return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+if (getDarkModePreference()) {
     document.documentElement.classList.add('dark-mode');
     document.addEventListener('DOMContentLoaded', function() {
         if (document.body) {
@@ -7937,7 +8877,7 @@ window.onload = function() {
     applyDarkMode();
 };
 function applyDarkMode() {
-    const darkModeEnabled = localStorage.getItem('darkMode') === 'true';
+    const darkModeEnabled = getDarkModePreference();
     if (darkModeEnabled) {
         document.body.classList.add('dark-mode');
         document.documentElement.classList.add('dark-mode');
@@ -7957,6 +8897,22 @@ function applyDarkMode() {
         }
     }
 };
+
+// Re-apply if the OS/browser theme changes while no explicit preference is stored (batpred#4800)
+if (window.matchMedia) {
+    const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleDarkModePreferenceChange = function() {
+        if (localStorage.getItem('darkMode') === null) {
+            applyDarkMode();
+        }
+    };
+    // Safari < 14 and Chrome < 39 only implement the older, deprecated addListener() method
+    if (darkModeMediaQuery.addEventListener) {
+        darkModeMediaQuery.addEventListener('change', handleDarkModePreferenceChange);
+    } else if (darkModeMediaQuery.addListener) {
+        darkModeMediaQuery.addListener(handleDarkModePreferenceChange);
+    }
+}
 
 function toggleDarkMode() {
     const isDarkMode = document.body.classList.toggle('dark-mode');
@@ -8025,6 +8981,14 @@ function downloadLiveApps() {
     }
 }
 
+function downloadFileApps() {
+    if (confirm(`Download apps.yaml with real credentials?\\n\\nOK = full unmasked file\\nCancel = masked file (credentials redacted)`)) {
+        window.location.href = './debug_apps?masked=0';
+    } else {
+        window.location.href = './debug_apps?masked=1';
+    }
+}
+
 function toggleSwitch(element, fieldName) {
     // Toggle the active class
     element.classList.toggle('active');
@@ -8066,6 +9030,11 @@ function toggleSwitch(element, fieldName) {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/mode/yaml/yaml.min.js"></script>
+    <!-- Full-document search -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/dialog/dialog.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/dialog/dialog.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/search/searchcursor.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/search/search.min.js"></script>
 
     <!-- CodeMirror Theme -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/theme/monokai.min.css">
@@ -8077,11 +9046,11 @@ function toggleSwitch(element, fieldName) {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/lint/lint.min.css">
     </head>"""
     text += "</head><body>"
-    text += get_menu_html(calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon)
+    text += get_menu_html(calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon, chat_enabled)
     return text
 
 
-def get_menu_html(calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon):
+def get_menu_html(calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon, chat_enabled=False):
     """
     Return the Predbat Menu page as HTML
     """
@@ -8234,6 +9203,105 @@ border-color: #555;
 body.dark-mode .dark-mode-toggle button:hover {
 background-color: #666;
 }
+
+/* Advanced sub-menu. The popup is a sibling of the menu bar, not a child, and is position: fixed and
+   placed under its toggle by positionMenuDropdown(): the bar scrolls horizontally and is itself fixed,
+   and WebKit clips a fixed child of such an element, so inside it the popup opened invisibly on iOS. */
+.menu-dropdown {
+display: flex;
+flex-shrink: 0;
+}
+
+.menu-dropdown-toggle {
+background: none;
+border: none;
+color: #333;
+padding: 14px 16px;
+font-size: 16px;
+font-family: inherit;
+cursor: pointer;
+white-space: nowrap;
+}
+
+.menu-dropdown-toggle:hover {
+background-color: #f0f0f0;
+color: #4CAF50;
+}
+
+.menu-dropdown-toggle.active {
+background-color: #4CAF50;
+color: white;
+}
+
+.menu-dropdown-content {
+display: none;
+position: fixed;
+flex-direction: column;
+min-width: 180px;
+background-color: #ffffff;
+border: 1px solid #ddd;
+box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+z-index: 1001;
+}
+
+.menu-dropdown-content.open {
+display: flex;
+}
+
+.menu-dropdown-content a {
+color: #333;
+padding: 14px 16px;
+text-decoration: none;
+font-size: 16px;
+display: flex;
+align-items: center;
+white-space: nowrap;
+}
+
+.menu-dropdown-content a:hover {
+background-color: #f0f0f0;
+color: #4CAF50;
+}
+
+.menu-dropdown-content a.active {
+background-color: #4CAF50;
+color: white;
+}
+
+body.dark-mode .menu-dropdown-content a {
+color: white;
+}
+
+body.dark-mode .menu-dropdown-content a:hover {
+background-color: #2c652f;
+color: white;
+}
+
+body.dark-mode .menu-dropdown-content a.active {
+background-color: #4CAF50;
+color: white;
+}
+
+/* !important because the shared dark-mode rule paints every button red with !important */
+body.dark-mode .menu-dropdown-toggle {
+background-color: transparent !important;
+color: white !important;
+}
+
+body.dark-mode .menu-dropdown-toggle:hover {
+background-color: #2c652f !important;
+color: white !important;
+}
+
+body.dark-mode .menu-dropdown-toggle.active {
+background-color: #4CAF50 !important;
+color: white !important;
+}
+
+body.dark-mode .menu-dropdown-content {
+background-color: #1e1e1e;
+border-color: #333;
+}
 </style>
 
 <script>
@@ -8250,10 +9318,57 @@ function storeActiveMenuItem(path) {
 localStorage.setItem('activeMenuItem', path);
 }
 
+// Open or close a menu-bar sub-menu (its popup is a sibling of the bar, see the CSS)
+function toggleMenuDropdown(event, contentId) {
+event.stopPropagation();
+const content = document.getElementById(contentId);
+if (!content) {
+    return;
+}
+const opening = !content.classList.contains('open');
+closeMenuDropdowns();
+if (opening) {
+    content.classList.add('open');
+    positionMenuDropdowns();
+}
+}
+
+// Place each open popup under its toggle
+function positionMenuDropdowns() {
+document.querySelectorAll('.menu-dropdown-content.open').forEach(content => {
+    const toggle = document.querySelector('.menu-dropdown-toggle[data-menu="' + content.id + '"]');
+    if (!toggle) {
+        return;
+    }
+    const rect = toggle.getBoundingClientRect();
+    content.style.top = rect.bottom + 'px';
+    content.style.left = Math.max(0, Math.min(rect.left, window.innerWidth - content.offsetWidth)) + 'px';
+});
+}
+
+function closeMenuDropdowns() {
+document.querySelectorAll('.menu-dropdown-content.open').forEach(content => content.classList.remove('open'));
+}
+
+// A click anywhere else closes an open sub-menu. Scrolling the bar or resizing only moves it: on a
+// phone a tap right after a swipe, or the address bar hiding, fires those events just after it opens.
+document.addEventListener('click', function(event) {
+if (!event.target.closest('.menu-dropdown, .menu-dropdown-content')) {
+    closeMenuDropdowns();
+}
+});
+window.addEventListener('resize', positionMenuDropdowns);
+document.addEventListener('DOMContentLoaded', function() {
+const menuBar = document.querySelector('.menu-bar');
+if (menuBar) {
+    menuBar.addEventListener('scroll', positionMenuDropdowns);
+}
+});
+
 // Function to set the active menu item
 function setActiveMenuItem() {
 // Get all menu links
-const menuLinks = document.querySelectorAll('.menu-bar a');
+const menuLinks = document.querySelectorAll('.menu-bar a, .menu-dropdown-content a');
 
 // Get current page path from window location
 let currentPath = window.location.pathname;
@@ -8345,8 +9460,14 @@ if (!activeFound && menuLinks.length > 0) {
     storeActiveMenuItem(new URL(defaultLink.href).pathname);
 }
 
-// Scroll active item into view
-const activeItem = document.querySelector('.menu-bar a.active');
+// A page inside a sub-menu lights up the sub-menu's toggle too - its own link is hidden until opened
+document.querySelectorAll('.menu-dropdown-toggle[data-menu]').forEach(toggle => {
+    const content = document.getElementById(toggle.dataset.menu);
+    toggle.classList.toggle('active', !!(content && content.querySelector('a.active')));
+});
+
+// Scroll active item into view (a sub-menu page has no link in the bar, so its lit toggle stands in)
+const activeItem = document.querySelector('.menu-bar a.active, .menu-bar .menu-dropdown-toggle.active');
 if (activeItem) {
     // Scroll with a slight offset to make it more visible
     const menuBar = document.querySelector('.menu-bar');
@@ -8399,15 +9520,12 @@ function stopStatusUpdates() {
 }
 
 // Initialise menu on page load
-    document.addEventListener("DOMContentLoaded", function() {
-    // Initialise in-memory batch state (ensures a fresh state on each load)
-    _predbatSelectedTimeOverrides = null;
-    _predbatBatchActive = false;
-    setActiveMenuItem();
-    startStatusUpdates();
+document.addEventListener("DOMContentLoaded", function() {
+setActiveMenuItem();
+startStatusUpdates();
 
 // For each menu item, add click handler to set it as active
-const menuLinks = document.querySelectorAll('.menu-bar a');
+const menuLinks = document.querySelectorAll('.menu-bar a, .menu-dropdown-content a');
 menuLinks.forEach(link => {
     link.addEventListener('click', function(e) {
         // Don't override external links (like Docs)
@@ -8441,7 +9559,7 @@ applyDarkMode();
 window.addEventListener('resize', function() {
 // Don't reload the page, just make sure the active menu item is visible
 setTimeout(function() {
-    const activeItem = document.querySelector('.menu-bar a.active');
+    const activeItem = document.querySelector('.menu-bar a.active, .menu-bar .menu-dropdown-toggle.active');
     if (activeItem) {
         const menuBar = document.querySelector('.menu-bar');
         const activeItemLeft = activeItem.offsetLeft;
@@ -8472,21 +9590,23 @@ setTimeout(function() {
     </div>
 </div>
 <a href='./dash'>Dash</a>
+<a href='./metrics_dashboard'>Metrics</a>
 <a href='./plan'>Plan</a>
-<a href='./entity'>Entities</a>
 <a href='./charts'>Charts</a>
+<a href='./entity'>Entities</a>
 <a href='./compare'>Compare</a>
 <a href='./annual'>WhatIf</a>
-<a href='./log'>Log</a>
-<a href='./config'>Config</a>
-<a href='./apps'>Apps"""
+"""
+        + ("<a href='./chat'>Chat</a>\n" if chat_enabled else "")
+        + """<a href='./log'>Log</a>
+<div class="menu-dropdown">
+<button class="menu-dropdown-toggle" type="button" data-menu="settings-menu" onclick="toggleMenuDropdown(event, 'settings-menu')">Settings"""
         + config_warning
-        + """</a>
-<a href='./components'>Components</a>
-<a href='./apps_editor'>Editor</a>
-<a href='./browse'>Browse</a>
-<a href='./internals'>Internals</a>
-<a href='./metrics_dashboard'>Metrics</a>
+        + """ &#9662;</button>
+</div>
+<div class="menu-dropdown">
+<button class="menu-dropdown-toggle" type="button" data-menu="advanced-menu" onclick="toggleMenuDropdown(event, 'advanced-menu')">Advanced &#9662;</button>
+</div>
 <a href='https://springfall2008.github.io/batpred/'>Docs</a>
 <div class="dark-mode-toggle">
     """
@@ -8494,6 +9614,21 @@ setTimeout(function() {
         + """
     <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
 </div>
+</div>
+<!-- Sub-menu popups sit outside .menu-bar on purpose: WebKit clips a position: fixed child of the fixed, scrolling bar -->
+<div class="menu-dropdown-content" id="settings-menu">
+<a href='./apps'>Apps"""
+        + config_warning
+        + """</a>
+<a href='./config'>Config</a>
+<a href='./components'>Components</a>
+<a href='./apps_editor'>Editor</a>
+</div>
+<div class="menu-dropdown-content" id="advanced-menu">
+<a href='./discovery'>Discovery</a>
+<a href='./browse'>Browse</a>
+<a href='./internals'>Internals</a>
+<a href='./kraken_key'>Kraken API Key</a>
 </div>
 """
     )
@@ -8734,6 +9869,205 @@ body.dark-mode .download-button:hover {
     """
 
 
+def get_kraken_key_page_html():
+    """
+    Return the body of the Kraken API key generator page: a short how-to, the token form and its script.
+
+    The script posts to ./api/kraken_key and renders every value with textContent, never innerHTML.
+    """
+    return """
+<style>
+.kraken-key { max-width: 820px; }
+.kraken-key p, .kraken-key label { white-space: normal; } /* the shared header sets p { white-space: nowrap } */
+.kraken-key ol { padding-left: 20px; }
+.kraken-key li { margin-bottom: 4px; }
+.kraken-key textarea { width: 100%; min-height: 90px; font-family: monospace; font-size: 13px; box-sizing: border-box; }
+.kraken-key select, .kraken-key button { font-size: 15px; padding: 6px 12px; margin: 8px 8px 8px 0; }
+.kraken-key code, .kraken-key pre { background-color: #f4f4f4; border-radius: 4px; padding: 2px 4px; }
+.kraken-key pre { padding: 8px; white-space: pre-wrap; word-break: break-all; }
+.kraken-key-note { color: #666; font-size: 14px; }
+.kraken-key-result { margin-top: 16px; padding: 12px; border-radius: 6px; border: 1px solid #ddd; }
+.kraken-key-result:empty { display: none; }
+.kraken-key-warning { border-color: #f0ad4e; background-color: #fff8e6; }
+.kraken-key-error { border-color: #f44336; background-color: #fdecea; }
+.kraken-key-success { border-color: #4CAF50; background-color: #edf7ed; }
+.kraken-key-value { width: 100%; font-family: monospace; font-size: 14px; padding: 6px; box-sizing: border-box; }
+body.dark-mode .kraken-key code, body.dark-mode .kraken-key pre { background-color: #2a2a2a; }
+body.dark-mode .kraken-key-note { color: #aaa; }
+body.dark-mode .kraken-key-result { border-color: #444; }
+body.dark-mode .kraken-key-warning { background-color: #3a2f12; }
+body.dark-mode .kraken-key-error { background-color: #3a1a1a; }
+body.dark-mode .kraken-key-success { background-color: #1a3320; }
+body.dark-mode .kraken-key textarea, body.dark-mode .kraken-key-value { background-color: #2a2a2a; color: #e0e0e0; border-color: #555; }
+</style>
+
+<div class="kraken-key">
+<h2>Kraken API key generator</h2>
+<p>Creates an API key for an E.ON Next or EDF account, for <code>kraken_auth_method: api_key</code> in <code>apps.yaml</code>.
+You need the sign-in token your browser sends to Kraken:</p>
+<ol>
+<li>Sign in to your E.ON Next (or EDF) online account in a desktop browser.</li>
+<li>Press <b>F12</b> to open the developer tools and choose the <b>Network</b> tab.</li>
+<li>Refresh the page, type <code>graphql</code> in the filter box and click one of the requests.</li>
+<li>Under <b>Request Headers</b>, copy the value of <b>Authorization</b> (a long string starting <code>eyJ</code>) and paste it below.</li>
+</ol>
+<p class="kraken-key-note">The token expires after a short time, so use it straight away. Predbat sends it only to your supplier's Kraken API and does not keep the token or the key.</p>
+
+<label for="kraken-key-provider">Supplier</label>
+<select id="kraken-key-provider">
+<option value="eon">E.ON Next</option>
+<option value="edf">EDF</option>
+</select>
+<textarea id="kraken-key-token" placeholder="eyJ..." autocomplete="off" spellcheck="false"></textarea>
+<button type="button" id="kraken-key-check" onclick="krakenKeyCheck()">Check account</button>
+
+<div id="kraken-key-result" class="kraken-key-result"></div>
+</div>
+
+<script>
+function krakenKeyEl(tag, text, className) {
+    const el = document.createElement(tag);
+    if (text !== undefined && text !== null) el.textContent = text;
+    if (className) el.className = className;
+    return el;
+}
+
+function krakenKeyResult(kind) {
+    const box = document.getElementById('kraken-key-result');
+    box.className = 'kraken-key-result' + (kind ? ' kraken-key-' + kind : '');
+    box.replaceChildren();
+    return box;
+}
+
+async function krakenKeyPost(action) {
+    const body = {
+        provider: document.getElementById('kraken-key-provider').value,
+        token: document.getElementById('kraken-key-token').value,
+        action: action
+    };
+    try {
+        const response = await fetch('./api/kraken_key', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+            cache: 'no-store'
+        });
+        return await response.json();
+    } catch (e) {
+        return {status: 'error', error: 'Could not reach Predbat: ' + e};
+    }
+}
+
+function krakenKeyBusy(busy) {
+    document.querySelectorAll('.kraken-key button').forEach(b => b.disabled = busy);
+}
+
+async function krakenKeyCheck() {
+    krakenKeyBusy(true);
+    krakenKeyResult().appendChild(krakenKeyEl('p', 'Checking...'));
+    const result = await krakenKeyPost('check');
+    krakenKeyBusy(false);
+    krakenKeyRender(result);
+}
+
+async function krakenKeyGenerate() {
+    krakenKeyBusy(true);
+    krakenKeyResult().appendChild(krakenKeyEl('p', 'Generating...'));
+    const result = await krakenKeyPost('generate');
+    krakenKeyBusy(false);
+    krakenKeyRender(result);
+}
+
+function krakenKeyRender(result) {
+    if (result.status === 'none') {
+        const box = krakenKeyResult();
+        box.appendChild(krakenKeyEl('p', 'This account has no API key yet.'));
+        const button = krakenKeyEl('button', 'Generate key');
+        button.type = 'button';
+        button.onclick = krakenKeyGenerate;
+        box.appendChild(button);
+    } else if (result.status === 'existing') {
+        const box = krakenKeyResult('warning');
+        const p = krakenKeyEl('p', 'This account already has an API key: ');
+        p.appendChild(krakenKeyEl('code', result.masked));
+        box.appendChild(p);
+        box.appendChild(krakenKeyEl('p', 'Kraken never shows an existing key in full, so the only way to get one is to generate a new key. That replaces the old key: anything else using it (another app, or another copy of Predbat) will stop working until you give it the new one.'));
+        krakenKeyConfirmGenerate(box, 'I understand the old key will stop working', 'Generate new key');
+    } else if (result.status === 'unknown') {
+        // Kraken answered without saying whether a key exists, so treat it like an existing key
+        const box = krakenKeyResult('warning');
+        box.appendChild(krakenKeyEl('p', 'Predbat could not tell whether this account already has an API key. If it does, generating a new one replaces it: anything else using the old key (another app, or another copy of Predbat) will stop working until you give it the new one.'));
+        krakenKeyConfirmGenerate(box, 'I understand any existing key will stop working', 'Generate key');
+    } else if (result.status === 'full') {
+        krakenKeyShow(result.key, true, 'This account already has an API key and Kraken returned it in full, so nothing was changed.');
+    } else if (result.status === 'generated') {
+        krakenKeyShow(result.key, result.verified, 'A new API key has been generated.');
+    } else {
+        krakenKeyResult('error').appendChild(krakenKeyEl('p', result.error || 'Something went wrong'));
+    }
+}
+
+// A Generate button that stays disabled until the user ticks a confirmation box
+function krakenKeyConfirmGenerate(box, confirmText, buttonText) {
+    const label = krakenKeyEl('label');
+    const confirm = document.createElement('input');
+    confirm.type = 'checkbox';
+    label.appendChild(confirm);
+    label.appendChild(document.createTextNode(' ' + confirmText));
+    box.appendChild(label);
+    box.appendChild(document.createElement('br'));
+    const button = krakenKeyEl('button', buttonText);
+    button.type = 'button';
+    button.disabled = true;
+    confirm.onchange = () => { button.disabled = !confirm.checked; };
+    button.onclick = krakenKeyGenerate;
+    box.appendChild(button);
+}
+
+function krakenKeyShow(key, verified, heading) {
+    // The token is no longer needed once the key is on screen
+    document.getElementById('kraken-key-token').value = '';
+    const provider = document.getElementById('kraken-key-provider').value;
+    const box = krakenKeyResult(verified ? 'success' : 'warning');
+    box.appendChild(krakenKeyEl('p', heading + ' This is the only time Predbat shows it, so copy it now.'));
+    if (!verified) {
+        box.appendChild(krakenKeyEl('p', 'Signing in with the new key did not work straight away. It may take a minute to become active; if Predbat still cannot sign in with it, generate another - you will need a fresh token from your browser, as this one has been cleared.'));
+    }
+    const input = krakenKeyEl('input', null, 'kraken-key-value');
+    input.type = 'text';
+    input.readOnly = true;
+    input.value = key;
+    box.appendChild(input);
+    const copy = krakenKeyEl('button', 'Copy key');
+    copy.type = 'button';
+    copy.onclick = () => krakenKeyCopy(input, copy);
+    box.appendChild(copy);
+    box.appendChild(krakenKeyEl('p', 'Add to apps.yaml:'));
+    box.appendChild(krakenKeyEl('pre', 'kraken_provider: ' + provider + '\\nkraken_account_id: A-12345678  # your account number, from your bill\\nkraken_auth_method: api_key\\nkraken_key: !secret kraken_key'));
+    box.appendChild(krakenKeyEl('p', 'And to secrets.yaml:'));
+    box.appendChild(krakenKeyEl('pre', 'kraken_key: ' + key));
+}
+
+function krakenKeyCopy(input, button) {
+    const done = () => { button.textContent = 'Copied'; };
+    // Copying can be refused (clipboard permission, an older browser): select the key so the user
+    // can copy it by hand, since it is only shown this once
+    const failed = () => { input.select(); button.textContent = 'Copy failed - press Ctrl+C (Cmd+C on a Mac)'; };
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(input.value).then(done).catch(failed);
+    } else {
+        input.select();
+        try {
+            if (document.execCommand('copy')) { done(); } else { failed(); }
+        } catch (e) {
+            failed();
+        }
+    }
+}
+</script>
+"""
+
+
 def get_internals_css():
     """
     Return CSS styles for the internals page
@@ -8775,6 +10109,7 @@ def get_internals_css():
     padding: 10px 15px;
     cursor: pointer;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
     background-color: #fff;
@@ -8788,18 +10123,24 @@ def get_internals_css():
 .thread-name {
     font-weight: bold;
     color: #2196F3;
-    flex: 0 0 200px;
+    flex: 0 1 200px;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .thread-id {
     color: #666;
     font-size: 0.9em;
-    flex: 0 0 150px;
+    flex: 0 1 150px;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .thread-status {
     color: #4CAF50;
     font-size: 0.9em;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .thread-stack {

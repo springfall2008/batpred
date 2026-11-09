@@ -11,7 +11,8 @@
 
 from carbon import CarbonAPI
 import aiohttp
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+import asyncio
 from datetime import datetime, timezone, timedelta
 from const import TIME_FORMAT_HA
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
@@ -100,7 +101,7 @@ def test_carbon(my_predbat=None):
         ("publish_forecast", _test_publish_carbon_data_forecast, "Publish forecast data"),
         ("publish_unknown", _test_publish_carbon_data_unknown, "Publish unknown state"),
         ("postcode_strip", _test_postcode_stripping, "Postcode stripping"),
-        ("multiple_dates", _test_multiple_date_fetches, "Multiple date fetches"),
+        ("single_fetch", _test_single_fw48h_fetch, "Single fw48h fetch in ISO8601 format"),
         ("time_format", _test_time_format_conversion, "Time format conversion"),
         ("timezone", _test_timezone_handling, "Timezone handling"),
         ("json_collection", _test_json_data_collection, "JSON data collection"),
@@ -108,6 +109,18 @@ def test_carbon(my_predbat=None):
         ("run_first", _test_run_first_call, "run() first call"),
         ("run_interval", _test_run_15min_interval, "run() 15-minute interval"),
         ("auto_config", _test_automatic_config_flow, "Automatic config flow"),
+        ("replicate_forward", _test_carbon_replicate_extends_forward, "Replicate forecast forward when data runs out"),
+        ("replicate_no_data", _test_carbon_replicate_no_data, "Replicate with no data at all"),
+        ("replicate_full", _test_carbon_replicate_full_coverage, "Replicate with full coverage"),
+        ("replicate_gap", _test_carbon_replicate_gap, "Replicate fills a gap in the forecast"),
+        ("fetch_short_warns", _test_fetch_short_forecast_warns, "Short API forecast warns once at fetch"),
+        ("fetch_full_quiet", _test_fetch_full_forecast_quiet, "Full API forecast fetches without a warning"),
+        ("intensity_warn_thin", _test_intensity_warn_only_when_thin, "Replication only warns once coverage is thin"),
+        ("discovery_record", _test_carbon_discovery_record, "Carbon forecast record and its binding"),
+        ("discovery_entity_only_when_published", _test_carbon_discovery_entity_only_when_published, "Binding claimed only once published"),
+        ("discovery_none_without_postcode", _test_carbon_discovery_none_without_postcode, "No record without a postcode"),
+        ("discovery_round_trip", _test_carbon_discovery_round_trip, "Record round-trips through the Coordinator"),
+        ("discovery_run_files_report", _test_carbon_discovery_run_files_report, "run() files the report every cycle"),
     ]
 
     print("\n" + "=" * 70)
@@ -159,7 +172,7 @@ def _test_carbon_initialization(my_predbat=None):
         print("  ✗ ERROR: Postcode not set correctly")
         failed = 1
 
-    if api.automatic != True:
+    if api.automatic is not True:
         print("  ✗ ERROR: Automatic flag not set correctly")
         failed = 1
 
@@ -188,11 +201,11 @@ def _test_fetch_carbon_data_success(my_predbat=None):
 
     with patch("carbon.aiohttp.ClientSession") as mock_session_class:
         mock_session_class.return_value = mock_session
-        result = run_async(api.fetch_carbon_data())
+        run_async(api.fetch_carbon_data())
 
-        # Check data was collected (3 points per call * 2 calls)
-        if len(api.carbon_data_points) != 6:
-            print(f"ERROR: Expected 6 data points, got {len(api.carbon_data_points)}")
+        # Check data was collected (3 points from the single fw48h call)
+        if len(api.carbon_data_points) != 3:
+            print(f"ERROR: Expected 3 data points, got {len(api.carbon_data_points)}")
             return 1
 
         # Check data format
@@ -230,9 +243,9 @@ def _test_fetch_carbon_data_http_error(my_predbat=None):
         mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
-        # Should increment failures_total (2 times, one per API call)
-        if api.failures_total != initial_failures + 2:
-            print(f"ERROR: Expected failures_total to increment by 2, got {api.failures_total}")
+        # Should increment failures_total once for the single API call
+        if api.failures_total != initial_failures + 1:
+            print(f"ERROR: Expected failures_total to increment by 1, got {api.failures_total}")
             return 1
 
         # Should not have collected any data
@@ -257,9 +270,9 @@ def _test_fetch_carbon_data_timeout(my_predbat=None):
         mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
-        # Should increment failures_total (2 times)
-        if api.failures_total != initial_failures + 2:
-            print(f"ERROR: Expected failures_total to increment by 2, got {api.failures_total}")
+        # Should increment failures_total once for the single API call
+        if api.failures_total != initial_failures + 1:
+            print(f"ERROR: Expected failures_total to increment by 1, got {api.failures_total}")
             return 1
 
         # Should not have collected any data
@@ -315,9 +328,9 @@ def _test_fetch_carbon_data_empty(my_predbat=None):
         mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
-        # Should increment failures_total for empty data (2 times)
-        if api.failures_total != initial_failures + 2:
-            print(f"ERROR: Expected failures_total to increment by 2, got {api.failures_total}")
+        # Should increment failures_total once for the single API call
+        if api.failures_total != initial_failures + 1:
+            print(f"ERROR: Expected failures_total to increment by 1, got {api.failures_total}")
             return 1
 
         # Should log warning about no data points
@@ -369,9 +382,9 @@ def _test_fetch_carbon_data_cache_refresh(my_predbat=None):
         mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
-        # Should make API calls (cache expired)
-        if mock_session.get.call_count != 2:
-            print(f"ERROR: Expected 2 API calls (cache expired), got {mock_session.get.call_count}")
+        # Should make the API call (cache expired)
+        if mock_session.get.call_count != 1:
+            print(f"ERROR: Expected 1 API call (cache expired), got {mock_session.get.call_count}")
             return 1
 
         # Should have collected data
@@ -552,9 +565,9 @@ def _test_postcode_stripping(my_predbat=None):
     return 0
 
 
-def _test_multiple_date_fetches(my_predbat=None):
-    """Test that two API calls are made (date_now and date_plus_48)"""
-    print("Test: Carbon API multiple date fetches")
+def _test_single_fw48h_fetch(my_predbat=None):
+    """Test a single fw48h request is made from now in the ISO8601 format the API specifies"""
+    print("Test: Carbon API single fw48h fetch")
 
     api = MockCarbonAPI()
     api.postcode = "BS16"
@@ -573,25 +586,25 @@ def _test_multiple_date_fetches(my_predbat=None):
 
             run_async(api.fetch_carbon_data())
 
-            # Should make exactly 2 API calls
-            if mock_session.get.call_count != 2:
-                print(f"ERROR: Expected 2 API calls, got {mock_session.get.call_count}")
+            # fw48h from now covers the whole published forecast horizon, so one call is enough
+            if mock_session.get.call_count != 1:
+                print(f"ERROR: Expected 1 API call, got {mock_session.get.call_count}")
                 return 1
 
-            # Check URLs contain different dates
-            calls = mock_session.get.call_args_list
-            url1 = calls[0][0][0]
-            url2 = calls[1][0][0]
+            url = mock_session.get.call_args_list[0][0][0]
 
-            if "2025-12-20" not in url1:
-                print(f"ERROR: First call should contain date 2025-12-20")
+            # The API specifies a YYYY-MM-DDThh:mmZ datetime, a bare date is not a documented input
+            expected_url = "https://api.carbonintensity.org.uk/regional/intensity/2025-12-20T14:00Z/fw48h/postcode/BS16"
+            if url != expected_url:
+                print(f"ERROR: Expected URL '{expected_url}', got '{url}'")
                 return 1
 
-            if "2025-12-22" not in url2:  # 48 hours later
-                print(f"ERROR: Second call should contain date 2025-12-22")
+            # The request must be built in UTC, a local date is a day out around midnight under BST
+            if mock_datetime.now.call_args[0] != (timezone.utc,):
+                print(f"ERROR: Expected datetime.now(timezone.utc), got now{mock_datetime.now.call_args[0]}")
                 return 1
 
-    print("  ✓ Multiple date fetches working correctly")
+    print("  ✓ Single fw48h fetch working correctly")
     return 0
 
 
@@ -673,67 +686,42 @@ def _test_timezone_handling(my_predbat=None):
 
 
 def _test_json_data_collection(my_predbat=None):
-    """Test data collection from multiple API calls"""
-    print("Test: Carbon API data collection from multiple dates")
+    """Test every data point in the API response is collected"""
+    print("Test: Carbon API JSON data collection")
 
     api = MockCarbonAPI()
     api.postcode = "BS16"
 
-    # Different responses for each call
-    response1 = {"data": {"regionid": 11, "postcode": "BS16", "data": [{"from": "2025-12-20T14:00Z", "to": "2025-12-20T14:30Z", "intensity": {"forecast": 265}}]}}
+    response = {
+        "data": {
+            "regionid": 11,
+            "postcode": "BS16",
+            "data": [
+                {"from": "2025-12-20T14:00Z", "to": "2025-12-20T14:30Z", "intensity": {"forecast": 265}},
+                {"from": "2025-12-20T14:30Z", "to": "2025-12-20T15:00Z", "intensity": {"forecast": 232}},
+                {"from": "2025-12-20T15:00Z", "to": "2025-12-20T15:30Z", "intensity": {"forecast": 300}},
+            ],
+        }
+    }
 
-    response2 = {"data": {"regionid": 11, "postcode": "BS16", "data": [{"from": "2025-12-22T14:00Z", "to": "2025-12-22T14:30Z", "intensity": {"forecast": 300}}]}}
-
-    # Create mock responses
-    mock_response1 = create_aiohttp_mock_response(status=200, json_data=response1)
-    mock_response2 = create_aiohttp_mock_response(status=200, json_data=response2)
-
-    # Create mock session with side_effect for get() to return different responses
-    mock_session = MagicMock()
-    call_count = [0]
-
-    def get_side_effect(*args, **kwargs):
-        mock_context = MagicMock()
-        response = mock_response1 if call_count[0] == 0 else mock_response2
-        call_count[0] += 1
-
-        async def aenter(*a, **kw):
-            return response
-
-        async def aexit(*a):
-            return None
-
-        mock_context.__aenter__ = aenter
-        mock_context.__aexit__ = aexit
-        return mock_context
-
-    mock_session.get = MagicMock(side_effect=get_side_effect)
-
-    async def session_aenter(*args):
-        return mock_session
-
-    async def session_aexit(*args):
-        return None
-
-    mock_session.__aenter__ = session_aenter
-    mock_session.__aexit__ = session_aexit
+    mock_response = create_aiohttp_mock_response(status=200, json_data=response)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
     with patch("carbon.aiohttp.ClientSession") as mock_session_class:
         mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
-        # Should have collected data from both calls
-        if len(api.carbon_data_points) != 2:
-            print(f"ERROR: Expected 2 data points (1 from each call), got {len(api.carbon_data_points)}")
+        if len(api.carbon_data_points) != 3:
+            print(f"ERROR: Expected 3 data points, got {len(api.carbon_data_points)}")
             return 1
 
-        # Check both data points are present
-        intensities = [p["intensity"] for p in api.carbon_data_points]
-        if 265 not in intensities or 300 not in intensities:
-            print(f"ERROR: Missing expected intensities. Got: {intensities}")
+        # Points must be kept in the order the API returned them
+        intensities = [point["intensity"] for point in api.carbon_data_points]
+        if intensities != [265, 232, 300]:
+            print(f"ERROR: Expected intensities [265, 232, 300], got {intensities}")
             return 1
 
-    print("  ✓ Data collection from multiple dates working correctly")
+    print("  ✓ Data collection from the API response working correctly")
     return 0
 
 
@@ -754,8 +742,8 @@ def _test_failure_counter(my_predbat=None):
         run_async(api.fetch_carbon_data())
         failures_after_404 = api.failures_total
 
-        if failures_after_404 != 2:  # 2 API calls, both fail
-            print(f"ERROR: Expected failures_total=2 after HTTP errors, got {failures_after_404}")
+        if failures_after_404 != 1:  # 1 API call, which fails
+            print(f"ERROR: Expected failures_total=1 after HTTP errors, got {failures_after_404}")
             return 1
 
     # Test with timeout
@@ -765,8 +753,8 @@ def _test_failure_counter(my_predbat=None):
         run_async(api.fetch_carbon_data())
         failures_after_timeout = api.failures_total
 
-        if failures_after_timeout != 4:  # Previous 2 + new 2
-            print(f"ERROR: Expected failures_total=4 after timeout, got {failures_after_timeout}")
+        if failures_after_timeout != 2:  # Previous 1 + new 1
+            print(f"ERROR: Expected failures_total=2 after timeout, got {failures_after_timeout}")
             return 1
 
     print("  ✓ Failure counter working correctly")
@@ -793,13 +781,13 @@ def _test_run_first_call(my_predbat=None):
         # Call run with first=True
         result = run_async(api.run(seconds=0, first=True))
 
-        if result != True:
+        if result is not True:
             print(f"ERROR: run() should return True")
             return 1
 
         # Should have made API calls
-        if mock_session.get.call_count != 2:
-            print(f"ERROR: Expected 2 API calls on first run, got {mock_session.get.call_count}")
+        if mock_session.get.call_count != 1:
+            print(f"ERROR: Expected 1 API call on first run, got {mock_session.get.call_count}")
             return 1
 
     print("  ✓ First run calling fetch correctly")
@@ -821,8 +809,8 @@ def _test_run_15min_interval(my_predbat=None):
         # Call at 15-minute interval (900 seconds)
         run_async(api.run(seconds=900, first=False))
 
-        if mock_session.get.call_count != 2:
-            print(f"ERROR: Expected 2 API calls at 15-min interval, got {mock_session.get.call_count}")
+        if mock_session.get.call_count != 1:
+            print(f"ERROR: Expected 1 API call at 15-min interval, got {mock_session.get.call_count}")
             return 1
 
         mock_session.get.reset_mock()
@@ -879,4 +867,292 @@ def _test_automatic_config_flow(my_predbat=None):
             return 1
 
     print("  ✓ Automatic config flow working correctly")
+    return 0
+
+
+# =============================================================================
+# Forward replication tests (carbon data running out before the plan horizon)
+# =============================================================================
+
+
+def _test_carbon_replicate_extends_forward(my_predbat=None):
+    """Test carbon data is replicated forward when the forecast runs out"""
+    print("Test: Carbon replicate extends forward")
+
+    saved_forecast_minutes = my_predbat.forecast_minutes
+    try:
+        my_predbat.forecast_minutes = 48 * 60
+
+        # Only 15 hours of real data, as happens when the API forecast is truncated
+        real_minutes = 15 * 60
+        carbon_data = {minute: 100 + (minute // 60) * 10 for minute in range(0, real_minutes)}
+        expected_last = carbon_data[real_minutes - 1]
+        expected_day1 = dict(carbon_data)
+
+        carbon_data, replicated = my_predbat.carbon_replicate(carbon_data)
+
+        # The whole plan horizon must now be covered
+        missing = [minute for minute in range(0, 48 * 60) if minute not in carbon_data]
+        if missing:
+            print(f"ERROR: {len(missing)} minutes still missing, first is {missing[0]}")
+            return 1
+
+        # Real data must not be touched
+        for minute, value in expected_day1.items():
+            if carbon_data[minute] != value:
+                print(f"ERROR: Real data at minute {minute} changed from {value} to {carbon_data[minute]}")
+                return 1
+            if minute in replicated:
+                print(f"ERROR: Real minute {minute} was marked as replicated")
+                return 1
+
+        # Tail of the first day holds the last known value, there is no 24h-previous point yet
+        for minute in (real_minutes, real_minutes + 100, 24 * 60 - 1):
+            if carbon_data[minute] != expected_last:
+                print(f"ERROR: Minute {minute} should hold last value {expected_last}, got {carbon_data[minute]}")
+                return 1
+            if minute not in replicated:
+                print(f"ERROR: Minute {minute} should be marked as replicated")
+                return 1
+
+        # Second day repeats the same time of day 24 hours earlier
+        for minute in (0, 500, real_minutes - 1):
+            if carbon_data[minute + 24 * 60] != expected_day1[minute]:
+                print(f"ERROR: Minute {minute + 24 * 60} should repeat minute {minute} ({expected_day1[minute]}), got {carbon_data[minute + 24 * 60]}")
+                return 1
+    finally:
+        my_predbat.forecast_minutes = saved_forecast_minutes
+
+    print("  ✓ Carbon data replicated forward correctly")
+    return 0
+
+
+def _test_carbon_replicate_no_data(my_predbat=None):
+    """Test carbon replicate invents nothing when there is no data at all"""
+    print("Test: Carbon replicate with no data")
+
+    carbon_data, replicated = my_predbat.carbon_replicate({})
+
+    if carbon_data:
+        print(f"ERROR: Expected no data to be invented, got {len(carbon_data)} minutes")
+        return 1
+
+    if replicated:
+        print(f"ERROR: Expected nothing to be marked replicated, got {len(replicated)} minutes")
+        return 1
+
+    print("  ✓ No data left alone correctly")
+    return 0
+
+
+def _test_carbon_replicate_full_coverage(my_predbat=None):
+    """Test carbon replicate is a no-op when the forecast already covers the plan"""
+    print("Test: Carbon replicate with full coverage")
+
+    saved_forecast_minutes = my_predbat.forecast_minutes
+    try:
+        my_predbat.forecast_minutes = 48 * 60
+        carbon_data = {minute: 200 for minute in range(0, 48 * 60)}
+
+        carbon_data, replicated = my_predbat.carbon_replicate(carbon_data)
+
+        if replicated:
+            print(f"ERROR: Expected no replication when data is complete, got {len(replicated)} minutes")
+            return 1
+
+        if len(carbon_data) != 48 * 60:
+            print(f"ERROR: Expected {48 * 60} minutes, got {len(carbon_data)}")
+            return 1
+    finally:
+        my_predbat.forecast_minutes = saved_forecast_minutes
+
+    print("  ✓ Complete forecast left unchanged correctly")
+    return 0
+
+
+def _test_carbon_replicate_gap(my_predbat=None):
+    """Test carbon replicate fills a hole in the middle of the forecast"""
+    print("Test: Carbon replicate fills gap")
+
+    saved_forecast_minutes = my_predbat.forecast_minutes
+    try:
+        my_predbat.forecast_minutes = 24 * 60
+        carbon_data = {minute: 150 for minute in range(0, 24 * 60)}
+        for minute in range(100, 200):
+            del carbon_data[minute]
+        carbon_data[99] = 175
+
+        carbon_data, replicated = my_predbat.carbon_replicate(carbon_data)
+
+        for minute in range(100, 200):
+            if minute not in carbon_data:
+                print(f"ERROR: Gap minute {minute} not filled")
+                return 1
+            if carbon_data[minute] != 175:
+                print(f"ERROR: Gap minute {minute} should hold last value 175, got {carbon_data[minute]}")
+                return 1
+            if minute not in replicated:
+                print(f"ERROR: Gap minute {minute} should be marked as replicated")
+                return 1
+
+        if len(replicated) != 100:
+            print(f"ERROR: Expected exactly 100 replicated minutes, got {len(replicated)}")
+            return 1
+    finally:
+        my_predbat.forecast_minutes = saved_forecast_minutes
+
+    print("  ✓ Gap filled correctly")
+    return 0
+
+
+def _carbon_forecast_points(start, hours):
+    """Half hourly forecast points in the component's published format, from start for the given number of hours."""
+    return [{"from": (start + timedelta(minutes=30 * slot)).strftime(TIME_FORMAT_HA), "to": (start + timedelta(minutes=30 * (slot + 1))).strftime(TIME_FORMAT_HA), "intensity": 100 + slot} for slot in range(int(hours * 2))]
+
+
+def _carbon_api_response(start, hours):
+    """A Carbon Intensity API response body holding hours of forecast from start."""
+    points = [{"from": (start + timedelta(minutes=30 * slot)).strftime("%Y-%m-%dT%H:%MZ"), "to": (start + timedelta(minutes=30 * (slot + 1))).strftime("%Y-%m-%dT%H:%MZ"), "intensity": {"forecast": 100 + slot}} for slot in range(int(hours * 2))]
+    return {"data": {"regionid": 11, "postcode": "BS16", "data": points}}
+
+
+def _fetch_with_response(json_data):
+    """Run one fetch_carbon_data() against a mocked API response, returning the API's log lines."""
+    api = MockCarbonAPI()
+    mock_session = create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=json_data))
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        run_async(api.fetch_carbon_data())
+    return api.log_messages
+
+
+def _test_fetch_short_forecast_warns(my_predbat=None):
+    """A fetch the API answers well short of 48 hours warns once, naming how far it reaches"""
+    now_utc = datetime.now(timezone.utc)
+    slot_start = now_utc.replace(minute=(now_utc.minute // 30) * 30, second=0, microsecond=0)
+    warns = [line for line in _fetch_with_response(_carbon_api_response(slot_start, 15)) if line.startswith("Warn")]
+    if len(warns) != 1 or "only reaches" not in warns[0]:
+        print(f"ERROR: Expected one short-forecast warning, got {warns}")
+        return 1
+    print("  ✓ Short API forecast warned at fetch time")
+    return 0
+
+
+def _test_fetch_full_forecast_quiet(my_predbat=None):
+    """A fetch covering the full 48 hours the API publishes logs no warning"""
+    now_utc = datetime.now(timezone.utc)
+    slot_start = now_utc.replace(minute=(now_utc.minute // 30) * 30, second=0, microsecond=0)
+    warns = [line for line in _fetch_with_response(_carbon_api_response(slot_start, 48)) if line.startswith("Warn")]
+    if warns:
+        print(f"ERROR: Expected no warning for a full forecast, got {warns}")
+        return 1
+    print("  ✓ Full API forecast fetched quietly")
+    return 0
+
+
+def _test_intensity_warn_only_when_thin(my_predbat=None):
+    """The per-cycle replication message is only a warning once the forecast covers less than a day of the plan (#5964)"""
+    saved_forecast_minutes = my_predbat.forecast_minutes
+    patched = {name: my_predbat.__dict__[name] for name in ("log", "get_state_wrapper") if name in my_predbat.__dict__}
+    logs = []
+    forecast = []
+    try:
+        my_predbat.forecast_minutes = 48 * 60
+        my_predbat.log = lambda message, *args, **kwargs: logs.append(str(message))
+        my_predbat.get_state_wrapper = lambda entity_id=None, default=None, attribute=None, **kwargs: forecast if attribute == "forecast" else None
+
+        # 44 hours left of a forecast that started 4 hours ago - the normal state between the component's polls
+        start = my_predbat.now_utc - timedelta(hours=4)
+        forecast[:] = _carbon_forecast_points(start, 48)
+        my_predbat.fetch_carbon_intensity("sensor.predbat_carbon_intensity")
+        lines = [line for line in logs if "Carbon intensity forecast only covers" in line]
+        if len(lines) != 1 or lines[0].startswith("Warn"):
+            print(f"ERROR: Expected one plain replication message for a 44 hour forecast, got {lines}")
+            return 1
+
+        # Only 12 hours left - the polls have been failing, so this is worth a warning
+        logs.clear()
+        forecast[:] = _carbon_forecast_points(my_predbat.now_utc - timedelta(hours=36), 48)
+        my_predbat.fetch_carbon_intensity("sensor.predbat_carbon_intensity")
+        lines = [line for line in logs if "Carbon intensity forecast only covers" in line]
+        if len(lines) != 1 or not lines[0].startswith("Warn"):
+            print(f"ERROR: Expected one replication warning for a 12 hour forecast, got {lines}")
+            return 1
+    finally:
+        my_predbat.forecast_minutes = saved_forecast_minutes
+        for name in ("log", "get_state_wrapper"):
+            if name in patched:
+                setattr(my_predbat, name, patched[name])
+            else:
+                my_predbat.__dict__.pop(name, None)
+
+    print("  ✓ Replication only warns once coverage is thin")
+    return 0
+
+
+def _carbon_discovery_api(published=True):
+    """A CarbonAPI whose state lookup reads back what it published, with its intensity sensor published if asked."""
+    api = MockCarbonAPI()
+    api.automatic = True
+    api.get_state_wrapper = lambda entity_id=None, default=None, **kwargs: api.dashboard_items.get(entity_id, {}).get("state", default)
+    if published:
+        api.publish_carbon_data()
+    return api
+
+
+def _test_carbon_discovery_record(my_predbat=None):
+    """The service is a carbon forecast for the postcode district it queries, 48 hours at 30-minute resolution, bound to carbon_intensity."""
+    report = _carbon_discovery_api().build_discovery()
+    assert report["automatic"] is True
+    record = report["forecasts"][0]
+    expected = {
+        "device_id": "carbon:BS16",
+        "kind": "carbon",
+        "info": {"vendor": "Carbon Intensity API", "postcode_district": "BS16"},
+        "coverage": {"horizon_hours": 48, "resolution_minutes": 30},
+        "entities": {"carbon_intensity": {"entity_id": "sensor.predbat_carbon_intensity", "domain": "sensor", "access": "r", "unit": "gCO2/kWh"}},
+    }
+    assert record == expected, record
+    return 0
+
+
+def _test_carbon_discovery_entity_only_when_published(my_predbat=None):
+    """Before the intensity sensor has been published, the binding is not claimed."""
+    record = _carbon_discovery_api(published=False).build_discovery()["forecasts"][0]
+    assert "entities" not in record, record
+    return 0
+
+
+def _test_carbon_discovery_none_without_postcode(my_predbat=None):
+    """With no postcode there is nothing to query, so no record."""
+    api = _carbon_discovery_api()
+    api.postcode = None
+    assert api.build_discovery() is None
+    return 0
+
+
+def _test_carbon_discovery_round_trip(my_predbat=None):
+    """Through the real Coordinator with no warnings: kind, coverage and the binding survive."""
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("carbon", _carbon_discovery_api().build_discovery())
+    record = coordinator.catalogue()["forecasts"][0]
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    assert record["kind"] == "carbon" and record["coverage"] == {"horizon_hours": 48, "resolution_minutes": 30}, record
+    assert record["entities"]["carbon_intensity"]["entity_id"] == "sensor.predbat_carbon_intensity", record
+    return 0
+
+
+def _test_carbon_discovery_run_files_report(my_predbat=None):
+    """run() files the report on a cycle that does not fetch."""
+    api = _carbon_discovery_api()
+    api.last_updated_timestamp = datetime.now(timezone.utc)
+    filed = []
+    api.report_discovery = filed.append
+    asyncio.run(api.run(60, False))
+    assert len(filed) == 1 and filed[0]["forecasts"][0]["kind"] == "carbon", filed
     return 0

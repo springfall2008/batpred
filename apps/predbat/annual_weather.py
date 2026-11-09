@@ -12,8 +12,10 @@ would have been looking at). The gap between them is genuine day-ahead forecast
 error, from which each month's P10 ratio is derived.
 """
 
+import calendar
+import hashlib
 import math
-from datetime import timedelta
+from datetime import date, timedelta
 
 from annual_http import fetch_json
 from solar_model import convert_azimuth, gti_hourly_to_period_kwh
@@ -118,8 +120,17 @@ class WeatherYear:
 class AnnualWeather:
     """Fetches and converts a calendar year of Open-Meteo data for one site."""
 
-    def __init__(self, arrays, latitude, longitude, log, storage=None, p10_fallback=0.7, fetch_json=None):
-        """Configure the site's PV arrays and the JSON fetcher used for downloads."""
+    def __init__(self, arrays, latitude, longitude, log, storage=None, p10_fallback=0.7, fetch_json=None, months=None):
+        """Configure the site's PV arrays, the JSON fetcher, and an optional month window.
+
+        ``months`` bounds every download to ONE contiguous window running from the earliest
+        to the latest month it names (plus the buffer the last sampled day's 48 hour plan
+        needs) - not to just the months named. A non-contiguous subset like [3, 7] still
+        downloads April, May and June along with March and July, since this fetches a
+        single ranged request per array rather than one request per named month; see
+        ``_window`` below for the exact span. ``None`` keeps the whole-year window every
+        caller before this used.
+        """
         self.arrays = arrays
         self.latitude = latitude
         self.longitude = longitude
@@ -127,22 +138,34 @@ class AnnualWeather:
         self.storage = storage
         self.p10_fallback = p10_fallback
         self.fetch_json = fetch_json or self._default_fetch_json
+        self.months = sorted(months) if months else None
 
     async def _default_fetch_json(self, url):
         """Download and decode one JSON document, returning None on any failure."""
         return await fetch_json(url, self.log, "Open-Meteo request", {"accept": "application/json", "user-agent": "predbat/1.0"}, 120)
 
-    def _build_url(self, base, array, year):
-        """Build one Open-Meteo request URL for a single array and calendar year.
+    def _window(self, year):
+        """Return (start_date, end_date) for the configured window.
 
-        The window runs to 1 January of the following year so the final sampled
-        day still has the following day its 48 hour plan needs.
+        With no window this is 1 January to 1 January of the following year, exactly as
+        before. With one, it runs from the first day of the earliest month to two days past
+        the end of the latest - the same buffer annual_tariff.fetch_month uses, so the last
+        sampled day can still complete its 48 hour plan.
         """
+        if not self.months:
+            return date(year, 1, 1), date(year + 1, 1, 1)
+        last = self.months[-1]
+        start = date(year, self.months[0], 1)
+        end = date(year, last, calendar.monthrange(year, last)[1]) + timedelta(days=2)
+        return start, end
+
+    def _build_url(self, base, array, start_date, end_date):
+        """Build one Open-Meteo request URL for a single array over an explicit date window."""
         azimuth = array.get("azimuth", 180.0)
         if not array.get("azimuth_zero_south", False):
             azimuth = convert_azimuth(azimuth)
-        return "{}?latitude={}&longitude={}&start_date={}-01-01&end_date={}-01-01&hourly={}&tilt={}&azimuth={}&wind_speed_unit=ms&timezone=UTC".format(
-            base, self.latitude, self.longitude, year, year + 1, HOURLY_VARIABLES, array.get("declination", 35.0), azimuth
+        return "{}?latitude={}&longitude={}&start_date={}&end_date={}&hourly={}&tilt={}&azimuth={}&wind_speed_unit=ms&timezone=UTC".format(
+            base, self.latitude, self.longitude, start_date.isoformat(), end_date.isoformat(), HOURLY_VARIABLES, array.get("declination", 35.0), azimuth
         )
 
     @staticmethod
@@ -174,10 +197,17 @@ class AnnualWeather:
         array with complete results for the others, which would understate the true forecast
         error and let the P10 derate collapse to an artificially optimistic value.
         """
+        start_date, end_date = self._window(year)
         totals = {}
         for index, array in enumerate(self.arrays):
-            url = self._build_url(base, array, year)
-            cache_key = "weather_{}_{}_{}_{}_{}".format(cache_tag, year, index, self.latitude, self.longitude)
+            url = self._build_url(base, array, start_date, end_date)
+            # Derived from the request URL, NOT from a hand-listed subset of its parameters.
+            # Listing them is how this drifted: the URL carries tilt and azimuth, the key did
+            # not, so two runs differing only in roof orientation collided and the second was
+            # served the first's irradiance - silently, since Open-Meteo computes the tilted
+            # irradiance server-side. Hashing the URL means any parameter added to
+            # _build_url from now on changes the key automatically.
+            cache_key = "weather_{}_{}_{}_{}".format(cache_tag, year, index, hashlib.sha256(url.encode()).hexdigest()[:16])
             data = None
             if self.storage:
                 cached = await self.storage.load("annual", cache_key)

@@ -74,8 +74,9 @@ class MockDatabaseManager:
         """Mock get_all_entities_db - returns list of entity IDs"""
         return list(self.state_data.keys())
 
-    def get_history_db(self, sensor, now, days=30):
-        """Mock get_history_db - returns empty list"""
+    def get_history_db(self, sensor, now, days=30, from_time=None):
+        """Mock get_history_db - records the request and returns empty list"""
+        self.get_history_calls = getattr(self, "get_history_calls", []) + [{"sensor": sensor, "now": now, "days": days, "from_time": from_time}]
         return []
 
 
@@ -320,7 +321,7 @@ def create_mock_session_for_websocket(websocket_mock):
     return mock_session
 
 
-def create_ha_interface(mock_base, ha_url="http://test", ha_key=None, db_enable=False, db_mirror_ha=False, db_primary=False, skip_addon_check=True, websocket_active=False):
+def create_ha_interface(mock_base, ha_url="http://test", ha_key=None, db_enable=False, db_mirror_ha=False, db_primary=False, skip_app_check=True, websocket_active=False):
     """
     Helper to create HAInterface with initialization.
 
@@ -331,7 +332,7 @@ def create_ha_interface(mock_base, ha_url="http://test", ha_key=None, db_enable=
         db_enable: Enable database
         db_mirror_ha: Enable DB mirroring
         db_primary: DB primary mode
-        skip_addon_check: If True, mock API calls to bypass addon/services check
+        skip_app_check: If True, mock API calls to bypass app/services check
         websocket_active: If True, set websocket_active flag
 
     Returns:
@@ -365,7 +366,7 @@ def create_ha_interface(mock_base, ha_url="http://test", ha_key=None, db_enable=
         ha_interface.db_manager = None
 
     # Now call initialize with proper parameters
-    if skip_addon_check and ha_key:
+    if skip_app_check and ha_key:
         # Mock the API calls in initialize()
         with patch("ha.requests.get") as mock_get:
             # Mock services check to return valid data

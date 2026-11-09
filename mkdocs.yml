@@ -12,6 +12,7 @@ nav:
     - apps-yaml.md
     - energy-rates.md
     - components.md
+    - discovery-catalogue.md
     - load-ml.md
     - car-charging.md
     - configuration-guide.md
@@ -33,6 +34,7 @@ nav:
     - random-scenarios.md
     - rest_api.md
     - plugins.md
+    - hub-live-display.md
   - 'Predheat':
     - predheat.md
 markdown_extensions:

@@ -7,9 +7,11 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+import os
+import re
 import yaml
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta, datetime
 from ha import run_async
 
 
@@ -20,10 +22,14 @@ def test_saving_session(my_predbat):
     print("Test saving session")
     ha = my_predbat.ha_interface
     failed = False
-    date_last_year = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
-    date_yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    date_before_yesterday = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    date_last_year = (my_predbat.midnight_utc - timedelta(days=365)).strftime("%Y-%m-%d")
+    date_yesterday = (my_predbat.midnight_utc - timedelta(days=1)).strftime("%Y-%m-%d")
+    date_before_yesterday = (my_predbat.midnight_utc - timedelta(days=2)).strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
     session_binary = f"""
@@ -104,7 +110,7 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
     ]
 
     # Example format Sat 25/01
-    date_today_service = datetime.now().strftime("%a %d/%m")
+    date_today_service = my_predbat.midnight_utc.strftime("%a %d/%m")
     expected_service = [
         ["octopus_energy/join_octoplus_power_down_session_event", {"event_code": 987654, "entity_id": "event.octopus_energy_a_12345678_octoplus_saving_session_event"}],
         ["notify/notify", {"message": "Predbat: Joined Octopus saving event {} 18:30-19:30, 50.0 p/kWh".format(date_today_service)}],
@@ -151,7 +157,6 @@ def test_saving_session_null_octopoints(my_predbat):
     print("Test saving session with null octopoints_per_kwh (issue #3079)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -230,6 +235,109 @@ friendly_name: Octopus Intelligent Saving Sessions
     return failed
 
 
+def test_octopus_free_session_null_code(my_predbat):
+    """
+    Test that octopus_free_session accepts booked/auto-joined events published with code: null
+    (e.g. Weekend Happy Hours) - issue #4835. Only "available to join" events carry a code, so
+    gating on it dropped genuine, already-booked free periods.
+    """
+    print("Test octopus_free_session with code: null (issue #4835)")
+    ha = my_predbat.ha_interface
+    failed = False
+
+    free_session_events = """
+events:
+    - id: 5798
+      code: null
+      start: '2026-08-30T12:00:00+01:00'
+      end: '2026-08-30T13:00:00+01:00'
+      duration_in_minutes: 60
+    - id: 5800
+      code: 'OCTOPLUS-99999'
+      start: '2026-08-30T14:00:00+01:00'
+      end: '2026-08-30T15:00:00+01:00'
+      duration_in_minutes: 60
+"""
+    ha.dummy_items["event.octopus_energy_a_12345678_octoplus_free_electricity_session_events"] = yaml.safe_load(free_session_events)
+    my_predbat.args["octopus_free_session"] = "event.octopus_energy_a_12345678_octoplus_free_electricity_session_events"
+    if "octopus_saving_session" in my_predbat.args:
+        del my_predbat.args["octopus_saving_session"]
+    if "octopus_free_url" in my_predbat.args:
+        del my_predbat.args["octopus_free_url"]
+    if "octopus_free_electricity" in my_predbat.args:
+        del my_predbat.args["octopus_free_electricity"]
+
+    octopus_free_slots, octopus_saving_slots = my_predbat.fetch_octopus_sessions()
+
+    expected_free = [
+        {"start": "2026-08-30T12:00:00+01:00", "end": "2026-08-30T13:00:00+01:00", "rate": 0},
+        {"start": "2026-08-30T14:00:00+01:00", "end": "2026-08-30T15:00:00+01:00", "rate": 0},
+    ]
+    if octopus_free_slots != expected_free:
+        print("ERROR: Expected free slots {} got {}".format(expected_free, octopus_free_slots))
+        failed = True
+
+    if not failed:
+        print("PASS: code: null free-session event is accepted, same as one with a real code")
+    return failed
+
+
+def test_kraken_flextras_free_electricity(my_predbat):
+    """
+    EDF Flextras booked hours published by the Kraken component (events with +0000 offsets on a
+    free_electricity sensor wired to octopus_free_electricity) are priced at 0p by the same path
+    as Octopus free electricity sessions.
+    """
+    print("Test Kraken Flextras free hours reach the import rates at 0p")
+    from kraken import KrakenAPI
+    from utils import str2time
+
+    ha = my_predbat.ha_interface
+    failed = False
+    saved_args = {key: my_predbat.args[key] for key in ("octopus_free_session", "octopus_saving_session", "octopus_free_url", "octopus_free_electricity") if key in my_predbat.args}
+    for key in saved_args:
+        del my_predbat.args[key]
+
+    # 10:00-12:00 UK time today, booked as two back-to-back hours
+    today_local = my_predbat.midnight_utc.astimezone(my_predbat.local_tz).strftime("%Y-%m-%d")
+    screen = {
+        "components": [
+            {
+                "type": "BOOKED_HOURS_LIST",
+                "props": {"items": [{"rawTimeSlots": [{"date": today_local, "startTime": "10:00", "endTime": "11:00"}, {"date": today_local, "startTime": "11:00", "endTime": "12:00"}]}]},
+            }
+        ]
+    }
+    sessions = KrakenAPI.parse_flextras_booked_hours(screen)
+    entity = "sensor.predbat_kraken_a_test_free_electricity"
+    ha.dummy_items[entity] = {"events": [{"start": s["start"], "end": s["end"], "code": "flextras", "rate": 0} for s in sessions]}
+    my_predbat.args["octopus_free_electricity"] = entity
+
+    try:
+        octopus_free_slots, _ = my_predbat.fetch_octopus_sessions()
+        if octopus_free_slots != [{"start": sessions[0]["start"], "end": sessions[0]["end"], "rate": 0}]:
+            print("ERROR: Expected one free slot from {} got {}".format(sessions, octopus_free_slots))
+            failed = True
+
+        rate_import = {n: 20.0 for n in range(-24 * 60, 48 * 60)}
+        my_predbat.load_free_slot(octopus_free_slots, rate_import, export=False, rate_replicate={})
+        start_minutes = int((str2time(sessions[0]["start"]) - my_predbat.midnight_utc).total_seconds() / 60)
+        if rate_import[start_minutes] != 0 or rate_import[start_minutes + 119] != 0:
+            print("ERROR: Expected 0p across the booked hours, got {} / {}".format(rate_import[start_minutes], rate_import[start_minutes + 119]))
+            failed = True
+        if rate_import[start_minutes - 1] != 20.0 or rate_import[start_minutes + 120] != 20.0:
+            print("ERROR: Expected the normal rate either side of the booked hours")
+            failed = True
+    finally:
+        del my_predbat.args["octopus_free_electricity"]
+        del ha.dummy_items[entity]
+        my_predbat.args.update(saved_args)
+
+    if not failed:
+        print("PASS: Flextras booked hours priced at 0p")
+    return failed
+
+
 def test_saving_session_notify_config(my_predbat):
     """
     Test that set_event_notify configuration controls Octopus saving session notifications
@@ -237,7 +345,11 @@ def test_saving_session_notify_config(my_predbat):
     print("Test saving session notification configuration")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -375,7 +487,11 @@ def test_saving_session_axle_conflict(my_predbat):
     print("Test saving session Axle conflict avoidance (issue #4120)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -508,7 +624,11 @@ def test_saving_session_zero_rate_skip(my_predbat):
     print("Test saving session zero reward rate is skipped (issue #4593)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -636,7 +756,11 @@ def test_saving_session_min_octopoints_threshold(my_predbat):
     print("Test saving session minimum octopoints threshold (issue #4595)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -769,7 +893,11 @@ def test_saving_session_join_service_fallback(my_predbat):
     print("Test saving session join service fallback (issue #4548 point 3)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -957,9 +1085,18 @@ def test_saving_session_auto_join_toggle(my_predbat):
     print("Test saving session auto-join toggle (issue #4120)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
+
+    # Use a fixed time reference before event to allow testing of pre-event lead hours.
+    original_now_utc = my_predbat.now_utc
+    now = datetime.fromisoformat(f"{date_today}T15:45:00+{tz_offset}:00")
+    my_predbat.now_utc = now
 
     session_binary = f"""
 state: off
@@ -1020,7 +1157,7 @@ friendly_name: Octoplus Saving Session Events
     else:
         print("  PASS: Join skipped when octopus_saving_auto_join is False")
 
-    # Test 2: auto-join enabled -> join proceeds
+    # Test 2: auto-join enabled, lead-hours unset default -> join proceeds
     print("  Test 2: octopus_saving_auto_join=True allows the join")
     setup_items()
     my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
@@ -1037,11 +1174,82 @@ friendly_name: Octoplus Saving Session Events
     else:
         print("  PASS: Join proceeds when octopus_saving_auto_join is True")
 
-    if not failed:
-        print("PASS: All auto-join toggle tests passed")
+    # Test 3: auto-join disabled, event within configured lead hours -> no join
+    print("  Test 3: octopus_saving_auto_join=False blocks the join despite time before event < octopus_saving_auto_join_lead_hours.")
+    setup_items()
+    my_predbat.expose_config("octopus_saving_auto_join", False, quiet=True)
+    my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 3, quiet=True)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if join_calls:
+        print(f"ERROR: Expected no join when auto-join disabled, got {join_calls}")
+        failed = True
+    else:
+        print("  PASS: Join skipped when octopus_saving_auto_join is False")
+
+    # Test 4: auto-join enabled, lead hours set to 0 (immediate) -> join proceeds
+    print("  Test 4: octopus_saving_auto_join=True with octopus_saving_auto_join_lead_hours=0 allows the join")
+    setup_items()
+    my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
+    my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 0, quiet=True)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join when immediate auto-join enabled, got {len(join_calls)}: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Join proceeds when octopus_saving_auto_join is True")
+
+    # Test 5: auto-join enabled, event outside configured lead hours -> no join
+    print("  Test 5: octopus_saving_auto_join=True with time before event > octopus_saving_auto_join_lead_hours skips the join")
+    setup_items()
+    my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
+    my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 2, quiet=True)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if join_calls:
+        print(f"ERROR: Expected no join when auto-join enabled time before event > octopus_saving_auto_join_lead_hours, got {join_calls}")
+        failed = True
+    else:
+        print("  PASS: Join skipped when octopus_saving_auto_join is True and time before event > octopus_saving_auto_join_lead_hours")
+
+    # Test 6: auto-join enabled, event within configured lead hours  -> join proceeds
+    print("  Test 6: octopus_saving_auto_join=True with time before event < octopus_saving_auto_join_lead_hours allows the join")
+    setup_items()
+    my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
+    my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 3, quiet=True)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join when immediate auto-join enabled and time before event < octopus_saving_auto_join_lead_hours, got {len(join_calls)}: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Join proceeds when octopus_saving_auto_join is True and time before event < octopus_saving_auto_join_lead_hours")
 
     # Restore default state so we do not leak it to other tests
     my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
+    my_predbat.expose_config("octopus_saving_auto_join_lead_hours", 0, quiet=True)
+    my_predbat.now_utc = original_now_utc
     my_predbat.octopus_last_joined_try = None
 
     return failed
@@ -1057,7 +1265,11 @@ def test_saving_session_custom_entity_no_rewrite_match(my_predbat):
     print("Test saving session with custom entity name that does not match the rewrite pattern (issue #4573)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -1131,7 +1343,11 @@ def test_saving_session_select_entity_join_defers_notify(my_predbat):
     print("Test select-entity join defers the joined notification (issue #4593)")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -1198,8 +1414,11 @@ def test_saving_session_default_rate(my_predbat):
     print("Test saving session default rate injection")
     ha = my_predbat.ha_interface
     failed = False
-    date_today = datetime.now().strftime("%Y-%m-%d")
-    date_yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 
@@ -1305,5 +1524,187 @@ def test_saving_session_entity_regex_power_rename(my_predbat):
                 failed = True
             else:
                 print(f"PASS: {description} resolved to {resolved}")
+
+    return failed
+
+
+def test_templates_ship_octopus_free_session(my_predbat):
+    """
+    Test that every apps.yaml template that ships an octopus_saving_session entry also ships an
+    octopus_free_session entry, and that the shipped pattern picks up a free-session event entity.
+    Without it Octopus free electricity / Power Up events never get their 0p rate in the plan.
+    Covers GitHub issue #5912 (the Tesla templates had the saving-session block but not this one).
+    """
+    print("Test apps.yaml templates ship octopus_free_session alongside octopus_saving_session (issue #5912)")
+    failed = False
+
+    templates_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "templates")
+    saving_line = re.compile(r"^\s+octopus_saving_session:", re.MULTILINE)
+    free_line = re.compile(r"^\s+octopus_free_session:\s*'([^']*)'", re.MULTILINE)
+    free_entities = ["event.octopus_energy_a4dd6c5ee_octoplus_free_electricity_session_events", "event.octopus_energy_a4dd6c5ee_octoplus_power_up_events"]
+    power_down_entity = "event.octopus_energy_a4dd6c5ee_octoplus_power_down_events"
+
+    checked = 0
+    for name in sorted(os.listdir(templates_dir)):
+        if not name.endswith(".yaml"):
+            continue
+        with open(os.path.join(templates_dir, name), encoding="utf-8") as handle:
+            text = handle.read()
+        if not saving_line.search(text):
+            continue
+        checked += 1
+        match = free_line.search(text)
+        if not match:
+            print(f"ERROR: {name} ships octopus_saving_session but not octopus_free_session")
+            failed = True
+            continue
+        pattern = match.group(1)
+        if not any(my_predbat.resolve_arg_re("octopus_free_session", pattern, [entity])[0] for entity in free_entities):
+            print(f"ERROR: {name} octopus_free_session pattern {pattern} matches no free-session event entity")
+            failed = True
+        if my_predbat.resolve_arg_re("octopus_free_session", pattern, [power_down_entity])[0]:
+            print(f"ERROR: {name} octopus_free_session pattern {pattern} cross-matches the Power Down entity")
+            failed = True
+
+    if checked < 10:
+        print(f"ERROR: expected the templates to be found and checked, only saw {checked}")
+        failed = True
+    elif not failed:
+        print(f"PASS: {checked} templates ship a working octopus_free_session alongside octopus_saving_session")
+
+    return failed
+
+
+def test_saving_session_zero_octopoints_joined_is_free_slot(my_predbat):
+    """
+    Test that the free/saving split is driven by eventType, not by the reward value.
+    Covers GitHub issue #4851.
+
+    Octopus publishes Power Up and Power Down through the same savingSessions feed and tells them
+    apart with eventType: TURN_DOWN (reduce, rewarded), WEEKEND_HAPPY_HOUR (earned free import hour,
+    reward 0), TURN_UP (increase, rewarded). Only WEEKEND_HAPPY_HOUR is free.
+
+    The reward value cannot stand in for the type: a TURN_DOWN reporting 0 would be zeroed on IMPORT,
+    making Predbat grid-charge through a session where the user is meant to be reducing import.
+    """
+    print("Test joined session free/saving split keys on eventType (issue #4851)")
+    ha = my_predbat.ha_interface
+    failed = False
+    # The harness runs on the timezone in apps.yaml (Europe/London), not the machine's. Reading the
+    # wall clock here gives a different date whenever the two are on opposite sides of midnight, and
+    # load_free_slot() measures the slot against midnight_utc - so the slot lands before "today"
+    # started and is dropped. Take the date from the clock the code under test is using.
+    date_today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
+
+    session_binary = """
+state: off
+current_joined_event_start: null
+current_joined_event_end: null
+current_joined_event_duration_in_minutes: null
+next_joined_event_start: null
+next_joined_event_end: null
+next_joined_event_duration_in_minutes: null
+icon: mdi:leaf
+friendly_name: Octoplus Saving Session
+"""
+
+    def run(joined_yaml):
+        session_sensor = f"""
+state: '2025-01-23T12:10:11.108+{tz_offset}:00'
+event_types: octopus_energy_all_octoplus_saving_sessions
+event_type: octopus_energy_all_octoplus_saving_sessions
+account_id: A-4DD6C5EE
+available_events: []
+joined_events:
+{joined_yaml}
+friendly_name: Octoplus Saving Session Events
+"""
+        ha.dummy_items.clear()
+        ha.dummy_items["binary_sensor.octopus_energy_test_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+        ha.dummy_items["event.octopus_energy_test_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
+        ha.dummy_items["sensor.octopus_free_session"] = {}
+        my_predbat.args["octopus_saving_session"] = "event.octopus_energy_test_octoplus_saving_session_event"
+        my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+        if "octopus_free_url" in my_predbat.args:
+            del my_predbat.args["octopus_free_url"]
+        my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 10
+        return my_predbat.fetch_octopus_sessions()
+
+    happy_hour = f"""    - id: 5797
+      start: '{date_today}T11:00:00+{tz_offset}:00'
+      end: '{date_today}T12:00:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: 0
+      event_type: WEEKEND_HAPPY_HOUR"""
+    turn_down_rewarded = f"""    - id: 5798
+      start: '{date_today}T17:00:00+{tz_offset}:00'
+      end: '{date_today}T18:00:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: 500
+      event_type: TURN_DOWN"""
+
+    # Test 1: a joined Happy Hour becomes a free slot; a rewarded TURN_DOWN alongside it stays a
+    # saving slot. Both arrive in the same joined_events list.
+    print("  Test 1: WEEKEND_HAPPY_HOUR is free, TURN_DOWN is a saving slot")
+    octopus_free_slots, octopus_saving_slots = run(happy_hour + "\n" + turn_down_rewarded)
+
+    expected_free = [{"start": "{}T11:00:00+{}:00".format(date_today, tz_offset), "end": "{}T12:00:00+{}:00".format(date_today, tz_offset), "rate": 0}]
+    expected_saving = [{"start": "{}T17:00:00+{}:00".format(date_today, tz_offset), "end": "{}T18:00:00+{}:00".format(date_today, tz_offset), "rate": 50.0, "state": False}]
+    if json.dumps(octopus_free_slots) != json.dumps(expected_free):
+        print("ERROR: Expecting free slots {} got {}".format(expected_free, octopus_free_slots))
+        failed = 1
+    if json.dumps(octopus_saving_slots) != json.dumps(expected_saving):
+        print("ERROR: Expecting saving slots {} got {}".format(expected_saving, octopus_saving_slots))
+        failed = 1
+
+    # The free slot must zero the import rate for exactly its hour and nothing else
+    rate_import_replicated = {}
+    my_predbat.rate_import = {n: 30.0 for n in range(-24 * 60, 48 * 60)}
+    my_predbat.load_free_slot(octopus_free_slots, my_predbat.rate_import, export=False, rate_replicate=rate_import_replicated)
+    zeroed = sorted(minute for minute in range(-24 * 60, 48 * 60) if my_predbat.rate_import[minute] == 0)
+    others = [minute for minute in range(-24 * 60, 48 * 60) if my_predbat.rate_import[minute] not in (0, 30.0)]
+    if len(zeroed) != 60:
+        print("ERROR: Free slot - expecting 60 minutes at rate 0, got {}".format(len(zeroed)))
+        failed = 1
+    elif zeroed != list(range(zeroed[0], zeroed[0] + 60)):
+        print("ERROR: Free slot - expecting one contiguous hour, got a gap in {}".format(zeroed))
+        failed = 1
+    elif others:
+        print("ERROR: Free slot - minutes outside the session were changed: {}".format(others[:5]))
+        failed = 1
+    elif rate_import_replicated.get(zeroed[0]) != "saving":
+        print("ERROR: Free slot - expecting the replicate reason to be marked, got {}".format(rate_import_replicated.get(zeroed[0])))
+        failed = 1
+
+    # Test 2: a TURN_DOWN reporting 0 must NOT be treated as free. This is the case the reward value
+    # alone cannot distinguish, and getting it wrong makes Predbat import at full price believing it
+    # is free, through a session where it should be reducing import.
+    print("  Test 2: A TURN_DOWN reporting zero reward is not free")
+    zero_turn_down = happy_hour.replace("event_type: WEEKEND_HAPPY_HOUR", "event_type: TURN_DOWN")
+    octopus_free_slots, _ = run(zero_turn_down)
+    if octopus_free_slots:
+        print("ERROR: A zero-reward TURN_DOWN must not become a free slot, got {}".format(octopus_free_slots))
+        failed = 1
+
+    # Test 3: TURN_UP is a rewarded increase event, not free import
+    print("  Test 3: TURN_UP is not free")
+    turn_up = turn_down_rewarded.replace("event_type: TURN_DOWN", "event_type: TURN_UP")
+    octopus_free_slots, _ = run(turn_up)
+    if octopus_free_slots:
+        print("ERROR: TURN_UP must not become a free slot, got {}".format(octopus_free_slots))
+        failed = 1
+
+    # Test 4: no eventType at all (older API, or a feed that does not carry it) - fall through to the
+    # existing behaviour rather than guessing from the reward
+    print("  Test 4: A missing eventType does not create a free slot")
+    no_type = happy_hour.replace("\n      event_type: WEEKEND_HAPPY_HOUR", "")
+    octopus_free_slots, _ = run(no_type)
+    if octopus_free_slots:
+        print("ERROR: A missing eventType must not become a free slot, got {}".format(octopus_free_slots))
+        failed = 1
 
     return failed

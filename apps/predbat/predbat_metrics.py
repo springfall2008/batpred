@@ -98,7 +98,7 @@ class PredbatMetrics:
         self.charge_rate_kw = _gauge("predbat_charge_rate_kw", "Current max charge rate in kW")
         self.discharge_rate_kw = _gauge("predbat_discharge_rate_kw", "Current max discharge rate in kW")
         self.inverter_register_writes_total = _counter("predbat_inverter_register_writes_total", "Total inverter register writes")
-        self.grid_power = _gauge("predbat_grid_power", "Current grid power in kW (positive for import, negative for export)")
+        self.grid_power = _gauge("predbat_grid_power", "Current grid power in kW (negative for import, positive for export)")
         self.load_power = _gauge("predbat_load_power", "Current load power in kW")
         self.pv_power = _gauge("predbat_pv_power", "Current PV power in kW")
         self.battery_power = _gauge("predbat_battery_power", "Current battery power in kW (positive for discharge, negative for charge)")
@@ -140,6 +140,12 @@ class PredbatMetrics:
         # names, not just a count, and Prometheus gauges cannot carry that shape.
         self.control_conflicts_events = []
         self.control_conflicts_sustained_controls = []
+
+        # -- Control failure monitor ----------------------------------------------
+        self.control_failures_24h = _gauge("predbat_control_failures_24h", "Slots where the battery did not follow Predbat's command in the last 24h")
+        self.control_failures_total = _gauge("predbat_control_failures_total", "Lifetime count of slots where the battery did not follow Predbat's command")
+        # Plain data for the dashboard table, as for control_conflicts_events
+        self.control_failures_events = []
 
 
     def to_dict(self):
@@ -243,6 +249,10 @@ class PredbatMetrics:
             "control_conflicts_sustained_total": _val(self.control_conflicts_sustained_total),
             "control_conflicts_events": self.control_conflicts_events,
             "control_conflicts_sustained_controls": self.control_conflicts_sustained_controls,
+            # Control failure monitor
+            "control_failures_24h": _val(self.control_failures_24h),
+            "control_failures_total": _val(self.control_failures_total),
+            "control_failures_events": self.control_failures_events,
         }
 
 

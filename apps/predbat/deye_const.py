@@ -25,17 +25,20 @@ DEYE_TIMEOUT = 30
 DEYE_RETRIES = 3
 TOU_SLOT_COUNT = 6
 FREEZE_EXPORT_SOC = 99
-
-# Distinct, ascending self-use start times used to pad a schedule out to
-# TOU_SLOT_COUNT slots. DEYE's 6 TOU slots are sequential intervals ("from this
-# start until the next slot's start"), so every slot must have a UNIQUE start
-# time — duplicate times create zero-length/ambiguous intervals the API may
-# reject. Seven options guarantee at least TOU_SLOT_COUNT distinct times remain
-# after removing any that collide with the schedule's own window boundaries.
-TOU_FILLER_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "23:00"]
 # Number of run() cycles a control order may stay unconfirmed before the applied-payload
 # cache is invalidated and the next apply is forced to re-write.
 DEYE_ORDER_MAX_POLLS = 3
+
+# Order-level status that GET /order/{orderId} reports for an order the device rejected. The
+# poll response's outer success flag only says the poll itself worked, so it is true here too.
+# Observed live (GH#6017): an executed order polls as status 666 with error null, a failed one
+# as {"success": true, "status": 500, "error": "540", "analysisResult": null}.
+DEYE_ORDER_FAILED_STATUSES = ("500",)
+
+# Order-level error values that mean "no error". Any other error marks the order failed. Only
+# null has been observed on an executed order; a numeric zero is excluded too so that a firmware
+# reporting error 0 alongside status 666 is not mistaken for a failure and re-sent every cycle.
+DEYE_ORDER_NO_ERROR_VALUES = ("", "0")
 
 # DEYE executes one control order at a time per device. A second command sent while one is
 # still running is rejected with this code — it means "retry shortly", not "rejected", so
@@ -62,6 +65,7 @@ DEYE_TTL_LIVE = 1  # device/latest — telemetry and energy counters
 # battery silently diverges from the plan. A redundant write is cheap; a skipped one is
 # not. Bounded so quick restarts keep the benefit and any longer outage forces a rewrite.
 DEYE_RESTORE_MAX_CONTROL = 15
+DEYE_RESTORE_MAX_CONTROL_ACTIVE = 8 * 60
 
 # Cache file names under DEYE_STORAGE_MODULE. One file per tier so storage.age() gives each
 # an independent clock; a single blob would need hand-rolled per-section timestamps, and
@@ -69,7 +73,8 @@ DEYE_RESTORE_MAX_CONTROL = 15
 DEYE_CACHE_STATIC = "static"  # station_ids, device_list
 DEYE_CACHE_CONFIG = "config"  # device_battery_config
 DEYE_CACHE_RATINGS = "ratings"  # device_capacity, device_pack_voltage, device_rated_power
-DEYE_CACHE_CONTROL = "control"  # applied_payload, pending_orders, order_poll_count
+DEYE_CACHE_CONTROL = "control"  # control_active ownership cache for reconciliation
+DEYE_CACHE_APPLIED_PAYLOAD = "applied_payload"  # last-applied payload cache for change detection
 DEYE_CACHE_TOU = "tou"  # device_tou_config, the programme the inverter already holds
 
 # Telemetry and the energy counters are deliberately NOT cached. The live tier polls every

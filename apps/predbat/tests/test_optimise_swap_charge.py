@@ -16,7 +16,7 @@ that single-window coordinate descent cannot reach, where the same charge is bet
 a different (equal or similar priced) window.
 """
 
-from tests.test_infra import reset_rates, reset_inverter, update_rates_import
+from tests.test_infra import reset_rates, reset_inverter, update_rates_import, clear_manual_times
 from prediction import Prediction
 
 
@@ -41,7 +41,7 @@ def setup_swap_charge(
     my_predbat.soc_max = battery_size
     my_predbat.soc_kw = battery_soc
     my_predbat.reserve = 0.5
-    my_predbat.manual_all_times = set()
+    clear_manual_times(my_predbat)
     my_predbat.iboost_enable = False
     my_predbat.iboost_plan = []
     my_predbat.iboost_on_export = False

@@ -101,7 +101,48 @@ class TemperatureAPI(ComponentBase):
                 # Keep publishing old data even on error
                 self.publish_temperature_sensor()
 
+        # Filed every enabled cycle, after any fetch and publish. refresh_discovery() owns the
+        # compare/retry/guard loop and never raises.
+        self.refresh_discovery()
+
         return True
+
+    def build_discovery(self):
+        """
+        Describe the temperature forecast service for the discovery catalogue.
+
+        One forecasts record of kind "temperature". Its coverage comes from the forecast already held,
+        never a fresh lookup: hourly resolution (the component reads Open-Meteo's "hourly" series),
+        the horizon from the current time to the last hourly point, and the grid point the forecast is
+        for, which Open-Meteo returns alongside it - published readable, as location is. Before the
+        first fetch only the resolution is known.
+
+        No entities and no "automatic": nothing is bound through a setting - the ML load model reads
+        sensor.{prefix}_temperature directly - so there is no automatic configuration to describe.
+
+        Returns None while the temperature forecast is switched off.
+        """
+        if not self.temperature_enable:
+            return None
+        open_meteo = "open-meteo" in str(self.temperature_url or "")
+        record = {"device_id": "temperature:open-meteo" if open_meteo else "temperature:custom", "kind": "temperature"}
+        if open_meteo:
+            record["info"] = {"vendor": "Open-Meteo"}
+        coverage = {"resolution_minutes": 60}
+        data = self.temperature_data or {}
+        try:
+            current = datetime.strptime(data["current"]["time"], "%Y-%m-%dT%H:%M")
+            last = datetime.strptime(data["hourly"]["time"][-1], "%Y-%m-%dT%H:%M")
+            horizon = round((last - current).total_seconds() / 3600)
+            if horizon > 0:
+                coverage["horizon_hours"] = horizon
+        except (KeyError, IndexError, TypeError, ValueError):
+            pass
+        for key in ("latitude", "longitude"):
+            if isinstance(data.get(key), (int, float)):
+                coverage[key] = data[key]
+        record["coverage"] = coverage
+        return {"forecasts": [record]}
 
     def get_coordinates(self):
         """
@@ -169,7 +210,7 @@ class TemperatureAPI(ComponentBase):
         for attempt in range(max_retries):
             try:
                 timeout = aiohttp.ClientTimeout(total=30)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.get(url) as response:
                         if response.status == 200:
                             data = await response.json()

@@ -19,10 +19,14 @@ def test_energydataservice(my_predbat):
     failed = 0
 
     print("Test energy data service")
-
-    date_yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    today = datetime.now().strftime("%Y-%m-%d")
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    # Anchor the fixture to Predbat's own day, not the host's. midnight_utc is local midnight
+    # in the configured timezone (Europe/London in the harness); datetime.now() is the machine's
+    # clock. Between 23:00 and 00:00 UTC under BST those land on different dates, the published
+    # rates are then a day out from the day the code is modelling, and rates[1440] does not
+    # exist - failing this test for the one hour a day CI happens to run in that window. Same
+    # trap, same fix as PR #4998 for the multi-car IOG tests.
+    today = my_predbat.midnight_utc.strftime("%Y-%m-%d")
+    tomorrow = (my_predbat.midnight_utc + timedelta(days=1)).strftime("%Y-%m-%d")
     tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
     tz_offset = f"{tz_offset:02d}"
 

@@ -4,11 +4,11 @@ HAInterface API Tests
 
 Tests for HAInterface API-related methods:
 - api_call() - GET/POST requests with error handling
-- initialize() - Addon/services checks
+- initialize() - App/services checks
 - get_history() - Historical data fetching
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 import requests
 
@@ -124,7 +124,7 @@ def test_hainterface_api_call_supervisor(my_predbat=None):
         mock_env.return_value = "supervisor_token"
         mock_get.return_value = create_mock_requests_response(200, {"supervisor": "data"})
 
-        result = ha_interface.api_call("/addons/self/info", core=False)
+        ha_interface.api_call("/addons/self/info", core=False)
 
         # Verify supervisor URL used
         if not mock_get.called:
@@ -266,7 +266,7 @@ def test_hainterface_api_call_silent_mode(my_predbat=None):
         mock_get.return_value = mock_response
 
         # Call with silent=True
-        result = ha_interface.api_call("/api/states", silent=True)
+        ha_interface.api_call("/api/states", silent=True)
 
         # Verify warning not logged
         if log_called[0]:
@@ -296,7 +296,7 @@ def test_hainterface_api_call_error_limit(my_predbat=None):
     with patch("ha.requests.get") as mock_get:
         mock_get.side_effect = requests.Timeout("Connection timeout")
 
-        result = ha_interface.api_call("/api/states")
+        ha_interface.api_call("/api/states")
 
         # Verify fatal error triggered
         if not fatal_called[0]:
@@ -320,7 +320,7 @@ def test_hainterface_api_call_error_reset(my_predbat=None):
     with patch("ha.requests.get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, {"result": "success"})
 
-        result = ha_interface.api_call("/api/states")
+        ha_interface.api_call("/api/states")
 
         # Verify error count reset
         if ha_interface.api_errors != 0:
@@ -332,18 +332,18 @@ def test_hainterface_api_call_error_reset(my_predbat=None):
     return failed
 
 
-def test_hainterface_initialize_addon_check(my_predbat=None):
-    """Test initialize() checks for addon/services"""
-    print("\n=== Testing HAInterface initialize() addon check ===")
+def test_hainterface_initialize_app_check(my_predbat=None):
+    """Test initialize() checks for app/services"""
+    print("\n=== Testing HAInterface initialize() app check ===")
     failed = 0
 
     mock_base = MockBase()
 
-    # Mock both addon info and services calls in initialize()
+    # Mock both app info and services calls in initialize()
     with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get:
         mock_env.return_value = "test_supervisor_token"  # Mock SUPERVISOR_TOKEN
         mock_get.side_effect = [
-            create_mock_requests_response(200, {"data": {"slug": "predbat_addon"}}),  # addon info
+            create_mock_requests_response(200, {"data": {"slug": "predbat_app"}}),  # app info
             create_mock_requests_response(200, [{"domain": "homeassistant"}]),  # services
         ]
 
@@ -363,18 +363,18 @@ def test_hainterface_initialize_addon_check(my_predbat=None):
         ha_interface.initialize("http://test:8123", "test_key", False, False, False)
 
         # Verify slug set
-        if ha_interface.slug != "predbat_addon":
-            print(f"ERROR: Slug should be 'predbat_addon', got {ha_interface.slug}")
+        if ha_interface.slug != "predbat_app":
+            print(f"ERROR: Slug should be 'predbat_app', got {ha_interface.slug}")
             failed += 1
         else:
-            print("✓ Addon slug detected correctly")
+            print("✓ App slug detected correctly")
 
     return failed
 
 
-def test_hainterface_initialize_no_addon(my_predbat=None):
-    """Test initialize() handles missing addon gracefully"""
-    print("\n=== Testing HAInterface initialize() no addon ===")
+def test_hainterface_initialize_no_app(my_predbat=None):
+    """Test initialize() handles missing app gracefully"""
+    print("\n=== Testing HAInterface initialize() no app ===")
     failed = 0
 
     mock_base = MockBase()
@@ -382,9 +382,9 @@ def test_hainterface_initialize_no_addon(my_predbat=None):
     with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get:
         # Mock supervisor token
         mock_env.return_value = "test_supervisor_token"
-        # Mock addon call returns None (supervisor timeout), services call success
+        # Mock app call returns None (supervisor timeout), services call success
         mock_get.side_effect = [
-            requests.Timeout("Supervisor timeout"),  # addon info fails with timeout
+            requests.Timeout("Supervisor timeout"),  # app info fails with timeout
             create_mock_requests_response(200, [{"domain": "homeassistant"}]),  # services succeeds
         ]
 
@@ -408,7 +408,7 @@ def test_hainterface_initialize_no_addon(my_predbat=None):
             print(f"ERROR: Slug should be None, got {ha_interface.slug}")
             failed += 1
         else:
-            print("✓ Missing addon handled gracefully")
+            print("✓ Missing app handled gracefully")
 
     return failed
 
@@ -524,7 +524,7 @@ def test_hainterface_get_history_from_time(my_predbat=None):
     with patch("ha.requests.get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, [[]])
 
-        result = ha_interface.get_history("sensor.battery", now, from_time=from_time)
+        ha_interface.get_history("sensor.battery", now, from_time=from_time)
 
         # Verify API called with from_time in path
         if not mock_get.called:
@@ -540,6 +540,32 @@ def test_hainterface_get_history_from_time(my_predbat=None):
                 failed += 1
             else:
                 print("✓ from_time parameter used correctly")
+
+    return failed
+
+
+def test_hainterface_get_history_from_time_db(my_predbat=None):
+    """Test get_history() passes from_time to the database in db_primary mode"""
+    print("\n=== Testing HAInterface get_history() with from_time from the database ===")
+    failed = 0
+
+    mock_base = MockBase()
+    mock_db = MockDatabaseManager()
+    ha_interface = create_ha_interface(mock_base, ha_key=None, db_enable=True, db_mirror_ha=False, db_primary=True)
+    ha_interface.db_manager = mock_db
+
+    now = datetime.now(timezone.utc)
+    from_time = now - timedelta(minutes=2)
+    ha_interface.get_history("sensor.battery", now, days=1, from_time=from_time)
+    ha_interface.get_history("sensor.battery", now, days=3)
+
+    calls = getattr(mock_db, "get_history_calls", [])
+    want = [{"sensor": "sensor.battery", "now": now, "days": 1, "from_time": from_time}, {"sensor": "sensor.battery", "now": now, "days": 3, "from_time": None}]
+    if calls != want:
+        print(f"ERROR: database should be asked for {want}, got {calls}")
+        failed += 1
+    else:
+        print("✓ from_time passed to the database")
 
     return failed
 
@@ -561,12 +587,13 @@ def run_hainterface_api_tests(my_predbat):
     failed += test_hainterface_api_call_silent_mode(my_predbat)
     failed += test_hainterface_api_call_error_limit(my_predbat)
     failed += test_hainterface_api_call_error_reset(my_predbat)
-    failed += test_hainterface_initialize_addon_check(my_predbat)
-    failed += test_hainterface_initialize_no_addon(my_predbat)
+    failed += test_hainterface_initialize_app_check(my_predbat)
+    failed += test_hainterface_initialize_no_app(my_predbat)
     failed += test_hainterface_get_history_basic(my_predbat)
     failed += test_hainterface_get_history_no_key(my_predbat)
     failed += test_hainterface_get_history_api_error(my_predbat)
     failed += test_hainterface_get_history_from_time(my_predbat)
+    failed += test_hainterface_get_history_from_time_db(my_predbat)
 
     print("\n" + "=" * 80)
     if failed == 0:

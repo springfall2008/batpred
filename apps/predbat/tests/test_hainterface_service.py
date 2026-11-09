@@ -32,7 +32,7 @@ def test_hainterface_call_service_websocket(my_predbat=None):
 
     ha_interface.call_service_websocket_command = mock_call_service_websocket_command
 
-    result = ha_interface.call_service("switch/turn_on", entity_id="switch.test")
+    ha_interface.call_service("switch/turn_on", entity_id="switch.test")
 
     if not call_service_websocket_command_called:
         print("ERROR: call_service_websocket_command should be called")
@@ -69,7 +69,7 @@ def test_hainterface_call_service_loopback(my_predbat=None):
         mock_base.trigger_callback_calls.append(data)
     mock_base.trigger_callback = mock_trigger_callback
 
-    result = ha_interface.call_service("number/set_value", entity_id="number.test", value=42)
+    ha_interface.call_service("number/set_value", entity_id="number.test", value=42)
 
     if not mock_base.trigger_callback_calls:
         print("ERROR: trigger_callback should be called")
@@ -291,7 +291,6 @@ def test_hainterface_async_call_service_exception(my_predbat=None):
     ha_interface.ws_pending_lock = threading.Lock()
 
     # Patch threading.Event.wait to simulate instant timeout
-    original_wait = threading.Event.wait
     def mock_wait(self, timeout=None):
         return False  # Simulate timeout
 
@@ -819,7 +818,9 @@ def test_hainterface_set_state_external_sensor(my_predbat=None):
     # Mock set_state
     set_state_called = []
     original_set_state = ha_interface.set_state
-    def mock_set_state(entity_id, state, attributes={}):
+    def mock_set_state(entity_id, state, attributes=None):
+        if attributes is None:
+            attributes = {}
         set_state_called.append((entity_id, state, attributes))
         # Don't call original_set_state to avoid API call
         # Just update state_data directly
@@ -855,7 +856,9 @@ def test_hainterface_set_state_external_watch_list(my_predbat=None):
     ha_interface = create_ha_interface(mock_base, ha_key="test_key")
 
     # Mock set_state to prevent API calls
-    def mock_set_state(entity_id, state, attributes={}):
+    def mock_set_state(entity_id, state, attributes=None):
+        if attributes is None:
+            attributes = {}
         ha_interface.state_data[entity_id.lower()] = {"state": state, "attributes": attributes}
     ha_interface.set_state = mock_set_state
 
@@ -900,7 +903,9 @@ def test_hainterface_set_state_external_no_change(my_predbat=None):
     ha_interface = create_ha_interface(mock_base, ha_key="test_key")
 
     # Mock set_state to prevent API calls
-    def mock_set_state(entity_id, state, attributes={}):
+    def mock_set_state(entity_id, state, attributes=None):
+        if attributes is None:
+            attributes = {}
         ha_interface.state_data[entity_id.lower()] = {"state": state, "attributes": attributes}
     ha_interface.set_state = mock_set_state
 

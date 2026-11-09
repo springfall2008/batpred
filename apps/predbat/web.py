@@ -24,12 +24,13 @@ import os
 import os.path
 import sys
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import shutil
 import html as html_module
 import urllib.parse
 import traceback
+import bisect
 import threading
 import io
 from io import StringIO
@@ -49,11 +50,15 @@ from web_helper import (
     get_apps_css,
     get_html_config_css,
     get_apps_js,
+    get_apps_filter_js,
+    get_filter_css,
     get_components_css,
+    get_discovery_css,
     get_entity_modal_css,
     get_component_edit_modal_css,
     get_entity_modal_js,
     get_component_edit_modal_js,
+    get_discovery_modal_js,
     get_logfile_js,
     get_entity_toggle_js,
     get_entity_control_css,
@@ -64,164 +69,275 @@ from web_helper import (
     get_browse_css,
     get_entity_detailed_row_js,
     get_internals_css,
+    get_kraken_key_page_html,
     get_internals_js,
     get_dashboard_css,
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args
-from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
+from utils import (
+    strptime_aware,
+    calc_percent_limit,
+    str2time,
+    dp0,
+    dp2,
+    dp4,
+    format_time_ago,
+    get_override_time_from_string,
+    history_attribute,
+    prune_today,
+    mask_secret_args,
+    mask_secret_yaml_text,
+    read_predbat_log,
+    classify_log_line,
+    log_line_included,
+    predbat_log_file_prev,
+    is_secret_key,
+)
+from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
+from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from compare import check_compare_list
 import debug_history
 from web_annual import AnnualPage
+from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
 
-ROOT_YAML_KEY = "pred_bat"
+# How many of the newest debug-history snapshots the dashboard's one-click archive bundles.
+# debug_history_count reaches 500 since #5070 and the archive is built in memory, so this is the
+# point where a single download stops being practical - not a limit on what is retained on disk.
+DEBUG_HISTORY_DOWNLOAD_MAX = 16
 
 
-def state_as_of_slots(records, slots):
+# The /entity history table has a row per half hour, each expanding to the 5-minute slots inside it
+HISTORY_TABLE_ROW_MINUTES = 30
+HISTORY_TABLE_SLOT_MINUTES = 5
+
+# Where the Components page's discovery pop-up shows each record container (coordinator.CONTAINER_SPEC)
+# and sub-record (SECTION_SPEC): in the at-a-glance summary, in this order, or only in the folded full
+# record. Fields inside a container need no entry here - the summary renders whatever a container holds.
+# A container this page has never been told about still reaches the summary (see
+# _discovery_glance_html), but test_component_discovery_places_every_container fails until it is placed.
+DISCOVERY_GLANCE_CONTAINERS = ("hardware_ids", "account_ids", "info", "ratings", "coverage", "tariff", "capabilities")
+DISCOVERY_FOLDED_CONTAINERS = ("entities",)
+
+# Status-map entries (Coordinator._component_status) for a component with nothing to show, in words:
+# the short form for a card's Discovery line, and a sentence for the pop-up. A load_error entry is filed
+# whether or not the component ever had a reporter - there is no instance left to ask - so its sentence
+# must not claim one was expected (storage, web and db can fail to load too).
+DISCOVERY_STATUS_TEXT = {"no_report": "has not reported yet", "not_started": "not started", "load_error": "failed to load"}
+DISCOVERY_STATUS_SENTENCE = {
+    "no_report": "This component has not reported yet.",
+    "not_started": "This component has not started, so it has not reported yet.",
+    "load_error": "This component failed to load.",
+}
+
+
+def history_value_at(records, stamps, when):
     """
-    Resolve each slot to the state in effect at it - the most recent record at or before the slot.
+    Return the value an entity held at an instant - its most recent record at or before it - or "-" before its first.
 
-    records must be a list of (timestamp, value) ordered oldest first. Returns
-    {slot: (value, changed, prev_value)} where value is "-" for slots preceding the first record and
-    changed marks a slot whose value differs from the one shown at the previous slot.
+    records is a list of (timestamp, value) ordered oldest first, stamps the same timestamps alone, for bisecting.
     """
-    filled = {}
-    last_value = None
-    previous = None
-    index = 0
-
-    for slot in sorted(slots):
-        while index < len(records) and records[index][0] <= slot:
-            last_value = records[index][1]
-            index += 1
-        value = last_value if last_value is not None else "-"
-        filled[slot] = (value, value != "-" and value != previous, previous)
-        previous = value
-
-    return filled
+    index = bisect.bisect_right(stamps, when)
+    return records[index - 1][1] if index else "-"
 
 
-def build_entity_history_table_data(entity_selections, entity_data_fetch):
+def history_period_kind(records, stamps, start, end):
     """
-    Resolve the /entity history table's 30-minute rows and their 5-minute detail slots.
+    Classify what an entity did over the period (start, end].
+
+    Returns "changed" when it left the period on a different value from the one it entered with, "reverted"
+    when it left on the same value but held another somewhere inside, and None when it held one value
+    throughout. An entity's first record is where its history starts, not a change.
+    """
+    first = bisect.bisect_right(stamps, start)
+    last = bisect.bisect_right(stamps, end)
+    if first == last:
+        return None
+    entered = records[first - 1][1] if first else records[first][1]
+    if records[last - 1][1] != entered:
+        return "changed"
+    if any(value != entered for _, value in records[first:last]):
+        return "reverted"
+    return None
+
+
+def floor_to_history_slot(when):
+    """Round a UTC instant down to its 5-minute slot. Every UTC offset is a multiple of 15 minutes, so this is a local 5-minute mark too."""
+    return when.replace(minute=when.minute - when.minute % HISTORY_TABLE_SLOT_MINUTES, second=0, microsecond=0)
+
+
+def floor_to_local_half_hour(when, local_tz):
+    """Round an instant down to the start of its half hour on the local clock, returned in UTC (so UTC+05:45 rows start on :00 and :30 too)."""
+    local = when.astimezone(local_tz)
+    return local.replace(minute=local.minute - local.minute % HISTORY_TABLE_ROW_MINUTES, second=0, microsecond=0).astimezone(timezone.utc)
+
+
+def build_entity_history_table_data(entity_selections, entity_data_fetch, local_tz=timezone.utc):
+    """
+    Build the /entity history table: 30-minute rows, newest first, each expanding to its 5-minute slots.
 
     entity_selections: list of {"entity_id": ..., "attribute": ...} (attribute may be None for state)
     entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now(), i.e. [[record, ...]]
+    local_tz: the timezone rows are laid out on and labelled in - HA/DB history is UTC
 
-    Every slot reports the state as of its own timestamp. Summarising a window by the last sample
-    taken inside it instead let a momentary blip stand for the whole window - one stray "Lost"
-    record at 21:57 made the entire 21:30 row read "Lost" - and that value then carried forward
-    into every later slot that had no sample of its own, turning a blip into hours of downtime.
+    Every cell shows the value at the time on its left, never a sample taken inside its period: summarising
+    a window by its last sample let one stray "Lost" record at 21:57 make a whole row read "Lost", and that
+    carried forward into every later row. A cell's colour says what happened since the slot before it, so a
+    row covers its own line and the detail slots it expands to: "changed" (pink) when the value moved and
+    stayed moved, "reverted" (blue) when it moved and came back. A change therefore marks the row it
+    happened in, and expanding that row shows the 5-minute slot it happened at.
 
-    Returns (entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min):
-      entity_filled_30min / entity_filled_5min: one dict per selection, {slot: (value, changed, prev_value)}
-      sorted_timestamps_30min: the 30-min row timestamps, newest first
-      all_display_slots_5min: the 5-min slots covering each 30-min row's own window (offsets 0 to +25)
+    A row is headed by the newest slot of its half hour - the half-hour mark that ends it, or for the
+    newest row the newest record's own time - and expands to the slots before it within that half hour. Heading
+    rows by their oldest slot hid the latest value under the top row and made an expanded table read
+    17:30, 17:55, 17:50 ... rather than newest to oldest all the way down.
+
+    Rows run without gaps from the first record to the newest across all selections, and never past it -
+    the newest is normally the current state get_history_with_now() appends, so nothing in the future shows.
+
+    Returns a list of rows, newest first:
+      {"time": datetime, "cells": [(value, kind), ...], "details": [{"time": datetime, "cells": [...]}, ...]}
+    with a cell per selection, kind being "changed", "reverted" or None, and details newest first.
     """
+    slot = timedelta(minutes=HISTORY_TABLE_SLOT_MINUTES)
+    row_length = timedelta(minutes=HISTORY_TABLE_ROW_MINUTES)
     entity_records = []
-    all_timestamps_30min = set()
+    all_stamps = []
 
     for selection in entity_selections:
-        entity_id = selection["entity_id"]
         attribute = selection["attribute"]
-        history = entity_data_fetch[entity_id]
+        history = entity_data_fetch.get(selection["entity_id"])
         records = []
+        for item in (history[0] if history else None) or []:
+            if "last_updated" not in item:
+                continue
+            try:
+                last_updated_stamp = str2time(item["last_updated"]).astimezone(timezone.utc)
+            except (ValueError, TypeError):
+                continue
+            all_stamps.append(last_updated_stamp)
 
-        if history and len(history) >= 1:
-            history = history[0]
-            if history:
-                for item in history:
-                    if "last_updated" not in item:
-                        continue
-                    try:
-                        last_updated_stamp = str2time(item["last_updated"])
-                    except (ValueError, TypeError):
-                        continue
-
-                    # Get state or attribute value
-                    if attribute:
-                        state = item.get("attributes", {}).get(attribute, None)
-                    else:
-                        state = item.get("state", None)
-
-                    if state is None:
-                        state = "None"
-
-                    records.append((last_updated_stamp, state))
-
-                    # A record makes the window it landed in a row, so activity is always on screen
-                    minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
-                    rounded_minutes_30 = (minutes // 30) * 30
-                    all_timestamps_30min.add(last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0))
-
-        # str2time is only reliable for ordering once parsed - the raw strings mix UTC history with
-        # the local-time "now" record get_history_with_now() appends
-        records.sort(key=lambda record: record[0])
-        entity_records.append(records)
-
-    # Sort timestamps in reverse chronological order
-    sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
-
-    # Detail slots are the 5-min marks INSIDE each row's own half hour, so expanding a row explains
-    # that row rather than describing the preceding half hour
-    all_display_slots_5min = set()
-    for ts_30 in sorted_timestamps_30min:
-        for offset in range(0, 30, 5):
-            all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
-
-    entity_filled_30min = []
-    entity_filled_5min = []
-    for records in entity_records:
-        entity_filled_30min.append(state_as_of_slots(records, sorted_timestamps_30min))
-        entity_filled_5min.append(state_as_of_slots(records, all_display_slots_5min))
-
-    return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
-
-
-def is_data_numerical(history, attribute=None):
-    """
-    Check if history data is numerical (supports both state and attribute checking)
-    Returns True if at least 10% of values are numeric or boolean
-    """
-    count_nums = 0
-    count_total = 0
-
-    if history and len(history) >= 1:
-        for item in history[0]:
             if attribute:
-                # Check attribute value
-                attr_value = item.get("attributes", {}).get(attribute, None)
-                if attr_value is None:
+                attributes = item.get("attributes")
+                # A record with no attributes at all says nothing about this one, rather than that it became None
+                if not isinstance(attributes, dict):
                     continue
-                value = str(attr_value)
+                state = attributes.get(attribute, None)
             else:
-                # Check state value
-                value = item.get("state", None)
-                if value is None:
-                    continue
-                value = str(value)
+                state = item.get("state", None)
 
-            if value.lower() in ["on", "off", "true", "false"]:
-                count_nums += 1
-            else:
-                try:
-                    float(value)
-                    count_nums += 1
-                except (ValueError, TypeError):
-                    pass
-            count_total += 1
+            if state is None:
+                state = "None"
+            records.append((last_updated_stamp, state))
 
-    if count_total > 0 and (count_nums / count_total) >= 0.1:
+        # The raw strings mix UTC history with the local-time "now" record get_history_with_now() appends
+        records.sort(key=lambda record: record[0])
+        entity_records.append((records, [record[0] for record in records]))
+
+    if not all_stamps:
+        return []
+
+    def cells_for(when, period_start, period_end):
+        """Each selection's value at when, and what it did over (period_start, period_end]."""
+        return [(history_value_at(records, stamps, when), history_period_kind(records, stamps, period_start, period_end)) for records, stamps in entity_records]
+
+    # A record shows from the first slot at or after it. The table ends on the newest record's own time rather
+    # than the slot before it: that record is normally the current state, and waiting for the next 5-minute
+    # mark left it off the table for up to 5 minutes.
+    oldest = min(all_stamps)
+    newest = max(all_stamps)
+    first_slot = floor_to_history_slot(oldest)
+    if first_slot < oldest:
+        first_slot += slot
+    first_slot = min(first_slot, newest)
+
+    # Each row covers the half hour (row_end - row_length, row_end], the first being the one holding first_slot
+    rows = []
+    row_end = floor_to_local_half_hour(first_slot, local_tz)
+    if row_end < first_slot:
+        row_end += row_length
+    while row_end - row_length < newest:
+        row_start = row_end - row_length
+        row_time = min(row_end, newest)
+        details = []
+        detail_time = floor_to_history_slot(row_time)
+        if detail_time == row_time:
+            detail_time -= slot
+        while detail_time > row_start and detail_time >= first_slot:
+            details.append({"time": detail_time.astimezone(local_tz), "cells": cells_for(detail_time, detail_time - slot, detail_time)})
+            detail_time -= slot
+        rows.append({"time": row_time.astimezone(local_tz), "cells": cells_for(row_time, row_start, row_time), "details": details})
+        row_end += row_length
+
+    rows.reverse()
+    return rows
+
+
+def history_row_shown(rows, index):
+    """
+    Decide whether a build_entity_history_table_data() row is shown in the /entity table and its CSV.
+
+    Only a pure duplicate is hidden: a row holding the same values as the row before it, with nothing
+    changing during it. The newest and oldest rows are always kept. A row that merely reads differently
+    from the one before it is kept even though nothing changed inside its own half hour - hiding it left
+    "N unchanged slots" holding a value the row beneath them never showed, and lost the value from the
+    CSV, which has no detail rows to find it in.
+    """
+    if index == 0 or index == len(rows) - 1:
         return True
-    elif count_total == 0:
+    row = rows[index]
+    if any(kind for _, kind in row["cells"]):
         return True
-    return False
+    return [value for value, _ in row["cells"]] != [value for value, _ in rows[index + 1]["cells"]]
+
+
+def render_entity_history_rows(rows, num_cols):
+    """
+    Render the /entity history table body from build_entity_history_table_data() rows.
+
+    Each 30-minute row is clickable and followed by its hidden 5-minute detail rows. Pure duplicate rows
+    (see history_row_shown()) are folded into an "N unchanged slots hidden" separator, so the table
+    opens on its changes.
+    """
+    cell_classes = {"changed": ' class="changed-cell"', "reverted": ' class="reverted-cell"'}
+    text = ""
+    row_index = 0
+    skipped_count = 0
+
+    for i, row in enumerate(rows):
+        if not history_row_shown(rows, i):
+            skipped_count += 1
+            continue
+
+        if skipped_count > 0:
+            col_span = 1 + num_cols
+            text += f'<tr class="gap-row"><td colspan="{col_span}" style="text-align:center; font-style:italic; font-size:0.85em; color:var(--text-secondary,#888); border-top:2px dashed #aaa; border-bottom:2px dashed #aaa; padding:4px;">— {skipped_count} unchanged slot{"s" if skipped_count != 1 else ""} hidden —</td></tr>\n'
+            skipped_count = 0
+
+        # Main 30-minute row (clickable)
+        text += f'<tr class="history-row" onclick="toggleDetailRow({row_index})" id="row_{row_index}">'
+        text += f"<td>▶ {row['time'].strftime(TIME_FORMAT)}</td>"
+        for value, kind in row["cells"]:
+            text += f"<td{cell_classes.get(kind, '')}>{html_module.escape(str(value))}</td>"
+        text += "</tr>\n"
+
+        # Detail rows: the earlier 5-minute slots of the half hour leading up to this row, newest first
+        for detail in row["details"]:
+            text += f'<tr class="detail-row" id="detail_{row_index}">'
+            text += f"<td>  {detail['time'].strftime(TIME_FORMAT)}</td>"
+            for value, kind in detail["cells"]:
+                text += f"<td{cell_classes.get(kind, '')}>{html_module.escape(str(value))}</td>"
+            text += "</tr>\n"
+
+        row_index += 1
+
+    return text
 
 
 def split_entities_for_charting(entities, entity_data_fetch):
@@ -290,6 +406,57 @@ def resolve_group_unit_and_name(entity_id, dashboard_values, live_unit=None, liv
     return unit or "(no unit)", friendly_name or entity_id
 
 
+def subtract_series(base, subtract, max_gap_seconds=300):
+    """Subtract one time series from another, matching on nearest time rather than on exact timestamp.
+
+    The two series come from different entities, which Home Assistant records independently - their
+    samples land a moment apart and prune_today() keys each result on its own source timestamp, so a
+    dict lookup by key misses essentially every time and silently subtracts nothing, leaving two
+    identical lines on the chart.
+
+    Nearest rather than most-recent-at-or-before: both are published in the same cycle, so the skew
+    between them is jitter rather than a real time difference, and it falls either way. Taking only
+    the earlier sample would pair a load reading with a car value from the previous cycle whenever the
+    jitter went the wrong way - visible the moment the car stops, where a stale reading would wipe out
+    the whole house figure for one point.
+
+    Clamped at zero: the two sensors run on their own cadences, so one can momentarily exceed the
+    other, and that has to read as nothing left rather than as negative power.
+
+    Matching is bounded by max_gap_seconds, one publish cycle. Beyond that the nearest sample is not
+    evidence of anything - a car sensor that stopped reporting hours ago would otherwise keep being
+    subtracted from every later point, wiping out the house figure for as long as it stayed away.
+
+    Args:
+    - base: {timestamp: value} to subtract from
+    - subtract: {timestamp: value} to subtract, may be empty
+    - max_gap_seconds: how far a sample may be from a base point and still count
+
+    Returns:
+    - dict: same keys as base, or empty when there is nothing to subtract
+    """
+    if not base or not subtract:
+        return {}
+    points = sorted((str2time(stamp), value) for stamp, value in subtract.items())
+    times = [point[0] for point in points]
+    result = {}
+    for stamp, value in base.items():
+        when = str2time(stamp)
+        index = bisect.bisect_left(times, when)
+        candidates = []
+        if index < len(points):
+            candidates.append(points[index])
+        if index > 0:
+            candidates.append(points[index - 1])
+        other = 0
+        if candidates:
+            nearest = min(candidates, key=lambda point: abs((point[0] - when).total_seconds()))
+            if abs((nearest[0] - when).total_seconds()) <= max_gap_seconds:
+                other = nearest[1]
+        result[stamp] = dp4(max(value - other, 0))
+    return result
+
+
 class WebInterface(ComponentBase):
     """Built-in web dashboard server using aiohttp.
 
@@ -307,6 +474,7 @@ class WebInterface(ComponentBase):
         self.registered_endpoints = []
 
         self.annual_page = AnnualPage(self)
+        self.chat_page = WebChat(self)
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -431,6 +599,43 @@ class WebInterface(ComponentBase):
         app.router.add_get("/annual_view", self.annual_page.html_annual_view)
         app.router.add_get("/annual_compare", self.annual_page.html_annual_compare)
 
+    def chat_enabled(self):
+        """Return whether the chat component is configured and running."""
+        components = getattr(self.base, "components", None)
+        return bool(components and components.get_component("chat"))
+
+    def _register_chat_routes(self, app):
+        """Register the Chat tab's routes on ``app``, unconditionally.
+
+        Split out of start() the same way the annual routes are, so a test can assert the routes
+        exist against a bare aiohttp Application without opening a socket.
+
+        These must be registered regardless of whether chat is configured yet: phase 0 (which
+        builds this Application and starts the site) runs before phase 1 (which initialises the
+        chat component), so gating on chat_enabled() here would freeze the router with the routes
+        permanently absent. Each handler already checks self.agent and returns 404 "Chat is not
+        configured" when the component is not up yet - that per-request check is what stands in
+        for a boot-time gate.
+        """
+        app.router.add_get("/chat", self.chat_page.html_chat)
+        app.router.add_get("/chat/conversations", self.chat_page.html_chat_conversations)
+        app.router.add_post("/chat/conversations", self.chat_page.html_chat_create)
+        app.router.add_post("/chat/rename", self.chat_page.html_chat_rename)
+        app.router.add_post("/chat/delete", self.chat_page.html_chat_delete)
+        app.router.add_get("/chat/history", self.chat_page.html_chat_history)
+        app.router.add_post("/chat/send", self.chat_page.html_chat_send)
+        app.router.add_get("/chat/stream", self.chat_page.html_chat_stream)
+        app.router.add_post("/chat/confirm", self.chat_page.html_chat_confirm)
+        app.router.add_post("/chat/cancel", self.chat_page.html_chat_cancel)
+        app.router.add_get("/chat/models", self.chat_page.html_chat_models)
+        app.router.add_post("/chat/model", self.chat_page.html_chat_model)
+        app.router.add_get("/chat/status", self.chat_page.html_chat_status)
+        app.router.add_post("/chat/status", self.chat_page.html_chat_status_post)
+        app.router.add_get("/chat/providers", self.chat_page.html_chat_providers)
+        app.router.add_post("/chat/providers", self.chat_page.html_chat_providers_post)
+        app.router.add_post("/chat/providers/models", self.chat_page.html_chat_provider_models)
+        app.router.add_post("/chat/provider", self.chat_page.html_chat_provider_select)
+
     async def start(self):
         # Start the web server
         app = web.Application()
@@ -439,6 +644,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/log", self.html_log)
         app.router.add_get("/apps", self.html_apps)
         app.router.add_post("/apps", self.html_apps_post)
+        app.router.add_get("/apps_value", self.html_apps_value)
         app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
         app.router.add_get("/entity", self.html_entity)
@@ -448,6 +654,8 @@ class WebInterface(ComponentBase):
         app.router.add_post("/dash", self.html_dash_post)
         app.router.add_get("/dash_content", self.html_dash_content)
         app.router.add_get("/components", self.html_components)
+        app.router.add_get("/discovery", self.html_discovery)
+        app.router.add_get("/component_discovery", self.html_component_discovery)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
         app.router.add_get("/component_config", self.html_component_config)
@@ -459,10 +667,11 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/debug_history_list", self.html_debug_history_list)
         app.router.add_get("/debug_history_download", self.html_debug_history_download)
-        app.router.add_get("/debug_history_download_all", self.html_debug_history_download_all)
+        app.router.add_get("/debug_history_download_recent", self.html_debug_history_download_recent)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
         self._register_annual_routes(app)
+        self._register_chat_routes(app)
         app.router.add_get("/apps_editor", self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_get("/apps_editor_checksum", self.html_apps_editor_checksum)
@@ -475,6 +684,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
         app.router.add_get("/api/plan_data", self.html_api_plan_data)
+        app.router.add_get("/api/plan_history", self.html_api_plan_history)
         app.router.add_get("/api/log", self.html_api_get_log)
         app.router.add_get("/api/entities", self.html_api_get_entities)
         app.router.add_post("/api/login", self.html_api_login)
@@ -484,6 +694,8 @@ class WebInterface(ComponentBase):
         app.router.add_get("/internals", self.html_internals)
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
+        app.router.add_get("/kraken_key", self.html_kraken_key)
+        app.router.add_post("/api/kraken_key", self.html_api_kraken_key)
         app.router.add_get("/api/status", self.html_api_get_status)
         app.router.add_get("/metrics", metrics_handler)
         app.router.add_get("/metrics/json", metrics_json_handler)
@@ -533,7 +745,8 @@ class WebInterface(ComponentBase):
         text = ""
         attributes = {}
         if from_db:
-            history = self.get_history_wrapper(entity, 1, required=False)
+            # Untracked: a tracked entity is re-read every 2 minutes until restart, and the entity pages call this for every entity they list
+            history = self.get_history_wrapper(entity, 1, required=False, tracked=False)
             if history and len(history) >= 1:
                 history = history[0]
                 if history:
@@ -602,13 +815,18 @@ class WebInterface(ComponentBase):
         load_power = self.base.load_power
 
         # Car charging only appears when a car_charging_power sensor is configured (execute.py
-        # update_car_charging_power). The charger sits on the house side of the meter, so its power
-        # is already inside load_power - subtract it so the House circle reads as the rest of the
+        # update_car_charging_power). Where the charger sits relative to the house CT clamp is what
+        # car_energy_reported_load records. With it on the charger is behind the clamp and its power
+        # is already inside load_power, so subtract it and the House circle reads as the rest of the
         # house rather than counting the car twice. Clamped at zero because the two readings come
         # from different meters and a slow-updating load sensor can briefly read below the car.
+        # With it off the charger is outside the clamp and was never in load_power, so subtracting
+        # would take the car off a figure that never held it and the clamp would then swallow the
+        # whole house load - leave the reading alone and feed the car from the Grid instead (#4788).
         car_configured = self.base.car_charging_power_configured
         car_power = self.base.car_charging_power
-        house_power = max(0, load_power - car_power) if car_configured else load_power
+        car_inside_clamp = self.base.car_energy_reported_load
+        house_power = max(0, load_power - car_power) if (car_configured and car_inside_clamp) else load_power
 
         # Determine flow directions. battery_power is positive when the battery is DISCHARGING
         # (gateway.py negates the firmware's sign for exactly this reason) and grid_power is
@@ -662,52 +880,69 @@ class WebInterface(ComponentBase):
             battery_icon, dp0(house_power)
         )
 
-        # Car charging arm - drawn top right, the corner left free by PV/battery/grid
+        # Car charging arm - drawn top right, the corner left free by PV/battery/grid. It runs from
+        # whichever node is actually feeding the charger: the House when the charger is behind the
+        # CT clamp, otherwise the Grid, since the incoming supply is then the only thing left that
+        # can be feeding it. Both run circle edge to circle edge, stopping short of the Car by the
+        # length of the arrowhead the marker draws past the end of the line.
         if car_configured:
             car_charging = car_power >= 10
+            if car_inside_clamp:
+                car_source = "House"
+                car_line = 'x1="342" y1="172" x2="391" y2="139"'
+                car_path = "M342,172 L391,139"
+                car_label = 'x="356" y="122"'
+            else:
+                car_source = "Grid"
+                car_line = 'x1="450" y1="250" x2="450" y2="170"'
+                car_path = "M450,250 L450,170"
+                car_label = 'x="485" y="205"'
+
             html += """
                 <!-- Car Circle -->
                 <circle cx="450" cy="100" r="50" fill="#E53935"><title>Car</title></circle>
                 <text x="450" y="100" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF010B;</text>
 
                 <defs>
-                    <!-- House to Car path -->
-                    <path id="house-car-path" d="M342,172 L391,139" stroke="transparent" fill="none" />
+                    <!-- {source} to Car path -->
+                    <path id="{source_id}-car-path" d="{path}" stroke="transparent" fill="none" />
                     <marker id="car-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
                     <polygon points="0 0, 10 3.5, 0 7" fill="#E53935"/>
                     </marker>
                 </defs>
-            """
+            """.format(
+                source=car_source, source_id=car_source.lower(), path=car_path
+            )
             if car_charging:
                 # Calculate animation speed based on power flow - faster for higher power
                 car_speed = max(0.5, min(3.0, 2.0 - (abs(car_power) / 3000)))
 
                 html += """
-                <!-- House to Car Arrow -->
-                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" marker-end="url(#car-arrow)" />
-                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+                <!-- {source} to Car Arrow -->
+                <line {line} stroke="#E53935" stroke-width="2" marker-end="url(#car-arrow)" />
+                <text {label} text-anchor="middle" fill="#E53935">{power} W</text>
 
-                <!-- Moving dots for House to Car -->
+                <!-- Moving dots for {source} to Car -->
                 <circle r="4" fill="#E53935" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,172 L391,139" />
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" path="{path}" />
                 </circle>
                 <circle r="3" fill="#E53935" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,172 L391,139" />
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" begin="0.5s" path="{path}" />
                 </circle>
                 <circle r="2" fill="#E53935" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,172 L391,139" />
+                    <animateMotion dur="{speed}s" repeatCount="indefinite" begin="1.0s" path="{path}" />
                 </circle>
                 """.format(
-                    dp0(car_power), car_speed, car_speed, car_speed
+                    source=car_source, line=car_line, label=car_label, power=dp0(car_power), speed=car_speed, path=car_path
                 )
             else:
                 html += """
-                <!-- House to Car Arrow (dashed) -->
-                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
-                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+                <!-- {source} to Car Arrow (dashed) -->
+                <line {line} stroke="#E53935" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
+                <text {label} text-anchor="middle" fill="#E53935">{power} W</text>
                 <!-- No moving dot when the car is not charging -->
                 """.format(
-                    dp0(car_power)
+                    source=car_source, line=car_line, label=car_label, power=dp0(car_power)
                 )
 
         # Draw arrows and labels
@@ -961,12 +1196,21 @@ class WebInterface(ComponentBase):
         text += '<div style="flex: 1;">\n'
         text += "<h2>Debug</h2>\n"
         text += "<table>\n"
-        text += "<tr><td>Download</td><td><a href='javascript:void(0)' onclick='downloadLiveApps()'>apps.yaml (live)</a> | <a href='./debug_apps'>apps.yaml (file)</a></td></tr>\n"
+        text += "<tr><td>Download</td><td><a href='javascript:void(0)' onclick='downloadLiveApps()'>apps.yaml (live)</a> | <a href='javascript:void(0)' onclick='downloadFileApps()'>apps.yaml (file)</a></td></tr>\n"
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
-        text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all (.tgz)</a></td></tr>\n"
+        text += "<tr><td>History</td><td><a href='./debug_history_download_recent'>Download recent</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
+        # The HA Companion app's embedded webview does not act on Content-Disposition: attachment,
+        # so it renders these downloads inline instead of saving them - a client limitation with no
+        # server-side fix (see #4720). Rather than try to detect the app (its webview sends no
+        # reliable identifying User-Agent - see #4720 discussion) and grey the links out, which risks
+        # false-positives against a genuine desktop browser, just say so for everyone.
+        text += "<tr><td colspan='2' style='font-size:0.85em; color:var(--text-secondary,#888); padding-top:6px;'>"
+        text += "'Create' and 'Download' above need a web browser - the HA Companion app cannot save files from them. "
+        text += "Companion app users can instead browse to <code>{}/debug/</code>, which also holds the rolling snapshot history as plain, readable files.".format(self.base.config_root_p)
+        text += "</td></tr>\n"
         text += "</table>\n"
         text += "</div>\n"
 
@@ -1143,20 +1387,26 @@ class WebInterface(ComponentBase):
     async def get_history_with_now(self, entity_id, days, attribute=None):
         """
         Get history for an entity including the current state
+
+        The current state is stamped at the real time, not now_utc - that is the start of the 5-minute
+        cycle, so it could land before records HA had already made since. Asked for the whole state
+        (attribute=None) it carries the current attributes too, so an attribute read from it is current
+        rather than missing.
         """
         history = copy.deepcopy(self.get_history_wrapper(entity_id, days, required=False, tracked=False))  # Copy to avoid modifying original history
         current_value = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
         if current_value is not None:
-            if not history:
-                history = [[]]
-                if attribute:
-                    history[0].append({"attributes": {attribute: current_value}, "last_updated": (self.now_now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
-                else:
-                    history[0].append({"state": current_value, "last_updated": (self.now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
             if attribute:
-                history[0].append({"attributes": {attribute: current_value}, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
+                current = {"attributes": {attribute: current_value}}
             else:
-                history[0].append({"state": current_value, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
+                current = {"state": current_value}
+                current_state = self.get_state_wrapper(entity_id, raw=True)
+                if isinstance(current_state, dict) and isinstance(current_state.get("attributes"), dict):
+                    current["attributes"] = current_state["attributes"]
+            now = self.now_utc_exact
+            if not history:
+                history = [[dict(current, last_updated=(now - timedelta(days=days)).strftime(TIME_FORMAT_HA))]]
+            history[0].append(dict(current, last_updated=now.strftime(TIME_FORMAT_HA)))
 
         return history
 
@@ -1415,6 +1665,7 @@ class WebInterface(ComponentBase):
                 body.dark-mode .reverted-cell { background-color: #0d2e4a; color: #90caff; }
                 </style>
                 """
+                text += '<p style="font-size:0.9em;">Each row shows the value at its time. <span class="changed-cell" style="padding:0 4px;">Changed</span> during the half hour up to it, <span class="reverted-cell" style="padding:0 4px;">changed and changed back</span>. Click a row to see the 5-minute slots before it.</p>\n'
                 text += '<button onclick="downloadEntityCSV()" style="margin-bottom: 10px; padding: 7px 14px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">&#11015; Download CSV</button>\n'
                 text += "<table>\n"
 
@@ -1431,83 +1682,13 @@ class WebInterface(ComponentBase):
                     text += f"<th>{friendly_name}{attr_display}{unit_display}</th>"
                 text += "</tr>\n"
 
-                # Collect and bucket history data for all entities (both 30-min summary and 5-min detail)
-                entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, _ = build_entity_history_table_data(entity_selections, entity_data_fetch)
-
-                # Pre-compute per-row cell classes so we can decide which rows to show
-                num_cols = len(entity_selections)
-                row_data = []  # list of (timestamp_30, [(value, cell_class), ...], has_highlight)
-                for timestamp_30 in sorted_timestamps_30min:
-                    cells = []
-                    has_highlight = False
-                    for filled_30, filled_5 in zip(entity_filled_30min, entity_filled_5min):
-                        value, is_changed, prev_value = filled_30.get(timestamp_30, ("-", False, None))
-                        if is_changed:
-                            cell_class = ' class="changed-cell"'
-                            has_highlight = True
-                        else:
-                            # Flag a row that held its value at both ends but moved somewhere inside its own half hour
-                            sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(5, 30, 5)]
-                            if any(v != value for v in sub_vals):
-                                cell_class = ' class="reverted-cell"'
-                                has_highlight = True
-                            else:
-                                cell_class = ""
-                        cells.append((value, cell_class))
-                    row_data.append((timestamp_30, cells, has_highlight))
-
-                # Build table rows — skip unchanged rows (except the oldest), inserting gap rows on skips
-                row_index = 0
-                oldest_idx = len(row_data) - 1
-                skipped_count = 0
-                prev_row_ts = None  # Previous row_data entry (visible or skipped) — for detecting history gaps
-                for i, (timestamp_30, cells, has_highlight) in enumerate(row_data):
-                    is_oldest = i == oldest_idx
-
-                    # Count slots absent from history entirely (gap between consecutive row_data entries).
-                    # Using prev_row_ts (not prev visible ts) avoids double-counting rows already
-                    # incremented via skipped_count += 1 below.
-                    if prev_row_ts is not None:
-                        gap_minutes = int((prev_row_ts - timestamp_30).total_seconds() / 60)
-                        missing_slots = max(0, (gap_minutes // 30) - 1)
-                        skipped_count += missing_slots
-
-                    prev_row_ts = timestamp_30
-
-                    if not has_highlight and not is_oldest:
-                        skipped_count += 1
-                        continue
-
-                    # If we skipped rows (present-but-unchanged OR absent from history), emit a gap separator
-                    if skipped_count > 0:
-                        col_span = 1 + num_cols
-                        text += f'<tr class="gap-row"><td colspan="{col_span}" style="text-align:center; font-style:italic; font-size:0.85em; color:var(--text-secondary,#888); border-top:2px dashed #aaa; border-bottom:2px dashed #aaa; padding:4px;">— {skipped_count} unchanged slot{"s" if skipped_count != 1 else ""} hidden —</td></tr>\n'
-                        skipped_count = 0
-
-                    # Main 30-minute row (clickable)
-                    text += f'<tr class="history-row" onclick="toggleDetailRow({row_index})" id="row_{row_index}">'
-                    text += f"<td>▶ {timestamp_30.strftime(TIME_FORMAT)}</td>"
-                    for value, cell_class in cells:
-                        text += f"<td{cell_class}>{value}</td>"
-                    text += "</tr>\n"
-
-                    # Detail rows: the remaining 5-minute slots inside this row's own half hour,
-                    # newest first to match the table's ordering (the row itself covers offset 0)
-                    for offset in range(25, 0, -5):
-                        detail_time = timestamp_30 + timedelta(minutes=offset)
-                        text += f'<tr class="detail-row" id="detail_{row_index}">'
-                        text += f"<td>  {detail_time.strftime(TIME_FORMAT)}</td>"
-                        for filled in entity_filled_5min:
-                            value, is_changed, prev_value = filled.get(detail_time, ("-", False, None))
-                            cell_class = ' class="changed-cell"' if is_changed else ""
-                            text += f"<td{cell_class}>{value}</td>"
-                        text += "</tr>\n"
-
-                    row_index += 1
+                # 30-minute rows with their 5-minute detail slots, laid out on the local clock
+                history_rows = build_entity_history_table_data(entity_selections, entity_data_fetch, local_tz=self.local_tz)
+                text += render_entity_history_rows(history_rows, len(entity_selections))
 
                 text += "</table><br>\n"
 
-                # Build CSV data for download (all 30-min slots, unfiltered, with carry-forward values)
+                # Build CSV data for download - the same rows the table shows, without the pure duplicates
                 csv_col_headers = ["Time"]
                 for sel in entity_selections:
                     sel_eid = sel["entity_id"]
@@ -1519,12 +1700,9 @@ class WebInterface(ComponentBase):
                     sel_attr_disp = f" - {sel_attr}" if sel_attr else ""
                     csv_col_headers.append(f"{sel_friendly}{sel_attr_disp}{sel_unit_disp}")
                 csv_all_rows = []
-                for ts in sorted_timestamps_30min:
-                    row_vals = [ts.strftime(TIME_FORMAT)]
-                    for filled_30 in entity_filled_30min:
-                        val, _, _ = filled_30.get(ts, ("-", False, None))
-                        row_vals.append(str(val))
-                    csv_all_rows.append(row_vals)
+                for index, history_row in enumerate(history_rows):
+                    if history_row_shown(history_rows, index):
+                        csv_all_rows.append([history_row["time"].strftime(TIME_FORMAT)] + [str(value) for value, _ in history_row["cells"]])
                 csv_data_json = json.dumps({"headers": csv_col_headers, "rows": csv_all_rows})
                 text += f"<script>var csvData = {csv_data_json};\n"
                 text += """function downloadEntityCSV() {
@@ -1695,7 +1873,7 @@ class WebInterface(ComponentBase):
         if self.base.update_pending:
             calculating = True
         self.update_success_timestamp()
-        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror)
+        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
 
     def get_chart_series(self, name, results, chart_type, color):
         """
@@ -1892,9 +2070,6 @@ var options = {
             text += "    title: {{ text: '{}' }},\n".format(yaxis_name)
             text += "    decimalsInFloat: 2\n"
             text += "  },\n"
-        text += "  title: {\n"
-        text += "    text: '{}'\n".format(chart_name)
-        text += "  },\n"
         text += "  legend: {\n"
         text += "    position: 'top',\n"
         text += "    formatter: function(seriesName, opts) {\n"
@@ -1923,7 +2098,24 @@ var options = {
         text += "    }\n"
         text += "   ]\n"
         text += "  }\n"
-        text += "}\n"
+        # The semicolon is required: the title script below starts with '(', and without it the browser parses
+        # 'var options = {...}(function() {...})()' as one statement calling the options object, which throws
+        # 'TypeError: ... is not a function' and leaves every chart blank (#6015).
+        text += "};\n"
+        # The title is an HTML heading above the chart, not an ApexCharts title: ApexCharts binds drag-to-zoom to the
+        # whole chart SVG, so a drag (or a touch-scroll on mobile) anywhere in a title band inside it - including the
+        # gap between the title text and the toolbar - zoomed the chart (#5979). Outside the SVG it cannot start a zoom,
+        # and it picks up the page's own heading style. The wrapper div keeps it on its own line, as h2 is inline here.
+        # The title goes in via a JSON string and textContent, so a friendly name with a quote or markup in it is safe.
+        chart_title_js = json.dumps(str(chart_name)).replace("<", "\\u003c")
+        text += "(function() {\n"
+        text += "  var container = document.getElementById('{}');\n".format(tagname)
+        text += "  var heading = document.createElement('h2');\n"
+        text += "  heading.textContent = {};\n".format(chart_title_js)
+        text += "  var wrapper = document.createElement('div');\n"
+        text += "  wrapper.appendChild(heading);\n"
+        text += "  container.parentNode.insertBefore(wrapper, container);\n"
+        text += "})();\n"
         # getElementById (not a '#id' CSS selector) - tagname can be unit-derived (e.g. "chart_%")
         # and '%' is not a valid unescaped CSS identifier character, which would throw in querySelector
         text += "var chart = new ApexCharts(document.getElementById('{}'), options);\n".format(tagname)
@@ -2267,16 +2459,7 @@ chart.render();
             return "".join(result_parts)
 
         try:
-            logfile = "predbat.log"
-            logfile_1 = "predbat.1.log"
-            logdata = ""
-
-            if os.path.exists(logfile):
-                with open(logfile, "r") as f:
-                    logdata = f.read()
-            if os.path.exists(logfile_1):
-                with open(logfile_1, "r") as f:
-                    logdata = f.read() + "\n" + logdata
+            logdata = read_predbat_log()
 
             # Get query parameters
             args = request.query
@@ -2304,22 +2487,10 @@ chart.render();
                     lineno -= 1
                     continue
 
-                # Apply log level filtering first
-                include_line = False
-                line_type = "log"
-
-                if "error" in line_lower:  # any error log lines will appear on all, info, warning and error tabs
-                    line_type = "error"
-                    include_line = True
-                elif "warn" in line_lower:  # warning log lines appear on all and warning tabs
-                    line_type = "warning"
-                    include_line = filter_type in ["all", "warnings"]
-                elif "info" in line_lower:  # info log lines appear on all and info tabs
-                    line_type = "info"
-                    include_line = filter_type in ["all", "info"]
-                else:  # all other log lines appear on just the all tab
-                    line_type = "log"
-                    include_line = filter_type == "all"
+                # Apply log level filtering first - shared with the get_log MCP tool so the
+                # two views of the same log can't drift apart (#4768)
+                line_type = classify_log_line(line)
+                include_line = log_line_included(line_type, filter_type)
 
                 # Apply search filter if search term is provided
                 if include_line and search_term:
@@ -2477,21 +2648,25 @@ chart.render();
         baseline_timestamp = baseline_json.get("timestamp", None) if baseline_json else None
 
         # Get current manual overrides
-        manual_charge_times = self.base.manual_times("manual_charge")
-        manual_export_times = self.base.manual_times("manual_export")
-        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
-        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
-        manual_demand_times = self.base.manual_times("manual_demand")
-        manual_import_rates = self.base.manual_rates("manual_import_rates")
-        manual_export_rates = self.base.manual_rates("manual_export_rates")
-        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
-        manual_soc_keep = self.base.manual_rates("manual_soc")
+        # Read-only: these run on the web server's own thread, so writing the decoded
+        # selection back could persist times captured mid-recompute (#4900)
+        manual_charge_times = self.base.manual_times("manual_charge", update=False)
+        manual_export_times = self.base.manual_times("manual_export", update=False)
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
+        manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
+        manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
+        manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
+        manual_soc_max_keep = self.base.manual_rates("manual_soc_max", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
         manual_export_rates_list = [{"minutes": k, "rate": v} for k, v in manual_export_rates.items()]
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
+        manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2504,6 +2679,7 @@ chart.render();
             "manual_export_rates": manual_export_rates_list,
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
+            "manual_soc_max": manual_soc_max_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -2533,9 +2709,40 @@ chart.render();
             return web.json_response({"unchanged": True, "overrides_hash": overrides_hash})
 
         # Build full response with data
-        response_data = {"unchanged": False, "plan": plan_json, "yesterday": yesterday_json, "baseline": baseline_json, "overrides": overrides, "overrides_hash": overrides_hash}
+        response_data = {
+            "unchanged": False,
+            "plan": plan_json,
+            "yesterday": yesterday_json,
+            "baseline": baseline_json,
+            "overrides": overrides,
+            "overrides_hash": overrides_hash,
+            "history_days": self.history_day_names(),
+            "history_day_events": self.history_day_events(),
+        }
 
         return web.json_response(response_data)
+
+    def history_day_names(self):
+        """The dates (YYYY-MM-DD, oldest first) the History view's day picker can show, from predbat.plan_history."""
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        return sorted(days) if isinstance(days, dict) else []
+
+    def history_day_events(self):
+        """The recorded events (saving session, free electricity, Axle) on each older History day that had any, as {date: [labels]}."""
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        if not isinstance(days, dict):
+            return {}
+        return {day: plan["history_events"] for day, plan in days.items() if isinstance(plan, dict) and plan.get("history_events")}
+
+    async def html_api_plan_history(self, request):
+        """
+        JSON API - Return the History view's plan JSON for one older day (?date=YYYY-MM-DD), or 404
+        """
+        day = request.rel_url.query.get("date", "")
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        if not isinstance(days, dict) or day not in days:
+            return web.json_response({"error": "no history for date"}, status=404)
+        return web.json_response(days[day])
 
     async def html_plan(self, request):
         """
@@ -2550,7 +2757,7 @@ chart.render();
         text += get_plan_css()
 
         # Add warning/error divs
-        text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale (last updated >15 minutes ago)</div>'
+        text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale</div>'
         text += '<div id="planError" style="display:none; padding:10px; background:#fee; color:#c00; border:1px solid #c00; margin-bottom:10px;"></div>'
 
         # Add view switcher buttons
@@ -2562,6 +2769,9 @@ chart.render();
         text += '<label id="debugToggleLabel" style="margin-left: auto;"><input type="checkbox" id="debugToggle" onchange="onDebugToggleChange()"> Show Debug</label>'
         text += "</div>"
 
+        # Day picker for the History view, filled in by renderHistoryPicker()
+        text += '<div id="historyPicker" style="display:none; margin-bottom: 10px; gap: 6px; flex-wrap: wrap;"></div>'
+
         # Add plan container
         text += '<div id="planContainer"></div>'
 
@@ -2571,21 +2781,25 @@ chart.render();
         baseline_json = self.get_state_wrapper(entity_id=self.prefix + ".savings_yesterday_predbat", attribute="json", default=None)
 
         # Fetch override data
-        manual_charge_times = self.base.manual_times("manual_charge")
-        manual_export_times = self.base.manual_times("manual_export")
-        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
-        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
-        manual_demand_times = self.base.manual_times("manual_demand")
-        manual_import_rates = self.base.manual_rates("manual_import_rates")
-        manual_export_rates = self.base.manual_rates("manual_export_rates")
-        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
-        manual_soc_keep = self.base.manual_rates("manual_soc")
+        # Read-only: these run on the web server's own thread, so writing the decoded
+        # selection back could persist times captured mid-recompute (#4900)
+        manual_charge_times = self.base.manual_times("manual_charge", update=False)
+        manual_export_times = self.base.manual_times("manual_export", update=False)
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
+        manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
+        manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
+        manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
+        manual_soc_max_keep = self.base.manual_rates("manual_soc_max", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
         manual_export_rates_list = [{"minutes": k, "rate": v} for k, v in manual_export_rates.items()]
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
+        manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2598,6 +2812,7 @@ chart.render();
             "manual_export_rates": manual_export_rates_list,
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
+            "manual_soc_max": manual_soc_max_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -2611,6 +2826,8 @@ chart.render();
         text += f"window.baselineData = {json.dumps(baseline_json)};"
         text += f"window.overridesData = {json.dumps(overrides)};"
         text += f"window.overridesHash = {json.dumps(overrides_hash)};"
+        text += f"window.historyDays = {json.dumps(self.history_day_names())};"
+        text += f"window.historyDayEvents = {json.dumps(self.history_day_events())};"
         text += "</script>"
 
         # Include renderer JavaScript (which declares newestDataTimestamp variable)
@@ -2745,6 +2962,23 @@ chart.render();
 
         raise web.HTTPFound("./config")
 
+    def render_delete_button(self, nested_row_id):
+        """
+        Render the delete button shown against a nested list item or dictionary key
+        """
+        return f'<button class="delete-button" id="delete_button_{nested_row_id}" onclick="deleteNestedValue({nested_row_id})">Delete</button>'
+
+    def render_add_row(self, function, js_args, label, row_counter):
+        """
+        Render the trailing table row holding an add button, which doubles as the anchor new rows are inserted before
+        """
+        if row_counter is None:
+            return ""
+        row_counter[0] += 1
+        anchor_id = row_counter[0]
+        args = ", ".join(["'{}'".format(html_module.escape(str(item), quote=True)) for item in js_args] + [str(anchor_id)])
+        return f"<tr id='add_anchor_{anchor_id}'><td colspan='2'></td><td><button class=\"add-button\" onclick=\"{function}({args})\">{label}</button></td></tr>\n"
+
     def render_type(self, arg, value, parent_path="", row_counter=None):
         """
         Render a value based on its type with support for nested editing.
@@ -2762,67 +2996,87 @@ chart.render();
         """
         text = ""
         if isinstance(value, list):
+            list_path = parent_path if parent_path else arg
             text += "<table>"
             for idx, item in enumerate(value):
-                nested_path = f"{parent_path}[{idx}]" if parent_path else f"{arg}[{idx}]"
+                nested_path = f"{list_path}[{idx}]"
+                # An apps.yaml key can hold any character, including the quotes the attributes
+                # below are delimited with - escape once here so a key such as "it's" cannot
+                # truncate data-nested-path/data-path and hand the browser a wrong path
+                nested_path_attr = html_module.escape(nested_path, quote=True)
 
                 # Check if this list item is editable
                 can_edit = self.is_editable_value(item)
                 actions_cell = ""
+                nested_row_id = None
 
-                if can_edit and row_counter is not None:
+                if row_counter is not None:
                     row_counter[0] += 1
                     nested_row_id = row_counter[0]
 
-                    if isinstance(item, bool):
-                        toggle_class = "toggle-button active" if item else "toggle-button"
-                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
-                    else:
-                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                    if can_edit:
+                        if isinstance(item, bool):
+                            toggle_class = "toggle-button active" if item else "toggle-button"
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path_attr}"></button>'
+                        else:
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path_attr}">Edit</button>'
 
-                    # Store the nested value info for later processing
-                    if not hasattr(self, "_nested_values"):
-                        self._nested_values = {}
-                    self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+                        # Store the nested value info for later processing
+                        if not hasattr(self, "_nested_values"):
+                            self._nested_values = {}
+                        self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+
+                    # Every list item can be removed, whether or not its value itself is editable
+                    actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(arg, item)
 
-                if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                if nested_row_id is not None:
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path_attr}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{nested_row_id}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item, nested_path, row_counter))
+            text += self.render_add_row("addListItem", [list_path, arg], "Add item", row_counter)
             text += "</table>"
         elif isinstance(value, dict):
+            dict_path = parent_path if parent_path else arg
             text += "<table>"
             for key in value:
-                nested_path = f"{parent_path}.{key}" if parent_path else f"{arg}.{key}"
+                nested_path = f"{dict_path}.{key}"
+                nested_path_attr = html_module.escape(nested_path, quote=True)
                 nested_value = value[key]
 
                 # Check if this nested value is editable
                 can_edit = self.is_editable_value(nested_value)
                 actions_cell = ""
+                nested_row_id = None
 
-                if can_edit and row_counter is not None:
+                if row_counter is not None:
                     row_counter[0] += 1
                     nested_row_id = row_counter[0]
 
-                    if isinstance(nested_value, bool):
-                        toggle_class = "toggle-button active" if nested_value else "toggle-button"
-                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
-                    else:
-                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                    if can_edit:
+                        if isinstance(nested_value, bool):
+                            toggle_class = "toggle-button active" if nested_value else "toggle-button"
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path_attr}"></button>'
+                        else:
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path_attr}">Edit</button>'
 
-                    # Store the nested value info for later processing
-                    if not hasattr(self, "_nested_values"):
-                        self._nested_values = {}
-                    self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+                        # Store the nested value info for later processing
+                        if not hasattr(self, "_nested_values"):
+                            self._nested_values = {}
+                        self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+
+                    # Every setting can be removed, whether or not its value itself is editable
+                    actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(key, nested_value)
+                secret_attr = self.secret_row_attr(key, nested_value, "'")
 
-                if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                if nested_row_id is not None:
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path_attr}' data-nested-original='{html_module.escape(str(raw_value))}'{secret_attr}><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
+            text += self.render_add_row("addDictKey", [dict_path], "Add setting", row_counter)
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z_]+\.\S+", value)
@@ -2902,22 +3156,42 @@ chart.render();
         filename = debug_history.snapshot_filename(resolved_id)
         return await self.html_file(filename, data)
 
-    async def html_debug_history_download_all(self, request):
+    async def html_debug_history_download_recent(self, request):
         """
-        Download every retained debug-history snapshot as a single gzip tarball, so a
-        bug report can be gathered with one link instead of chasing a user through the
-        per-snapshot picker for the right moment, for #4417.
+        Download the most recent DEBUG_HISTORY_DOWNLOAD_MAX retained debug-history snapshots as a
+        single gzip tarball, so a bug report can be gathered with one link instead of chasing a
+        user through the per-snapshot picker for the right moment, for #4417.
+
+        Capped rather than "all": debug_history_count reaches 500 since #5070, and the archive is
+        built by loading every snapshot into memory at once, so an unbounded bundle of whole debug
+        dumps is neither downloadable nor attachable to an issue. Older snapshots are still
+        available individually from the plan's History view, or straight off disk in debug/.
         """
         storage = self._storage()
-        named_snapshots = await debug_history.load_all_snapshots(storage)
+        named_snapshots = await debug_history.load_all_snapshots(storage, DEBUG_HISTORY_DOWNLOAD_MAX)
         if not named_snapshots:
             return web.Response(content_type="text/html", text="No debug-history snapshots found", status=404)
 
         archive_bytes = debug_history.build_archive(named_snapshots)
+        # The trailing .dmp is load-bearing, not decoration. Browsers that unarchive downloads
+        # whose extension they recognise - on by default in more than one - turn a .tgz into a
+        # bare .tar on the way down, and that is fatal here twice over: .tar is not a file type
+        # GitHub accepts as an attachment, and a real 15-snapshot history is ~32MB expanded
+        # against a 25MB attachment limit, where the archive itself is under 5MB. Compression is
+        # doing essential work, so the download has to reach the user still compressed.
+        #
+        # There is no server-side way to decline the unarchiving - it keys on the extension, not
+        # on the content type or Content-Disposition, both of which are set correctly below and
+        # were not enough on their own. So the file is named with an extension those browsers
+        # leave alone and GitHub still accepts. The body is an ordinary gzip tarball and
+        # "tar xzf" reads it whatever it is called, so nothing needs renaming to open it.
         return web.Response(
-            content_type="application/gzip",
+            content_type="application/octet-stream",
             body=archive_bytes,
-            headers={"Content-Disposition": "attachment; filename=predbat_debug_history.tgz"},
+            headers={
+                "Content-Disposition": 'attachment; filename="predbat_debug_history.tgz.dmp"',
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     async def html_file_load(self, filename, also_file=None, as_file=None):
@@ -2925,7 +3199,7 @@ chart.render();
         Load a file and serve it up
         """
         data = None
-        if os.path.exists(filename):
+        if filename and os.path.exists(filename):
             with open(filename, "r") as f:
                 data = f.read()
         if also_file and os.path.exists(also_file):
@@ -2938,10 +3212,38 @@ chart.render();
         return await self.html_file(as_file or filename, data)
 
     async def html_debug_log(self, request):
-        return await self.html_file_load("predbat.1.log", also_file="predbat.log", as_file="predbat.log")
+        # The previous log is whichever name is present - two-digit, or the single-digit one an
+        # older Predbat wrote (#5076). Hard-coding predbat.1.log here served nothing once
+        # rotation moved to the padded form.
+        return await self.html_file_load(predbat_log_file_prev(), also_file="predbat.log", as_file="predbat.log")
 
     async def html_debug_apps(self, request):
-        return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
+        """
+        Return the apps.yaml file as written, with credential values redacted by default.
+
+        Masks unless ?masked=0 is passed, matching /debug_apps_live: this link sits next to that
+        one and is the file a user grabs to attach to a bug report, so a bare request - or any
+        of the plain './debug_apps' links elsewhere in the UI - must not hand over credentials.
+        Redaction is applied to the file text rather than the parsed args, so the download still
+        reads like the user's own apps.yaml, comments and '!secret' references included.
+        """
+        masked = request.query.get("masked", "1") != "0"
+        if not masked:
+            return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
+
+        data = None
+        if os.path.exists("apps.yaml"):
+            with open("apps.yaml", "r") as f:
+                data = f.read()
+        if data:
+            try:
+                data = mask_secret_yaml_text(data)
+            except Exception as e:
+                # Fail closed - serving the raw file because the parse failed is the leak this
+                # route exists to avoid. The unmasked download is still one click away.
+                self.log("Warn: Unable to redact apps.yaml for download: {}".format(e))
+                data = "# Predbat could not parse apps.yaml to redact it, so it has not been served.\n" "# Fix the YAML error, or use the unmasked download if you intend to share credentials.\n" "# Error: {}\n".format(e)
+        return await self.html_file("apps_masked.yaml.txt", data)
 
     async def html_debug_apps_live(self, request):
         """
@@ -3067,6 +3369,13 @@ chart.render();
         soc_kw_h0[now_str] = self.base.soc_kw
         soc_kw = self.get_entity_results(self.prefix + ".soc_kw")
         soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
+        # What earlier plans predicted for now, shifted forward by the horizon they were made at, so
+        # each lands on the moment it was forecasting and can be read straight against Actual.
+        # Pruned to today like the chart's other series - unpruned, the 7-day history this is read from
+        # stretched the Battery chart back across the whole week.
+        soc_best_history = self.get_history_with_now_attrs(self.prefix + ".soc_kw_best", 7)
+        soc_kw_best_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=True, offset_minutes=60)
+        soc_kw_best_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=True, offset_minutes=60 * 8)
         soc_kw_best10 = self.get_entity_results(self.prefix + ".soc_kw_best10")
         soc_kw_base10 = self.get_entity_results(self.prefix + ".soc_kw_base10")
         charge_limit_kw = self.get_entity_results(self.prefix + ".charge_limit_kw")
@@ -3100,6 +3409,8 @@ chart.render();
                 {"name": "Best", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "4", "stroke_curve": "smooth", "color": "#eb2323"},
                 {"name": "Best10", "data": soc_kw_best10, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#cd23eb"},
                 {"name": "Actual", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8"},
+                {"name": "Predicted (+1h)", "data": soc_kw_best_h1, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#f5a442"},
+                {"name": "Predicted (+8h)", "data": soc_kw_best_h8, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#9b59b6"},
                 {"name": "Charge Limit Base", "data": charge_limit_kw, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#15eb8b"},
                 {
                     "name": "Charge Limit Best",
@@ -3174,7 +3485,9 @@ chart.render();
         elif chart == "PV" or chart == "PV7":
             pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
             pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=chart == "PV")
-            pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False))
+            # The uncalibrated forecast: h0's state is the calibrated one while calibration is on, which would
+            # draw the same line as Forecast History CL below
+            pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0_uncalibrated", 7, required=False))
             pv_forecast_histCL = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
 
             pv_forecast = prune_today(pv_forecast_hist, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
@@ -3239,6 +3552,18 @@ chart.render();
             load_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_power", 7, required=False))
             load_power = prune_today(load_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
 
+            # Car charging, and the house with it taken back out. load_power is whatever the inverter
+            # reports as house load, and on a charger inside the CT clamp that includes the car - while
+            # the ML forecast it is plotted against has the car subtracted out (car_charging_hold in
+            # load_ml_component). Comparing the two directly makes every charging session look like a
+            # forecast miss the model was never trying to make. Both series are shown rather than only
+            # the corrected one: the car draw is real and worth seeing, it just is not what the model
+            # is predicting. Absent when no charger is configured, in which case neither series is
+            # drawn and the chart is exactly as it was.
+            car_charging_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".car_charging_power", 7, required=False))
+            car_charging_power = prune_today(car_charging_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
+            load_power_no_car = subtract_series(load_power, car_charging_power)
+
             # Get ML predicted load energy (cumulative) and convert to power (kW)
             load_ml_forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
             load_ml_forecast_power = {}
@@ -3251,8 +3576,6 @@ chart.render();
 
             # Sort timestamps and calculate deltas to get energy per interval
             if load_ml_forecast_energy:
-                from datetime import datetime
-
                 sorted_timestamps = sorted(load_ml_forecast_energy.keys())
                 prev_energy = 0
                 prev_timestamp = None
@@ -3263,8 +3586,8 @@ chart.render();
                     # Calculate actual interval in hours between this and previous timestamp
                     if prev_timestamp:
                         # Parse timestamps and calculate difference in hours
-                        curr_dt = datetime.strptime(timestamp, TIME_FORMAT)
-                        prev_dt = datetime.strptime(prev_timestamp, TIME_FORMAT)
+                        curr_dt = strptime_aware(timestamp, TIME_FORMAT)
+                        prev_dt = strptime_aware(prev_timestamp, TIME_FORMAT)
                         interval_hours = (curr_dt - prev_dt).total_seconds() / 3600.0
                         load_ml_forecast_power[timestamp] = dp4(energy_delta / interval_hours)
 
@@ -3280,6 +3603,8 @@ chart.render();
 
             series_data = [
                 {"name": "Load Power (Actual)", "data": load_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kW"},
+                {"name": "Load Power (Actual, less car)", "data": load_power_no_car, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#2ca02c", "unit": "kW"},
+                {"name": "Car Charging Power", "data": car_charging_power, "opacity": "0.6", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e377c2", "unit": "kW"},
                 {"name": "Load Power (ML Predicted Future)", "data": load_ml_forecast_power, "opacity": "0.5", "stroke_width": "3", "chart_type": "area", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kW"},
                 {"name": "Load Power ML History", "data": power_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#eb2323"},
                 {"name": "Load Power ML History +1h", "data": power_today_h1, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#716d63"},
@@ -3548,6 +3873,47 @@ chart.render();
             return len(value) > 0 and any(self.is_editable_value(item) for item in value)
         return False
 
+    def secret_row_attr(self, key, value, quote):
+        """
+        Return the data-secret attribute for a row whose value html_apps() served masked, else "".
+
+        The page holds SECRET_MASK for a credential rather than the credential itself, so the
+        browser's Edit has to fetch the real value (/apps_value) before it can offer it - this flag
+        is how it knows to. mask_secret_args() replaces a secret key's whole value, list or dict
+        included, so a credential container (e.g. redact_strings) is also one masked row and is
+        flagged too; /apps_value refuses to hand a container back, so its Edit ends in that
+        refusal rather than letting the editor overwrite the whole list with a single string.
+        """
+        if value == SECRET_MASK and is_secret_key(key):
+            return " data-secret={}1{}".format(quote, quote)
+        return ""
+
+    async def html_apps_value(self, request):
+        """
+        Return the real value of one apps.yaml setting, for the /apps editor's Edit on a credential.
+
+        html_apps() serves credentials masked, so without this Edit could only offer "xxx" - the
+        user could neither see nor amend the key, and saving it back unchanged is refused. Only
+        the one path asked for is returned, and only when it is a single value, so the page itself
+        still never carries credentials and a whole container cannot be pulled in the clear. The
+        unmasked /debug_apps download already exposes the same values behind the same access.
+
+        The value is returned as stored, not passed through resolve_value_raw(): a credential is
+        literal text, and one holding a brace ("abc{def", "{0}") makes str.format() in
+        resolve_arg() raise ValueError/IndexError, which would surface as a 500 here.
+        """
+        path = request.query.get("path", "")
+        if not path:
+            return web.json_response({"success": False, "message": "No path given"})
+        try:
+            value = resolve_nested_yaml_value(self.args, path)
+        except (KeyError, TypeError, ValueError, IndexError) as e:
+            # IndexError: a negative index into an empty list gets past the lookup's range check
+            return web.json_response({"success": False, "message": f"Path {path} not found: {str(e)}"})
+        if not self.is_editable_value(value) or isinstance(value, list):
+            return web.json_response({"success": False, "message": f"{path} is not a single value that can be edited here - edit apps.yaml directly"})
+        return web.json_response({"success": True, "value": str(value)})
+
     def resolve_value_raw(self, arg, value):
         if isinstance(value, str) and "{" in value:
             text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
@@ -3581,12 +3947,16 @@ chart.render();
             self.log(f"Error serializing all_states for web interface: {e}")
             all_states_json = "{}"
 
-        # Add CSS styles for edit functionality
+        # Add CSS styles for edit functionality and for the filter box
         text += get_apps_css()
+        text += get_filter_css()
         text += "<body>\n"
 
         # JavaScript for edit functionality
         text += get_apps_js(all_states_json)
+
+        # JavaScript for the filter box
+        text += get_apps_filter_js()
 
         # Add message container
         text += '<div id="messageContainer" class="message-container"></div>\n'
@@ -3602,14 +3972,34 @@ chart.render();
 </div>
 """
 
+        # Filter box, matching the one on the Config page (issue #5210)
+        text += """
+<div class="filter-container">
+    <label for="appsFilter"><strong>Filter settings:</strong></label>
+    <input type="text" id="appsFilter" class="filter-input" placeholder="Type to filter settings..." oninput="filterApps()" />
+    <button type="button" style="margin-left: 10px; padding: 8px 12px;" onclick="document.getElementById('appsFilter').value=''; filterApps();">Clear</button>
+</div>
+"""
+
         warning = ""
         if self.base.arg_errors:
             warning = "&#9888;"
         text += "{}<a href='./debug_apps'>apps.yaml</a> - has {} errors<br>\n".format(warning, len(self.base.arg_errors))
+        if self.base.arg_warnings:
+            text += "&#9888; apps.yaml has {} credential-like value(s) stored in plain text - consider using '!secret' to reference secrets.yaml: {}<br>\n".format(len(self.base.arg_warnings), html_module.escape(", ".join(sorted(self.base.arg_warnings))))
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
 
-        args = self.args
+        # Mask once, here, through the same recursive traversal every other surface uses
+        # (mask_secret_args - see utils.py). A top-level `is_secret_key(arg)` test on the loop
+        # below only covers credentials whose own apps.yaml key names them: a nested one such as
+        # chat.providers.openrouter.api_key or forecast_solar[0].api_key sits under a top-level
+        # key that matches nothing, and render_type() recurses into it - so the value, and the
+        # data-nested-original attribute built from it, both reached the browser in the clear
+        # (#5053 review). Masking the structure instead of the row keeps this route honest as
+        # new nested credentials appear, and deep-copies, so self.args (the live object shared
+        # with self.base.args) is untouched.
+        args = mask_secret_args(self.args)
         row_id = 0
         # Initialise nested values tracking and row counter
         self._nested_values = {}
@@ -3618,9 +4008,10 @@ chart.render();
         for arg in args:
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
-            if isinstance(arg, str) and (("_key" in arg) or ("_password" in arg) or ("_secret" in arg) or ("_pem" in arg)):
-                value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
+            # The filter box and the editor both read the row back through data-arg-name, so an
+            # apps.yaml key holding a quote must not be able to truncate the attribute
+            arg_attr = html_module.escape(str(arg), quote=True)
 
             # Determine if this value can be edited
             # Lists should not be editable at the top level - only their individual items
@@ -3628,7 +4019,7 @@ chart.render();
 
             if arg_errors:
                 text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td><td></td></tr>\n'.format(
-                    row_id, arg, html_module.escape(str(raw_value)), arg_errors, arg, self.render_type(arg, value, "", row_counter)
+                    row_id, arg_attr, html_module.escape(str(raw_value)), arg_errors, arg, self.render_type(arg, value, "", row_counter)
                 )
             else:
                 actions_cell = ""
@@ -3641,8 +4032,8 @@ chart.render();
                         # For numerical values, show edit button
                         actions_cell = f'<button class="edit-button" onclick="editValue({row_id})">Edit</button>'
 
-                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
-                    row_id, arg, html_module.escape(str(raw_value)), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
+                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"{}><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
+                    row_id, arg_attr, html_module.escape(str(raw_value)), self.secret_row_attr(arg, value, '"'), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
                 )
             row_id += 1
 
@@ -3651,7 +4042,7 @@ chart.render();
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
             text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td><td></td></tr>\n'.format(
-                row_id, arg, html_module.escape(str(raw_value)), arg, self.render_type(arg, value, "", row_counter)
+                row_id, html_module.escape(str(arg), quote=True), html_module.escape(str(raw_value)), arg, self.render_type(arg, value, "", row_counter)
             )
             row_id += 1
 
@@ -3660,30 +4051,38 @@ chart.render();
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
-    def _update_nested_yaml_value(self, data, path, value):
+    def _split_yaml_path(self, path):
         """
-        Update a nested value in YAML data using a dot-notation path
+        Split a dot-notation path into keys, with each list index as its own '[n]' key
         """
-        pre_keys = path.split(".")
         keys = []
-        # Split out set of square brackets into a different key
-        for key in pre_keys:
-            if "[" in key and "]" in key:
-                # Handle keys with square brackets, e.g., "battery_charge_low[0]"
-                base_key, index = key.split("[")
-                index = index.rstrip("]")
-                keys.append(base_key)
-                keys.append(f"[{index}]")
-            else:
-                keys.append(key)
+        # Split out every set of square brackets into its own key, e.g. "battery_charge_low[0]"
+        # into "battery_charge_low", "[0]", and a directly nested list's "foo[0][1]" into
+        # "foo", "[0]", "[1]"
+        for component in path.split("."):
+            for token in re.split(r"(\[[^\[\]]*\])", component):
+                if token:
+                    keys.append(token)
+        return keys
 
+    def _yaml_path_index(self, key, path):
+        """
+        Return the integer index held by a '[n]' path key, raising KeyError if it is not one
+        """
+        index = key[1:-1]
+        if not index.isdigit():
+            raise KeyError(f"Invalid list index '{key}' in path '{path}'")
+        return int(index)
+
+    def _navigate_yaml_path(self, data, keys, path):
+        """
+        Walk YAML data along all but the last key and return the container holding the final key
+        """
         current = data
-
-        # Navigate to the parent of the target value
         for key in keys[:-1]:
             if key.startswith("[") and key.endswith("]"):
                 # Handle numerical index in square brackets
-                index = int(key[1:-1])
+                index = self._yaml_path_index(key, path)
                 if not isinstance(current, list) or index >= len(current):
                     raise KeyError(f"Index '{index}' out of range in path '{path}'")
                 current = current[index]
@@ -3691,12 +4090,83 @@ chart.render();
                 current = current[key]
             else:
                 raise KeyError(f"Key '{key}' not found in path '{path}'")
+        return current
+
+    def _yaml_path_sort_key(self, path):
+        """
+        Return a sort key for a path so that deeper paths and higher list indices sort last
+        """
+        sort_key = []
+        for key in self._split_yaml_path(path):
+            if key.startswith("[") and key.endswith("]") and key[1:-1].isdigit():
+                sort_key.append((0, int(key[1:-1]), ""))
+            else:
+                sort_key.append((1, 0, str(key)))
+        return sort_key
+
+    def _parse_yaml_fragment(self, text):
+        """
+        Parse a user supplied YAML fragment (a scalar, or a block of key: value lines) into a value
+        """
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        value = yaml.load(text)
+        if value is None:
+            raise ValueError("value is empty")
+        return value
+
+    def _delete_nested_yaml_value(self, data, path):
+        """
+        Delete a nested list item or dictionary key from YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
+
+        key = keys[-1]
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = self._yaml_path_index(key, path)
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            del current[index]
+        elif isinstance(current, dict) and key in current:
+            del current[key]
+        else:
+            raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    def _add_nested_yaml_value(self, data, path, value):
+        """
+        Add a new list item (path ending in '[]') or dictionary key to YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
+
+        key = keys[-1]
+        if key == "[]":
+            if not isinstance(current, list):
+                raise KeyError(f"Path '{path}' does not refer to a list")
+            current.append(value)
+        elif key.startswith("[") and key.endswith("]"):
+            raise KeyError(f"Cannot add at an existing list index, use [] to append in path '{path}'")
+        elif not isinstance(current, dict):
+            raise KeyError(f"Path '{path}' does not refer to a dictionary")
+        elif key in current:
+            raise KeyError(f"Key '{key}' already exists in path '{path}'")
+        else:
+            current[key] = value
+
+    def _update_nested_yaml_value(self, data, path, value):
+        """
+        Update a nested value in YAML data using a dot-notation path
+        """
+        keys = self._split_yaml_path(path)
+        current = self._navigate_yaml_path(data, keys, path)
 
         # Set the final value
         key = keys[-1]
         if key.startswith("[") and key.endswith("]"):
             # Handle numerical index in square brackets
-            index = int(key[1:-1])
+            index = self._yaml_path_index(key, path)
             if not isinstance(current, list) or index >= len(current):
                 raise KeyError(f"Index '{index}' out of range in path '{path}'")
             current[index] = value
@@ -3712,6 +4182,17 @@ chart.render();
                     current[key] = value
             else:
                 raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    def _validate_compare_list(self, compare_list):
+        """
+        Check every compare_list profile still has the unique id and non-empty name that
+        compare.py indexes results by, raising ValueError if a batch has left one without.
+        Uses compare.py's own rules, so the editor refuses exactly what a comparison would skip,
+        and names every problem at once so they can all be fixed in one go.
+        """
+        _, problems = check_compare_list(compare_list)
+        if problems:
+            raise ValueError("; ".join(problems))
 
     async def html_apps_post(self, request):
         """
@@ -3737,6 +4218,7 @@ chart.render();
             apps_yaml_path = "apps.yaml"
             yaml = YAML()
             yaml.preserve_quotes = True
+            yaml.width = YAML_DUMP_WIDTH
 
             try:
                 with open(apps_yaml_path, "r") as f:
@@ -3748,12 +4230,47 @@ chart.render();
             if ROOT_YAML_KEY not in data:
                 return web.json_response({"success": False, "message": "pred_bat section not found in apps.yaml"})
 
-            # Process each change
+            # Process each change - additions and updates are applied first, then deletions, as
+            # deleting a list item shifts the indices every other path was rendered against.
+            # Every mutation lands on live_args, a copy of self.args, rather than self.args
+            # itself - a batch that fails partway, or whose file write fails, must never leave
+            # self.args (which is the same object as self.base.args) reflecting only some of it
             updated_args = []
+            deleted_paths = []
+            live_args = copy.deepcopy(self.args)
             for path_or_arg, change_info in changes.items():
-                new_value = change_info["newValue"]
                 change_type = change_info.get("type", "numerical")
                 is_nested = change_info.get("isNested", False)
+                # Adds are keyed uniquely by the browser so several can target one list, so the
+                # path is taken from the change itself rather than from the key
+                path_or_arg = change_info.get("path", path_or_arg) if is_nested else path_or_arg
+
+                if change_type in ("add", "delete"):
+                    # Determine nesting from the parsed path itself, not the client-supplied
+                    # isNested flag, so a delete posted with isNested spoofed true still cannot
+                    # reach a bare top-level key
+                    if len(self._split_yaml_path(path_or_arg)) < 2:
+                        return web.json_response({"success": False, "message": f"Only nested values can be added or deleted, not {path_or_arg}"})
+
+                if change_type == "delete":
+                    deleted_paths.append(path_or_arg)
+                    continue
+
+                new_value = change_info["newValue"]
+
+                if change_type == "add":
+                    # Added values are entered as YAML so a whole new list entry can be created at once
+                    try:
+                        added_value = self._parse_yaml_fragment(new_value)
+                    except Exception as e:
+                        return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {str(e)}"})
+                    try:
+                        self._add_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, added_value)
+                        self._add_nested_yaml_value(live_args, path_or_arg, copy.deepcopy(added_value))
+                    except (KeyError, TypeError) as e:
+                        return web.json_response({"success": False, "message": f"Could not add {path_or_arg}: {str(e)}"})
+                    updated_args.append(f"added {path_or_arg}")
+                    continue
 
                 # Convert the new value to appropriate type
                 try:
@@ -3771,12 +4288,23 @@ chart.render();
                 except ValueError:
                     return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {new_value}"})
 
+                # The /apps page serves credentials masked as SECRET_MASK (see html_apps), so the
+                # browser's data-original-value for a secret row is the mask, not the credential.
+                # Saving such a row unchanged would write "xxx" over a live key and destroy it -
+                # the same read-modify-write trap find_redacted_secret_overwrite() already refuses
+                # on the model's write path (chat_tools.py). Refuse it here too rather than trusting
+                # the page not to offer the edit, so the guard holds for any future surface (#5053
+                # review). A deliberate change to a real new value is unaffected.
+                secret_path = any(is_secret_key(segment) for segment in parse_yaml_path(path_or_arg) if not segment.startswith("["))
+                if converted_value == SECRET_MASK and secret_path:
+                    return web.json_response({"success": False, "message": f"Refusing to overwrite the credential {path_or_arg} with the redaction placeholder '{SECRET_MASK}' - edit it in apps.yaml or secrets.yaml directly"})
+
                 # Update the value in the YAML data
                 if is_nested:
                     # Handle nested paths like "battery_charge_low.normal"
                     try:
                         self._update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
-                        self._update_nested_yaml_value(self.args, path_or_arg, converted_value)
+                        self._update_nested_yaml_value(live_args, path_or_arg, converted_value)
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     except (KeyError, TypeError) as e:
                         return web.json_response({"success": False, "message": f"Path {path_or_arg} not found or invalid: {str(e)}"})
@@ -3784,15 +4312,44 @@ chart.render();
                     # Handle top-level arguments
                     if path_or_arg in data[ROOT_YAML_KEY]:
                         data[ROOT_YAML_KEY][path_or_arg] = converted_value
-                        self.args[path_or_arg] = converted_value  # Update the base args as well
+                        live_args[path_or_arg] = converted_value
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     else:
                         return web.json_response({"success": False, "message": f"Argument {path_or_arg} not found in apps.yaml"})
+
+            # Deletions run last, deepest path and highest list index first, so that one deletion
+            # never shifts the index another one still refers to
+            for path in sorted(deleted_paths, key=self._yaml_path_sort_key, reverse=True):
+                try:
+                    self._delete_nested_yaml_value(data[ROOT_YAML_KEY], path)
+                    self._delete_nested_yaml_value(live_args, path)
+                except (KeyError, TypeError) as e:
+                    return web.json_response({"success": False, "message": f"Could not delete {path}: {str(e)}"})
+                updated_args.append(f"deleted {path}")
+
+            # Compare profiles are indexed by id elsewhere (e.g. compare.py), so a batch that
+            # leaves one without an id or name, or with a duplicate id, must be refused
+            try:
+                self._validate_compare_list(data[ROOT_YAML_KEY].get("compare_list"))
+            except ValueError as e:
+                return web.json_response({"success": False, "message": str(e)})
 
             # Write back to the file, preserving comments and formatting
             try:
                 with open(apps_yaml_path, "w") as f:
                     yaml.dump(data, f)
+
+                # Only now that the whole batch has validated and the file write has succeeded is
+                # the live config published - in place, so self.args (the same object as
+                # self.base.args) never reflects a partially applied batch
+                self.args.clear()
+                self.args.update(live_args)
+                # A credential value or the redact_strings/redact_strings_labelled denylists
+                # themselves can change in this batch, so log()'s cached redaction pattern
+                # (log_secrets.py, held on self.base - the PredBat instance, not this web component)
+                # must be rebuilt on next use, or a newly added/changed secret keeps leaking into
+                # the log under the stale pattern until the restart below completes (GH#4770 review).
+                self.base._invalidate_log_secret_pattern()
 
                 change_count = len(updated_args)
                 self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")
@@ -3990,7 +4547,9 @@ chart.render();
         else:
             cost_yesterday_no_car = cost_yesterday_hist
 
-        compare_list = self.get_arg("compare_list", [])
+        # Same entries, with the same string ids, as the comparison itself ran on (#5472)
+        configured_compare_list = self.get_arg("compare_list", [])
+        compare_list, compare_problems = check_compare_list(configured_compare_list)
         compare_hist = {}
         for item in compare_list:
             id = item.get("id", None)
@@ -4002,8 +4561,6 @@ chart.render();
                     compare_hist[id]["cost"] = history_attribute(entity_hist, daily=True, pounds=True)
                     compare_hist[id]["metric"] = history_attribute(entity_hist, state_key="metric", attributes=True, daily=True, pounds=True)
                     compare_hist[id]["cost_1am"] = self.history_daily_at_hour(entity_hist)
-
-        compare_list = self.get_arg("compare_list", [])
 
         for compare in compare_list:
             name = compare.get("name", "")
@@ -4064,6 +4621,10 @@ chart.render();
 
         text += "</table>\n"
 
+        # The comparison only logs skipped entries when it runs, so say why a configured tariff is missing here
+        for problem in compare_problems:
+            text += "<p><b>Skipped:</b> {} - fix it in apps.yaml</p>\n".format(html_module.escape(problem))
+
         # Charts
         text += '<div id="chart"></div>'
         series_data = []
@@ -4079,9 +4640,9 @@ chart.render();
 
         if compare_hist:
             text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
-        elif not compare_list:
+        elif not configured_compare_list:
             text += '<br><h2>No tariffs configured yet - see <a href="https://springfall2008.github.io/batpred/compare/" target="_blank" rel="noopener noreferrer">Comparing Energy Tariffs</a> for how to add some to apps.yaml</h2><br>'
-        else:
+        elif compare_list:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
         # 7-day rolling average chart
@@ -4098,7 +4659,7 @@ chart.render();
         if series_7d:
             text += self.render_chart(series_7d, self.currency_symbols[0], "Tariff Comparison - 7 day rolling average", now_str, tagname="chart7d", daily_chart=False)
         elif not compare_list:
-            pass  # Already explained by the "No tariffs configured" message above
+            pass  # Already explained above, by "No tariffs configured" or the skipped entries
         else:
             text += "<br><h2>7 day rolling average chart loading (please wait)...</h2><br>"
 
@@ -4417,8 +4978,9 @@ chart.render();
             override_time = get_override_time_from_string(now_utc, time_str, self.plan_interval_minutes)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 48 * 60:
-                return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
+            if minutes_from_now >= MANUAL_RATE_MAX_MINUTES:
+                max_hours = MANUAL_RATE_MAX_MINUTES // 60
+                return web.json_response({"success": False, "message": f"Override time must be within {max_hours} hours from now."}, status=400)
 
             # Calculate minutes from midnight for looking up existing rates
             minutes_from_midnight = int((override_time - self.midnight_utc).total_seconds() / 60)
@@ -4427,7 +4989,7 @@ chart.render();
 
             # For clear operations, we need to use the actual stored rate value, not the passed rate
             if action == "Clear Import":
-                manual_import_rates = self.base.manual_rates("manual_import_rates")
+                manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
                 actual_rate = manual_import_rates.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_import_rates", clear_option)
@@ -4436,7 +4998,7 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_import_rates", selection_option)
             elif action == "Clear Export":
-                manual_export_rates = self.base.manual_rates("manual_export_rates")
+                manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
                 actual_rate = manual_export_rates.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_export_rates", clear_option)
@@ -4449,7 +5011,7 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_load_adjust", selection_option)
             elif action == "Clear Load":
-                manual_load_adjust = self.base.manual_rates("manual_load_adjust")
+                manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
                 actual_rate = manual_load_adjust.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_load_adjust", clear_option)
@@ -4458,10 +5020,19 @@ chart.render();
                 await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_soc", selection_option)
             elif action == "Clear SOC":
-                manual_soc = self.base.manual_rates("manual_soc")
+                manual_soc = self.base.manual_rates("manual_soc", update=False)
                 actual_rate = manual_soc.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_soc", clear_option)
+            elif action == "Set SOC Max":
+                item = self.base.config_index.get("manual_soc_max_value", {})
+                await self.set_state_external(item.get("entity", None), rate)
+                await self.base.async_manual_select("manual_soc_max", selection_option)
+            elif action == "Clear SOC Max":
+                manual_soc_max = self.base.manual_rates("manual_soc_max", update=False)
+                actual_rate = manual_soc_max.get(minutes_from_midnight, rate)
+                clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
+                await self.base.async_manual_select("manual_soc_max", clear_option)
             else:
                 self.log("ERROR: Unknown action for rate override")
                 return web.json_response({"success": False, "message": "Unknown action"}, status=400)
@@ -4499,34 +5070,38 @@ chart.render();
             if not time_values:
                 return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
 
+            action_selects = {
+                "Manual Demand": "manual_demand",
+                "Manual Charge": "manual_charge",
+                "Manual Export": "manual_export",
+                "Manual Freeze Charge": "manual_freeze_charge",
+                "Manual Freeze Export": "manual_freeze_export",
+            }
+            if action != "Clear" and action not in action_selects:
+                return web.json_response({"success": False, "message": "Unknown action"}, status=400)
+
+            # Validate every slot before applying any, so one bad slot can't leave a batch half-applied
             now_utc = self.now_utc
+            override_times = []
             for time_value in time_values:
                 override_time = get_override_time_from_string(now_utc, time_value, self.plan_interval_minutes)
                 if not override_time:
                     return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
 
                 minutes_from_now = (override_time - now_utc).total_seconds() / 60
-                if minutes_from_now >= 48 * 60:
-                    return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
+                if minutes_from_now >= MANUAL_TIME_MAX_MINUTES:
+                    max_hours = MANUAL_TIME_MAX_MINUTES // 60
+                    return web.json_response({"success": False, "message": f"Override time must be within {max_hours} hours from now."}, status=400)
+                override_times.append(override_time)
 
+            for override_time in override_times:
                 selection_option = "{}".format(override_time.strftime("%a %H:%M"))
                 clear_option = "[{}]".format(override_time.strftime("%a %H:%M"))
                 if action == "Clear":
                     await self.base.async_manual_select("manual_demand", selection_option)
                     await self.base.async_manual_select("manual_demand", clear_option)
                 else:
-                    if action == "Manual Demand":
-                        await self.base.async_manual_select("manual_demand", selection_option)
-                    elif action == "Manual Charge":
-                        await self.base.async_manual_select("manual_charge", selection_option)
-                    elif action == "Manual Export":
-                        await self.base.async_manual_select("manual_export", selection_option)
-                    elif action == "Manual Freeze Charge":
-                        await self.base.async_manual_select("manual_freeze_charge", selection_option)
-                    elif action == "Manual Freeze Export":
-                        await self.base.async_manual_select("manual_freeze_export", selection_option)
-                    else:
-                        return web.json_response({"success": False, "message": "Unknown action"}, status=400)
+                    await self.base.async_manual_select(action_selects[action], selection_option)
 
             # Refresh plan
             self.base.update_pending = True
@@ -4601,6 +5176,310 @@ chart.render();
             self.log(f"Error in html_component_entities: {e}")
             return web.json_response({"error": str(e)}, status=500)
 
+    def _coordinator(self):
+        """Return the discovery coordinator, or None when there is no component registry."""
+        components = getattr(self.base, "components", None)
+        return getattr(components, "coordinator", None) if components else None
+
+    def _discovery_value_html(self, value):
+        """Render one catalogue value - a scalar, a list or a nested container - as HTML.
+
+        Deliberately generic: it renders whatever shape it is handed rather than knowing the
+        catalogue's fields. The catalogue is designed to grow, and a renderer written against a
+        fixed field list would silently omit anything added later - which is precisely the kind of
+        gap an observe-only release exists to catch. Every value is escaped: info strings come from
+        third-party vendor APIs, not from Predbat.
+        """
+        if isinstance(value, dict):
+            return self._discovery_fields_html(value)
+        if isinstance(value, list):
+            if not value:
+                return "<span class='discovery-token'>none</span>"
+            if all(not isinstance(item, (dict, list)) for item in value):
+                return " ".join("<span class='discovery-token'>{}</span>".format(html_module.escape(str(item))) for item in value)
+            return "".join("<div class='discovery-nested'>{}</div>".format(self._discovery_value_html(item)) for item in value)
+        return "<span class='discovery-token'>{}</span>".format(html_module.escape(str(value)))
+
+    def _discovery_fields_html(self, mapping, skip=()):
+        """Render a mapping as labelled rows, recursing into whatever it nests."""
+        text = ""
+        for key in mapping:
+            if key in skip:
+                continue
+            value = mapping[key]
+            label = html_module.escape(str(key))
+            nested = isinstance(value, dict) and value
+            nested = nested or (isinstance(value, list) and value and any(isinstance(item, (dict, list)) for item in value))
+            if nested:
+                text += "<div class='discovery-field'><span class='discovery-key'>{}</span>:</div>\n".format(label)
+                text += "<div class='discovery-nested'>{}</div>\n".format(self._discovery_value_html(value))
+            else:
+                text += "<div class='discovery-field'><span class='discovery-key'>{}</span>: {}</div>\n".format(label, self._discovery_value_html(value))
+        return text
+
+    def _discovery_record_html(self, record):
+        """Render one catalogue record as a card, titled by its device_id and reporting source."""
+        text = "<div class='discovery-card'>\n"
+        text += "<div class='discovery-card-title'>{}".format(html_module.escape(str(record.get("device_id", "(no device_id)"))))
+        source = record.get("source")
+        if source:
+            text += "<span class='discovery-source'>{}</span>".format(html_module.escape(str(source)))
+        text += "</div>\n"
+        # entities is much the largest container on a real inverter - collapsed so one record does
+        # not push every other section off the screen.
+        entities = record.get("entities")
+        text += self._discovery_fields_html(record, skip=("device_id", "source", "entities"))
+        if entities:
+            text += "<details><summary>{} entities</summary><div class='discovery-nested'>{}</div></details>\n".format(len(entities), self._discovery_fields_html(entities))
+        text += "</div>\n"
+        return text
+
+    def _discovery_document_html(self, catalogue):
+        """Render the whole catalogue as the YAML a bug report would carry, for copying out."""
+        try:
+            stream = StringIO()
+            YAML().dump(json.loads(json.dumps(catalogue, default=str)), stream)
+            body = stream.getvalue()
+        except Exception as e:
+            self.log("Warn: Web: could not render the discovery document as YAML: {}".format(e))
+            body = json.dumps(catalogue, indent=2, default=str)
+        return "<details><summary>Full document</summary><pre class='discovery-raw'>{}</pre></details>\n".format(html_module.escape(body))
+
+    async def html_discovery(self, request):
+        """
+        Return the discovery catalogue as an HTML page
+
+        The published catalogue by default - what a debug dump would carry, email addresses scrubbed -
+        with ?raw=1 for the view with email addresses left in. Identifiers are published in both.
+        Reads the coordinator directly rather than parsing sensor.predbat_discovery's attributes
+        back out: that entity deliberately carries only a summary, and the coordinator is the
+        better coupling anyway (see Coordinator.publish()).
+        """
+        raw = str(request.query.get("raw", "")).lower() in ("1", "true", "yes", "on")
+        self.default_page = "./discovery"
+        text = self.get_header("Predbat Discovery", refresh=60)
+        text += "<body>\n"
+        text += get_discovery_css()
+        text += "<h2>Discovery Catalogue</h2>\n"
+
+        coordinator = self._coordinator()
+        catalogue = None
+        if coordinator is not None:
+            try:
+                catalogue = coordinator.catalogue_raw() if raw else coordinator.catalogue()
+            except Exception as e:
+                self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+
+        if catalogue is None:
+            text += "<div class='discovery-empty'>The discovery catalogue is not available - no component coordinator is running yet.</div>\n"
+            text += "</body></html>\n"
+            return web.Response(content_type="text/html", text=text)
+
+        # Any list at the top level is a section of records, so a section added to the catalogue
+        # later appears here without this page being taught about it.
+        meta_keys = ("schema_version", "generated", "components", "observations")
+        sections = [key for key, value in catalogue.items() if key not in meta_keys and isinstance(value, list)]
+
+        text += "<div class='discovery-bar'>\n"
+        text += "<div class='discovery-counts'>\n"
+        text += "<span class='discovery-count'>schema {}</span>\n".format(html_module.escape(str(catalogue.get("schema_version", "?"))))
+        text += "<span class='discovery-count'>generated {}</span>\n".format(html_module.escape(str(catalogue.get("generated", "?"))))
+        for section in sections:
+            text += "<span class='discovery-count'>{} {}</span>\n".format(len(catalogue[section]), html_module.escape(section))
+        text += "</div>\n"
+        if raw:
+            text += "<a class='discovery-toggle' href='./discovery'>Show redacted</a>\n"
+        else:
+            text += "<a class='discovery-toggle' href='./discovery?raw=1'>Show raw values</a>\n"
+        text += "</div>\n"
+
+        if raw:
+            text += "<div class='discovery-warning'><strong>Raw view.</strong> Email addresses are shown unredacted - this view is <strong>not safe to share</strong>. Use the default view for anything you post in a bug report.</div>\n"
+
+        conflicts = catalogue.get("observations", {}).get("conflicts", [])
+        if conflicts:
+            text += "<div class='discovery-conflicts'>\n"
+            text += "<strong>{} conflict(s)</strong> - two components describing the same hardware, or competing for the same slot.\n".format(len(conflicts))
+            for conflict in conflicts:
+                text += "<div class='discovery-nested'>{}</div>\n".format(self._discovery_fields_html(conflict))
+            text += "</div>\n"
+        else:
+            text += "<div class='discovery-clear'>No conflicts - no two components are describing the same hardware.</div>\n"
+
+        components = catalogue.get("components", {})
+        if components:
+            text += "<h3>Components</h3>\n"
+            text += "<div class='discovery-grid'>\n"
+            for name in sorted(components):
+                text += "<div class='discovery-card'>\n"
+                text += "<div class='discovery-card-title'>{}</div>\n".format(html_module.escape(str(name)))
+                text += self._discovery_fields_html(components[name] if isinstance(components[name], dict) else {"status": components[name]})
+                text += "</div>\n"
+            text += "</div>\n"
+
+        for section in sections:
+            records = catalogue[section]
+            if not records:
+                continue
+            text += "<h3>{} <span class='discovery-count'>{}</span></h3>\n".format(html_module.escape(section.title()), len(records))
+            text += "<div class='discovery-grid'>\n"
+            for record in records:
+                text += self._discovery_record_html(record if isinstance(record, dict) else {"device_id": record})
+            text += "</div>\n"
+
+        text += self._discovery_document_html(catalogue)
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
+
+    def _discovery_status_map(self):
+        """The catalogue's per-component status map, or {} when there is no catalogue to read."""
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return {}
+        try:
+            return coordinator.catalogue().get("components", {})
+        except Exception as e:
+            self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+            return {}
+
+    def _discovery_status_text(self, status):
+        """One component's status-map entry in words: what it reported, or why it has nothing to show."""
+        if status.get("status") != "ok":
+            return DISCOVERY_STATUS_TEXT.get(status.get("status"), str(status.get("status")))
+        counts = status.get("counts") or {}
+        parts = ["{} {}".format(count, section[:-1] if count == 1 and section.endswith("s") else section) for section, count in counts.items()]
+        return ", ".join(parts) if parts else "nothing reported"
+
+    def _discovery_label(self, key):
+        """A field name as a label: underscores become spaces, and the name is otherwise as reported."""
+        return html_module.escape(str(key).replace("_", " "))
+
+    def _discovery_chips_html(self, items, off=()):
+        """Render values as chips, struck through for any in `off`. Values are escaped."""
+        return "".join("<span class='discovery-chip{}'>{}</span>".format(" discovery-chip-off" if item in off else "", html_module.escape(str(item))) for item in items)
+
+    def _discovery_glance_value_html(self, value):
+        """Render one summary value: a list as chips, a mapping as labelled rows, anything else as plain text."""
+        if isinstance(value, dict):
+            return self._discovery_fields_html(value)
+        if isinstance(value, list):
+            if all(not isinstance(item, (dict, list)) for item in value):
+                return self._discovery_chips_html(value)
+            return self._discovery_value_html(value)
+        return html_module.escape(str(value))
+
+    def _discovery_glance_html(self, record):
+        """Render one record's at-a-glance summary: what it is, how big it is, and what it does.
+
+        Built by rule from the record's own shape, never from a list of field names, so a field a
+        reporter adds later appears here with no change to this page. Identity containers come
+        first (serial, account ids, model, firmware), then the record's own top-level facts and
+        lists (type, composition, functions, flags), then its sizes and the rest of the summary
+        containers in DISCOVERY_GLANCE_CONTAINERS order, then any container this page has never
+        been told about, and finally "Predbat controls": the entities it can write to. Field names
+        are shown with underscores as spaces; values are shown as reported.
+        """
+        placed = set(DISCOVERY_GLANCE_CONTAINERS) | set(DISCOVERY_FOLDED_CONTAINERS)
+        identity = ("hardware_ids", "account_ids", "info")
+        rows = []
+
+        def add_container(container):
+            """Add one summary row per key of a mapping-valued container."""
+            for key, value in container.items():
+                rows.append((self._discovery_label(key), self._discovery_glance_value_html(value)))
+
+        for name in identity:
+            if isinstance(record.get(name), dict):
+                add_container(record[name])
+        for key, value in record.items():
+            if key in ("device_id", "source") or key in placed or isinstance(value, dict):
+                continue
+            rows.append((self._discovery_label(key), self._discovery_glance_value_html(value)))
+        for name in DISCOVERY_GLANCE_CONTAINERS:
+            value = record.get(name)
+            if name in identity or not isinstance(value, dict):
+                continue
+            if name == "capabilities":
+                rows.append((self._discovery_label(name), self._discovery_chips_html([str(key).replace("_", " ") for key in value], off={str(key).replace("_", " ") for key, flag in value.items() if not flag})))
+            else:
+                add_container(value)
+        for key, value in record.items():
+            if key not in placed and isinstance(value, dict):
+                add_container(value)
+        entities = record.get("entities")
+        if isinstance(entities, dict):
+            controls = [str(key).replace("_", " ") for key, descriptor in entities.items() if isinstance(descriptor, dict) and descriptor.get("access") == "rw"]
+            if controls:
+                rows.append(("Predbat controls", self._discovery_chips_html(controls)))
+
+        text = "<table class='discovery-glance'>\n"
+        for label, value in rows:
+            text += "<tr><td>{}</td><td>{}</td></tr>\n".format(label, value)
+        text += "</table>\n"
+        return text
+
+    def _discovery_component_html(self, catalogue, name):
+        """Render the Components page pop-up body for one component: its status, then each record it reported.
+
+        Each record gets the at-a-glance summary, with the full record (entities included) folded
+        beneath it. Reads the published catalogue, so this shows what a debug dump would carry.
+        """
+        from components import COMPONENT_LIST
+
+        display_name = COMPONENT_LIST.get(name, {}).get("name", name)
+        text = "<h2 class='discovery-modal-title'>{} · discovery</h2>\n".format(html_module.escape(str(display_name)))
+
+        status = catalogue.get("components", {}).get(name)
+        if status is None:
+            text += "<div class='discovery-meta'>This component has no discovery reporter.</div>\n"
+        elif status.get("status") == "ok":
+            meta = []
+            reported_at = status.get("reported_at")
+            if reported_at:
+                try:
+                    meta.append("Reported {}".format(format_time_ago(datetime.fromisoformat(reported_at)).lower()))
+                except (TypeError, ValueError):
+                    meta.append("Reported {}".format(reported_at))
+            if "automatic" in status:
+                meta.append("automatic: {}".format("yes" if status["automatic"] else "no"))
+            meta.append(self._discovery_status_text(status))
+            text += "<div class='discovery-meta'>{}</div>\n".format(html_module.escape(" · ".join(meta)))
+        else:
+            sentence = DISCOVERY_STATUS_SENTENCE.get(status.get("status"), "This component's discovery status is {}.".format(status.get("status")))
+            text += "<div class='discovery-meta'>{}</div>\n".format(html_module.escape(sentence))
+
+        meta_keys = ("schema_version", "generated", "components", "observations")
+        for section, records in catalogue.items():
+            if section in meta_keys or not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict) or record.get("source") != name:
+                    continue
+                text += "<div class='discovery-card'>\n"
+                text += "<div class='discovery-card-title'>{}<span class='discovery-source'>{}</span></div>\n".format(
+                    html_module.escape(str(record.get("device_id", "(no device_id)"))), html_module.escape(section[:-1] if section.endswith("s") else section)
+                )
+                text += self._discovery_glance_html(record)
+                text += "<details><summary>Full record</summary>\n{}</details>\n".format(self._discovery_record_html(record))
+                text += "</div>\n"
+
+        text += "<p><a href='./discovery'>Open the full discovery page &rarr;</a></p>\n"
+        return text
+
+    async def html_component_discovery(self, request):
+        """Return one component's discovery info as an HTML fragment, for the Components page pop-up."""
+        name = str(request.query.get("name", ""))
+        coordinator = self._coordinator()
+        catalogue = None
+        if coordinator is not None:
+            try:
+                catalogue = coordinator.catalogue()
+            except Exception as e:
+                self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+        if catalogue is None:
+            return web.Response(content_type="text/html", text="<div class='discovery-empty'>Discovery is not available - no component coordinator is running yet.</div>\n")
+        return web.Response(content_type="text/html", text=self._discovery_component_html(catalogue, name))
+
     async def html_components(self, request):
         """
         Return the Components view as an HTML page showing status of all components
@@ -4613,6 +5492,11 @@ chart.render();
         text += get_component_edit_modal_css()
         text += get_entity_modal_js()
         text += get_component_edit_modal_js()
+        text += get_discovery_css()
+        text += get_discovery_modal_js()
+
+        # Discovery status per component: the ones listed here get an info button (see html_component_discovery)
+        discovery_status = self._discovery_status_map()
 
         # Get all component information
         all_components = self.base.components.get_all()
@@ -4627,7 +5511,7 @@ chart.render();
             is_alive = self.base.components.is_alive(component_name)
             is_active = component_name in active_components
 
-            if is_active and not is_alive:
+            if (is_active and not is_alive) or self.base.components.load_error(component_name):
                 error_components.append(component_name)
             elif is_active and is_alive:
                 active_healthy_components.append(component_name)
@@ -4635,7 +5519,7 @@ chart.render();
                 disabled_components.append(component_name)
 
         # Add heading with checkbox and totals on the same line
-        text += "<div style='display: flex; align-items: center; margin-bottom: 15px;'>\n"
+        text += "<div style='display: flex; flex-wrap: wrap; align-items: center; gap: 8px 0; margin-bottom: 15px;'>\n"
         text += "<h2 style='margin: 0; margin-right: 20px;'>Component Status</h2>\n"
         text += "<label style='cursor: pointer; margin-right: 20px; white-space: nowrap;'>\n"
         text += "<input type='checkbox' id='showDisabledCheckbox' onclick='toggleDisabledComponents()' style='margin-right: 8px;'>\n"
@@ -4657,22 +5541,29 @@ chart.render();
             from components import COMPONENT_LIST
 
             component_info = COMPONENT_LIST.get(component_name, {})
-            component = self.base.components.get_component(component_name)
             is_alive = self.base.components.is_alive(component_name)
             can_restart = self.base.components.can_restart(component_name)
             is_active = component_name in active_components
+            # Configured but failed to import or construct: inactive, yet shown as an error
+            load_error = self.base.components.load_error(component_name)
 
             # Get last updated time
             last_updated_time = self.base.components.last_updated_time(component_name)
             time_ago_text = format_time_ago(last_updated_time)
 
             # Create component card
-            card_class = "active" if is_active else "inactive"
-            if is_active and not is_alive:
-                card_class += " error"
+            if load_error:
+                # Not "inactive" as well: that rule would paint over the error border
+                card_class = "error"
+            elif is_active and not is_alive:
+                card_class = "active error"
+            elif is_active:
+                card_class = "active"
+            else:
+                card_class = "inactive"
 
             # Add data-disabled attribute for filtering
-            disabled_attr = 'data-disabled="true"' if not is_active else 'data-disabled="false"'
+            disabled_attr = 'data-disabled="true"' if not (is_active or load_error) else 'data-disabled="false"'
 
             text += f'<div class="component-card {card_class}" {disabled_attr}>\n'
             text += f'<div class="component-header">\n'
@@ -4681,17 +5572,21 @@ chart.render();
             # Status indicator
             if is_active and is_alive:
                 text += '<span class="status-indicator status-healthy">●</span><span class="status-text">Active</span>\n'
-            elif is_active and not is_alive:
+            elif (is_active and not is_alive) or load_error:
                 text += '<span class="status-indicator status-error">●</span><span class="status-text">Error</span>\n'
             else:
                 text += '<span class="status-indicator status-inactive">●</span><span class="status-text">Disabled</span>\n'
 
-            # Add restart button for active components
-            if is_active and can_restart:
+            # Add restart button for active and failed components
+            if (is_active or load_error) and can_restart:
                 text += f'<button class="restart-button" onclick="restartComponent(\'{component_name}\')" title="Restart this component">Restart</button>\n'
 
             # Add edit button for all components
             text += f'<button class="edit-button" onclick="showComponentEditModal(\'{component_name}\')" title="Edit component configuration">&#9998;</button>\n'
+
+            # Add a discovery info button for every component the catalogue has a status for
+            if component_name in discovery_status:
+                text += f'<button class="info-button" onclick="showDiscoveryModal(\'{component_name}\')" title="Show what this component discovered">&#9432;</button>\n'
 
             text += f"</div>\n"
 
@@ -4701,11 +5596,20 @@ chart.render();
             # Add last updated time
             text += f'<p><strong>Last Updated:</strong> <span class="last-updated-time">{time_ago_text}</span></p>\n'
 
+            # Say why a component could not be initialised
+            if load_error:
+                text += f'<p><strong>Error:</strong> <span class="error-count-high">{html_module.escape(load_error)}</span></p>\n'
+
             # Add error count
             error_count = self.base.components.get_error_count(component_name)
             if error_count is not None:
                 error_class = "error-count-high" if error_count > 0 else "error-count-none"
                 text += f'<p><strong>Error Count:</strong> <span class="{error_class}">{error_count}</span></p>\n'
+
+            # Summarise what the component discovered; the summary opens the same pop-up as the info button
+            if component_name in discovery_status:
+                discovery_text = html_module.escape(self._discovery_status_text(discovery_status[component_name]))
+                text += f'<p><strong>Discovery:</strong> <span class="discovery-summary-link" onclick="showDiscoveryModal(\'{component_name}\')">{discovery_text}</span></p>\n'
 
             # Show args and their current values
             args_info = component_info.get("args", {})
@@ -4790,6 +5694,14 @@ chart.render();
             </table>
         </div>
         <div id="entityEmptyState" class="entity-empty-state" style="display: none;">No entities found</div>
+    </div>
+</div>
+
+<!-- Discovery Modal -->
+<div id="discoveryModal" class="entity-modal">
+    <div class="entity-modal-content">
+        <span class="entity-modal-close" onclick="closeDiscoveryModal()">&times;</span>
+        <div id="discoveryModalBody"></div>
     </div>
 </div>
 
@@ -5003,6 +5915,7 @@ document.addEventListener('DOMContentLoaded', function() {
             yaml = YAML()
             yaml.preserve_quotes = True
             yaml.default_flow_style = False
+            yaml.width = YAML_DUMP_WIDTH
 
             try:
                 with open(apps_yaml_path, "r") as f:
@@ -5421,6 +6334,61 @@ document.addEventListener('DOMContentLoaded', function() {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    async def html_kraken_key(self, request):
+        """
+        Return the Kraken API key generator page (Advanced -> Kraken API Key)
+
+        No auto-refresh: a refresh would wipe a token the user has just pasted.
+        """
+        self.default_page = "./kraken_key"
+        text = self.get_header("Predbat Kraken API Key", refresh=0)
+        text += "<body>\n"
+        text += get_kraken_key_page_html()
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text, headers={"Cache-Control": "no-store"})
+
+    async def html_api_kraken_key(self, request):
+        """
+        Check an account's Kraken API key, or generate a new one, using a token pasted from the user's browser.
+
+        Body: {"provider": "eon"|"edf", "token": "...", "action": "check"|"generate"}. The token and the key are
+        passed straight through and never logged or kept; responses are marked no-store.
+        """
+        # Imported here so the Kraken code is only loaded when someone uses this page
+        import kraken_key
+        from kraken import KRAKEN_BASE_URLS
+
+        headers = {"Cache-Control": "no-store"}
+        try:
+            data = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return web.json_response({"status": "error", "error": "Invalid request"}, status=400, headers=headers)
+        if not isinstance(data, dict):
+            return web.json_response({"status": "error", "error": "Invalid request"}, status=400, headers=headers)
+
+        provider = data.get("provider")
+        base_url = KRAKEN_BASE_URLS.get(provider) if isinstance(provider, str) else None
+        if not base_url:
+            return web.json_response({"status": "error", "error": "Choose E.ON Next or EDF"}, status=400, headers=headers)
+        token = kraken_key.normalise_kraken_token(data.get("token"))
+        if not token:
+            return web.json_response({"status": "error", "error": "Paste the token from your browser first"}, status=400, headers=headers)
+
+        action = data.get("action")
+        if action == "check":
+            result = await kraken_key.check_kraken_key(base_url, token, session_factory=self.http_session)
+        elif action == "generate":
+            result = await kraken_key.generate_kraken_key(base_url, token, session_factory=self.http_session)
+        else:
+            return web.json_response({"status": "error", "error": "Unknown action"}, status=400, headers=headers)
+
+        # Outcome only - never the token or the key
+        if result.get("status") == "generated":
+            self.log("Web: Kraken API key generated for {} (sign-in check {})".format(provider, "passed" if result.get("verified") else "failed"))
+        elif result.get("status") == "error":
+            self.log("Warn: Web: Kraken API key {} for {} failed: {}".format(action, provider, result.get("error")))
+        return web.json_response(result, headers=headers)
+
     async def html_internals(self, request):
         """
         Return the Internals page showing the class hierarchy and object inspection
@@ -5625,13 +6593,13 @@ document.addEventListener('DOMContentLoaded', function() {
                                     import linecache
 
                                     line_code = linecache.getline(code.co_filename, line_no).strip()
-                                except:
+                                except Exception:
                                     line_code = ""
 
                                 stack.append({"file": code.co_filename, "line": line_no, "name": code.co_name, "code": line_code})
 
                             task_info["stack"] = stack
-                except Exception as e:
+                except Exception:
                     # If we can't get the coroutine stack, just skip it
                     pass
 
@@ -5804,7 +6772,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 except Exception as e:
                     try:
                         yaml_key = str(key)
-                    except:
+                    except Exception:
                         yaml_key = f"<unprintable_key_{hash(key)}>"
                     result[yaml_key] = f"<error: {type(e).__name__}>"
             # Remove from visited after processing to allow same object in different branches
@@ -5835,7 +6803,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if len(str_value) > 200:
                 return str_value[:200] + "..."
             return str_value
-        except:
+        except Exception:
             return f"<{type(obj).__name__}>"
 
     def _get_object_members(self, obj, path):
@@ -5940,7 +6908,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     display_value = str_value[:100] + "..."
                 else:
                     display_value = str_value
-            except:
+            except Exception:
                 display_value = f"<{value_type}>"
 
         # Build the full path for this item using :: as separator

@@ -6,7 +6,13 @@ At a glance, the Predbat plan shows you the plan going forward for home demand, 
 
 ## Displaying the Predbat plan
 
-Firstly install the [HTML template card](https://github.com/PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card) in HACS:
+Firstly install the [HTML template card](https://github.com/PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card) from the [Marketplace](install.md#hacs-and-the-marketplace) on Home Assistant 2026.11 or newer:
+
+- Go to **Settings** → **Marketplace** and search for 'HTML'
+- Click on 'HTML Jinja2 Template card', select **Install**, check the version and select **Install** again
+- Reload your browser to load the new dashboard resource
+
+Or, on Home Assistant 2026.10 or older, install it in HACS:
 
 - In HACS, click on Frontend
 - Click the blue *Explore and download repositories* button and type 'HTML'
@@ -30,7 +36,7 @@ You should see something like this:
 
 ![image](images/predbat-html-plan.png)
 
-If you get an error 'Custom element doesn't exist: html-template-card' then you've not installed the Jinja2 template card correctly from HACS.
+If you get an error 'Custom element doesn't exist: html-template-card' then you've not installed the Jinja2 template card correctly from the Marketplace (or HACS).
 
 ## Understanding the Predbat plan
 
@@ -53,9 +59,9 @@ Rate symbols (import and export):
 
 - ? &#8518; - Rate that has been modified based on **input_number.predbat_metric_future_rate_offset_import** or **input_number.predbat_metric_future_rate_offset_export**
 - ? &#x2696; - Rate that has been estimated using future rate estimation data (e.g. Nordpool)
-- &#61; - Rate that has been overridden by the user's apps.yaml
-- &#177; - Rate that has been adjusted with a rate offset in the user's apps.yaml
-- &dollar; - Rate that has been adjusted for an Octopus Saving session
+- &#61; - Rate that has been overridden by the user's `apps.yaml`
+- &#177; - Rate that has been adjusted with a rate offset in the user's `apps.yaml`
+- &dollar; - Rate that has been adjusted for an Octopus Saving session or Axle event
 - ? - Rate that has not yet been defined and the previous day's data was used instead
 
 Battery SoC symbols:
@@ -63,6 +69,12 @@ Battery SoC symbols:
 - &rarr; - Current SoC expected to remain level
 - &searr; - Current SoC expected to fall
 - &nearr; - Current SoC expected to rise
+- &#9888; - The slot is inside an active [weather alert](apps-yaml.md#weather-alert-system), so Predbat will try to keep the battery at or above the alert's `keep` percentage
+- &#9998; - A [manual SoC target](customisation.md#manual-control) (minimum SoC, set with **select.predbat_manual_soc**) applies to the slot
+- &#11015; - A [manual SoC maximum](customisation.md#manual-control) (SoC ceiling, set with **select.predbat_manual_soc_max**) applies to the slot
+
+On the plan in the Predbat web interface, where you can click the SoC % cell to set or clear a manual SoC target or maximum, the cell also repeats the override after the SoC value:
+a 'Forced' (&#8526;) for a manual SoC target and a second down arrow (&#11015;) for a manual SoC maximum.
 
 Cost symbols:
 
@@ -96,6 +108,11 @@ If battery discharging is planned by Predbat for a particular slot, the export r
 discharging and force exported, or being held at the current level.<BR>
 Alongside the state is an arrow which points upwards if the battery SoC is increasing (i.e. charging), to the right if the battery SoC remains constant,
 or downwards if the battery SoC is decreasing (i.e. discharging).<BR>
+On a Demand slot (or the part of a slot before an export starts), a car (&#128663;) replaces the arrow when the plan holds the battery for a charging car for at least half of that time:
+Predbat controls charge windows, *switch.predbat_car_charging_from_battery* is Off, and the car either has a charging slot
+(and is below its charge limit, unless Octopus Intelligent plans it with *switch.predbat_octopus_intelligent_consider_full* Off) or is reporting *car_charging_now*.
+House load that solar does not cover then comes from the grid rather than the battery.
+In the Yesterday view the car shows where Predbat's recorded status was "Hold for car" for at least half the slot.<BR>
 If Predbat's plan has been over-ridden and the [slot has been manually controlled](customisation.md#manual-control) to be a Charging slot, Discharging or Idle,
 then alongside the State and battery SoC arrow will be an upside down 'F' (&#8526;) indicating it is a 'Forced' activity.<BR>
 The slot will be coloured Green for Charging, Yellow for Discharging, Silver Grey for Freeze Charging, Dark Grey for Freeze Discharging, Pale Blue for Hold Charging or White for Idle.<BR>
@@ -135,6 +152,8 @@ If the solar diverter is planned to be on in that slot then the kWh will be colo
 together with an arrow pointing up, to the right or downwards to indicate whether the battery SoC is increasing, remaining constant or decreasing during the time slot.<BR>
 The 'SoC %' can be read in conjunction with the 'Limit %'; the SoC column gives the estimated SoC at the beginning of the slot,
 the Limit column the estimated SoC at the end of the slot.<BR>
+A warning triangle (&#9888;) before the arrow means the slot is inside an active [weather alert](apps-yaml.md#weather-alert-system),
+a pencil (&#9998;) means a manual SoC target applies to the slot, and a down arrow (&#11015;) means a manual SoC maximum applies to it.<BR>
 If the SoC is 50% or greater it will be coloured Green, 20% or greater, Yellow, and if less than 20%, Orangey-Red.
 
 - **Cost** - The estimated cost in pence for the time slot together with an arrow indicating whether the total cost today is increasing, staying flat or decreasing.<BR>
@@ -161,6 +180,10 @@ The carbon amount in kg will be coloured according to the direction of travel ov
 if falling by 10kg or more it will be green with a downwards arrow, and in the middle, white with a horizontal arrow.
 
 - **Debug** - (Only shown on the plan's [History view](web-interface.md#plan-view)) A download link to the [debug history snapshot](customisation.md#debug-history) captured for that exact time slot, if one was retained, labelled with the time it was taken. Empty if no snapshot was captured for that slot.
+
+Hovering over a cell shows what that value would be in the plan's [pessimistic and optimistic scenarios](customisation.md#scaling-and-weight-options),
+one line per scenario. In the web interface's plan view this works on the PV, Load, SoC %, Cost and Total columns; on the `predbat.plan_html` card, on the SoC % column only.
+A tooltip only appears when a scenario changes that cell's value as shown, and a scenario whose weight (`pv_metric10_weight` or `pv_metric90_weight`) is 0 is left out.
 
 ## Debug mode for Predbat Plan
 
@@ -204,8 +227,8 @@ There's a further [explanation of the Predbat forecast and plan](faq.md#the-plan
 
 ## Customising and Reformatting the Predbat Plan
 
-An additional independent front-end Home Assistant component the 'Predbat Table Card' is available on HACS that gives a number of additional customisation and configuration options
-to tailor how the Predbat plan looks and is highly recommended if you want to change the standard plan look and feel:
+A couple of additional independent front-end Home Assistant components have been created by the Predbat community, the 'Predbat Table Card' in the [Marketplace](install.md#hacs-and-the-marketplace) (or HACS on Home Assistant 2026.10 or older), that gives additional customisation and configuration options
+to tailor how the Predbat plan looks and are highly recommended if you want to change the standard plan look and feel:
 
 - Change the sequence of columns and which columns are shown in the plan
 - Restyle the columns, or retain the Predbat original colour scheme
@@ -218,7 +241,9 @@ to tailor how the Predbat plan looks and is highly recommended if you want to ch
 
 ![image](images/predbat-table-card.png)
 
-See the [Predbat Table Card repository](https://github.com/pacemaker82/PredBat-Table-Card) for more details.
+The original [Predbat Table Card](https://github.com/pacemaker82/PredBat-Table-Card) which is now no longer being actively developed, and the recently released [Predbat Table Card Next](https://github.com/llbbdd/Predbat-Table-Card-Next).
+
+Please give them a try.
 
 ## PV Prediction summary
 
@@ -227,3 +252,19 @@ The same author of the Predbat Table Card has produced a nice visualisation for 
 ![image](images/pv-card-preview.png)
 
 See the [PV Card Preview repository](https://github.com/pacemaker82/PV-Card-Preview)
+
+## Predbat Card
+
+[Predbat Card](https://github.com/mimikm/Predbat-Card) is an independent community card that gives an at-a-glance overview of Predbat on your dashboard:
+
+- Status header with Predbat status, mode and last update
+- Overview tiles for battery SoC, what the battery is doing now, cost today, predicted saving today, and the next charge and export windows
+- Battery forecast chart (Predbat plan vs baseline), grid import & export chart and energy rates chart
+- Colour-coded plan timeline, upcoming actions and an expandable plan table
+- Visual editor with all Predbat entities prefilled
+- Six visual styles, light/dark override and adjustable text size
+
+![image](https://github.com/mimikm/Predbat-Card/blob/main/images/styles-light.png?raw=true)
+
+Install it as a custom repository (Dashboard) with the link `https://github.com/mimikm/Predbat-Card`:
+on Home Assistant 2026.11 or newer use **Add from link** in the [Marketplace](install.md#hacs-and-the-marketplace), or on 2026.10 or older add it to HACS as a custom repository.

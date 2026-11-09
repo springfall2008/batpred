@@ -39,11 +39,13 @@ wheels/
 MANIFEST
 
 # Test and coverage files
+tools/shuffle_fuzz_known_pairs.txt
 coverage/*.yaml
 coverage/*.log
 coverage/*.json
 coverage/*.txt
 coverage/*.db
+coverage/gecloud_api_budget_log.jsonl
 coverage/*.html
 coverage/*.prof
 coverage/*.py
@@ -108,6 +110,12 @@ apps.mod.yaml
 apps.yaml.mark
 comparisons.yaml
 it
+
+# Written to the CLI's cwd by a headless PredBat instance before annual_cli.py's --work-dir
+# takes effect (create_headless_predbat() sets config_root only after load_user_config()/
+# fetch_config_options() have already run) - so running the documented annual_cli.py command
+# from the repo root leaves this behind.
+predbat_config.json
 
 # Runtime-generated manifest
 apps/predbat/manifest.yaml

@@ -9,12 +9,14 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
+import copy
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock
 import json
 from solax import (
     SolaxAPI,
     SOLAX_MIN_RESERVE_PERCENT,
+    SOLAX_COUNTER_DIP_HOLD_HOURS,
     SOLAX_CONTROL_RETRY_BACKOFF,
     SOLAX_CONTROL_RETRY_MAX,
     SOLAX_PLANT_INFO_MAX_AGE,
@@ -23,6 +25,8 @@ from solax import (
     SOLAX_INFO_RETRY_MINUTES,
 )
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session
+from inverter import Inverter
+from const import MINUTE_WATT
 
 
 class MockSolaxAPI(SolaxAPI):
@@ -40,6 +44,13 @@ class MockSolaxAPI(SolaxAPI):
         self.realtime_device_data = {}
         self.realtime_plant_failed = set()  # Plants whose last realtime read failed
         self.realtime_device_failed = set()  # Devices whose last realtime read failed
+        self.plant_pv_from_devices = set()  # Plants whose PV energy has been built from their inverters
+        self.counter_last = {}  # Last value published for each lifetime counter
+        self.counter_dip_since = {}  # When a lifetime counter first read lower than its last published value
+        self.counter_stored = {}  # Last values restored from storage, used when the sensor is gone
+        self.counter_save_due = False  # A dip started or ended, save the counter state now
+        self.counter_saved = None  # When the counter state was last saved
+        self.plant_no_pv_warned = set()  # Plants already warned for having no PV source
         self._storage = None  # No storage cache by default in tests
         self.log_messages = []
         self.dashboard_items = {}
@@ -130,6 +141,111 @@ class MockSolaxAPI(SolaxAPI):
     # Don't override these - let tests call real methods from SolaxAPI and mock send_command_and_wait
 
 
+# Discovery catalogue reporter
+
+DISCOVERY_PLANT = "1618699116555534337"
+DISCOVERY_INVERTER = "H1231231932123"
+DISCOVERY_BATTERY = "TP123456123123"
+
+
+def _discovery_solax(plants=1):
+    """A SolaxAPI holding `plants` battery plants, each with one hybrid inverter and one battery."""
+    api = MockSolaxAPI()
+    api.initialize(client_id="test", client_secret="test", region="eu")
+    api.automatic = True
+    for index in range(plants):
+        plant = str(int(DISCOVERY_PLANT) + index)
+        inverter = DISCOVERY_INVERTER[:-1] + str(index)
+        battery = DISCOVERY_BATTERY[:-1] + str(index)
+        api.plant_info.append({"plantId": plant, "plantName": "Smith Family Home", "batteryCapacity": 15.0, "pvCapacity": 8.5})
+        api.plant_inverters[plant] = [inverter]
+        api.plant_batteries[plant] = [battery]
+        api.device_info[inverter] = {"deviceSn": inverter, "deviceType": 1, "plantId": plant, "deviceModel": 14, "ratedPower": 10.0, "armVersion": "1.51", "dspVersion": "1.55", "registerNo": "SY1231321312", "onlineStatus": 1}
+        api.device_info[battery] = {"deviceSn": battery, "deviceType": 2, "plantId": plant, "deviceModel": 1, "ratedPower": 5.0, "softwareVersion": "3.16", "onlineStatus": 1}
+    return api
+
+
+def _solax_discovery_tests():
+    """Discovery reporter tests; raise AssertionError on failure."""
+    import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
+    from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+    from solax import SolaxAPI
+
+    print("\n=== Testing SolaX discovery reporter ===")
+
+    # test_solax_catalogue_none_without_a_battery_plant
+    api = MockSolaxAPI()
+    api.initialize(client_id="test", client_secret="test", region="eu")
+    assert api.build_discovery() is None
+    api.plant_inverters["p1"] = ["INV001"]
+    api.device_info["INV001"] = {"deviceSn": "INV001", "deviceType": 1, "plantId": "p1", "ratedPower": 10.0}
+    assert api.build_discovery() is None, "a plant with no battery is not configured, so not reported"
+    print("✓ no record without a battery plant")
+
+    # test_solax_record_shape
+    report = _discovery_solax().build_discovery()
+    record = report["inverters"][0]
+    inverter = DISCOVERY_INVERTER[:-1] + "0"
+    assert report["automatic"] is True
+    assert record["device_id"] == "solax:" + inverter, record
+    assert record["inverter_type"] == "SolaxCloud" and record["composition"] == "direct" and record["functions"] == ["solar", "battery"]
+    assert record["hardware_ids"] == {"serial": inverter} and record["account_ids"] == {"plant_id": DISCOVERY_PLANT}
+    assert record["info"] == {"vendor": "SolaX", "model": "X3-Hybrid-G4", "firmware": "ARM 1.51 DSP 1.55"}, record["info"]
+    assert record["ratings"] == {"inverter_limit": 10000.0, "soc_max": 15.0, "battery_rate_max": 5000.0}, record["ratings"]
+    assert record["entities"]["battery_min_soc"] == {"value": SOLAX_MIN_RESERVE_PERCENT, "access": "r"}
+    assert record["entities"]["battery_power"]["invert"] is True
+    assert "Smith" not in str(report) and "SY1231321312" not in str(report), "plant name and dongle serial are not reported"
+    print("✓ record shape")
+
+    # test_solax_record_rebuilds_its_inverter_def_row
+    assert_definition_complete(validated_inverters(_discovery_solax().build_discovery())[0], SolaxAPI.WRITE_AND_POLL_SLEEP)
+    print("✓ record rebuilds the SolaxCloud row")
+
+    # test_solax_record_agrees_with_automatic_config / test_solax_two_plants_two_records
+    for plants in (1, 2):
+        api = _discovery_solax(plants)
+        records = validated_inverters(api.build_discovery())
+        assert len(records) == plants
+        captured = capture_automatic_config(api)
+        for index, record in enumerate(records):
+            assert_record_agrees(record, captured, index=index)
+            assert_record_binds_nothing_extra(record, captured, index=index)
+        assert ("battery_temperature_history" in records[0]["entities"]) and all("battery_temperature_history" not in record["entities"] for record in records[1:])
+    print("✓ records agree with automatic_config, one per plant")
+
+    # test_solax_round_trip_keeps_plant_id_readable
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("solax", _discovery_solax().build_discovery())
+    catalogue = str(coordinator.catalogue())
+    assert "sensor.predbat_solax_{}_battery_soc".format(DISCOVERY_PLANT) in catalogue, "the plant id is not secret, and stays readable inside entity ids"
+    assert inverter in catalogue
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    print("✓ round trip keeps the plant id readable")
+
+    # test_solax_catalogue_filed_when_automatic_config_raises
+    api = _discovery_solax()
+    filed = []
+    api.report_discovery = filed.append
+
+    async def failing_automatic_config():
+        """Stand in for an automatic_config() that raises, as it does for an account with no battery plant."""
+        raise ValueError("SolaX API: No plants with inverters and batteries found, cannot configure")
+
+    api.automatic_config = failing_automatic_config
+    raised = False
+    try:
+        asyncio.run(run_one_cycle(api, 0, True))
+    except ValueError:
+        raised = True
+    assert raised, "the stand-in automatic_config() raised"
+    assert len(filed) == 1 and filed[0]["inverters"][0]["device_id"] == "solax:" + inverter, "the report is filed before automatic_config() can raise"
+    print("✓ report filed before automatic_config() can raise")
+
+
 def run_solax_tests(my_predbat):
     """
     Run all SolaX API tests
@@ -165,6 +281,8 @@ def run_solax_tests(my_predbat):
             assert not failed
         failed |= asyncio.run(test_publish_device_realtime_data_main())
         failed |= asyncio.run(test_helper_methods_main())
+        failed |= asyncio.run(test_battery_power_models_main())
+        failed |= asyncio.run(test_battery_power_config_main(my_predbat))
         failed |= asyncio.run(test_automatic_config_main())
         failed |= asyncio.run(test_publish_controls_main())
         if failed:
@@ -189,6 +307,10 @@ def run_solax_tests(my_predbat):
         failed |= asyncio.run(test_publish_plant_info_capacity_floor_main(my_predbat))
         failed |= asyncio.run(test_static_info_cache_main(my_predbat))
         failed |= asyncio.run(test_realtime_publish_gating_main(my_predbat))
+        failed |= asyncio.run(test_plant_pv_yield_main(my_predbat))
+        failed |= asyncio.run(test_counter_dip_main(my_predbat))
+
+        _solax_discovery_tests()
 
         if not failed:
             print("**** SolaX API tests: All tests passed ****")
@@ -1311,6 +1433,7 @@ async def test_realtime_publish_gating_main(my_predbat):
         api.device_info["TP123456123123"] = {"deviceSn": "TP123456123123", "deviceType": 2, "plantId": test_plant_id, "ratedPower": 5.0}
         api.realtime_data[test_plant_id] = {"totalYield": 3250.5, "totalCharged": 1850.2, "totalDischarged": 1720.8, "totalImported": 4200.3, "totalExported": 2800.7, "totalEarnings": 485.5}
         api.realtime_device_data["TP123456123123"] = {"deviceSn": "TP123456123123", "batterySOC": 75, "batteryRemainings": 11.25, "batteryTemperature": 18.5}
+        api.realtime_device_data["H1231231932123"] = {"deviceSn": "H1231231932123", "deviceStatus": 102, "totalYield": 3250.5}
         return api
 
     yield_entity = f"sensor.predbat_solax_{test_plant_id}_total_yield"
@@ -1398,6 +1521,496 @@ async def test_realtime_publish_gating_main(my_predbat):
             failed = True
         else:
             print("✓ Failures are recorded on a bad read and cleared on a good one")
+
+    return failed
+
+
+async def test_plant_pv_yield_main(my_predbat):
+    """
+    Test the plant PV yield is built from the inverters rather than the plant total (GH#5356)
+
+    On a plant with a PV inverter and an AC-coupled battery inverter the plant totalYield includes the
+    battery inverter's AC output, so battery discharge was counted as PV and twice in the load
+    """
+    failed = False
+    print("\n=== Testing plant PV yield from inverters ===")
+
+    test_plant_id = "1618699116555534337"
+    pv_sn = "XB3000000000001"
+    hybrid_sn = "H4000000000001"
+    battery_sn = "TP123456123123"
+    pv_entity = f"sensor.predbat_solax_{test_plant_id}_pv_yield"
+    yield_entity = f"sensor.predbat_solax_{test_plant_id}_total_yield"
+    load_entity = f"sensor.predbat_solax_{test_plant_id}_total_load"
+
+    def build_api():
+        """Build a plant with a PV-only inverter and an AC-coupled battery inverter that has no panels"""
+        api = MockSolaxAPI(prefix="predbat")
+        api.plant_info = [{"plantId": test_plant_id, "plantName": "Test Plant", "batteryCapacity": 5.8, "pvCapacity": 3.4}]
+        api.plant_inverters[test_plant_id] = [pv_sn, hybrid_sn]
+        api.plant_batteries[test_plant_id] = [battery_sn]
+        api.device_info[pv_sn] = {"deviceSn": pv_sn, "deviceType": 1, "plantId": test_plant_id, "ratedPower": 3.3}
+        api.device_info[hybrid_sn] = {"deviceSn": hybrid_sn, "deviceType": 1, "plantId": test_plant_id, "ratedPower": 3.7}
+        api.device_info[battery_sn] = {"deviceSn": battery_sn, "deviceType": 2, "plantId": test_plant_id, "ratedPower": 3.0}
+        # The plant yield is well above what the panels produced, as it includes the battery inverter's output
+        api.realtime_data[test_plant_id] = {"totalYield": 19569.5, "totalCharged": 10183.5, "totalDischarged": 9016.5, "totalImported": 8000.0, "totalExported": 3000.0, "totalEarnings": 0.0}
+        api.realtime_device_data[pv_sn] = {"deviceSn": pv_sn, "deviceStatus": 102, "totalYield": 10269.0, "totalACOutput": 10269.0, "mpptMap": {"MPPT1Power": 500.0}}
+        api.realtime_device_data[hybrid_sn] = {"deviceSn": hybrid_sn, "deviceStatus": 102, "totalYield": 0.0, "totalACOutput": 3676.8}
+        api.realtime_device_data[battery_sn] = {"deviceSn": battery_sn, "batterySOC": 50, "batteryRemainings": 2.9, "batteryTemperature": 20.0}
+        return api
+
+    def state_of(api, entity_id):
+        """Return the published state of an entity, or None if it was not published"""
+        return api.dashboard_items.get(entity_id, {}).get("state")
+
+    # Test 1: PV yield is the sum of the inverters and the load is built from it
+    print("Test 1: PV yield and load use the inverter sum")
+    api = build_api()
+    await api.publish_plant_info()
+
+    # 8000.0 + 9016.5 - 3000.0 - 10183.5 + 10269.0
+    expected_load = 14102.0
+    if state_of(api, pv_entity) != 10269.0:
+        print(f"**** ERROR: PV yield should be the inverter sum 10269.0, got {state_of(api, pv_entity)} ****")
+        failed = True
+    elif state_of(api, load_entity) is None or abs(state_of(api, load_entity) - expected_load) > 0.01:
+        print(f"**** ERROR: Total load should use the inverter PV yield, expected {expected_load}, got {state_of(api, load_entity)} ****")
+        failed = True
+    elif state_of(api, yield_entity) != 19569.5:
+        print(f"**** ERROR: Total yield should still publish the raw plant figure 19569.5, got {state_of(api, yield_entity)} ****")
+        failed = True
+    else:
+        print("✓ PV yield and load built from the inverters, plant total yield unchanged")
+
+    # Test 2: A failed inverter read uses that inverter's last known yield, a lifetime counter does not go
+    # backwards so the sum cannot dip, and the load keeps following the plant counters
+    print("Test 2: Failed inverter read uses its last known yield")
+    api.realtime_data[test_plant_id]["totalImported"] = 8001.0
+    api.realtime_device_failed.add(pv_sn)
+    await api.publish_plant_info()
+
+    if state_of(api, pv_entity) != 10269.0:
+        print(f"**** ERROR: PV yield should stay at the last known 10269.0 while an inverter read failed, got {state_of(api, pv_entity)} ****")
+        failed = True
+    elif abs(state_of(api, load_entity) - (expected_load + 1.0)) > 0.01:
+        print(f"**** ERROR: Total load should still be published while an inverter read failed, expected {expected_load + 1.0}, got {state_of(api, load_entity)} ****")
+        failed = True
+    else:
+        print("✓ Last known yield used on a failed inverter read, load still published")
+
+    # Test 3: The next good read moves on from the last known value
+    print("Test 3: A good read publishes the new yield")
+    api.realtime_device_data[pv_sn]["totalYield"] = 10270.0
+    api.realtime_device_failed.discard(pv_sn)
+    await api.publish_plant_info()
+
+    if state_of(api, pv_entity) != 10270.0:
+        print(f"**** ERROR: PV yield should be 10270.0 once the inverter is read again, got {state_of(api, pv_entity)} ****")
+        failed = True
+    else:
+        print("✓ PV yield follows the inverter once it is read again")
+
+    # Test 4: An inverter that should be answering but has never given a yield holds, this is the startup case
+    print("Test 4: An unread inverter with no known yield holds")
+    for online_status in [None, 1]:
+        api = build_api()
+        del api.realtime_device_data[pv_sn]
+        api.realtime_device_failed.add(pv_sn)
+        if online_status is not None:
+            api.device_info[pv_sn]["onlineStatus"] = online_status
+        await api.publish_plant_info()
+
+        if pv_entity in api.dashboard_items or load_entity in api.dashboard_items:
+            print(f"**** ERROR: PV yield and load should not be published before an online inverter is read (onlineStatus {online_status}) ****")
+            failed = True
+        elif yield_entity not in api.dashboard_items:
+            print("**** ERROR: The plant totals do not depend on the inverters and should still be published ****")
+            failed = True
+        else:
+            print(f"✓ PV yield and load not published before an online inverter is read (onlineStatus {online_status})")
+
+    # Test 5: No inverter reports a yield of its own, so the plant figure is used as before
+    print("Test 5: Falls back to the plant yield when no inverter reports one")
+    api = build_api()
+    api.realtime_device_data[pv_sn]["totalYield"] = 0.0
+    await api.publish_plant_info()
+
+    if state_of(api, pv_entity) != 19569.5:
+        print(f"**** ERROR: PV yield should fall back to the plant figure 19569.5, got {state_of(api, pv_entity)} ****")
+        failed = True
+    else:
+        print("✓ Plant yield used when the inverters report none")
+
+    # Test 6: Once built from the inverters a zero sum is held, the far larger plant figure would read as generation
+    print("Test 6: No fallback to the plant yield once the inverters have reported")
+    api = build_api()
+    await api.publish_plant_info()
+    api.realtime_device_data[pv_sn]["totalYield"] = 0.0
+    await api.publish_plant_info()
+
+    if state_of(api, pv_entity) != 10269.0:
+        print(f"**** ERROR: PV yield should be held at 10269.0 rather than switching to the plant figure, got {state_of(api, pv_entity)} ****")
+        failed = True
+    else:
+        print("✓ PV yield held rather than switching to the plant figure")
+
+    # Test 7: An inverter that reads fine but has no totalYield counts as 0. Alone in a plant, with no PV inputs
+    # either, there is no PV figure at all and 0 is published rather than the plant total (GH#5388)
+    print("Test 7: An inverter with no totalYield of its own counts as 0")
+    api = build_api()
+    api.plant_inverters[test_plant_id] = [hybrid_sn]
+    del api.realtime_device_data[hybrid_sn]["totalYield"]
+    await api.publish_plant_info()
+    alone_yield = state_of(api, pv_entity)
+
+    api = build_api()
+    del api.realtime_device_data[hybrid_sn]["totalYield"]
+    await api.publish_plant_info()
+
+    if alone_yield != 0.0:
+        print(f"**** ERROR: PV yield should be 0.0 when the only inverter has no totalYield and no PV inputs, got {alone_yield} ****")
+        failed = True
+    elif state_of(api, pv_entity) != 10269.0:
+        print(f"**** ERROR: PV yield should be 10269.0 from the other inverter when one has no totalYield, got {state_of(api, pv_entity)} ****")
+        failed = True
+    else:
+        print("✓ An inverter with no totalYield counts as 0 rather than holding the plant")
+
+    # Test 8: An offline inverter that has never reported contributes 0 rather than holding the plant
+    print("Test 8: An offline inverter that never reported contributes 0")
+    api = build_api()
+    del api.realtime_device_data[hybrid_sn]
+    api.realtime_device_failed.add(hybrid_sn)
+    api.device_info[hybrid_sn]["onlineStatus"] = 0
+    await api.publish_plant_info()
+
+    if state_of(api, pv_entity) != 10269.0:
+        print(f"**** ERROR: PV yield should be 10269.0 with an offline inverter counted as 0, got {state_of(api, pv_entity)} ****")
+        failed = True
+    else:
+        print("✓ Offline inverter with no known yield counted as 0")
+
+    # Test 9: After a restart the last known yield is seeded from the inverter's own sensor, so a dead
+    # inverter stays in the sum rather than stepping the total down
+    print("Test 9: Last known yield is seeded from the inverter sensor after a restart")
+    api = build_api()
+    api.realtime_device_data[hybrid_sn] = {}
+    api.realtime_device_failed.add(hybrid_sn)
+    api.device_info[hybrid_sn]["onlineStatus"] = 0
+    api.dashboard_items[f"sensor.predbat_solax_{test_plant_id}_{hybrid_sn}_total_yield"] = {"state": 459.1, "attributes": {}}
+    await api.publish_plant_info()
+
+    if state_of(api, pv_entity) is None or abs(state_of(api, pv_entity) - 10728.1) > 0.01:
+        print(f"**** ERROR: PV yield should be 10728.1 with the dead inverter seeded from its sensor, got {state_of(api, pv_entity)} ****")
+        failed = True
+    else:
+        print("✓ Dead inverter's yield seeded from its sensor")
+
+    # Test 10: A sensor state that is not a number is not used as a seed
+    print("Test 10: A non-numeric sensor state is not a seed")
+    api = build_api()
+    del api.realtime_device_data[pv_sn]
+    api.realtime_device_failed.add(pv_sn)
+    api.dashboard_items[f"sensor.predbat_solax_{test_plant_id}_{pv_sn}_total_yield"] = {"state": "unknown", "attributes": {}}
+    await api.publish_plant_info()
+
+    if pv_entity in api.dashboard_items:
+        print(f"**** ERROR: PV yield should be held when the only seed is not a number, got {state_of(api, pv_entity)} ****")
+        failed = True
+    else:
+        print("✓ Non-numeric sensor state ignored")
+
+    # Test 11: The inverters are stored under the plant ID as SolaX gives it while the entities use a tidied
+    # form of it, a plant ID the tidying changes must still find its inverters and its seed sensor
+    print("Test 11: A plant ID that is changed for the entity names still finds its inverters")
+    raw_plant_id = "Plant A"
+    api = build_api()
+    api.plant_info[0]["plantId"] = raw_plant_id
+    api.plant_inverters[raw_plant_id] = api.plant_inverters.pop(test_plant_id)
+    api.plant_batteries[raw_plant_id] = api.plant_batteries.pop(test_plant_id)
+    api.realtime_data[raw_plant_id] = api.realtime_data.pop(test_plant_id)
+    for device_sn in [pv_sn, hybrid_sn, battery_sn]:
+        api.device_info[device_sn]["plantId"] = raw_plant_id
+    api.realtime_device_data[hybrid_sn] = {}
+    api.realtime_device_failed.add(hybrid_sn)
+    api.dashboard_items[f"sensor.predbat_solax_plant_a_{hybrid_sn}_total_yield"] = {"state": 459.1, "attributes": {}}
+    await api.publish_plant_info()
+
+    raw_pv_yield = state_of(api, "sensor.predbat_solax_plant_a_pv_yield")
+    if raw_pv_yield is None or abs(raw_pv_yield - 10728.1) > 0.01:
+        print(f"**** ERROR: PV yield should be 10728.1 from the inverters and the seed sensor, not the plant figure, got {raw_pv_yield} ****")
+        failed = True
+    else:
+        print("✓ Inverters and seed sensor found for a plant ID that is changed for the entity names")
+
+    return failed
+
+
+async def test_counter_dip_main(my_predbat):
+    """
+    Test a lifetime counter that dips and recovers is held rather than read as generation (GH#5388)
+
+    SolaX can return a lower value for a plant total for a while and then the right one again. Published as
+    received the recovery is counted as energy produced that day
+    """
+    failed = False
+    print("\n=== Testing lifetime counter dips are held ===")
+
+    test_plant_id = "1618699116555534337"
+    inv_a = "H4000000000001"
+    inv_b = "H4000000000002"
+    battery_sn = "TP123456123123"
+    totals = {"total_yield": "totalYield", "total_charged": "totalCharged", "total_discharged": "totalDischarged", "total_imported": "totalImported", "total_exported": "totalExported"}
+
+    def entity(name):
+        """Return the plant sensor entity for a name"""
+        return f"sensor.predbat_solax_{test_plant_id}_{name}"
+
+    def build_api():
+        """Build a plant with two hybrid inverters that each have panels"""
+        api = MockSolaxAPI(prefix="predbat")
+        api.plant_info = [{"plantId": test_plant_id, "plantName": "Test Plant", "batteryCapacity": 5.8, "pvCapacity": 3.4}]
+        api.plant_inverters[test_plant_id] = [inv_a, inv_b]
+        api.plant_batteries[test_plant_id] = [battery_sn]
+        api.device_info[inv_a] = {"deviceSn": inv_a, "deviceType": 1, "plantId": test_plant_id, "ratedPower": 3.7}
+        api.device_info[inv_b] = {"deviceSn": inv_b, "deviceType": 1, "plantId": test_plant_id, "ratedPower": 3.7}
+        api.device_info[battery_sn] = {"deviceSn": battery_sn, "deviceType": 2, "plantId": test_plant_id, "ratedPower": 3.0}
+        api.realtime_data[test_plant_id] = {"totalYield": 4437.8, "totalCharged": 5000.0, "totalDischarged": 4487.66, "totalImported": 6000.0, "totalExported": 3000.0, "totalEarnings": 0.0}
+        api.realtime_device_data[inv_a] = {"deviceSn": inv_a, "deviceStatus": 102, "totalYield": 100.0, "mpptMap": {"MPPT1Power": 500.0}}
+        api.realtime_device_data[inv_b] = {"deviceSn": inv_b, "deviceStatus": 102, "totalYield": 50.0, "mpptMap": {"MPPT1Power": 200.0}}
+        api.realtime_device_data[battery_sn] = {"deviceSn": battery_sn, "batterySOC": 50, "batteryRemainings": 2.9, "batteryTemperature": 20.0}
+        return api
+
+    def state_of(api, entity_id):
+        """Return the published state of an entity, or None if it was not published"""
+        return api.dashboard_items.get(entity_id, {}).get("state")
+
+    # Test 1: A dip in the plant totals is held, so is the load that is built from them
+    print("Test 1: A dip in the plant totals is held")
+    api = build_api()
+    await api.publish_plant_info()
+    load_before = state_of(api, entity("total_load"))
+    api.realtime_data[test_plant_id].update({"totalYield": 4260.4, "totalDischarged": 4280.26, "totalImported": 5990.0, "totalExported": 2990.0, "totalCharged": 4990.0})
+    await api.publish_plant_info()
+
+    expected = {"total_yield": 4437.8, "total_charged": 5000.0, "total_discharged": 4487.66, "total_imported": 6000.0, "total_exported": 3000.0}
+    wrong = {name: state_of(api, entity(name)) for name in expected if state_of(api, entity(name)) != expected[name]}
+    if wrong:
+        print(f"**** ERROR: Plant totals should be held at their previous values on a dip, got {wrong} ****")
+        failed = True
+    elif state_of(api, entity("total_load")) != load_before:
+        print(f"**** ERROR: Total load should be held at {load_before} while the plant totals dip, got {state_of(api, entity('total_load'))} ****")
+        failed = True
+    elif not any("lower than" in message for message in api.log_messages):
+        print("**** ERROR: A held dip should be logged ****")
+        failed = True
+    else:
+        print("✓ Plant totals and load held on a dip")
+
+    # Test 2: The recovery publishes the new value, which is the true change across the dip
+    print("Test 2: The recovery publishes the true value")
+    api.realtime_data[test_plant_id].update({"totalYield": 4441.7, "totalDischarged": 4491.56, "totalImported": 6000.0, "totalExported": 3000.0, "totalCharged": 5000.0})
+    await api.publish_plant_info()
+
+    if state_of(api, entity("total_yield")) != 4441.7 or state_of(api, entity("total_discharged")) != 4491.56:
+        print(f"**** ERROR: Plant totals should follow the counter once it recovers, got {state_of(api, entity('total_yield'))}/{state_of(api, entity('total_discharged'))} ****")
+        failed = True
+    else:
+        print("✓ Plant totals follow the counter once it recovers")
+
+    # Test 3: A lower value that stays for the hold period is a genuine reset and is accepted
+    print("Test 3: A lower value is accepted once it has lasted the hold period")
+    api.realtime_data[test_plant_id]["totalYield"] = 10.0
+    await api.publish_plant_info()
+    held = state_of(api, entity("total_yield"))
+    api.counter_dip_since[entity("total_yield")] -= timedelta(hours=SOLAX_COUNTER_DIP_HOLD_HOURS, minutes=1)
+    await api.publish_plant_info()
+
+    if held != 4441.7:
+        print(f"**** ERROR: A reset should be held at 4441.7 at first, got {held} ****")
+        failed = True
+    elif state_of(api, entity("total_yield")) != 10.0:
+        print(f"**** ERROR: A lower value should be accepted after the hold period, got {state_of(api, entity('total_yield'))} ****")
+        failed = True
+    else:
+        print("✓ Lower value accepted as a reset after the hold period")
+
+    # Test 4: After a restart the last published value comes from the sensor, so a dip is still held
+    print("Test 4: A dip straight after a restart is held against the sensor value")
+    api = build_api()
+    for name, key in totals.items():
+        api.dashboard_items[entity(name)] = {"state": api.realtime_data[test_plant_id][key], "attributes": {}}
+    api.realtime_data[test_plant_id]["totalYield"] = 4260.4
+    await api.publish_plant_info()
+
+    if state_of(api, entity("total_yield")) != 4437.8:
+        print(f"**** ERROR: Total yield should be held at the sensor value 4437.8 after a restart, got {state_of(api, entity('total_yield'))} ****")
+        failed = True
+    else:
+        print("✓ Dip after a restart held against the sensor value")
+
+    # Test 5: An upward step is published as received
+    print("Test 5: An upward step is published")
+    api = build_api()
+    await api.publish_plant_info()
+    api.realtime_data[test_plant_id]["totalYield"] = 8318.7
+    await api.publish_plant_info()
+
+    if state_of(api, entity("total_yield")) != 8318.7:
+        print(f"**** ERROR: An upward step should be published, got {state_of(api, entity('total_yield'))} ****")
+        failed = True
+    else:
+        print("✓ Upward step published")
+
+    # Test 6: An inverter that reads 0.0 for a while keeps its known yield, in the plant sum and its own sensor
+    print("Test 6: An inverter reading 0.0 keeps its known yield")
+    api = build_api()
+    await api.publish_plant_info()
+    await api.publish_device_realtime_data()
+    api.realtime_device_data[inv_a]["totalYield"] = 0.0
+    await api.publish_plant_info()
+    await api.publish_device_realtime_data()
+    inverter_entity = f"sensor.predbat_solax_{test_plant_id}_{inv_a}_total_yield"
+
+    if state_of(api, entity("pv_yield")) != 150.0:
+        print(f"**** ERROR: PV yield should stay at 150.0 while an inverter reads 0.0, got {state_of(api, entity('pv_yield'))} ****")
+        failed = True
+    elif state_of(api, inverter_entity) != 100.0:
+        print(f"**** ERROR: The inverter's own total yield should stay at 100.0 while it reads 0.0, got {state_of(api, inverter_entity)} ****")
+        failed = True
+    else:
+        api.realtime_device_data[inv_a]["totalYield"] = 101.0
+        await api.publish_plant_info()
+        if state_of(api, entity("pv_yield")) != 151.0:
+            print(f"**** ERROR: PV yield should be 151.0 once the inverter reads again, got {state_of(api, entity('pv_yield'))} ****")
+            failed = True
+        else:
+            print("✓ Inverter reading 0.0 keeps its known yield")
+
+    # Test 7: A plant with no PV inputs and no yield counter publishes 0 PV rather than the plant total, which
+    # there is the inverter AC output and so battery discharge, and warns once
+    print("Test 7: A plant with no PV source publishes 0 PV and warns once")
+    api = build_api()
+    api.plant_inverters[test_plant_id] = [inv_a]
+    api.realtime_device_data[inv_a] = {"deviceSn": inv_a, "deviceStatus": 102, "totalYield": None, "mpptMap": {}, "pvMap": {}}
+    await api.publish_plant_info()
+    await api.publish_plant_info()
+    warnings = [message for message in api.log_messages if "with PV inputs" in message]
+
+    # 6000.0 + 4487.66 - 3000.0 - 5000.0 + 0.0, the battery discharge is counted once
+    if state_of(api, entity("pv_yield")) != 0.0:
+        print(f"**** ERROR: PV yield should be 0.0 for a plant with no PV source, got {state_of(api, entity('pv_yield'))} ****")
+        failed = True
+    elif abs(state_of(api, entity("total_load")) - 2487.66) > 0.01:
+        print(f"**** ERROR: Total load should be 2487.66 with no PV term, got {state_of(api, entity('total_load'))} ****")
+        failed = True
+    elif state_of(api, entity("total_yield")) != 4437.8:
+        print(f"**** ERROR: Total yield should still publish the plant figure 4437.8, got {state_of(api, entity('total_yield'))} ****")
+        failed = True
+    elif len(warnings) != 1:
+        print(f"**** ERROR: Expected one warning that the plant has no PV source, got {len(warnings)} ****")
+        failed = True
+    else:
+        print("✓ Plant with no PV source publishes 0 PV and warned once")
+
+    # Test 8: Inverters with panels but no yield of their own still use the plant figure, and do not warn
+    print("Test 8: Inverters with PV inputs but no yield use the plant figure")
+    api = build_api()
+    api.realtime_device_data[inv_a]["totalYield"] = 0.0
+    api.realtime_device_data[inv_b]["totalYield"] = 0.0
+    await api.publish_plant_info()
+
+    if state_of(api, entity("pv_yield")) != 4437.8:
+        print(f"**** ERROR: PV yield should fall back to the plant figure 4437.8 when the inverters have PV inputs, got {state_of(api, entity('pv_yield'))} ****")
+        failed = True
+    elif any("with PV inputs" in message for message in api.log_messages):
+        print("**** ERROR: A plant whose inverters have PV inputs should not warn ****")
+        failed = True
+    else:
+        print("✓ Plant figure used and no warning for a plant whose inverters have PV inputs")
+
+    # Test 9: A yield counter that reads 0.0 is still a PV source, as on a newly commissioned inverter
+    print("Test 9: An inverter with a yield counter at 0.0 and no PV maps is a PV source")
+    api = build_api()
+    api.plant_inverters[test_plant_id] = [inv_a]
+    api.realtime_device_data[inv_a] = {"deviceSn": inv_a, "deviceStatus": 102, "totalYield": 0.0, "mpptMap": {}, "pvMap": {}}
+    await api.publish_plant_info()
+
+    if any("with PV inputs" in message for message in api.log_messages):
+        print("**** ERROR: An inverter with a yield counter should not be warned about as having no PV source ****")
+        failed = True
+    elif state_of(api, entity("pv_yield")) != 4437.8:
+        print(f"**** ERROR: PV yield should use the plant figure 4437.8 while the inverter's own counter reads 0.0, got {state_of(api, entity('pv_yield'))} ****")
+        failed = True
+    else:
+        print("✓ Yield counter at 0.0 counts as a PV source")
+
+    # Test 10: The time a dip started is saved, so a restart does not start the hold period again. A system
+    # restarted every day would otherwise hold the old total for ever after a genuine reset
+    print("Test 10: The dip start time survives a restart")
+    storage = MockStorage()
+    api = build_api()
+    api.storage = storage
+    await api.publish_plant_info()
+    api.realtime_data[test_plant_id]["totalYield"] = 10.0
+    await api.publish_plant_info()
+    await api.save_counter_state()
+    saved = storage.data.get("counters", {})
+
+    if entity("total_yield") not in saved.get("dip_since", {}):
+        print(f"**** ERROR: The dip start time should be saved to storage, got {saved} ****")
+        failed = True
+    else:
+        # The restart: a new instance, the sensor still holding the old value, the dip now over a day old
+        saved["dip_since"][entity("total_yield")] = (datetime.now(timezone.utc) - timedelta(hours=SOLAX_COUNTER_DIP_HOLD_HOURS, minutes=1)).isoformat()
+        restarted = build_api()
+        restarted.storage = storage
+        restarted.dashboard_items = {entity_id: dict(item) for entity_id, item in api.dashboard_items.items()}
+        restarted.realtime_data[test_plant_id]["totalYield"] = 10.0
+        await restarted.load_counter_state()
+        await restarted.publish_plant_info()
+
+        if state_of(restarted, entity("total_yield")) != 10.0:
+            print(f"**** ERROR: A reset older than the hold period should be accepted after a restart, got {state_of(restarted, entity('total_yield'))} ****")
+            failed = True
+        else:
+            print("✓ Dip start time restored from storage, reset accepted after a restart")
+
+    # Test 11: With the sensors gone after a restart the last values come from storage, so a dip is still held
+    print("Test 11: The last values come from storage when the sensors are gone")
+    storage = MockStorage()
+    api = build_api()
+    api.storage = storage
+    await api.publish_plant_info()
+    await api.save_counter_state()
+    restarted = build_api()
+    restarted.storage = storage
+    restarted.realtime_data[test_plant_id]["totalYield"] = 4260.4
+    await restarted.load_counter_state()
+    await restarted.publish_plant_info()
+
+    if state_of(restarted, entity("total_yield")) != 4437.8:
+        print(f"**** ERROR: Total yield should be held at the stored 4437.8 when the sensor is gone, got {state_of(restarted, entity('total_yield'))} ****")
+        failed = True
+    else:
+        print("✓ Dip held against the stored value when the sensors are gone")
+
+    # Test 12: Nothing is written while nothing has changed, and an unchanged dip is not written every cycle
+    print("Test 12: The counter state is only saved when it needs to be")
+    saves_before = len(storage.saved)
+    await restarted.save_counter_state()
+    saves_after_dip = len(storage.saved)
+    await restarted.publish_plant_info()
+    await restarted.save_counter_state()
+
+    if saves_after_dip != saves_before + 1:
+        print(f"**** ERROR: A new dip should be saved straight away, {saves_after_dip - saves_before} saves ****")
+        failed = True
+    elif len(storage.saved) != saves_after_dip:
+        print(f"**** ERROR: An unchanged dip should not be saved again, {len(storage.saved) - saves_after_dip} extra saves ****")
+        failed = True
+    else:
+        print("✓ Counter state saved only when needed")
 
     return failed
 
@@ -1513,7 +2126,7 @@ async def test_write_setting_from_event(my_predbat):
     entity_id = f"switch.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_enable"
     await solax_api.switch_event(entity_id, "turn_on")
 
-    if solax_api.controls[test_plant_id]["charge"]["enable"] != True:
+    if solax_api.controls[test_plant_id]["charge"]["enable"] is not True:
         print(f"**** ERROR: Charge enable not set to True ****")
         failed = True
     else:
@@ -1522,7 +2135,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 8: Update charge enable (switch - turn_off service)
     await solax_api.switch_event(entity_id, "turn_off")
 
-    if solax_api.controls[test_plant_id]["charge"]["enable"] != False:
+    if solax_api.controls[test_plant_id]["charge"]["enable"] is not False:
         print(f"**** ERROR: Charge enable not set to False ****")
         failed = True
     else:
@@ -1610,7 +2223,7 @@ async def test_write_setting_from_event(my_predbat):
     entity_id = f"switch.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_enable"
     await solax_api.switch_event(entity_id, "turn_on")
 
-    if solax_api.controls[test_plant_id]["export"]["enable"] != True:
+    if solax_api.controls[test_plant_id]["export"]["enable"] is not True:
         print(f"**** ERROR: Export enable not set to True ****")
         failed = True
     else:
@@ -1619,7 +2232,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 17: Update export enable (switch - toggle service)
     await solax_api.switch_event(entity_id, "toggle")
 
-    if solax_api.controls[test_plant_id]["export"]["enable"] != False:
+    if solax_api.controls[test_plant_id]["export"]["enable"] is not False:
         print(f"**** ERROR: Export enable not toggled to False ****")
         failed = True
     else:
@@ -1684,7 +2297,7 @@ async def test_fetch_controls(solax_api, test_plant_id):
     else:
         print("✓ Charge end_time fetched correctly (06:00:00)")
 
-    if charge_controls.get("enable") != True:
+    if charge_controls.get("enable") is not True:
         print(f"**** ERROR: Charge enable not fetched correctly. Expected True, got {charge_controls.get('enable')} ****")
         failed = True
     else:
@@ -1716,7 +2329,7 @@ async def test_fetch_controls(solax_api, test_plant_id):
     else:
         print("✓ Export end_time fetched correctly (19:00:00)")
 
-    if export_controls.get("enable") != False:
+    if export_controls.get("enable") is not False:
         print(f"**** ERROR: Export enable not fetched correctly. Expected False, got {export_controls.get('enable')} ****")
         failed = True
     else:
@@ -1792,6 +2405,9 @@ async def test_publish_plant_info_main(my_predbat):
         "batteryTemperature": 18.5,
         "batteryRemainings": 11.25,  # 75% of 15.0 kWh
     }
+
+    # Set up realtime device data for the inverter, the PV yield is built from it
+    solax_api.realtime_device_data["H1231231932123"] = {"deviceSn": "H1231231932123", "deviceStatus": 102, "totalYield": 3250.5}
 
     return await test_publish_plant_info(solax_api, test_plant_id, test_plant_name)
 
@@ -3280,7 +3896,7 @@ async def test_fetch_single_result(my_predbat):
     if result is None:
         print(f"**** ERROR: Expected result, got None ****")
         failed = True
-    elif result.get("success") != True:
+    elif result.get("success") is not True:
         print(f"**** ERROR: Result data mismatch ****")
         failed = True
     elif request_id != "req-789":
@@ -4086,7 +4702,7 @@ async def test_query_plant_realtime_data_main():
 
     api3.fetch_single_result = mock_fetch_multiple
 
-    result1 = await api3.query_plant_realtime_data("plant_001")
+    await api3.query_plant_realtime_data("plant_001")
     result2 = await api3.query_plant_realtime_data("plant_002")
 
     if "plant_001" not in api3.realtime_data or "plant_002" not in api3.realtime_data:
@@ -4681,7 +5297,7 @@ async def test_query_device_realtime_data_all_main():
 
     api5.query_device_realtime_data = mock_query_log_types
 
-    result5 = await api5.query_device_realtime_data_all("plant5")
+    await api5.query_device_realtime_data_all("plant5")
 
     if len(device_type_log) != 3:
         print(f"**** ERROR: Expected 3 calls, got {len(device_type_log)} ****")
@@ -6075,6 +6691,65 @@ async def test_publish_device_realtime_data_main():
     else:
         print(f"✓ Multi-inverter load_power aggregated correctly ({expected_load10}W) and tied to first inverter SN")
 
+    # The plant PV and grid power cover every inverter, not just the first one in the plant
+    plant_pv_sensor10 = "sensor.predbat_solax_multi_inv_plant_pv_power"
+    plant_grid_sensor10 = "sensor.predbat_solax_multi_inv_plant_grid_power"
+    if api10.dashboard_items.get(plant_pv_sensor10, {}).get("state") != 2000:
+        print(f"**** ERROR: Expected plant pv_power 2000W summed over both inverters, got {api10.dashboard_items.get(plant_pv_sensor10)} ****")
+        failed = True
+    elif api10.dashboard_items.get(plant_grid_sensor10, {}).get("state") != -300:
+        print(f"**** ERROR: Expected plant grid_power -300W summed over both inverters, got {api10.dashboard_items.get(plant_grid_sensor10)} ****")
+        failed = True
+    else:
+        print("✓ Multi-inverter plant pv_power and grid_power summed over both inverters")
+
+    # A failed inverter read holds the plant powers, a sum with one inverter missing would under-read
+    api10.realtime_device_failed.add("INV_B")
+    api10.realtime_device_data["INV_A"]["pvMap"] = {"pv1Power": 900}
+    await api10.publish_device_realtime_data()
+    if api10.dashboard_items[plant_pv_sensor10]["state"] != 2000 or api10.dashboard_items[plant_grid_sensor10]["state"] != -300:
+        print(f"**** ERROR: Plant pv_power/grid_power should be held when an inverter failed its read, got {api10.dashboard_items[plant_pv_sensor10]['state']}/{api10.dashboard_items[plant_grid_sensor10]['state']} ****")
+        failed = True
+    else:
+        print("✓ Plant pv_power and grid_power held when an inverter failed its read")
+
+    # Republished on the next good read
+    # An offline inverter is not expected to answer, so it counts as 0W rather than holding the plant
+    api10.device_info["INV_B"]["onlineStatus"] = 0
+    await api10.publish_device_realtime_data()
+    if api10.dashboard_items[plant_pv_sensor10]["state"] != 900 or api10.dashboard_items[plant_grid_sensor10]["state"] != -200:
+        print(f"**** ERROR: Plant pv_power/grid_power should be 900/-200 with the offline inverter counted as 0, got {api10.dashboard_items[plant_pv_sensor10]['state']}/{api10.dashboard_items[plant_grid_sensor10]['state']} ****")
+        failed = True
+    else:
+        print("✓ Offline inverter counted as 0W in the plant pv_power and grid_power")
+    api10.device_info["INV_B"]["onlineStatus"] = 1
+
+    api10.realtime_device_failed.discard("INV_B")
+    await api10.publish_device_realtime_data()
+    if api10.dashboard_items[plant_pv_sensor10]["state"] != 1400:
+        print(f"**** ERROR: Expected plant pv_power 1400W after the inverter recovered, got {api10.dashboard_items[plant_pv_sensor10]['state']} ****")
+        failed = True
+    else:
+        print("✓ Plant pv_power republished once every inverter is read again")
+
+    # The plant powers are held for a plant ID that is changed for the entity names too
+    api10c = MockSolaxAPI()
+    api10c.initialize(client_id="test", client_secret="test", region="eu")
+    api10c.plant_inverters["Plant A"] = ["INV_C", "INV_D"]
+    api10c.device_info["INV_C"] = {"deviceSn": "INV_C", "deviceType": 1, "deviceModel": 3, "plantId": "Plant A"}
+    api10c.device_info["INV_D"] = {"deviceSn": "INV_D", "deviceType": 1, "deviceModel": 3, "plantId": "Plant A"}
+    api10c.realtime_device_data["INV_C"] = {"deviceSn": "INV_C", "gridPower": -200, "pvMap": {"pv1Power": 1500}, "deviceStatus": 102}
+    api10c.realtime_device_failed.add("INV_D")
+    await api10c.publish_device_realtime_data()
+    if "sensor.predbat_solax_plant_a_pv_power" in api10c.dashboard_items:
+        print(f"**** ERROR: Plant pv_power should be held while an inverter is unread, got {api10c.dashboard_items['sensor.predbat_solax_plant_a_pv_power']['state']} ****")
+        failed = True
+    elif "sensor.predbat_solax_plant_a_INV_C_load_power" not in api10c.dashboard_items:
+        print("**** ERROR: load_power should still be published under the plant's first inverter ****")
+        failed = True
+    else:
+        print("✓ Plant pv_power held for a plant ID that is changed for the entity names")
+
     # Test 11: Battery SOH sensor published correctly, including zero-SOH guard and aggregate
     print("Test 11: Battery SOH sensor published correctly")
     api11 = MockSolaxAPI()
@@ -6137,6 +6812,143 @@ async def test_publish_device_realtime_data_main():
         print("✓ publish_device_realtime_data tests passed")
 
     return failed
+
+
+def battery_power_fixture():
+    """A residential hybrid and a separate PV inverter, with no battery ratedPower."""
+    api = MockSolaxAPI()
+    api.plant_info = [{"plantId": "plant1", "batteryCapacity": 12.0}]
+    api.plant_inverters = {"plant1": ["HYBRID", "PV"]}
+    api.plant_batteries = {"plant1": ["BATTERY"]}
+    api.device_info = {
+        "HYBRID": {"deviceSn": "HYBRID", "plantId": "plant1", "deviceType": 1, "deviceModel": 15, "ratedPower": 3.68},
+        "PV": {"deviceSn": "PV", "plantId": "plant1", "deviceType": 1, "deviceModel": 4, "ratedPower": 3.68},
+        "BATTERY": {"deviceSn": "BATTERY", "plantId": "plant1", "deviceType": 2, "ratedCapacity": 12.0},
+    }
+    api.realtime_device_data["BATTERY"] = {"batterySOC": 50, "batteryRemainings": 6.0}
+    return api
+
+
+async def test_battery_power_models_main():
+    """Exclude known PV-only models without losing explicit ratings or multiple battery inverters."""
+    print("Test: SolaX battery capability on mixed plants")
+    api = battery_power_fixture()
+    assert api.get_max_power_battery("plant1") == 3680, "PV-only inverter must not increase battery capability"
+    assert api.get_max_power_inverter("plant1") == 7360, "Aggregate inverter capability must still include PV"
+
+    for rating in (0, "0", None, "invalid", -1, float("nan"), float("inf")):
+        api.device_info["BATTERY"]["ratedPower"] = rating
+        assert api.get_max_power_battery("plant1") == 3680, f"Unusable battery rating {rating} must use the filtered fallback"
+    for model in (4, 16, 18, 22, 26, 27, 28, 29, 44, "4"):
+        api.device_info["PV"]["deviceModel"] = model
+        assert api.get_max_power_battery("plant1") == 3680, f"Residential PV-only model {model} must be excluded"
+
+    # Device model numbers are scoped to businessType, so commercial model 4 must not be excluded.
+    api.device_info["PV"].update(deviceModel=4, businessType=4)
+    assert api.get_max_power_battery("plant1") == 7360, "Residential model classification must not apply to commercial devices"
+    api.device_info["PV"].pop("businessType")
+    for model in (None, 999, "unknown"):
+        api.device_info["PV"]["deviceModel"] = model
+        assert api.get_max_power_battery("plant1") == 7360, "Unknown models retain the existing inverter fallback"
+    api.device_info["PV"].pop("deviceModel")
+    assert api.get_max_power_battery("plant1") == 7360, "Missing model metadata retains the existing inverter fallback"
+
+    api = battery_power_fixture()
+    for model in (14, 9):  # Another hybrid, or an AC-coupled battery inverter.
+        api.device_info["SECOND"] = {"deviceModel": model, "ratedPower": 5.0}
+        api.plant_inverters["plant1"] = ["HYBRID", "SECOND", "PV"]
+        assert api.get_max_power_battery("plant1") == 8680, "Multiple battery inverters must retain their aggregate capability"
+        assert api.get_max_power_inverter("plant1") == 12360
+
+    api.device_info["BATTERY"]["ratedPower"] = "2.5"
+    api.device_info["BATTERY2"] = {"ratedPower": 4.0}
+    api.plant_batteries["plant1"].append("BATTERY2")
+    assert api.get_max_power_battery("plant1") == 6500, "Explicit battery ratings take precedence over inverter ratings"
+    api.device_info["BATTERY2"]["ratedPower"] = None
+    assert api.get_max_power_battery("plant1") == 2500, "A valid battery rating must survive another battery's missing rating"
+    api.device_info["BATTERY"]["ratedPower"] = 15
+    assert api.get_max_power_battery("plant1") == 15000
+    assert api.control_info("plant1", "charge", "rate")[7] == 12360, "AC controls must retain the aggregate inverter ceiling"
+
+    api = battery_power_fixture()
+    api.plant_inverters["plant1"] = ["HYBRID"]
+    api.device_info["HYBRID"].pop("deviceModel")
+    assert api.get_max_power_battery("plant1") == 3680, "Single inverter fallback must still work without model metadata"
+    for rating in (None, 0, "invalid", -1, float("nan"), float("inf")):
+        api.device_info["HYBRID"]["ratedPower"] = rating
+        assert api.get_max_power_battery("plant1") == 0, f"Unusable inverter rating {rating} must not create battery capability"
+    api.plant_inverters["plant1"] = ["PV"]
+    assert api.get_max_power_battery("plant1") == 0, "PV-only plant must not create battery capability"
+    assert api.get_max_power_battery("missing") == 0
+    return False
+
+
+async def test_battery_power_config_main(my_predbat):
+    """Carry corrected watts through discovery, sensors, automatic configuration and control defaults."""
+    print("Test: SolaX battery capability reaches automatic configuration and controls")
+    api = battery_power_fixture()
+    inverters = [api.device_info[sn] for sn in api.plant_inverters["plant1"]]
+    batteries = [api.device_info["BATTERY"]]
+    with patch.object(api, "fetch_paginated_data", new=AsyncMock(side_effect=[inverters, batteries])):
+        await api.query_device_info("plant1", 1)
+        await api.query_device_info("plant1", 2)
+    assert api.device_info["PV"]["businessType"] == 1, "Discovery must retain the model namespace"
+
+    await api.publish_plant_info()
+    await api.automatic_config()
+    battery_sensor = "sensor.predbat_solax_plant1_battery_max_power"
+    inverter_sensor = "sensor.predbat_solax_plant1_inverter_max_power"
+    assert api.args["battery_rate_max"] == [battery_sensor]
+    assert api.args["inverter_limit"] == [inverter_sensor]
+    assert api.dashboard_items[battery_sensor]["state"] == 3680
+    assert api.dashboard_items[inverter_sensor]["state"] == 7360
+    assert api.dashboard_items[battery_sensor]["attributes"]["unit_of_measurement"] == "W"
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(my_predbat.ha_interface.dummy_items)
+    try:
+        for key in ("inverter_limit_charge", "inverter_limit_charge_dc", "inverter_limit_discharge", "inverter_limit_export", "inverter_limit_override"):
+            my_predbat.args.pop(key, None)
+        my_predbat.args.update(api.args)
+        for entity_id, item in api.dashboard_items.items():
+            my_predbat.ha_interface.dummy_items[entity_id] = {"state": item["state"], **item["attributes"]}
+        inv = Inverter(my_predbat, 0, quiet=True)
+        assert inv.battery_rate_max_raw == 3680
+        for rate in (inv.battery_rate_max_charge, inv.battery_rate_max_charge_dc, inv.battery_rate_max_discharge, inv.battery_rate_max_export):
+            assert round(rate * MINUTE_WATT) == 3680, "The model must use 3.68 kW battery limits"
+        assert round(inv.inverter_limit * MINUTE_WATT) == 7360
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.ha_interface.dummy_items.clear()
+        my_predbat.ha_interface.dummy_items.update(saved_items)
+
+    # Fetching controls on a new installation must use the battery ceiling, not the PV total.
+    await api.fetch_controls("plant1")
+    for direction in ("charge", "export"):
+        info = api.control_info("plant1", direction, "rate")
+        assert info[4] == "W" and info[5] == 3680 and info[7] == 3680
+        assert api.controls["plant1"][direction]["rate"] == 3680
+
+    # A saved rate from before the correction is also clamped when controls are refreshed.
+    api.dashboard_items["number.predbat_solax_plant1_battery_schedule_charge_rate"] = {"state": 7360, "attributes": {}}
+    await api.fetch_controls("plant1")
+    assert api.controls["plant1"]["charge"]["rate"] == 3680
+
+    for direction, target, expected_power in (("charge", 100, 3680), ("export", 10, -3680)):
+        api.controls["plant1"]["charge"]["enable"] = False
+        api.controls["plant1"]["export"]["enable"] = False
+        api.controls["plant1"][direction].update(enable=True, start_time="00:00:00", end_time="00:00:00", target_soc=target)
+        with patch.object(api, "set_default_work_mode", new=AsyncMock(return_value=True)), patch.object(api, "soc_target_control_mode", new=AsyncMock(return_value=True)) as command:
+            await api.apply_controls("plant1")
+        assert command.call_args.kwargs["charge_discharge_power"] == expected_power
+
+    # Commercial discovery uses another model namespace, even when a response omits businessType.
+    with patch.object(api, "fetch_paginated_data", new=AsyncMock(return_value=[{"deviceSn": "COMMERCIAL", "deviceModel": 4, "ratedPower": 50}])):
+        await api.query_device_info("commercial", 1, business_type=4)
+    assert api.device_info["COMMERCIAL"]["businessType"] == 4
+    assert api.get_max_power_battery("commercial") == 50000
+    return False
 
 
 async def test_helper_methods_main():
@@ -6376,6 +7188,65 @@ async def test_helper_methods_main():
     else:
         print(f"✓ Multiple battery charge/discharge power sum correct (-500W)")
 
+    # Test 16: get_charge_discharge_power_battery - one battery reports null power
+    print("Test 16: get_charge_discharge_power_battery - one battery reports null power")
+    api16 = MockSolaxAPI()
+    api16.initialize(client_id="test", client_secret="test", region="eu")
+
+    api16.plant_batteries["plant16"] = ["BAT001", "BAT002"]
+    api16.realtime_device_data["BAT001"] = {"chargeDischargePower": 1500}
+    api16.realtime_device_data["BAT002"] = {"chargeDischargePower": None}  # SolaX returns an explicit null
+
+    try:
+        result16 = api16.get_charge_discharge_power_battery("plant16")
+    except TypeError as e:
+        result16 = f"TypeError: {e}"
+    if result16 != 1500:
+        print(f"**** ERROR: Expected 1500W with a null battery treated as 0, got {result16} ****")
+        failed = True
+    else:
+        print(f"✓ Null battery charge/discharge power treated as 0 (1500W)")
+
+    # Test 17: get_current_soc_battery_kwh - null SOC/remainings behave like missing fields
+    print("Test 17: get_current_soc_battery_kwh - null SOC/remainings behave like missing fields")
+    api17 = MockSolaxAPI()
+    api17.initialize(client_id="test", client_secret="test", region="eu")
+
+    api17.plant_batteries["plant17"] = ["BAT001", "BAT002"]
+    api17.realtime_device_data["BAT001"] = {"batterySOC": 80, "batteryRemainings": 8.0}
+    api17.realtime_device_data["BAT002"] = {}
+    expected17 = api17.get_current_soc_battery_kwh("plant17")
+    api17.realtime_device_data["BAT002"] = {"batterySOC": None, "batteryRemainings": None}
+
+    try:
+        result17 = api17.get_current_soc_battery_kwh("plant17")
+    except TypeError as e:
+        result17 = f"TypeError: {e}"
+    if result17 != expected17:
+        print(f"**** ERROR: Expected {expected17} with null SOC/remainings, got {result17} ****")
+        failed = True
+    else:
+        print(f"✓ Null SOC/remainings match the missing-field result {expected17}")
+
+    # Test 18: get_battery_temperature - null temperature behaves like a missing field
+    print("Test 18: get_battery_temperature - null temperature behaves like a missing field")
+    api18 = MockSolaxAPI()
+    api18.initialize(client_id="test", client_secret="test", region="eu")
+
+    api18.plant_batteries["plant18"] = ["BAT001", "BAT002"]
+    api18.realtime_device_data["BAT001"] = {"batteryTemperature": 20.0}
+    api18.realtime_device_data["BAT002"] = {"batteryTemperature": None}
+
+    try:
+        result18 = api18.get_battery_temperature("plant18")
+    except TypeError as e:
+        result18 = f"TypeError: {e}"
+    if result18 != 20.0:
+        print(f"**** ERROR: Expected 20.0°C with a null battery temperature, got {result18} ****")
+        failed = True
+    else:
+        print(f"✓ Null battery temperature skipped (20.0°C)")
+
     if not failed:
         print("✓ helper methods tests passed")
 
@@ -6411,6 +7282,15 @@ async def test_automatic_config_main():
         failed = True
     elif api.get_arg("load_today") != ["sensor.predbat_solax_plant1_total_load"]:
         print(f"**** ERROR: load_today config incorrect ****")
+        failed = True
+    elif api.get_arg("pv_today") != ["sensor.predbat_solax_plant1_pv_yield"]:
+        print(f"**** ERROR: pv_today should use the PV yield built from the inverters, got {api.get_arg('pv_today')} ****")
+        failed = True
+    elif api.get_arg("pv_power") != ["sensor.predbat_solax_plant1_pv_power"]:
+        print(f"**** ERROR: pv_power should use the plant PV power summed over the inverters, got {api.get_arg('pv_power')} ****")
+        failed = True
+    elif api.get_arg("grid_power") != ["sensor.predbat_solax_plant1_grid_power"]:
+        print(f"**** ERROR: grid_power should use the plant grid power summed over the inverters, got {api.get_arg('grid_power')} ****")
         failed = True
     elif api.get_arg("battery_scaling") != ["sensor.predbat_solax_plant1_INV001_battery_soh"]:
         print(f"**** ERROR: battery_scaling not set to SOH sensor, got {api.get_arg('battery_scaling')} ****")
@@ -7059,7 +7939,7 @@ async def test_positive_or_negative_mode_main():
         endpoint = call_args[0][0]
         payload = call_args[0][1]
         command_name = call_args[0][2]
-        sn = call_args[0][3]
+        call_args[0][3]
 
         if endpoint != "/openapi/v2/device/inverter_vpp_mode/push_power/positive_or_negative_mode":
             print(f"**** ERROR: Wrong endpoint: {endpoint} ****")
@@ -7841,7 +8721,7 @@ async def test_fetch_controls_value_conversion_main():
     if api3.controls[plant_id]["charge"]["start_time"] != "00:00":
         print(f"**** ERROR: Expected default start_time 00:00, got {api3.controls[plant_id]['charge']['start_time']} ****")
         failed = True
-    elif api3.controls[plant_id]["charge"]["enable"] != False:
+    elif api3.controls[plant_id]["charge"]["enable"] is not False:
         print(f"**** ERROR: Expected default enable False, got {api3.controls[plant_id]['charge']['enable']} ****")
         failed = True
     elif api3.controls[plant_id]["charge"]["target_soc"] != 100:

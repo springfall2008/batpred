@@ -79,13 +79,15 @@ def test_db_manager(my_predbat=None):
     - Persistence: data survival across restarts, state recovery
     - Commit throttling: 5-second interval enforcement
 
-    Total: 5 sub-tests
+    Total: 7 sub-tests
     """
 
     # Registry of all Database Manager tests
     sub_tests = [
         ("set_get_state", _test_db_manager_set_get_state, "Set/get state operations with attributes"),
         ("entities_history", _test_db_manager_entities_and_history, "Entities and history queries"),
+        ("history_from_time", _test_db_manager_history_from_time, "History from a given start time"),
+        ("history_engine_compat", _test_db_manager_history_engine_without_from_time, "Engine without from_time support"),
         ("error_handling", _test_db_manager_error_handling, "Error handling (corrupted files, missing dirs)"),
         ("persistence", _test_db_manager_persistence, "Data persistence across restarts"),
         ("commit_throttle", _test_db_manager_commit_throttling, "Commit throttling (5 second interval)"),
@@ -183,7 +185,7 @@ def _test_db_manager_set_get_state(my_predbat=None):
             state2 = "15.3"
             attributes2 = {"unit_of_measurement": "kW"}
 
-            result2 = await loop.run_in_executor(None, db_mgr.set_state_db, entity_id2, state2, attributes2, custom_timestamp)
+            await loop.run_in_executor(None, db_mgr.set_state_db, entity_id2, state2, attributes2, custom_timestamp)
             retrieved2 = await loop.run_in_executor(None, db_mgr.get_state_db, entity_id2)
             assert retrieved2 is not None, "get_state_db returned None for entity2"
             assert retrieved2["state"] == state2, f"Expected state {state2}, got {retrieved2['state']}"
@@ -330,7 +332,7 @@ def _test_db_manager_entities_and_history(my_predbat=None):
                     try:
                         # Remove 'Z' suffix if present
                         ts = timestamp_str.rstrip("Z")
-                        parsed = datetime.strptime(ts, TIME_FORMAT_DB)
+                        datetime.strptime(ts, TIME_FORMAT_DB)
                         print(f"✓ Timestamp format correct: {timestamp_str}")
                         break
                     except ValueError as e:
@@ -359,6 +361,102 @@ def _test_db_manager_entities_and_history(my_predbat=None):
 
     run_async(run_test())
     print("=== test_db_manager_entities_and_history PASSED ===\n")
+
+
+def _test_db_manager_history_from_time(my_predbat=None):
+    """get_history_db with from_time returns only the states from that instant on (as HAHistory's refresh asks)"""
+    print("\n=== Testing DatabaseManager get_history_db with from_time ===")
+
+    async def run_test():
+        mock_base = MockBase()
+        db_mgr = MockDatabaseManager()
+        db_mgr.api_stop = False
+        db_mgr.base = mock_base
+        db_mgr.log = mock_base.log
+        db_mgr.initialize(db_enable=True, db_days=30)
+
+        try:
+            task = asyncio.create_task(db_mgr.start())
+            timeout = 0
+            while not db_mgr.api_started and timeout < 50:
+                await asyncio.sleep(0.1)
+                timeout += 1
+            assert db_mgr.api_started, "DatabaseManager failed to start"
+
+            loop = asyncio.get_event_loop()
+            entity = "sensor.battery_soc"
+            # Hourly states written in the local zone (GMT+2), stored as UTC
+            base_timestamp = datetime(2025, 12, 25, 0, 0, 0, tzinfo=mock_base.local_tz)
+            for i in range(10):
+                await loop.run_in_executor(None, db_mgr.set_state_db, entity, str(50.0 + i * 3.5), {}, base_timestamp + timedelta(hours=i))
+
+            now = datetime(2025, 12, 25, 12, 0, 0, tzinfo=mock_base.local_tz)
+            full = await loop.run_in_executor(None, db_mgr.get_history_db, entity, now, 30)
+            full_states = [entry["state"] for entry in full[0]]
+            assert full_states == [str(50.0 + i * 3.5) for i in range(10)], f"full window should return all 10 states, got {full_states}"
+
+            # from_time as HAHistory builds it: aware UTC at the 7th state (05:00 UTC = 07:00 GMT+2), inclusive
+            from_time = datetime.fromtimestamp((base_timestamp + timedelta(hours=7)).timestamp(), timezone.utc)
+            recent = await loop.run_in_executor(None, db_mgr.get_history_db, entity, now, 1, from_time)
+            recent_states = [entry["state"] for entry in recent[0]]
+            assert recent_states == [str(50.0 + i * 3.5) for i in range(7, 10)], f"from_time should return states 7-9, got {recent_states}"
+            print("✓ get_history_db with from_time returned only the states from that instant on")
+
+            await db_mgr.stop()
+            timeout = 0
+            while db_mgr.api_started and timeout < 50:
+                await asyncio.sleep(0.1)
+                timeout += 1
+            await task
+        finally:
+            shutil.rmtree(mock_base.config_root)
+
+    run_async(run_test())
+    print("=== test_db_manager_history_from_time PASSED ===\n")
+
+
+def _test_db_manager_history_engine_without_from_time(my_predbat=None):
+    """An engine whose _get_history_db predates from_time is called without it, not with a TypeError"""
+    print("\n=== Testing DatabaseManager with an engine that has no from_time ===")
+
+    class OldEngine:
+        """A database engine written before from_time existed"""
+
+        def __init__(self):
+            self.calls = []
+
+        def _get_history_db(self, sensor, now, days=30):
+            """Record the request"""
+            self.calls.append((sensor, now, days))
+            return [[]]
+
+    class NewEngine:
+        """A database engine that accepts from_time"""
+
+        def __init__(self):
+            self.calls = []
+
+        def _get_history_db(self, sensor, now, days=30, from_time=None):
+            """Record the request"""
+            self.calls.append((sensor, now, days, from_time))
+            return [[]]
+
+    db_mgr = MockDatabaseManager()
+    now = datetime(2025, 12, 25, 12, 0, 0, tzinfo=timezone.utc)
+    from_time = now - timedelta(minutes=2)
+    info = {"sensor": "sensor.x", "now": now, "days": 1, "from_time": from_time}
+
+    db_mgr.db_engine = OldEngine()
+    assert db_mgr.get_history_from_engine(info) == [[]]
+    assert db_mgr.db_engine.calls == [("sensor.x", now, 1)], db_mgr.db_engine.calls
+
+    # The check follows the engine object, so a different engine is re-checked
+    db_mgr.db_engine = NewEngine()
+    db_mgr.get_history_from_engine(info)
+    db_mgr.get_history_from_engine({"sensor": "sensor.x", "now": now, "days": 3, "from_time": None})
+    assert db_mgr.db_engine.calls == [("sensor.x", now, 1, from_time), ("sensor.x", now, 3, None)], db_mgr.db_engine.calls
+    print("✓ from_time passed only to an engine that accepts it")
+    print("=== test_db_manager_history_engine_without_from_time PASSED ===\n")
 
 
 def _test_db_manager_error_handling(my_predbat=None):

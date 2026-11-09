@@ -12,6 +12,8 @@
 Tests for the shared MockBase used by the standalone command-line harnesses.
 """
 
+import contextlib
+import io
 from datetime import datetime, timezone
 
 from component_base import ComponentBase
@@ -165,6 +167,32 @@ def test_mock_base_set_arg_none_deletes_key(my_predbat):
     assert base.get_arg("probe_key", "fallback") == "fallback", "set_arg(key, None) should delete the key, not store None"
     assert "probe_key" not in base.args, "the deleted key must not remain in args"
     print("PASS: MockBase set_arg(key, None) deletes the key")
+    return False
+
+
+def test_mock_base_set_arg_prints_every_list_state(my_predbat):
+    """set_arg on an entity list prints each entity's state in list order, not just the first one's.
+
+    A PV-only inverter listed second in pv_power used to look like no PV at all, because only
+    the battery inverter's 0.0 was printed (issue #5279).
+    """
+    base = MockBase()
+    base.entities["sensor.bat_pv_power"] = {"state": 0.0}
+    base.entities["sensor.string_pv_power"] = {"state": 0.5}
+
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        base.set_arg("pv_power", ["sensor.bat_pv_power", "sensor.string_pv_power"])
+        base.set_arg("battery_power_invert", ["True", "True"])
+        base.set_arg("mixed", ["sensor.string_pv_power", 5])
+        base.set_arg("soc_percent", "sensor.bat_pv_power")
+    lines = printed.getvalue().splitlines()
+
+    assert lines[0].endswith("(state=[0.0, 0.5])"), f"expected both states, got {lines[0]}"
+    assert lines[1].endswith("(state=n/a [])"), f"a list with no entities should say so, got {lines[1]}"
+    assert lines[2].endswith("(state=[0.5, 'n/a'])"), f"non-entity entries keep their position, got {lines[2]}"
+    assert lines[3].endswith("(state=0.0)"), f"a single entity prints its own state, got {lines[3]}"
+    print("PASS: MockBase set_arg prints every entity state in a list")
     return False
 
 
@@ -325,6 +353,7 @@ def test_mock_base_all(my_predbat):
         ("none_kwargs", test_mock_base_none_kwargs_are_skipped, "None kwargs are skipped, False is kept"),
         ("arg_round_trip", test_mock_base_arg_round_trip, "get_arg/set_arg round-trip"),
         ("set_arg_none_deletes", test_mock_base_set_arg_none_deletes_key, "set_arg(key, None) deletes the key"),
+        ("set_arg_list_states", test_mock_base_set_arg_prints_every_list_state, "set_arg prints every entity state in a list"),
         ("reexport_identity", test_mock_base_reexport_identity, "Re-export and subclass modules resolve to the shared MockBase"),
         ("dashboard_no_mutate", test_mock_base_dashboard_item_does_not_mutate_attributes, "dashboard_item does not mutate caller attributes"),
         ("dashboard_datetime", test_mock_base_dashboard_item_serialises_datetime, "dashboard_item serialises datetime attributes"),

@@ -13,11 +13,31 @@ There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a
 
 - [What is Home Assistant from Smart Home Junkie](https://www.youtube.com/watch?v=Frd-C7ZeZAo)
 - [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA)
-- [Installing HACS from Speak to the Geek](https://www.youtube.com/watch?v=TL2eqsjhmTE)
+- [Installing HACS from Speak to the Geek](https://www.youtube.com/watch?v=TL2eqsjhmTE) (Home Assistant 2026.10 or older only, see [HACS and the Marketplace](#hacs-and-the-marketplace))
 - [Setting up the Energy dashboard for GivEnergy inverters from Speak to the Geek](https://www.youtube.com/watch?v=YPPpwTKIz7M)
 - [Power Flow Card Plus from Speak to the Geek](https://www.youtube.com/watch?v=C4Zh35E9wJE)
 
 If you get stuck, please read the [FAQs](faq.md) and if necessary raise a [GitHub ticket](https://github.com/springfall2008/batpred/issues) for support.
+
+## Home Assistant Pre-requisites
+
+Ensure that the computer (or VM) that is running your Home Assistant has sufficient memory. Predbat (and in particular LoadML if you are using it) can be quite resource intensive and it's recommended that your HA computer has at least 3 GB of memory allocated. If Predbat doesn't have sufficient memory then it can crash with few diagnostics.
+
+## HACS and the Marketplace
+
+Several of the integrations and dashboard cards used with Predbat are community projects that aren't part of Home Assistant itself.
+Where you get them from depends on your Home Assistant version:
+
+- **Home Assistant 2026.11 or newer** - community projects come from the built-in **Marketplace**, under **Settings** → **Marketplace**. There is nothing extra to install.
+  Search for a project by name, open its page, select **Install**, check the version and select **Install** again.
+  To add a project that isn't in the catalogue (a custom repository), select **Add from link** in the upper-right corner, enter the GitHub link, and select **Add**.
+- **Home Assistant 2026.10 or older** - the same projects come from HACS (the Home Assistant Community Store), which you need to install first (see the Speak to the Geek video above).
+
+The Marketplace replaced HACS in Home Assistant 2026.11 and uses the same catalogue, so anything you downloaded with HACS stays installed and keeps getting updates after you upgrade.
+HACS can't be installed on Home Assistant 2026.11 or newer. See [HACS and the Marketplace](https://hacs.xyz/docs/marketplace/) and the
+[Marketplace documentation](https://www.home-assistant.io/integrations/marketplace/) for details.
+
+Where these docs say to install something "from the Marketplace", use HACS instead if you are on Home Assistant 2026.10 or older.
 
 ## Inverter Control install
 
@@ -40,12 +60,11 @@ If you have a [different inverter](inverter-setup.md) then you will need to use 
 You will need a method of editing configuration files within your Home Assistant environment.
 
 There are several ways to achieve this in Home Assistant, but two of the simplest are to use either the File Editor or Studio Code Server apps.
-Whichever you use is a personal preference. File Editor is a bit simpler, Studio Code Server is more powerful
-but does require HACS (the Home Assistant Community Store) to be installed first.
+Whichever you use is a personal preference. File Editor is a bit simpler, Studio Code Server is more powerful.
+Both are apps installed from **Settings** → **Apps**, so neither needs HACS or the Marketplace.
 
 If you do not have one of these file editors already installed in Home Assistant:
 
-- For Studio Code Server you will need to install HACS first (see Speak To The Geek video linked above)
 - Go to Settings / Apps / Install app (bottom right)
 - Scroll down the app list, to find either 'File editor' or 'Studio Code Server' as appropriate, click on the app, click 'INSTALL'
 - Once the editor has been installed, ensure that the 'Start on boot' option is turned on, and click 'START' to start the app
@@ -74,12 +93,12 @@ Ensure 'start on boot' is enabled and click 'start'.
 
 **Note:** Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file `apps.yaml` and the Predbat logfile.
 
-These are located under the Home Assistant directory `/addon_configs/6adb4f0d_predbat` which contains:
+These are located under the Home Assistant directory `/app_configs/6adb4f0d_predbat` which contains:
 
 - **predbat.log** - Predbat's active logfile that reports details of what Predbat is doing, and details of any errors
 - **apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
 
-You can use your file editor (i.e. 'File editor' or 'Studio Code Server' app) to open the directory `/addon_configs/6adb4f0d_predbat` and view these files.
+You can use your file editor (i.e. 'File editor' or 'Studio Code Server' app) to open the directory `/app_configs/6adb4f0d_predbat` and view these files.
 
 The Predbat web interface will work through the Predbat app, you can click on the 'Web UI' button to open it once Predbat is running.
 
@@ -95,14 +114,17 @@ Installation instructions can be found at [https://github.com/nipar4/predbat_add
 
 Installing HACS, Appdaemon and then Predbat within Appdaemon has been deprecated, please swap to either the Predbat app or Docker installation methods.
 
-The process to [upgrade from Predbat within Appdaemon to Predbat addon](#upgrading-from-appdaemon-to-predbat-app) is described below.
+From Home Assistant 2026.11 HACS has been replaced by the built-in [Marketplace](#hacs-and-the-marketplace), which no longer manages AppDaemon apps:
+an existing Predbat install inside AppDaemon keeps running, but it stops receiving updates through the Marketplace and Home Assistant raises a repair for it.
 
-## Solcast Install
+The process to [upgrade from Predbat within Appdaemon to Predbat App](#upgrading-from-appdaemon-to-predbat-app) is described below.
+
+## Solar Forecast Install
 
 Predbat needs a solar forecast to predict solar generation and battery charging.
 If you have solar panels it's recommended to use the Solcast integration to retrieve your forecast solar generation.
 
-If you do not want to use Solcast you can also use [Forecast.solar](#predbat-direct-to-forecastsolar) (less accurate) - see below.
+If you do not want to use Solcast you can also use [Forecast.solar](#predbat-direct-to-forecastsolar) (less accurate) or [Open-Meteo](#predbat-direct-to-open-meteo) - see below.
 
 If you don't have one already, register for a free [Solcast hobbyist account](https://solcast.com/) and enter the details of your system.
 You can create 2 sites maximum under one (free hobbyist) account, if you have more aspects then it suggests you average the angle based on the number of panels
@@ -129,9 +151,11 @@ uncomment the Solcast cloud interface settings in `apps.yaml` and set the API ke
 
 ```yaml
   solcast_host: 'https://api.solcast.com.au/'
-  solcast_api_key: 'xxxx'
+  solcast_api_key: !secret solcast_api_key
   solcast_poll_hours: 8
 ```
+
+Keep the API key in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](apps-yaml.md#storing-secrets).
 
 NB: If you use Predbat to obtain your Solcast solar forecast then you can't
 [include the Solar Forecast within the Home Assistant Energy dashboard](https://www.home-assistant.io/dashboards/energy/#solar-production-graph)
@@ -184,7 +208,7 @@ Optionally you can set an api_key for personal or professional accounts and you 
 ``` yaml
   forecast_solar:
     - postcode: SW1A 2AB
-      api_key: 'xxxxx'
+      api_key: !secret forecast_solar_api_key
       days: 3
 ```
 
@@ -243,7 +267,7 @@ For a house with two differently oriented roof aspects, add a second entry to th
 Install the Solcast integration (<https://github.com/BJReplay/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
 configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
-Make sure that the configuration option 'Enable forecast half-hourly detail attributes' is turned on as predbat requires the half-hourly detailed solar forecast to populate the predbat plan.
+Make sure that the configuration option 'Enable forecast half-hourly detail attributes' is turned on as Predbat requires the half-hourly detailed solar forecast to populate the Predbat plan.
 By default the Solcast integration only provides hourly forecasts and Predbat will take each hourly PV forecast and treat it as a half-hour value - doubling your solar generation forecast!
 
 Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities created by the Solcast integration in Home Assistant.
@@ -330,7 +354,7 @@ multiple import rates during the day, and variable tariffs such as Agile, etc.
 
 The detailed [Predbat Customisation Guide](customisation.md) details all the Predbat configuration items (switches, input numbers, etc) in Home Assistant, and what each of them does.
 
-The Predbat [Web Interface](web-interface.md) provides an easy way to view all of the Predbat configuration items, check apps.yaml for errors, and view the logfile.
+The Predbat [Web Interface](web-interface.md) provides an easy way to view all of the Predbat configuration items, check `apps.yaml` for errors, and view the logfile.
 
 ## Ready to light the touch-paper
 
@@ -399,17 +423,8 @@ the latest version will be at the top of the list. Predbat will update itself an
 
 Alternatively, if you turn On **switch.predbat_auto_update**, Predbat will automatically update itself as new releases are published on GitHub.
 
-For testing against a fork, you can override the repository used when updating to **main** by setting this under your Predbat app in `apps.yaml`:
-
-```yaml
-pred_bat:
-  # ... existing Predbat config ...
-  predbat_repository: your-github-user/batpred
-```
-
-Only the `main` update path uses this override; release tags in **select.predbat_update** are still read from the official upstream repository.
-
-You can also set environment variable `PREDBAT_REPOSITORY` (same `owner/repo` format).
+For testing against a fork or a branch, you can change where **main** is downloaded from, and add branches to the update drop-down, using the `predbat_repository` and `predbat_branch` settings in `apps.yaml`,
+see [predbat_repository](apps-yaml.md#predbat_repository) and [predbat_branch](apps-yaml.md#predbat_branch).
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/56bca491-1069-4abb-be29-a50b0a67a6b9)
 
@@ -444,12 +459,12 @@ From the Assets list, download the source code (zip) file:
 - Unzip the source code file you have downloaded
 - Navigate to the release sub folder, then `apps`, and finally the `predbat` sub-folder
 - Shutdown Predbat
-- Copy all the .py files from the `predbat` sub-folder into your Predbat application folder in Home Assistant  and overwrite the existing .py files. If you are running the Predbat app then the destination folder will be `/addon_configs/6adb4f0d_predbat`
+- Copy all the .py files from the `predbat` sub-folder into your Predbat application folder in Home Assistant  and overwrite the existing .py files. If you are running the Predbat app then the destination folder will be `/app_configs/6adb4f0d_predbat`
 - Restart Predbat
 
 ## Upgrading from AppDaemon to Predbat app
 
-These steps assume you already have a working Predbat system and want to upgrade to using the Predbat app instead of using either the AppDaemon or the AppDaemon-predbat app.
+These steps assume you already have a working Predbat system and want to upgrade to using the Predbat app instead of using either the (now deprecated) AppDaemon or the AppDaemon-predbat apps.
 
 Using the Predbat app is the strategic direction for Predbat and resolves some performance and data load issues that can occur with AppDaemon.
 The Predbat code that runs is the same and the configuration is exactly the same, it is just changing the 'container' that Predbat runs within.
@@ -470,21 +485,21 @@ The Predbat code that runs is the same and the configuration is exactly the same
     - Click on the existing AppDaemon/AppDaemon-predbat app
     - Click STOP, and untick 'Start on boot'
 
-6. Briefly start the new Predbat app so that it creates the addon_config folder and the template `apps.yaml` file:
+6. Briefly start the new Predbat app so that it creates the template `apps.yaml` file:
     - Go to Settings/Apps
     - Click on the Predbat app
-    - Click START, wait a minute for the app to initialise itself, then click STOP. A predbat status warning that you have a template apps.yaml file is normal and can be ignored
+    - Click START, wait a minute for the app to initialise itself, then click STOP. A Predbat status warning that you have a template `apps.yaml` file is normal and can be ignored
 
 7. Open your file editor and open your existing `apps.yaml` file:
-    - If you are using the old 'combined AppDaemon/Predbat app installation method' it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
+    - If you are using the 'combined AppDaemon/Predbat app installation method' it's in the directory `/app_configs/46f69597_appdaemon-predbat/apps`,
     or
 
-    - with the old HACS Appdaemon app then Predbat installation method it's in `/config/appdaemon/apps/batpred/config/`
+    - with the original HACS Appdaemon app then Predbat installation method it's in `/config/appdaemon/apps/batpred/config/`
 
-8. Select all the contents of the apps.yaml file and 'copy' (control-C, command-C, etc as appropriate)
+8. Select all the contents of the `apps.yaml` file and 'copy' (control-C, command-C, etc as appropriate)
 
-9. Now open the template `apps.yaml` file that's supplied with the Predbat app and has been created in the directory `/addon_configs/6adb4f0d_predbat`,
-select all the contents of the template apps.yaml file, and paste in the contents of your existing apps.yaml, overwriting the template with your specific configuration
+9. Now open the template `apps.yaml` file that's supplied with the Predbat app and has been created in the directory `/app_configs/6adb4f0d_predbat`,
+select all the contents of the template `apps.yaml` file, and paste in the contents of your existing `apps.yaml`, overwriting the template with your specific configuration
 
 10. Now you are ready to swap from running the AppDaemon or AppDaemon-predbat app to the Predbat app:
     - Go to Settings/Apps

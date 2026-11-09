@@ -15,11 +15,16 @@ It's recommended to watch the [YouTube video on Energy tariff comparison](https:
 
 Keep in mind this is an approximation of costs for the following 24-hour period and the reality could be different. In particular, car charging costs are unlikely to reflect the true picture as it will only be planned after you plug in.
 Smart tariffs like Octopus Intelligent Go can give you extra cheap car slots, and Octopus Intelligent Flux where Octopus controls the charging/discharging, mean these tariffs cannot be predicted as accurately.
+
+Solar Generation and House Load are by their nature forecast predictions and whilst Predbat tries to allow for the unknown variability in those predictions, the actual generation and house load will vary and so Predbat's plan for that day will in all likelihood be different.
+
+Standing charge is by design not included in the comparison amd nor is there a mechanism to include the standing charge for each tariff in the [comparison configuration](#configuring-the-tariffs-to-compare). In most cases standing charges are usually quite similar across tariffs and will make little difference to the comparison anyway.
+
 When changing tariffs, you should use your judgment, the Predbat Compare data is only a helpful guide.
 
 ## Configuring the tariff's to compare
 
-First, you need to tell Predbat in apps.yaml which tariffs you want to compare, you should list all the tariffs you realistically might want to switch between, including your current tariff to act as a baseline.
+First, you need to tell Predbat in `apps.yaml` which tariffs you want to compare, you should list all the tariffs you realistically might want to switch between, including your current tariff to act as a baseline.
 
 Below is a suggestion of various Octopus tariff combinations (valid October 2025) against region A.
 You will need to change **dno_region** to match your region code if you decide to use this template - see list of [Electricity region codes](https://energy-stats.uk/dno-region-codes-explained/).
@@ -43,7 +48,7 @@ As well as Octopus rate URLs (rates_import_octopus_url/rates_export_octopus_url)
 Octopus integration rates (metric_octopus_import/metric_octopus_export) and Energi Data service rates (metric_energidataservice_import/metric_energidataservice_export).
 
 Each tariff must be given an ID which will be used to create a sensor to track predicted cost over time, the full name is used in the description of that sensor and on the web page.
-The ID can contain alphanumeric characters or underscores; do not use slashes, commas, spaces or other special characters in the ID or predbat will crash when running the compare!
+The ID can contain alphanumeric characters or underscores; do not use slashes, commas, spaces or other special characters in the ID or Predbat will crash when running the compare!
 
 If you do not set an import or export rate for a particular tariff then your existing energy rates will be used.
 
@@ -134,20 +139,28 @@ The metric includes the value of the contents of your battery and iBoost that ha
 
 The predicted cost is also shown, but keep in mind ending the day with an empty battery may be cheaper today but cost more tomorrow.
 
+A tariff whose rates match the ones you are on now is marked **Existing**. The match is made against your underlying tariff, so a saving session,
+free electricity session, Axle event or Intelligent dispatch does not stop your own tariff being recognised, and neither does a
+`rates_import_override`/`rates_export_override` or manual rate override on the live rates.
+
 ![image](images/web-interface-compare-view.png)
 
 ## Comparison sensors
 
-For each tariff a new sensor is created in Home Assistant called **predbat.compare_tariff_id** where **id** is the ID name you entered above in apps.yaml. This sensor will track the cost as its main value and many details about the prediction in its attributes.
+For each tariff a new sensor is created in Home Assistant called **predbat.compare_tariff_id** where **id** is the ID name you entered above in `apps.yaml`. This sensor will track the cost as its main value and many details about the prediction in its attributes.
 
 You can create charts from these sensors to show how the different tariffs compare on a daily basis.
+
+The day-by-day history on the Compare tab is read back from Home Assistant's recorded history of these sensors, so they must be kept by the recorder.
+If you have added a `recorder:` filter that excludes the `predbat` domain, include them again with an `entity_globs` entry of `predbat.compare_tariff_*`
+(see the [recorder example in the FAQ](faq.md#predbat-is-causing-exceed-maximum-size-warning-messages-in-the-home-assistant-core-log)), otherwise the Compare tab will only ever show the most recent run.
 
 ![image](https://github.com/user-attachments/assets/6d5c30f6-822f-4d9c-b4a6-701c0b676c61)
 
 ## Overriding Predbat configuration per tariff
 
-You can override any standard Predbat configuration setting for a specific tariff comparison using the `config:` block.
-This is applied before the scenario is run and is used to model that comparison scenario.
+You can override any standard Predbat configuration setting for a specific tariff comparison using the `config:` block in `apps.yaml`.
+This configuration override is applied before the comparison scenario is run and is used to model that scenario.
 
 For example, to model a tariff combined with a higher minimum SoC target:
 
@@ -164,16 +177,32 @@ For example, to model a tariff combined with a higher minimum SoC target:
 You can model what your costs would look like with a **different battery size, charge rate, or inverter limit** using the hardware override keys.
 These are applied after live inverter data is fetched, so they fully replace the real hardware values for the duration of the comparison scenario.
 
-All four keys are optional and can be combined freely:
+All five keys are optional and can be combined freely:
 
 | Key | Description | Unit |
-|-----|-------------|------|
+| ----- | ------------- | ------ |
 | `override_soc_max_kwh` | Battery usable capacity | kWh |
 | `override_battery_rate_max_charge_kw` | Maximum battery charge rate | kW |
 | `override_battery_rate_max_discharge_kw` | Maximum battery discharge rate | kW |
+| `override_battery_rate_max_export_kw` | Maximum battery discharge rate during export (force export) windows | kW |
 | `override_inverter_limit_kw` | AC inverter output limit | kW |
 
+These values replace the totals Predbat sums across **all** of your inverters, so on a multi-inverter system enter the
+combined figure rather than a single inverter's rating.
+
 When `override_soc_max_kwh` is set the starting SoC is automatically clamped to the new capacity if needed.
+
+Predbat uses a separate rate during export windows, so if you only set `override_battery_rate_max_discharge_kw` then the
+export rate follows it automatically. Set `override_battery_rate_max_export_kw` as well whenever you want the export-window
+rate to differ from the discharge rate in either direction — for example an inverter that exports more slowly than it
+discharges, or an AC-coupled retrofit that exports faster.
+
+Your grid export limit (`export_limit` in `apps.yaml`) is **not** changed by these keys, since the property's grid
+connection does not change when you swap the inverter. If your export is capped by the grid connection rather than by the
+inverter, raising the override rates will not increase the modelled export.
+
+The modelled battery draw is also capped by the inverter limit, so a discharge or export override above the real inverter
+limit has no effect unless you raise `override_inverter_limit_kw` as well.
 
 **Example — evaluating a battery upgrade from 10 kWh to 20 kWh:**
 

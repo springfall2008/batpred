@@ -192,7 +192,7 @@ def payback_row(capital_gbp, annual_saving_gbp, recurring_gbp=0.0):
     return row
 
 
-def build_payback(annual_scenarios, costs, months_included, settings):
+def build_payback(annual_scenarios, costs, months_included, settings, months_requested=12):
     """Return the payback block for a completed run, or a reason it could not be built.
 
     Payback needs a full year. When a month is unavailable the annual totals cover less
@@ -200,10 +200,21 @@ def build_payback(annual_scenarios, costs, months_included, settings):
     correspondingly overstated. Extrapolating a partial year to a full one would invent
     savings for months the tool could not price, so this refuses instead and says which
     it had - matching how the rest of the tool declines to count an unavailable month.
+
+    ``months_requested`` is how many months annual.months actually asked for - 12 when it
+    was left at its default (every caller before this parameter existed passes that,
+    implicitly, via the default). A full-year attempt that came up short is a genuine
+    failure, so it keeps the original "only N of 12 months could be modelled" wording. An
+    explicit subset (``months_requested < 12``) never tried to model the other months at
+    all, so describing it the same way would misreport a deliberate single/few-month run as
+    a defect - it gets its own "deliberately covered" wording instead, naming what this run
+    actually covered rather than what is "missing".
     """
     if not annual_scenarios:
         return {"available": False, "reason": "No month produced a usable result, so there is nothing to pay back."}
     if months_included != 12:
+        if months_requested < 12:
+            return {"available": False, "reason": "Payback needs a full year, but this run deliberately covered {} of 12 month(s).".format(months_included)}
         return {"available": False, "reason": "Payback needs a full year, but only {} of 12 months could be modelled. The missing months are named in the caveats.".format(months_included)}
 
     baseline = annual_scenarios.get("no_pvbat", {}).get("cost_p")

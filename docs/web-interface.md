@@ -38,8 +38,10 @@ The initial view is the Dash view which gives a summary of Predbat's status and 
 ![image](images/web-interface-dash-view.png)
 
 The power flow diagram shows the PV, battery, grid and house, with animated arrows whose speed reflects how much power is flowing.
-A car is also shown if you have set [car_charging_power](car-charging.md#configure-appsyaml-for-your-car-charging) in `apps.yaml` (this is automatic for the supported charger integrations);
-the car charging power is then subtracted from the House figure so that it shows the rest of your household load rather than counting the car twice.
+A car is also shown if you have set [car_charging_power](car-charging.md#configure-appsyaml-for-your-car-charging) in `apps.yaml` (this is automatic for the supported charger integrations).
+If **switch.predbat_car_energy_reported_load** is on (the default) then your charger sits inside the house CT clamp, so the car is drawn as being fed from the House
+and its power is subtracted from the House figure, which then shows the rest of your household load rather than counting the car twice.
+If the switch is off then the charger is outside the clamp and its power was never in your house load reading, so the car is drawn as being fed from the Grid and the House figure is shown as it is read.
 
 The Debug panel provides easy access to a number of files that are useful in diagnosing a problem and are usually required if you raise a [Predbat GitHub issue](https://github.com/springfall2008/batpred/issues):
 
@@ -49,10 +51,9 @@ all the input settings for Predbat and all Predbat's output data including the c
 This debug file enables your setup to be recreated to identify any configuration issues it may have or Predbat bugs to be re-created. Confidential information such as your Solcast API or GECloud API are redacted in the debug file.
 - **Download predbat.log** - provides a link to download the current [Predbat logfile](output-data.md#predbat-logfile) which contains progress and any error messages that occur whilst Predbat is running
 - **Download predbat_plan.html** - provides a link to download the current [Predbat HTML plan](output-data.md#viewing-the-predbat-plan)
-- **History** - a link to download every retained automatically-captured [debug history snapshot](customisation.md#debug-history) as a single `.tgz` archive, the same as `predbat_debug.yaml` above but covering a window of earlier points in time, without needing debug mode to have already been turned on. Individual snapshots for a specific plan time slot can also be downloaded from the **Debug** column on the plan's [History view](#plan-view).
+- **History** - a link to download every retained automatically-captured [debug history snapshot](customisation.md#debug-history) as a single gzip tarball (`predbat_debug_history.tgz.dmp` - open with `tar xzf predbat_debug_history.tgz.dmp`; the `.dmp` keeps browsers from unpacking it on download, which would push it past GitHub's attachment limit), the same as `predbat_debug.yaml` above but covering a window of earlier points in time, without needing debug mode to have already been turned on. Individual snapshots for a specific plan time slot can also be downloaded from the **Debug** column on the plan's [History view](#plan-view).
 
-Note that before you can attach a downloaded apps.yaml or predbat_debug.yaml file to a GitHub issue you must rename the file extension, e.g. to '.txt', so for example `apps.txt` and `predbat_debug.txt`.
-This is because GitHub does not accept .yaml file attachments.
+Note that GitHub does not accept .yaml file attachments. The debug file download arrives already named `predbat_debug.yaml.txt`, so it can be attached to an issue as-is, but a downloaded apps.yaml still needs renaming, e.g. to `apps.txt`, before GitHub will take it.
 
 Underneath the Debug panel is the Power Flow diagram.  The Power Flow gives an 'instantaneous Power' snapshot of your PV generation, Battery charge/discharge, Grid import/export and House consumption using the **power_xx** entities defined in `apps.yaml`.
 
@@ -62,6 +63,23 @@ Note these are a snapshot view of what is happening right now on your inverter a
 Beneath that is the plan textual description panel which gives a brief summary of current battery level, forthcoming import rates, solar generation, planned charging, discharging and export activity.
 
 At the bottom of the view is the Predbat Entities panel which details all the other Predbat output entities, their current state and attributes. Any entity name can be clicked to swap to the [Entities view](#entities-view) for that entity.
+
+### Metrics View
+
+The Metrics view provides a dashboard giving an overview of Predbat internal metrics, including application health, plan status, battery state, energy totals, costs, savings and API status.
+The dashboard auto-refreshes every 30 seconds and contains the following sections:
+
+- **System Health** - shows a set of system health cards including confirming that Predbat is running, the configuration and plan are valid, how long since the last Predbat run, that there are no component errors and the amount of data history that Predbat is using.
+The System Health row includes a **Data Age** card, showing how many days of historical load data (`load_today`) Predbat was able to retrieve from Home Assistant, going back from now. This is a measure of how much history is *available*, not how stale the latest reading is - a higher number generally means better load forecasting, since day-of-week weighted forecasts (the `days_previous` setting) need enough history to match against. The card is only flagged as a warning when the retrieved depth falls short of what your `days_previous` configuration actually needs (shown in the "need Xd" sub-label) - for example, if `days_previous` includes `7`, Predbat needs at least 7 days of history, and a shortfall usually means Home Assistant's recorder purged old data before Predbat could read it, or a load sensor is newly added.
+- **Battery Status** - shows battery SoC doughnut and power meters for current battery charge, discharge, house load, PV, grid import and grid export
+- **Energy Today** - shows total energy today for house load, grid import, grid export and PV generation
+- **Cost & Savings** - shows electricity cost today and yesterday, and savings achieved yesterday from having solar and battery and from using predbat
+- **API & Solar Status** - shows API health (requests, failures and last call) made by Predbat to Axle, Solcast/Forecast.Solar, GivEnergy Cloud, Fox ESS Cloud, Solis Cloud, and Open Meteo (Temperature for LoadML). Data is only shown for components that are active, i.e. if Predbat is not using the GivEnergy Cloud integration, no API call metrics are shown.<BR>
+Solar status shows Solcast API calls (Predbat Solcast direct only) and PV Calibration Scaling (worst day, best day and total)
+- **Control Conflicts** - shows how many inverter settings were changed outside Predbat in the last 24 hours and which controls are being changed repeatedly (sustained controls), with a table of recent changes showing what Predbat set and what the setting now reads
+- **Control Failures** - shows how many charge, export and freeze slots in the last 24 hours (and in total) the battery did not follow Predbat's command, with a table of recent failures - see [control failure data](output-data.md#control-failure-data)
+
+![image](images/web-interface-metrics-view.png)
 
 ### Plan View
 
@@ -76,6 +94,20 @@ The starting battery SoC for this simulation is carried forward from the end of 
 'without Predbat' universe remains self-consistent — i.e. if Predbat had not been running, the battery may have had a different SoC at midnight than it actually did.
 This means the starting SoC shown in the 'Yesterday without Predbat' view can differ significantly from the 'History' view, which reflects what actually happened.
 
+A time slot in the 'History' view where Predbat reported a warning or error is marked with 🚩 next to its state - the state shown is still the one Predbat carried out, and hovering over it names the problem.
+
+A row of day buttons under the view buttons lets you look back over the last week as well as the default 'Yesterday + today' view. The older days are rebuilt once a day from what was recorded (and again when new billing arrives), and only as far back as Home Assistant's history (and your `days_previous` load history) reaches.
+
+If Predbat reads your rates directly from Octopus or a Kraken supplier (EDF, E.ON Next), the 'History' view also shows what you were actually billed:
+
+- A **Billed** column shows what your supplier billed for each slot. Hover over it to see the rate buckets the bill was split into - on Intelligent Octopus Go, for example, Home Low/Standard Rate and EV Low/Standard Rate. The column is shown on every History day, including today's slots; a dash means the supplier hasn't published that half hour yet. Billing usually appears one to two days later, and the view updates as soon as Predbat reads it.
+- A **Diff** column shows the billed amount less Predbat's own Cost for the slot (left blank where Predbat recorded nothing for it, for example while it wasn't running): red when you were billed more than Predbat recorded, green when less. The standing charge is left out of both and shown separately.
+- A summary above the table gives the day's Predbat cost, billed cost and the difference, the import and export kWh Predbat recorded against the meter's, and both standing charges. It says how far the billing reaches and how many half hours before that are still missing (shown as a dash in the table), and only compares the slots that have been billed.
+- A slot with an Octopus saving session, free electricity session, Axle event or a rate you overrode (a manual rate, or a rate override in apps.yaml) is marked with it, and a day that had one gets a dot on its day button - the bill won't show it the way Predbat priced it, so a difference there is expected. These are read from the recorded history of the saving session, free electricity and Axle event entities and of `binary_sensor.predbat_rate_override_import` / `_export`, so every day in the picker is marked. Rate overrides on older days are only marked from when those two sensors started recording.
+- If you have no export meter Predbat reads billing for, the comparison is made on import only (against Predbat's import cost) and the summary says so. If you do and a slot's export billing hasn't arrived yet (export is often published a day after import) or couldn't be read, Billed shows the slot's import charge marked 'import, export not billed yet', with no Diff, and the slot is left out of the summary until its export arrives.
+
+Billing comes from your supplier's half-hourly cost estimate (the same data behind the usage graphs in their app), not the final bill, so expect it to differ from your statement by the odd penny. Predbat's Cost comes from your inverter's readings, so a big difference usually means a meter or reading mismatch - for example a car charger outside the inverter's CT clamp. Users who only get Octopus rates through the Home Assistant Octopus Energy integration, without `octopus_api_key` set in Predbat, don't get billing.
+
 The 'History' view also shows a **Debug** column with a download link on any time slot that has an automatically-captured [debug history snapshot](customisation.md#debug-history) from around that time - useful for grabbing the real Predbat state from the moment something looked wrong, without needing to have had debug mode switched on in advance.
 
 You can easily change Predbat's planned activity for a slot by clicking on the slot time, then selecting Manual Demand, Manual Charge, Manual Export, Manual Freeze Charge or Manual Freeze Export to set the activity.
@@ -84,18 +116,6 @@ If you have previously changed Predbat's planned activity for a slot, choose Cle
 Further details of the columns, what they show, the colour coding, etc can be found in the [Predbat plan card documentation](predbat-plan-card.md#understanding-the-predbat-plan).
 
 You can also [create a Predbat Plan card](predbat-plan-card.md) to show Predbat's plan on your own custom dashboard.
-
-### Entities View
-
-This view enables you to look at the history of any predbat output entity or (input) configuration setting.
-
-Select the entity required to be viewed, the attributes to be charted (defaults to entity state) and the time period of history to view the entity over (but note you may need to [increase HA's purge_keep_days](apps-yaml.md#days_previous) first).
-
-You can select multiple entities and their attributes and Predbat will then display the current entity values, a chart of the selected attribute history, and then a list of prior historical values.
-The example below shows predbat import and export rates charted for the last 7 days:
-
-![image](images/web-interface-entities-view.png)
-![image](images/web-interface-entities-chart.png)
 
 ### Charts View
 
@@ -107,8 +127,9 @@ The chart also shows where charging is planned under the Base and Best scenarios
 - **Cost** - Shows the historic import, export and net total cost incurred for today and the predicted cost for the plan duration under the Base/Base10/Best and Best10 scenarios
 - **Rates** - Shows historic and future import and export rates along with historic hourly and today pence per kWh so you can see where you have earned or spent the most on electricity during today
 - **InDay** - Shows Predbat's predicted house load for today, the actual house load that has occurred so far today, and then Predbat's adjusted house load prediction based on the variance of today's actual load to predicted load
-- **PV** - Shows today's predicted solar generation under the PV, PV10 and PV90 scenarios alongside today's actual solar generation
-- **PV7** - Similar to the PV chart, but shows actual solar generation and forecast for the last 7 days including today
+- **PV** - Shows today's predicted solar power generation under the PV, PV10 and PV90 scenarios alongside today's actual solar power generation
+- **PV7** - Similar to the PV chart, but shows actual solar power generation and forecast for the last 7 days including today
+- **PVAccuracy** - Shows how accurate the PV energy forecast is, comparing cumulative PV forecast energy for today to today's actual cumulative solar energy generation
 - **Load ML** - Shows the correlation between your actual house load and the [Load ML predictions](load-ml.md), charting current prediction, the 1 hour in the future prediction, and the 8 hours future prediction
 - **LoadMLPower** - Similar to the Load ML chart, but also plots actual PV production, predicted PV production and temperature predictions.
 - **MarginalCosts** - Shows the marginal cost of consuming extra electricity at different load levels (1, 2, 4, 8 kWh) across upcoming time windows.
@@ -121,11 +142,135 @@ Example PV chart:
 
 ![image](images/web-interface-pv-chart.png)
 
+### Entities View
+
+This view enables you to look at the history of any Predbat output entity or (input) configuration setting.
+
+Select the entity required to be viewed, the attributes to be charted (defaults to entity state) and the time period of history to view the entity over (but note you may need to [increase HA's purge_keep_days](apps-yaml.md#days_previous) first).
+
+You can select multiple entities and their attributes and Predbat will then display the current entity values, a chart of the selected attribute history, and then a list of prior historical values.
+The example below shows Predbat import and export rates charted for the last 7 days:
+
+![image](images/web-interface-entities-view.png)
+![image](images/web-interface-entities-chart.png)
+
 ### Compare View
 
 The Compare View provides access to Predbat's [Compare Energy Tariff feature](compare.md) which enables you compare what Predbat predicts it would cost you (or you'd gain from export) on different energy tariffs with your predicted load and solar generation.
 
 ![image](images/web-interface-compare-view.png)
+
+### Chat View
+
+The Chat tab gives you a conversational way to ask about your Predbat setup, backed by a large
+language model. That model can be a hosted one reached through
+[OpenRouter](https://openrouter.ai), or one running on your own machine through
+[Ollama](https://ollama.com) or anything else with an OpenAI-compatible API. Until a provider is
+configured the tab is still there, showing a banner offering to open **Settings** rather than
+vanishing without explanation.
+
+A banner across the top of the page is a standing reminder that tool results - including log
+lines and configuration - are sent to whichever provider you have configured, and on to whoever
+serves the model you choose; dismissing it persists in that browser (via `localStorage`) until its
+site data is cleared, not just for the current session. Read the
+[chat component's security note](components.md#security-note-chat) before enabling the feature -
+in particular, the web interface has no login of its own, so anyone who can reach it can use the
+chat and read every saved conversation.
+
+#### Finding your way around
+
+Across the top of the page are a **Settings** button, a **New chat** button, and the title of the
+conversation you are reading. Click the title to drop down the list of your saved conversations,
+newest first, each showing when it was last updated and its running cost; click one to switch to
+it, or the &#10005; beside it to delete it. The pencil next to the title renames the conversation
+you are in. Deleting hides a conversation immediately, but its stored copy is not removed - it
+remains on disk until it ages out after `chat_expiry_days` of inactivity, the same as any
+conversation you have not touched.
+
+Only one reply runs at a time across the whole installation - not just per conversation - so the
+composer locks itself while a reply is in progress, whichever conversation it belongs to, and a
+banner names the conversation that is busy.
+
+If the model wants to change a setting or override the plan, and
+`switch.predbat_chat_confirm_writes` is on (the default), it does not run immediately: a
+confirmation card appears in the transcript showing the tool name and the exact arguments it wants
+to call it with, and the turn waits for you to **Approve** or **Reject** it. Turn the switch off
+if you would rather the agent act without asking first.
+
+#### Settings
+
+**Settings** is where you tell Predbat which AI providers to use. Each one has a name of your
+choosing, a type (`openrouter`, `ollama`, `openai` or `local`), the URL of its endpoint, an API
+key where the provider needs one, and a default model. Choosing a type fills in the endpoint and a
+sensible default model for you, so adding a local Ollama is usually just picking `ollama` and
+saving.
+
+Pointing this at Ollama on another machine needs two things doing first - Ollama has to be told to
+listen on the network, and the URL has to name that machine rather than `localhost`. See
+[Reaching Ollama from Predbat](apps-yaml.md#reaching-ollama-from-predbat).
+
+**Fetch models** asks that endpoint what it serves and turns the model box into a searchable list,
+which works before the provider has been saved - so you can pick a real model while setting it up
+rather than saving blind and finding out afterwards. Only tool-capable models are offered: a model
+that cannot call tools cannot drive the agent at all, and would answer from its own guesswork
+rather than from your plan. If the endpoint cannot be reached the box stays free text and tells
+you why.
+
+**Save to apps.yaml** writes the
+lot into the `chat:` block of your `apps.yaml` and closes the dialog, putting you back on your
+conversation. Predbat watches that file, so a few seconds later it restarts to pick the change up.
+The Chat tab goes quiet for a moment and then reconnects on its own, and any reply that was in
+progress is cut short; a note above the transcript says so, and your conversations are saved and
+will still be there. Save stays greyed out until you actually change something, so
+closing a dialog you only looked at cannot restart Predbat for nothing.
+
+Switching between providers you have already set up is not done here - it is the dropdown next to
+the model box, described below. That writes nothing and restarts nothing.
+
+Your API keys are never sent to this page - a provider shows only whether a key is set, and
+leaving the key box empty when you edit one keeps the key already in the file, so changing a URL
+cannot wipe your credentials. See [AI Chat Agent](apps-yaml.md#ai-chat-agent) for the file format
+if you would rather edit it by hand.
+
+Below the providers are the agent's three permission toggles - **Confirm writes**, **Web search**
+and **HA state access**. They are the same switches as `switch.predbat_chat_confirm_writes`,
+`switch.predbat_chat_web_search` and `switch.predbat_ai_ha_state_enable` under
+[Config](#config-view), not a per-tab copy of them: a change here takes effect everywhere, which
+for HA state access includes the MCP server, and applies the moment you make it rather than
+waiting for the Save button. See the
+[chat component's switch table](components.md#ai-chat-agent-chat) for what each one allows.
+
+#### Choosing a provider and a model
+
+A dropdown at the bottom left names the provider that is answering - and so also names the
+endpoint the model list beside it came from. With more than one provider configured you can
+change it there, and it takes effect at once: nothing is written to `apps.yaml` and Predbat does
+not restart, because every provider is already in the file and which one answers is only a
+preference. Your choice is remembered across restarts. The model list is refetched when you
+switch, since the models on offer belong to the endpoint rather than to Predbat.
+
+A model search box beside it lets you choose a different model for that one
+conversation. Each result shows its price and context window - the price is US dollars per
+million tokens, input then output, so `$2/$10  1000k` means $2 per million tokens in, $10 per
+million out, with a one-million-token context. Models that cost nothing show `free`, and
+OpenRouter's routing models (`openrouter/auto` and similar) show `varies`, because what they cost
+depends on which model they route your request to. Click it and type to filter - OpenRouter offers
+several hundred tool-capable models, so it filters on both id and name rather than being a plain
+dropdown. Your choice is remembered per provider as the starting point for new conversations and
+survives a restart, so setting a provider's `model` in `apps.yaml` is optional; if you do set it,
+it is what new conversations use until you pick something else.
+
+Everything about the model is per provider, including a choice made inside one conversation. A
+model id only means anything to the endpoint serving it, so switching provider does not carry your
+OpenRouter model over to Ollama - it goes back to whatever you last chose on that provider, or to
+its default. If neither is available, the box says **Pick a model to start** rather than naming
+something the endpoint would reject. Switching back restores what you had. If the provider's catalogue cannot
+be fetched, only the configured model is offered.
+
+Beside it, Predbat shows the token usage and cost of the turn that just completed, the
+conversation's context size against the selected model's limit, and the running total cost for
+the whole conversation - the costs come from the provider's own reported pricing for the model in
+use, where it publishes any.
 
 ### Log View
 
@@ -143,7 +288,29 @@ The Download tab gives the ability to download the logfile.
 
 Further details about the Predbat logfile and its location is [described in the output data document](output-data.md#predbat-logfile).
 
-### Config View
+### Settings Menu
+
+The **Settings** menu groups the views for configuring Predbat. Click it to open the list. If `apps.yaml` has an error, a warning sign shows on **Settings** as well as on **Apps**.
+
+#### Apps View
+
+The Apps view allows you to look at your `apps.yaml` configuration and to modify the values within the web browser without having to edit the YAML file directly.
+Click the edit button to change a value, when all the edits are complete hit save to save the `apps.yaml` and Predbat will automatically be restarted with the new configuration.
+
+<img alt="image of Predbat apps view" src="https://github.com/user-attachments/assets/f9aacd17-f25b-45d6-95fe-229431a1f4d6" />
+
+Alongside the edit button, each entry of a list and each setting within it can be removed with the **Delete** button, and new ones created with the
+**Add item** and **Add setting** buttons at the end of each group. This is how you add, change or remove a [tariff to compare](compare.md) without hand-editing
+the YAML - **Add item** against `compare_list` asks for the new tariff as one `setting: value` per line, starting from a template of the required `name` and `id`.
+Deletions and additions are only pending until you hit save, so they can be undone first with the **Undo**, **Remove** and **Discard Changes** buttons.
+
+Predbat validates your `apps.yaml` every time it runs and if there are any configuration issues it displays a count of those errors and highlights the items in error in red:
+
+![image](images/web-interface-apps-yaml-validation-error.png)
+
+Further details of the `apps.yaml` error can be found in the [Predbat Log](#log-view).
+
+#### Config View
 
 The Config view provides a way to see and change all of Predbat's configuration entities in Home Assistant.  For each entity is displayed the name, entity type, the current entity value and Predbat's default value for that entity.
 
@@ -156,39 +323,33 @@ Any entity name can be clicked to swap to the [Entities view](#entities-view) fo
 You can also create a [custom dashboard to see and update Predbat's control entities](output-data.md#creating-a-compact-predbat-control-dashboard);
 and full explanation of Predbat's control entities and what they do can be found in the [customisation documentation](customisation.md).
 
-### Apps View
-
-The Apps view allows you to look at your `apps.yaml` configuration and to modify the values within the web browser without having to edit the YAML file directly.
-Click the edit button to change a value, when all the edits are complete hit save to save the `apps.yaml` and Predbat will automatically be restarted with the new configuration.
-
-<img alt="image of Predbat apps view" src="https://github.com/user-attachments/assets/f9aacd17-f25b-45d6-95fe-229431a1f4d6" />
-
-Predbat validates your `apps.yaml` every time it runs and if there are any configuration issues it displays a count of those errors and highlights the items in error in red:
-
-![image](images/web-interface-apps-yaml-validation-error.png)
-
-Further details of the `apps.yaml` error can be found in the [Predbat Log](#log-view).
-
-### Components View
+#### Components View
 
 The Components View enables you see the current status of the different [Predbat Components](components.md) and the key configuration settings being used by those components.
 
 You can restart individual Predbat components if required.
 
-### Editor View
+#### Editor View
 
-The editor view allows you to edit `apps.yaml` as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
-will be disabled pending a fix.
+The editor view allows you to edit `apps.yaml` as text directly within the web interface. If you make a syntax error then the error will be highlighted and save will be disabled pending a fix.
 
 <img alt="image of Predbat Editor view" src="https://github.com/user-attachments/assets/17383694-2300-4c81-996e-63970671b903" />
 
-### Browse View
+### Advanced Menu
+
+The **Advanced** menu groups the views most users rarely need. Click it to open the list.
+
+#### Discovery
+
+The Discovery view shows the catalogue of inverters, meters and other devices Predbat has discovered. Identifying values are redacted by default; **Show raw values** shows them in full.
+
+#### Browse View
 
 The Browse view gives a simple file system browser to enable you to view any of the configuration, output and code files in the directory that Predbat is installed in.
 
 You can navigate around subfolders and view files, but not make any changes using the Browse view.
 
-### Internals View
+#### Internals View
 
 The Internals view gives a view of Predbat's internal operations.
 
@@ -196,11 +357,17 @@ It gives the hierarchy of threads, and their status; and the Predbat code object
 
 These are intended for debugging and developer activities, in normal use you can ignore this view!
 
-### Metrics View
+#### Kraken API Key
 
-The Metrics view gives a dashboard of Predbat's internal metrics, including application health, plan status, battery state, energy totals, costs, savings and API status.
+The Kraken API key generator creates an API key for an E.ON Next or EDF account, for use with the [Kraken component](components.md#kraken-energy-kraken). E.ON Next customers currently need one, because E.ON Next no longer accepts email/password sign-in for the Kraken API and its website does not offer a key.
 
-The System Health row includes a **Data Age** card, showing how many days of historical load data (`load_today`) Predbat was able to retrieve from Home Assistant, going back from now. This is a measure of how much history is *available*, not how stale the latest reading is - a higher number generally means better load forecasting, since day-of-week weighted forecasts (the `days_previous` setting) need enough history to match against. The card is only flagged as a warning when the retrieved depth falls short of what your `days_previous` configuration actually needs (shown in the "need Xd" sub-label) - for example, if `days_previous` includes `7`, Predbat needs at least 7 days of history, and a shortfall usually means Home Assistant's recorder purged old data before Predbat could read it, or a load sensor is newly added.
+1. Sign in to your E.ON Next (or EDF) online account in a desktop browser, open the developer tools (**F12**) and choose the **Network** tab.
+2. Refresh the page, filter on `graphql`, click one of the requests and copy the value of the **Authorization** request header.
+3. Paste it into the page, choose your supplier and click **Check account**.
+4. If the account has no key, click **Generate key**. If it already has one, the page shows it masked: Kraken never shows an existing key in full, so you can only get one by generating a new key, which **replaces** the old one. Anything else using the old key stops working until you give it the new one, so the page asks you to confirm first.
+5. Copy the key into `secrets.yaml` and set `kraken_auth_method: api_key` and `kraken_key: !secret kraken_key` in `apps.yaml`.
+
+The key is shown once. Predbat sends the token only to your supplier's Kraken API and does not store or log the token or the key.
 
 ### Docs View
 
