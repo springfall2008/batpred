@@ -89,7 +89,7 @@ pred_bat:
   soc_max: 32
 
   # ---- Battery state ----
-  battery_power: 're:(sensor\.solis(_[a-z0-9]{2}_[a-z0-9]{1,6})?_battery_power)'
+  battery_power: 're:(sensor\.solis(_[a-z0-9]{2}_[a-z0-9]{1,6})?_battery_power_net)'
   soc_percent: 're:(sensor\.solis(_[a-z0-9]{2}_[a-z0-9]{1,6})?_battery_soc)'
 
   # ---- RC power control ----
