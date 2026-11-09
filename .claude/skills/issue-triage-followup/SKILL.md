@@ -39,6 +39,7 @@ Same as `/issue-triage` step 2 (including files on a source ticket this one was 
   ```
 
 - Read [tools/debug-journal.md](../../../tools/debug-journal.md) before revising your assessment.
+- If the `mcp__shared-memory__*` tools are available, `search` for `issue:<number>` and the symptom. The original triage may have left a memory of what it established.
 - Re-check `git log`/`git blame` on the relevant area — the fix may have landed on `main` since the original triage.
 - If the new information points at a test module, run it via `tools/triage_test.sh <name> <scratch>/test.log` (never the full suite).
 
@@ -64,6 +65,8 @@ Check the comment history first: if the most recent comment is already a bot com
 Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated follow-up triage review (a maintainer will review before any action is taken), followed by: what was new since the last review, whether the classification/priority/root-cause changed and why (or confirmation nothing changed), the one-line bug statement from step 4 whenever one is restated, newly written, or retracted there — restated as-is if the new evidence didn't bear on it — and any further information request.
 
 Do **not** touch the `BOT_TRIAGED` or `BOT_REVIEW` labels — the daemon manages both.
+
+If the `mcp__shared-memory__*` tools are available and this review changed what is known, `update` the issue's existing memory (found by `issue:<number>`) rather than storing a second one. If none exists, `store` one as `/issue-triage` step 9 describes. The public-safety rules in CLAUDE.md's "Shared team memory" apply.
 
 ## Guardrails
 

@@ -25,6 +25,11 @@ web interface. It shows the per-section record counts, any conflicts, a status f
 and a card per record, with the entity map collapsed behind a toggle and the whole document
 available at the bottom in the same YAML form a debug dump carries.
 
+**The Components page.** To look at one component, click the ⓘ button on its card (or its
+**Discovery** line). The pop-up shows an at-a-glance summary of each device that component
+reported, with the full record folded beneath it. The summary is built from the record's own
+fields, so anything a reporter adds later appears there without a change to the page.
+
 The page shows **what a bug report would contain** by default: everything the components reported,
 with email addresses removed. "Show raw values" (`?raw=1`) switches to the document as reported, email addresses included. The
 raw view is labelled on screen and is **not safe to share**: Predbat's web interface has no

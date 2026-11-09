@@ -28,6 +28,7 @@ A `bug` label can arrive without that statement: the split and evidence gates (`
   ```
 
 - Read [tools/debug-journal.md](../../../tools/debug-journal.md) before forming an implementation approach — it maps common symptoms to modules and records known per-integration behaviour from past investigations. Its entries are dated observations, not current truth — confirm anything you rely on against the working tree.
+- If the `mcp__shared-memory__*` tools are available, `search` for `issue:<issue-number>` and the area you are about to change. A triage memory may record approaches already ruled out. Confirm against the working tree.
 - Read the relevant source area named in the triage comment's root-cause pointer, or that the issue's classification points to.
 - Check `git log`/`git blame` on that area — the triage comment may already cover this, but confirm nothing has changed on `main` since triage ran.
 
@@ -126,7 +127,9 @@ EOF
 )"
 ```
 
-This is the last step on success — there is nothing further to report; the daemon detects the new PR itself.
+If the `mcp__shared-memory__*` tools are available, record the outcome: `update` the issue's memory (found by `issue:<issue-number>`), or `store` one in scope `predbat-devs`. Tag it `repo:batpred`, `issue:<issue-number>`, `pr:<pr-number>` and `status:in-review`. Say what the fix changes and why this approach over the alternatives. The public-safety rules in CLAUDE.md's "Shared team memory" apply.
+
+That is the last step on success — there is nothing further to report; the daemon detects the new PR itself.
 
 ## 8. On failure
 

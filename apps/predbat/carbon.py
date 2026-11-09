@@ -19,7 +19,7 @@ from utils import strptime_aware
 import asyncio
 import sys
 import aiohttp
-from const import TIME_FORMAT_HA
+from const import TIME_FORMAT_HA, CARBON_FETCH_SHORT_HOURS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
@@ -63,7 +63,7 @@ class CarbonAPI(ComponentBase):
         url = f"https://api.carbonintensity.org.uk/regional/intensity/{date_from}/fw48h/postcode/{postcode}"
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url) as response:
                     if response.status == 200:
                         try:
@@ -109,6 +109,12 @@ class CarbonAPI(ComponentBase):
             self.carbon_data_points = collected_data
             self.publish_carbon_data()
             self.log("Carbon API: Successfully fetched {} data points".format(len(collected_data)))
+            # Warn here, once per fetch, when the API itself published short - the plan's per-cycle replication
+            # can't tell that apart from the forecast simply ageing between polls
+            last_to = max(strptime_aware(point["to"], TIME_FORMAT_HA) for point in collected_data)
+            hours_ahead = (last_to - datetime.now(timezone.utc)).total_seconds() / 3600.0
+            if hours_ahead < CARBON_FETCH_SHORT_HOURS:
+                self.log("Warn: Carbon API: Forecast for postcode {} only reaches {:.1f} hours ahead, short of the 48 hours the API normally publishes - the rest of the plan will repeat the previous day".format(postcode, hours_ahead))
 
     def publish_carbon_data(self):
         """

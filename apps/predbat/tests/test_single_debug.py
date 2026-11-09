@@ -64,18 +64,10 @@ def rebuild_battery_value_rates(my_predbat):
         my_predbat.rate_export_min_base = my_predbat.rate_minmax(my_predbat.rate_export_base)[0]
 
 
-def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
-    print("**** Running debug test {} ****\n".format(debug_file))
-    # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
-    # debug_cases regression suite exercise the same code path and produce the same result.
-    re_do_rates = redo
-    reset_load_model = redo
-    reload_octopus_slots = redo
-    load_override = 1.0
-    my_predbat.load_user_config()
-    failed = False
-
-    print("**** Test {} ****".format(test_name))
+def load_debug_dump(my_predbat, debug_file):
+    """
+    Load a debug dump into my_predbat ready to plan from it, resetting the derived state the dump does not carry.
+    """
     reset_inverter(my_predbat)
     # Some derived state is neither saved in the debug yaml (so read_debug_yaml cannot restore it) nor
     # reset by reset_inverter, so inside the full suite it leaks from a previous test and makes the debug
@@ -111,6 +103,21 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     my_predbat.save_restore_dir = "./"
     my_predbat.load_user_config()
     my_predbat.args["threads"] = 0
+
+
+def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
+    print("**** Running debug test {} ****\n".format(debug_file))
+    # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
+    # debug_cases regression suite exercise the same code path and produce the same result.
+    re_do_rates = redo
+    reset_load_model = redo
+    reload_octopus_slots = redo
+    load_override = 1.0
+    my_predbat.load_user_config()
+    failed = False
+
+    print("**** Test {} ****".format(test_name))
+    load_debug_dump(my_predbat, debug_file)
     # my_predbat.fetch_config_options()
 
     # Force off combine export XXX:
@@ -145,7 +152,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.carbon_enable = False
         # my_predbat.metric_battery_value_scaling = 0.50
         # my_predbat.manual_export_times = []
-        # my_predbat.manual_all_times = []
         # my_predbat.manual_charge_times = []
         # my_predbat.manual_demand_times = []
         # my_predbat.manual_freeze_charge_times = []
@@ -308,7 +314,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     )
     my_predbat.log("Final plan soc_min {} final_soc {}".format(soc_min, soc))
 
-    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record, show_scenarios=True)
     filename = "plan_final.html"
     open(filename, "w").write(html_plan)
     filename = "plan_final.json"

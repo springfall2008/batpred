@@ -28,6 +28,7 @@ ROW_DEFAULTS = {
     "rate_step_percent_of_capacity": 0,
     "reserve_above_soc_charges_from_grid": False,
     "charge_window_blocks_discharge": False,
+    "reserve_full_only_above_80": False,
 }
 
 # Row fields the record is not expected to rebuild: the display name, and two fields nothing reads
