@@ -14,7 +14,6 @@ from ha import HAHistory, EntityHistory
 from utils import str2time
 from tests.test_infra import run_async
 
-
 FIVE_MINUTE_ENTRIES_PER_DAY = 1440 // 5
 
 

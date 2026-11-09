@@ -15,6 +15,7 @@ so for half an hour after Octopus withdrew the dispatch. A minute whose half hou
 cycle, and none covers now, goes back to the day rate; one no dispatch has ever covered is left alone. The half
 hours seen covered are saved to storage, so a restart while the feed is still stale does not bring the discount back.
 """
+
 import copy
 import shutil
 import tempfile

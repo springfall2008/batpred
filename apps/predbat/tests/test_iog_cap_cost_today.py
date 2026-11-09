@@ -17,6 +17,7 @@ start is moved up to now every cycle, so the slot had always started, and a disp
 about 44 kWh of car charging that had not happened yet at the peak rate into the day's cost (+1332p at 23:35 on
 the reporter's system, when the car drew 3.4 kWh before midnight).
 """
+
 import copy
 
 from tests.test_octopus_dispatch_hold import STATE_FIELDS, _check, _cycle, _dispatch, _reset

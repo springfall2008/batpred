@@ -61,7 +61,7 @@ repos:
   - id: ruff
     args: [--select=F401,E713,F811,E722,F821,F841,E712,B007,B006, --fix]
 - repo: https://github.com/psf/black
-  rev: 23.11.0
+  rev: 26.10.1
   hooks:
   - id: black
 # - repo: https://github.com/PyCQA/isort

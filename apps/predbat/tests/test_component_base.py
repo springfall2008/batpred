@@ -32,7 +32,6 @@ from solis import SolisAPI
 from teslemetry import TeslemetryAPI
 from wallbox import WallboxAPI
 
-
 # Save original sleep before any patching
 _original_sleep = asyncio.sleep
 

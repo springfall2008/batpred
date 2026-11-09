@@ -714,9 +714,13 @@ def test_parallel_cli_never_writes_to_a_slave():
 
     args = argparse.Namespace(username=None, password=None, region="sunsynk", auth_method="password", serial=None, dump_settings=False, write_test=False, tou_test=True, automatic=False)
     buffer = io.StringIO()
-    with patch("sunsynk._build_sunsynk", return_value=client), patch.object(client, "run", side_effect=_async_true), patch("sunsynk._tou_round_trip", side_effect=fake_round_trip), _clock(
-        client, LONDON.localize(datetime(2026, 10, 18, 9, 5))
-    ), redirect_stdout(buffer):
+    with (
+        patch("sunsynk._build_sunsynk", return_value=client),
+        patch.object(client, "run", side_effect=_async_true),
+        patch("sunsynk._tou_round_trip", side_effect=fake_round_trip),
+        _clock(client, LONDON.localize(datetime(2026, 10, 18, 9, 5))),
+        redirect_stdout(buffer),
+    ):
         run_async_local(run_cli_once(args))
     output = buffer.getvalue()
     if tested != [MASTER]:

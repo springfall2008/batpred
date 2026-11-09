@@ -4939,7 +4939,7 @@ def test_charge_window_stuck_enable_presses_button_once(test_name, ha, inv, my_p
                 ha.dummy_items.pop(key, None)
             else:
                 ha.dummy_items[key] = value
-        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+        inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending = saved_fields
 
     return failed
 
@@ -5083,7 +5083,7 @@ def test_charge_window_unmapped_minute_entity_commits_once(test_name, ha, inv, m
                 ha.dummy_items.pop(key, None)
             else:
                 ha.dummy_items[key] = value
-        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+        inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending = saved_fields
 
     return failed
 
@@ -5453,7 +5453,7 @@ def _save_inverter_fields(inv):
 
 def _restore_inverter_fields(inv, saved):
     """Put back what _save_inverter_fields() copied"""
-    (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.reserve_percent, inv.last_committed, inv.commit_pending) = saved
+    inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.reserve_percent, inv.last_committed, inv.commit_pending = saved
 
 
 def _setup_hm_charge_window(ha, inv, start, end):
