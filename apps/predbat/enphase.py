@@ -27,7 +27,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from const import EXPORT_LIMIT_FREEZE
 from mock_base import MockBase
@@ -849,6 +849,7 @@ class EnphaseAPI(ComponentBase):
                     local[direction][time_key] = value
         await self.publish_schedule_settings_ha(site_id)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a number entity change routed from HA, updating the local schedule model.
 
@@ -871,6 +872,7 @@ class EnphaseAPI(ComponentBase):
                 local[direction]["soc"] = int(float(value))
         await self.publish_schedule_settings_ha(site_id)
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a switch service call routed from HA, updating the local schedule model.
 
@@ -899,6 +901,7 @@ class EnphaseAPI(ComponentBase):
         """Return True when Predbat is in read-only mode and must not write to the account."""
         return self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on"
 
+    @writes
     async def _delete_schedule(self, site_id, schedule_id, context=None):
         """Delete one schedule by id. Returns True on success.
 
@@ -909,6 +912,7 @@ class EnphaseAPI(ComponentBase):
         result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}/delete", family="battery_config", allow_empty=True, context=context)
         return result is not None
 
+    @writes
     async def _prune_sibling_schedules(self, site_id, family_key, details, keep):
         """Delete every schedule in a family except the one Predbat drives, and return the survivors.
 
@@ -958,6 +962,7 @@ class EnphaseAPI(ComponentBase):
             failures[family_key] = True
             self.count_errors += 1
 
+    @writes
     async def _activate_control_mode(self, site_id, family, body, apply_cache, label):
         """Commit a freshly written schedule to the gateway via a batterySettings PUT.
 
@@ -983,6 +988,7 @@ class EnphaseAPI(ComponentBase):
         self._note_schedule_write_result(site_id, family_key, result is not None)
         return result is not None
 
+    @writes
     async def _activate_cfg_mode(self, site_id, family=SCHEDULE_CHARGE):
         """Activate charge-from-grid (CFG) after writing its schedule.
 
@@ -998,6 +1004,7 @@ class EnphaseAPI(ComponentBase):
 
         return await self._activate_control_mode(site_id, family, body, apply_cache, "CFG")
 
+    @writes
     async def _activate_dtg_mode(self, site_id, family=SCHEDULE_EXPORT):
         """Activate discharge-to-grid (DTG) after writing its schedule; see _activate_control_mode."""
 
@@ -1007,6 +1014,7 @@ class EnphaseAPI(ComponentBase):
 
         return await self._activate_control_mode(site_id, family, {"dtgControl": {"enabled": True}}, apply_cache, "DTG")
 
+    @writes
     async def _activate_rbd_mode(self, site_id, family=SCHEDULE_FREEZE):
         """Activate restrict-battery-discharge (RBD) after writing its schedule; see _activate_control_mode."""
 
@@ -1016,6 +1024,7 @@ class EnphaseAPI(ComponentBase):
 
         return await self._activate_control_mode(site_id, family, {"rbdControl": {"enabled": True}}, apply_cache, "RBD")
 
+    @writes
     async def _ensure_charge_from_grid(self, site_id):
         """Accept the one-time ITC disclaimer required before charge-from-grid can be enabled.
 
@@ -1028,6 +1037,7 @@ class EnphaseAPI(ComponentBase):
         self.log(f"Enphase: Accepting ITC disclaimer on site {site_id}")
         await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/batterySettings/acceptDisclaimer/{site_id}", family="battery_config", json_body={"disclaimer-type": "itc"})
 
+    @writes
     async def set_reserve(self, site_id, reserve):
         """Write the battery backup reserve (batteryBackupPercentage) via a profile PUT.
 
@@ -1084,6 +1094,7 @@ class EnphaseAPI(ComponentBase):
             "rbd": {"enabled": export_enabled and export_soc == EXPORT_LIMIT_FREEZE, "start": export_start, "end": export_end, "limit": None},  # encoding-ok
         }
 
+    @writes
     async def _cleanup_family(self, site_id, family_key, target, force_recreate):
         """Delete a family's existing schedule when it must not survive into the write phase.
 
@@ -1120,6 +1131,7 @@ class EnphaseAPI(ComponentBase):
             self._note_schedule_write_result(site_id, family_key, True)
         return True
 
+    @writes
     async def _converge_family(self, site_id, family_key, target, force_activate=False):
         """Write and activate one family to match `target`, if it still needs it after cleanup.
 
@@ -1165,6 +1177,7 @@ class EnphaseAPI(ComponentBase):
             return await activate(site_id)
         return True
 
+    @writes
     async def _converge_reserve(self, site_id, local):
         """Write the reserve via a profile PUT if it differs from the cached cloud value."""
         desired_reserve = int(local.get("reserve", 0))
@@ -1173,6 +1186,7 @@ class EnphaseAPI(ComponentBase):
             return True
         return await self.set_reserve(site_id, desired_reserve) is not None
 
+    @writes
     async def _reconcile_once(self, site_id):
         """Run one read-clean-write pass, converging the cloud to Predbat's desired local model.
 
@@ -1210,6 +1224,7 @@ class EnphaseAPI(ComponentBase):
             ok = False
         return ok
 
+    @writes
     async def apply_battery_schedule(self, site_id):
         """Reconcile the cloud schedule/reserve state to match Predbat's desired local model.
 
@@ -1227,7 +1242,7 @@ class EnphaseAPI(ComponentBase):
             if await self._reconcile_once(site_id):
                 return True
             if attempt < ENPHASE_RECONCILE_MAX_ATTEMPTS - 1:
-                await asyncio.sleep(1 + attempt * random.random() * 3)
+                await self.sleep(1 + attempt * random.random() * 3)
         return False
 
     async def get_battery_status(self, site_id):
@@ -1340,7 +1355,7 @@ class EnphaseAPI(ComponentBase):
 
         async def consume():
             """Subscribe and return the first decodable reading."""
-            async with aiomqtt.Client(
+            async with self.mqtt_client(
                 hostname=boot["aws_iot_endpoint"],
                 port=443,
                 transport="websockets",
@@ -1439,6 +1454,7 @@ class EnphaseAPI(ComponentBase):
         await self._save_cache("site_settings", self.site_settings)
         return self.site_settings[site_id]
 
+    @writes
     async def get_schedules(self, site_id):
         """Fetch and normalise the charge/export/freeze battery schedules for a site.
 
@@ -1829,7 +1845,7 @@ class EnphaseAPI(ComponentBase):
 
     async def request_raw(self, method, url, headers=None, data=None, json_body=None, params=None):
         """Perform one HTTP request, returning (status, json_or_none, text, cookie_dict). Overridden in tests."""
-        async with aiohttp.ClientSession() as session:
+        async with self.http_session() as session:
             async with session.request(method, url, headers=headers, data=data, json=json_body, params=params, timeout=aiohttp.ClientTimeout(total=60)) as response:
                 text = await response.text()
                 cookies = {key: morsel.value for key, morsel in response.cookies.items()}
@@ -1913,7 +1929,7 @@ class EnphaseAPI(ComponentBase):
             except (asyncio.TimeoutError, aiohttp.ClientError) as error:
                 self.log(f"Warn: Enphase: Request error on {path}: {error}")
                 record_api_call("enphase", False, "connection_error")
-                await asyncio.sleep(1 + retry * random.random() * 5)
+                await self.sleep(1 + retry * random.random() * 5)
                 continue
 
             self.requests_today += 1
@@ -1936,7 +1952,7 @@ class EnphaseAPI(ComponentBase):
 
             if status == 429 or status >= 500:
                 record_api_call("enphase", False, "rate_limit" if status == 429 else "server_error")
-                await asyncio.sleep(min(30, (retry + 1) * (2 + random.random() * 3)))
+                await self.sleep(min(30, (retry + 1) * (2 + random.random() * 3)))
                 continue
 
             if status != 200 and not (allow_empty and status == 204):

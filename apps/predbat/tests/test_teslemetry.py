@@ -6,13 +6,14 @@
 """Unit tests for the TeslemetryAPI component (Tesla Powerwall via Teslemetry)."""
 
 import copy
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
-from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE, FORCED_ASSERT_SECONDS, EXPORT_PERMISSION_RECHECK_SECONDS, SIGNAL_BASE_TIER
+from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE, FORCED_ASSERT_SECONDS, EXPORT_PERMISSION_RECHECK_SECONDS, SIGNAL_BASE_TIER, HOLD_STATE_MAX_AGE_SECONDS, HOLD_STATE_REFRESH_SECONDS
 
 
 class FakeStorage:
@@ -74,6 +75,11 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.battery_type = None
         self.powerwall_3 = False
         self._reserve_band_warned = False
+        self._hold_level = None
+        self._hold_topping_up = False
+        self._hold_kind = None
+        self._hold_dirty = False
+        self._hold_saved_at = None
         self.args_set = {}
         # OAuth state (production sets these via _init_oauth in initialize, which the mock bypasses).
         self.auth_method = "api_key"
@@ -1170,17 +1176,26 @@ def test_teslemetry_tbc_charging_below_target_enables_grid_at_the_real_reserve()
     assert api.evaluate_schedule_tbc(3 * 60, 40) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 15, "mode": "autonomous"}
 
 
-def test_teslemetry_tbc_at_target_holds_with_reserve_100_and_no_grid():
-    """At target it holds: reserve 100 stops discharge, grid charging off stops it importing to reach it."""
+def test_teslemetry_tbc_at_target_holds_on_the_target_with_no_grid():
+    """At target it holds on the reserve with grid charging off. Below the 81-99 band the target itself is
+    the reserve; it is never 100, which the Powerwall would fill from the grid whatever the grid flag says
+    (GH#6046)."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 70, "enable": 1})
+    assert api.evaluate_schedule_tbc(3 * 60, 70) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 70, "mode": "autonomous"}
+
+
+def test_teslemetry_tbc_at_target_in_the_band_holds_at_80():
+    """A hold at a charge target in 81-96 uses 80, the highest reserve Tesla honours below the band, not 100 (GH#6046)."""
     api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1})
-    assert api.evaluate_schedule_tbc(3 * 60, 90) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 100, "mode": "autonomous"}
+    assert api.evaluate_schedule_tbc(3 * 60, 90) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 80, "mode": "autonomous"}
 
 
 def test_teslemetry_tbc_hold_deadband_survives_a_one_percent_sag():
-    """A freeze charge whose SOC has sagged 1% below the written target still holds, rather than importing."""
+    """A freeze charge whose SOC has sagged 1% below the written target still holds, rather than importing; two
+    points below is a real shortfall, and charging resumes. Pins both sides of SIGNAL_HOLD_DEADBAND_PERCENT."""
     api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 85, "enable": 1})
     assert api.evaluate_schedule_tbc(3 * 60, 84)["grid_charging"] is False
-    assert api.evaluate_schedule_tbc(3 * 60, 84)["reserve"] == 100
+    assert api.evaluate_schedule_tbc(3 * 60, 84)["reserve"] == 80
     # Two points below the target is a real shortfall, not sensor sag, so charging resumes.
     assert api.evaluate_schedule_tbc(3 * 60, 83)["grid_charging"] is True
 
@@ -1270,15 +1285,60 @@ def test_teslemetry_tbc_charge_wins_over_an_overlapping_export():
     assert api.evaluate_schedule_tbc(3 * 60, 40)["grid_charging"] is True
 
 
-def test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off():
-    """Predbat's own reserve hold (soc+1) lands in the band Tesla rejects and must round UP, not down.
-
-    execute.py writes adjust_reserve(soc+1) under set_reserve_hold, so a battery at 85% asks for 86.
-    Snapping that to 80 would let it discharge 6% during a hold; 100 actually holds, and grid
-    charging off is what stops it importing to reach 100.
-    """
+def test_teslemetry_tbc_reserve_hold_in_the_band_holds_at_80_with_grid_off():
+    """A hold request in 81-96 is held at 80 with grid charging off, so the battery may drift down for house
+    load rather than fill to 100 from the grid (GH#6046)."""
     api = _tbc_api(reserve=86)
-    assert api.evaluate_schedule_tbc(12 * 60, 85) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 100, "mode": "self_consumption"}
+    assert api.evaluate_schedule_tbc(12 * 60, 86) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 80, "mode": "self_consumption"}
+
+
+def test_teslemetry_tbc_reserve_hold_tops_up_once_soc_falls_3_below_the_hold():
+    """Once the SOC falls more than SIGNAL_HOLD_TOP_UP_PERCENT below the hold level, reserve 100 with grid
+    charging on tops it back up."""
+    api = _tbc_api(reserve=86)
+    assert api.evaluate_schedule_tbc(12 * 60, 86)["reserve"] == 80
+    assert api.evaluate_schedule_tbc(12 * 60, 83.1)["reserve"] == 80
+    assert api.evaluate_schedule_tbc(12 * 60, 82.9) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 100, "mode": "self_consumption"}
+
+
+def test_teslemetry_tbc_reserve_hold_top_up_stops_at_the_hold_level():
+    """A top-up runs until the SOC is back at the hold level and no further, then returns to 80 with grid
+    charging off - hysteresis, so it does not flip between 80 and 100 just below the trigger."""
+    api = _tbc_api(reserve=86)
+    api.evaluate_schedule_tbc(12 * 60, 86)
+    assert api.evaluate_schedule_tbc(12 * 60, 82.5)["reserve"] == 100
+    assert api.evaluate_schedule_tbc(12 * 60, 83.5)["reserve"] == 100
+    assert api.evaluate_schedule_tbc(12 * 60, 85.9)["reserve"] == 100
+    assert api.evaluate_schedule_tbc(12 * 60, 86.0) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 80, "mode": "self_consumption"}
+
+
+def test_teslemetry_tbc_reserve_hold_level_survives_the_request_drifting_down():
+    """execute rewrites a freeze's reserve as the live SOC each cycle, so the request drifts down with the
+    battery. The hold level is the highest request since the hold began, or the top-up would never come."""
+    api = _tbc_api(reserve=86)
+    api.evaluate_schedule_tbc(12 * 60, 86.4)
+    for request, soc in ((85, 85.6), (84, 84.4), (83, 83.2)):
+        api.schedule["reserve"] = request
+        assert api.evaluate_schedule_tbc(12 * 60, soc)["reserve"] == 80
+    api.schedule["reserve"] = 82
+    assert api.evaluate_schedule_tbc(12 * 60, 82.9)["reserve"] == 100
+
+
+def test_teslemetry_tbc_reserve_hold_level_resets_once_the_request_leaves_the_band():
+    """A request of 80 or below ends the hold, so the next hold in the band starts from its own level."""
+    api = _tbc_api(reserve=90)
+    api.evaluate_schedule_tbc(12 * 60, 90)
+    api.schedule["reserve"] = 4
+    assert api.evaluate_schedule_tbc(12 * 60, 88)["reserve"] == 4
+    api.schedule["reserve"] = 84
+    assert api.evaluate_schedule_tbc(12 * 60, 82)["reserve"] == 80
+
+
+def test_teslemetry_tbc_reserve_hold_near_full_uses_100_with_grid_on():
+    """A hold request of SIGNAL_HOLD_ROUND_UP_PERCENT or more uses 100: the top-up to full is at most a few
+    percent, the smaller deviation from the plan. Grid charging is left on, as a 100% reserve imports anyway."""
+    api = _tbc_api(reserve=97)
+    assert api.evaluate_schedule_tbc(12 * 60, 97) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 100, "mode": "self_consumption"}
 
 
 def test_teslemetry_tbc_reserve_band_warning_logs_once():
@@ -1308,12 +1368,227 @@ def test_teslemetry_tbc_reserve_of_exactly_100_is_not_reported_as_the_rejected_b
     assert "86%" in warnings[0]
 
 
-def test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window():
-    """A hold reserve inside a charge window must not import to fill to 100 against the 0p band."""
-    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, reserve=86)
+def test_teslemetry_tbc_reserve_hold_in_a_charge_window_charges_with_grid_on():
+    """A band reserve inside a charge window never turns the charge off: the charge itself needs grid
+    charging on, and the reserve follows the same hold rule (here a top-up, the SOC being far below it)."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 95, "enable": 1}, reserve=86)
     state = api.evaluate_schedule_tbc(3 * 60, 40)
     assert state["reserve"] == 100
-    assert state["grid_charging"] is False
+    assert state["grid_charging"] is True
+
+
+def test_teslemetry_tbc_reserve_band_warning_says_which_way():
+    """The one-shot band diagnostic says what was done with the request instead, not only that it was rejected."""
+    api = _tbc_api(reserve=86)
+    api.evaluate_schedule_tbc(12 * 60, 86)
+    warnings = [msg for msg in api.log_messages if "81-99 band" in msg]
+    assert len(warnings) == 1
+    assert "80%" in warnings[0] and "86%" in warnings[0] and "3%" in warnings[0]
+
+
+HOLD_T0 = datetime(2026, 11, 8, 3, 0, tzinfo=timezone.utc)
+
+
+def _hold_api(storage, reserve=86, now=HOLD_T0):
+    """A TBC mock with a shared storage and a settable wall clock, for the hold-state persistence tests."""
+    api = _tbc_api(reserve=reserve)
+    api.mock_storage = storage
+    api.clock_now = now
+    api._wall_clock = lambda: api.clock_now
+    return api
+
+
+def test_teslemetry_tbc_hold_level_resets_when_the_kind_of_hold_changes():
+    """A freeze's hold level must not carry into a hold at a charge target: a freeze at 90 followed directly by
+    a hold at target 85 holds near 85, rather than topping up towards the old 90."""
+    api = _tbc_api(reserve=90)
+    api.evaluate_schedule_tbc(12 * 60, 90)
+    api.schedule["reserve"] = 4
+    api.schedule["charge"] = {"start_time": "12:00:00", "end_time": "14:00:00", "soc": 85, "enable": 1}
+    assert api.evaluate_schedule_tbc(12 * 60 + 5, 88)["reserve"] == 80
+    # Within 3% of the new 85 hold, though more than 3% below the freeze's old 90
+    assert api.evaluate_schedule_tbc(12 * 60 + 5, 86.5)["reserve"] == 80
+
+
+def test_teslemetry_tbc_hold_level_resets_when_the_charge_target_changes():
+    """A hold at one charge target does not lend its level to a hold at a lower one."""
+    api = _tbc_api(charge={"start_time": "12:00:00", "end_time": "14:00:00", "soc": 92, "enable": 1})
+    api.evaluate_schedule_tbc(12 * 60 + 5, 92)
+    api.schedule["charge"]["soc"] = 85
+    assert api.evaluate_schedule_tbc(12 * 60 + 5, 85)["reserve"] == 80
+    # Still a hold (within the 1% deadband of 85) and within 3% of it, though far below the old 92
+    assert api.evaluate_schedule_tbc(12 * 60 + 5, 84.5)["reserve"] == 80
+
+
+def test_teslemetry_tbc_hold_survives_a_restart_mid_drift():
+    """A restart keeps the hold level: a freeze that began at 86 and has drifted to 84 still tops up below 83,
+    not 3% below wherever the battery was when the process came back."""
+    storage = FakeStorage()
+    api = _hold_api(storage)
+    api.evaluate_schedule_tbc(12 * 60, 86)
+    api.schedule["reserve"] = 84
+    api.evaluate_schedule_tbc(12 * 60, 84.2)
+    run_async(api.save_hold_state())
+    restarted = _hold_api(storage, reserve=84, now=HOLD_T0 + timedelta(minutes=5))
+    run_async(restarted.load_schedule())
+    restarted.schedule["reserve"] = 82
+    assert restarted.evaluate_schedule_tbc(12 * 60, 82.9)["reserve"] == 100
+
+
+def test_teslemetry_tbc_hold_survives_a_restart_mid_top_up():
+    """A restart part way through a top-up carries on topping up to the hold level."""
+    storage = FakeStorage()
+    api = _hold_api(storage)
+    api.evaluate_schedule_tbc(12 * 60, 86)
+    api.schedule["reserve"] = 82
+    assert api.evaluate_schedule_tbc(12 * 60, 82.5)["reserve"] == 100
+    run_async(api.save_hold_state())
+    restarted = _hold_api(storage, reserve=83, now=HOLD_T0 + timedelta(minutes=5))
+    run_async(restarted.load_schedule())
+    assert restarted.evaluate_schedule_tbc(12 * 60, 83.5)["reserve"] == 100
+    assert restarted.evaluate_schedule_tbc(12 * 60, 86.0)["reserve"] == 80
+
+
+def test_teslemetry_tbc_hold_state_older_than_30_minutes_is_ignored():
+    """Saved hold state more than HOLD_STATE_MAX_AGE_SECONDS old is not restored: the hold starts afresh from the
+    first request after the restart."""
+    storage = FakeStorage()
+    api = _hold_api(storage)
+    api.evaluate_schedule_tbc(12 * 60, 86)
+    run_async(api.save_hold_state())
+    restarted = _hold_api(storage, reserve=84, now=HOLD_T0 + timedelta(seconds=HOLD_STATE_MAX_AGE_SECONDS + 60))
+    run_async(restarted.load_schedule())
+    assert restarted.evaluate_schedule_tbc(12 * 60, 82.9)["reserve"] == 80
+
+
+def test_teslemetry_tbc_hold_state_from_another_kind_of_hold_is_not_used():
+    """Restored state applies only to the same kind of hold: a saved freeze does not set the level of a hold at a
+    charge target after the restart."""
+    storage = FakeStorage()
+    api = _hold_api(storage, reserve=90)
+    api.evaluate_schedule_tbc(12 * 60, 90)
+    run_async(api.save_hold_state())
+    restarted = _hold_api(storage, reserve=4, now=HOLD_T0 + timedelta(minutes=5))
+    run_async(restarted.load_schedule())
+    restarted.schedule["charge"] = {"start_time": "12:00:00", "end_time": "14:00:00", "soc": 85, "enable": 1}
+    assert restarted.evaluate_schedule_tbc(12 * 60 + 5, 86.5)["reserve"] == 80
+
+
+def test_teslemetry_tbc_hold_state_is_saved_on_change_and_refreshed_while_held():
+    """The state is saved when it changes, and re-saved every HOLD_STATE_REFRESH_SECONDS while a hold runs, so a
+    long steady hold is still fresh when a restart comes; nothing is written while there is no hold to keep."""
+    storage = FakeStorage()
+    api = _hold_api(storage, reserve=4)
+    api.evaluate_schedule_tbc(12 * 60, 50)
+    run_async(api.save_hold_state())
+    assert ("teslemetry", "hold") not in storage.saved
+    api.schedule["reserve"] = 86
+    api.evaluate_schedule_tbc(12 * 60, 86)
+    run_async(api.save_hold_state())
+    first = storage.saved[("teslemetry", "hold")]
+    assert first["level"] == 86 and first["kind"] == "idle" and first["topping_up"] is False
+    api.clock_now = HOLD_T0 + timedelta(seconds=HOLD_STATE_REFRESH_SECONDS - 60)
+    api.evaluate_schedule_tbc(12 * 60, 85.5)
+    run_async(api.save_hold_state())
+    assert storage.saved[("teslemetry", "hold")] == first
+    api.clock_now = HOLD_T0 + timedelta(seconds=HOLD_STATE_REFRESH_SECONDS + 60)
+    api.evaluate_schedule_tbc(12 * 60, 85.2)
+    run_async(api.save_hold_state())
+    assert storage.saved[("teslemetry", "hold")]["saved_at"] == (HOLD_T0 + timedelta(seconds=HOLD_STATE_REFRESH_SECONDS + 60)).timestamp()
+
+
+def test_teslemetry_tbc_hold_state_is_cleared_when_the_hold_ends():
+    """When the hold ends the saved state is cleared, so a restart afterwards cannot bring the old level back."""
+    storage = FakeStorage()
+    api = _hold_api(storage)
+    api.evaluate_schedule_tbc(12 * 60, 86)
+    run_async(api.save_hold_state())
+    api.schedule["reserve"] = 4
+    api.evaluate_schedule_tbc(12 * 60, 85)
+    run_async(api.save_hold_state())
+    assert not storage.saved[("teslemetry", "hold")]
+    restarted = _hold_api(storage, reserve=84, now=HOLD_T0 + timedelta(minutes=5))
+    run_async(restarted.load_schedule())
+    assert restarted.evaluate_schedule_tbc(12 * 60, 82.9)["reserve"] == 80
+
+
+def test_teslemetry_tbc_hold_restarts_when_the_control_state_changes():
+    """A change of control state ends the hold, even when the request stays in the band. Here set_reserve_min is
+    85, so execute's reset after a freeze at 90 still asks for 85; once the charge is over the hold is 85's, not
+    the freeze's 90."""
+    W = {"start_time": "12:00:00", "end_time": "13:00:00", "soc": 95, "enable": 1}
+    api = _tbc_api(reserve=90)
+    api.evaluate_schedule_tbc(11 * 60, 90)
+    api.schedule["reserve"] = 85
+    api.schedule["charge"] = dict(W)
+    api.evaluate_schedule_tbc(12 * 60 + 5, 70)
+    api.schedule["charge"]["enable"] = 0
+    assert api.evaluate_schedule_tbc(13 * 60 + 5, 86.5)["reserve"] == 80
+
+
+def test_teslemetry_tbc_hold_restarts_after_an_export():
+    """An export between two holds in the band ends the first: the second is held near its own level."""
+    api = _tbc_api(reserve=90)
+    api.evaluate_schedule_tbc(11 * 60, 90)
+    api.schedule["reserve"] = 85
+    api.schedule["discharge"] = {"start_time": "12:00:00", "end_time": "13:00:00", "soc": 20, "enable": 1}
+    api.evaluate_schedule_tbc(12 * 60 + 5, 88)
+    api.schedule["discharge"]["enable"] = 0
+    assert api.evaluate_schedule_tbc(13 * 60 + 5, 86.5)["reserve"] == 80
+
+
+def test_teslemetry_real_rate_charge_window_ends_the_hold():
+    """The real-rate charge window sends its target as asked rather than through the hold rule, so it ends the
+    hold itself: a later hold at 88 is held near 88, not topped up towards the freeze's 90 before it."""
+    api = _tbc_api(reserve=90)
+    api.tbc_control = False
+    api.evaluate_schedule(11 * 60, 90)
+    api.schedule["charge"] = {"start_time": "12:00:00", "end_time": "13:00:00", "soc": 95, "enable": 1}
+    api.evaluate_schedule(12 * 60 + 5, 70)
+    api.schedule["charge"]["enable"] = 0
+    api.schedule["reserve"] = 88
+    assert api.evaluate_schedule(13 * 60 + 5, 86.5)["reserve"] == 80
+
+
+def test_teslemetry_real_rate_export_window_ends_the_hold():
+    """The real-rate export window ends the hold the same way."""
+    api = _tbc_api(reserve=90)
+    api.tbc_control = False
+    api.evaluate_schedule(11 * 60, 90)
+    api.schedule["discharge"] = {"start_time": "12:00:00", "end_time": "13:00:00", "soc": 20, "enable": 1}
+    api.evaluate_schedule(12 * 60 + 5, 88)
+    api.schedule["discharge"]["enable"] = 0
+    api.schedule["reserve"] = 88
+    assert api.evaluate_schedule(13 * 60 + 5, 86.5)["reserve"] == 80
+
+
+def test_teslemetry_real_rate_charge_window_clears_the_saved_hold():
+    """Ending the hold in a real-rate window also clears the saved copy, so a restart cannot bring it back."""
+    storage = FakeStorage()
+    api = _hold_api(storage, reserve=90)
+    api.tbc_control = False
+    api.evaluate_schedule(11 * 60, 90)
+    run_async(api.save_hold_state())
+    api.schedule["charge"] = {"start_time": "12:00:00", "end_time": "13:00:00", "soc": 95, "enable": 1}
+    api.evaluate_schedule(12 * 60 + 5, 70)
+    run_async(api.save_hold_state())
+    assert not storage.saved[("teslemetry", "hold")]
+
+
+def test_teslemetry_real_rate_reserve_hold_in_the_band_uses_the_same_rule():
+    """The real-rate path holds a band reserve the same way, never leaving the device to snap it."""
+    api = _tbc_api(reserve=86)
+    api.tbc_control = False
+    assert api.evaluate_schedule(12 * 60, 86)["reserve"] == 80
+    assert api.evaluate_schedule(12 * 60, 82.9)["reserve"] == 100
+
+
+def test_teslemetry_real_rate_charge_target_in_the_band_is_not_rounded_down():
+    """A real-rate charge window sends its target as the reserve. That is a charge, not a hold, and must not
+    be rounded down to 80, which would stop the charge short."""
+    api = _tbc_api(charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1})
+    api.tbc_control = False
+    assert api.evaluate_schedule(3 * 60, 50)["reserve"] == 90
 
 
 def test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band():
@@ -3450,7 +3725,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_signal_tariff_without_windows_is_flat_base()
     test_teslemetry_charge_window_accessor()
     test_teslemetry_tbc_charging_below_target_enables_grid_at_the_real_reserve()
-    test_teslemetry_tbc_at_target_holds_with_reserve_100_and_no_grid()
+    test_teslemetry_tbc_at_target_holds_on_the_target_with_no_grid()
+    test_teslemetry_tbc_at_target_in_the_band_holds_at_80()
     test_teslemetry_tbc_hold_deadband_survives_a_one_percent_sag()
     test_teslemetry_tbc_export_uses_the_real_reserve_not_the_export_target()
     test_teslemetry_tbc_export_stops_at_the_target()
@@ -3460,10 +3736,31 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_tbc_midnight_recommit_minute_stays_autonomous()
     test_teslemetry_tbc_mode_matches_the_pushed_tariff()
     test_teslemetry_tbc_charge_wins_over_an_overlapping_export()
-    test_teslemetry_tbc_reserve_hold_above_80_becomes_100_with_grid_off()
+    test_teslemetry_tbc_reserve_hold_in_the_band_holds_at_80_with_grid_off()
+    test_teslemetry_tbc_reserve_hold_tops_up_once_soc_falls_3_below_the_hold()
+    test_teslemetry_tbc_reserve_hold_top_up_stops_at_the_hold_level()
+    test_teslemetry_tbc_reserve_hold_level_survives_the_request_drifting_down()
+    test_teslemetry_tbc_reserve_hold_level_resets_once_the_request_leaves_the_band()
+    test_teslemetry_tbc_reserve_hold_near_full_uses_100_with_grid_on()
     test_teslemetry_tbc_reserve_band_warning_logs_once()
     test_teslemetry_tbc_reserve_of_exactly_100_is_not_reported_as_the_rejected_band()
-    test_teslemetry_tbc_reserve_hold_suppresses_grid_charging_inside_a_charge_window()
+    test_teslemetry_tbc_reserve_hold_in_a_charge_window_charges_with_grid_on()
+    test_teslemetry_tbc_reserve_band_warning_says_which_way()
+    test_teslemetry_real_rate_reserve_hold_in_the_band_uses_the_same_rule()
+    test_teslemetry_real_rate_charge_target_in_the_band_is_not_rounded_down()
+    test_teslemetry_tbc_hold_level_resets_when_the_kind_of_hold_changes()
+    test_teslemetry_tbc_hold_level_resets_when_the_charge_target_changes()
+    test_teslemetry_tbc_hold_survives_a_restart_mid_drift()
+    test_teslemetry_tbc_hold_survives_a_restart_mid_top_up()
+    test_teslemetry_tbc_hold_state_older_than_30_minutes_is_ignored()
+    test_teslemetry_tbc_hold_state_from_another_kind_of_hold_is_not_used()
+    test_teslemetry_tbc_hold_state_is_saved_on_change_and_refreshed_while_held()
+    test_teslemetry_tbc_hold_state_is_cleared_when_the_hold_ends()
+    test_teslemetry_tbc_hold_restarts_when_the_control_state_changes()
+    test_teslemetry_tbc_hold_restarts_after_an_export()
+    test_teslemetry_real_rate_charge_window_ends_the_hold()
+    test_teslemetry_real_rate_export_window_ends_the_hold()
+    test_teslemetry_real_rate_charge_window_clears_the_saved_hold()
     test_teslemetry_tbc_never_writes_a_reserve_in_the_invalid_band()
     test_teslemetry_day_runs_groups_replicated_days()
     test_teslemetry_day_runs_all_identical_single_run()

@@ -1449,6 +1449,8 @@ approval was lower than your maximum inverter power (check your install informat
 
 If you do not set an export limit then it is assumed to be unlimited (and thus limited by your inverter or PV system).
 
+With **givtcp_rest**, **ge_cloud** and some other integrations, Predbat reads the limit from the inverter itself when you do not set one - see the section for your integration.
+
 ### **battery_export_permitted**
 
 One per inverter (optional), an entity whose state is `on` or `off`.
@@ -1478,6 +1480,8 @@ When set in Watts, overrides the maximum charge/discharge rate settings used whe
 This can be used if you need Predbat to cap your inverter battery rate (e.g. due to grid import/export limitations or to charge overnight at a slower rate to reduce inverter/battery heating).
 By default Predbat will normally configure all timed charges or discharges to be at the inverter's maximum rate and these options enable you to reduce that maximum rate.
 [Low rate charging](customisation.md#inverter-control-options) could also be used to slow down Predbat's charge rate whilst still meeting the battery plan.
+
+Some cloud integrations set these for you from the inverter's own reported ratings: SolisCloud and Sigenergy Cloud in automatic mode both set `inverter_limit_charge` and `inverter_limit_discharge` separately, with `battery_rate_max` as the larger of the two, so a battery that discharges faster than it charges is planned at both rates. A value you set in `apps.yaml` takes precedence.
 
 With more than one inverter, these rates also decide how the fleet's SoC target is shared between the inverters. Each inverter is given a share of the energy to charge in proportion to its charge rate, or of the energy to discharge in proportion to its discharge rate, so the inverters finish together.
 An inverter that is full (or at its reserve) is held there and the others take its share. Forced exports are shared by **inverter_limit_export** instead, see below.
@@ -1827,6 +1831,15 @@ repointing them at a sensor it has only just created would throw that history aw
 planning with no load model until the days build back up. This applies per setting, so naming one of
 the four by hand leaves the other three auto-configured. Everything else Predbat auto-configures here
 is read as a current value rather than as history, and anything you set for those is still overridden.
+
+**export_limit** is also left to you if you set it. Predbat publishes the inverter's own export limit
+as `sensor.predbat_givtcp_<n>_export_limit` (from GivTCP's `Export_Limit`, which is 0 for a
+zero-export site) and points **export_limit** at it only when `apps.yaml` does not set one. If your
+`apps.yaml` value differs from what the inverter reports, the log says so once - delete the
+`export_limit` line to use the inverter's figure instead. GivTCP v2 and three-phase inverters do not
+report an export limit, so for those keep setting it by hand. If only some of your inverters report
+one, Predbat leaves **export_limit** entirely to `apps.yaml` (deleting it would make every inverter
+unlimited); the log still notes any inverter whose own figure differs, so you can correct its entry.
 
 Predbat also publishes the battery flows and the lifetime counters -
 `sensor.predbat_givtcp_<n>_battery_{charge,discharge}_today` and
