@@ -48,6 +48,8 @@ from sunsynk_const import (
     SUNSYNK_TELEMETRY,
     SUNSYNK_ENERGY,
     SUNSYNK_TELEMETRY_NEGATE,
+    SUNSYNK_GRID_POWER_CT_FIELD,
+    SUNSYNK_GRID_POWER_FALLBACK_FIELD,
     SUNSYNK_CAPACITY_AH_FIELD,
     SUNSYNK_CHARGE_VOLT_FIELD,
     SUNSYNK_CHARGE_CURRENT_FIELDS,
@@ -585,6 +587,30 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 value = -value
             # Preserve integers as integers so SOC publishes as 62 rather than 62.0.
             values[leaf] = int(value) if float(value).is_integer() and leaf in ("soc",) else value
+
+        # grid_power reads the external CT (limiterTotalPower, GH#6068), not pac: on
+        # export pac is the inverter's own grid-port reading and overstates export by
+        # the grid-side house load. Fall back to pac when the CT field is missing, or
+        # reads 0 while pac is live - a site with no CT/limiter fitted. The telemetry
+        # loop above already mapped grid_power from the CT, so only those two cases
+        # need fixing here; both fields share the sign convention (negative on export),
+        # so the negation applies to whichever one sourced the value.
+        grid_payload = responses.get("grid") or {}
+        ct_raw = grid_payload.get(SUNSYNK_GRID_POWER_CT_FIELD)
+        pac_raw = grid_payload.get(SUNSYNK_GRID_POWER_FALLBACK_FIELD)
+        pac = self._as_float(pac_raw) if pac_raw is not None else None
+        if pac is not None and (ct_raw is None or (self._as_float(ct_raw) == 0 and pac != 0)):
+            values["grid_power"] = -pac
+            if ct_raw is not None:
+                # A zero CT reading is ambiguous: no CT/limiter fitted, or the net
+                # flow is zero at this poll because the grid-side load absorbs the
+                # port export. Say so once rather than silently reintroducing the
+                # over-read for that poll.
+                self._warn_parallel_once(
+                    ("grid_ct_zero_fallback", sn),
+                    f"Warn: Sunsynk {sn} limiterTotalPower reads 0 while pac is live, so grid_power falls back to pac - either no CT/limiter is fitted, or the net flow is zero at this poll",
+                )
+
         # Ratings inputs are kept raw on device_values so the derivations below can read them.
         battery = responses.get("battery") or {}
         for field in (SUNSYNK_CAPACITY_AH_FIELD, SUNSYNK_CHARGE_VOLT_FIELD, SUNSYNK_BMS_CURRENT_FIELD) + SUNSYNK_CHARGE_CURRENT_FIELDS + SUNSYNK_BMS_LINK_FIELDS:
@@ -723,10 +749,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
     def group_values(self, sn):
         """Return the telemetry Predbat sees for inverter sn - for a group master, the whole group's.
 
-        SoC, voltage and temperature are the master's (the slave mirrors them); grid, PV and load
-        are summed, a value one unit did not report being withheld rather than published as the
-        master's share. Battery power is the whole bank from the master's BMS, -bmsCurrent x
-        voltage: the master's own power is only its share, and the slave's is garbage.
+        SoC, voltage and temperature are the master's (the slave mirrors them); PV and load
+        are summed, a value one unit did not report being withheld rather than published as
+        the master's share. Grid is the master's site-wide CT reading (GH#6068), not a
+        per-unit share, so it is taken from the master, never summed. Battery power is the
+        whole bank from the master's BMS, -bmsCurrent x voltage: the master's own power is
+        only its share, and the slave's is garbage.
         """
         values = self.device_values.get(sn, {})
         members = self._group_members(sn)

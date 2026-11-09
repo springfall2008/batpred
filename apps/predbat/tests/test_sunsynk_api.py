@@ -670,6 +670,160 @@ def test_grid_power_sign_matches_the_live_export_sample():
     assert not failed, "test_grid_power_sign_matches_the_live_export_sample"
 
 
+def test_grid_power_uses_ct_limiter_on_export():
+    """GH#6068: on export grid_power must come from the external CT, not pac.
+
+    Pinned to the raw grid/realtime line from issue #6068 (single-inverter site
+    exporting at night, no PV): pac -3389 W is the inverter's own grid-port
+    reading (the same value as vip[0].power) and counts 1584 W of house load
+    wired on the grid side of the inverter as export. limiterTotalPower -1805 W
+    is the external CT reading, the true site flow. Predbat's convention wants
+    export positive, so this must publish +1805, not +3389.
+    """
+    failed = False
+    s = MockSunsynk()
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return the #6068 export line for each realtime endpoint."""
+        if endpoint_key == "battery":
+            return {"soc": "71.0", "power": 3938, "temp": "22.0", "voltage": "53.9"}
+        if endpoint_key == "grid":
+            return {"vip": [{"volt": "249.3", "current": "13.2", "power": -3389}], "pac": -3389, "etodayFrom": "22.8", "etodayTo": "1.4", "limiterPowerArr": [-1805, 0], "limiterTotalPower": -1805}
+        if endpoint_key == "load":
+            return {"totalPower": 1788, "dailyUsed": 20.1}
+        if endpoint_key == "input":
+            return {"pac": 0, "etoday": 0.0}
+        return {}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    if values.get("grid_power") != 1805.0:
+        print(f"ERROR: exporting site published grid_power {values.get('grid_power')}, expected +1805.0 (the CT reading)")
+        failed = True
+    assert not failed, "test_grid_power_uses_ct_limiter_on_export"
+
+
+def test_grid_power_import_matches_ct_when_pac_agrees():
+    """GH#6068 control: on import pac equals the CT reading, so the value is unchanged.
+
+    Pinned to an import row from #6068: pac 5411 W and limiterTotalPower 5411 W.
+    Predbat's convention wants import negative, so this must publish -5411.
+    """
+    failed = False
+    s = MockSunsynk()
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return the #6068 import row for each realtime endpoint."""
+        if endpoint_key == "battery":
+            return {"soc": "71.0", "power": -3623, "temp": "22.0", "voltage": "53.9"}
+        if endpoint_key == "grid":
+            return {"pac": 5411, "etodayFrom": "22.8", "etodayTo": "1.4", "limiterTotalPower": 5411}
+        if endpoint_key == "load":
+            return {"totalPower": 1788, "dailyUsed": 20.1}
+        if endpoint_key == "input":
+            return {"pac": 0, "etoday": 0.0}
+        return {}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    if values.get("grid_power") != -5411.0:
+        print(f"ERROR: importing site published grid_power {values.get('grid_power')}, expected -5411.0")
+        failed = True
+    assert not failed, "test_grid_power_import_matches_ct_when_pac_agrees"
+
+
+def test_grid_power_falls_back_to_pac_when_ct_missing():
+    """GH#6068: a payload with no limiterTotalPower keeps reading pac.
+
+    Older payloads (and the ones the earlier pac tests were pinned to) omit the
+    CT field entirely; grid_power must still publish instead of going absent.
+    """
+    failed = False
+    s = MockSunsynk()
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return a grid payload with no CT field."""
+        if endpoint_key == "battery":
+            return {"soc": 62, "power": -1500, "voltage": 51.2, "temp": 21.5}
+        if endpoint_key == "grid":
+            return {"pac": -430, "etodayFrom": 3.2, "etodayTo": 1.1}
+        if endpoint_key == "load":
+            return {"totalPower": 900, "dailyUsed": 12.6}
+        if endpoint_key == "input":
+            return {"pac": 2830, "etoday": 9.8}
+        return {}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    if values.get("grid_power") != 430.0:
+        print(f"ERROR: site without a CT field published grid_power {values.get('grid_power')}, expected +430.0 (pac)")
+        failed = True
+    assert not failed, "test_grid_power_falls_back_to_pac_when_ct_missing"
+
+
+def test_grid_power_falls_back_to_pac_when_ct_reads_zero():
+    """GH#6068: a CT reading of 0 while pac is live means no CT/limiter is fitted.
+
+    Such a site must keep reading pac; publishing 0 would hide real import and
+    export. A second poll with both fields at 0 publishes 0 either way.
+    """
+    failed = False
+
+    async def fake_get_live(endpoint_key, sn=None, params=None):
+        """Return a grid payload whose CT reads 0 while pac exports."""
+        if endpoint_key == "battery":
+            return {"soc": "71.0", "power": -652, "temp": "22.0", "voltage": "53.9"}
+        if endpoint_key == "grid":
+            return {"pac": -1939, "etodayFrom": "0.0", "etodayTo": "2.8", "limiterTotalPower": 0}
+        if endpoint_key == "load":
+            return {"totalPower": 117, "dailyUsed": 1.9}
+        if endpoint_key == "input":
+            return {"pac": 2708, "etoday": 6.4}
+        return {}
+
+    s = MockSunsynk()
+    with patch.object(s, "_get", side_effect=fake_get_live):
+        run_async_local(s.fetch_device_data("INV1"))
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    if values.get("grid_power") != 1939.0:
+        print(f"ERROR: site with a zero CT reading published grid_power {values.get('grid_power')}, expected +1939.0 (pac)")
+        failed = True
+    # The zero-fallback is ambiguous (no CT fitted, or the net flow is zero at this
+    # poll), so it warns once rather than silently reintroducing the over-read.
+    ct_warnings = [message for message in s.log_messages if "limiterTotalPower reads 0" in message]
+    if len(ct_warnings) != 1:
+        print(f"ERROR: expected one warning about the zero CT fallback, got {ct_warnings}")
+        failed = True
+
+    async def fake_get_idle(endpoint_key, sn=None, params=None):
+        """Return a grid payload with both the CT and pac at 0."""
+        if endpoint_key == "battery":
+            return {"soc": "71.0", "power": 0, "temp": "22.0", "voltage": "53.9"}
+        if endpoint_key == "grid":
+            return {"pac": 0, "etodayFrom": "0.0", "etodayTo": "2.8", "limiterTotalPower": 0}
+        if endpoint_key == "load":
+            return {"totalPower": 0, "dailyUsed": 1.9}
+        if endpoint_key == "input":
+            return {"pac": 0, "etoday": 6.4}
+        return {}
+
+    s = MockSunsynk()
+    with patch.object(s, "_get", side_effect=fake_get_idle):
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    if values.get("grid_power") != 0.0:
+        print(f"ERROR: idle site published grid_power {values.get('grid_power')}, expected 0.0")
+        failed = True
+    if any("limiterTotalPower reads 0" in message for message in s.log_messages):
+        print(f"ERROR: an idle site with both fields at 0 must not warn about the zero CT fallback, got {s.log_messages}")
+        failed = True
+    assert not failed, "test_grid_power_falls_back_to_pac_when_ct_reads_zero"
+
+
 def test_fetch_device_data_absent_fields_are_not_invented():
     """A model that omits a counter leaves it absent rather than publishing a zero."""
     failed = False
@@ -1378,6 +1532,10 @@ def run_sunsynk_api_tests(my_predbat):
         ("device_list_unfiltered", test_get_device_list_unfiltered_returns_all),
         ("telemetry_mapping", test_fetch_device_data_maps_telemetry_and_energy),
         ("grid_power_sign", test_grid_power_sign_matches_the_live_export_sample),
+        ("grid_power_ct", test_grid_power_uses_ct_limiter_on_export),
+        ("grid_power_import_ct", test_grid_power_import_matches_ct_when_pac_agrees),
+        ("grid_power_fallback_missing", test_grid_power_falls_back_to_pac_when_ct_missing),
+        ("grid_power_fallback_zero", test_grid_power_falls_back_to_pac_when_ct_reads_zero),
         ("telemetry_absent", test_fetch_device_data_absent_fields_are_not_invented),
         ("nominal_pack_voltage", test_nominal_pack_voltage_variants),
         ("nominal_pack_voltage_warns_once", test_nominal_pack_voltage_warns_once_per_unmatched_charge_volt),

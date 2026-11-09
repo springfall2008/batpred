@@ -57,6 +57,8 @@ def _parallel_pair(s=None):
     s.device_list = [MASTER, SLAVE]
     s.device_roles = {MASTER: {"equip_mode": "M1", "plant": str(PLANT)}, SLAVE: {"equip_mode": "S2", "plant": str(PLANT)}}
     # 18 Oct ~10:00: the master charging from its own PV; the slave's battery block is garbage.
+    # grid_power is the site-wide CT reading (GH#6068), so both units report the same
+    # value - the group must publish 6.0, not the 12.0 summing would give.
     s.device_values[MASTER] = {
         "soc": 80,
         "battery_power": -1220.0,
@@ -78,7 +80,7 @@ def _parallel_pair(s=None):
         "battery_power": 6007.0,
         "battery_voltage": 54.0,
         "temperature": 0.0,
-        "grid_power": -2.0,
+        "grid_power": 6.0,
         "load_power": 305.0,
         "pv_power": 504.0,
         "capacity": 400.0,
@@ -263,11 +265,11 @@ def test_parallel_filter_warns_when_the_list_has_no_roles():
 
 
 def test_parallel_group_values():
-    """Grid, PV and load are summed; SoC and temperature come from the master; battery power from the BMS."""
+    """PV and load are summed; grid is the master's site-wide CT reading; SoC and temperature come from the master; battery power from the BMS."""
     failed = False
     s = _parallel_pair()
     values = s.group_values(MASTER)
-    expected = {"soc": 80, "battery_voltage": 54.1, "temperature": 29.0, "grid_power": 4.0, "load_power": 611.0, "pv_power": 2066.0, "battery_power": -1244.0}
+    expected = {"soc": 80, "battery_voltage": 54.1, "temperature": 29.0, "grid_power": 6.0, "load_power": 611.0, "pv_power": 2066.0, "battery_power": -1244.0}
     for leaf, want in expected.items():
         if values.get(leaf) != want:
             print(f"ERROR: group {leaf} {values.get(leaf)!r}, expected {want!r}")
@@ -470,8 +472,8 @@ def test_parallel_publish():
     s = _parallel_pair()
     with _clock(s, LONDON.localize(datetime(2026, 10, 18, 9, 5))):
         run_async_local(s.publish_data())
-    if s.published.get(s._sensor_name(MASTER, "grid_power"), {}).get("state") != 4.0:
-        print(f"ERROR: the master's grid_power should be the group sum, got {s.published.get(s._sensor_name(MASTER, 'grid_power'))}")
+    if s.published.get(s._sensor_name(MASTER, "grid_power"), {}).get("state") != 6.0:
+        print(f"ERROR: the master's grid_power should be the site-wide CT reading, not the group sum, got {s.published.get(s._sensor_name(MASTER, 'grid_power'))}")
         failed = True
     if s.published.get(s._sensor_name(MASTER, "import_today"), {}).get("state") != 42.3:
         print(f"ERROR: the master's import_today should be the group sum, got {s.published.get(s._sensor_name(MASTER, 'import_today'))}")
