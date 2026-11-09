@@ -2306,7 +2306,7 @@ class Output:
         # Work out change in battery value
         battery_level_now = self.soc_kwh_history.get(0, 0)
         battery_level_hour = self.soc_kwh_history.get(60, 0)
-        battery_level_midnight = self.soc_kwh_history.get(self.minutes_now, 0)
+        battery_level_midnight = self.soc_kwh_history.get(self.minutes_since_day_start(), 0)
         battery_change_hour = battery_level_now - battery_level_hour
         battery_change_midnight = battery_level_now - battery_level_midnight
         # Shared with the planner's own metric so the reported battery value matches the plan it
@@ -2390,9 +2390,13 @@ class Output:
                 )
             )
 
-        for minute in range(self.minutes_now):
+        # Today runs from the real start of the day. On a clock-change day that is not minute 0 of this plan-aligned loop
+        # (whose history reads line up with the rate tables), but the change away from it: an hour earlier after the autumn
+        # change, later after the spring one. Starting at 0 dropped today's first hour or counted yesterday's last (GH#5760)
+        day_start_minute = self.clock_change_minutes_today()
+        for minute in range(day_start_minute, self.minutes_now):
             # Add in standing charge
-            if (minute % (24 * 60)) == 0:
+            if minute == day_start_minute:
                 day_cost += self.metric_standing_charge
 
             minute_back = self.minutes_now - minute - 1
@@ -3144,7 +3148,11 @@ class Output:
         total_forecast_value_pred = 0
         total_forecast_value_pred_now = 0
 
-        for minute in range(0, 24 * 60, step):
+        # The day runs from its real start, which on a clock-change day is the change away from minute 0 of this plan-aligned
+        # loop: today then lasts 25 hours (autumn) or 23 (spring), and starting at 0 dropped its first hour or counted
+        # yesterday's last (GH#5760). The history reads below stay aligned with the plan minutes
+        day_start_minute = self.clock_change_minutes_today()
+        for minute in range(day_start_minute, 24 * 60, step):
             import_value_today = 0
             load_value_today = 0
             load_value_today_raw = 0
@@ -3266,7 +3274,7 @@ class Output:
             )
             # minute_data() keys history by real elapsed time, while minutes_now counts wall-clock minutes, so on a clock-change day
             # the two differ by the change - without the correction the lookup lands an hour off yesterday's final value (GH#5760)
-            minutes_back = minutes_now - self.clock_change_minutes_today() + 1
+            minutes_back = minutes_now - day_start_minute + 1
             yesterday_adjustment_pct = yesterday_data.get(minutes_back, 100.0)
             yesterday_adjustment = yesterday_adjustment_pct / 100.0  # Convert from percentage to factor
 
@@ -3621,7 +3629,7 @@ class Output:
         # minutes_now counts wall-clock minutes since midnight, so on a clock-change day the two differ by the change: without the
         # correction the autumn lookup lands an hour into today (reading today's standing charge as yesterday's cost) and the
         # spring one an hour before yesterday ended (GH#5760)
-        minutes_back = self.minutes_now - self.clock_change_minutes_today() + 1
+        minutes_back = self.minutes_since_day_start() + 1
         # The per-minute arrays below stay on the History view's own axis - minute m is midnight_utc - 1 day + m, the
         # wall-clock axis load, PV, rates, status and billing are all built on - so they keep the uncorrected offset
         minutes_back_axis = self.minutes_now + 1
@@ -4476,12 +4484,6 @@ class Output:
             import_kwh,
             None if import_only else export_kwh,
         )
-
-    def clock_change_minutes_today(self):
-        """Minutes the clocks have moved since local midnight today: 60 after a spring change, -60 after an autumn one, otherwise 0."""
-        now_local = self.now_utc.astimezone(self.local_tz)
-        midnight_local = self.local_midnight_utc(now_local.date())
-        return int((now_local.utcoffset() - midnight_local.utcoffset()).total_seconds() // 60)
 
     def local_midnight_utc(self, day):
         """Local midnight at the start of date day, as a local-time aware datetime like self.midnight_utc (the plan table shows its times as they are)."""
