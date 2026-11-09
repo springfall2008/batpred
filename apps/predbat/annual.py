@@ -751,7 +751,6 @@ def reset_sample_state(predbat):
     predbat.manual_freeze_charge_times = []
     predbat.manual_freeze_export_times = []
     predbat.manual_demand_times = []
-    predbat.manual_all_times = []
 
     predbat.charge_limit_best = []
     predbat.charge_window_best = []

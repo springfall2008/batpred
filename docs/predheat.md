@@ -50,7 +50,7 @@ Then add in the Home Assistant service and connect up your API key to obtain hou
 
 ### Apex Charts install
 
-Use HACS to install Apex Charts: <https://github.com/RomRider/apexcharts-card>
+Install Apex Charts from the [Marketplace](install.md#hacs-and-the-marketplace) (or HACS on Home Assistant 2026.10 or older): <https://github.com/RomRider/apexcharts-card>
 
 There is a template of [example_Predheat charts](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/example_chart_predheat.yaml_template) you can use.
 
