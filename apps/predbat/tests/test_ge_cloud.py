@@ -63,6 +63,7 @@ class MockGECloudDirect(GECloudDirect):
         self.evc_data = {}
         self.evc_sessions = {}
         self.evc_status_unknown = set()
+        self.evc_start_skipped = set()
         self.automatic_evc = False
         # Off, the components.py default when apps.yaml does not mention it
         self.evc_control = False
@@ -6751,7 +6752,7 @@ def _test_evc_control(my_predbat):
         commands = []
         ge = _evc_control_component(commands)
         ge.evc_device_list = ["evc-001"]
-        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "preparing"}}
         ge.entity_attributes = plan
 
         await ge.charger_control_apply(inside)
@@ -6842,7 +6843,7 @@ def _test_evc_control(my_predbat):
         ge.evc_device_list = ["evc-second", "evc-first"]
         ge.evc_device = {
             "evc-first": {"serial_number": "EVC200", "status": "charging"},
-            "evc-second": {"serial_number": "EVC100", "status": "charging"},
+            "evc-second": {"serial_number": "EVC100", "status": "preparing"},
         }
         ge.entity_attributes = {EVC_PLAN_SENSOR: plan[EVC_PLAN_SENSOR], EVC_PLAN_SENSOR_CAR_1: {"planned": []}}
 
@@ -6856,7 +6857,7 @@ def _test_evc_control(my_predbat):
         ge = _evc_control_component(commands, num_cars=1)
         ge.evc_device_list = ["evc-first", "evc-second"]
         ge.evc_device = {
-            "evc-first": {"serial_number": "EVC100", "status": "charging"},
+            "evc-first": {"serial_number": "EVC100", "status": "preparing"},
             "evc-second": {"serial_number": "EVC200", "status": "charging"},
         }
         ge.entity_attributes = {EVC_PLAN_SENSOR: plan[EVC_PLAN_SENSOR]}
@@ -6905,6 +6906,68 @@ def _test_evc_control(my_predbat):
         await ge.charger_control_tick(outside)
         assert commands == [("evc-001", "start-charge")], "The release should be retried, got {}".format(commands)
         assert ge.charger_control_released is not None
+
+        # Test 13: a charger that is already charging inside a window is not sent start-charge, which
+        # GE Cloud rejects, but is held as charging so the stop at the end of the window is still sent
+        commands = []
+        ge = _evc_control_component(commands)
+        ge.evc_device_list = ["evc-001"]
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "Charging"}}
+        ge.entity_attributes = plan
+        await ge.charger_control_apply(inside)
+        assert commands == [], "An already charging charger needs no start-charge, got {}".format(commands)
+        assert ge.charger_control_state == {"evc-001": True}, "It should be held as charging, got {}".format(ge.charger_control_state)
+        await ge.charger_control_apply(outside)
+        assert commands == [("evc-001", "stop-charge")], "The end of the window should stop it, got {}".format(commands)
+
+        # Test 14: a charger Predbat stopped that starts itself (its own schedule, plug and go) is
+        # stopped again - before the window and after it - rather than left charging all night
+        commands = []
+        ge = _evc_control_component(commands)
+        ge.evc_device_list = ["evc-001"]
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "Preparing"}}
+        ge.entity_attributes = plan
+        before = tz.localize(datetime(2026, 8, 22, 22, 0))
+        await ge.charger_control_apply(before)
+        assert commands == [("evc-001", "stop-charge")], "Before the window the charger is stopped, got {}".format(commands)
+
+        commands.clear()
+        ge.evc_device["evc-001"]["status"] = "Charging"
+        await ge.charger_control_apply(before)
+        assert commands == [("evc-001", "stop-charge")], "A charger that started itself should be stopped again, got {}".format(commands)
+        assert any("re-applying" in message for message in ge.log_messages), "The drift should be logged"
+
+        # The charger starts itself again before the window, and the window opens on a running charge
+        commands.clear()
+        await ge.charger_control_apply(inside)
+        assert commands == [], "A running charge inside the window needs no command, got {}".format(commands)
+        await ge.charger_control_apply(outside)
+        assert commands == [("evc-001", "stop-charge")], "The stop at the end of the window must be sent, got {}".format(commands)
+
+        # Test 15: a car that stops drawing inside a window is not sent start-charge over and over
+        commands = []
+        ge = _evc_control_component(commands)
+        ge.evc_device_list = ["evc-001"]
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "Preparing"}}
+        ge.entity_attributes = plan
+        await ge.charger_control_apply(inside)
+        assert commands == [("evc-001", "start-charge")]
+        commands.clear()
+        ge.evc_device["evc-001"]["status"] = "SuspendedEV"
+        await ge.charger_control_apply(inside)
+        assert commands == [], "A full or paused car is not drift, got {}".format(commands)
+
+        # Test 16: a start skipped on a stale Charging status is retried once the charger reports Preparing
+        commands = []
+        ge = _evc_control_component(commands)
+        ge.evc_device_list = ["evc-001"]
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "Charging"}}
+        ge.entity_attributes = plan
+        await ge.charger_control_apply(inside)
+        assert commands == [], "Already charging should get no start-charge, got {}".format(commands)
+        ge.evc_device["evc-001"]["status"] = "Preparing"
+        await ge.charger_control_apply(inside)
+        assert commands == [("evc-001", "start-charge")], "A charge that ended before the window should be started, got {}".format(commands)
 
         return 0
 
