@@ -13,7 +13,7 @@ Keep script-controlled inverter templates off the inverter's real window time en
 
 For an inverter type whose charge_time_format is not "HH:MM:SS" Predbat creates its own placeholder entities for
 charge/discharge_start/end_time, but since #4738 an entity mapped in apps.yaml wins. Predbat's window writes - including
-the 00:00:00 - 00:00:00 discharge disable on inverters with no discharge enable switch - then land on the real inverter
+the 00:00:00 - 00:00:00 disable on inverters with no charge or discharge enable switch - then land on the real inverter
 window. has_time_window and an apps.yaml set_charge_window/set_discharge_window stop none of this, so the docs say so.
 """
 
@@ -68,16 +68,19 @@ def _real_window_entities(config):
 
 
 def _section(text, heading):
-    """Return the markdown section under heading, up to the next heading of the same or a higher level."""
+    """Return the markdown section under heading, up to the next heading of the same or a higher level, ignoring fenced code blocks."""
     lines = text.splitlines()
     level = len(heading) - len(heading.lstrip("#"))
     out = None
+    in_fence = False
     for line in lines:
         if out is None:
             if line.strip() == heading:
                 out = []
             continue
-        if line.startswith("#"):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+        if not in_fence and line.startswith("#"):
             this_level = len(line) - len(line.lstrip("#"))
             if line[this_level : this_level + 1] == " " and this_level <= level:
                 break
@@ -106,6 +109,9 @@ def test_docs_time_window(my_predbat):
     if _charge_time_formats({"inverter_type": "GE"}) != [INVERTER_DEF["GE"]["charge_time_format"]]:
         print("ERROR: the charge_time_format of a built-in inverter type was not resolved")
         failed = True
+    if _section("# Top\n## A\n```yaml\n# comment\n```\nafter fence\n## B\n", "## A") != "```yaml\n# comment\n```\nafter fence":
+        print("ERROR: a # comment inside a fenced code block ended the markdown section")
+        failed = True
 
     template_paths = sorted(glob.glob(os.path.join(TEMPLATES_DIR, "*.yaml")))
     if not template_paths:
@@ -132,9 +138,9 @@ def test_docs_time_window(my_predbat):
             print("ERROR: inverter-setup.md has_time_window section does not mention '{}'".format(needed))
             failed = True
 
-    print("Test: apps-yaml.md Schedule section warns about the 00:00:00 discharge disable")
+    print("Test: apps-yaml.md Schedule section warns about the 00:00:00 charge and discharge disable")
     schedule = _section(_read_doc("apps-yaml.md"), "#### Schedule") or ""
-    for needed in ["has_discharge_enable_time", "00:00:00", "charge_time_format", "set_discharge_window"]:
+    for needed in ["has_discharge_enable_time", "has_charge_enable_time", "00:00:00", "charge_time_format", "set_discharge_window"]:
         if needed not in schedule:
             print("ERROR: apps-yaml.md Schedule section does not mention '{}'".format(needed))
             failed = True

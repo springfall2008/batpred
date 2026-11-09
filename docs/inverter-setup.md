@@ -4261,7 +4261,7 @@ they are ignored, even when set to `false`. Whether Predbat writes the charge an
 writes both, and Monitor and Control SoC only write neither (except to reset them when the Predbat mode or the read-only switch is changed).
 
 On an inverter with **has_discharge_enable_time** set to False, a discharge window that is turned off is written as
-00:00:00 - 00:00:00. See the warning in the [apps.yaml schedule settings](apps-yaml.md#schedule) on why you should not map the
+00:00:00 - 00:00:00, and likewise a charge window that is turned off when **has_charge_enable_time** is False. See the warning in the [apps.yaml schedule settings](apps-yaml.md#schedule) on why you should not map the
 window times to your inverter's real time entities when it is controlled through services or a script.
 
 ### charge_time_format
