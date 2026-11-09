@@ -1980,6 +1980,10 @@ class SolarAPI(ComponentBase):
                 self.log("SolarAPI: PV Forecast today adds up to {} and total sensors add up to {} kWh - detected forecast data is in {} (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, units, factor))
 
         if pv_forecast_data:
+            # Shallow-copy each entry so downstream overlays and calibration never mutate the
+            # Home Assistant state cache's own dicts in place.
+            pv_forecast_data = [dict(entry) for entry in pv_forecast_data]
+
             # Recorded only on a successful fetch (this branch), never on the empty-data branch
             # below - a transient failure must not overwrite the last known-good answer to "which
             # provider is actually feeding the plan" - see build_discovery()'s own docstring and
@@ -2036,7 +2040,7 @@ class SolarAPI(ComponentBase):
                     if entity_id:
                         data, _, _ = self.fetch_pv_datapoints(argname, entity_id)
                         if data:
-                            ha_data += data
+                            ha_data += [dict(entry) for entry in data]
                 if ha_data:
                     self.overlay_clearsky_data(pv_forecast_data, ha_data, value_field="pv_clearsky", source_period=period, source_divide_by=divide_by, target_divide_by=divide_by, target_period=period)
             elif clipping_clearsky_source == "pv90_scaled":
