@@ -6,7 +6,12 @@ There's a [Video Guide to the different charts](https://www.youtube.com/watch?v=
 
 To install the charts:
 
-- Install Apex Charts [https://github.com/RomRider/apexcharts-card](https://github.com/RomRider/apexcharts-card):
+- Install Apex Charts [https://github.com/RomRider/apexcharts-card](https://github.com/RomRider/apexcharts-card) from the [Marketplace](install.md#hacs-and-the-marketplace) on Home Assistant 2026.11 or newer:
+    - Go to **Settings** → **Marketplace** and search for 'apex'
+    - Click on 'apexcharts-card', select **Install**, check the version and select **Install** again
+    - Reload your browser to load the new dashboard resource
+
+- Or, on Home Assistant 2026.10 or older, install Apex Charts from HACS:
     - In HACS, click on Frontend
     - Click the blue *Explore and download repositories* button and type 'apex'
     - Click on 'apexcharts-card', then click the blue 'Download', then 'Download' again to install it
@@ -22,7 +27,7 @@ create a new apexcharts card and copy the YAML into it:
     - Repeat (adding Apex chart card, copy paste card config) for all of the charts you want to see
 - Customise as you like
 
-If you get an error 'Custom element doesn't exist: apexcharts-card' then you've not installed the Apex Charts card correctly from HACS.
+If you get an error 'Custom element doesn't exist: apexcharts-card' then you've not installed the Apex Charts card correctly from the Marketplace (or HACS).
 
 See the [video guides](video-guides.md) for a walkthrough of what the different charts show.
 

@@ -306,6 +306,25 @@ def _scenario_plan_once_recompute(my_predbat):
     return failed
 
 
+def _scenario_plan_once_publishes_rate_overrides(my_predbat):
+    """plan_once publishes the import/export rate override sensors for the current slot, alongside the rates."""
+    failed = 0
+    saved = (my_predbat.rate_import_replicated, my_predbat.rate_export_replicated)
+    my_predbat.plan_valid = False
+    my_predbat.plan_last_updated = None
+    my_predbat.rate_import_replicated = {my_predbat.minutes_now: "manual"}
+    my_predbat.rate_export_replicated = {}
+    try:
+        with ExitStack() as stack:
+            _patch_pipeline(my_predbat, stack)
+            my_predbat.plan_once(scheduled=True)
+        state = my_predbat.get_state_wrapper("binary_sensor." + my_predbat.prefix + "_rate_override_import")
+    finally:
+        my_predbat.rate_import_replicated, my_predbat.rate_export_replicated = saved
+    failed = _check(failed, state == "on", "plan_once: import rate override sensor published on for a manual rate (got {})".format(state))
+    return failed
+
+
 def _scenario_plan_once_reuse(my_predbat):
     """plan_once with a fresh valid plan reuses it - recomputed False and nothing persisted."""
     failed = 0
@@ -735,6 +754,7 @@ def test_plan_execute_split(my_predbat):
         failed += _scenario_fused_template(my_predbat)
         failed += _scenario_plan_once_recompute(my_predbat)
         failed += _scenario_plan_once_reuse(my_predbat)
+        failed += _scenario_plan_once_publishes_rate_overrides(my_predbat)
         failed += _scenario_plan_once_unscheduled_forces(my_predbat)
         failed += _scenario_plan_once_failures(my_predbat)
         failed += _scenario_execute_once(my_predbat)
