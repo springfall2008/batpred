@@ -700,7 +700,6 @@ If you do not want to use the dynamic cloud-based tracking, you can manually for
 - **`clipping_buffer_start_time`**: The start time for the fixed buffer window.
 - **`clipping_buffer_end_time`**: The end time for the fixed buffer window.
 
-
 ## iBoost
 
 Predbat has an 'iBoost model' that, instead of exporting excess solar to the grid, can divert power towards an external energy sink. Although Predbat refers to this feature as 'iBoost', the model can be used to control any resistive device. This is typically a water heater, via an iBoost, Fingerbot, MyEnergy Eddi, or any high-power smart switch, provided the device is ultimately controlled by a thermostat.
