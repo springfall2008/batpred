@@ -198,7 +198,7 @@ class SolarAPI(ComponentBase):
         self.log("SolarAPI: Fetching {}".format(url))
         try:
             timeout = aiohttp.ClientTimeout(total=60)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url, params=params) as response:
                     status_code = response.status
 
@@ -767,9 +767,9 @@ class SolarAPI(ComponentBase):
 
         - One `solar` record per Solcast resource id seen so far (self.discovered_sites, populated
           by download_solcast_data()'s site loop - see that method). device_id "solcast:{resource
-          id}"; the resource id goes in account_ids (site and plant ids are registry-flagged
-          credentials - see docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md), never
-          in info, so the redactor pseudonymises it; info.vendor "Solcast"; coverage describing the
+          id}"; the resource id goes in account_ids, the container for an id that names the user's
+          account or site rather than hardware (published readable, like every identifier); info.vendor
+          "Solcast"; coverage describing the
           service itself (the "hours": 168 this component actually requests from Solcast's
           forecasts endpoint, its 30-minute native resolution, and the pv10/pv50/pv90 variants the
           endpoint returns by default - see SOLCAST_DISCOVERY_COVERAGE). Deliberately never the
@@ -1946,10 +1946,14 @@ class SolarAPI(ComponentBase):
             # (calibrated alongside P50) rather than replacing them with ones created from history.
             # active_source, not configured_source: a Forecast.Solar fallback or primary that
             # actually served the data has no band of its own.
-            calibrate_band = False
             if active_source == "open_meteo" and self.open_meteo_ensemble_band:
                 create_pv10 = False
-                calibrate_band = True
+            # Any band the provider supplied (Open-Meteo's ensemble, or Solcast's own P10/P90 from the
+            # API or the HA integration) moves with the P50 it was paired with. Left on the raw curve,
+            # calibration shifted only P50, so a forecast calibrated down left P90 too high and P10
+            # above P50 itself (#5969). A forecast with no band of its own has nothing to move.
+            has_band = any("pv_estimate10" in entry or "pv_estimate90" in entry for entry in pv_forecast_data)
+            calibrate_band = not create_pv10 and has_band
 
             # Run calibration on the data
             pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data = self.pv_calibration(

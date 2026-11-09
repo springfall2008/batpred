@@ -34,7 +34,7 @@ def record(when, state, attributes=None):
 
 
 def find_row(rows, when):
-    """Return the 30-minute row that starts at the given instant, or None."""
+    """Return the 30-minute row headed by the given instant, or None."""
     for row in rows:
         if row["time"] == when:
             return row
@@ -71,7 +71,7 @@ def run_web_history_table_tests(my_predbat):
     if reported_lost:
         print(f"  ERROR: the sensor read Normal at every 30-min mark but these rows report 'Lost': {reported_lost}")
         failed += 1
-    # 21:57 is first visible at the 22:00 slot, which is the 22:00 row's own line
+    # 21:57 is first visible at the 22:00 slot, the newest slot of the half hour the 22:00 row heads
     row = find_row(rows, utc(22, 0))
     if not row or row["cells"][0] != ("Normal", "reverted"):
         print(f"  ERROR: expected the 22:00 row to read Normal marked reverted, got {row['cells'] if row else None}")
@@ -85,35 +85,47 @@ def run_web_history_table_tests(my_predbat):
     print("Test: a change that sticks is pink in the row it happened in, and the expanded slot shows where")
     records = [record(utc(10, 0), "A"), record(utc(10, 10), "A"), record(utc(10, 40), "B"), record(utc(11, 50), "B")]
     rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
-    row_1030 = find_row(rows, utc(10, 30))
-    if not row_1030 or row_1030["cells"][0] != ("A", "changed"):
-        print(f"  ERROR: the 10:30 row should read A (its value at 10:30) and be marked changed, got {row_1030['cells'] if row_1030 else None}")
+    row_1100 = find_row(rows, utc(11, 0))
+    if not row_1100 or row_1100["cells"][0] != ("B", "changed"):
+        print(f"  ERROR: the 11:00 row should read B (its value at 11:00) and be marked changed, got {row_1100['cells'] if row_1100 else None}")
         failed += 1
     else:
-        details = {detail["time"].strftime("%H:%M"): detail["cells"][0] for detail in row_1030["details"]}
+        details = {detail["time"].strftime("%H:%M"): detail["cells"][0] for detail in row_1100["details"]}
         expected = {"10:55": ("B", None), "10:50": ("B", None), "10:45": ("B", None), "10:40": ("B", "changed"), "10:35": ("A", None)}
         if details != expected:
-            print(f"  ERROR: expected the 10:30 row to expand to {expected}, got {details}")
+            print(f"  ERROR: expected the 11:00 row to expand to {expected}, got {details}")
             failed += 1
-        detail_times = [detail["time"] for detail in row_1030["details"]]
-        if detail_times != sorted(detail_times, reverse=True):
-            print("  ERROR: detail slots should be newest first, matching the table's ordering")
-            failed += 1
-    row_1100 = find_row(rows, utc(11, 0))
-    if not row_1100 or row_1100["cells"][0] != ("B", None):
-        print(f"  ERROR: the change happened in the 10:30 row, so the 11:00 row should read B unmarked, got {row_1100['cells'] if row_1100 else None}")
+    row_1030 = find_row(rows, utc(10, 30))
+    if not row_1030 or row_1030["cells"][0] != ("A", None):
+        print(f"  ERROR: the change happened in the 11:00 row, so the 10:30 row should read A unmarked, got {row_1030['cells'] if row_1030 else None}")
         failed += 1
+
+    # -------------------------------------------------------------------------
+    # The table used to head each row with the oldest slot of its half hour and list the newer slots
+    # beneath it, so an expanded row read 17:30, 17:55, 17:50 ... and the newest value sat hidden.
+    print("Test: expanded, the table reads newest to oldest from top to bottom")
+    flat = []
+    for row in rows:
+        flat.append(row["time"])
+        flat.extend(detail["time"] for detail in row["details"])
+    if flat != sorted(flat, reverse=True) or len(set(flat)) != len(flat):
+        print(f"  ERROR: expected strictly newest-first times, got {[when.strftime('%H:%M') for when in flat]}")
+        failed += 1
+    for row in rows:
+        if any(detail["time"] >= row["time"] or detail["time"] <= row["time"] - timedelta(minutes=30) for detail in row["details"]):
+            print(f"  ERROR: the {row['time'].strftime('%H:%M')} row should expand only to the slots of the half hour leading up to it")
+            failed += 1
 
     # -------------------------------------------------------------------------
     print("Test: a change that reverts inside a row is blue, and its slots show both changes")
     records = [record(utc(10, 0), "A"), record(utc(10, 37), "B"), record(utc(10, 48), "A"), record(utc(11, 20), "A")]
     rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
-    row_1030 = find_row(rows, utc(10, 30))
-    if not row_1030 or row_1030["cells"][0] != ("A", "reverted"):
-        print(f"  ERROR: expected the 10:30 row to read A marked reverted, got {row_1030['cells'] if row_1030 else None}")
+    row_1100 = find_row(rows, utc(11, 0))
+    if not row_1100 or row_1100["cells"][0] != ("A", "reverted"):
+        print(f"  ERROR: expected the 11:00 row to read A marked reverted, got {row_1100['cells'] if row_1100 else None}")
         failed += 1
     else:
-        changed_slots = {detail["time"].strftime("%H:%M"): detail["cells"][0] for detail in row_1030["details"] if detail["cells"][0][1]}
+        changed_slots = {detail["time"].strftime("%H:%M"): detail["cells"][0] for detail in row_1100["details"] if detail["cells"][0][1]}
         if changed_slots != {"10:40": ("B", "changed"), "10:50": ("A", "changed")}:
             print(f"  ERROR: expected the 10:40 and 10:50 slots to show the change and the revert, got {changed_slots}")
             failed += 1
@@ -130,18 +142,24 @@ def run_web_history_table_tests(my_predbat):
         failed += 1
 
     # -------------------------------------------------------------------------
-    print("Test: rows and slots never reach past the newest record")
+    # The newest record is normally the current state, stamped at the real time between two 5-minute
+    # marks. Ending the table on the 5-minute mark before it left the current value off the table until
+    # the next mark, up to 5 minutes late.
+    print("Test: the top row is the newest record's own time, so the current value shows at once, and nothing reaches past it")
     records = [record(utc(20, 0), "1"), record(utc(21, 12), "2")]
     rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
-    if rows[0]["time"] != utc(21, 0):
-        print(f"  ERROR: the newest row should be 21:00, got {rows[0]['time']}")
+    if rows[0]["time"] != utc(21, 12) or rows[0]["cells"][0] != ("2", "changed"):
+        print(f"  ERROR: the newest row should be 21:12 reading 2 marked changed, got {rows[0]['time']} {rows[0]['cells']}")
         failed += 1
     future = [detail["time"].strftime("%H:%M") for row in rows for detail in row["details"] if detail["time"] > utc(21, 12)]
     if future:
         print(f"  ERROR: detail slots after the newest record (21:12) should not exist, got {future}")
         failed += 1
-    if [detail["time"] for detail in rows[0]["details"]] != [utc(21, 10), utc(21, 5)]:
-        print(f"  ERROR: expected the 21:00 row to expand to 21:10 and 21:05 only, got {[detail['time'].strftime('%H:%M') for detail in rows[0]['details']]}")
+    if [(detail["time"], detail["cells"][0]) for detail in rows[0]["details"]] != [(utc(21, 10), ("1", None)), (utc(21, 5), ("1", None))]:
+        print(f"  ERROR: expected the 21:12 row to expand to 21:10 and 21:05 reading 1, got {[(detail['time'].strftime('%H:%M'), detail['cells'][0]) for detail in rows[0]['details']]}")
+        failed += 1
+    if len(rows) < 2 or rows[1]["time"] != utc(21, 0):
+        print(f"  ERROR: the row beneath the newest should be 21:00, got {[row['time'].strftime('%H:%M') for row in rows]}")
         failed += 1
 
     # -------------------------------------------------------------------------
@@ -164,9 +182,9 @@ def run_web_history_table_tests(my_predbat):
         return held
 
     times = [row["time"] for row in rows]
-    expected_times = [utc(13, 30, day=2, month=10) - timedelta(minutes=30 * index) for index in range(len(times))]
+    expected_times = [utc(13, 35, day=2, month=10)] + [utc(13, 30, day=2, month=10) - timedelta(minutes=30 * index) for index in range(len(times) - 1)]
     if times != expected_times or times[-1] != utc(22, 0, day=1, month=10):
-        print(f"  ERROR: expected a continuous run of rows from 13:30 back to 22:00, got {[when.strftime('%d %H:%M') for when in times]}")
+        print(f"  ERROR: expected the newest slot 13:35, then a continuous run of rows from 13:30 back to 22:00, got {[when.strftime('%d %H:%M') for when in times]}")
         failed += 1
     wrong = [f"{row['time'].strftime('%d %H:%M')} reads {row['cells'][0][0]} but was {actual_state(row['time'])}" for row in rows if row["cells"][0][0] != actual_state(row["time"])]
     for row in rows:
@@ -177,7 +195,7 @@ def run_web_history_table_tests(my_predbat):
         print(f"  ERROR: {len(wrong)} cells do not match the time on their left, e.g. {wrong[0]}")
         failed += 1
     marked = {row["time"].strftime("%d %H:%M"): row["cells"][0][1] for row in rows if row["cells"][0][1]}
-    if marked != {"01 23:00": "changed", "02 04:30": "changed", "02 13:30": "changed"}:
+    if marked != {"01 23:30": "changed", "02 05:00": "changed", "02 13:35": "changed"}:
         print(f"  ERROR: expected exactly the rows each change happened in to be marked, got {marked}")
         failed += 1
 
@@ -200,7 +218,7 @@ def run_web_history_table_tests(my_predbat):
     records = [record(utc(10, minute), str(minute + 4), {"other": "o{}".format(minute)}) for minute in range(1, 5)]
     records.append(record(utc(10, 30), "8", {"other": "o4"}))
     rows = build_entity_history_table_data(selections, {"sensor.x": make_history(records)})
-    detail = find_detail(find_row(rows, utc(10, 0)), utc(10, 5))
+    detail = find_detail(find_row(rows, utc(10, 30)), utc(10, 5))
     if detail["cells"] != [("8", "changed"), ("o4", "changed")]:
         print(f"  ERROR: expected the 10:05 slot to read ['8', 'o4'] both changed, got {detail['cells']}")
         failed += 1
@@ -216,9 +234,9 @@ def run_web_history_table_tests(my_predbat):
     if "None" in shown:
         print(f"  ERROR: the attributes-less 10:40 record turned the soc column into 'None': {shown}")
         failed += 1
-    row_1030 = find_row(rows, utc(10, 30))
-    if not row_1030 or row_1030["cells"][0] != (60, None):
-        print(f"  ERROR: expected the 10:30 row to hold soc 60 unmarked, got {row_1030['cells'] if row_1030 else None}")
+    row_1040 = find_row(rows, utc(10, 40))
+    if not row_1040 or row_1040["cells"][0] != (60, None):
+        print(f"  ERROR: expected the newest (10:40) row to hold soc 60 unmarked, got {row_1040['cells'] if row_1040 else None}")
         failed += 1
 
     # -------------------------------------------------------------------------
@@ -230,21 +248,28 @@ def run_web_history_table_tests(my_predbat):
         failed += 1
 
     # -------------------------------------------------------------------------
+    print("Test: history between two 5-minute marks is one row holding its value, not '-'")
+    rows = build_entity_history_table_data(status, {"sensor.status": make_history([record(utc(12, 1), "A"), record(utc(12, 3), "B")])})
+    if [(row["time"], row["cells"], row["details"]) for row in rows] != [(utc(12, 3), [("B", "changed")], [])]:
+        print(f"  ERROR: expected one 12:03 row reading B marked changed with no slots, got {[(row['time'], row['cells'], row['details']) for row in rows]}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
     # HA/DB history is UTC; the table was shown in UTC too, an hour adrift of local time during BST.
     print("Test: rows are laid out and shown in the local timezone")
     london = pytz.timezone("Europe/London")
     records = [record(utc(20, 10), "A"), record(utc(20, 50), "B"), record(utc(21, 20), "B")]
     rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)}, local_tz=london)
     labels = [row["time"].strftime("%H:%M%z") for row in rows]
-    if labels != ["22:00+0100", "21:30+0100", "21:00+0100"]:
-        print(f"  ERROR: expected rows 22:00, 21:30, 21:00 BST, got {labels}")
+    if labels != ["22:20+0100", "22:00+0100", "21:30+0100"]:
+        print(f"  ERROR: expected rows 22:20, 22:00, 21:30 BST, got {labels}")
         failed += 1
     # Nepal is UTC+05:45, so its half hours do not fall on UTC half hours
     kathmandu = pytz.timezone("Asia/Kathmandu")
     rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)}, local_tz=kathmandu)
     labels = [row["time"].strftime("%H:%M") for row in rows]
-    if not labels or any(not label.endswith((":00", ":30")) for label in labels):
-        print(f"  ERROR: rows should start on local half hours, got {labels}")
+    if len(labels) < 2 or any(not label.endswith((":00", ":30")) for label in labels[1:]):
+        print(f"  ERROR: every row below the newest should end on a local half hour, got {labels}")
         failed += 1
 
     # -------------------------------------------------------------------------
@@ -253,22 +278,22 @@ def run_web_history_table_tests(my_predbat):
     rows = build_entity_history_table_data(status, {"sensor.status": make_history(records)})
     html = render_entity_history_rows(rows, 1)
     if '<td class="reverted-cell">A</td>' not in html or '<td class="changed-cell">B</td>' not in html:
-        print("  ERROR: expected the 10:30 row blue and its 10:40 slot pink")
+        print("  ERROR: expected the 11:00 row blue and its 10:40 slot pink")
         failed += 1
-    # 14:00 is the newest, 13:00 the first to read C, 12:30 and 10:30 changed, 08:00 the oldest
+    # 14:10 is the newest, 13:00 changed to C, 11:00 changed and back, 08:00 the oldest
     shown = [row["time"].strftime("%H:%M") for index, row in enumerate(rows) if history_row_shown(rows, index)]
-    if shown != ["14:00", "13:00", "12:30", "10:30", "08:00"]:
-        print(f"  ERROR: expected rows 14:00, 13:00, 12:30, 10:30 and 08:00 to be shown, got {shown}")
+    if shown != ["14:10", "13:00", "11:00", "08:00"]:
+        print(f"  ERROR: expected rows 14:10, 13:00, 11:00 and 08:00 to be shown, got {shown}")
         failed += 1
     rendered_rows = html.count('class="history-row"')
     if rendered_rows != len(shown):
         print(f"  ERROR: the table should render exactly the {len(shown)} shown rows, got {rendered_rows}")
         failed += 1
-    if "1 unchanged slot hidden" not in html.split("14:00", 1)[-1].split("13:00", 1)[0]:
-        print("  ERROR: expected the 13:30 duplicate to be folded into '1 unchanged slot hidden' between 14:00 and 13:00")
+    if "2 unchanged slots hidden" not in html.split("14:10", 1)[-1].split("13:00", 1)[0]:
+        print("  ERROR: expected the 14:00 and 13:30 duplicates to be folded into '2 unchanged slots hidden' between 14:10 and 13:00")
         failed += 1
-    if "3 unchanged slots hidden" not in html.split("12:30", 1)[-1]:
-        print("  ERROR: expected the 11:00-12:00 rows to be folded into '3 unchanged slots hidden' beneath the 12:30 row")
+    if "3 unchanged slots hidden" not in html.split("13:00", 1)[-1].split("11:00", 1)[0]:
+        print("  ERROR: expected the 11:30-12:30 rows to be folded into '3 unchanged slots hidden' between 13:00 and 11:00")
         failed += 1
 
     # -------------------------------------------------------------------------
@@ -293,7 +318,7 @@ def run_web_history_table_tests(my_predbat):
         print(f"  ERROR: {len(misreported)} hidden rows differ from the row beneath them, e.g. {misreported[0]}")
         failed += 1
     shown_values = [(rows[index]["time"].strftime("%d %H:%M"), rows[index]["cells"][0][0]) for index in shown]
-    expected_values = [("02 13:30", "Demand"), ("02 05:00", "Demand"), ("02 04:30", "Charging"), ("01 23:30", "Charging"), ("01 23:00", "Exporting"), ("01 22:00", "Exporting")]
+    expected_values = [("02 13:35", "Freeze exporting"), ("02 05:00", "Demand"), ("01 23:30", "Charging"), ("01 22:00", "Exporting")]
     if shown_values != expected_values:
         print(f"  ERROR: expected the shown rows {expected_values}, got {shown_values}")
         failed += 1

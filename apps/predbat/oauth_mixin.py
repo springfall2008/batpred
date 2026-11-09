@@ -154,7 +154,7 @@ class OAuthMixin:
             last_error = None
             for attempt in range(OAUTH_REFRESH_RETRIES):
                 try:
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with self.http_session(timeout=timeout) as session:
                         async with session.post(url, headers=headers, json=payload) as response:
                             if response.status == 200:
                                 data = await response.json()

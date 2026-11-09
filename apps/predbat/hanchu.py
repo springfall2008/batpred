@@ -49,7 +49,7 @@ import statistics
 import time
 from datetime import datetime
 import aiohttp
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from hanchu_const import (
     HANCHU_ACK_MAP,
@@ -420,7 +420,7 @@ class HanchuAPI(ComponentBase):
         closed, or anything that is not a real session, is replaced rather than trusted.
         """
         if self._session is None or getattr(self._session, "closed", True) is not False:
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            self._session = self.http_session(timeout=timeout)
         return self._session
 
     async def close_session(self):
@@ -1129,11 +1129,18 @@ class HanchuAPI(ComponentBase):
             self.set_arg_auto(flag, [False for _ in devices])
 
         # Only map an arg when EVERY device reports the underlying value.
+        #
+        # overwrite=False: these four are the daily energy totals whose recorder HISTORY Predbat
+        # reads (the load model and the day's cost), so a sensor the user named in apps.yaml wins and
+        # keeps its history - set_arg_auto still fills the key in when they named nothing. Claimed
+        # per key, as GivTCP does. The case that needs it: an EV charger wired outside the Hanchu
+        # grid meter, so Hanchu's own import_today misses the car and the user points the key at
+        # their smart meter instead.
         for leaf in ("load_today", "import_today", "export_today", "pv_today"):
             if leaf == "pv_today" and self.automatic_ignore_pv:
                 continue
             if all(leaf in self.device_energy.get(sn, {}) for sn in devices):
-                self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices])
+                self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices], overwrite=False)
             else:
                 self.log("Warn: Hanchu not every device reports {}, it must be set manually in apps.yaml".format(leaf))
 
@@ -1431,18 +1438,22 @@ class HanchuAPI(ComponentBase):
                 window["enable"] = self._to_bool(value, window.get("enable", False))
             return
 
+    @writes
     async def select_event(self, entity_id, value):
         """Handle a select entity change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a number entity value change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a switch entity service call."""
         await self._handle_control_event(entity_id, service)
 
+    @writes
     async def _handle_control_event(self, entity_id, value):
         """Route one control-entity event to the right device and apply it."""
         sn = self._sn_from_entity(entity_id)
@@ -1820,6 +1831,7 @@ class HanchuAPI(ComponentBase):
             interval = min(interval, HANCHU_FAILED_WRITE_INTERVAL)
         return (time.time() - last) >= interval
 
+    @writes
     async def _write_payload(self, sn, payload, force=False):
         """Serialise every settings write through one lock, then send it.
 
@@ -1829,6 +1841,7 @@ class HanchuAPI(ComponentBase):
         async with self.write_lock:
             return await self._write_payload_locked(sn, payload, force=force)
 
+    @writes
     async def _write_payload_locked(self, sn, payload, force=False):
         """Send one batched payload if it differs from the last accepted one and pacing allows.
 
@@ -1907,6 +1920,7 @@ class HanchuAPI(ComponentBase):
             self.write_failure_notified.discard(sn)
         self.write_failures.pop(sn, None)
 
+    @writes
     async def apply_schedule(self, sn, force=False):
         """Build and send the locally held schedule for one device.
 
@@ -1925,6 +1939,7 @@ class HanchuAPI(ComponentBase):
             return False
         return await self._write_payload(sn, self.build_write_payload(sn, schedule), force=force)
 
+    @writes
     async def _reconcile_control(self, sn):
         """Re-apply sn's schedule if Predbat already controls it, unforced.
 

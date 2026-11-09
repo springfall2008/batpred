@@ -421,7 +421,7 @@ async def test_async_get_day_night_rates(my_predbat):
         failed = True
     else:
         # Verify alternating pattern: night, day, night, day...
-        # Night rate: 00:30-07:30, Day rate: 07:30-00:30 (next day)
+        # Unknown tariff code, so the GO window: night 00:30-05:30 local, day 05:30-00:30 (next day)
         alternates_correctly = True
         for i in range(0, len(result), 2):
             night_entry = result[i]
