@@ -63,6 +63,7 @@ class MockGECloudDirect(GECloudDirect):
         self.evc_data = {}
         self.evc_sessions = {}
         self.evc_status_unknown = set()
+        self.evc_start_skipped = set()
         self.automatic_evc = False
         # Off, the components.py default when apps.yaml does not mention it
         self.evc_control = False
@@ -6955,6 +6956,18 @@ def _test_evc_control(my_predbat):
         ge.evc_device["evc-001"]["status"] = "SuspendedEV"
         await ge.charger_control_apply(inside)
         assert commands == [], "A full or paused car is not drift, got {}".format(commands)
+
+        # Test 16: a start skipped on a stale Charging status is retried once the charger reports Preparing
+        commands = []
+        ge = _evc_control_component(commands)
+        ge.evc_device_list = ["evc-001"]
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "Charging"}}
+        ge.entity_attributes = plan
+        await ge.charger_control_apply(inside)
+        assert commands == [], "Already charging should get no start-charge, got {}".format(commands)
+        ge.evc_device["evc-001"]["status"] = "Preparing"
+        await ge.charger_control_apply(inside)
+        assert commands == [("evc-001", "start-charge")], "A charge that ended before the window should be started, got {}".format(commands)
 
         return 0
 
