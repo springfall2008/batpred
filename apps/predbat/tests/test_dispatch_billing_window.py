@@ -162,7 +162,8 @@ def _run_window(my_predbat):
     completed = [_dispatch(my_predbat, 1080, 1110, kwh=3.0)]
     rates = _cycle(my_predbat, 1135, planned=_running(my_predbat, 1135, 1200), completed=completed)
     failed |= _check("t6 cheap with a completed entry", _low(rates, 1080, 1110), "rate {}".format(rates[1080]))
-    failed |= _check("t6 nothing held under a completed entry", _held(my_predbat) == [], "held {}".format(_held(my_predbat)))
+    # Only the part of the half hour in progress that the running dispatch has gone past is held
+    failed |= _check("t6 nothing held under a completed entry", [slot["start"] for slot in _held(my_predbat)] == [_dispatch(my_predbat, 1110, 1133)["start"]], "held {}".format(_held(my_predbat)))
 
     print("Test 7: the window hold runs out after a day")
     _setup(my_predbat)

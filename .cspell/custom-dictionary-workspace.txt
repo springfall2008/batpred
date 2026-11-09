@@ -118,6 +118,7 @@ coro
 corruptleg
 corruptplans
 cprofile
+CREAT
 creds
 crosscharge
 ctrdis
@@ -425,6 +426,7 @@ metricmid
 microinverters
 middlebox
 middleboxes
+middot
 milli
 minb
 minmax
@@ -448,6 +450,7 @@ monokai
 Mosquitto
 mousedown
 mpan
+mpans
 mppt
 mprn
 mpxn
@@ -800,6 +803,7 @@ workstreams
 worktree
 writeonly
 wrongsha
+WRONLY
 wwxxabcdefyyzz
 x1
 xaxis
