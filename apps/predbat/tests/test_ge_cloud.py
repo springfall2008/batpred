@@ -13,6 +13,7 @@ from gecloud import GECloudDirect, GECloudData, regname_to_ha
 from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
 from gecloud import EVCCommandFailed, GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
 from gecloud import CONTROL_SETTINGS_REFRESH_SECONDS, DEVICE_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
+from gecloud import DEVICE_HOLD_INITIAL_SECONDS, DEVICE_HOLD_MAX_SECONDS, DEVICE_TIMEOUT_ATTEMPTS
 from utils import dp4
 import asyncio
 import copy
@@ -90,6 +91,7 @@ class MockGECloudDirect(GECloudDirect):
         self.model_rate_warned = set()
         self._discovery_report = None
         self._now_utc_exact = datetime.now(timezone.utc)
+        self.device_hold = {}
         self.settings_from_cache = False
         self.default_options_stamp = None
         self.pending_default_options = set()
@@ -193,6 +195,7 @@ class MockGECloudData(GECloudData):
         self.log_messages = []
         self.config_args = {}
         self._now_utc_exact = datetime.now(timezone.utc)
+        self.device_hold = {}
 
     @property
     def config_root(self):
@@ -326,6 +329,9 @@ def test_ge_cloud(my_predbat=None):
         ("api_locked", _test_async_get_inverter_data_inverter_locked, "Inverter locked body is a failure, not a success"),
         ("api_body_retryable", _test_async_get_inverter_data_retryable_body_failure, "Retryable body failure returns None"),
         ("write_locked", _test_async_write_inverter_setting_locked, "Write aborts on a terminal failure"),
+        ("device_hold_codes", _test_device_hold_on_device_level_codes, "Offline, no response and locked hold off the device's setting requests"),
+        ("device_hold_probe", _test_device_hold_probe_escalates_and_clears, "Device hold probe escalates to the cap and clears on success"),
+        ("device_timeout_capped", _test_device_timeout_retries_capped, "Device timeouts are retried a capped number of times"),
         ("api_bare_code", _test_async_get_inverter_data_terminal_code_without_success_flag, "Terminal code without a success flag is a failure"),
         ("api_negative_value", _test_async_get_inverter_data_negative_value_other_endpoint, "Negative value outside the setting endpoints is data"),
         ("switch_event", _test_switch_event, "Switch event handler"),
@@ -4388,8 +4394,9 @@ def _test_async_write_inverter_setting_success(my_predbat):
                 print("ERROR: Expected None when value is error code, got {}".format(result2))
                 return 1
 
-            if call_count[0] != 10:
-                print("ERROR: Expected 10 retry attempts for error value code, got {}".format(call_count[0]))
+            # A device timeout keeps its retries, but only DEVICE_TIMEOUT_ATTEMPTS of them
+            if call_count[0] != DEVICE_TIMEOUT_ATTEMPTS:
+                print("ERROR: Expected {} attempts for a device timeout, got {}".format(DEVICE_TIMEOUT_ATTEMPTS, call_count[0]))
                 return 1
 
             return 0
@@ -4552,6 +4559,165 @@ def _test_async_write_inverter_setting_locked(my_predbat):
             if not any("Inverter Locked" in message and str(code) in message for message in ge_cloud.log_messages):
                 print("ERROR: Expected the GivEnergy message and code {} to be logged, got {}".format(code, ge_cloud.log_messages))
                 return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_device_hold_on_device_level_codes(my_predbat):
+    """
+    Offline (-2), no response (-6) and locked (-7) hold off the device's setting reads and writes.
+
+    A retry seconds later almost never clears these, so each costs one call, not RETRIES of them; while
+    the hold lasts, reads and writes to that device fail without a call and other devices are unaffected.
+    """
+
+    async def test():
+        for code in [-2, -6, -7]:
+            for op in ["read", "write"]:
+                ge_cloud = MockGECloudDirect()
+                ge_cloud.pending_writes["inv1"] = []
+                ge_cloud.pending_writes["inv2"] = []
+                calls = []
+
+                async def mock_get_data(endpoint, serial, setting_id, *args, **kwargs):
+                    calls.append(serial)
+                    if serial == "inv2":
+                        return {"value": 50}
+                    if code == -7:
+                        raise GECloudTerminalError(-7, "Inverter Locked", "inverter_locked")
+                    return {"value": code, "success": False, "message": "device problem"}
+
+                ge_cloud.async_get_inverter_data = mock_get_data
+                action = ge_cloud.async_read_inverter_setting if op == "read" else (lambda serial, sid: ge_cloud.async_write_inverter_setting(serial, sid, "10"))
+
+                with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                    result = await action("inv1", 77)
+                    if result is not None:
+                        print("ERROR: code {} {}: expected None, got {}".format(code, op, result))
+                        return 1
+                    if len(calls) != 1:
+                        print("ERROR: code {} {}: expected 1 call, not a retry burst, got {}".format(code, op, len(calls)))
+                        return 1
+                    hold = ge_cloud.device_hold.get("inv1")
+                    if not hold or hold["seconds"] != DEVICE_HOLD_INITIAL_SECONDS or hold["code"] != code:
+                        print("ERROR: code {} {}: expected a {}s hold, got {}".format(code, op, DEVICE_HOLD_INITIAL_SECONDS, hold))
+                        return 1
+
+                    # Held: no calls for this device, whether read or write
+                    await ge_cloud.async_read_inverter_setting("inv1", 78)
+                    await ge_cloud.async_write_inverter_setting("inv1", 78, "1")
+                    if len(calls) != 1:
+                        print("ERROR: code {} {}: expected no calls while held, got {}".format(code, op, calls))
+                        return 1
+
+                    # Another device is not held
+                    result = await ge_cloud.async_read_inverter_setting("inv2", 77)
+                    if result != {"value": 50} or calls[-1] != "inv2":
+                        print("ERROR: code {} {}: expected another device to be read normally, got {}".format(code, op, result))
+                        return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_device_hold_probe_escalates_and_clears(my_predbat):
+    """The first request after a hold is the probe: a repeat failure doubles the hold up to the cap, a success clears it"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.pending_writes["inv1"] = []
+        responses = []
+        calls = [0]
+
+        async def mock_get_data(*args, **kwargs):
+            calls[0] += 1
+            return responses.pop(0)
+
+        ge_cloud.async_get_inverter_data = mock_get_data
+        start = ge_cloud._now_utc_exact
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            expected = DEVICE_HOLD_INITIAL_SECONDS
+            for attempt in range(6):
+                responses.append({"value": -2, "success": False})
+                await ge_cloud.async_write_inverter_setting("inv1", 72, "10")
+                hold = ge_cloud.device_hold["inv1"]
+                if hold["seconds"] != expected:
+                    print("ERROR: probe {}: expected a {}s hold, got {}".format(attempt, expected, hold["seconds"]))
+                    return 1
+                # Just after the hold expires the next write is sent as the probe
+                ge_cloud._now_utc_exact = hold["until"] + timedelta(seconds=1)
+                expected = min(expected * 2, DEVICE_HOLD_MAX_SECONDS)
+            if calls[0] != 6:
+                print("ERROR: expected one call per probe, got {}".format(calls[0]))
+                return 1
+
+            # A successful probe clears the hold, and the next write goes straight through
+            responses.append({"value": 10})
+            result = await ge_cloud.async_write_inverter_setting("inv1", 72, "10")
+            if result != {"value": 10} or "inv1" in ge_cloud.device_hold:
+                print("ERROR: expected a successful probe to clear the hold, got {} / {}".format(result, ge_cloud.device_hold))
+                return 1
+            if not any("hold off cleared" in message for message in ge_cloud.log_messages):
+                print("ERROR: expected the cleared hold to be logged")
+                return 1
+
+            # A failure long after the last hold ended starts from the initial hold again
+            ge_cloud.device_hold["inv1"] = {"until": start, "seconds": DEVICE_HOLD_MAX_SECONDS, "code": -2}
+            ge_cloud._now_utc_exact = start + timedelta(seconds=DEVICE_HOLD_MAX_SECONDS + 60)
+            responses.append({"value": -6, "success": False})
+            # Not 72, whose write above is answered from pending_writes without a call
+            await ge_cloud.async_read_inverter_setting("inv1", 73)
+            if ge_cloud.device_hold["inv1"]["seconds"] != DEVICE_HOLD_INITIAL_SECONDS:
+                print("ERROR: expected a stale hold to restart at {}s, got {}".format(DEVICE_HOLD_INITIAL_SECONDS, ge_cloud.device_hold["inv1"]))
+                return 1
+
+            # A second failure while already held (two reads run side by side) does not escalate it
+            ge_cloud.hold_device("inv1", -6)
+            if ge_cloud.device_hold["inv1"]["seconds"] != DEVICE_HOLD_INITIAL_SECONDS:
+                print("ERROR: expected a failure during a hold to leave it at {}s, got {}".format(DEVICE_HOLD_INITIAL_SECONDS, ge_cloud.device_hold["inv1"]))
+                return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_device_timeout_retries_capped(my_predbat):
+    """A device timeout (-1) clears on a retry, so it is retried - but only DEVICE_TIMEOUT_ATTEMPTS times - and never holds the device"""
+
+    async def test():
+        # Recovers on the second attempt
+        ge_cloud = MockGECloudDirect()
+        responses = [{"value": -1, "success": False}, {"value": 42}]
+
+        async def mock_recover(*args, **kwargs):
+            return responses.pop(0)
+
+        ge_cloud.async_get_inverter_data = mock_recover
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            result = await ge_cloud.async_read_inverter_setting("inv1", 77)
+        if result != {"value": 42}:
+            print("ERROR: expected the retry after a timeout to succeed, got {}".format(result))
+            return 1
+
+        # Times out every time: gives up after DEVICE_TIMEOUT_ATTEMPTS, no hold
+        ge_cloud = MockGECloudDirect()
+        calls = [0]
+
+        async def mock_timeout(*args, **kwargs):
+            calls[0] += 1
+            return {"value": -1, "success": False}
+
+        ge_cloud.async_get_inverter_data = mock_timeout
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            result = await ge_cloud.async_read_inverter_setting("inv1", 77)
+        if result is not None or calls[0] != DEVICE_TIMEOUT_ATTEMPTS:
+            print("ERROR: expected {} timed out attempts then None, got {} attempts / {}".format(DEVICE_TIMEOUT_ATTEMPTS, calls[0], result))
+            return 1
+        if ge_cloud.device_hold:
+            print("ERROR: expected a timeout not to hold the device, got {}".format(ge_cloud.device_hold))
+            return 1
         return 0
 
     return run_async(test())
