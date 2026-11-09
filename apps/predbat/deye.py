@@ -34,6 +34,8 @@ from deye_const import (
     DEYE_TIMEOUT,
     DEYE_RETRIES,
     DEYE_TELEMETRY_KEYS,
+    DEYE_TELEMETRY_FALLBACK_KEYS,
+    DEYE_PV_STRING_KEY_PREFIX,
     DEYE_LATEST_BODY_KEY,
     DEYE_WORKMODE,
     FREEZE_EXPORT_SOC,
@@ -380,6 +382,22 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         except (TypeError, ValueError):
             return default
 
+    def _telemetry_value(self, name, flat):
+        """Read one telemetry metric from a flattened dataList.
+
+        Returns (value, found). Tries the primary key, then any model-specific fallbacks,
+        and for pv_power finally the sum of the per-string DCPowerPV<n> readings. found is
+        False only when none of them is present, so a genuine 0 W is not treated as missing.
+        """
+        for key in (DEYE_TELEMETRY_KEYS[name],) + DEYE_TELEMETRY_FALLBACK_KEYS.get(name, ()):
+            if key in flat:
+                return self._as_float(flat.get(key)), True
+        if name == "pv_power":
+            strings = [key for key in flat if key.startswith(DEYE_PV_STRING_KEY_PREFIX) and key[len(DEYE_PV_STRING_KEY_PREFIX) :].isdigit()]
+            if strings:
+                return sum(self._as_float(flat.get(key)) for key in strings), True
+        return 0.0, False
+
     async def fetch_device_data(self, sn):
         """Fetch and normalise the latest telemetry for one inverter."""
         data = await self._post("device_latest", {DEYE_LATEST_BODY_KEY: [sn]})
@@ -391,8 +409,11 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             return {}
         flat = self._datalist_to_dict(rows[0].get("dataList"))
         result = {}
-        for name, key in DEYE_TELEMETRY_KEYS.items():
-            value = self._as_float(flat.get(key))
+        found = set()
+        for name in DEYE_TELEMETRY_KEYS:
+            value, present = self._telemetry_value(name, flat)
+            if present:
+                found.add(name)
             # DEYE's grid sign is the opposite of Predbat's (see DEYE_TELEMETRY_NEGATE).
             result[name] = -value if name in DEYE_TELEMETRY_NEGATE else value
         self.device_energy[sn] = {name: self._as_float(flat.get(key)) for name, key in DEYE_ENERGY_KEYS.items() if key in flat}
@@ -404,7 +425,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         if DEYE_RATED_POWER_KEY in flat:
             self.device_rated_power[sn] = self._as_float(flat[DEYE_RATED_POWER_KEY])
         self.derive_battery_capacity(sn, flat)
-        missing = [DEYE_TELEMETRY_KEYS[name] for name in DEYE_TELEMETRY_REQUIRED if DEYE_TELEMETRY_KEYS[name] not in flat]
+        missing = [DEYE_TELEMETRY_KEYS[name] for name in DEYE_TELEMETRY_REQUIRED if name not in found]
         if missing:
             # A missing key silently reads 0.0, which previously hid a wholly wrong key
             # map, so say so loudly and name what the device did return.
