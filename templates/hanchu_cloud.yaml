@@ -1,9 +1,11 @@
-# Predbat config for the Hanchu iESS, via the hanchu-ess-ha HACS
+# Predbat config for the Hanchu iESS, via the hanchu-ess-ha custom
 # integration (https://github.com/upton68/hanchu-ess-ha)
 #
 # Copy this over your apps.yaml and:
-#   1. Install the "Hanchu iESS" integration via HACS and configure it
-#      with your Hanchu cloud account credentials.
+#   1. Install the "Hanchu iESS" integration from the Marketplace
+#      (Settings -> Marketplace, Home Assistant 2026.11 or newer) or from HACS
+#      (Home Assistant 2026.10 or older) and configure it with your Hanchu
+#      cloud account credentials.
 #   2. Create three helpers in Home Assistant (see inverter-setup docs).
 #   3. Create the bridge script (see inverter-setup docs).
 #   4. Add the soc_kw template sensor to configuration.yaml (see inverter-setup docs).

@@ -24,7 +24,11 @@ def test_octopus_intelligent_devices_wrapper(my_predbat):
     failed += test_discovery_report_not_advanced_while_car_entities_incomplete(my_predbat)
     failed += test_discovery_report_failure_contained_and_retried(my_predbat)
     failed += test_build_discovery_round_trips_through_coordinator_and_redaction(my_predbat)
-    failed += test_build_discovery_car_uuid_device_id_not_published_in_clear(my_predbat)
+    failed += test_build_discovery_car_uuid_device_id_published_readable(my_predbat)
+    failed += test_build_discovery_saving_session_programme(my_predbat)
+    failed += test_build_discovery_no_saving_programme_until_joined(my_predbat)
+    failed += test_build_discovery_free_electricity_programme_once_events_seen(my_predbat)
+    failed += test_build_discovery_programmes_round_trip(my_predbat)
     failed += test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_failure(my_predbat)
     failed += test_discovery_report_produced_when_automatic_is_false(my_predbat)
     failed += test_intelligent_dispatch_change_requests_replan(my_predbat)
@@ -1713,28 +1717,24 @@ def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predba
     coordinator.assemble()
     catalogue_text = str(coordinator.catalogue())
 
-    check(mpan not in catalogue_text, "the raw MPAN appears in the clear in the redacted catalogue")
-    check(account_id not in catalogue_text, "the raw account id appears in the clear in the redacted catalogue")
-    # Task 7 review, Finding 1: get_entity_name() lower-cases account_id and swaps "-" for "_" when
-    # folding it into every car entity id (already published above by _publish_car_entities, using
-    # the real get_entity_name()) - "A-1234ABCD" becomes "a_1234abcd", a DIFFERENT string from the
-    # noted original that the redactor must catch too, not just the byte-exact raw form.
-    check(account_id.lower().replace("-", "_") not in catalogue_text, "the case-folded, separator-swapped account id form appears in the clear in the redacted catalogue")
+    # Identifiers are not secret (maintainer decision, 2 Nov 2026): the MPAN, the account id and the car
+    # entity ids get_entity_name() folds the account id into (lower-cased, "-" swapped for "_") all reach
+    # the published catalogue unchanged, so a reader can re-bind configuration from them
+    check(mpan in catalogue_text, "the MPAN is an identifier and must stay readable in the published catalogue")
+    check(account_id in catalogue_text, "the account id is an identifier and must stay readable in the published catalogue")
+    check(account_id.lower().replace("-", "_") in catalogue_text, "the car entity ids embedding the account id must reach the published catalogue unchanged")
     check("E-1R-INTELLI-VAR-24-10-29-A" in catalogue_text, "the tariff code should survive in the clear, but is missing from the redacted catalogue")
     check("INTELLI-VAR-24-10-29" in catalogue_text, "the product code should survive in the clear, but is missing from the redacted catalogue")
 
     if failed == 0:
-        print("PASS: build_discovery() round-trips through the real Coordinator and Redactor - MPAN/account pseudonymised (byte-exact AND case/separator-transformed), tariff/product codes kept in the clear")
+        print("PASS: build_discovery() round-trips through the real Coordinator and Redactor - MPAN, account id, entity ids and tariff/product codes all readable")
     return failed
 
 
-def test_build_discovery_car_uuid_device_id_not_published_in_clear(my_predbat):
-    """Final review, Ruling R43: the car record's device_id ("octopus:{uuid}") carried no
-    account_ids, so _has_pseudonym_container was False and it was never noted - a UUID-shaped
-    Intelligent device id has no 10-digit run for the shape guard to catch either, so it reached
-    the redacted catalogue verbatim. Solcast pseudonymises its own provider id on exactly this
-    reasoning (an account/site-specific identifier, not a public one), so Octopus's car record now
-    carries the same device id in account_ids too, letting the existing machinery tokenise it."""
+def test_build_discovery_car_uuid_device_id_published_readable(my_predbat):
+    """A UUID-shaped Intelligent device id is an identifier, and identifiers are not secret (maintainer
+    decision, 2 Nov 2026): the car record carries it in its device_id and in account_ids, and the
+    published catalogue keeps both readable - nothing tokenises it."""
     api = _make_discovery_api(my_predbat, "cars-uuid-device-id")
     device_id = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"
     api.intelligent_devices = {device_id: {"suspended": False}}
@@ -1742,18 +1742,129 @@ def test_build_discovery_car_uuid_device_id_not_published_in_clear(my_predbat):
     report = api.build_discovery()
     car_record = report["cars"][0]
     assert car_record["device_id"] == "octopus:{}".format(device_id)
-    assert car_record.get("account_ids", {}).get("intelligent_device_id") == device_id, "the raw device id must be carried in account_ids so the redactor tokenises it: {}".format(car_record)
+    assert car_record.get("account_ids", {}).get("intelligent_device_id") == device_id, car_record
 
     from coordinator import Coordinator
     from mock_base import MockBase as SharedMockBase
 
     coordinator = Coordinator(SharedMockBase())
     coordinator.report("octopus", report)
-    coordinator.assemble()
-    catalogue_text = str(coordinator.catalogue())
+    published = coordinator.catalogue()["cars"][0]
 
-    assert device_id not in catalogue_text, "the raw UUID-shaped Intelligent device id must not survive redaction"
-    print("PASS: a UUID-shaped Intelligent device id is pseudonymised, not published in the clear")
+    assert published["device_id"] == "octopus:{}".format(device_id), published
+    assert published["account_ids"]["intelligent_device_id"] == device_id, published
+    print("PASS: a UUID-shaped Intelligent device id is published readable")
+    return 0
+
+
+def _programmes_api(my_predbat, account_id):
+    """An Octopus component with an import meter, its session entities published in my_predbat's state store."""
+    api = _make_discovery_api(my_predbat, account_id)
+    api.mpan = "1300000000001"
+    api.tariffs = {"import": {"tariffCode": "E-1R-VAR-22-11-01-A", "productCode": "VAR-22-11-01", "deviceID": "meter-import", "mpan": "1300000000001"}}
+    for domain, suffix in (("binary_sensor", "saving_session"), ("select", "saving_session_join"), ("sensor", "free_electricity")):
+        my_predbat.set_state_wrapper(api.get_entity_name(domain, suffix), "off")
+    return api
+
+
+def _programme(report, kind):
+    """The programme record of this kind in a report, or None."""
+    return next((record for record in report.get("programmes", []) if record.get("kind") == kind), None)
+
+
+def test_build_discovery_saving_session_programme(my_predbat):
+    """An account that has joined the Saving Sessions campaign is a saving_session programme on its import meter."""
+    api = _programmes_api(my_predbat, "A-SAVE0001")
+    api.saving_sessions = {"account": {"hasJoinedCampaign": True, "joinedEvents": []}}
+    programme = _programme(api.build_discovery(), "saving_session")
+    expected = {
+        "device_id": "octopus:saving_session:A-SAVE0001",
+        "kind": "saving_session",
+        "meter": "octopus:1300000000001",
+        "account_ids": {"account": "A-SAVE0001"},
+        "effects": ["rate_override"],
+        "entities": {
+            "octopus_saving_session": {"entity_id": api.get_entity_name("binary_sensor", "saving_session"), "domain": "binary_sensor", "access": "r"},
+            "octopus_saving_session_join": {"entity_id": api.get_entity_name("select", "saving_session_join"), "domain": "select", "access": "rw"},
+        },
+    }
+    if programme != expected:
+        print(f"ERROR: expected {expected}, got {programme}")
+        return 1
+    print("PASS: a joined Saving Sessions campaign is a saving_session programme")
+    return 0
+
+
+def test_build_discovery_no_saving_programme_until_joined(my_predbat):
+    """No Saving Sessions data, or a campaign not joined, gives no saving_session programme."""
+    api = _programmes_api(my_predbat, "A-SAVE0002")
+    for sessions in ({}, {"account": {"hasJoinedCampaign": False}}):
+        api.saving_sessions = sessions
+        if _programme(api.build_discovery(), "saving_session") is not None:
+            print(f"ERROR: expected no saving_session programme for {sessions}")
+            return 1
+    print("PASS: no saving_session programme until the campaign is joined")
+    return 0
+
+
+def test_build_discovery_free_electricity_programme_once_events_seen(my_predbat):
+    """Free Electricity has no enrolment flag: the programme appears once the account has had a session, and stays after it ends."""
+    api = _programmes_api(my_predbat, "A-FREE0001")
+    if _programme(api.build_discovery(), "free_electricity") is not None:
+        print("ERROR: no Free Electricity session has been seen, so there should be no programme yet")
+        return 1
+    answers = {"free": {"customerFlexibilityCampaignEvents": {"edges": [{"node": {"code": "FREE-1", "startAt": "2026-11-02T12:00:00+00:00", "endAt": "2026-11-02T13:00:00+00:00"}}]}}}
+
+    async def query(query, context, **kwargs):
+        """Answer the flexibility queries: no saving events, the free electricity events in answers."""
+        if context == "get-flexibility-free-electricity":
+            return answers["free"]
+        return None
+
+    api.async_graphql_query = AsyncMock(side_effect=query)
+    api.async_get_saving_sessions = AsyncMock(return_value={})
+    asyncio.run(api.async_get_flexibility_events("A-FREE0001"))
+    programme = _programme(api.build_discovery(), "free_electricity")
+    expected = {
+        "device_id": "octopus:free_electricity:A-FREE0001",
+        "kind": "free_electricity",
+        "meter": "octopus:1300000000001",
+        "account_ids": {"account": "A-FREE0001"},
+        "effects": ["rate_override"],
+        "entities": {"octopus_free_electricity": {"entity_id": api.get_entity_name("sensor", "free_electricity"), "domain": "sensor", "access": "r"}},
+    }
+    if programme != expected:
+        print(f"ERROR: expected {expected}, got {programme}")
+        return 1
+    answers["free"] = {"customerFlexibilityCampaignEvents": {"edges": []}}
+    asyncio.run(api.async_get_flexibility_events("A-FREE0001"))
+    if _programme(api.build_discovery(), "free_electricity") is None:
+        print("ERROR: the programme should stay once a session has been seen, after the events clear")
+        return 1
+    print("PASS: a Free Electricity programme appears once a session is seen, and stays")
+    return 0
+
+
+def test_build_discovery_programmes_round_trip(my_predbat):
+    """Through the real Coordinator: both programmes survive validation, each linked to the import meter's device_id."""
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    api = _programmes_api(my_predbat, "A-BOTH0001")
+    api.saving_sessions = {"account": {"hasJoinedCampaign": True}}
+    api.free_electricity_seen = True
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("octopus", api.build_discovery())
+    catalogue = coordinator.catalogue()
+    warnings = [line for line in logs if line.startswith("Warn")]
+    meter_id = next(record for record in catalogue["meters"] if record["direction"] == "import")["device_id"]
+    kinds = sorted(record["kind"] for record in catalogue["programmes"])
+    if warnings or kinds != ["free_electricity", "saving_session"] or any(record["meter"] != meter_id for record in catalogue["programmes"]):
+        print(f"ERROR: warnings {warnings}, kinds {kinds}, programmes {catalogue['programmes']}, import meter {meter_id}")
+        return 1
+    print("PASS: both programmes round-trip, linked to the import meter")
     return 0
 
 

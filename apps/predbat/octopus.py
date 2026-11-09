@@ -27,11 +27,14 @@ from const import (
     DISPATCH_SOURCE_CHARGING_UNLISTED,
     REPEAT_FULL_LOG_SECONDS,
     OCTOPUS_DISPATCH_HOLD_MINUTES,
+    OCTOPUS_DISPATCH_TAIL_MINUTES,
     OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES,
     DISPATCH_BILLING_CHOICES,
     OCTOPUS_STATE_SMART_CONTROL_IN_PROGRESS,
     OCTOPUS_STATES_NOT_DISPATCHING,
     OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES,
+    PREDICT_STEP,
+    DYNAMIC_LOAD_CAR_START_MINUTES,
 )
 from utils import (
     RepeatLogGate,
@@ -48,11 +51,13 @@ from utils import (
     parse_retry_after,
     TOKEN_MINT_BACKOFF_BASE_SECONDS,
     TOKEN_MINT_BACKOFF_MAX_SECONDS,
+    TOKEN_MINT_RATE_LIMIT_BACKOFF_MAX_SECONDS,
     GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS,
     GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
     strptime_aware,
 )
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session
+from billing import BillingReader
 from mock_base import MockBase as SharedMockBase
 import aiohttp
 import hashlib
@@ -202,6 +207,10 @@ def parse_date_time(dt_str):
 # recover from a misclassification. Measured in time rather than a count of blocked requests:
 # one poll sends several queries, so a count of five was reached within a couple of minutes.
 EDGE_BLOCK_REFRESH_AFTER_SECONDS = 30 * 60
+# Once the token mint has been refused this long without a break, report the component as
+# failed. Public rate downloads keep succeeding through a mint block, so without this the
+# component looked healthy while every authenticated call (dispatches, saving sessions) failed.
+OCTOPUS_MINT_UNHEALTHY_AFTER_SECONDS = 60 * 60
 
 
 api_token_query = """mutation {{
@@ -532,12 +541,14 @@ class OctopusEnergyApiClient:
     dispatch queries, and saving session management.
     """
 
-    def __init__(self, api_key, log, timeout_in_seconds=20):
+    def __init__(self, api_key, log, timeout_in_seconds=20, session_factory=None):
         if api_key is None:
             raise Exception("OctopusAPI: API KEY is not set")
 
         self.api_key = api_key
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
         self.base_url = "https://api.octopus.energy"
         self.backend_url = "https://api.backend.octopus.energy"
 
@@ -555,8 +566,15 @@ class OctopusEnergyApiClient:
         if self.session is not None:
             return self.session
 
-        self.session = aiohttp.ClientSession(headers=self.default_headers, skip_auto_headers=["User-Agent"])
+        self.session = self._session_factory(headers=self.default_headers, skip_auto_headers=["User-Agent"])
         return self.session
+
+    async def async_reset_client_session(self):
+        """Close the session so the next request starts a fresh one, with no cookies or pooled connections."""
+        session = self.session
+        self.session = None
+        if session is not None:
+            await session.close()
 
 
 def _slot_tou_label(node):
@@ -653,26 +671,6 @@ def _merge_minute_windows(minutes):
     return sorted(tuple(window) for window in windows)
 
 
-def _tou_window_to_local(start_minute, end_minute, utc_offset_minutes):
-    """
-    Shift a TOU window given in UTC minutes into wall-clock minutes from local midnight.
-
-    The measurements API labels UTC instants, so a meter whose off-peak period is fixed to local
-    time reports it shifted by whatever offset was in force when it was sampled. Both ends move
-    together so the window keeps its length, and the pair is then normalised as a unit so the start
-    falls within the day while a window crossing midnight keeps an end beyond 1440.
-    """
-    start_minute += utc_offset_minutes
-    end_minute += utc_offset_minutes
-    while start_minute < 0:
-        start_minute += 24 * 60
-        end_minute += 24 * 60
-    while start_minute >= 24 * 60:
-        start_minute -= 24 * 60
-        end_minute -= 24 * 60
-    return start_minute, end_minute
-
-
 def _localise_wall_clock(local_tz, wall_clock):
     """
     Attach a zone to a naive wall-clock time, taking the offset in force at that time.
@@ -693,17 +691,15 @@ def _localise_wall_clock(local_tz, wall_clock):
             wall_clock = wall_clock.replace(second=0, microsecond=0) + timedelta(minutes=1)
 
 
-def _tou_windows_from_measurements(response_data):
+def _tou_samples_from_measurements(response_data):
     """
-    Derive the meter's off-peak windows from measurement TOU bucket labels.
+    Read the labelled half-hours out of a measurements response as (UTC start, TOU label) pairs.
 
-    Returns (start_minute, end_minute) offsets from UTC midnight, or None when the response carries
-    no labels or only a single bucket, in which case there is nothing to distinguish an off-peak
-    period and the caller should fall back to the hard-wired windows.
+    Returns them in time order, or None when the response carries no labels at all.
     """
     if not response_data:
         return None
-    labels_by_slot = {}
+    samples = []
     for prop in (response_data.get("account", {}) or {}).get("properties", []) or []:
         for edge in (prop.get("measurements", {}) or {}).get("edges", []) or []:
             node = edge.get("node", {}) or {}
@@ -711,15 +707,54 @@ def _tou_windows_from_measurements(response_data):
             label = _slot_tou_label(node)
             if not stamp or not label:
                 continue
-            start = str2time(stamp).astimezone(timezone.utc)
-            labels_by_slot.setdefault(start.hour * 60 + start.minute, []).append(label)
-    if not labels_by_slot:
+            samples.append((str2time(stamp).astimezone(timezone.utc), label))
+    # Order by time alone, so a half-hour the response repeats keeps the API's own order
+    return sorted(samples, key=lambda sample: sample[0]) if samples else None
+
+
+def _dominant_label(labels):
+    """
+    Pick the label voted most often from a time-ordered list.
+
+    A slot's votes can tie on the local clock, where the changeover day adds or removes one. A tie
+    goes to the label seen most recently - the meter's current schedule - so the result never
+    depends on set ordering.
+    """
+    last_seen = {label: index for index, label in enumerate(labels)}
+    return max(last_seen, key=lambda label: (labels.count(label), last_seen[label]))
+
+
+def _tou_windows_from_samples(samples, local_tz=None):
+    """
+    Derive the meter's off-peak windows from labelled half-hour samples.
+
+    Returns (start_minute, end_minute) offsets from UTC midnight, or from local midnight when
+    local_tz is given, or None when there are no samples or only a single bucket, in which case
+    there is nothing to distinguish an off-peak period and the caller should fall back to the
+    hard-wired windows.
+
+    The labels are stamped as UTC instants. A meter switching on local time moves by an hour in UTC
+    across a clock change, so for such a meter each slot is placed by its own local wall-clock time
+    rather than shifted afterwards by a single offset - a sample straddling the change would
+    otherwise split its votes between two UTC positions, and today's offset would misplace the
+    days sampled before the change.
+    """
+    if not samples:
         return None
-    dominant = {slot: max(set(values), key=values.count) for slot, values in labels_by_slot.items()}
+    labels_by_slot = {}
+    for start, label in samples:
+        start = start.astimezone(local_tz or timezone.utc)
+        labels_by_slot.setdefault(start.hour * 60 + start.minute, []).append(label)
+    dominant = {slot: _dominant_label(values) for slot, values in labels_by_slot.items()}
     off_peak = _off_peak_tou_label(set(dominant.values()))
     if not off_peak or len(set(dominant.values())) < 2:
         return None
     return _merge_minute_windows(sorted(slot for slot, label in dominant.items() if label == off_peak))
+
+
+def _tou_windows_from_measurements(response_data, local_tz=None):
+    """Derive the meter's off-peak windows straight from a measurements response - see _tou_windows_from_samples."""
+    return _tou_windows_from_samples(_tou_samples_from_measurements(response_data), local_tz=local_tz)
 
 
 class OctopusAPI(ComponentBase):
@@ -733,8 +768,10 @@ class OctopusAPI(ComponentBase):
     def initialize(self, key, account_id, automatic):
         """Initialise the Octopus API component"""
         self.api_key = key
-        self.api = OctopusEnergyApiClient(key, self.log)
+        self.api = OctopusEnergyApiClient(key, self.log, session_factory=self.http_session)
         self.account_id = account_id
+        # What Octopus actually billed, half-hour by half-hour, published as sensor.predbat_billing
+        self.billing = BillingReader(self, "octopus_user", "billing")
         self.graphql_token = None
         self.graphql_expiration = None
         self.consecutive_edge_blocks = 0
@@ -778,9 +815,13 @@ class OctopusAPI(ComponentBase):
         self.commands = []
         self.smart_control_pending = {}  # device_id -> (suspended, expiry) for a Smart Control change Octopus accepted but may not yet report
         self.mpan = None
-        self.tou_windows = None
+        self.tou_samples = None
         self.tou_windows_day = None
         self.free_electricity_events = []
+        # Whether this process has seen a Free Electricity session for the account - the only evidence of
+        # enrolment there is, since the campaign has no joined flag. Kept once set, so the discovery programme
+        # outlives the session; not persisted, as the events themselves are not (build_discovery()).
+        self.free_electricity_seen = False
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -885,7 +926,20 @@ class OctopusAPI(ComponentBase):
         )
 
     def is_alive(self):
-        return self.api_started and self.account_data
+        """Report unhealthy once the token mint has been refused for a while, however much cached or public data is still arriving."""
+        return bool(self.api_started and self.account_data) and not self.token_mint_failing()
+
+    def token_mint_failing(self):
+        """Return True when the token mint has been refused continuously for OCTOPUS_MINT_UNHEALTHY_AFTER_SECONDS."""
+        started_at = self.token_mint_backoff.started_at
+        return started_at is not None and (datetime.now(timezone.utc) - started_at).total_seconds() >= OCTOPUS_MINT_UNHEALTHY_AFTER_SECONDS
+
+    def health_message(self):
+        """Say why Octopus is unhealthy, so the run status names the refused sign-in rather than just the component."""
+        if not self.token_mint_failing():
+            return None
+        hours = (datetime.now(timezone.utc) - self.token_mint_backoff.started_at).total_seconds() / 3600
+        return "sign-in {} by Octopus for {:.0f}h, retrying automatically".format("rate limited" if self.token_mint_backoff.reason == "rate limited" else "blocked", hours)
 
     def _data_age_minutes(self, fetched_at):
         """Return how many minutes ago fetched_at was, or 9999 if not set."""
@@ -900,6 +954,7 @@ class OctopusAPI(ComponentBase):
         if first:
             # Load cached data (restores tariff_fetched_at / device_fetched_at timestamps)
             await self.load_octopus_cache()
+            await self.billing.load()
             self.log("OctopusAPI: Started")
 
         # Process any queued commands
@@ -943,6 +998,8 @@ class OctopusAPI(ComponentBase):
             self.sensor_updated_at = datetime.now()
             await self.async_update_intelligent_devices(self.account_id)
             await self.async_intelligent_update_sensor(self.account_id)
+
+        await self.async_update_billing(first)
 
         if tariff_due or device_due:
             # Don't save cache every 2 minutes, if we lose it then we re-fresh it anyhow
@@ -1002,10 +1059,30 @@ class OctopusAPI(ComponentBase):
 
         return True
 
+    async def async_update_billing(self, first):
+        """Read the half-hourly billing for the modelled import/export MPANs when due, and publish sensor.predbat_billing.
+
+        Only the MPANs Predbat takes its rates from are read, so another meter on the account can't
+        inflate the bill or hide a day. The first run publishes the restored cache without reading anything.
+        """
+        import_mpan = (self.tariffs.get("import") or {}).get("mpan")
+        if not import_mpan:
+            return
+        now_utc = datetime.now(timezone.utc)
+        self.billing.random_delay = self.get_arg("plan_random_delay", 0) > 0
+        # The first run only publishes what was cached, keeping a restart free of API calls; the read follows a cycle later
+        if not first and self.billing.due(now_utc):
+            export_mpan = (self.tariffs.get("export") or {}).get("mpan")
+            mpans = {"import": (self.account_id, import_mpan), "export": (self.account_id, export_mpan) if export_mpan else None}
+            await self.billing.read(self.async_graphql_query, mpans, now_utc, "octopus", app="octopus")
+        elif first:
+            self.billing.publish("octopus", now_utc, app="octopus")
+
     async def final(self):
         """
         Final cleanup before stopping
         """
+        self.billing.stop()
         await self.api.async_close()
 
     async def process_commands(self, account_id):
@@ -1802,9 +1879,9 @@ class OctopusAPI(ComponentBase):
         device_id. self.mpan is still the fallback for import alone, the one direction it is known
         to describe. mpan is only known for electricity (import/export); this component tracks no
         separate MPRN for gas, so a gas record's account_ids carries only the account id rather
-        than mislabelling it with the electricity MPAN. Both mpan and account genuinely identify the customer, so they go in
-        account_ids, the pseudonym container the redactor tokenises - see the module's docstring
-        and docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md. The tariff and product
+        than mislabelling it with the electricity MPAN. Both mpan and account identify the customer rather than a
+        product, so they go in account_ids, the container for account identifiers (published readable,
+        like every identifier - see docs/discovery-catalogue.md). The tariff and product
         codes describe a publicly listed Octopus product rather than the customer, so they go in
         the clear, in the nested `tariff` sub-record's info container, alongside flags built from
         this component's own existing classifiers (is_intelligent_go_tariff, has_six_hour_cap) plus
@@ -1823,10 +1900,8 @@ class OctopusAPI(ComponentBase):
         catalogue must not claim one exists that Home Assistant has never seen. Vehicle battery
         size and charge-point power are reported in ratings where Octopus's own vehicle/charger
         catalogue lookup found them. The Intelligent device id itself is carried in account_ids
-        (not left as a bare structural device_id) since it is a UUID unique to this account's
-        vehicle enrolment, not a public identifier - without a pseudonym container present, this
-        record's device_id would have nothing to mark it as identity-derived and would publish the
-        raw UUID verbatim (see coordinator.py's _has_pseudonym_container).
+        as well as in the device_id, labelling it as a UUID unique to this account's vehicle
+        enrolment rather than a public product identifier.
 
         Reporting is independent of self.automatic: it records what Octopus's own account
         describes, not whether this component wired Predbat's apps.yaml to it - that distinction is
@@ -1883,12 +1958,9 @@ class OctopusAPI(ComponentBase):
         for device_id in self.get_active_intelligent_device_ids():
             device = self.intelligent_devices.get(device_id, {})
             index_suffix = self.device_id_to_index_suffix(device_id)
-            # account_ids carries the Intelligent device id itself: it is a UUID assigned by
-            # Octopus to this specific account's vehicle enrolment, not a public identifier like a
-            # tariff or product code, so it belongs in the pseudonymised container on the same
-            # reasoning the meter records above apply to mpan/account - see _has_pseudonym_container.
-            # Without it the record's device_id ("octopus:{uuid}") has no pseudonym container
-            # anywhere in it and is never noted at all, publishing the raw UUID verbatim.
+            # account_ids carries the Intelligent device id itself: it is a UUID assigned by Octopus to
+            # this specific account's vehicle enrolment, not a public identifier like a tariff or
+            # product code, so it is labelled as an account identifier alongside mpan/account above
             record = {"device_id": "octopus:{}".format(device_id), "account_ids": {"intelligent_device_id": device_id}}
 
             ratings = {}
@@ -1904,7 +1976,50 @@ class OctopusAPI(ComponentBase):
 
             cars.append(record)
 
-        return {"automatic": self.automatic, "meters": meters, "cars": cars}
+        return {"automatic": self.automatic, "meters": meters, "cars": cars, "programmes": self._discovery_programmes(meters)}
+
+    def _discovery_programmes(self, meters):
+        """The Octoplus flexibility programmes the account is in, for the discovery catalogue.
+
+        saving_session: the account has joined the Saving Sessions campaign (hasJoinedCampaign, which the
+        cache restores across a restart). free_electricity: a Free Electricity session has been seen for
+        the account - that campaign has no joined flag, so a session is the only evidence, and once seen
+        the programme stays for the life of the process rather than flickering as sessions come and go.
+        Both rewrite rates for their windows (fetch_octopus_sessions()), hence rate_override, and both link
+        to the import meter. Their entities are the ones automatic_config() binds - the saving session
+        sensor and its join select, which Predbat writes, and the free electricity sensor - once Home
+        Assistant has seen them; reported whether or not self.automatic wired them.
+        """
+        import_meter = next((record["device_id"] for record in meters if record.get("direction") == "import"), None)
+        if import_meter is None and self.mpan:
+            import_meter = "octopus:{}".format(self.mpan)
+        programmes = []
+
+        def programme(kind, entities):
+            """One programme record of this kind on the import meter."""
+            record = {"device_id": "octopus:{}:{}".format(kind, self.account_id), "kind": kind}
+            if import_meter:
+                record["meter"] = import_meter
+            record["account_ids"] = {"account": self.account_id}
+            record["effects"] = ["rate_override"]
+            seen = self.discovery_entities(entities)
+            if seen:
+                record["entities"] = seen
+            return record
+
+        if (self.saving_sessions or {}).get("account", {}).get("hasJoinedCampaign"):
+            programmes.append(
+                programme(
+                    "saving_session",
+                    {
+                        "octopus_saving_session": {"entity_id": self.get_entity_name("binary_sensor", "saving_session"), "domain": "binary_sensor", "access": "r"},
+                        "octopus_saving_session_join": {"entity_id": self.get_entity_name("select", "saving_session_join"), "domain": "select", "access": "rw"},
+                    },
+                )
+            )
+        if self.free_electricity_seen:
+            programmes.append(programme("free_electricity", {"octopus_free_electricity": {"entity_id": self.get_entity_name("sensor", "free_electricity"), "domain": "sensor", "access": "r"}}))
+        return programmes
 
     async def async_get_saving_sessions(self, account_id):
         """
@@ -1995,6 +2110,8 @@ class OctopusAPI(ComponentBase):
         # dropping the free sessions until the next poll (#5745). An answer with no events still clears them.
         if campaign_data is not None:
             self.free_electricity_events = free_events
+            if free_events:
+                self.free_electricity_seen = True
         elif self.free_electricity_events:
             self.log("Warn: OctopusAPI: Free electricity events not returned, keeping the last known ones")
 
@@ -2110,21 +2227,23 @@ class OctopusAPI(ComponentBase):
         """
         return bool(tariff_code) and "IOG-SMB" in tariff_code
 
-    async def async_get_tou_night_windows(self, days=7):
+    async def async_get_tou_night_windows(self, days=7, local_tz=None):
         """
         Read the meter's real off-peak windows from the measurements API's TOU bucket labels.
 
         Octopus labels every half-hour interval with the time-of-use bucket it bills against, which
         is the meter's actual switching schedule rather than something inferred from the tariff
-        code. Returns (start_minute, end_minute) offsets from UTC midnight, or None when the labels
-        are unavailable so the caller falls back to the hard-wired windows. The result is cached
-        for the day, since a meter's schedule does not change between polls.
+        code. Returns (start_minute, end_minute) offsets from UTC midnight, or from local midnight
+        when local_tz is given for a meter on local time, or None when the labels are unavailable
+        so the caller falls back to the hard-wired windows. The labelled samples are cached for the
+        day, since a meter's schedule does not change between polls, and either clock is read from
+        them.
         """
         if not self.mpan or not self.account_id:
             return None
         today = self.now_utc_exact.astimezone(timezone.utc).strftime(DATE_STR_FORMAT)
         if self.tou_windows_day == today:
-            return self.tou_windows
+            return _tou_windows_from_samples(self.tou_samples, local_tz=local_tz)
 
         end_at = self.now_utc_exact.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         start_at = end_at - timedelta(days=days)
@@ -2141,14 +2260,13 @@ class OctopusAPI(ComponentBase):
         except Exception as error:  # noqa: BLE001 - a diagnostic lookup must never break rate fetching
             self.log("Warn: OctopusAPI: TOU bucket lookup failed ({}), falling back to hard-wired windows".format(error))
             response_data = None
-        windows = _tou_windows_from_measurements(response_data)
         # Only a lookup that returned data settles the day. A failed or rate-limit-held one is
         # retried on the next fetch rather than leaving the hard-wired windows in place until
         # UTC midnight.
         if response_data is not None:
             self.tou_windows_day = today
-        self.tou_windows = windows
-        return windows
+        self.tou_samples = _tou_samples_from_measurements(response_data)
+        return _tou_windows_from_samples(self.tou_samples, local_tz=local_tz)
 
     def _fallback_night_window(self, tariff_code, log_unknown=True):
         """
@@ -2173,9 +2291,9 @@ class OctopusAPI(ComponentBase):
         Get day and night rates from Octopus.
 
         Selects the correct night/day window based on the tariff type:
-        - IOG TOU (product_code contains INTELLI+IOG+TOU): 23:30 to 05:30 (crosses midnight)
-        - Economy 7 (tariff_code starts with E-2R-) or unknown (400-error fallback): 00:30 to 07:30
-        - GO and other day/night tariffs: 00:30 to 05:30
+        - IOG TOU (product_code contains INTELLI+IOG+TOU): 23:30 to 05:30 local (crosses midnight)
+        - Economy 7 (tariff_code starts with E-2R-): 00:30 to 07:30 UTC
+        - GO, and any tariff code not recognised: 00:30 to 05:30 local
         """
         mdata = []
         self.log("Info: OctopusAPI: tariff has day and night rates, fetching both")
@@ -2203,21 +2321,15 @@ class OctopusAPI(ComponentBase):
                 # The guaranteed window taken below is the only fixed part of an IOG day.
                 self.log("Info: OctopusAPI: Tariff {} is Intelligent GO, its off-peak periods are dispatch-driven so the TOU labels are not read as a schedule".format(tariff_code))
             else:
-                tou_windows = await self.async_get_tou_night_windows()
+                # The labels are UTC instants, but only some meters are on a UTC-fixed schedule. Read
+                # them on whichever clock this tariff's off-peak period is really fixed to - holding a
+                # summer-sampled window at its UTC offset would run it an hour early through winter.
+                anchor_utc = self._fallback_night_window(tariff_code, log_unknown=False).get("utc", False)
+                tou_windows = await self.async_get_tou_night_windows(local_tz=None if anchor_utc else self.now_utc_exact.tzinfo)
                 if tou_windows:
-                    # The labels are UTC instants, but only some meters are on a UTC-fixed schedule.
-                    # Anchor them to whichever clock this tariff's off-peak period is really fixed to,
-                    # converting the offsets to wall-clock minutes for a local one - holding a
-                    # summer-sampled window at its UTC offset would run it an hour early through winter.
-                    anchor_utc = self._fallback_night_window(tariff_code, log_unknown=False).get("utc", False)
-                    if anchor_utc:
-                        windows = sorted((start_minute, end_minute, True) for start_minute, end_minute in tou_windows)
-                    else:
-                        utc_offset = self.now_utc_exact.utcoffset()
-                        utc_offset_minutes = int(utc_offset.total_seconds() // 60) if utc_offset else 0
-                        windows = sorted((*_tou_window_to_local(start_minute, end_minute, utc_offset_minutes), False) for start_minute, end_minute in tou_windows)
-                    applied_windows = [(start_minute, end_minute) for start_minute, end_minute, _ in windows]
-                    self.log("Info: OctopusAPI: Using off-peak windows {} ({} minutes from midnight) from measurement TOU labels, anchored to {}".format(applied_windows, "UTC" if anchor_utc else "local", "UTC" if anchor_utc else "local time"))
+                    windows = [(start_minute, end_minute, anchor_utc) for start_minute, end_minute in tou_windows]
+                    clock_name = "UTC" if anchor_utc else "local"
+                    self.log("Info: OctopusAPI: Using off-peak windows {} ({} minutes from midnight) from measurement TOU labels, anchored to {} time".format(tou_windows, clock_name, clock_name))
             if not windows:
                 window = self._fallback_night_window(tariff_code)
                 start_minute = window["start"][0] * 60 + window["start"][1]
@@ -2227,10 +2339,10 @@ class OctopusAPI(ComponentBase):
                 windows = [(start_minute, end_minute, window.get("utc", False))]
                 self.log("Info: OctopusAPI: Using hard-wired night rate window {} anchored to {} based on tariff code {}".format(window, "UTC" if window.get("utc", False) else "local time", tariff_code))
 
-            # Anchor each window to whichever clock it is fixed to. Economy 7 and any TOU-derived
-            # schedule are UTC, so anchoring them locally would run them an hour early through
-            # British Summer Time; GO and Intelligent GO are local wall-clock windows and must not
-            # move with the seasons. A hand-configured schedule may mix the two.
+            # Anchor each window to whichever clock it is fixed to. Economy 7 is UTC, so anchoring it
+            # locally would run it an hour early through British Summer Time; GO and Intelligent GO
+            # are local wall-clock windows and must not move with the seasons. A TOU-derived schedule
+            # takes its tariff's clock, and a hand-configured one may mix the two.
             utc_midnight = self.now_utc_exact.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             local_tz = self.now_utc_exact.tzinfo
             local_midnight_naive = self.now_utc_exact.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
@@ -2286,7 +2398,7 @@ class OctopusAPI(ComponentBase):
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=20)
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}) as response:
                         if response.status not in [200, 201]:
                             self.failures_total += 1
@@ -2526,7 +2638,9 @@ class OctopusAPI(ComponentBase):
             reason: How the mint was refused - "edge/WAF blocked" or "rate limited".
             retry_after: Seconds the server asked us to wait, or None.
         """
-        delay = self.token_mint_backoff.start(reason, retry_after)
+        # KT-CT-1199 is a per-key limit that an hourly retry can keep tripped, so let it rest longer
+        max_seconds = TOKEN_MINT_RATE_LIMIT_BACKOFF_MAX_SECONDS if reason == "rate limited" else None
+        delay = self.token_mint_backoff.start(reason, retry_after, max_seconds=max_seconds)
         self.log("Warn: OctopusAPI: Token mint {} (block {}) - this is rate limiting, not a bad API key. Backing off for {}s".format(reason, self.token_mint_backoff.count, delay))
 
     def log_token_mint_backoff(self):
@@ -2585,6 +2699,13 @@ class OctopusAPI(ComponentBase):
                 return self.graphql_token
             self.log_token_mint_backoff()
             return None
+
+        # An edge/WAF block on the mint has been seen to stick to one HTTP session for days, while a
+        # fresh process on the same key was let straight through (Nov 2026). So retry a blocked mint
+        # from a fresh session, with no cookies or pooled connections carried over from the block.
+        if self.token_mint_backoff.count and self.token_mint_backoff.reason == "edge/WAF blocked":
+            self.log("OctopusAPI: Starting a fresh HTTP session to retry the token mint after edge/WAF block {}".format(self.token_mint_backoff.count))
+            await self.api.async_reset_client_session()
 
         client = await self.api.async_create_client_session()
         url = f"{self.api.base_url}/v1/graphql/"
@@ -4143,7 +4264,8 @@ class Octopus:
         Split a car slot wherever the import rate changes, as (start, end, kwh, rate) chunks.
 
         For a slot billed at the normal tariff rate rather than a dispatch rate - a charger's own
-        schedule (see DISPATCH_SOURCE_CHARGER_SCHEDULE). Such a session commonly runs for hours and
+        schedule (see DISPATCH_SOURCE_CHARGER_SCHEDULE), or a BOOST / bump-charge dispatch
+        (dispatch_billed_off_peak() returns False for both, #6048). Such a session commonly runs for hours and
         crosses rate bands, so pricing all of it at the rate it starts on would give the car a rate
         of its own that differs from the house rate for the rest of the slot (car_charge_slot_rate()).
         kWh is apportioned to each chunk by its share of the slot's duration.
@@ -4171,7 +4293,7 @@ class Octopus:
         what the rates are built from - so it can only price a slot on the previous cycle's rate_import:
         empty on the first cycle after a restart, a day out on the first after midnight, and behind
         whenever new rates arrive. An Intelligent slot does not care, it is priced at the dispatch
-        rate. A charger schedule is priced at the tariff, so each of its slots is split and priced
+        rate. A charger schedule, BOOST or bump-charge slot is priced at the tariff, so each of its slots is split and priced
         again here, once the rates are known.
 
         Done in place rather than by building the slots again, so that what dynamic_load_car_check()
@@ -4288,20 +4410,18 @@ class Octopus:
 
         return sorted(slots_decoded, key=lambda x: x[0])
 
-    def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
+    def octopus_cap_segments(self, car_n, octopus_slots):
         """
-        Turn octopus slots into charging plan
+        Count every car's dispatches on the account against the midday-to-midday cap, earliest first.
+
+        Returns car_n's own slots from octopus_slot_segments() as (slot, capped) pairs, capped when the slot is
+        eligible for the off-peak rate and so counted against the cap, and the set of minutes, of any car's
+        dispatch, that fitted the budget. Shared by load_octopus_slots() and octopus_over_cap_minutes().
         """
-        new_slots = []
-        if car_n >= self.num_cars:
-            # Car not configured, just return the slots as they are (for export or other non-car use)
-            return new_slots
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         cap_minutes = self.get_octopus_cap_minutes()
         minutes_per_day = {}  # Track dispatch minutes used per midday-to-midday period
         budget_minutes = set()  # The minutes, of any car's dispatch, that fitted the budget
-        car_soc = self.car_charging_soc[car_n]
-        limit = self.car_charging_limit[car_n]
 
         # Earliest first across the cars, the lower car first on a tie
         account_segments = sorted(
@@ -4334,6 +4454,42 @@ class Octopus:
                 budget_minutes.update(wanted_minutes[:granted_minutes])
             if slot_car == car_n:
                 own_segments.append((slot, capped))
+        return own_segments, budget_minutes
+
+    def octopus_over_cap_minutes(self, car_n, octopus_slots):
+        """
+        The minutes of car_n's dispatches beyond the midday-to-midday cap, past ones included, each with the
+        dispatch's own energy for that minute.
+
+        Octopus bills the car's charging in these at the peak rate while the house keeps its own rate.
+        load_octopus_slots() only plans from now on, and the running dispatch's start is moved up to now each
+        cycle, so its slots cannot say what has already been charged beyond the cap - today_cost() reads that from here.
+        """
+        over_cap = {}
+        if car_n >= self.num_cars:
+            return over_cap
+        own_segments, budget_minutes = self.octopus_cap_segments(car_n, octopus_slots)
+        for slot, capped in own_segments:
+            start_minutes, end_minutes, kwh = slot[0], slot[1], slot[2]
+            if not capped or end_minutes <= start_minutes:
+                continue
+            kwh_per_minute = kwh / (end_minutes - start_minutes)
+            for minute in range(start_minutes, end_minutes):
+                if minute not in budget_minutes:
+                    over_cap[minute] = over_cap.get(minute, 0.0) + kwh_per_minute
+        return over_cap
+
+    def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
+        """
+        Turn octopus slots into charging plan
+        """
+        new_slots = []
+        if car_n >= self.num_cars:
+            # Car not configured, just return the slots as they are (for export or other non-car use)
+            return new_slots
+        car_soc = self.car_charging_soc[car_n]
+        limit = self.car_charging_limit[car_n]
+        own_segments, budget_minutes = self.octopus_cap_segments(car_n, octopus_slots)
 
         # Add in the current charging slot
         for slot, capped in own_segments:
@@ -4341,11 +4497,16 @@ class Octopus:
             # kWh is apportioned to each chunk by its share of the slot's duration - an
             # approximation (real draw isn't perfectly uniform across the slot).
             # Marked so reprice_charger_schedule_slots() can find them again once this cycle's rates are built
-            charger_schedule = source == DISPATCH_SOURCE_CHARGER_SCHEDULE
+            # A BOOST or bump-charge dispatch is billed at the tariff, not the off-peak rate
+            # (dispatch_billed_off_peak() returns False for both), so like a charger schedule it
+            # is priced on the tariff split wherever the rate changes (#6048): such a session
+            # commonly runs for hours across rate bands, and pricing all of it at the rate its
+            # start minute lands on would freeze a cheap start rate for the whole slot.
+            tariff_rate_slot = source == DISPATCH_SOURCE_CHARGER_SCHEDULE or source in ("BOOST", "bump-charge")
             slot_minutes = end_minutes - start_minutes
 
             chunks = [(start_minutes, end_minutes, kwh, self.rate_import.get(start_minutes, self.rate_min_base))]
-            if charger_schedule:
+            if tariff_rate_slot:
                 chunks = self.split_slot_by_rate(start_minutes, end_minutes, kwh)
             elif capped:
                 low_runs = self.minute_runs(start_minutes, end_minutes, budget_minutes)
@@ -4396,7 +4557,7 @@ class Octopus:
                         new_slot["cost"] = dp2(new_slot["average"] * kwh)
                         new_slot["soc"] = dp2(car_soc)
                         new_slot["octopus"] = True
-                        if charger_schedule:
+                        if tariff_rate_slot:
                             new_slot["tariff_rate"] = True
                         new_slots.append(new_slot)
 
@@ -4409,7 +4570,7 @@ class Octopus:
                             new_slot["cost"] = 0.0
                             new_slot["soc"] = dp2(car_soc)
                             new_slot["octopus"] = True
-                            if charger_schedule:
+                            if tariff_rate_slot:
                                 new_slot["tariff_rate"] = True
                             new_slots.append(new_slot)
 
@@ -4423,7 +4584,7 @@ class Octopus:
                         new_slot["cost"] = dp2(new_slot["average"] * kwh)
                         new_slot["soc"] = dp2(car_soc)
                         new_slot["octopus"] = True
-                        if charger_schedule:
+                        if tariff_rate_slot:
                             new_slot["tariff_rate"] = True
                         new_slots.append(new_slot)
         return new_slots
@@ -4579,8 +4740,8 @@ class Octopus:
 
     def octopus_planned_running(self, car_n, planned, minute_exact=None):
         """
-        The source of the planned dispatch that is pricing the current half hour off-peak for car_n, or None
-        when none is.
+        The planned dispatch that is pricing the current half hour off-peak for car_n, as (source, end) with
+        end in minutes since midnight_utc, or None when none is.
 
         The dispatch must be running on the exact clock: started - the Octopus API component advances the
         start of a running dispatch to the time of its last poll, which is after minutes_now - and not yet
@@ -4597,7 +4758,7 @@ class Octopus:
             if start_minutes == end_minutes or not self.dispatch_billed_off_peak(car_n, source, location, start_minutes, end_minutes):
                 continue
             if start_minutes <= minute_exact < end_minutes:
-                return source
+                return source, end_minutes
         return None
 
     def dispatch_billing_window(self):
@@ -4645,27 +4806,146 @@ class Octopus:
         shorter than the 5 minute cycle is never running at one (see dispatch_too_short()).
 
         A half hour the car is charging in during a smart charge, with no planned dispatch listed for it,
-        is kept as well (see octopus_charging_unlisted()).
+        is kept as well (see octopus_charging_unlisted()) - but not in the tail of the half hour before it
+        (see octopus_dispatch_tail()).
+
+        One whose dispatch Octopus withdrew before the car charged in it is let go (see
+        octopus_held_withdrawn()). Returns True when one was, so a replan is asked for.
         """
         hold_minutes = self.octopus_hold_minutes()
         minute_exact = self.dynamic_load_car_minute(now) if now is not None else None
         period_minute = int(minute_exact // 30) * 30 if now is not None else (self.minutes_now // 30) * 30
         period_start = self.midnight_utc + timedelta(minutes=period_minute)
+        released = False
         for car_n in range(self.num_cars):
             held = self.octopus_slots_held.setdefault(car_n, {})
+            held_until = self.octopus_slots_held_until.setdefault(car_n, {})
+            held_charged = self.octopus_slots_held_charged.setdefault(car_n, set())
             for start in list(held):
                 if start + timedelta(minutes=30 + hold_minutes) <= self.now_utc:
                     del held[start]
+            for start in list(held_until):
+                if start not in held:
+                    del held_until[start]
+            held_charged.intersection_update(held)
             strip_from = self.dynamic_load_car_strip_from(car_n)
             if strip_from is not None and strip_from < period_minute + 30:
                 held.pop(period_start, None)
                 continue
-            source = self.octopus_planned_running(car_n, self.octopus_slots_planned.get(car_n, []), minute_exact)
-            if source is None and self.octopus_charging_unlisted(car_n):
+            planned = self.octopus_slots_planned.get(car_n, [])
+            running = self.octopus_planned_running(car_n, planned, minute_exact)
+            source = None
+            if running is not None:
+                source, end_minutes = running
+                held_until[period_start] = self.midnight_utc + timedelta(minutes=end_minutes)
+            if (running is not None or period_start in held) and self.octopus_car_charging_reading(car_n, period_minute, load=now is None) is True:
+                held_charged.add(period_start)
+            if running is None and self.octopus_held_withdrawn(car_n, period_start, planned, minute_exact):
+                self.log("Octopus Intelligent: car {} dispatch was withdrawn before the car charged in it, no longer keeping the dispatch rate for the half hour from {}".format(car_n, self.time_abs_str(period_minute)))
+                held.pop(period_start, None)
+                held_until.pop(period_start, None)
+                held_charged.discard(period_start)
+                released = True
+                continue
+            if source is None and not self.octopus_dispatch_tail(held, period_minute, minute_exact) and self.octopus_charging_unlisted(car_n):
                 source = DISPATCH_SOURCE_CHARGING_UNLISTED
             if source is not None:
                 held[period_start] = source
         self.octopus_held_save()
+        return released
+
+    def octopus_held_withdrawn(self, car_n, period_start, planned, minute_exact=None):
+        """
+        Whether the half hour from period_start that car_n holds for a planned dispatch is one Octopus withdrew
+        before the car charged in it, so it is not billed off-peak and must not keep the dispatch rate (GH#5957).
+
+        A half hour is held at the first check that sees its dispatch running, which can be the boundary itself,
+        before there is any evidence the car is charging. Octopus often re-plans a dispatch just as it starts:
+        it leaves the planned list with no completed dispatch to follow, and nothing else lets the hold go - the
+        dispatch check only judges a car that is inside a dispatch (see dynamic_load_car_target()).
+
+        All of these must hold:
+        - octopus_intelligent_dynamic is on, and not the window rule, which bills the half hour off-peak whether
+          the car charges or not (see dispatch_billing_window());
+        - it is the half hour in progress: an earlier one was judged by the dispatch check while it ran;
+        - the dispatch it was held for was last seen due to run past now (octopus_slots_held_until), so it was
+          withdrawn rather than ran to its end - restored after a restart only from a store saved in the same
+          half hour (see octopus_held_load()), and without one the hold is kept as before;
+        - no planned dispatch reaches the half hour any more - one moved within it still prices it;
+        - the car was never confirmed charging in it (dynamic_load_car_confirmed_periods), nor seen charging at
+          any check while it was held (octopus_slots_held_charged): confirmation waits a few minutes into the
+          half hour, and a car that filled up in them, with Octopus ending its dispatch, was billed off-peak;
+        - the car is seen not charging now (octopus_car_charging_reading()), from DYNAMIC_LOAD_CAR_START_MINUTES into
+          the half hour, as the dispatch check only takes it once the car and charger have had time to wake up.
+
+        The planned list is the one the last cycle fetched, so a withdrawal is seen at the cycle after it; the 15
+        second poll only lets go a half hour that cycle kept for want of a reading.
+
+        minute_exact is the minute to judge it at on the exact clock, from the 15 second poll; None for this cycle's.
+        Reads state only, so octopus_held_dispatches() can leave the half hour out in the same cycle.
+        """
+        poll = minute_exact is not None
+        until = self.octopus_slots_held_until.get(car_n, {}).get(period_start)
+        if until is None or period_start not in self.octopus_slots_held.get(car_n, {}):
+            return False
+        if not self.octopus_intelligent_dynamic or self.dispatch_billing_window():
+            return False
+        if minute_exact is None:
+            minute_exact = self.dynamic_load_car_minute(self.now_utc_real)
+        period_minute = minutes_to_time(period_start, self.midnight_utc)
+        if not period_minute + DYNAMIC_LOAD_CAR_START_MINUTES <= minute_exact < period_minute + 30 or minutes_to_time(until, self.midnight_utc) <= minute_exact:
+            return False
+        for slot in planned:
+            start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+            if start_minutes != end_minutes and start_minutes < period_minute + 30 and end_minutes > period_minute:
+                return False
+        if period_start in self.octopus_slots_held_charged.get(car_n, set()):
+            return False
+        period_end = period_start + timedelta(minutes=30)
+        if period_end in self.dynamic_load_car_confirmed_periods.get(car_n, set()):
+            return False
+        confirmed = self.dynamic_load_car_confirmed.get(car_n)
+        if confirmed is not None and confirmed >= period_end:
+            return False
+        return self.octopus_car_charging_reading(car_n, period_minute, load=not poll) is False
+
+    def octopus_car_charging_reading(self, car_n, period_minute, load=True):
+        """
+        Whether car_n is charging now in the half hour from period_minute: True (charging, or may be), False
+        (not charging) or None (no evidence), from the evidence the dispatch check uses (see
+        dynamic_load_car_evidence()):
+        - any car's car_charging_now sensor reading charging is charging;
+        - otherwise the car's own car_charging_now sensor, read live;
+        - without one, for a car inside the CT clamp, the load over the last PREDICT_STEP minutes once that
+          window lies inside the half hour (see dynamic_load_car_load_low()) - load that is not low may be the car.
+          Only with load True: the 15 second poll passes False, as the window is the last cycle's and judging it
+          again only repeats the sensor reads and the log.
+        """
+        if self.dynamic_load_any_car_charging_now():
+            return True
+        if car_n in self.dynamic_load_car_sensors:
+            return self.car_charging_now_reading(car_n)
+        if load and self.car_energy_reported_load and self.load_minutes and self.minutes_now > 5 and self.minutes_now - PREDICT_STEP >= period_minute:
+            low = self.dynamic_load_car_load_low(car_n, log=False)
+            return None if low is None else not low
+        return None
+
+    def octopus_dispatch_tail(self, held, period_minute, minute_exact=None):
+        """
+        Whether it is still the tail of the half hour before period_minute, which held keeps for a dispatch:
+        the first OCTOPUS_DISPATCH_TAIL_MINUTES of the half hour, on the exact clock (minute_exact from the
+        15 second poll; None for this cycle's).
+
+        A dispatch ending at the boundary leaves car_charging_now showing charging for a car that has stopped
+        - seen for 10 seconds - while Octopus still reports the smart charge in progress, and the half hour
+        after it was held as an unlisted smart charge it never had (GH#5884). A car plugged in at the boundary,
+        with nothing held before it, is not in a tail, so its half hour is held straight away.
+        """
+        if self.midnight_utc + timedelta(minutes=period_minute - 30) not in held:
+            return False
+        if minute_exact is None:
+            minute_exact = self.dynamic_load_car_minute(self.now_utc_real)
+        return minute_exact - period_minute < OCTOPUS_DISPATCH_TAIL_MINUTES
 
     def octopus_charging_unlisted(self, car_n):
         """
@@ -4709,10 +4989,31 @@ class Octopus:
 
     def octopus_held_state(self):
         """
-        The held half hours in a form storage can hold: per car, the absolute start of each half hour and the
-        source of the dispatch that ran in it.
+        The held half hours in a form storage can hold, keyed by car and the absolute start of each half hour:
+        - cars: the source of the dispatch that ran in it;
+        - until: when the dispatch it was held for was last seen due to end (octopus_slots_held_until);
+        - charged: the half hours the car was seen charging in while held (octopus_slots_held_charged).
+
+        until and charged are what octopus_held_withdrawn() needs to judge the half hour in progress, so a
+        restart in it neither keeps the rate of a dispatch Octopus withdraws after it nor lets go one the car
+        charged in before it. Empty when nothing is held, so an install with no dispatches never writes.
         """
-        return {str(car_n): {start.isoformat(): source for start, source in sorted(held.items())} for car_n, held in sorted(self.octopus_slots_held.items()) if held}
+        cars = {}
+        until = {}
+        charged = {}
+        for car_n, held in sorted(self.octopus_slots_held.items()):
+            if not held:
+                continue
+            cars[str(car_n)] = {start.isoformat(): source for start, source in sorted(held.items())}
+            held_until = {start.isoformat(): end.isoformat() for start, end in sorted(self.octopus_slots_held_until.get(car_n, {}).items()) if start in held}
+            if held_until:
+                until[str(car_n)] = held_until
+            held_charged = [start.isoformat() for start in sorted(self.octopus_slots_held_charged.get(car_n, set())) if start in held]
+            if held_charged:
+                charged[str(car_n)] = held_charged
+        if not cars:
+            return {}
+        return {"cars": cars, "until": until, "charged": charged}
 
     def octopus_held_save(self):
         """
@@ -4722,8 +5023,8 @@ class Octopus:
 
         Recorded as saved only once a write works: under the window rule the half hours can stay unchanged
         for hours after the last dispatch, so a failed write is retried each cycle rather than left unsaved
-        until they expire. It runs once a cycle, so it needs none of the throttle dynamic_load_car_save() has
-        against its 15 second poll.
+        until they expire. The state changes at most a few times a half hour, even from the 15 second poll,
+        so it needs none of the throttle dynamic_load_car_save() has against it.
         """
         state = self.octopus_held_state()
         if state == self.octopus_slots_held_saved:
@@ -4736,7 +5037,7 @@ class Octopus:
             # Expiry is on the real clock, as storage.load() checks it (see save_plan()). It only tidies up:
             # octopus_held_load() decides what is still current
             expiry = datetime.now(timezone.utc) + timedelta(minutes=30 + OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES)
-            if run_async(storage.save("predbat", "octopus_held", {"cars": state}, format="json", expiry=expiry)):
+            if run_async(storage.save("predbat", "octopus_held", state, format="json", expiry=expiry)):
                 self.octopus_slots_held_saved = state
             else:
                 self.log("Warn: Octopus Intelligent: failed to save the held dispatch half hours")
@@ -4747,6 +5048,11 @@ class Octopus:
         """
         Restore the held half hours saved by octopus_held_save(), at start up, taking only those still inside
         the hold of the billing rule in use.
+
+        A dispatch's end and whether the car charged are taken only for the half hour still in progress, the only
+        one octopus_held_withdrawn() judges: the store can be hours old, and under the window rule a day, and
+        an older record says nothing about the half hour now. A store saved before they were kept has neither,
+        so the half hour in progress keeps its hold as before.
         """
         storage = self.components.get_component("storage") if self.components else None
         if not storage or self.now_utc is None:
@@ -4779,9 +5085,43 @@ class Octopus:
                 if current:
                     held[start] = source
                     restored += 1
+        self.octopus_held_load_in_progress(data)
         self.octopus_slots_held_saved = self.octopus_held_state()
         if restored:
             self.log("Octopus Intelligent: restored {} held dispatch half hour(s) from storage".format(restored))
+
+    def octopus_held_load_in_progress(self, data):
+        """
+        Restore, from the store octopus_held_load() read, the dispatch end (octopus_slots_held_until) and the
+        car seen charging (octopus_slots_held_charged) of each restored half hour that is still in progress.
+        An entry that does not parse, or a dispatch end not after the start of its half hour, is skipped.
+        """
+        until_cars = data.get("until")
+        charged_cars = data.get("charged")
+        for car_n, held in self.octopus_slots_held.items():
+            in_progress = {start for start in held if start <= self.now_utc < start + timedelta(minutes=30)}
+            if not in_progress:
+                continue
+            periods = until_cars.get(str(car_n)) if isinstance(until_cars, dict) else None
+            if isinstance(periods, dict):
+                for start, end in periods.items():
+                    try:
+                        start = datetime.fromisoformat(start)
+                        end = datetime.fromisoformat(end)
+                        valid = start in in_progress and end > start
+                    except (ValueError, TypeError):
+                        continue
+                    if valid:
+                        self.octopus_slots_held_until.setdefault(car_n, {})[start] = end
+            starts = charged_cars.get(str(car_n)) if isinstance(charged_cars, dict) else None
+            if isinstance(starts, list):
+                for start in starts:
+                    try:
+                        start = datetime.fromisoformat(start)
+                    except (ValueError, TypeError):
+                        continue
+                    if start in in_progress:
+                        self.octopus_slots_held_charged.setdefault(car_n, set()).add(start)
 
     def octopus_held_dispatches(self, car_n, completed, planned):
         """
@@ -4806,6 +5146,8 @@ class Octopus:
 
         Under the window rule (dispatch_billing_window()) the half hour was billed off-peak whether the car
         charged or not, so a completed dispatch of no energy does not take it back.
+
+        One whose dispatch Octopus withdrew before the car charged in it is left out (octopus_held_withdrawn()).
         """
         held = self.octopus_slots_held.get(car_n, {})
         if not held:
@@ -4816,10 +5158,15 @@ class Octopus:
         # as never having happened
         covering = [slot for slot in completed if not window or self.decode_octopus_slot(car_n, slot, raw=True)[2] > 0]
         covered = []
-        for slot in covering + list(planned):
+        for slot in covering:
             start_minutes, end_minutes, _, source, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
             if start_minutes != end_minutes and source != DISPATCH_SOURCE_CHARGER_SCHEDULE:
                 covered.append(round_out_to_period(start_minutes, end_minutes))
+        planned_spans = []
+        for slot in planned:
+            start_minutes, end_minutes, _, source, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+            if start_minutes != end_minutes and source != DISPATCH_SOURCE_CHARGER_SCHEDULE:
+                planned_spans.append((start_minutes, end_minutes))
 
         dispatches = []
         for period_start in sorted(held):
@@ -4830,6 +5177,18 @@ class Octopus:
             period_minute = minutes_to_time(period_start, self.midnight_utc)
             if any(start_minutes < period_minute + 30 and end_minutes > period_minute for start_minutes, end_minutes in covered):
                 continue
+            # Let go by octopus_held_update() after the rates are built, so left out here too, for this cycle
+            if self.octopus_held_withdrawn(car_n, period_start, planned):
+                continue
+            # A planned dispatch still reaching the half hour covers it from its own start: the running one's start is
+            # advanced to now, so the part of the half hour it has already run in is held up to there, or the cap would
+            # not count those minutes and the car's charging in them would be priced as if it never happened
+            reached_from = [start_minutes for start_minutes, end_minutes in planned_spans if start_minutes < period_minute + 30 and end_minutes > period_minute]
+            if reached_from:
+                planned_start = min(reached_from)
+                if planned_start <= period_minute:
+                    continue
+                end = min(end, self.midnight_utc + timedelta(minutes=planned_start))
             dispatches.append({"start": period_start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "source": held[period_start], "location": "AT_HOME", "held": True})
         return dispatches
 
@@ -4901,6 +5260,143 @@ class Octopus:
                     start_minutes, end_minutes = round_out_to_period(slot["start"], slot["end"])
                     usable_minutes.update(range(start_minutes, min(end_minutes, usable_until)))
         return {minute for minute in dispatch_minutes - usable_minutes if not self.in_iog_fixed_window(minute)}
+
+    def octopus_strip_withdrawn_feed_rates(self, rates, save=True):
+        """
+        Remove an Octopus Intelligent discount the rate feed still carries for a dispatch Octopus has withdrawn
+        (GH#5663).
+
+        The Octopus Energy integration's rate sensor lowers the price of dispatch minutes and marks them
+        is_intelligent_adjusted (self.io_adjusted), and has been seen to keep doing so for half an hour after the
+        dispatch left the dispatching sensor. Every other check keys on the dispatch list, so once the dispatch
+        has gone the discount is unchecked and the plan charges the battery through it at what is really the day
+        rate. Octopus only bills a dispatch off-peak where the car charged in it.
+
+        A minute is set back to rate_max_base, and loses its io_adjusted marker, when it is from now onwards,
+        outside the fixed 23:30-05:30 window, and its half hour is not covered by any car's dispatch now -
+        planned, completed or held (see octopus_held_dispatches()) - but was at an earlier cycle. A discount no
+        dispatch has ever covered is left alone: the feed may be ahead of the dispatching sensor, or no sensor
+        may be set up at all. The half hours seen covered are saved to storage (octopus_feed_save()), so a restart
+        while the feed is still stale does not bring the discount back. Not under the window rule (dispatch_billing_window()),
+        where the supplier bills a planned dispatch's half hours off-peak whether or not it ran.
+
+        Nothing is stripped while any car reads charging: Octopus answers an empty planned list for a few minutes
+        while it re-plans a running session, which looks just like a withdrawal, and the Octopus Energy integration
+        has no hold over it (see OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES). The half hour in progress is left alone with
+        octopus_intelligent_dynamic Off too: a dispatch the car charged in is billed off-peak for the whole half
+        hour (GH#5316), and only the dispatch check's 15 second poll holds that half hour (octopus_held_update())
+        when the dispatch starts and is withdrawn between two cycles.
+
+        With save False (compare.py) the minutes are stripped but nothing is recorded or logged.
+        """
+        if self.dispatch_billing_window() or self.midnight_utc is None:
+            if save:
+                self.octopus_feed_covered = set()
+                self.octopus_feed_stripped = set()
+                self.octopus_feed_save()
+            return rates
+        covered = set()
+        for car_n in range(min(self.num_cars, len(self.octopus_slots))):
+            for slot in self.octopus_slots[car_n]:
+                start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+                if start_minutes == end_minutes:
+                    continue
+                start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes)
+                for period_minute in range(start_minutes, end_minutes, 30):
+                    covered.add(self.midnight_utc + timedelta(minutes=period_minute))
+
+        current_minute = (self.minutes_now // 30) * 30
+        keep_current = not self.octopus_intelligent_dynamic
+        candidates = [] if any(self.car_charging_now) else sorted(self.io_adjusted)
+        stripped = 0
+        stripped_periods = set()
+        for minute in candidates:
+            if minute < self.minutes_now or not self.io_adjusted.get(minute, False) or self.in_iog_fixed_window(minute):
+                continue
+            if keep_current and minute < current_minute + 30:
+                continue
+            period_start = self.midnight_utc + timedelta(minutes=(minute // 30) * 30)
+            if period_start in covered or period_start not in self.octopus_feed_covered:
+                continue
+            rates[minute] = self.rate_max_base
+            del self.io_adjusted[minute]
+            stripped += 1
+            stripped_periods.add(period_start)
+
+        if not save:
+            return rates
+        current = self.midnight_utc + timedelta(minutes=current_minute)
+        self.octopus_feed_covered = {period for period in self.octopus_feed_covered | covered if period >= current}
+        self.octopus_feed_save()
+        # The feed is re-read every cycle, so the same half hours are stripped again each time, and fewer of their
+        # minutes as time passes - log only when a half hour is newly stripped
+        if stripped_periods - self.octopus_feed_stripped:
+            self.log("Octopus Intelligent: removed the dispatch rate the rate feed still carries from {} minutes, as their dispatch has been withdrawn".format(stripped))
+        self.octopus_feed_stripped = stripped_periods
+        return rates
+
+    def octopus_feed_state(self):
+        """
+        The half hours seen covered by a dispatch (octopus_strip_withdrawn_feed_rates()) in a form storage can hold:
+        the absolute start of each, oldest first.
+        """
+        return [period.isoformat() for period in sorted(self.octopus_feed_covered)]
+
+    def octopus_feed_save(self):
+        """
+        Save the half hours seen covered by a dispatch to storage when they have changed since the last save, so a
+        restart while the rate feed still carries a withdrawn dispatch's discount does not keep it (GH#5663).
+        Recorded as saved only once a write works, so a failed write is retried next cycle, as octopus_held_save()
+        does. An install that never sees a dispatch never writes.
+        """
+        state = self.octopus_feed_state()
+        if state == self.octopus_feed_covered_saved:
+            return
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+
+        try:
+            # Expiry is on the real clock, as storage.load() checks it. It only tidies up: octopus_feed_load()
+            # drops the half hours that have passed, and no dispatch is listed further ahead than the plan's 48 hours
+            expiry = datetime.now(timezone.utc) + timedelta(hours=48)
+            if run_async(storage.save("predbat", "octopus_feed_covered", {"periods": state}, format="json", expiry=expiry)):
+                self.octopus_feed_covered_saved = state
+            else:
+                self.log("Warn: Octopus Intelligent: failed to save the half hours seen covered by a dispatch")
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to save the half hours seen covered by a dispatch: {}".format(e))
+
+    def octopus_feed_load(self):
+        """
+        Restore the half hours saved by octopus_feed_save(), at start up, taking only those not yet over.
+        """
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage or self.now_utc is None:
+            return
+
+        try:
+            data = run_async(storage.load("predbat", "octopus_feed_covered"))
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to load the half hours seen covered by a dispatch: {}".format(e))
+            return
+        periods = data.get("periods") if isinstance(data, dict) else None
+        if not isinstance(periods, list):
+            return
+
+        restored = 0
+        for period in periods:
+            try:
+                period = datetime.fromisoformat(period)
+                current = period + timedelta(minutes=30) > self.now_utc
+            except (ValueError, TypeError):
+                continue
+            if current:
+                self.octopus_feed_covered.add(period)
+                restored += 1
+        self.octopus_feed_covered_saved = self.octopus_feed_state()
+        if restored:
+            self.log("Octopus Intelligent: restored {} half hour(s) seen covered by a dispatch from storage".format(restored))
 
     def dynamic_load_car_strip_feed_rates(self, rates):
         """

@@ -20,6 +20,7 @@ from datetime import date, datetime, timedelta
 import pytz
 
 from annual_costs import build_costs, build_payback, resolve_costs
+from annual_store import DEFAULT_PANEL_WATTS
 from annual_interpolate import ANCHOR_MONTHS, FAST_MODE_MAX_RATE_CV, build_interpolated_rows, rate_variability
 from annual_load import build_load_forecast, OctopusConsumptionLoadProfile, SyntheticLoadProfile
 from annual_tariff import AnnualTariff
@@ -43,9 +44,6 @@ DEFAULT_HYBRID = True
 # domestic inverter, so an unset value behaves as "no extra restriction" rather
 # than silently clipping exports.
 DEFAULT_EXPORT_LIMIT_KW = 10.0
-
-# A typical domestic panel in 2026. Only used to turn a panel count into kWp.
-DEFAULT_PANEL_WATTS = 400.0
 
 # A kWp figure above this in the solar config is far more likely Watts typed by
 # mistake - "6000" meaning 6,000 Wp - than a real array; even a large domestic
@@ -753,7 +751,6 @@ def reset_sample_state(predbat):
     predbat.manual_freeze_charge_times = []
     predbat.manual_freeze_export_times = []
     predbat.manual_demand_times = []
-    predbat.manual_all_times = []
 
     predbat.charge_limit_best = []
     predbat.charge_window_best = []

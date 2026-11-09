@@ -61,8 +61,8 @@ pred_bat:
 
   soc_percent:
     - sensor.sigen_plant_battery_state_of_charge
-  soc_kw:
-    - sensor.sigen_plant_available_max_discharging_capacity
+  # soc_kw is intentionally not configured: sigen_plant_available_max_discharging_capacity refers to the DC capacity, and does not align
+  # with the actual SOC reported by the battery. As per the Predbat documentation, soc_kw is not needed in conjunction with soc_percent.
   soc_max:
     - sensor.sigen_plant_rated_energy_capacity
   battery_temperature:
@@ -266,6 +266,10 @@ pred_bat:
   octopus_saving_session_octopoints_per_penny: 8
   # Minimum octopoints_per_kwh an available saving session must offer for Predbat to auto-join it (default 0, joins any non-negative reward).
   octopus_saving_session_min_octopoints_per_kwh: 0
+
+  # Octopus free session points to the free session Sensor in the Octopus plugin
+  # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work
+  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_(free_electricity_session_events|power_up_events))'
 
   # Enter your Axle VPP API key if you have signed up to the Axle service in the UK
   # axle_api_key: "xxxxxxx"
