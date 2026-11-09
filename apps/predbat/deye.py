@@ -414,6 +414,9 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             updated = {name for name, key in DEYE_TELEMETRY_KEYS.items() if telemetry_number(flat.get(key)) is not None}
             if sum(1 for item in rows[0].get("dataList") or [] if isinstance(item, dict) and item.get("key") == DEYE_TELEMETRY_KEYS["soc"]) != 1:
                 updated.discard("soc")
+            soc = telemetry_number(flat.get(DEYE_TELEMETRY_KEYS["soc"]))
+            if soc is None or not 0 <= soc <= 100:
+                updated.discard("soc")
             stamp = rows[0].get("collectionTime")
             if isinstance(stamp, str) and stamp.isdigit():
                 stamp = int(stamp)

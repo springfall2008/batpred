@@ -400,7 +400,7 @@ def test_no_observer_no_work(failures):
     _check(failures, run_async(api.fetch_device_data(SUNSYNK_SN)).get("soc") == 50, "sunsynk without observer failed")
 
 
-def run_provider_observations_claude_tests(my_predbat):
+def run_provider_observations_cloud_tests(my_predbat):
     """Run the GE Cloud, Teslemetry, Hanchu and Sunsynk observation tests; return True on failure."""
     print("**** Running provider telemetry observation tests (GE Cloud, Teslemetry, Hanchu, Sunsynk) ****")
     failures = []

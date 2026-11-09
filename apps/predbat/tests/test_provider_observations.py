@@ -1,3 +1,9 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+
 """Accepted observations for the multi-device and HTTP-only provider paths."""
 
 import asyncio
@@ -51,6 +57,13 @@ async def _provider_checks():
     deye._post.return_value["deviceDataList"][0]["dataList"].append({"key": "SOC", "value": 50})
     await DeyeAPI.fetch_device_data(deye, "A")
     assert "soc" not in events[-1]["updated_fields"]
+
+    for soc in (-1, 150, None, "bad", 0, 100):
+        deye._post.return_value["deviceDataList"][0]["dataList"] = [{"key": "SOC", "value": soc}]
+        await DeyeAPI.fetch_device_data(deye, "A")
+        expected_measured = soc in (0, 100)
+        assert ("soc" in events[-1]["updated_fields"]) is expected_measured
+        assert ("soc" in events[-1]["held_fields"]) is not expected_measured
 
     solis = SolisAPI.__new__(SolisAPI)
     events = _observe(solis)

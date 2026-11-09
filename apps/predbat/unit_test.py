@@ -344,7 +344,7 @@ from tests.test_hypervolt import test_hypervolt
 from tests.test_car_charger_control import run_car_charger_control_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_provider_observations import run_provider_observation_tests
-from tests.test_provider_observations_claude import run_provider_observations_claude_tests
+from tests.test_provider_observations_cloud import run_provider_observations_cloud_tests
 from tests.test_components import test_components_all
 from tests.test_coordinator import test_coordinator_all
 from tests.test_discovery_contract import run_discovery_contract_tests
@@ -510,7 +510,7 @@ def main():
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
         ("provider_observations", run_provider_observation_tests, "Accepted telemetry across devices and timestamps", False),
-        ("provider_observations_claude", run_provider_observations_claude_tests, "Accepted telemetry for GE, Tesla, Hanchu and Sunsynk", False),
+        ("provider_observations_cloud", run_provider_observations_cloud_tests, "Accepted telemetry for GE, Tesla, Hanchu and Sunsynk", False),
         ("secrets", run_secrets_tests, "Secrets loading tests", False),
         ("env_config", run_env_config_tests, "Per-instance PREDBAT_APPS_FILE / PREDBAT_SECRETS_FILE config tests", False),
         ("export_encoding", run_export_encoding_tests, "Packed export limit encoding accessor tests", False),
