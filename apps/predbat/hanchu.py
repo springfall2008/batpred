@@ -1486,7 +1486,20 @@ class HanchuAPI(ComponentBase):
                     await self._on_component_loop(self.apply_schedule(sn))
             return
         self.update_local_schedule(sn, entity_id, value)
+        if self._write_debounce_available():
+            # Predbat writes the charge and discharge rates after its per-inverter loop with no
+            # press of their own, and the zero discharge rate is what turns a charge slot into a
+            # hold. A change while a write is waiting therefore restarts the wait, so it goes out
+            # with the rates rather than ahead of them (batpred#6074).
+            await self._on_component_loop(self._restart_pending_write(sn))
         await self.publish_schedule_settings_ha(sn)
+
+    async def _restart_pending_write(self, sn):
+        """Restart sn's debounced write if one is waiting; with none waiting, leave the change for the next press or tick."""
+        if self._write_pending(sn):
+            await self._schedule_write(sn)
+            return True
+        return False
 
     def _write_debounce_available(self):
         """Return whether a press can be debounced: a delay is configured and the component's loop is running.

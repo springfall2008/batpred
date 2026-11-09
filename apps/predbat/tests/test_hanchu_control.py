@@ -1250,22 +1250,31 @@ def test_hanchu_hold_caps_the_grid_charge_limit_at_the_soc():
     assert not failed, "test_hanchu_hold_caps_the_grid_charge_limit_at_the_soc"
 
 
-def _press_stages_of_a_hold_starting(client, button, owner):
+# Long enough that the cross-loop hops of a press finish well inside it on a loaded CI runner.
+DEBOUNCE_TEST_SECONDS = 1.0
+
+
+def _commit_a_hold_starting(client, gap=0.0):
     """Replay how Predbat committed a hold at the start of a new window on 09 Nov (batpred#6074).
 
-    Predbat sets the window times, then the hold target, then the zero rates, pressing the write
-    button after each. Returns nothing; the caller inspects what was written.
+    Predbat writes the window times and presses the write button, then the hold target and presses
+    again, and then - after its per-inverter loop, with no press - the charge rate and then the
+    discharge rate. gap is the pause before each of those two rate writes.
     """
+    button = client._control_name("switch", SN, "battery_schedule_charge_write")
     # Stage 1: the new 08:00-16:00 window, still carrying the previous cycle's target (100, from
     # inverter_soc_reset) and its 4000 W charge rate.
     client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 100, "power": 4000, "start": "08:00:00", "end": "16:00:00"}, reserve=5)
     run_async_local(client._handle_control_event(button, "turn_on"))
     # Stage 2: the hold target, the current SoC.
-    client.local_schedule[SN]["charge"]["soc"] = 81
+    run_async_local(client._handle_control_event(client._control_name("number", SN, "battery_schedule_charge_soc"), 81))
     run_async_local(client._handle_control_event(button, "turn_on"))
-    # Stage 3: a zero discharge rate - how Predbat asks this inverter to hold.
-    client.local_schedule[SN]["export"]["power"] = 0
-    run_async_local(client._handle_control_event(button, "turn_on"))
+    # Stage 3: the rates, with no press. Charge 0 on its own would read as a freeze export; with the
+    # discharge rate also 0 it is how Predbat asks this inverter to hold.
+    time.sleep(gap)
+    run_async_local(client._handle_control_event(client._control_name("number", SN, "battery_schedule_charge_power"), 0))
+    time.sleep(gap)
+    run_async_local(client._handle_control_event(client._control_name("number", SN, "battery_schedule_export_power"), 0))
 
 
 def _recording_apply(client, sent):
@@ -1284,44 +1293,52 @@ def test_hanchu_write_button_debounce_sends_only_the_settled_hold():
 
     Without the debounce the first press sent the new slot with CHG_PWR_LMT 4000 and DTU_AC_CHG_SOC_LMT 100,
     and min_write_interval then held the corrected payload back, so the battery charged from the grid for
-    about 95 seconds on a live HESS-HY-S-5.0K.
+    about 95 seconds on a live HESS-HY-S-5.0K. The rates that make it a hold arrive with no press, so they
+    must restart the wait too, or a write fired between the target press and the rates is the same fault.
     """
     failed = False
-    button = None
     results = {}
-    for label, debounce in (("immediate", 0), ("debounced", 0.2)):
+    # Each rate lands 0.6 of the debounce after the change before it, so the discharge rate arrives 1.2
+    # debounces after the last press: a timer only presses restart has fired by then, half-applied.
+    gap = DEBOUNCE_TEST_SECONDS * 0.6
+    for label, debounce in (("immediate", 0), ("debounced", DEBOUNCE_TEST_SECONDS)):
         client = ready(write_debounce=debounce)
         client.device_values[SN] = {"soc": 81.0}
         client.set_mock_clock(8 * 60)
-        button = client._control_name("switch", SN, "battery_schedule_charge_write")
         sent = []
         client.apply_schedule = _recording_apply(client, sent)
         owner, thread = _start_owner_loop()
         try:
             client._loop = owner
-            _press_stages_of_a_hold_starting(client, button, owner)
-            time.sleep(0.6)
+            _commit_a_hold_starting(client, gap=gap if debounce else 0.0)
+            if debounce:
+                # Still inside the debounce the discharge rate restarted.
+                time.sleep(DEBOUNCE_TEST_SECONDS * 0.6)
+                if sent:
+                    print(f"ERROR: a write went out before the rates had settled: {sent}")
+                    failed = True
+            time.sleep(DEBOUNCE_TEST_SECONDS * 0.8)
         finally:
             _stop_owner_loop(owner, thread)
         results[label] = sent
 
     immediate = results["immediate"]
     # The fault being fixed: with no debounce the first write is a live full-power grid charge.
-    if len(immediate) != 3 or immediate[0].get(HANCHU_KEY_GRID_CHARGE_SOC) != 100 or immediate[0].get(HANCHU_KEY_CHARGE_POWER) != 4000:
+    if len(immediate) != 2 or immediate[0].get(HANCHU_KEY_GRID_CHARGE_SOC) != 100 or immediate[0].get(HANCHU_KEY_CHARGE_POWER) != 4000:
         print(f"ERROR: the immediate path should reproduce the half-applied first write, got {immediate}")
         failed = True
 
     debounced = results["debounced"]
     if len(debounced) != 1:
-        print(f"ERROR: three presses inside the debounce should send exactly one write, sent {len(debounced)}")
+        print(f"ERROR: one commit should send exactly one write, sent {len(debounced)}")
         failed = True
     else:
         payload = debounced[0]
         if payload.get(HANCHU_KEY_GRID_CHARGE_SOC) != 81:
             print(f"ERROR: the write should carry the hold's grid-charge limit 81, got {payload.get(HANCHU_KEY_GRID_CHARGE_SOC)}")
             failed = True
-        if payload.get(HANCHU_KEY_CHARGE_POWER) != 0:
-            print(f"ERROR: the hold should go out at zero charge power, got {payload.get(HANCHU_KEY_CHARGE_POWER)}")
+        if payload.get(HANCHU_KEY_CHARGE_POWER) != 0 or payload.get(HANCHU_KEY_DISCHARGE_POWER) != 0:
+            print(f"ERROR: the hold should go out at zero charge and discharge power, got {payload.get(HANCHU_KEY_CHARGE_POWER)} / {payload.get(HANCHU_KEY_DISCHARGE_POWER)}")
             failed = True
         if payload.get(HANCHU_KEY_CHARGE_START.format(1)) != 8 * 3600:
             print(f"ERROR: the new window should still be written, slot 1 starts at {payload.get(HANCHU_KEY_CHARGE_START.format(1))}")
@@ -1329,10 +1346,36 @@ def test_hanchu_write_button_debounce_sends_only_the_settled_hold():
     assert not failed, "test_hanchu_write_button_debounce_sends_only_the_settled_hold"
 
 
+def test_hanchu_schedule_change_without_a_pending_write_does_not_start_one():
+    """A schedule-entity change with no press pending is left for the next press or tick, as before the debounce."""
+    failed = False
+    client = ready(write_debounce=DEBOUNCE_TEST_SECONDS)
+    client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "04:00:00"})
+    sent = []
+    client.apply_schedule = _recording_apply(client, sent)
+    owner, thread = _start_owner_loop()
+    try:
+        client._loop = owner
+        run_async_local(client._handle_control_event(client._control_name("number", SN, "battery_schedule_export_power"), 0))
+        if client._write_pending(SN):
+            print("ERROR: a schedule change alone should not start a debounced write")
+            failed = True
+        time.sleep(DEBOUNCE_TEST_SECONDS * 0.2)
+        if sent:
+            print(f"ERROR: a schedule change alone should not write: {sent}")
+            failed = True
+        if client.local_schedule[SN]["export"]["power"] != 0:
+            print("ERROR: the change should still reach the local schedule")
+            failed = True
+    finally:
+        _stop_owner_loop(owner, thread)
+    assert not failed, "test_hanchu_schedule_change_without_a_pending_write_does_not_start_one"
+
+
 def test_hanchu_reconcile_waits_for_a_pending_debounced_write():
     """The reconcile tick does not send the half-applied schedule the debounce is waiting out."""
     failed = False
-    client = ready(write_debounce=0.2)
+    client = ready(write_debounce=DEBOUNCE_TEST_SECONDS)
     client.device_values[SN] = {"soc": 81.0}
     client.set_mock_clock(8 * 60)
     button = client._control_name("switch", SN, "battery_schedule_charge_write")
@@ -1351,7 +1394,7 @@ def test_hanchu_reconcile_waits_for_a_pending_debounced_write():
             print(f"ERROR: the reconcile tick wrote while a debounced write was pending: {sent}")
             failed = True
         client.local_schedule[SN]["charge"]["soc"] = 81
-        time.sleep(0.5)
+        time.sleep(DEBOUNCE_TEST_SECONDS * 1.5)
         if len(sent) != 1 or sent[0].get(HANCHU_KEY_GRID_CHARGE_SOC) != 81:
             print(f"ERROR: the debounced write should send the settled schedule once, sent {sent}")
             failed = True
@@ -1371,7 +1414,7 @@ def test_hanchu_reconcile_waits_for_a_pending_debounced_write():
 def test_hanchu_stopping_cancels_a_pending_debounced_write():
     """A debounced write still waiting when the component stops is cancelled, not left to run on a dying loop."""
     failed = False
-    client = ready(write_debounce=0.2)
+    client = ready(write_debounce=DEBOUNCE_TEST_SECONDS)
     button = client._control_name("switch", SN, "battery_schedule_charge_write")
     sent = []
     client.apply_schedule = _recording_apply(client, sent)
@@ -1386,7 +1429,7 @@ def test_hanchu_stopping_cancels_a_pending_debounced_write():
             client._cancel_pending_writes()
 
         asyncio.run_coroutine_threadsafe(stop(), owner).result(5)
-        time.sleep(0.4)
+        time.sleep(DEBOUNCE_TEST_SECONDS * 1.5)
         if sent:
             print(f"ERROR: a cancelled debounced write was still sent: {sent}")
             failed = True
@@ -1461,6 +1504,7 @@ def run_hanchu_control_tests(my_predbat):
         ("device_drift", test_hanchu_settings_changed_on_the_device_are_re_sent),
         ("hold_grid_cap", test_hanchu_hold_caps_the_grid_charge_limit_at_the_soc),
         ("write_debounce", test_hanchu_write_button_debounce_sends_only_the_settled_hold),
+        ("write_debounce_change_only", test_hanchu_schedule_change_without_a_pending_write_does_not_start_one),
         ("write_debounce_reconcile", test_hanchu_reconcile_waits_for_a_pending_debounced_write),
         ("write_debounce_stop", test_hanchu_stopping_cancels_a_pending_debounced_write),
         ("write_debounce_no_loop", test_hanchu_debounce_is_skipped_without_a_running_component_loop),
