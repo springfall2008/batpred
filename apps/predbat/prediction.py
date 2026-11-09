@@ -36,6 +36,7 @@ from utils import (
 )
 from prediction_batch import EXPORT_FLOOR_SCENARIOS, PredictionBatch, export_end_soc_from_series, floor_export_limits, prediction_cache_key
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
+from shared_power import build_shared_power_model, car_slot_average, shared_battery_charge_limit
 
 # The limit an inactive export window reads as. Built once at import rather than per minute:
 # run_prediction consults it on every step of the horizon for every simulation.
@@ -216,6 +217,14 @@ class Prediction(PredictionBatch):
             self.prediction_cache = {}
             self.plan_interval_minutes = base.plan_interval_minutes
             self.charge_scaling10 = base.charge_scaling10
+            self.shared_power_groups = getattr(base, "shared_power_groups", [])
+            self.shared_power_group_limit, self.shared_power_group_battery_rate, self.shared_power_car_group, self.shared_power_unconstrained_battery_rate = build_shared_power_model(
+                self.shared_power_groups,
+                getattr(base, "inverters", []),
+                self.battery_rate_max_charge,
+                self.num_cars,
+                int(getattr(base, "num_inverters", 1)),
+            )
 
             # C++ prediction kernel context (0 = kernel unavailable, Python engine is used)
             self.prediction_kernel_enable = getattr(base, "prediction_kernel_enable", False)
@@ -898,10 +907,14 @@ class Prediction(PredictionBatch):
             car_load_energy_bypass = 0  # Amount of car energy bypassing the CT clamp
             car_gone_kwh = 0  # Car energy in a dispatch that has gone away, kept off the battery (see below)
             car_gone_cost = 0  # ...and what it costs at the rate the nominal case pays for it
+            shared_power_ev_energy = [0.0] * len(self.shared_power_group_limit)
 
             # Simulate car charging
             if car_enable:
                 car_load, car_rate_slot = in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)
+                for car_n in range(self.num_cars):
+                    if self.shared_power_car_group[car_n] >= 0:
+                        car_load[car_n], car_rate_slot[car_n] = car_slot_average(minute_absolute, step, car_n, self.car_charging_slots)
 
                 # Car charging?
                 for car_n in range(self.num_cars):
@@ -910,6 +923,9 @@ class Prediction(PredictionBatch):
                         car_load_scale = car_load_scale * self.car_charging_loss
                         car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
                         car_soc[car_n] = car_soc[car_n] + car_load_scale
+                        shared_group_n = self.shared_power_car_group[car_n]
+                        if shared_group_n >= 0:
+                            shared_power_ev_energy[shared_group_n] += car_load_scale
 
                         if dispatch_gone:
                             # Worst case the dispatch has gone away. The car is still charged, at the rate the
@@ -1294,6 +1310,17 @@ class Prediction(PredictionBatch):
                         battery_state = "fz-"
                     else:
                         battery_state = "fz~"
+
+            # EV-first shared grid-to-DC conversion capacity. Direct hybrid PV is already in pv_dc,
+            # so only the grid-derived part of battery charging competes with the EV.
+            if self.shared_power_group_limit and battery_draw < 0:
+                grid_battery_charge = max(abs(battery_draw) - pv_dc, 0.0)
+                shared_charge_limit = shared_battery_charge_limit(step, self.shared_power_group_limit, self.shared_power_group_battery_rate, shared_power_ev_energy, self.shared_power_unconstrained_battery_rate)
+                if grid_battery_charge > shared_charge_limit:
+                    battery_draw += grid_battery_charge - shared_charge_limit
+                    if inverter_hybrid:
+                        pv_dc = min(abs(battery_draw), pv_now)
+                        pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
             # Clamp at inverter limit
             if inverter_hybrid:
