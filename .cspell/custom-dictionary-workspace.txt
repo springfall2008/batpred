@@ -351,6 +351,7 @@ iot
 IPPROTO
 isinstance
 isoformat
+isolarcloud
 isort
 itemsize
 itemtype
@@ -579,6 +580,7 @@ pylint
 pymyenergi
 pypi
 pyproject
+pysolarcloud
 pytest
 pythonhashseed
 pytz
@@ -694,6 +696,7 @@ suback
 subclassing
 submessage
 substep
+sungrow
 sunspec
 sunsynk
 supabase
@@ -762,6 +765,7 @@ unfetchable
 unflushed
 unhashable
 unindexed
+unjudged
 unnormalised
 unparseable
 unpickled
