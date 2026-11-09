@@ -1092,12 +1092,13 @@ class ScriptedHAInterface:
     def get_history(self, entity_id, now, days=30, from_time=None):
         """Record the call and return the scripted answer"""
         self.get_history_calls.append({"entity_id": entity_id, "now": now, "days": days, "from_time": from_time})
-        return self.answers.get(entity_id, None)
+        answer = self.answers.get(entity_id, None)
+        return answer(from_time) if callable(answer) else answer
 
 
 def test_hahistory_empty_vs_failed_reads(my_predbat=None):
     """An empty history read is cached and rechecked every HISTORY_EMPTY_RECHECK_SECONDS from the last check; a failed read is never cached"""
-    from ha import HISTORY_EMPTY_RECHECK_SECONDS, HISTORY_EMPTY_OVERLAP_SECONDS
+    from ha import HISTORY_EMPTY_RECHECK_SECONDS, HISTORY_REFRESH_OVERLAP_SECONDS
 
     print("\n=== Testing HAHistory empty vs failed reads ===")
     failed = 0
@@ -1171,7 +1172,7 @@ def test_hahistory_empty_vs_failed_reads(my_predbat=None):
     check(len(empty_calls) == 1, "refresh rechecks an empty entity once the recheck is due")
     if empty_calls:
         from_time = empty_calls[0]["from_time"]
-        check(from_time is not None and abs(from_time.timestamp() - (checked_epoch - HISTORY_EMPTY_OVERLAP_SECONDS)) < 1, "recheck reads from the last check less the overlap")
+        check(from_time is not None and abs(from_time.timestamp() - (checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS)) < 1, "recheck reads from the last check less the overlap")
     check(ha_history.history_checked[empty_id] > checked_epoch, "an empty recheck moves the check time on")
 
     # A failed recheck leaves the check time where it was, so the next refresh asks again for the same span
@@ -1184,7 +1185,7 @@ def test_hahistory_empty_vs_failed_reads(my_predbat=None):
     empty_calls = calls_for(ha, empty_id)
     check(len(empty_calls) == 2, "a failed recheck is asked again on the next refresh")
     check(ha_history.history_checked[empty_id] == checked_epoch, "a failed recheck does not move the check time")
-    check(all(abs(call["from_time"].timestamp() - (checked_epoch - HISTORY_EMPTY_OVERLAP_SECONDS)) < 1 for call in empty_calls), "a failed recheck keeps reading from the same point")
+    check(all(abs(call["from_time"].timestamp() - (checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS)) < 1 for call in empty_calls), "a failed recheck keeps reading from the same point")
     check(ha_history.get_history(empty_id, days=11) == [[]], "the entity is still served as empty from the cache meanwhile")
 
     # A recheck that finds history makes it an ordinary store, refreshed from its last record
@@ -1193,7 +1194,7 @@ def test_hahistory_empty_vs_failed_reads(my_predbat=None):
     ha.get_history_calls = []
     run_async(refresh())
     check(len(ha_history.history_data[empty_id]) == 1, "a recheck that finds a record stores it")
-    check(empty_id not in ha_history.history_checked, "a store with history drops its check time")
+    check(ha_history.history_checked.get(empty_id, 0) > checked_epoch, "a recheck that finds a record moves the check time on")
     check(ha_history.get_history(empty_id, days=11)[0][0]["state"] == "on", "the found record is served from the cache")
     ha.get_history_calls = []
     run_async(refresh())
@@ -1207,6 +1208,89 @@ def test_hahistory_empty_vs_failed_reads(my_predbat=None):
     ha.get_history_calls = []
     run_async(refresh())
     check(late_id in ha_history.history_checked and len(ha_history.history_data[late_id]) == 0, "an empty first read in the refresh is cached")
+
+    return failed
+
+
+def test_hahistory_refresh_window_quiet_store(my_predbat=None):
+    """A tracked store refreshes from its last record or its last check less the overlap, whichever is later"""
+    from ha import HISTORY_REFRESH_OVERLAP_SECONDS
+
+    print("\n=== Testing HAHistory refresh window for a quiet store ===")
+    failed = 0
+
+    def check(condition, message):
+        """Count and report one expectation"""
+        nonlocal failed
+        if condition:
+            print("✓ " + message)
+        else:
+            print("ERROR: " + message)
+            failed += 1
+
+    async def refresh():
+        """One 2-minute refresh"""
+        return await ha_history.run(seconds=120, first=False)
+
+    mock_base = MockBase()
+    ha_history = HAHistory(mock_base)
+    ha_history.initialize()
+    ha = ScriptedHAInterface()
+    mock_base.components.register_component("ha", ha)
+
+    # A quiet entity: its last change was three days ago, and the full read that loaded it worked
+    entity_id = "binary_sensor.saving_session"
+    now = datetime.now(pytz.UTC)
+    last_change = now - timedelta(days=3)
+    ha.answers[entity_id] = [[{"state": "off", "last_updated": last_change.isoformat(), "attributes": {}}]]
+    ha_history.get_history(entity_id, days=11)
+    checked_epoch = ha_history.history_checked.get(entity_id)
+    check(checked_epoch is not None and len(ha_history.history_data[entity_id]) == 1, "the full read is stored and records its check time")
+
+    # Home Assistant opens the window with the current state, stamped at the window start
+    def ha_window(from_time):
+        """The state in effect at from_time, stamped at from_time, as Home Assistant answers"""
+        return [[{"state": "off", "last_updated": from_time.isoformat(), "attributes": {}}]]
+
+    ha.answers[entity_id] = ha_window
+    ha.get_history_calls = []
+    run_async(refresh())
+    calls = ha.get_history_calls
+    check(len(calls) == 1 and abs(calls[0]["from_time"].timestamp() - (checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS)) < 1, "a quiet store reads from its last check less the overlap, not from its last change")
+    check(len(ha_history.history_data[entity_id]) == 1, "the record stamped at the window start is not stored again")
+    check(ha_history.history_checked[entity_id] > checked_epoch, "a refresh that worked moves the check time on")
+    run_async(refresh())
+    check(len(ha_history.history_data[entity_id]) == 1, "...on any later refresh either")
+
+    # A new record inside the window is stored, and then refreshes read from it
+    event_time = datetime.now(pytz.UTC) - timedelta(minutes=1)
+    ha.answers[entity_id] = lambda from_time: [[{"state": "off", "last_updated": from_time.isoformat(), "attributes": {}}, {"state": "on", "last_updated": event_time.isoformat(), "attributes": {}}]]
+    run_async(refresh())
+    records = ha_history.history_data[entity_id].to_records()
+    check([record["state"] for record in records] == ["off", "on"], "a new record in the window is stored, without the window-start record")
+    ha.answers[entity_id] = [[]]
+    ha.get_history_calls = []
+    run_async(refresh())
+    check(abs(ha.get_history_calls[0]["from_time"].timestamp() - event_time.timestamp()) < 1, "an active store reads from its last record, as before")
+
+    # A failed refresh leaves the check time where it was, so the next one covers the gap
+    ha_history.history_data[entity_id] = EntityHistory.from_records([{"state": "off", "last_updated": last_change.isoformat(), "attributes": {}}])
+    stale_epoch = now.timestamp() - 3600
+    ha_history.history_checked[entity_id] = stale_epoch
+    ha.answers[entity_id] = None
+    ha.get_history_calls = []
+    run_async(refresh())
+    run_async(refresh())
+    check(ha_history.history_checked[entity_id] == stale_epoch, "a failed refresh does not move the check time")
+    check(all(abs(call["from_time"].timestamp() - (stale_epoch - HISTORY_REFRESH_OVERLAP_SECONDS)) < 1 for call in ha.get_history_calls), "...so each retry reads from the same point")
+
+    # A store with no check time (filled before one was kept) refreshes from its last record, as before
+    del ha_history.history_checked[entity_id]
+    ha.answers[entity_id] = [[]]
+    ha.get_history_calls = []
+    run_async(refresh())
+    check(abs(ha.get_history_calls[0]["from_time"].timestamp() - last_change.timestamp()) < 1, "a store without a check time reads from its last record")
+    check(entity_id in ha_history.history_checked, "...and records one once that read works")
 
     return failed
 
@@ -1230,6 +1314,7 @@ def run_hahistory_tests(my_predbat):
     failed += test_hahistory_get_history_untracked(my_predbat)
     failed += test_hahistory_expand_from_7_to_30_days(my_predbat)
     failed += test_hahistory_empty_vs_failed_reads(my_predbat)
+    failed += test_hahistory_refresh_window_quiet_store(my_predbat)
 
     # Data management tests
     failed += test_hahistory_update_entity_filter_attributes(my_predbat)

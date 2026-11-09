@@ -36,14 +36,15 @@ from component_base import ComponentBase
 # response body, decoded string and parsed objects are resident at a time.
 HISTORY_CHUNK_DAYS = 3
 
+# The 2-minute refresh of a tracked entity reads from its last record or from its last check less
+# this overlap, whichever is later, so a quiet entity is not re-read from a change days ago. The
+# overlap catches a record that reached the database a little after the moment it is stamped; one
+# that arrives later than that is stamped before every refresh window and is not seen until a
+# restart: the cost of not re-reading the whole window.
+HISTORY_REFRESH_OVERLAP_SECONDS = 15 * 60
 # A tracked entity whose history read came back empty (a read that worked, not one that failed)
-# is cached as empty and asked again this often, rather than having its whole window re-read
-# on every 2-minute refresh. Each recheck reads only from the last check, less the overlap, so a
-# record that reached the database a little after the moment it is stamped is still found.
-# One that arrives later than the overlap is stamped before every recheck window and is not
-# seen until a restart: the cost of not re-reading the whole window.
+# is cached as empty and asked again only this often
 HISTORY_EMPTY_RECHECK_SECONDS = 30 * 60
-HISTORY_EMPTY_OVERLAP_SECONDS = 15 * 60
 
 
 class RunThread(threading.Thread):
@@ -242,7 +243,7 @@ class HAHistory(ComponentBase):
     def initialize(self):
         self.history_entities = {}
         self.history_data = {}
-        # Epoch time each tracked entity with an empty store was last found to have no history
+        # Epoch time each tracked entity's history was last read successfully, up to which it is known
         self.history_checked = {}
         self.history_lock = threading.Lock()
 
@@ -305,20 +306,36 @@ class HAHistory(ComponentBase):
                 cutoff_epoch = (now - timedelta(days=max_days)).timestamp()
                 self.history_data[entity_id].prune(cutoff_epoch)
 
-    def update_entity(self, entity_id, new_history_data, checked_time=None):
+    def update_entity(self, entity_id, new_history_data, checked_time=None, window_start=None):
         """
         Update history data for an entity
 
-        checked_time is the end of the window new_history_data was read for. When it is given and the
-        read found nothing for an entity with no stored history, the entity is cached as empty, checked
-        at that time. Pass it only for a read that worked: a failed read (None) must not get here.
+        checked_time is the end of the window new_history_data was read for, recorded as the time the
+        entity was last checked. Pass it only for a read that worked: a failed read (None) must not get
+        here. A read that found nothing for an entity with no stored history caches it as empty.
+
+        window_start is the start of a refresh window. Records stamped at or before it are dropped: Home
+        Assistant opens every window with the state in effect at its start, stamped at the start, which
+        would otherwise be stored again on every refresh, and anything real there was in the previous read.
         """
+        if new_history_data and window_start is not None:
+            floor_epoch = window_start.timestamp()
+            kept = []
+            for entry in new_history_data:
+                try:
+                    if str2time(entry.get("last_updated")).timestamp() <= floor_epoch:
+                        continue
+                except (ValueError, TypeError, AttributeError):
+                    pass
+                kept.append(entry)
+            new_history_data = kept
+
         if not new_history_data:
             if checked_time is not None:
                 with self.history_lock:
                     if not self.history_data.get(entity_id, None):
                         self.history_data[entity_id] = EntityHistory()
-                        self.history_checked[entity_id] = checked_time.timestamp()
+                    self.history_checked[entity_id] = checked_time.timestamp()
             return
 
         FILTER_ATTRIBUTES = ["friendly_name", "unit_of_measurement", "icon", "device_class", "results", "state_class", "entity_id"]
@@ -375,8 +392,8 @@ class HAHistory(ComponentBase):
                     self.history_data[entity_id] = EntityHistory.from_records(combined)
             else:
                 self.history_data[entity_id] = EntityHistory.from_records(new_history_data)
-                # The store holds real history now, so it is refreshed from its last record instead
-                self.history_checked.pop(entity_id, None)
+            if checked_time is not None:
+                self.history_checked[entity_id] = checked_time.timestamp()
 
         # Update last success timestamp
         self.update_success_timestamp()
@@ -396,23 +413,28 @@ class HAHistory(ComponentBase):
             for entity_id in list(self.history_entities.keys()):
                 # self.log("HAHistory: Updating history for {}".format(entity_id))
                 store = self.history_data.get(entity_id, None)
-                last_updated_time = datetime.fromtimestamp(store.epochs[-1], timezone.utc) if store and len(store) > 0 else None
-                checked_epoch = self.history_checked.get(entity_id, None) if store is not None and not last_updated_time else None
-                if last_updated_time:
-                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=last_updated_time)
+                checked_epoch = self.history_checked.get(entity_id, None) if store is not None else None
+                if store:
+                    # Read from the last record, or from the last check less the overlap if that is later.
+                    # A failed read leaves the check time where it was, so the next refresh covers the gap
+                    start_epoch = store.epochs[-1]
+                    if checked_epoch is not None:
+                        start_epoch = max(start_epoch, checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS)
+                    from_time = datetime.fromtimestamp(start_epoch, timezone.utc)
+                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=from_time)
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
-                        self.update_entity(entity_id, history_data)
+                        self.update_entity(entity_id, history_data, checked_time=now, window_start=from_time)
                 elif checked_epoch is not None:
-                    # Cached as empty: ask again only every HISTORY_EMPTY_RECHECK_SECONDS, and only for
-                    # the time since the last check. A failed read leaves the check time where it was
+                    # Cached as empty: ask again only every HISTORY_EMPTY_RECHECK_SECONDS, from the last check
+                    # less the overlap
                     if now.timestamp() - checked_epoch < HISTORY_EMPTY_RECHECK_SECONDS:
                         continue
-                    from_time = datetime.fromtimestamp(checked_epoch - HISTORY_EMPTY_OVERLAP_SECONDS, timezone.utc)
+                    from_time = datetime.fromtimestamp(checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS, timezone.utc)
                     history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id], from_time=from_time)
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
-                        self.update_entity(entity_id, history_data, checked_time=now)
+                        self.update_entity(entity_id, history_data, checked_time=now, window_start=from_time)
                 else:
                     history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id])
                     if history_data and len(history_data) > 0:
