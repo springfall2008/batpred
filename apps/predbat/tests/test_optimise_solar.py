@@ -8,7 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from tests.test_infra import reset_rates, reset_inverter, update_rates_export
+from tests.test_infra import reset_rates, reset_inverter, update_rates_export, clear_manual_times
 from utils import unpack_export_limit
 from prediction import Prediction
 
@@ -46,7 +46,7 @@ def run_optimise_solar(
     my_predbat.soc_max = battery_size
     my_predbat.soc_kw = battery_soc
     my_predbat.reserve = 0.5
-    my_predbat.manual_all_times = set()
+    clear_manual_times(my_predbat)
 
     # Car charging defaults to none, but a car charging slot can be supplied to test overlap handling
     car_charging_slots = car_charging_slots if car_charging_slots is not None else []

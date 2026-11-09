@@ -5,13 +5,13 @@ import contextlib
 import datetime
 import inspect
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import gateway_status_pb2 as pb
 import inverter as inverter_module
 from config import INVERTER_DEF
 from inverter import Inverter
-from tests.test_gateway_commit import CHARGE_ENABLED, DISCHARGE_ENABLED, DISCHARGE_END, DISCHARGE_START, SLOT_END, SLOT_START, WRITE, clock, inject, make_gateway, make_status
+from tests.test_gateway_commit import CHARGE_ENABLED, DISCHARGE_ENABLED, DISCHARGE_END, DISCHARGE_START, SLOT_END, SLOT_START, WRITE, DictClock, inject, make_gateway, make_status
 
 
 class SimulatedHub:
@@ -147,18 +147,18 @@ def make_inverter(base):
 @contextlib.contextmanager
 def hub_cycle(**hub_kwargs):
     """A gateway, simulated Hub, Predbat base and inverter, with the ack clock under test control."""
-    now, clock_patch = clock()
+    now = {"now": 1000.0}
 
     async def pause():
         """An ack wait moves the clock on a second."""
         now["now"] += 1
 
-    with clock_patch, patch("gateway._commit_pause", pause):
-        gw = make_gateway()
-        hub = SimulatedHub(gw, **hub_kwargs)
-        base = HubBase(gw)
-        gw.base = base
-        yield make_inverter(base), gw, hub, base, now
+    gw = make_gateway()
+    hub = SimulatedHub(gw, **hub_kwargs)
+    base = HubBase(gw)
+    gw.base = base
+    base.component_clock = DictClock(now, pause)
+    yield make_inverter(base), gw, hub, base, now
 
 
 def at(value):

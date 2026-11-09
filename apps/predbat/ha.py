@@ -20,7 +20,7 @@ HAHistory for automatic entity history tracking and pruning.
 import os
 from datetime import timedelta, datetime, timezone
 import asyncio
-from aiohttp import ClientSession, WSMsgType
+from aiohttp import WSMsgType
 import array
 import bisect
 import json
@@ -73,7 +73,7 @@ class EntityHistory:
     oldest to newest so the epoch array stays sorted.
     """
 
-    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions"]
+    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions", "anchored"]
 
     def __init__(self):
         """
@@ -84,6 +84,8 @@ class EntityHistory:
         self.state_exceptions = {}
         self.shared_attributes = None
         self.attribute_exceptions = {}
+        # True while the first record is one prune() re-stamped at its cutoff rather than a real change
+        self.anchored = False
 
     def __len__(self):
         """
@@ -188,16 +190,39 @@ class EntityHistory:
 
     def prune(self, cutoff_epoch):
         """
-        Drop all records older than the given cutoff epoch time
+        Drop all records older than the given cutoff epoch time.
+
+        The last record before the cutoff holds the state in force at the cutoff, so unless a record
+        lands exactly on the cutoff it is kept and re-stamped at the cutoff, as Home Assistant stamps
+        the first record of a history window. Dropping it would leave a rarely-changing sensor with
+        no history before its next change (#5456).
         """
         index = bisect.bisect_left(self.epochs, cutoff_epoch)
-        if index > 0:
-            self.epochs = self.epochs[index:]
-            self.states = self.states[index:]
-            if self.state_exceptions:
-                self.state_exceptions = {epoch: value for epoch, value in self.state_exceptions.items() if epoch >= cutoff_epoch}
-            if self.attribute_exceptions:
-                self.attribute_exceptions = {epoch: value for epoch, value in self.attribute_exceptions.items() if epoch >= cutoff_epoch}
+        if index == 0:
+            return
+        anchor_epoch = None
+        if index == len(self.epochs) or self.epochs[index] != cutoff_epoch:
+            index -= 1
+            anchor_epoch = self.epochs[index]
+        self.epochs = self.epochs[index:]
+        self.states = self.states[index:]
+        self.anchored = anchor_epoch is not None
+        if self.anchored:
+            self.epochs[0] = cutoff_epoch
+        if self.state_exceptions:
+            self.state_exceptions = self._prune_exceptions(self.state_exceptions, cutoff_epoch, anchor_epoch)
+        if self.attribute_exceptions:
+            self.attribute_exceptions = self._prune_exceptions(self.attribute_exceptions, cutoff_epoch, anchor_epoch)
+
+    @staticmethod
+    def _prune_exceptions(exceptions, cutoff_epoch, anchor_epoch):
+        """
+        Return the exceptions at or after the cutoff, with the kept anchor's (if any) moved to the cutoff
+        """
+        pruned = {epoch: value for epoch, value in exceptions.items() if epoch >= cutoff_epoch}
+        if anchor_epoch in exceptions:
+            pruned[cutoff_epoch] = exceptions[anchor_epoch]
+        return pruned
 
 
 class HAHistory(ComponentBase):
@@ -314,8 +339,13 @@ class HAHistory(ComponentBase):
 
                 if older_entries:
                     # Rebuild the store with the older entries merged in (rare, only happens
-                    # when more days of history are requested than previously cached)
-                    combined = older_entries + store.to_records()
+                    # when more days of history are requested than previously cached). A re-stamped
+                    # prune anchor is dropped: the older entries already hold the state in force at the
+                    # cutoff, and the anchor would contradict them if the cache had missed a change
+                    stored_records = store.to_records()
+                    if store.anchored:
+                        stored_records = stored_records[1:]
+                    combined = older_entries + stored_records
                     combined.sort(key=lambda x: str2time(x.get("last_updated")))
                     self.history_data[entity_id] = EntityHistory.from_records(combined)
             else:
@@ -559,7 +589,7 @@ class HAInterface(ComponentBase):
 
             url = "{}/api/websocket".format(self.ha_url)
             self.log("Info: Start socket for url {}".format(url))
-            async with ClientSession() as session:
+            async with self.http_session() as session:
                 try:
                     async with session.ws_connect(url) as websocket:
                         await websocket.send_json({"type": "auth", "access_token": self.ha_key})
@@ -946,7 +976,7 @@ class HAInterface(ComponentBase):
         self.db_mirror_list[sensor.lower()] = True
 
         if (self.db_primary or force_db) and self.db_enable:
-            return self.db_manager.get_history_db(sensor, now, days=days)
+            return self.db_manager.get_history_db(sensor, now, days=days, from_time=from_time)
 
         if from_time:
             start = from_time

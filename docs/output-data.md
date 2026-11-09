@@ -45,14 +45,23 @@ This will give you a simple Predbat control and output dashboard that you can th
 You can also create a dashboard page that's dynamically generated to automatically include all the Predbat control and output entities,
 so when new entities are added in future Predbat releases, you don't have to edit the dashboard.
 
-Firstly you need to install HACS if it isn't already installed, and then install two HACS front-end components:
+Firstly you need to install two front-end (Dashboard) components from the [Marketplace](install.md#hacs-and-the-marketplace) (or from HACS on Home Assistant 2026.10 or older):
 
 - Auto Entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities))
 automatically generates a list of entities that match a wildcard expression
 - Lovelace Collapsable Cards ([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards))
 wraps the entity lists within a drop-down toggle
 
-Installation steps:
+Installation steps on Home Assistant 2026.11 or newer, using the Marketplace:
+
+- Go to **Settings** → **Marketplace**
+- Select **Add from link** in the upper-right corner, enter `https://github.com/RossMcMillan92/lovelace-collapsable-cards` under 'GitHub link' and select **Add**
+(if asked for the Type, choose 'Dashboard' and select **Add** again)
+- Open the 'collapsable cards' repository page, select **Install**, check the version and select **Install** again
+- Search for 'auto-entities', open its repository page, then select **Install** and **Install** again
+- Reload your browser to load the new dashboard resources
+
+Installation steps on Home Assistant 2026.10 or older, using HACS:
 
 - Click the HACS icon on the left-hand side panel
 - Click the three dots in the top right corner then 'Custom Repositories'
@@ -453,6 +462,7 @@ These are useful for automations if for example, you want to turn off car chargi
 - predbat.low_rate_start - Start time of the next low import rate slot
 - predbat.low_rate_cost_2, predbat.low_rate_end_2, predbat.low_rate_start_2 - The cost and times of the following low import rate slot
 - binary_sensor.predbat_low_rate_slot - A sensor that is 'on' to indicate when there is a low energy rate import slot active, 'off' otherwise
+- binary_sensor.predbat_rate_override_import / binary_sensor.predbat_rate_override_export - 'on' while the current slot's import (or export) rate is one you overrode - a manual rate, or a `rates_import_override` / `rates_export_override` in apps.yaml - 'off' otherwise. The `tag` attribute says which: `manual`, `user` (an override rate) or `increment` (an override that adds to the rate). Their recorded history is how the History view marks overridden slots on older days.
 
 ### High-rate export entities
 
@@ -638,6 +648,13 @@ and only charging at the lowest import rate in the 24 hour period
 - predbat.savings_yesterday_pvbat - A sensor which tells you how much money you saved from using Predbat
 vs not having a PV and battery system at all and all house load being met from grid import
 
+- sensor.predbat_billing - What your supplier actually billed, published when Predbat reads your rates directly from Octopus or a Kraken supplier (EDF, E.ON Next).
+The state is the most recent complete day's billed energy cost in pence (import less export, standing charge excluded); with an export meter a day only counts as complete once its export billing has been read too.
+Attributes: `supplier`, `legs` (whether import and export billing were read: true, false if the last read failed, or null if not configured), `complete_until` (the end of the last billed half hour, UTC),
+`days` (a summary per day: billed import and export cost and kWh, standing charge and the cost and kWh in each rate bucket) and `slots` (every billed half hour of the last week, with its rate buckets).
+It is refreshed every three hours; billing usually appears one to two days after the half hour. The attributes are too large for Home Assistant's recorder to store, so only the current value is kept.
+- predbat.plan_history - The 'History' view for each of the older days in the [web interface](web-interface.md#plan-view) day picker, rebuilt once a day and again when new billing arrives. The state is the number of days available. A day that had a saving session, free electricity session, Axle event or rate override lists them in its `history_events`.
+
 Note: predbat.savings_yesterday_predbat's own displayed state is the *adjusted* saving (it factors in the change in battery value across the day, via the `saving_adjusted` attribute), while predbat.savings_total_predbat accumulates the *real*, unadjusted `saving_real` attribute from that same sensor. This is deliberate - the running total is meant to track real money saved, not a figure that includes the battery-value adjustment - but it means the two numbers are not simply "yesterday's bar vs the running total plus that bar", and the daily figure can legitimately be negative on a day the total still rises. Both `saving_real` and `saving_adjusted` are published as attributes on predbat.savings_yesterday_predbat if you want to chart either one explicitly.
 
 Note: The savings using Predbat are calculated by default compared to having one fixed nightly charge slot set to charge at the lowest import rate with a target of 100%
@@ -654,6 +671,9 @@ because without Predbat the baseline assumes charging to 100% in the cheapest wi
 After each plan calculation Predbat runs a set of what-if simulations to determine the marginal cost (in pence per kWh) of consuming extra electricity at different
 levels and at different times in the upcoming forecast window. The results are published as a matrix sensor and a set of binary sensors.
 
+The cost is worked out against the current plan, so it includes any planned export the extra load would displace. Energy the battery would otherwise still hold at the end of the plan
+is valued the same way the planner values it, so extra load the battery covers is not shown as free.
+
 ### Main matrix sensor
 
 - **sensor.predbat_marginal_energy_costs** - The primary marginal cost sensor. State is the 1 kWh marginal cost for the current time window.
@@ -663,7 +683,7 @@ levels and at different times in the upcoming forecast window. The results are p
     - `grid_export` - Dict of actual grid export rate (p/kWh) at each time window label
     - `grid_import_now` - Current grid import rate (p/kWh)
     - `grid_export_now` - Current grid export rate (p/kWh)
-    - `baseline_metric` - Internal baseline cost used to compute deltas (standing charge excluded)
+    - `baseline_metric` - Internal baseline used to compute deltas: the plan's cost less the value of the energy left in the battery at the end (standing charge excluded), so it can be negative
     - `rate_now_low_consumption` - Marginal cost now for the 'low' (1 kWh) load level
     - `rate_now_med_consumption` - Marginal cost now for the 'medium' (2 kWh) load level
     - `rate_now_high_consumption` - Marginal cost now for the 'high' (4 kWh) load level
@@ -687,6 +707,9 @@ The cheap/moderate thresholds are computed relative to the current day's import 
 
 - **Cheap threshold** = `rate_min × 1.2`
 - **Moderate threshold** = `max(rate_max × 0.5, rate_min × 1.5)`
+
+`rate_min` and `rate_max` are the base tariff's lowest and highest import rates, the same values as the sensor's `rate_min`/`rate_max` attributes.
+Octopus free and saving sessions, Axle events and rate overrides are left out, so a free session does not drag the cheap threshold down to zero.
 
 These binary sensors are useful in Home Assistant automations, e.g. to start an EV charge or run a dishwasher only when energy is cheap.
 

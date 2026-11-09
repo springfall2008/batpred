@@ -99,6 +99,7 @@ The following `apps.yaml` settings can be overridden using predbat_manual_api:
 - inverter_limit_charge
 - inverter_limit_charge_dc
 - inverter_limit_discharge
+- inverter_limit_export
 
 ### Stopping the battery charging or discharging with inverter_limit_charge and inverter_limit_discharge
 
