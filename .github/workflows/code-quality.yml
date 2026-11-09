@@ -1,6 +1,10 @@
 name: code-quality
 on:
   pull_request:
+  # Runs on main as well so its pip and pre-commit caches exist: a cache saved by a PR run is visible only to that PR,
+  # while every PR can read main's, so without this the pre-commit environments were rebuilt on every run
+  push:
+    branches: [main]
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
@@ -17,9 +21,10 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-    - uses: pre-commit/action@v3.0.0
+    - uses: pre-commit/action@v3.0.1
     - uses: pre-commit-ci/lite-action@v1.1.0
-      if: always()
+      # Pushes fixes back to a PR branch, so there is nothing for it to do on main
+      if: always() && github.event_name == 'pull_request'
     - name: Build prediction kernel
       run: bash apps/predbat/build_kernel.sh
     - name: Run unit tests (quick mode)
