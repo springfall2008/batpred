@@ -704,6 +704,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.evc_data = {}
         self.evc_sessions = {}
         self.evc_status_unknown = set()
+        self.evc_start_skipped = set()
         self.api_fatal = False
         self.api_auth_failed = False
         self.auth_denied_reported = False
@@ -2380,9 +2381,36 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         """A charger with no car plugged in is left alone - commanding it would achieve nothing and every command costs a retry loop."""
         return self.evc_car_connected(self.evc_device[uuid].get("status", None))
 
+    def evc_charging_now(self, uuid):
+        """Does the charger report that it is delivering a charge right now."""
+        return evc_status_key(self.evc_device[uuid].get("status", None)) == "charging"
+
+    def charger_control_drifted(self, uuid, charge):
+        """Has a charger Predbat stopped started charging again - its own schedule, or plug and go.
+
+        start-charge and stop-charge are one-off commands, so nothing stops the charger starting
+        itself afterwards. Without this a charger Predbat holds as stopped could charge all night
+        and the stop at the end of the window would never be sent, as it matches what is held.
+        Inside a window only a start skipped because the charger was already Charging is checked:
+        that status can be a poll old, so if the charger is back at Preparing (plugged in, no
+        session) the start is sent after all. A start GE Cloud accepted is not re-sent while the
+        status catches up, and a car that stops drawing itself (SuspendedEV - full, or its own
+        schedule) is not something another start-charge can fix.
+        """
+        if charge:
+            return uuid in self.evc_start_skipped and evc_status_key(self.evc_device[uuid].get("status", None)) == "preparing"
+        return self.evc_charging_now(uuid)
+
     @writes
     async def charger_control_send(self, uuid, charge, car_n):
         """Start the charger inside a planned window, stop it outside one."""
+        if charge and self.evc_charging_now(uuid):
+            # GE Cloud rejects start-charge on a charger that is already charging, and a start that
+            # keeps failing is never recorded, leaving the charger held as stopped while it charges
+            self.log("GECloud: EV charger {} for car {} is already charging, no start-charge needed".format(self.evc_device[uuid]["serial_number"], car_n))
+            self.evc_start_skipped.add(uuid)
+            return
+        self.evc_start_skipped.discard(uuid)
         command = EVC_COMMAND_START if charge else EVC_COMMAND_STOP
         self.log("GECloud: Sending {} to EV charger {} for car {}".format(command, self.evc_device[uuid]["serial_number"], car_n))
         if await self.async_send_evc_command(uuid, command, {}) is None:
