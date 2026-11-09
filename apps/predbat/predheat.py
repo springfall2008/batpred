@@ -21,35 +21,14 @@ requirements and costs for heat pump systems.
 
 from datetime import datetime, timedelta, timezone
 import pytz
-from utils import str2time, dp2, dp3, is_entity_id, minute_data, minutes_since_midnight, next_aligned_run
+from utils import str2time, dp2, dp3, convert_temperature, is_entity_id, minute_data, minutes_since_midnight, next_aligned_run, temperature_scale
 
 from const import TIME_FORMAT
 
 MAX_INCREMENT = 100
 PREDICT_STEP = 5
-FAHRENHEIT_UNITS = ("°F", "F", "℉")
-KELVIN_UNITS = ("K",)
-
-
-def to_celsius(value, unit):
-    """
-    Return a temperature as a °C float, converting from °F or K when the unit says so (#5153).
-    Values that aren't numbers are returned unchanged for the caller to skip.
-    """
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return value
-    if unit in FAHRENHEIT_UNITS:
-        return (number - 32) * 5 / 9
-    if unit in KELVIN_UNITS:
-        return number - 273.15
-    return number
-
-
-def from_celsius(value, unit):
-    """Return a °C temperature in the given display unit (°F or °C)."""
-    return value * 9 / 5 + 32 if unit in FAHRENHEIT_UNITS else value
+TEMPERATURE_UNIT = "°C"  # The heat model works in °C: its efficiency tables, water physics and defaults all assume it
+TEMPERATURE_LABELS = {"C": "°C", "F": "°F", "K": "K"}  # The unit to publish for each temperature scale
 
 
 """
@@ -145,7 +124,7 @@ class PredHeat:
         # The model works in °C. system_unit is Home Assistant's, as the weather entity reports it; the published
         # temperatures follow the internal temperature sensor's unit, or the system's if it has none
         self.system_unit = None
-        self.display_unit = "°C"
+        self.display_unit = TEMPERATURE_UNIT
         self.call_service = base.call_service_wrapper
         self.get_history = base.get_history_wrapper
         self.expose_config = base.expose_config
@@ -221,13 +200,13 @@ class PredHeat:
             data = {}
 
         self.temperatures = {}
-        # The forecast comes in the weather entity's own unit; the model works in °C (#5153)
-        unit = self.system_unit or self.display_unit
-        if data and unit not in (None, "°C"):
-            data = [dict(item, temperature=to_celsius(item.get("temperature"), unit)) if isinstance(item, dict) else item for item in data]
-
         if data:
-            self.temperatures, _ = minute_data(data, self.forecast_days, now_utc, "temperature", "datetime", backwards=False, smoothing=True, prev_last_updated_time=now_utc, last_state=self.external_temperature[0], max_increment=MAX_INCREMENT)
+            # The forecast is in the weather entity's own unit, with none on the items for minute_data to convert from (#5153)
+            unit = self.system_unit if temperature_scale(self.system_unit) else self.display_unit
+            data = [dict(item, attributes={"unit_of_measurement": unit}) for item in data]
+            self.temperatures, _ = minute_data(
+                data, self.forecast_days, now_utc, "temperature", "datetime", backwards=False, smoothing=True, prev_last_updated_time=now_utc, last_state=self.external_temperature[0], max_increment=MAX_INCREMENT, required_unit=TEMPERATURE_UNIT
+            )
         else:
             self.log("WARN: Unable to fetch data for {}".format(entity_id))
             self.record_status("Warn - Unable to fetch data from {}".format(entity_id), had_errors=True)
@@ -266,15 +245,25 @@ class PredHeat:
                     age_days = min(age_days, age.days)
 
             if temperature and history and len(history[0]) > 0:
-                # Each record in its own unit where it has one, so a sensor that changed unit mid-history reads right
+                # minute_data converts each record from the unit on it, and drops one in a unit it can't convert. A
+                # missing or unrecognised unit must not lose the reading, so those records take the fallback instead.
                 unit = self.temperature_unit(entity_id)
-                record_units = {(item.get("attributes") or {}).get("unit_of_measurement") or unit for item in history[0]}
-                if record_units - {"°C"}:
-                    history = [[dict(item, state=to_celsius(item.get("state"), (item.get("attributes") or {}).get("unit_of_measurement") or unit)) for item in history[0]]]
+                history = [[item if temperature_scale((item.get("attributes") or {}).get("unit_of_measurement")) else dict(item, attributes=dict(item.get("attributes") or {}, unit_of_measurement=unit)) for item in history[0]]]
 
             if history and len(history[0]) > 0:
                 data_points, _ = minute_data(
-                    history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=smoothing, scale=scaling / total_count, clean_increment=incrementing, accumulate=data_points, max_increment=MAX_INCREMENT
+                    history[0],
+                    self.max_days_previous,
+                    now_utc,
+                    "state",
+                    "last_updated",
+                    backwards=True,
+                    smoothing=smoothing,
+                    scale=scaling / total_count,
+                    clean_increment=incrementing,
+                    accumulate=data_points,
+                    max_increment=MAX_INCREMENT,
+                    required_unit=TEMPERATURE_UNIT if temperature else None,
                 )
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
@@ -285,15 +274,35 @@ class PredHeat:
         return data_points, age_days
 
     def entity_unit(self, entity_id):
-        """Return an entity's own unit_of_measurement (an entity$attribute reference reads the entity's), or None."""
+        """Return an entity's own unit_of_measurement (for entity$attribute, the entity's), or None."""
         return self.get_state(entity_id.split("$")[0], attribute="unit_of_measurement")
 
     def temperature_unit(self, entity_id):
         """
-        Return the temperature unit to read an entity in: its own, else Home Assistant's (a climate entity or a
-        template sensor often has none), else the display unit.
+        Return the temperature unit to read an entity in: its own if that names a temperature scale, else Home
+        Assistant's (a template sensor often has none), else the display unit.
         """
-        return self.entity_unit(entity_id) or self.system_unit or self.display_unit
+        unit = self.entity_unit(entity_id)
+        if temperature_scale(unit):
+            return unit
+        return self.system_unit if temperature_scale(self.system_unit) else self.display_unit
+
+    def get_temperature_arg(self, name, default):
+        """
+        Read a temperature setting in °C. A number typed in apps.yaml is °C, and a sensor is converted from its unit by
+        get_arg. An entity with no recognisable unit is left alone by the shared conversion, so it is read here in
+        Home Assistant's unit, the same as the temperature histories (#5153).
+        """
+        entity_id = self.get_arg(name, None, indirect=False, domain="predheat")
+        if is_entity_id(entity_id):
+            # Read with no default: one returned for a missing entity$attribute would be converted as if in the entity's unit
+            has_unit = temperature_scale(self.entity_unit(entity_id))
+            try:
+                value = float(self.get_arg(name, None, domain="predheat", required_unit=TEMPERATURE_UNIT if has_unit else None))
+                return value if has_unit else convert_temperature(value, self.temperature_unit(entity_id), TEMPERATURE_UNIT)
+            except (TypeError, ValueError):
+                pass  # Unreadable: the read below reports it and gives the default, which is already °C
+        return self.get_arg(name, default, domain="predheat")
 
     def first_entity(self, name):
         """Return the first entity id configured for a Predheat setting, or None."""
@@ -302,48 +311,24 @@ class PredHeat:
             entity_ids = entity_ids[0] if entity_ids else None
         return entity_ids if is_entity_id(entity_ids) else None
 
-    def get_temperature_arg(self, name, default, domain="predheat"):
-        """
-        Read a temperature setting in °C: a number is taken as °C, as documented, and a sensor is converted from
-        its own unit (#5153) - a helper with no unit is taken as °C like a typed number. A sensor that can't be
-        read gives the default, which is already °C.
-        """
-        entity_id = self.get_arg(name, None, indirect=False, domain=domain)
-        if is_entity_id(entity_id):
-            value = self.get_arg(name, None, domain=domain)
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                self.log("Warn: Predheat: {} sensor {} reads {}, using {} °C".format(name, entity_id, value, dp2(default)))
-                return default
-            return to_celsius(value, self.entity_unit(entity_id) or "°C")
-        return self.get_arg(name, default, domain=domain)
-
-    def read_volume_temp(self, default):
-        """
-        Read volume_temp, the radiator water temperature, in °C: from the predheat section, as documented, else the
-        top level, where it used to be read from. A sensor is converted from its own unit. Without one, default -
-        next_volume_temp, Predheat's own saved state, in °C - is used.
-        """
-        domain = "predheat" if self.get_arg("volume_temp", None, indirect=False, domain="predheat") is not None else None
-        return self.get_temperature_arg("volume_temp", default, domain=domain)
-
     def set_units(self):
         """
         Work out the units for this run: Home Assistant's, as the weather entity reports it, and the display unit
         for published temperatures - the first internal temperature sensor's, else Home Assistant's, else °C.
         """
         weather_id = self.get_arg("weather", None, indirect=False, domain="predheat")
-        self.system_unit = self.get_state(weather_id, attribute="temperature_unit") if is_entity_id(weather_id) else None
+        weather_unit = self.get_state(weather_id, attribute="temperature_unit") if is_entity_id(weather_id) else None
+        if weather_unit or not is_entity_id(weather_id):  # Keep the last one known while the weather entity is unavailable
+            self.system_unit = weather_unit
         internal_id = self.first_entity("internal_temperature")
         internal_unit = self.entity_unit(internal_id) if internal_id else None
-        self.display_unit = "°F" if (internal_unit or self.system_unit) in FAHRENHEIT_UNITS else "°C"
+        self.display_unit = TEMPERATURE_LABELS.get(temperature_scale(internal_unit) or temperature_scale(self.system_unit), TEMPERATURE_UNIT)
 
     def display_temperature(self, value, zero_is_off=False):
         """Return a °C temperature for publishing, in the display unit. With zero_is_off a 0 (heating off) stays 0."""
         if zero_is_off and value == 0:
             return value
-        return dp2(from_celsius(value, self.display_unit))
+        return dp2(convert_temperature(value, TEMPERATURE_UNIT, self.display_unit))
 
     def display_series(self, series, zero_is_off=False):
         """Return a {time: °C temperature} series for publishing, in the display unit."""
@@ -738,7 +723,8 @@ class PredHeat:
         self.smart_thermostat = self.get_arg("smart_thermostat", False, domain="predheat")
         self.smart_thermostat_max_minutes = self.get_smart_thermostat_max_minutes()
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
-        self.next_volume_temp = self.read_volume_temp(self.get_arg("next_volume_temp", self.internal_temperature[0]))
+        # A volume_temp sensor is converted from its own unit; next_volume_temp is Predheat's own, in °C
+        self.next_volume_temp = self.get_temperature_arg("volume_temp", self.get_arg("next_volume_temp", self.internal_temperature[0]))
 
         self.log("Predheat: Hysteresis On {} off {} heat loss {} W heat loss {} W per degree".format(self.hysteresis_on, self.hysteresis_off, self.heat_loss_watts, self.heat_loss_degrees))
         self.log(

@@ -82,6 +82,7 @@ from const import (
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
 from utils import (
+    convert_temperature,
     strptime_aware,
     RepeatLogGate,
     minutes_since_yesterday,
@@ -159,6 +160,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             units, required_unit = required_unit, units
 
         if isinstance(state, float) and units and required_unit and units != required_unit:
+            converted = convert_temperature(state, units, required_unit)
+            if converted is not None:
+                return converted
+
             units_lhs = units[0]
             if units_lhs == "K":
                 units_lhs = "k"
