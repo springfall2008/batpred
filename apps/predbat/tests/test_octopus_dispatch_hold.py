@@ -115,7 +115,10 @@ def _reset(my_predbat):
     my_predbat.dynamic_load_car_confirmed_periods = {}
     my_predbat.car_charging_now = [False]
     my_predbat.dynamic_load_car_sensors = {}
-    my_predbat.car_energy_reported_load = False
+    # The car inside the CT clamp, as create_predbat() has it: the cost tests that share this reset price the car's
+    # energy as already in the import (see car_outside_clamp_energy()). No load_minutes keeps the load evidence off
+    # (see octopus_car_charging_reading()) until a test sets them
+    my_predbat.car_energy_reported_load = True
     my_predbat.load_minutes = {}
     my_predbat.load_last_period = 0
     # 6kW, so the battery's own rate never decides whether the load is low (see dynamic_load_classify())
