@@ -1,3 +1,9 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+
 """Daily savings can be reused without scheduled device/state housekeeping."""
 
 from copy import deepcopy
