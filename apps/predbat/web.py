@@ -4942,6 +4942,14 @@ chart.render();
 
         return response
 
+    def _parse_override_times(self, time_str):
+        """
+        Split a comma-separated override time string into individual values.
+        """
+        if not time_str:
+            return []
+        return [item.strip() for item in time_str.split(",") if item.strip()]
+
     async def html_rate_override(self, request):
         """
         Handle POST request for rate overrides
@@ -5058,34 +5066,42 @@ chart.render();
             if not time_str or not action:
                 return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
 
-            now_utc = self.now_utc
-            override_time = get_override_time_from_string(now_utc, time_str, self.plan_interval_minutes)
-            if not override_time:
+            time_values = self._parse_override_times(time_str)
+            if not time_values:
                 return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
 
-            minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= MANUAL_TIME_MAX_MINUTES:
-                max_hours = MANUAL_TIME_MAX_MINUTES // 60
-                return web.json_response({"success": False, "message": f"Override time must be within {max_hours} hours from now."}, status=400)
+            action_selects = {
+                "Manual Demand": "manual_demand",
+                "Manual Charge": "manual_charge",
+                "Manual Export": "manual_export",
+                "Manual Freeze Charge": "manual_freeze_charge",
+                "Manual Freeze Export": "manual_freeze_export",
+            }
+            if action != "Clear" and action not in action_selects:
+                return web.json_response({"success": False, "message": "Unknown action"}, status=400)
 
-            selection_option = "{}".format(override_time.strftime("%a %H:%M"))
-            clear_option = "[{}]".format(override_time.strftime("%a %H:%M"))
-            if action == "Clear":
-                await self.base.async_manual_select("manual_demand", selection_option)
-                await self.base.async_manual_select("manual_demand", clear_option)
-            else:
-                if action == "Manual Demand":
+            # Validate every slot before applying any, so one bad slot can't leave a batch half-applied
+            now_utc = self.now_utc
+            override_times = []
+            for time_value in time_values:
+                override_time = get_override_time_from_string(now_utc, time_value, self.plan_interval_minutes)
+                if not override_time:
+                    return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
+
+                minutes_from_now = (override_time - now_utc).total_seconds() / 60
+                if minutes_from_now >= MANUAL_TIME_MAX_MINUTES:
+                    max_hours = MANUAL_TIME_MAX_MINUTES // 60
+                    return web.json_response({"success": False, "message": f"Override time must be within {max_hours} hours from now."}, status=400)
+                override_times.append(override_time)
+
+            for override_time in override_times:
+                selection_option = "{}".format(override_time.strftime("%a %H:%M"))
+                clear_option = "[{}]".format(override_time.strftime("%a %H:%M"))
+                if action == "Clear":
                     await self.base.async_manual_select("manual_demand", selection_option)
-                elif action == "Manual Charge":
-                    await self.base.async_manual_select("manual_charge", selection_option)
-                elif action == "Manual Export":
-                    await self.base.async_manual_select("manual_export", selection_option)
-                elif action == "Manual Freeze Charge":
-                    await self.base.async_manual_select("manual_freeze_charge", selection_option)
-                elif action == "Manual Freeze Export":
-                    await self.base.async_manual_select("manual_freeze_export", selection_option)
+                    await self.base.async_manual_select("manual_demand", clear_option)
                 else:
-                    return web.json_response({"success": False, "message": "Unknown action"}, status=400)
+                    await self.base.async_manual_select(action_selects[action], selection_option)
 
             # Refresh plan
             self.base.update_pending = True
