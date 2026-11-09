@@ -2858,9 +2858,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         """
         Hold off a device's setting reads and writes if code says the device itself can not act.
 
-        Returns True when a hold was set. The hold doubles each time the probe after it fails the same way,
-        up to DEVICE_HOLD_MAX_SECONDS, and starts again from DEVICE_HOLD_INITIAL_SECONDS once a hold has been
-        over for longer than that.
+        Returns True when the device is held, whether this call set the hold or one was already running. The
+        hold doubles each time the probe after it fails again with any of GE_DEVICE_HOLD_CODES (not only the
+        code that started it), up to DEVICE_HOLD_MAX_SECONDS, and starts again from DEVICE_HOLD_INITIAL_SECONDS
+        once a hold has been over for longer than that.
         """
         if code not in GE_DEVICE_HOLD_CODES:
             return False
