@@ -9,7 +9,9 @@ repos:
     args: [--markdown-linebreak-ext=md]
   - id: end-of-file-fixer
   - id: check-yaml
-    exclude: (example_chart.yml)
+    # The coverage/cases dumps are 12MB of the 13MB this hook would parse (about 45s in CI), and every one is
+    # already loaded by the unit tests (debug_cases, random), which fail on a file that does not parse
+    exclude: (example_chart.yml|^coverage/cases/)
   - id: check-json
     exclude: ^(\.cspell\.json|\.devcontainer\/devcontainer\.json)$
 # The cspell dictionary needs case-insensitive *uniqueness*, which file-contents-sorter cannot do -

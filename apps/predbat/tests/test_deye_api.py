@@ -11,7 +11,7 @@
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 import pytz
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from coordinator import validate_report
 from deye import DeyeAPI
 from deye_const import DEYE_BASE_URLS, DEYE_TELEMETRY_KEYS, CONFIG_BATTERY_KEYS, DEYE_LATEST_BODY_KEY
@@ -616,6 +616,9 @@ def test_run_first_cycle_publishes_and_configures():
         publish_schedule_settings_ha=fake_pub_sched,
         get_schedule_settings_ha=fake_get_sched,
         automatic_config=fake_auto,
+        # Read on the static and config tiers; without a stub, they post the fake token to the live Deye API
+        fetch_measure_points=AsyncMock(return_value={}),
+        fetch_tou_config=AsyncMock(return_value=[]),
     ):
         ok = run_async_local(d.run(0, True))
     if not ok:
@@ -787,6 +790,9 @@ def test_deye_catalogue_filed_when_first_cycle_defers():
         publish_schedule_settings_ha=fake_pub_sched,
         get_schedule_settings_ha=fake_get_sched,
         automatic_config=fake_auto,
+        # Read on the static and config tiers; without a stub, they post the fake token to the live Deye API
+        fetch_measure_points=AsyncMock(return_value={}),
+        fetch_tou_config=AsyncMock(return_value=[]),
     ):
         ok = run_async_local(d.run(0, True))
     if ok:

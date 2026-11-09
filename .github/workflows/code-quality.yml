@@ -6,9 +6,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
-        python-version: 3.x
+        # Pinned rather than 3.x: a new Python lands on the runners before numpy (pinned in requirements.txt) ships
+        # wheels for it, and pip then builds numpy from source - 3.15 made that 4+ minutes of every run
+        python-version: "3.14"
+        cache: pip
+        cache-dependency-path: requirements.txt
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip

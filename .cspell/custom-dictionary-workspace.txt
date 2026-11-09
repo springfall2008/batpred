@@ -273,9 +273,11 @@ generationmix
 generationpower
 geserial
 geseriale
+getaddrinfo
 getaffinity
 getall
 getattr
+getframe
 getmembers
 getrusage
 Ginlong
@@ -394,6 +396,7 @@ lmt
 loadml
 loadmlpower
 loadspower
+localdomain
 localfolder
 locationless
 lockstep
@@ -477,6 +480,7 @@ nocharge
 NODETAIL
 nodischarge
 nohup
+NONAME
 noopener
 nord
 nordpool
