@@ -1680,8 +1680,11 @@ class Fetch:
         # before the rates are built, so a cancelled dispatch never gets its cheap rate
         dynamic_load_car_changed = self.dynamic_load_car_check(save=save)
         if save:
-            # Remember the half hour a dispatch is running in, now it is known whether the car was cancelled
-            self.octopus_held_update()
+            # Remember the half hour a dispatch is running in, now it is known whether the car was cancelled. One
+            # let go here that the slots above still kept (the car's reading arrived in between) is in this cycle's
+            # rates, so run again
+            if self.octopus_held_update():
+                self.update_pending = True
         octopus_surplus_changed = False
 
         if "rates_export_octopus_url" in self.args:
