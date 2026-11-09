@@ -2745,6 +2745,14 @@ max: 10
     - select.solax_inverter_remotecontrol_timeout_next_motion_mode_1_9
     - select.solax_remotecontrol_power_control_mode
     - button.solax_powercontrolmode8_trigger
+    - sensor.solax_house_load_alt
+    - sensor.solax_meter_2_measured_power
+
+- Mode 8 control also needs the 'House Load Alt' sensor (`sensor.solax_house_load_alt`) and the 'Meter 2 Measured Power' sensor (`sensor.solax_meter_2_measured_power`), one of the inputs House Load Alt is calculated from, to stay enabled.
+  As with the other entities, the prefix may differ on your system (e.g. `sensor.solax_inverter_house_load_alt`).
+  Recent versions of the Solax Modbus integration treat House Load Alt as a required input to the Mode 8 trigger: if it is disabled or unavailable the integration stops the trigger and sets the inverter's power control mode back to 'Disabled' straight after Predbat sends each command,
+  so the inverter ignores Predbat. House Load Alt is disabled by default, and both sensors have been found disabled after a Solax Modbus update, so re-check them after updating the integration.
+  The Home Assistant log then shows `SolaX: stopping powercontrolmode8_trigger because a required control input is invalid: ['house_load_alt']` (see [issue #6059](https://github.com/springfall2008/batpred/issues/6059)).
 
 - Predbat needs a 'Todays House Load' sensor, this can be created from inverter-supplied information by creating two custom helper entities:
 

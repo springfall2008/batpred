@@ -145,6 +145,9 @@ pred_bat:
   # Predbat calls the supplied Solax automation script to set the appropriate inverter controls directly.
   #
   # If you are using Mode 8 control, change the ALL the service calls to 'script.solax_remote_control_mode_8'
+  # Mode 8 control also needs sensor.solax_house_load_alt and sensor.solax_meter_2_measured_power enabled in the Solax Modbus integration,
+  # otherwise the integration cancels each command Predbat sends - re-check them after updating the integration.
+  # The sensor prefix may differ on your system, e.g. sensor.solax_inverter_house_load_alt (see docs/inverter-setup.md)
   charge_start_service:
     - service: script.solax_remote_control
       power: "{power}"
