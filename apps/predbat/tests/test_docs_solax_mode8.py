@@ -67,7 +67,7 @@ def test_docs_solax_mode8(my_predbat):
             if sensor not in entities:
                 print("ERROR: docs/inverter-setup.md Mode 8 entity list is missing {}".format(sensor))
                 failed = True
-    if "house_load_alt" not in docs_text or "powercontrolmode8_trigger because a required control input is invalid" not in docs_text:
+    if "treat House Load Alt as a required input" not in docs_text or "powercontrolmode8_trigger because a required control input is invalid" not in docs_text:
         print("ERROR: docs/inverter-setup.md does not explain the House Load Alt Mode 8 dependency and its log message")
         failed = True
 
@@ -77,6 +77,9 @@ def test_docs_solax_mode8(my_predbat):
         if sensor not in template_text:
             print("ERROR: templates/solax_sx4.yaml Mode 8 note is missing {}".format(sensor))
             failed = True
+    if "sensor prefix may differ" not in template_text:
+        print("ERROR: templates/solax_sx4.yaml Mode 8 note does not say the sensor prefix may differ")
+        failed = True
 
     if failed:
         print("ERROR: test_docs_solax_mode8 FAILED")
