@@ -3185,10 +3185,8 @@ class Output:
                     import_value_today += self.get_from_incrementing(import_minutes, minutes_now - minute - offset - 1)
                     load_value_today, load_value_today_raw = self.get_filtered_load_minute(load_minutes, minutes_now - minute - 1, historical=False, step=step)
 
-            import_value_pred = 0
             forecast_value_pred = 0
             for offset in range(step):
-                import_value_pred += self.get_historical(import_minutes, minute - minutes_now + offset)
                 # The load forecast starts at midnight_utc; before it (today's first hour after an autumn change) there is
                 # none, and a negative index would wrap round to tonight's forecast
                 if minute + offset >= 0:
