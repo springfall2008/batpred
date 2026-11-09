@@ -499,6 +499,52 @@ def _test_predicted_today_stable_across_the_day(my_predbat, failed):
 # ---------------------------------------------------------------------------
 
 
+def _test_yesterday_factor_read_at_yesterday_end_on_clock_change(my_predbat, failed):
+    """GH#5760: on a clock-change day the in-day adjustment carries yesterday's final factor, not one from an hour off.
+
+    The load_inday_adjustment history is keyed by real elapsed time while minutes_now counts wall-clock minutes. At 02:00
+    GMT on the autumn change day (wall minutes 120, real 180 since local midnight) yesterday's factor has full weight, so
+    the result is yesterday's 23:59 BST value (150% -> 1.5), not today's 00:59 BST one (80% -> 0.8).
+    """
+    print("  test: yesterday's in-day factor read at yesterday's end on a clock-change day (GH#5760)")
+    london = pytz.timezone("Europe/London")
+    saved = {name: getattr(my_predbat, name) for name in ("now_utc", "midnight_utc", "minutes_now", "local_tz", "calculate_inday_adjustment", "log")}
+    saved_history = my_predbat.__dict__.get("get_history_wrapper")
+    prefix = my_predbat.prefix
+
+    def _stamp(when_utc):
+        return when_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+    history = [[{"state": str(value), "last_updated": _stamp(when)} for when, value in [(datetime(2026, 10, 24, 12, 0), 120.0), (datetime(2026, 10, 24, 22, 59), 150.0), (datetime(2026, 10, 24, 23, 59), 80.0)]]]
+
+    def _get_history_wrapper(entity_id, days=30, required=True, tracked=True):
+        return history if entity_id == prefix + ".load_inday_adjustment" else None
+
+    try:
+        my_predbat.log = lambda *a, **kw: None
+        my_predbat.local_tz = london
+        my_predbat.calculate_inday_adjustment = True
+        now_local = london.normalize(london.localize(datetime(2026, 10, 25, 2, 0)))
+        my_predbat.now_utc = now_local
+        my_predbat.midnight_utc = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        my_predbat.minutes_now = int((now_local - my_predbat.midnight_utc).total_seconds() / 60)
+        my_predbat.get_history_wrapper = _get_history_wrapper
+        result = my_predbat.load_today_comparison({}, {}, {}, {}, minutes_now=my_predbat.minutes_now, save=False)
+        if abs(result - 1.5) > 0.001:
+            print("  ERROR: expected yesterday's final factor 1.5 on the autumn change day, got {}{}".format(result, " - today's early factor" if abs(result - 0.8) < 0.001 else ""))
+            failed = True
+        else:
+            print("  PASS: yesterday's final in-day factor used on the clock-change day")
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+        if saved_history is None:
+            my_predbat.__dict__.pop("get_history_wrapper", None)
+        else:
+            my_predbat.get_history_wrapper = saved_history
+    return failed
+
+
 def test_load_today_comparison(my_predbat):
     """
     Unit tests for load_today_comparison() covering the None-guard fix
@@ -516,5 +562,6 @@ def test_load_today_comparison(my_predbat):
     failed = _test_load_scaling_applied_to_predicted(my_predbat, failed) or failed
     failed = _test_load_scaling_dynamic_and_manual_adjust_applied_to_predicted(my_predbat, failed) or failed
     failed = _test_predicted_today_stable_across_the_day(my_predbat, failed) or failed
+    failed = _test_yesterday_factor_read_at_yesterday_end_on_clock_change(my_predbat, failed) or failed
 
     return failed

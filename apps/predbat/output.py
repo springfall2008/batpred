@@ -3247,12 +3247,14 @@ class Output:
 
         # Fetch yesterday's in-day adjustment factor from history
         yesterday_adjustment = 1.0
-        yesterday_adjustment_data = self.get_history_wrapper(entity_id=self.prefix + ".load_inday_adjustment", days=1, required=False)
+        # Two days, so yesterday's last minute stays in range when it lies more than 24 hours back - late on an autumn
+        # clock-change day, a 25-hour day (GH#5760)
+        yesterday_adjustment_data = self.get_history_wrapper(entity_id=self.prefix + ".load_inday_adjustment", days=2, required=False)
         if yesterday_adjustment_data:
             # Extract yesterday's final adjustment value at midnight position
             yesterday_data, _ = minute_data(
                 yesterday_adjustment_data[0],
-                1,
+                2,
                 self.now_utc,
                 "state",
                 "last_updated",
@@ -3262,7 +3264,9 @@ class Output:
                 divide_by=1.0,
                 scale=1.0,
             )
-            minutes_back = minutes_now + 1
+            # minute_data() keys history by real elapsed time, while minutes_now counts wall-clock minutes, so on a clock-change day
+            # the two differ by the change - without the correction the lookup lands an hour off yesterday's final value (GH#5760)
+            minutes_back = minutes_now - self.clock_change_minutes_today() + 1
             yesterday_adjustment_pct = yesterday_data.get(minutes_back, 100.0)
             yesterday_adjustment = yesterday_adjustment_pct / 100.0  # Convert from percentage to factor
 
@@ -3613,7 +3617,14 @@ class Output:
             yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         finally:
             self.forecast_minutes = forecast_minutes_before_yesterday_step
-        minutes_back = self.minutes_now + 1
+        # How far back yesterday's last minute is in the history below. minute_data() keys history by real elapsed time but
+        # minutes_now counts wall-clock minutes since midnight, so on a clock-change day the two differ by the change: without the
+        # correction the autumn lookup lands an hour into today (reading today's standing charge as yesterday's cost) and the
+        # spring one an hour before yesterday ended (GH#5760)
+        minutes_back = self.minutes_now - self.clock_change_minutes_today() + 1
+        # The per-minute arrays below stay on the History view's own axis - minute m is midnight_utc - 1 day + m, the
+        # wall-clock axis load, PV, rates, status and billing are all built on - so they keep the uncorrected offset
+        minutes_back_axis = self.minutes_now + 1
 
         # Get yesterday's SoC
         try:
@@ -3685,13 +3696,15 @@ class Output:
             carbon_yesterday = carbon_data.get(minutes_back, 0.0)
         cost_yesterday_array = {}
         for minute in range(0, end_record + self.minutes_now):
-            cost_value = cost_data.get(minutes_back + 24 * 60 - minute - 5, 0.0)  # -5 gives 4 minutes into new data to allow for reset
+            cost_value = cost_data.get(minutes_back_axis + 24 * 60 - minute - 5, 0.0)  # -5 gives 4 minutes into new data to allow for reset
             # After midnight (minute >= end_record), add the final cost from yesterday to make
             # the cost cumulative across the midnight boundary. Without this adjustment, the
             # cost_today sensor reset would cause incorrect negative deltas in the plan display
             # (e.g., -376p instead of the actual slot cost like +26p) because metric_change
-            # is calculated as metric_end - metric_start in publish_html_plan.
-            if minute >= end_record:
+            # is calculated as metric_end - metric_start in publish_html_plan. On a clock-change
+            # day local midnight - where cost_today resets - sits the change away from row
+            # end_record on this wall-clock axis (an hour earlier in autumn, later in spring)
+            if minute >= end_record + self.clock_change_minutes_today():
                 cost_value += cost_yesterday
             cost_yesterday_array[minute] = cost_value
 
@@ -3707,7 +3720,7 @@ class Output:
         battery_soc_yesterday = battery_data.get(minutes_back, soc_yesterday)
         battery_soc_yesterday_array = {}
         for minute in range(0, end_record + self.minutes_now):
-            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute - 5, soc_yesterday)  # -5 gives 4 minutes into new data to allow for reset
+            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back_axis + 24 * 60 - minute - 5, soc_yesterday)  # -5 gives 4 minutes into new data to allow for reset
 
         # Get status history
         predbat_status_data = self.get_history_wrapper(entity_id=self.prefix + ".status", days=2, required=False)
@@ -4463,6 +4476,12 @@ class Output:
             import_kwh,
             None if import_only else export_kwh,
         )
+
+    def clock_change_minutes_today(self):
+        """Minutes the clocks have moved since local midnight today: 60 after a spring change, -60 after an autumn one, otherwise 0."""
+        now_local = self.now_utc.astimezone(self.local_tz)
+        midnight_local = self.local_midnight_utc(now_local.date())
+        return int((now_local.utcoffset() - midnight_local.utcoffset()).total_seconds() // 60)
 
     def local_midnight_utc(self, day):
         """Local midnight at the start of date day, as a local-time aware datetime like self.midnight_utc (the plan table shows its times as they are)."""
