@@ -278,10 +278,12 @@ SUNSYNK_MAX_SOLAR_FIELD = "solarMaxSellPower"  # settings, watts
 #   bank, POSITIVE WHILE CHARGING - the opposite of power/current - so battery power is
 #   -bmsCurrent x voltage. 411 of 411 samples with a clear direction agreed (246 charging,
 #   165 discharging), and integrated it tracks the SoC change where the counters do not.
-# - PV and load are each the unit's own share and are summed. Grid is NOT: since
-#   GH#6068 grid_power reads the site-wide CT (limiterTotalPower), so the group takes
-#   the master's reading and summing would double-count it. The pac evidence that
-#   used to justify summing grid - master import alone 1.85-1.96x below the
+# - PV and load are each the unit's own share and are summed. Grid depends on which
+#   field sourced it (GH#6068 follow-up): a CT reading (limiterTotalPower) is the
+#   site-wide flow, so the group takes the master's and summing would double-count
+#   it - but a pac-fallback reading is only that unit's share, so when every member
+#   fell back to pac the shares are summed, as they were on main. The pac evidence
+#   that used to justify summing grid - master import alone 1.85-1.96x below the
 #   supplier's meter over four days, master + slave matching it - was the pac shares
 #   adding up to the site flow; with the CT field the master alone reports the site
 #   flow. Load reads near-identical on both units because they split it evenly, not
@@ -294,7 +296,9 @@ SUNSYNK_BMS_CURRENT_FIELD = "bmsCurrent"  # battery realtime, amps, positive whi
 SUNSYNK_BMS_VOLT_FIELD = "bmsVolt"  # battery realtime, volts at the BMS
 SUNSYNK_BMS_LINK_FIELDS = (SUNSYNK_BMS_VOLT_FIELD, "bmsSoc")  # battery realtime, 0 on a unit with no BMS link
 SUNSYNK_PARALLEL_SUMMED_POWER = ("load_power", "pv_power")
-# grid_power is the site-wide CT reading from the master, not a per-unit share (GH#6068).
+# grid_power stays out of the summed tuple because its combining depends on its source
+# (GH#6068): CT-sourced it is the master's site-wide reading, pac-fallback shares are
+# summed instead - see _group_grid_power in sunsynk.py.
 SUNSYNK_PARALLEL_SUMMED_ENERGY = ("pv_today", "import_today", "export_today", "load_today")
 # Leaf -> integrator total for a group's battery energy.
 SUNSYNK_PARALLEL_BATTERY_ENERGY = {"battery_charge_today": "charge", "battery_discharge_today": "discharge"}

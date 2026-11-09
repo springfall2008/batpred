@@ -43,6 +43,8 @@ class MockSunsynk(SunsynkAPI):
         self.device_values = {}
         self.device_settings = {}
         self.device_energy = {}
+        # Mirrors SunsynkAPI.__init__: {sn: "ct" | "pac"} - which field sourced grid_power
+        self.grid_power_source = {}
         self.device_rated_power = {}
         self.bms_charge_limit_max = {}
         self.battery_nominal_voltage = 0.0
