@@ -1765,6 +1765,19 @@ or
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
+**Warning - discharge times are set to 00:00:00 on inverters with no discharge enable switch:** if your inverter type has
+[has_discharge_enable_time](inverter-setup.md#has_discharge_enable_time) set to False, Predbat has no switch to turn timed discharge off,
+so it disables the discharge window by writing 00:00:00 to both **discharge_start_time** and **discharge_end_time** instead.
+In Control charge & discharge mode it sets them back to 00:00:00 whenever no export is planned or running, and in any mode it also does it
+when the Predbat mode or the read-only switch is changed. Predbat also keeps writing its planned charge window to **charge_start_time** and **charge_end_time**.
+
+If your inverter is controlled through services or a script and its **charge_time_format** is not "HH:MM:SS" (for example the SolaX Gen4+ Mode 8
+template), leave **charge_start_time**, **charge_end_time**, **discharge_start_time** and **discharge_end_time** out of `apps.yaml`.
+Predbat then creates its own `sensor.predbat_<inverter type>_<inverter number>_...` entities for them, e.g. `sensor.predbat_SOLAX_0_discharge_end_time`, and
+writes the window times there. If you point them at your inverter's real time entities, Predbat overwrites those instead, and the 00:00:00 write
+closes any window you set on the inverter yourself - for example a SolaX discharge window kept at 00:00-23:59 so the battery supplies the house.
+Adding `set_charge_window: false` or `set_discharge_window: false` to `apps.yaml` does not stop these writes, see [has_time_window](inverter-setup.md#has_time_window).
+
 Some inverters require a "button press" to be triggered by Predbat to update the charge/discharge schedules in the inverter after the appropriate HA entities have been set.
 
 If your inverter features a combined charge/discharge update button, the **charge_discharge_update_button** can be set to the button name. e.g.:

@@ -4244,7 +4244,17 @@ When True, the inverter has an idle time register which must be set to the start
 
 ### has_time_window
 
-Not currently used by Predbat.
+Not currently used by Predbat: setting it to True or False makes no difference to which entities Predbat writes, and
+in particular it does not stop Predbat writing the charge and discharge start and end times.
+
+**set_charge_window** and **set_discharge_window** are not `apps.yaml` options either. If you add them to `apps.yaml`
+they are ignored, even when set to `false`. Whether Predbat writes the charge and discharge windows is decided by the
+[Predbat mode](customisation.md#predbat-mode) alone: Control charge writes the charge window, Control charge & discharge
+writes both, and Monitor and Control SoC only write neither (except to reset them when the Predbat mode or the read-only switch is changed).
+
+On an inverter with **has_discharge_enable_time** set to False, a discharge window that is turned off is written as
+00:00:00 - 00:00:00. See the warning in the [apps.yaml schedule settings](apps-yaml.md#schedule) on why you should not map the
+window times to your inverter's real time entities when it is controlled through services or a script.
 
 ### charge_time_format
 
