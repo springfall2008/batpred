@@ -615,7 +615,9 @@ Balancing runs as part of Predbat's normal control cycle rather than on a timer 
 the charge and discharge rates Predbat was already going to set rather than overriding them afterwards.
 Rate changes below 5% of the inverter's maximum are not written at all, so balancing only writes a register
 when it genuinely changes what the inverter is doing.
-If the inverter supports [battery pause mode](apps-yaml.md#schedule) then the pause mode will also be set whenever balancing holds an inverter’s charge or discharge rate at 0, to prevent trickle charging/discharging, and released when the hold ends.
+
+In **Control charge** and **Control charge & discharge** modes, if the inverter supports [battery pause mode](apps-yaml.md#schedule) then the pause mode will also be set whenever balancing holds an inverter’s charge or discharge rate at 0, to prevent trickle charging/discharging, and released when the hold ends.
+A cross-charge hold is kept until the fleet direction changes, rather than until the inverter stops cross-charging, so it does not switch on and off every minute.
 
 If your inverter has a [limited life-span flash memory](caution.md#flash-memory) and the option is available,
 you are still recommended to turn on "real time registers" using `switch.givtcp_xxxx_real_time_control` for

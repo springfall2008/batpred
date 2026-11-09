@@ -264,11 +264,10 @@ class Execute:
         Args:
             intent (dict): inverter id -> rate intent, mutated in place
         """
-        if not self.balance_inverters_enable or self.set_read_only:
+        if not self.balance_inverters_enable or self.set_read_only or len(self.inverters) < 2:
+            self.inverter_crosscharge_held = {}
             return
-        if len(self.inverters) < 2:
-            return
-        balance_inverters(
+        self.inverter_crosscharge_held = balance_inverters(
             intent,
             self.build_inverter_snapshot(),
             self.balance_inverters_charge,
@@ -277,6 +276,7 @@ class Execute:
             self.balance_inverters_threshold_charge,
             self.balance_inverters_threshold_discharge,
             log_to=self.log,
+            held_crosscharge=self.inverter_crosscharge_held,
         )
 
     def allocate_fleet_export_rates(self):
@@ -411,6 +411,11 @@ class Execute:
         # maximum is never 0, so a value of 0 here means the user has set a limit of 0 to stop that direction.
         limit_pause_charge = reset_rates and inverter.battery_rate_max_charge <= 0
         limit_pause_discharge = reset_rates and inverter.battery_rate_max_discharge <= 0
+
+        # A balancer hold is only paused where Predbat controls the windows, like a limit of 0. In Monitor and
+        # Control SoC only nothing would write the release once the hold ended, so the pause would stick on.
+        balance_pause_charge = reset_rates and balance_pause_charge
+        balance_pause_discharge = reset_rates and balance_pause_discharge
         pause_charge = bool(intent.get("pause_charge", False)) or limit_pause_charge or balance_pause_charge
         pause_discharge = bool(intent.get("pause_discharge", False)) or limit_pause_discharge or balance_pause_discharge
         if reset_rates or pause_charge or pause_discharge:
@@ -532,7 +537,10 @@ class Execute:
         # inverter balancer (which also takes a rate to 0) can add to what the plan asked for. A rate of 0 on its own
         # still lets the battery trickle charge or discharge at a few hundred W, only a pause stops it, and two
         # separate writes would undo each other (GitHub issue 2155).
-        # The exception is calibration: while any inverter is calibrating, Predbat stands down for the whole fleet and no pause is written.
+        #
+        # The exception is calibration: while any inverter is calibrating, Predbat stands down for the whole fleet, so no plan,
+        # limit-of-0 or balancer pause is written, and the inverters that are not calibrating have their pause released by the
+        # calibration reset.
         #
         # Per-inverter detail segments, assembled into the status text after the headline status is
         # resolved - see build_status_extra() for why they can't be concatenated inline.
@@ -1772,6 +1780,7 @@ class Execute:
         if not self.inverter_rate_intent:
             return
         if not self.balance_inverters_enable or self.set_read_only:
+            self.inverter_crosscharge_held = {}
             return
 
         # A poll can land between an inverter entering calibration and the next plan run, with the
@@ -1781,6 +1790,7 @@ class Execute:
         if any(inverter.in_calibration for inverter in self.inverters):
             self.log("Balance: an inverter is calibrating, discarding the stored rate intent")
             self.inverter_rate_intent = {}
+            self.inverter_crosscharge_held = {}
             return
         intent = {inverter_id: dict(value) for inverter_id, value in self.inverter_rate_intent.items()}
 

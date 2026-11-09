@@ -124,7 +124,7 @@ If your inverter has a pause mode (for example GivEnergy), Predbat therefore als
 In **Monitor** and **Control SoC only** modes Predbat does not change the inverter's pause mode because of these limits.
 - If Predbat already needs a pause, for example for [Freeze Export during Demand](customisation.md#freeze-export-during-demand), the two are combined,
 so a pause of charge plus a discharge limit of 0 gives Pause both.
-- Predbat's inverter balancing also sets the charge or discharge rate of an inverter to 0, and it sets the pause mode in the same way in any mode where balancing is on.
+- Predbat's inverter balancing also sets the charge or discharge rate of an inverter to 0. In **Control charge** and **Control charge & discharge** modes it also sets the pause mode in the same way. In **Monitor** and **Control SoC only** modes it does not change the pause mode.
 - When the limit is set back above 0, or balancing releases the inverter, the pause mode is set back to Disabled.
 
 ## Example solution to over-ride predicted house load

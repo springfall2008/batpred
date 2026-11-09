@@ -3006,7 +3006,7 @@ def limit_malloc_arenas(max_arenas=MALLOC_ARENA_LIMIT):
 PV_SURPLUS_THRESHOLD = 50.0
 
 
-def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None):
+def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None, held_crosscharge=None):
     """
     Mutate the executor's per-inverter rate intent to correct fleet imbalance.
 
@@ -3035,15 +3035,24 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
         threshold_charge (float): minimum SoC% divergence to act on during charge
         threshold_discharge (float): minimum SoC% divergence to act on during discharge
         log_to (callable): optional logger, called with a single string
+        held_crosscharge (dict): inverter id -> fleet direction (True = fleet discharging) for the cross-charge holds this function returned on its previous pass, or None
+
+    Returns:
+    - dict: inverter id -> fleet direction for each inverter held for cross-charging this pass, empty if none.
+      Pass it back in as held_crosscharge on the next pass. A cross-charge hold is latched like this because the
+      pause removes the trickle that used to keep the inverter selected, so without it the hold would release on the
+      next poll and come straight back (on/off every minute, with full-rate cross-charging in between).
     """
+    if held_crosscharge is None:
+        held_crosscharge = {}
     num_inverters = len(snapshot)
     if num_inverters < 2:
-        return
+        return {}
     for entry in snapshot:
         if entry["in_calibration"]:
             if log_to:
                 log_to("BALANCE: an inverter is in calibration, not balancing")
-            return
+            return {}
 
     socs = [entry["soc_percent"] for entry in snapshot]
     reserves = [entry["reserve_percent"] for entry in snapshot]
@@ -3141,10 +3150,13 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     else:
         fleet_should_discharge = during_discharge and spare_pv <= PV_SURPLUS_THRESHOLD
 
+    # An inverter this function held for cross-charging last pass stays held while the fleet direction is unchanged,
+    # even though the hold has stopped it working against the fleet (that is what the hold achieves).
+    latched = [id for id, direction in held_crosscharge.items() if direction == fleet_should_discharge]
     if fleet_should_discharge:
-        against_fleet = [id for id in range(num_inverters) if power_enough_charge[id] and id in intent]
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_charge[id] or id in latched)]
     else:
-        against_fleet = [id for id in range(num_inverters) if power_enough_discharge[id] and id in intent]
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_discharge[id] or id in latched)]
 
     if against_fleet and balance_crosscharge:
         for id in against_fleet:
@@ -3157,10 +3169,10 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
         # This pass is done: SoC balancing on top would be the second direction of hold that the
         # coupling between inverters rules out. When the correction is switched OFF we hold nothing
         # here, so a same-direction SoC hold below is still a single-direction pass and is allowed.
-        return
+        return {id: fleet_should_discharge for id in against_fleet}
 
     if not out_of_balance:
-        return
+        return {}
 
     # SoC balancing, in the fleet's own direction only. Holds are applied cumulatively - the rate
     # guard asks "if I stop this one, can the rest cover?", so each hold has to account for the
@@ -3207,6 +3219,7 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
                 log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))
             intent[id]["charge_rate"] = 0
             held.add(id)
+    return {}
 
 
 def allocate_export_rates(needs, max_rates, p_fleet):

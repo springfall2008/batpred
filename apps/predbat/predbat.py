@@ -403,6 +403,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.prediction_started = False
         self.inverter_rate_intent = {}
         self.inverter_balance_overridden = {}
+        self.inverter_crosscharge_held = {}
         self.update_pending = True
         self.midnight_utc = None
         self.difference_minutes = 0

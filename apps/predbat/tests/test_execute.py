@@ -777,6 +777,7 @@ def save_balance_state(my_predbat):
         "threshold_charge": my_predbat.balance_inverters_threshold_charge,
         "threshold_discharge": my_predbat.balance_inverters_threshold_discharge,
         "intent": my_predbat.inverter_rate_intent,
+        "crosscharge_held": my_predbat.inverter_crosscharge_held,
     }
 
 
@@ -791,6 +792,7 @@ def restore_balance_state(my_predbat, saved):
     my_predbat.balance_inverters_threshold_charge = saved["threshold_charge"]
     my_predbat.balance_inverters_threshold_discharge = saved["threshold_discharge"]
     my_predbat.inverter_rate_intent = saved["intent"]
+    my_predbat.inverter_crosscharge_held = saved["crosscharge_held"]
     for inverter, (power, grid, soc) in zip(my_predbat.inverters, saved["readings"]):
         inverter.battery_power = power
         inverter.grid_power = grid
@@ -820,6 +822,16 @@ def clean_intent(my_predbat):
     - dict: inverter id -> rate intent
     """
     return {inverter.id: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand"} for inverter in my_predbat.inverters}
+
+
+def inverters_with_pause_written(my_predbat):
+    """
+    Which inverters have had a pause mode written since a test reset it to None.
+
+    Returns:
+    - list: inverter ids
+    """
+    return [inverter.id for inverter in my_predbat.inverters if inverter.pause_charge is not None or inverter.pause_discharge is not None]
 
 
 def test_crosscharge_is_prevented_through_execute_plan(my_predbat):
@@ -881,6 +893,190 @@ def test_crosscharge_is_prevented_through_the_inverter_poll(my_predbat):
             print("ERROR: the poll mutated its stored baseline, so successive polls would compound")
             failed = True
     finally:
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
+def test_balancer_pause_is_not_written_in_monitor_or_soc_only_modes(my_predbat):
+    """
+    A balancer hold only pauses the battery where Predbat controls the charge and export windows.
+
+    In Monitor and Control SoC only nothing writes the release once a hold ends (reset_rates is false), so a
+    pause written for the hold would stay on the inverter until the mode changed. The balancer pause must
+    therefore never be written in those modes: not during the hold, not when it ends, not when balancing is
+    switched off. (The balancer's rate of 0 in these modes is existing behaviour and is not tested here.)
+    """
+    failed = balance_fixture(my_predbat, "balancer_pause_modes_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    saved_charge_window = my_predbat.set_charge_window
+    saved_export_window = my_predbat.set_export_window
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_discharge = False
+        my_predbat.set_charge_window = False
+        my_predbat.set_export_window = False
+        socs = {0: 50.0, 1: 50.0}
+        for inverter in my_predbat.inverters:
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+
+        # A hold starts: inverter 1 is cross-charging
+        force_fleet(my_predbat, {0: 2000.0, 1: -500.0}, grid=0.0, socs=socs)
+        my_predbat.execute_plan()
+        if my_predbat.inverters[1].charge_rate != 0:
+            print("ERROR: the balancer did not hold the cross-charger, so this test proves nothing, got charge rate {}".format(my_predbat.inverters[1].charge_rate))
+            failed = True
+        written = inverters_with_pause_written(my_predbat)
+        if written:
+            print("ERROR: a balancer hold wrote a pause in Control SoC only on inverters {}".format(written))
+            failed = True
+
+        # The poll during the hold, then the hold ending
+        my_predbat.rebalance_inverter_rates()
+        force_fleet(my_predbat, {0: 0.0, 1: 0.0}, grid=0.0, socs=socs)
+        my_predbat.rebalance_inverter_rates()
+        written = inverters_with_pause_written(my_predbat)
+        if written:
+            print("ERROR: a pause was written in Control SoC only as the balancer hold ended, inverters {}".format(written))
+            failed = True
+
+        # Balancing switched off: nothing may be left set
+        my_predbat.balance_inverters_enable = False
+        my_predbat.execute_plan()
+        written = inverters_with_pause_written(my_predbat)
+        if written:
+            print("ERROR: a pause was written in Control SoC only after balancing was switched off, inverters {}".format(written))
+            failed = True
+    finally:
+        my_predbat.set_charge_window = saved_charge_window
+        my_predbat.set_export_window = saved_export_window
+        for inverter in my_predbat.inverters:
+            inverter.pause_charge = False
+            inverter.pause_discharge = False
+        my_predbat.inverter_balance_overridden = {}
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
+def test_crosscharge_hold_is_latched_and_does_not_flap(my_predbat):
+    """
+    The pause stops the trickle that used to keep a cross-charge hold selected, so the hold must be latched or it
+    releases on the next 60s poll and comes back when cross-charging resumes (full-rate charging on alternate
+    minutes). The hold has to survive polls where the held inverter reads 0W, release when the fleet direction
+    changes, and not survive balancing being switched off.
+    """
+    failed = balance_fixture(my_predbat, "crosscharge_latch_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_discharge = False
+        socs = {0: 50.0, 1: 50.0}
+        for inverter in my_predbat.inverters:
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+
+        force_fleet(my_predbat, {0: 2000.0, 1: -500.0}, grid=0.0, socs=socs)
+        my_predbat.execute_plan()
+        if my_predbat.inverters[1].charge_rate != 0 or not my_predbat.inverters[1].pause_charge:
+            print("ERROR: the cross-charger was not held and paused, so the latch check proves nothing, got {}W {}".format(my_predbat.inverters[1].charge_rate, my_predbat.inverters[1].pause_charge))
+            failed = True
+
+        # The pause has stopped the trickle: several polls must all keep the hold, not alternate
+        for poll in range(3):
+            force_fleet(my_predbat, {0: 2000.0, 1: 0.0}, grid=0.0, socs=socs)
+            my_predbat.rebalance_inverter_rates()
+            if my_predbat.inverters[1].charge_rate != 0 or not my_predbat.inverters[1].pause_charge:
+                print("ERROR: poll {} released the cross-charge hold while the fleet direction was unchanged, got {}W pause {}".format(poll + 1, my_predbat.inverters[1].charge_rate, my_predbat.inverters[1].pause_charge))
+                failed = True
+            if my_predbat.inverters[0].pause_charge or my_predbat.inverters[0].pause_discharge:
+                print("ERROR: poll {} paused the inverter that was not held, got {} {}".format(poll + 1, my_predbat.inverters[0].pause_charge, my_predbat.inverters[0].pause_discharge))
+                failed = True
+
+        # The fleet direction changes (now net charging): the hold and the pause must be released
+        force_fleet(my_predbat, {0: -1000.0, 1: 0.0}, grid=0.0, socs=socs)
+        my_predbat.rebalance_inverter_rates()
+        if my_predbat.inverters[1].charge_rate != 2600 or my_predbat.inverters[1].pause_charge:
+            print("ERROR: a change of fleet direction should release the hold and the pause, got {}W pause {}".format(my_predbat.inverters[1].charge_rate, my_predbat.inverters[1].pause_charge))
+            failed = True
+        if my_predbat.inverter_crosscharge_held:
+            print("ERROR: the latch should be empty after the hold is released, got {}".format(my_predbat.inverter_crosscharge_held))
+            failed = True
+
+        # Latch it again, then switch balancing off and on: a stale latch must not hold an inverter that is no longer cross-charging
+        force_fleet(my_predbat, {0: 2000.0, 1: -500.0}, grid=0.0, socs=socs)
+        my_predbat.rebalance_inverter_rates()
+        if not my_predbat.inverter_crosscharge_held:
+            print("ERROR: the cross-charge hold was not latched, so the stale-latch check proves nothing")
+            failed = True
+        my_predbat.balance_inverters_enable = False
+        my_predbat.rebalance_inverter_rates()
+        if my_predbat.inverter_crosscharge_held:
+            print("ERROR: switching balancing off should clear the latch, got {}".format(my_predbat.inverter_crosscharge_held))
+            failed = True
+        my_predbat.balance_inverters_enable = True
+        force_fleet(my_predbat, {0: 2000.0, 1: 0.0}, grid=0.0, socs=socs)
+        my_predbat.rebalance_inverter_rates()
+        if my_predbat.inverters[1].charge_rate != 2600 or my_predbat.inverters[1].pause_charge:
+            print("ERROR: a stale latch held an inverter after balancing was switched off and on, got {}W pause {}".format(my_predbat.inverters[1].charge_rate, my_predbat.inverters[1].pause_charge))
+            failed = True
+    finally:
+        for inverter in my_predbat.inverters:
+            inverter.pause_charge = False
+            inverter.pause_discharge = False
+        my_predbat.inverter_balance_overridden = {}
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
+def test_crosscharge_hold_stays_while_the_held_inverter_discharges(my_predbat):
+    """
+    A cross-charge hold is kept until the fleet direction changes, not until the held inverter stops cross-charging.
+
+    A charge-paused inverter in Eco can still discharge, so a held inverter that now reads as discharging with the fleet
+    must stay held and paused. Releasing on that reading would let it cross-charge again and bring the flap back.
+    """
+    failed = balance_fixture(my_predbat, "crosscharge_discharging_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_discharge = False
+        socs = {0: 50.0, 1: 50.0}
+        for inverter in my_predbat.inverters:
+            inverter.pause_charge = None
+            inverter.pause_discharge = None
+
+        force_fleet(my_predbat, {0: 2000.0, 1: -500.0}, grid=0.0, socs=socs)
+        my_predbat.execute_plan()
+        if my_predbat.inverters[1].charge_rate != 0 or not my_predbat.inverters[1].pause_charge:
+            print("ERROR: the cross-charger was not held and paused, so this test proves nothing, got {}W {}".format(my_predbat.inverters[1].charge_rate, my_predbat.inverters[1].pause_charge))
+            failed = True
+
+        # Both inverters now discharge with the fleet: the direction is unchanged, so the hold and the pause stay
+        force_fleet(my_predbat, {0: 1000.0, 1: 1000.0}, grid=0.0, socs=socs)
+        my_predbat.execute_plan()
+        if my_predbat.inverters[1].charge_rate != 0 or not my_predbat.inverters[1].pause_charge or my_predbat.inverters[1].pause_discharge:
+            print("ERROR: a held inverter that is now discharging should stay held with charge paused only, got {}W pause {} {}".format(my_predbat.inverters[1].charge_rate, my_predbat.inverters[1].pause_charge, my_predbat.inverters[1].pause_discharge))
+            failed = True
+        if my_predbat.inverters[0].pause_charge or my_predbat.inverters[0].pause_discharge:
+            print("ERROR: the inverter that was never held should not be paused, got {} {}".format(my_predbat.inverters[0].pause_charge, my_predbat.inverters[0].pause_discharge))
+            failed = True
+    finally:
+        for inverter in my_predbat.inverters:
+            inverter.pause_charge = False
+            inverter.pause_discharge = False
+        my_predbat.inverter_balance_overridden = {}
         restore_balance_state(my_predbat, saved)
     return failed
 
@@ -1054,14 +1250,13 @@ def test_calibration_discards_intent_collected_so_far(my_predbat):
 
 def test_calibration_writes_no_pause(my_predbat):
     """
-    While any inverter is calibrating Predbat stands down for the whole fleet and no pause mode is written (GitHub issue 2155).
+    While any inverter is calibrating Predbat stands down for the whole fleet (GitHub issue 2155).
 
-    The calibration branch of execute_plan() puts every inverter to full rates and clears the intent, so the single pause
-    write in apply_inverter_rates() never runs for the inverters processed BEFORE the calibrating one. On main those
-    inverters had already written their pause from inside their own blocks, so this is a deliberate difference: an
-    inverter that is paused when calibration starts stays as it is until calibration ends, and a pause that a normal
-    cycle would have written (here a limit of 0) is not written during calibration. The next normal cycle must then
-    write the correct pause again.
+    The calibration branch of execute_plan() puts every inverter to full rates, clears the intent and, on the inverters that are
+    not calibrating, cancels charge and export and releases the pause (the same reset as reset_inverter()). So the pause write in
+    apply_inverter_rates() never runs: a pause that a normal cycle would have written (here a limit of 0) is not written, and the
+    pause on the inverters that are not calibrating is released. The calibrating inverter's own pause is left to its firmware.
+    The next normal cycle must write the correct pause again.
     """
     failed = balance_fixture(my_predbat, "calibration_pause_setup")
     if failed:
@@ -1076,25 +1271,29 @@ def test_calibration_writes_no_pause(my_predbat):
         my_predbat.inverters[0].in_calibration = False
         my_predbat.inverters[1].in_calibration = True
 
-        # No pause is written during calibration, even though the limit of 0 asks for one
+        # No pause is written for the limit of 0 during calibration: inverter 0 (not calibrating) is reset, inverter 1 (calibrating) is left alone
         for inverter in my_predbat.inverters:
             inverter.pause_charge = None
             inverter.pause_discharge = None
         my_predbat.execute_plan()
-        for inverter in my_predbat.inverters:
-            if inverter.pause_charge is not None or inverter.pause_discharge is not None:
-                print("ERROR: inverter {} had a pause written during calibration, got {} {}, Predbat should stand down for the whole fleet".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
-                failed = True
+        if my_predbat.inverters[0].pause_charge or my_predbat.inverters[0].pause_discharge:
+            print("ERROR: inverter 0 had a pause written for its limit of 0 during calibration, got {} {}".format(my_predbat.inverters[0].pause_charge, my_predbat.inverters[0].pause_discharge))
+            failed = True
+        if my_predbat.inverters[1].pause_charge is not None or my_predbat.inverters[1].pause_discharge is not None:
+            print("ERROR: the calibrating inverter's pause was touched, got {} {}".format(my_predbat.inverters[1].pause_charge, my_predbat.inverters[1].pause_discharge))
+            failed = True
 
-        # An inverter that was already paused when calibration started is left as it is, not released and not rewritten
+        # Already paused when calibration started: the inverter that is not calibrating is released, the calibrating one is left as it is
         for inverter in my_predbat.inverters:
             inverter.pause_charge = True
             inverter.pause_discharge = True
         my_predbat.execute_plan()
-        for inverter in my_predbat.inverters:
-            if inverter.pause_charge is not True or inverter.pause_discharge is not True:
-                print("ERROR: inverter {} pause should be left unchanged during calibration, got {} {}".format(inverter.id, inverter.pause_charge, inverter.pause_discharge))
-                failed = True
+        if my_predbat.inverters[0].pause_charge or my_predbat.inverters[0].pause_discharge:
+            print("ERROR: inverter 0 should have its pause released by the calibration reset, got {} {}".format(my_predbat.inverters[0].pause_charge, my_predbat.inverters[0].pause_discharge))
+            failed = True
+        if my_predbat.inverters[1].pause_charge is not True or my_predbat.inverters[1].pause_discharge is not True:
+            print("ERROR: the calibrating inverter's pause should be left as it is, got {} {}".format(my_predbat.inverters[1].pause_charge, my_predbat.inverters[1].pause_discharge))
+            failed = True
 
         # The 60s poll must not apply a stale plan's pause either
         my_predbat.balance_inverters_enable = True
@@ -1608,8 +1807,9 @@ def test_balance_release_is_also_silent(my_predbat):
             print("ERROR: the hold was not applied, so the release cannot be tested")
             failed = True
 
-        # Cycle two: the fleet is no longer fighting itself, so the hold is released
-        force_fleet(my_predbat, {0: 1000.0, 1: 1000.0}, grid=0.0)
+        # Cycle two: the fleet is now charging as a whole, so the fleet direction has changed and the latched hold is released.
+        # (The hold is latched until the direction changes, so merely having inverter 1 stop cross-charging does not release it)
+        force_fleet(my_predbat, {0: -1000.0, 1: -1000.0}, grid=0.0)
         my_predbat.execute_plan()
         if my_predbat.inverters[1].charge_rate == 0:
             print("ERROR: the hold was not released, so the release cannot be tested")
@@ -1670,6 +1870,7 @@ def test_stored_intent_is_the_executor_baseline(my_predbat):
     finally:
         my_predbat.balance_inverters_enable = saved_enable
         my_predbat.balance_inverters_crosscharge = saved_cross
+        my_predbat.inverter_crosscharge_held = {}
         for inverter, (power, grid, soc) in zip(my_predbat.inverters, saved):
             inverter.battery_power = power
             inverter.grid_power = grid
@@ -5600,6 +5801,18 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_crosscharge_is_prevented_through_the_inverter_poll(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_balancer_pause_is_not_written_in_monitor_or_soc_only_modes(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_crosscharge_hold_is_latched_and_does_not_flap(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_crosscharge_hold_stays_while_the_held_inverter_discharges(my_predbat)
     if failed:
         return failed
 

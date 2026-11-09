@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from tests.fleet_rig import FleetInverter, setup_fleet
+from utils import balance_inverters
 
 
 def run_balance(my_predbat):
@@ -19,6 +20,7 @@ def run_balance(my_predbat):
     Replaces the old balance_inverters(test_mode=True) entry point, which built its own Inverter
     objects and wrote rates directly.
     """
+    my_predbat.inverter_crosscharge_held = {}
     my_predbat.balance_inverters_enable = True
     my_predbat.set_read_only = False
     intent = {}
@@ -119,6 +121,114 @@ def run_balance_inverters_tests(my_predbat):
     if failed:
         return failed
 
+    # Test 14: Cross-charge hold latch
+    print("Test 14: Cross-charge hold is latched until the fleet direction changes")
+    failed |= test_balance_crosscharge_latch(my_predbat)
+    if failed:
+        return failed
+
+    return failed
+
+
+def pure_balance_snapshot(powers, grid=0.0, calibrating=False):
+    """
+    Plain readings for a fleet of equal, balanced inverters, as balance_inverters() consumes them.
+
+    Returns:
+    - list: one dict per inverter
+    """
+    snapshot = []
+    for index, power in enumerate(powers):
+        snapshot.append(
+            {
+                "soc_percent": 50.0,
+                "reserve_percent": 4.0,
+                "battery_power": power,
+                "pv_power": 0.0,
+                "grid_power": grid if index == 0 else 0.0,
+                "charge_rate_now": 2600.0,
+                "discharge_rate_now": 2600.0,
+                "battery_rate_max_charge": 2600.0,
+                "battery_rate_max_discharge": 2600.0,
+                "in_calibration": calibrating,
+            }
+        )
+    return snapshot
+
+
+def run_pure_balance(powers, held=None, crosscharge=True, grid=0.0, calibrating=False):
+    """
+    Run balance_inverters() on an unclaimed intent.
+
+    Returns:
+    - tuple: the mutated intent, and the cross-charge holds the call returned
+    """
+    intent = {index: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand"} for index in range(len(powers))}
+    result = balance_inverters(intent, pure_balance_snapshot(powers, grid, calibrating), False, False, crosscharge, 1, 1, held_crosscharge=held)
+    return intent, result
+
+
+def test_balance_crosscharge_latch(my_predbat):
+    """
+    The cross-charge hold is latched against the fleet direction it was taken in, and balance_inverters() reports
+    which inverters it holds so the caller can feed that back in on the next pass.
+    """
+    failed = False
+
+    # First pass: inverter 1 cross-charges at -500W while inverter 0 discharges
+    intent, result = run_pure_balance([2000.0, -500.0])
+    if result != {1: True} or intent[1]["charge_rate"] != 0 or intent[0]["charge_rate"] is not None:
+        print("ERROR: first pass should hold inverter 1 charge only and return {{1: True}}, got {} {}".format(result, intent))
+        failed = True
+
+    # The trickle has gone (0W): without the latch the hold is lost, which is the flap
+    intent, result = run_pure_balance([2000.0, 0.0])
+    if result != {} or intent[1]["charge_rate"] is not None:
+        print("ERROR: with no latch an inverter reading 0W should not be held, got {} {}".format(result, intent))
+        failed = True
+
+    # With the latch the hold survives
+    intent, result = run_pure_balance([2000.0, 0.0], held={1: True})
+    if result != {1: True} or intent[1]["charge_rate"] != 0 or intent[0]["charge_rate"] is not None:
+        print("ERROR: a latched cross-charge hold should be kept at 0W, got {} {}".format(result, intent))
+        failed = True
+
+    # The fleet direction changes (net charging): the latch must not apply
+    intent, result = run_pure_balance([-1000.0, 0.0], held={1: True})
+    if result != {} or intent[1]["charge_rate"] is not None:
+        print("ERROR: a change of fleet direction should release the latch, got {} {}".format(result, intent))
+        failed = True
+
+    # A hold taken in the other direction is not a charge hold in this one
+    intent, result = run_pure_balance([2000.0, 0.0], held={1: False})
+    if result != {} or intent[1]["charge_rate"] is not None:
+        print("ERROR: a latch recorded for the other direction should be ignored, got {} {}".format(result, intent))
+        failed = True
+
+    # A held inverter that now reads as discharging stays held while the fleet direction is unchanged: a charge-paused inverter
+    # in Eco can still discharge, and releasing on that would let it cross-charge again and bring the flap back
+    intent, result = run_pure_balance([1000.0, 1000.0], held={1: True})
+    if result != {1: True} or intent[1]["charge_rate"] != 0:
+        print("ERROR: a latched inverter that is now discharging should stay held until the fleet direction changes, got {} {}".format(result, intent))
+        failed = True
+
+    # Cross-charge balancing switched off: nothing is held, latch or not
+    intent, result = run_pure_balance([2000.0, 0.0], held={1: True}, crosscharge=False)
+    if result != {} or intent[1]["charge_rate"] is not None:
+        print("ERROR: with cross-charge balancing off nothing should be held, got {} {}".format(result, intent))
+        failed = True
+
+    # Early returns hand back an empty dict (not None), so the caller's latch is cleared
+    intent, result = run_pure_balance([2000.0, -500.0], calibrating=True)
+    if result != {}:
+        print("ERROR: calibration should return an empty dict, got {}".format(result))
+        failed = True
+    if balance_inverters({0: {}}, pure_balance_snapshot([2000.0]), False, False, True, 1, 1) != {}:
+        print("ERROR: a single inverter should return an empty dict")
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: cross-charge hold latch")
     return failed
 
 
