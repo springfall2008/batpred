@@ -8,7 +8,7 @@ Tests for HAInterface API-related methods:
 - get_history() - Historical data fetching
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 import requests
 
@@ -1046,6 +1046,32 @@ def test_hainterface_get_history_from_time(my_predbat=None):
     return failed
 
 
+def test_hainterface_get_history_from_time_db(my_predbat=None):
+    """Test get_history() passes from_time to the database in db_primary mode"""
+    print("\n=== Testing HAInterface get_history() with from_time from the database ===")
+    failed = 0
+
+    mock_base = MockBase()
+    mock_db = MockDatabaseManager()
+    ha_interface = create_ha_interface(mock_base, ha_key=None, db_enable=True, db_mirror_ha=False, db_primary=True)
+    ha_interface.db_manager = mock_db
+
+    now = datetime.now(timezone.utc)
+    from_time = now - timedelta(minutes=2)
+    ha_interface.get_history("sensor.battery", now, days=1, from_time=from_time)
+    ha_interface.get_history("sensor.battery", now, days=3)
+
+    calls = getattr(mock_db, "get_history_calls", [])
+    want = [{"sensor": "sensor.battery", "now": now, "days": 1, "from_time": from_time}, {"sensor": "sensor.battery", "now": now, "days": 3, "from_time": None}]
+    if calls != want:
+        print(f"ERROR: database should be asked for {want}, got {calls}")
+        failed += 1
+    else:
+        print("✓ from_time passed to the database")
+
+    return failed
+
+
 def run_hainterface_api_tests(my_predbat):
     """Run all HAInterface API tests"""
     print("\n" + "=" * 80)
@@ -1081,6 +1107,7 @@ def run_hainterface_api_tests(my_predbat):
     failed += test_hainterface_get_history_no_key(my_predbat)
     failed += test_hainterface_get_history_api_error(my_predbat)
     failed += test_hainterface_get_history_from_time(my_predbat)
+    failed += test_hainterface_get_history_from_time_db(my_predbat)
 
     print("\n" + "=" * 80)
     if failed == 0:

@@ -14,6 +14,7 @@ from tests.test_infra import reset_rates, reset_inverter, update_rates_import, u
 from tests.test_kernel_parity import kernel_available
 from prediction import Prediction
 from compare import Compare
+from utils import calc_percent_limit
 
 
 def run_optimise_all_windows(
@@ -173,10 +174,10 @@ def run_optimise_all_windows_tests(my_predbat, prediction_kernel=False):
     print("**** Running Optimise all windows tests{} ****".format(" (C++ prediction kernel enabled)" if prediction_kernel else ""))
     reset_inverter(my_predbat)
     my_predbat.prediction_kernel_enable = prediction_kernel
-    # reset_rates() uses rate_scan(print=False) which deliberately skips the rate_min_forward
-    # recalculation, so a stale forward-min from a previous test (e.g. the Compare test's real
+    # reset_rates() uses rate_scan(), which does not build rate_min_forward (only fetch and compare
+    # do), so a stale forward-min from a previous test (e.g. the Compare test's real
     # tariffs) would leak into compute_metric's battery residual value and change the plan.
-    # Production is unaffected: fetch always ends with rate_scan(print=True) which recomputes it.
+    # Production is unaffected: fetch_sensor_data() always rebuilds it from the pre-session tariff.
     my_predbat.rate_min_forward = {}
     failed = False
 
@@ -278,19 +279,30 @@ def run_optimise_all_windows_tests(my_predbat, prediction_kernel=False):
         0, len(expect_charge_limit), expect_charge_limit, charge_window_best, export_window_best, expect_export_limit, all_n=None, end_record=my_predbat.end_record
     )
     before_best_metric = best_metric
-    my_predbat.isCharging = True
-    my_predbat.isCharging_Target = 100
-    best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan = my_predbat.optimise_charge_limit(
-        0, len(expect_charge_limit), expect_charge_limit, charge_window_best, export_window_best, expect_export_limit, all_n=None, end_record=my_predbat.end_record
-    )
+    # calculate_plan() works out the running charge's target once on entry; this calls the optimiser directly
+    my_predbat.charge_keep_target = calc_percent_limit(100, my_predbat.soc_max)
+    try:
+        best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan = my_predbat.optimise_charge_limit(
+            0, len(expect_charge_limit), expect_charge_limit, charge_window_best, export_window_best, expect_export_limit, all_n=None, end_record=my_predbat.end_record
+        )
 
-    if (before_best_metric - best_metric) < 0.099:
-        print("ERROR: Expected best metric to have 0.1 skew for charging but got {} vs {} skew was {}".format(best_metric, before_best_metric, before_best_metric - best_metric))
-        failed = True
-    if best_cost != 19.5:
-        print("ERROR: Expected best cost to be 19.5 but got {}".format(best_cost))
-        failed = True
-    my_predbat.isCharging = False
+        # Keeping the running charge's target is worth the same 0.5p as keeping a running export
+        if (before_best_metric - best_metric) < 0.499:
+            print("ERROR: Expected best metric to have 0.5 skew for charging but got {} vs {} skew was {}".format(best_metric, before_best_metric, before_best_metric - best_metric))
+            failed = True
+        if best_cost != 19.5:
+            print("ERROR: Expected best cost to be 19.5 but got {}".format(best_cost))
+            failed = True
+
+        # Only the window the charge is running in is kept - a later window is optimised as before
+        later = [my_predbat.optimise_charge_limit(1, len(expect_charge_limit), expect_charge_limit, charge_window_best, export_window_best, expect_export_limit, all_n=None, end_record=my_predbat.end_record)[1]]
+        my_predbat.charge_keep_target = None
+        later.append(my_predbat.optimise_charge_limit(1, len(expect_charge_limit), expect_charge_limit, charge_window_best, export_window_best, expect_export_limit, all_n=None, end_record=my_predbat.end_record)[1])
+        if later[0] != later[1]:
+            print("ERROR: a window the charge is not running in should not be skewed, got {} with the keep vs {} without".format(later[0], later[1]))
+            failed = True
+    finally:
+        my_predbat.charge_keep_target = None
 
     # Low rate tes
     charge_window_best = []

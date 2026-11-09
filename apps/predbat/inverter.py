@@ -42,6 +42,7 @@ from const import (
     INVERTER_CLOCK_SKEW_RESTART_MINUTES,
     INVERTER_CLOCK_SKEW_WARN_MINUTES,
     INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
+    BATTERY_SIZE_RETRY_MINUTES,
     INVERTER_LIMIT_DEFAULT_W,
     EXPORT_LIMIT_DEFAULT_W,
 )
@@ -411,6 +412,9 @@ class Inverter:
         # used to be reseeded every cycle because the object itself was rebuilt every cycle).
         self.count_register_writes = 0
         self.created_attributes = {}
+        # Set once an invalid battery_scaling read has been warned about, so a source that keeps
+        # reading invalid warns once rather than every cycle (#5368); cleared by a valid read.
+        self.battery_scaling_invalid_warned = False
         # Commit-once state, keyed by scope - see commit_needed(). Each entry is the last state that
         # scope actually committed to this inverter; a scope absent from the dict has committed
         # nothing yet in this run, so its next call commits once. commit_pending marks a scope whose
@@ -525,9 +529,12 @@ class Inverter:
             # read as valid, rather than inventing one; only fall back to 1.0 if nothing valid has
             # ever been read for this inverter.
             last_known = self.base.get_arg("battery_scaling_last_known", default=1.0, index=self.id)
-            self.log("Warn: Inverter {} battery_scaling read as {} which is not a valid scaling factor, retaining last known value {} for this cycle".format(self.id, self.battery_scaling, last_known))
+            level = "Info" if self.battery_scaling_invalid_warned else "Warn"
+            self.battery_scaling_invalid_warned = True
+            self.log("{}: Inverter {} battery_scaling read as {} which is not a valid scaling factor, retaining last known value {} for this cycle".format(level, self.id, self.battery_scaling, last_known))
             self.battery_scaling = last_known
         else:
+            self.battery_scaling_invalid_warned = False
             self.base.set_arg("battery_scaling_last_known", self.battery_scaling, index=self.id)
         self.battery_scaling_config = self.battery_scaling
 
@@ -577,6 +584,12 @@ class Inverter:
         self.inv_has_target_soc = INVERTER_DEF[self.inverter_type]["has_target_soc"]
         self.inv_has_reserve_soc = INVERTER_DEF[self.inverter_type]["has_reserve_soc"]
         self.inv_has_timed_pause = INVERTER_DEF[self.inverter_type]["has_timed_pause"]
+        # True when a reserve above the SoC makes the battery charge from the grid to reach it, so a
+        # hold on reserve must not lead the SoC. Defaults False so an inverter type has to opt in.
+        self.inv_reserve_above_soc_charges_from_grid = INVERTER_DEF[self.inverter_type].get("reserve_above_soc_charges_from_grid", False)
+        # True when no reserve between 80 and 100 is honoured (a Powerwall, GH#6046), so above 80% a hold that must not
+        # discharge at all can only ask for 100. Defaults False so an inverter type has to opt in.
+        self.inv_reserve_full_only_above_80 = INVERTER_DEF[self.inverter_type].get("reserve_full_only_above_80", False)
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
         self.inv_charge_time_entity_is_option = INVERTER_DEF[self.inverter_type]["charge_time_entity_is_option"]
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]
@@ -776,6 +789,12 @@ class Inverter:
         else:
             register_bounds = ", register accepts {} to {}".format("{}%".format(device_min) if device_min is not None else "any", "{}%".format(device_max) if device_max is not None else "any")
         self.base.log("Inverter {} Reserve min: {}%, battery_min: {}%{}".format(self.id, self.reserve_min, dp0(battery_min_soc), register_bounds))
+
+        # Publish the floor as set_reserve_min's min too, so a UI driven by the entity's attributes stops
+        # offering values the raise above reverts a cycle later (GH#5995). Unlike that raise it follows the
+        # floor back down. Only a bound battery_min_soc counts here, as the default above is derived from reserve_min.
+        reserve_floor = max(self.base.get_arg("battery_min_soc", default=0, index=self.id), device_min or 0)
+        self.base.expose_config_min("set_reserve_min" + reserve_min_postfix, reserve_floor)
         if (self.base.set_reserve_enable and self.inv_has_reserve_soc) or not self.inv_has_reserve_soc:
             self.reserve_percent = self.reserve_min
         else:
@@ -801,6 +820,11 @@ class Inverter:
             self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
         if "export_limit" in self.base.args:
             self.export_limit = self.base.get_arg("export_limit", self.export_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
+        # A site can be barred from exporting battery energy while still exporting spare solar, e.g. a Powerwall
+        # left at Tesla's Solar Only export permission (GH#5710). Only an explicit off or false bars it, so a
+        # missing or unavailable entity leaves export planning as it was.
+        battery_export = self.base.get_arg("battery_export_permitted", None, index=self.id)
+        self.inv_battery_export_permitted = str(battery_export).lower() not in ["off", "false"]
 
         # Log inverter details
         if not quiet:
@@ -833,8 +857,21 @@ class Inverter:
             self.base.args["scheduled_discharge_enable"][self.id] = self.create_entity("scheduled_discharge_enable", "on")
 
         if not self.inv_has_reserve_soc:
-            self.create_missing_arg("reserve", self.reserve)
-            self.base.args["reserve"][self.id] = self.create_entity("reserve", self.reserve, device_class=None, uom="%", icon="mdi:battery-lock")
+            # The dummy is a percentage, read back above as reserve_percent_current, so it is seeded with
+            # reserve_percent - seeding it with the kWh self.reserve fed kWh to the balancer as a percent (#5850)
+            self.create_missing_arg("reserve", self.reserve_percent)
+            reserve_entity = self.create_entity("reserve", self.reserve_percent, device_class=None, uom="%", icon="mdi:battery-lock")
+            self.base.args["reserve"][self.id] = reserve_entity
+            # create_entity() keeps a state that already exists, so a dummy an earlier version seeded in kWh
+            # would never be corrected. There is no device-side reserve to preserve: Predbat owns this value,
+            # and the only writes it makes here (adjust_reserve(0), clamped up to reserve_percent) are this number
+            if self.base.get_arg("reserve", default=None, index=self.id, required_unit="%") != self.reserve_percent:
+                self.base.set_state_wrapper(reserve_entity, state=self.reserve_percent, attributes=self.created_attributes[reserve_entity])
+                # The read near the top of this pass took the stale value, so take it again rather than report it
+                # for a whole cycle. Only on a write: with a literal reserve (GH#5003) the new dummy already reads back
+                # equal, so the literal still stands as the current reserve
+                self.reserve_percent_current = max(self.base.get_arg("reserve", default=battery_min_soc, index=self.id, required_unit="%"), battery_min_soc)
+                self.reserve_current = dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         if not self.inv_has_target_soc:
             self.create_missing_arg("charge_limit", 100)
@@ -913,14 +950,31 @@ class Inverter:
         # trimmed mean is recovered too; otherwise today_key is present in the recovered history (so the
         # recalculation below is skipped) while the live-only state read returns None, silently disabling
         # battery_scaling_auto for the rest of the day.
-        trimmed_mean_state = self.base.load_previous_value_from_ha(soc_max_sensor_name)
+        # With no measurement in the history the state is only the nominal capacity it was published
+        # with. That is harmless while a nominal is configured (the scaling comes out at 1.0), but with
+        # soc_max unset it is an old configured size read back as a measurement - e.g. a Sunsynk
+        # installer-entered Batt Capacity bound as soc_max before soc_max_fallback existed.
+        has_measurement = any(type(value) in (int, float) and math.isfinite(value) and value > 0 for value in existing_history.values())
+        trimmed_mean_state = self.base.load_previous_value_from_ha(soc_max_sensor_name) if has_measurement or (self.nominal_capacity and self.nominal_capacity > 0) else None
         try:
             trimmed_mean = float(trimmed_mean_state) if trimmed_mean_state is not None else None
         except (ValueError, TypeError):
             trimmed_mean = None
 
-        if today_key not in existing_history:
-            # Only calculate once per day to save compute resources
+        # A day whose calculation found nothing is retried hourly rather than left until tomorrow: the
+        # first cycle after midnight UTC comes before an overnight charge, so a None stored then would
+        # skip that night's charge for a whole day. The attempt time is kept on the sensor, as a new
+        # Inverter is built every cycle and the history already survives a restart there.
+        retry_due = False
+        if today_key in existing_history and existing_history[today_key] is None:
+            last_attempt = self.base.load_previous_value_from_ha(soc_max_sensor_name, attribute="last_attempt")
+            try:
+                retry_due = (self.base.now_utc - datetime.fromisoformat(str(last_attempt))).total_seconds() >= BATTERY_SIZE_RETRY_MINUTES * 60
+            except (ValueError, TypeError):
+                retry_due = True
+
+        if today_key not in existing_history or retry_due:
+            # Only calculate once per day (or hourly until it succeeds) to save compute resources
             found_size = self.find_battery_size(self.nominal_capacity)
             if found_size and found_size > 0:
                 trimmed_mean = self.update_soc_max_calculated_sensor(found_size, self.nominal_capacity)
@@ -931,7 +985,7 @@ class Inverter:
             # Recorder has today's result, but a restart removed the live sensor.
             # Preserve the recorded state as the planning mean; an all-None history
             # publishes the nominal capacity but returns no newly calculated mean.
-            self.update_soc_max_calculated_sensor(existing_history[today_key], self.nominal_capacity)
+            self.update_soc_max_calculated_sensor(existing_history[today_key], self.nominal_capacity, attempted=False)
 
         if self.base.battery_scaling_auto and trimmed_mean and trimmed_mean > 0:
             if self.nominal_capacity > 0:
@@ -944,31 +998,47 @@ class Inverter:
                 self.soc_max = dp3(self.nominal_capacity * new_scaling)
                 self.log("Info: Inverter {} battery_scaling_auto set scaling {:.3f} (mean {:.2f} kWh, nominal {:.2f} kWh) resulting in soc_max {:.3f} kWh".format(self.id, new_scaling, trimmed_mean, self.nominal_capacity, self.soc_max))
             else:
-                # No nominal configured - use trimmed mean directly without clamping
+                # No nominal configured - use trimmed mean directly without clamping. It is not written
+                # back to soc_max: the next cycle would read it as configured, so the clamp and the
+                # find_battery_size plausibility band would hold every later estimate to the first one.
+                # Each cycle recovers the mean from the sensor instead.
                 self.soc_max = dp3(trimmed_mean)
                 self.nominal_capacity = self.soc_max
                 self.battery_scaling = 1.0
-                self.base.set_arg("soc_max", self.soc_max, index=self.id)
                 self.base.set_arg("soc_max_nominal", 0.0, index=self.id)
                 self.log("Info: Inverter {} battery_scaling_auto using measured mean {:.2f} kWh (no nominal configured)".format(self.id, trimmed_mean))
 
         # Final fallback if soc_max is still not determined
         if not self.soc_max or self.soc_max <= 0:
-            self.log("Warn: Inverter {} unable to determine battery size, using 8 kWh default for this cycle, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
-            self.soc_max = 8.0
+            # A driver that knows a likely size but not a trustworthy one (Sunsynk's installer-entered
+            # Batt Capacity) binds soc_max_fallback rather than soc_max, so it is planned with only
+            # until find_battery_size() has a figure, and never becomes the nominal whose plausibility
+            # band would reject the very charges that show it is wrong.
+            try:
+                soc_max_fallback = float(self.base.get_arg("soc_max_fallback", default=0.0, index=self.id))
+            except (ValueError, TypeError):
+                soc_max_fallback = 0.0
+            if soc_max_fallback > 0 and math.isfinite(soc_max_fallback):
+                self.soc_max = dp3(soc_max_fallback * self.battery_scaling)
+                self.log("Info: Inverter {} battery size not yet estimated from charge history, using soc_max_fallback {:.2f} kWh for this cycle".format(self.id, self.soc_max))
+            else:
+                self.log("Warn: Inverter {} unable to determine battery size, using 8 kWh default for this cycle, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
+                self.soc_max = 8.0
             self.nominal_capacity = self.soc_max
             # Intentionally do NOT persist the fallback into the soc_max / soc_max_nominal args:
             # caching 8.0 would override a configured (but momentarily unavailable) source and pin
             # soc_max to 8 kWh until restart. Leaving the args intact lets the next cycle re-read the
             # real source (or restore soc_max_nominal) and recover automatically.
 
-    def update_soc_max_calculated_sensor(self, found_size, nominal_capacity=0):
+    def update_soc_max_calculated_sensor(self, found_size, nominal_capacity=0, attempted=True):
         """
         Update the soc_max_calculated sensor with a new data point and return the trimmed mean.
 
         Stores one data point per calendar day (keyed by date string) and keeps the 7 most-recent days.
         The sensor state is the trimmed mean (min and max dropped when >= 3 samples, plain average otherwise).
         nominal_capacity is stored as a sensor attribute (0 if not configured).
+        attempted records now as the last_attempt attribute that paces retries of a day that found
+        nothing; pass False when only republishing a recorded result, which keeps the previous one.
         Returns the trimmed mean or None if no data.
         """
         if self.id > 0:
@@ -979,6 +1049,7 @@ class Inverter:
         history = self.base.load_previous_value_from_ha(sensor_name, attribute="history") or {}
         if not isinstance(history, dict):
             history = {}
+        last_attempt = self.base.now_utc.isoformat() if attempted else self.base.load_previous_value_from_ha(sensor_name, attribute="last_attempt")
 
         today_key = str(self.base.now_utc.date())
         history[today_key] = round(found_size, 3) if found_size is not None else None
@@ -996,6 +1067,7 @@ class Inverter:
                 state=nominal_capacity if nominal_capacity > 0 else "unknown",
                 attributes={
                     "history": history,
+                    "last_attempt": last_attempt,
                     "nominal_capacity": round(nominal_capacity, 3),
                     "degradation_percent": None,
                     "configured_degradation": round((1 - self.battery_scaling) * 100, 2),
@@ -1027,6 +1099,7 @@ class Inverter:
             state=dp2(trimmed_mean),
             attributes={
                 "history": history,
+                "last_attempt": last_attempt,
                 "nominal_capacity": round(nominal_capacity, 3),
                 "degradation_percent": round(degradation * 100, 2),
                 "configured_degradation": round((1 - self.battery_scaling) * 100, 2),
@@ -1045,7 +1118,10 @@ class Inverter:
         """
         soc_percent_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
         soc_kw_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
-        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
+        # battery_size_power, when a driver or the user sets it, is a battery-side power reading
+        # better suited to measuring capacity than battery_power (e.g. Sunsynk's BMS power, which
+        # counts against the same current the BMS's SoC does). Same sign convention and invert flag.
+        battery_power_sensor = self.base.get_arg("battery_size_power", indirect=False, index=self.id) or self.base.get_arg("battery_power", indirect=False, index=self.id)
         battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
 
         if (soc_percent_sensor or soc_kw_sensor) and battery_power_sensor:
@@ -1343,7 +1419,7 @@ class Inverter:
             soc_label = "soc_percent"
         else:
             soc_kwh_percent = False
-            soc_label = "soc_kwh"
+            soc_label = "soc_kw"
             soc_kwh_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
 
         if discharge:
@@ -1358,10 +1434,6 @@ class Inverter:
 
         final_curve = {}
         final_curve_count = {}
-        soc_kwh = []
-        charge_rate = []
-        battery_power = []
-        predbat_status = []
 
         if discharge:
             max_power = int(self.battery_rate_max_discharge * MINUTE_WATT)
@@ -1636,12 +1708,18 @@ class Inverter:
                         )
                     )
             else:
-                self.log(
-                    "Warn: Inverter {} Cannot find battery {} curve (missing history), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(self.id, curve_type, soc_label, curve_type)
-                )
-                self.log("Warn: Inverter {} Sensor history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(self.id, soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
+                history_checks = [
+                    (soc_label, soc_kwh_sensor, soc_kwh_data),
+                    ("{}_rate".format(curve_type), charge_rate_sensor, charge_rate_data),
+                    ("battery_power", battery_power_sensor, battery_power_data),
+                    ("predbat.status", predbat_status_sensor, predbat_status_data),
+                ]
+                no_history = ["{} ({})".format(setting, entity_id) for setting, entity_id, data in history_checks if not data]
+                self.log("Warn: Inverter {} Cannot find battery {} curve (missing history), no history found for {} - check the entity name in apps.yaml and that Home Assistant is recording its history".format(self.id, curve_type, ", ".join(no_history)))
+                self.log("Warn: Inverter {} Sensor history record counts: {}".format(self.id, ", ".join("{} {}".format(setting, len(data[0]) if data else 0) for setting, entity_id, data in history_checks)))
         else:
-            self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(self.id, curve_type, soc_label, curve_type))
+            missing_settings = [setting for setting, entity_id in [(soc_label, soc_kwh_sensor), ("{}_rate".format(curve_type), charge_rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
+            self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), {} not set in apps.yaml".format(self.id, curve_type, ", ".join(missing_settings)))
         return {}
 
     def create_entity(self, entity_name, value, uom=None, device_class=None, icon=None):
@@ -3895,7 +3973,9 @@ class Inverter:
                 continue
 
             now_local = datetime.now(local_tz)
-            if (now_local - time_pressed).seconds < 10:
+            # total_seconds(), not .seconds: .seconds is normalised into [0, 86399], so a stamp a
+            # second ahead of our clock read as ~86399s stale and a days-old one read as fresh (batpred#5694).
+            if abs((now_local - time_pressed).total_seconds()) < 10:
                 self.base.log(f"Inverter {self.id} successfully pressed button {entity_id}")
                 # Counted for the same reason as the toggle-button path above (batpred#4712).
                 self.count_register_writes += 1

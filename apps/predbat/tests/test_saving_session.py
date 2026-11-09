@@ -7,6 +7,8 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+import os
+import re
 import yaml
 import json
 from datetime import timedelta, datetime
@@ -277,6 +279,62 @@ events:
 
     if not failed:
         print("PASS: code: null free-session event is accepted, same as one with a real code")
+    return failed
+
+
+def test_kraken_flextras_free_electricity(my_predbat):
+    """
+    EDF Flextras booked hours published by the Kraken component (events with +0000 offsets on a
+    free_electricity sensor wired to octopus_free_electricity) are priced at 0p by the same path
+    as Octopus free electricity sessions.
+    """
+    print("Test Kraken Flextras free hours reach the import rates at 0p")
+    from kraken import KrakenAPI
+    from utils import str2time
+
+    ha = my_predbat.ha_interface
+    failed = False
+    saved_args = {key: my_predbat.args[key] for key in ("octopus_free_session", "octopus_saving_session", "octopus_free_url", "octopus_free_electricity") if key in my_predbat.args}
+    for key in saved_args:
+        del my_predbat.args[key]
+
+    # 10:00-12:00 UK time today, booked as two back-to-back hours
+    today_local = my_predbat.midnight_utc.astimezone(my_predbat.local_tz).strftime("%Y-%m-%d")
+    screen = {
+        "components": [
+            {
+                "type": "BOOKED_HOURS_LIST",
+                "props": {"items": [{"rawTimeSlots": [{"date": today_local, "startTime": "10:00", "endTime": "11:00"}, {"date": today_local, "startTime": "11:00", "endTime": "12:00"}]}]},
+            }
+        ]
+    }
+    sessions = KrakenAPI.parse_flextras_booked_hours(screen)
+    entity = "sensor.predbat_kraken_a_test_free_electricity"
+    ha.dummy_items[entity] = {"events": [{"start": s["start"], "end": s["end"], "code": "flextras", "rate": 0} for s in sessions]}
+    my_predbat.args["octopus_free_electricity"] = entity
+
+    try:
+        octopus_free_slots, _ = my_predbat.fetch_octopus_sessions()
+        if octopus_free_slots != [{"start": sessions[0]["start"], "end": sessions[0]["end"], "rate": 0}]:
+            print("ERROR: Expected one free slot from {} got {}".format(sessions, octopus_free_slots))
+            failed = True
+
+        rate_import = {n: 20.0 for n in range(-24 * 60, 48 * 60)}
+        my_predbat.load_free_slot(octopus_free_slots, rate_import, export=False, rate_replicate={})
+        start_minutes = int((str2time(sessions[0]["start"]) - my_predbat.midnight_utc).total_seconds() / 60)
+        if rate_import[start_minutes] != 0 or rate_import[start_minutes + 119] != 0:
+            print("ERROR: Expected 0p across the booked hours, got {} / {}".format(rate_import[start_minutes], rate_import[start_minutes + 119]))
+            failed = True
+        if rate_import[start_minutes - 1] != 20.0 or rate_import[start_minutes + 120] != 20.0:
+            print("ERROR: Expected the normal rate either side of the booked hours")
+            failed = True
+    finally:
+        del my_predbat.args["octopus_free_electricity"]
+        del ha.dummy_items[entity]
+        my_predbat.args.update(saved_args)
+
+    if not failed:
+        print("PASS: Flextras booked hours priced at 0p")
     return failed
 
 
@@ -1466,6 +1524,53 @@ def test_saving_session_entity_regex_power_rename(my_predbat):
                 failed = True
             else:
                 print(f"PASS: {description} resolved to {resolved}")
+
+    return failed
+
+
+def test_templates_ship_octopus_free_session(my_predbat):
+    """
+    Test that every apps.yaml template that ships an octopus_saving_session entry also ships an
+    octopus_free_session entry, and that the shipped pattern picks up a free-session event entity.
+    Without it Octopus free electricity / Power Up events never get their 0p rate in the plan.
+    Covers GitHub issue #5912 (the Tesla templates had the saving-session block but not this one).
+    """
+    print("Test apps.yaml templates ship octopus_free_session alongside octopus_saving_session (issue #5912)")
+    failed = False
+
+    templates_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "templates")
+    saving_line = re.compile(r"^\s+octopus_saving_session:", re.MULTILINE)
+    free_line = re.compile(r"^\s+octopus_free_session:\s*'([^']*)'", re.MULTILINE)
+    free_entities = ["event.octopus_energy_a4dd6c5ee_octoplus_free_electricity_session_events", "event.octopus_energy_a4dd6c5ee_octoplus_power_up_events"]
+    power_down_entity = "event.octopus_energy_a4dd6c5ee_octoplus_power_down_events"
+
+    checked = 0
+    for name in sorted(os.listdir(templates_dir)):
+        if not name.endswith(".yaml"):
+            continue
+        with open(os.path.join(templates_dir, name), encoding="utf-8") as handle:
+            text = handle.read()
+        if not saving_line.search(text):
+            continue
+        checked += 1
+        match = free_line.search(text)
+        if not match:
+            print(f"ERROR: {name} ships octopus_saving_session but not octopus_free_session")
+            failed = True
+            continue
+        pattern = match.group(1)
+        if not any(my_predbat.resolve_arg_re("octopus_free_session", pattern, [entity])[0] for entity in free_entities):
+            print(f"ERROR: {name} octopus_free_session pattern {pattern} matches no free-session event entity")
+            failed = True
+        if my_predbat.resolve_arg_re("octopus_free_session", pattern, [power_down_entity])[0]:
+            print(f"ERROR: {name} octopus_free_session pattern {pattern} cross-matches the Power Down entity")
+            failed = True
+
+    if checked < 10:
+        print(f"ERROR: expected the templates to be found and checked, only saw {checked}")
+        failed = True
+    elif not failed:
+        print(f"PASS: {checked} templates ship a working octopus_free_session alongside octopus_saving_session")
 
     return failed
 

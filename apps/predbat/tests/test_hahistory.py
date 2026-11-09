@@ -577,6 +577,55 @@ def test_hahistory_update_entity_merge_new(my_predbat=None):
     return failed
 
 
+def test_hahistory_merge_drops_restamped_anchor(my_predbat=None):
+    """Test a more-days merge replaces the record prune re-stamped at the cutoff with the fetched data"""
+    print("\n=== Testing HAHistory update_entity() merge over a re-stamped prune anchor ===")
+    failed = 0
+
+    entity_id = "sensor.battery"
+    base_time = datetime(2025, 12, 25, 10, 0, 0, tzinfo=pytz.UTC)
+    cutoff = base_time + timedelta(days=2)
+
+    def record(state, offset):
+        """Build a history record stamped offset after base_time"""
+        return {"state": state, "last_updated": (base_time + offset).isoformat(), "attributes": {}}
+
+    # The cache missed the change to 5 a day in (a failed chunk), so prune re-stamps 7 at the cutoff,
+    # and the refetch must not leave 7 asserted at the cutoff after the 5 it supplies
+    full_history = [record("7", timedelta(0)), record("5", timedelta(days=1)), record("9", timedelta(days=3))]
+    for label, cached, expected in [
+        ("a cache that missed a change", [full_history[0], full_history[2]], [7.0, 5.0, 9.0]),
+        ("a complete cache", full_history, [7.0, 5.0, 9.0]),
+    ]:
+        ha_history = HAHistory(MockBase())
+        ha_history.initialize()
+        ha_history.update_entity(entity_id, [dict(entry) for entry in cached])
+        ha_history.history_data[entity_id].prune(cutoff.timestamp())
+        ha_history.update_entity(entity_id, [dict(entry) for entry in full_history])
+        states = [entry["state"] for entry in ha_history.history_data[entity_id]]
+        if states != expected:
+            print(f"ERROR: Merge over {label}: expected states {expected}, got {states}")
+            failed += 1
+        else:
+            print(f"✓ Merge over {label} drops the re-stamped anchor")
+
+    # A real record exactly on the cutoff is not a re-stamped anchor, so the merge keeps it
+    ha_history = HAHistory(MockBase())
+    ha_history.initialize()
+    on_cutoff = [record("7", timedelta(0)), record("8", timedelta(days=2)), record("9", timedelta(days=3))]
+    ha_history.update_entity(entity_id, [dict(entry) for entry in on_cutoff])
+    ha_history.history_data[entity_id].prune(cutoff.timestamp())
+    ha_history.update_entity(entity_id, [dict(entry) for entry in on_cutoff])
+    states = [entry["state"] for entry in ha_history.history_data[entity_id]]
+    if states != [7.0, 8.0, 9.0]:
+        print(f"ERROR: Merge over a record on the cutoff: expected [7.0, 8.0, 9.0], got {states}")
+        failed += 1
+    else:
+        print("✓ Merge keeps a real record that lands on the cutoff")
+
+    return failed
+
+
 def test_hahistory_prune_history(my_predbat=None):
     """Test HAHistory prune_history() removes old entries"""
     print("\n=== Testing HAHistory prune_history() ===")
@@ -589,8 +638,8 @@ def test_hahistory_prune_history(my_predbat=None):
     entity_id = "sensor.battery"
     now = datetime(2025, 12, 25, 10, 0, 0, tzinfo=pytz.UTC)
 
-    # Create history spanning 60 days
-    history = create_mock_history(entity_id, days=60, step_minutes=60, start_time=now - timedelta(days=60))
+    # Create history spanning 60 days, offset so the cutoff falls between two records (#5456)
+    history = create_mock_history(entity_id, days=60, step_minutes=60, start_time=now - timedelta(days=60, minutes=-7))
     ha_history.history_data[entity_id] = EntityHistory.from_records(history)
     ha_history.history_entities[entity_id] = 30  # Only keep 30 days
 
@@ -603,7 +652,7 @@ def test_hahistory_prune_history(my_predbat=None):
     final_count = len(ha_history.history_data[entity_id])
     print(f"  After pruning: {final_count} entries")
 
-    # Verify entries are within 30 days
+    # Verify entries are within 30 days; the first holds the state in force at the cutoff, stamped there (#5456)
     cutoff_time = now - timedelta(days=30)
     for entry in ha_history.history_data[entity_id]:
         entry_time = str2time(entry["last_updated"])
@@ -614,6 +663,11 @@ def test_hahistory_prune_history(my_predbat=None):
 
     if failed == 0:
         print("✓ All entries within 30-day window")
+
+    first_time = str2time(ha_history.history_data[entity_id][0]["last_updated"])
+    if first_time != cutoff_time:
+        print(f"ERROR: Expected the first entry at the cutoff {cutoff_time}, got {first_time}")
+        failed += 1
 
     # Verify some entries were removed
     if final_count >= initial_count:
@@ -952,20 +1006,70 @@ def test_entity_history_store(my_predbat=None):
     else:
         print("✓ Indexing and iteration materialise records correctly")
 
-    # Test 7: prune drops older records and their exceptions
-    store.prune((base_time + timedelta(minutes=12)).timestamp())
-    remaining = [entry["state"] for entry in store.to_records()]
-    if remaining != ["Charging", 30.0]:
-        print(f"ERROR: Expected ['Charging', 30.0] after prune, got {remaining}")
+    # Test 7: prune drops older records and their exceptions, but keeps the state in force at the
+    # cutoff (the 10-minute record, with its attributes) re-stamped at the cutoff (#5456)
+    cutoff_epoch = (base_time + timedelta(minutes=12)).timestamp()
+    store.prune(cutoff_epoch)
+    remaining = store.to_records()
+    if [entry["state"] for entry in remaining] != [20.25, "Charging", 30.0]:
+        print(f"ERROR: Expected [20.25, 'Charging', 30.0] after prune, got {[entry['state'] for entry in remaining]}")
         failed += 1
-    elif store.state_exceptions and min(store.state_exceptions) < (base_time + timedelta(minutes=12)).timestamp():
+    elif str2time(remaining[0]["last_updated"]).timestamp() != cutoff_epoch:
+        print(f"ERROR: Expected the kept record re-stamped at the cutoff, got {remaining[0]['last_updated']}")
+        failed += 1
+    elif remaining[0]["attributes"] != {"special": True}:
+        print(f"ERROR: Expected the kept record to keep its attributes, got {remaining[0]['attributes']}")
+        failed += 1
+    elif store.state_exceptions and min(store.state_exceptions) < cutoff_epoch:
         print(f"ERROR: Prune left stale state exceptions: {store.state_exceptions}")
         failed += 1
-    elif store.attribute_exceptions:
-        print(f"ERROR: Prune left stale attribute exceptions: {store.attribute_exceptions}")
+    elif list(store.attribute_exceptions) != [cutoff_epoch]:
+        print(f"ERROR: Expected only the kept record's attribute exception, got {store.attribute_exceptions}")
         failed += 1
     else:
-        print("✓ Prune drops old records and stale exceptions")
+        print("✓ Prune drops old records and stale exceptions, keeping the state in force at the cutoff")
+
+    # Test 7b: a record exactly on the cutoff is the state in force there, so nothing older is kept
+    store.prune((base_time + timedelta(minutes=15)).timestamp())
+    remaining = [entry["state"] for entry in store.to_records()]
+    if remaining != ["Charging", 30.0] or store.attribute_exceptions:
+        print(f"ERROR: Expected ['Charging', 30.0] and no attribute exceptions after pruning on a record, got {remaining} {store.attribute_exceptions}")
+        failed += 1
+    else:
+        print("✓ Prune on an exact record time keeps nothing older")
+
+    # Test 7d: a non-numeric state in force at the cutoff keeps its value, not the 0.0 placeholder (#5456)
+    switch_store = EntityHistory.from_records(
+        [
+            {"state": "on", "last_updated": base_time.isoformat(), "attributes": {}},
+            {"state": "off", "last_updated": (base_time + timedelta(minutes=5)).isoformat(), "attributes": {}},
+        ]
+    )
+    switch_store.prune((base_time + timedelta(minutes=10)).timestamp())
+    remaining = [entry["state"] for entry in switch_store.to_records()]
+    if remaining != ["off"]:
+        print(f"ERROR: Expected ['off'] kept at the cutoff, got {remaining}")
+        failed += 1
+    else:
+        print("✓ A non-numeric state in force at the cutoff is kept")
+
+    # Test 7c: a rarely-changing sensor whose last change (a brief 'unavailable' blip) is older than
+    # the cutoff keeps its current value, not just the blip (#5456)
+    blip_store = EntityHistory.from_records(
+        [
+            {"state": "7.0", "last_updated": base_time.isoformat(), "attributes": {}},
+            {"state": "unavailable", "last_updated": (base_time + timedelta(days=2)).isoformat(), "attributes": {}},
+            {"state": "7.0", "last_updated": (base_time + timedelta(days=2, minutes=1)).isoformat(), "attributes": {}},
+        ]
+    )
+    blip_cutoff = base_time + timedelta(days=3)
+    blip_store.prune(blip_cutoff.timestamp())
+    remaining = blip_store.to_records()
+    if [entry["state"] for entry in remaining] != [7.0] or str2time(remaining[0]["last_updated"]) != blip_cutoff:
+        print(f"ERROR: Expected [7.0] stamped at the cutoff, got {remaining}")
+        failed += 1
+    else:
+        print("✓ A sensor with no change since the cutoff keeps its current value")
 
     # Test 8: records without a valid last_updated are not stored
     bad_store = EntityHistory.from_records([{"state": "1"}, {"state": "2", "last_updated": "junk"}, {"state": "3", "last_updated": base_time.isoformat()}])
@@ -974,6 +1078,219 @@ def test_entity_history_store(my_predbat=None):
         failed += 1
     else:
         print("✓ Records without a valid last_updated are dropped")
+
+    return failed
+
+
+class ScriptedHAInterface:
+    """HAInterface stand-in whose get_history answer is set per entity: [[]] is a read that found nothing, None a read that failed"""
+
+    def __init__(self):
+        self.answers = {}
+        self.get_history_calls = []
+
+    def get_history(self, entity_id, now, days=30, from_time=None):
+        """Record the call and return the scripted answer"""
+        self.get_history_calls.append({"entity_id": entity_id, "now": now, "days": days, "from_time": from_time})
+        answer = self.answers.get(entity_id, None)
+        return answer(from_time) if callable(answer) else answer
+
+
+def test_hahistory_empty_vs_failed_reads(my_predbat=None):
+    """An empty history read is cached and rechecked every HISTORY_EMPTY_RECHECK_SECONDS from the last check; a failed read is never cached"""
+    from ha import HISTORY_EMPTY_RECHECK_SECONDS, HISTORY_REFRESH_OVERLAP_SECONDS
+
+    print("\n=== Testing HAHistory empty vs failed reads ===")
+    failed = 0
+
+    def check(condition, message):
+        """Count and report one expectation"""
+        nonlocal failed
+        if condition:
+            print("✓ " + message)
+        else:
+            print("ERROR: " + message)
+            failed += 1
+
+    def calls_for(ha, entity_id):
+        """The interface calls made for one entity"""
+        return [call for call in ha.get_history_calls if call["entity_id"] == entity_id]
+
+    mock_base = MockBase()
+    ha_history = HAHistory(mock_base)
+    ha_history.initialize()
+    ha = ScriptedHAInterface()
+    mock_base.components.register_component("ha", ha)
+
+    empty_id = "binary_sensor.predbat_rate_override_import"
+    failing_id = "binary_sensor.saving_session"
+    ha.answers[empty_id] = [[]]
+    ha.answers[failing_id] = None
+
+    # A read that worked and found nothing is cached as empty
+    result = ha_history.get_history(empty_id, days=11)
+    check(result == [[]], "empty read answers [[]]")
+    check(empty_id in ha_history.history_data and len(ha_history.history_data[empty_id]) == 0, "empty read creates an empty store")
+    check(empty_id in ha_history.history_checked, "empty read records when it was checked")
+    result = ha_history.get_history(empty_id, days=11)
+    check(result == [[]] and len(calls_for(ha, empty_id)) == 1, "a second read of an empty entity is a cache hit")
+    check(ha_history.get_history(empty_id, days=2, tracked=False) == [[]] and len(calls_for(ha, empty_id)) == 1, "an untracked read of a cached empty entity is a cache hit too")
+    ha_history.get_history(empty_id, days=20)
+    check(len(calls_for(ha, empty_id)) == 2, "asking for more days than were checked reads again")
+
+    # A read that failed is not cached, so it is asked again
+    result = ha_history.get_history(failing_id, days=11)
+    check(result is None, "failed read answers None")
+    check(failing_id not in ha_history.history_data and failing_id not in ha_history.history_checked, "failed read caches nothing")
+    ha_history.get_history(failing_id, days=11)
+    check(len(calls_for(ha, failing_id)) == 2, "a failed read is tried again")
+
+    # An untracked empty read caches nothing
+    untracked_id = "binary_sensor.untracked"
+    ha.answers[untracked_id] = [[]]
+    ha_history.get_history(untracked_id, days=2, tracked=False)
+    check(untracked_id not in ha_history.history_data and untracked_id not in ha_history.history_checked, "untracked empty read caches nothing")
+
+    async def refresh():
+        """One 2-minute refresh"""
+        return await ha_history.run(seconds=120, first=False)
+
+    # The refresh leaves a freshly checked empty entity alone, and keeps asking for a failed one
+    ha.get_history_calls = []
+    run_async(refresh())
+    check(calls_for(ha, empty_id) == [], "refresh skips an empty entity checked under HISTORY_EMPTY_RECHECK_SECONDS ago")
+    failing_calls = calls_for(ha, failing_id)
+    check(len(failing_calls) == 1 and failing_calls[0]["from_time"] is None, "refresh re-reads the whole window of a failed entity")
+    check(failing_id not in ha_history.history_data, "a refresh that fails caches nothing")
+
+    # Once the recheck is due, only the time since the last check (less the overlap) is read
+    checked_epoch = ha_history.history_checked[empty_id] - HISTORY_EMPTY_RECHECK_SECONDS - 60
+    ha_history.history_checked[empty_id] = checked_epoch
+    ha.get_history_calls = []
+    run_async(refresh())
+    empty_calls = calls_for(ha, empty_id)
+    check(len(empty_calls) == 1, "refresh rechecks an empty entity once the recheck is due")
+    if empty_calls:
+        from_time = empty_calls[0]["from_time"]
+        check(from_time is not None and abs(from_time.timestamp() - (checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS)) < 1, "recheck reads from the last check less the overlap")
+    check(ha_history.history_checked[empty_id] > checked_epoch, "an empty recheck moves the check time on")
+
+    # A failed recheck leaves the check time where it was, so the next refresh asks again for the same span
+    checked_epoch = ha_history.history_checked[empty_id] - HISTORY_EMPTY_RECHECK_SECONDS - 60
+    ha_history.history_checked[empty_id] = checked_epoch
+    ha.answers[empty_id] = None
+    ha.get_history_calls = []
+    run_async(refresh())
+    run_async(refresh())
+    empty_calls = calls_for(ha, empty_id)
+    check(len(empty_calls) == 2, "a failed recheck is asked again on the next refresh")
+    check(ha_history.history_checked[empty_id] == checked_epoch, "a failed recheck does not move the check time")
+    check(all(abs(call["from_time"].timestamp() - (checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS)) < 1 for call in empty_calls), "a failed recheck keeps reading from the same point")
+    check(ha_history.get_history(empty_id, days=11) == [[]], "the entity is still served as empty from the cache meanwhile")
+
+    # A recheck that finds history makes it an ordinary store, refreshed from its last record
+    event_time = datetime.now(pytz.UTC) - timedelta(minutes=5)
+    ha.answers[empty_id] = [[{"state": "on", "last_updated": event_time.isoformat(), "attributes": {}}]]
+    ha.get_history_calls = []
+    run_async(refresh())
+    check(len(ha_history.history_data[empty_id]) == 1, "a recheck that finds a record stores it")
+    check(ha_history.history_checked.get(empty_id, 0) > checked_epoch, "a recheck that finds a record moves the check time on")
+    check(ha_history.get_history(empty_id, days=11)[0][0]["state"] == "on", "the found record is served from the cache")
+    ha.get_history_calls = []
+    run_async(refresh())
+    empty_calls = calls_for(ha, empty_id)
+    check(len(empty_calls) == 1 and empty_calls[0]["from_time"] is not None and abs(empty_calls[0]["from_time"].timestamp() - event_time.timestamp()) < 1, "it is then refreshed from its last record")
+
+    # The refresh's own first read of a tracked entity caches an empty answer too
+    late_id = "binary_sensor.added_later"
+    ha_history.add_entity(late_id, 3)
+    ha.answers[late_id] = [[]]
+    ha.get_history_calls = []
+    run_async(refresh())
+    check(late_id in ha_history.history_checked and len(ha_history.history_data[late_id]) == 0, "an empty first read in the refresh is cached")
+
+    return failed
+
+
+def test_hahistory_refresh_window_quiet_store(my_predbat=None):
+    """A tracked store refreshes from its last record or its last check less the overlap, whichever is later"""
+    from ha import HISTORY_REFRESH_OVERLAP_SECONDS
+
+    print("\n=== Testing HAHistory refresh window for a quiet store ===")
+    failed = 0
+
+    def check(condition, message):
+        """Count and report one expectation"""
+        nonlocal failed
+        if condition:
+            print("✓ " + message)
+        else:
+            print("ERROR: " + message)
+            failed += 1
+
+    async def refresh():
+        """One 2-minute refresh"""
+        return await ha_history.run(seconds=120, first=False)
+
+    mock_base = MockBase()
+    ha_history = HAHistory(mock_base)
+    ha_history.initialize()
+    ha = ScriptedHAInterface()
+    mock_base.components.register_component("ha", ha)
+
+    # A quiet entity: its last change was three days ago, and the full read that loaded it worked
+    entity_id = "binary_sensor.saving_session"
+    now = datetime.now(pytz.UTC)
+    last_change = now - timedelta(days=3)
+    ha.answers[entity_id] = [[{"state": "off", "last_updated": last_change.isoformat(), "attributes": {}}]]
+    ha_history.get_history(entity_id, days=11)
+    checked_epoch = ha_history.history_checked.get(entity_id)
+    check(checked_epoch is not None and len(ha_history.history_data[entity_id]) == 1, "the full read is stored and records its check time")
+
+    # Home Assistant opens the window with the current state, stamped at the window start
+    def ha_window(from_time):
+        """The state in effect at from_time, stamped at from_time, as Home Assistant answers"""
+        return [[{"state": "off", "last_updated": from_time.isoformat(), "attributes": {}}]]
+
+    ha.answers[entity_id] = ha_window
+    ha.get_history_calls = []
+    run_async(refresh())
+    calls = ha.get_history_calls
+    check(len(calls) == 1 and abs(calls[0]["from_time"].timestamp() - (checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS)) < 1, "a quiet store reads from its last check less the overlap, not from its last change")
+    check(len(ha_history.history_data[entity_id]) == 1, "the record stamped at the window start is not stored again")
+    check(ha_history.history_checked[entity_id] > checked_epoch, "a refresh that worked moves the check time on")
+    run_async(refresh())
+    check(len(ha_history.history_data[entity_id]) == 1, "...on any later refresh either")
+
+    # A new record inside the window is stored, and then refreshes read from it
+    event_time = datetime.now(pytz.UTC) - timedelta(minutes=1)
+    ha.answers[entity_id] = lambda from_time: [[{"state": "off", "last_updated": from_time.isoformat(), "attributes": {}}, {"state": "on", "last_updated": event_time.isoformat(), "attributes": {}}]]
+    run_async(refresh())
+    records = ha_history.history_data[entity_id].to_records()
+    check([record["state"] for record in records] == ["off", "on"], "a new record in the window is stored, without the window-start record")
+    ha.answers[entity_id] = [[]]
+    ha.get_history_calls = []
+    run_async(refresh())
+    check(abs(ha.get_history_calls[0]["from_time"].timestamp() - event_time.timestamp()) < 1, "an active store reads from its last record, as before")
+
+    # A failed refresh leaves the check time where it was, so the next one covers the gap
+    ha_history.history_data[entity_id] = EntityHistory.from_records([{"state": "off", "last_updated": last_change.isoformat(), "attributes": {}}])
+    stale_epoch = now.timestamp() - 3600
+    ha_history.history_checked[entity_id] = stale_epoch
+    ha.answers[entity_id] = None
+    ha.get_history_calls = []
+    run_async(refresh())
+    run_async(refresh())
+    check(ha_history.history_checked[entity_id] == stale_epoch, "a failed refresh does not move the check time")
+    check(all(abs(call["from_time"].timestamp() - (stale_epoch - HISTORY_REFRESH_OVERLAP_SECONDS)) < 1 for call in ha.get_history_calls), "...so each retry reads from the same point")
+
+    # A store with no check time (filled before one was kept) refreshes from its last record, as before
+    del ha_history.history_checked[entity_id]
+    ha.answers[entity_id] = [[]]
+    ha.get_history_calls = []
+    run_async(refresh())
+    check(abs(ha.get_history_calls[0]["from_time"].timestamp() - last_change.timestamp()) < 1, "a store without a check time reads from its last record")
+    check(entity_id in ha_history.history_checked, "...and records one once that read works")
 
     return failed
 
@@ -996,10 +1313,13 @@ def run_hahistory_tests(my_predbat):
     failed += test_hahistory_get_history_fetch_and_cache(my_predbat)
     failed += test_hahistory_get_history_untracked(my_predbat)
     failed += test_hahistory_expand_from_7_to_30_days(my_predbat)
+    failed += test_hahistory_empty_vs_failed_reads(my_predbat)
+    failed += test_hahistory_refresh_window_quiet_store(my_predbat)
 
     # Data management tests
     failed += test_hahistory_update_entity_filter_attributes(my_predbat)
     failed += test_hahistory_update_entity_merge_new(my_predbat)
+    failed += test_hahistory_merge_drops_restamped_anchor(my_predbat)
     failed += test_hahistory_prune_history(my_predbat)
     failed += test_hahistory_prune_empty_history(my_predbat)
 

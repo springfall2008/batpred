@@ -27,7 +27,7 @@ Data endpoints used:
   GET  /openapi/instruction/{systemId}/settings          — current operating mode
 
 Control endpoints:
-  PUT  /openapi/instruction/settings                     — switch operating mode (MSC/FFG)
+  MQTT openapi/instruction/mode                          — switch operating mode (MSC/FFG)
   MQTT openapi/instruction/command                       — charge / discharge / idle (via MQTT broker)
 
 The MQTT broker hostname is derived from the REST base URL (same host, port 8883, TLS).
@@ -42,7 +42,7 @@ Registered in components.py under key 'sigenergy'.
 
 Example apps.yaml config:
 
-  sigenergy_system_id: 'XRTKQ1773829273'
+  sigenergy_system_id: 'TESTA1700000000'
   sigenergy_app_key: !secret sigenergy_app_key
   sigenergy_app_secret: !secret sigenergy_app_secret
   sigenergy_client_pem: !secret sigenergy_client_pem
@@ -61,9 +61,9 @@ import argparse
 import asyncio
 import base64
 import json
+import math
 import ssl
 import tempfile
-import time
 import traceback
 import os
 
@@ -81,9 +81,10 @@ except ImportError:
     aiomqtt = None
     HAS_AIOMQTT = False
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from axle import fetch_axle_active
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
+from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 
@@ -130,20 +131,29 @@ SIGENERGY_CODE_ACCOUNT_SYSTEM_ERROR = 1601
 SIGENERGY_CODE_ACCOUNT_ALREADY_REGISTERED = 1602
 SIGENERGY_CODE_ACCOUNT_UNREVIEWED = 1603
 SIGENERGY_CODE_DEVELOPER_NOT_APPROVED = 1604
+SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP = 13001  # Top-level "station info not found", seen for a mistyped system ID (#5691)
 SIGENERGY_TOKEN_EXPIRY_BUFFER = 600   # refresh token 10 min before expiry
 SIGENERGY_MIN_REQUEST_INTERVAL = 6.0  # enforce ≥10 req/min API limit
 SIGENERGY_POLL_INTERVAL = 300         # realtime data poll every 5 minutes
+SIGENERGY_MQTT_STALE_SECONDS = 300    # an MQTT period reading older than this on arrival is stale - poll REST instead
+# MQTT counts as keeping energy_flow live if a message arrived within this long. Wider than the poll
+# interval because the broker's ~5 min period cadence jitters to ~410s: a 300s window sent REST polls
+# on healthy feeds, and REST energyFlow is the weaker source (no third-party PV, for one).
+SIGENERGY_MQTT_FRESH_SECONDS = 450
 SIGENERGY_VPP_RECLAIM_INTERVAL = 60   # re-assert VPP ownership every minute (see _manage_vpp_registration)
 SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
 SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
 SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used to convert ratedEnergy (Ah) → kWh
 SIGENERGY_RATED_ENERGY_AH_THRESHOLD = 100.0  # a ratedEnergy above this is Ah (e.g. 314), below it kWh (e.g. 9.04) - see _get_battery_capacity_kwh
 SIGENERGY_MQTT_PORT = 8883             # TLS MQTT port on the Sigenergy broker
+SIGENERGY_MQTT_RESUBSCRIBE_DELAY = 5   # seconds between cancelling and re-requesting the change push (see _mqtt_listener_loop)
+SIGENERGY_MQTT_RESTORE_TIMEOUT = 10  # maximum additional wait for interrupted subscription setup
 
 # MQTT topic patterns — format with app_key and system_id
 SIGENERGY_MQTT_TOPIC_CHANGE = "openapi/change/{app_key}/{system_id}"    # system data (device state)
 SIGENERGY_MQTT_TOPIC_PERIOD = "openapi/period/{app_key}/{system_id}"    # telemetry data
 SIGENERGY_MQTT_TOPIC_ALARM = "openapi/alarm/{app_key}/{system_id}"      # alarm data
+SIGENERGY_MQTT_TOPIC_UNSUBSCRIBE_CHANGE = "openapi/unsubscription/change"  # cancel change push (see _mqtt_listener_loop)
 SIGENERGY_MQTT_TOPIC_COMMAND = "openapi/instruction/command"            # battery command publish
 SIGENERGY_MQTT_TOPIC_MODE = "openapi/instruction/mode"                  # V1 operating mode switch (MQTT)
 MQTT_RC_NO_MATCHING_SUBSCRIBERS = 0x10  # MQTT 5 PUBACK: accepted, but no client is subscribed so the message went nowhere
@@ -199,6 +209,21 @@ SIGENERGY_ACTIVE_MODE_SELF_GRID = "selfConsumption-grid"
 # Device type strings returned by the device-list endpoint
 SIGENERGY_DEVICE_INVERTER = "Inverter"
 SIGENERGY_DEVICE_AIO = "AIO"
+
+# The SIGCLOUD INVERTER_DEF row's behaviour, stated in every discovery record so the record alone rebuilds
+# the row (coordinator.inverter_definition()).
+SIGENERGY_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": False,
+    "can_span_midnight": True,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": False,
+}
+
+# The format the inverter_time sensor publishes ("2026-11-01T21:30:00+00:00"), reported in discovery records
+SIGENERGY_DISCOVERY_CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 SIGENERGY_DEVICE_BATTERY = "Battery"
 SIGENERGY_DEVICE_GATEWAY = "Gateway"
 SIGENERGY_DEVICE_METER = "Meter"
@@ -225,10 +250,20 @@ SIGENERGY_HISTORY_NODES = [
     ("FROM_EVDC", "ev_discharge_lifetime", "EV Discharge Lifetime"),
 ]
 
+# Lifetime kWh a PV source (FROM_SOLAR or FROM_THIRD_PARTY_INV) must have produced to count as
+# fitted. Keeps a few stray Wh of native PV on an AC-coupled install (seen: 0.08kWh) from reading
+# as DC strings.
+SIGENERGY_PV_PRESENT_KWH = 1.0
+
 # Storage cache keys for poll-interval system state persisted between restarts (see
 # load_cached_data()). System/device discovery is deliberately excluded — it is always
 # re-fetched fresh on startup.
-SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status", "grid_export"]
+SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status", "grid_export", "device_cutoffs"]
+SIGENERGY_CACHE_EXPIRY_DAYS = 1
+# Plant settings that only an openapi/change snapshot reports - kept for longer so a missed snapshot
+# doesn't silently drop the export limit and SoC cut-offs back to their defaults
+SIGENERGY_SETTINGS_CACHE_KEYS = ["grid_export", "device_cutoffs"]
+SIGENERGY_SETTINGS_CACHE_EXPIRY_DAYS = 28
 
 # Sentinel returned by _request() when the API responds with code=0 but an empty/null data field.
 # Distinguishes "success with no payload" from None which always means "request failed".
@@ -470,7 +505,7 @@ class SigenergyAPI(ComponentBase):
 
         # Token state
         self.access_token = None
-        self.token_expires_at = 0.0  # UNIX timestamp
+        self.token_expires_at = 0.0  # monotonic time (see monotonic()), not a UNIX timestamp
 
         # Data stores keyed by systemId
         self.systems = {}         # systemId → system info dict
@@ -490,6 +525,7 @@ class SigenergyAPI(ComponentBase):
         self._offboard_done = set()           # systemIds successfully offboarded this process
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
         self.grid_export = {}     # systemId → {"antiReflux": "on"/"off", "gridMaxBackfeedPowerW": W} from openapi/change, cached
+        self.device_cutoffs = {}  # systemId → {"backup": %, "discharge": %} from openapi/change, cached - the plant's own SoC floors
 
         # Age (datetime of last update) of each SIGENERGY_CACHE_KEYS category, used to avoid an
         # unnecessary API refresh on restart when the persisted cache is still fresh
@@ -514,6 +550,8 @@ class SigenergyAPI(ComponentBase):
         # Background MQTT listener task
         self._mqtt_task = None
         self.last_mqtt_update = {}  # UNIX timestamp of last MQTT message received, keyed by system_id
+        self.last_mqtt_mono = {}  # monotonic time of the same message, for the freshness window (a wall-clock step must not change it)
+        self.mqtt_data_lag = {}  # seconds between the last MQTT period reading (statisticsTime) and its arrival, keyed by system_id
         self._tls_context = None  # cached SSLContext built once on first use
 
         self.log("SigenergyAPI: Initialised, base_url={}".format(self.base_url))
@@ -538,7 +576,7 @@ class SigenergyAPI(ComponentBase):
         Returns:
             Access token string on success, None on failure.
         """
-        now = time.monotonic()
+        now = self.monotonic()
         if self.access_token and now < self.token_expires_at - SIGENERGY_TOKEN_EXPIRY_BUFFER:
             return self.access_token
 
@@ -552,12 +590,12 @@ class SigenergyAPI(ComponentBase):
         for attempt in range(SIGENERGY_MAX_RETRIES):
             try:
                 timeout = aiohttp.ClientTimeout(total=SIGENERGY_TIMEOUT)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.post(url, json=payload) as response:
                         if response.status != 200:
                             self.log("Warn: SigenergyAPI: Auth request returned HTTP {} (attempt {}/{})".format(response.status, attempt + 1, SIGENERGY_MAX_RETRIES))
                             if attempt < SIGENERGY_MAX_RETRIES - 1:
-                                await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                                await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
                                 continue
                             return None
                         try:
@@ -565,7 +603,7 @@ class SigenergyAPI(ComponentBase):
                         except Exception as e:
                             self.log("Warn: SigenergyAPI: Failed to decode auth response: {}".format(e))
                             if attempt < SIGENERGY_MAX_RETRIES - 1:
-                                await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                                await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
                                 continue
                             return None
 
@@ -592,11 +630,11 @@ class SigenergyAPI(ComponentBase):
             except asyncio.TimeoutError:
                 self.log("Warn: SigenergyAPI: Auth request timed out (attempt {}/{})".format(attempt + 1, SIGENERGY_MAX_RETRIES))
                 if attempt < SIGENERGY_MAX_RETRIES - 1:
-                    await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                    await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
             except Exception as e:
                 self.log("Warn: SigenergyAPI: Exception during authentication: {}".format(e))
                 if attempt < SIGENERGY_MAX_RETRIES - 1:
-                    await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                    await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
 
         self.access_token = None
         return None
@@ -607,11 +645,11 @@ class SigenergyAPI(ComponentBase):
 
     async def _enforce_rate_limit(self):
         """Sleep if necessary to respect the 10 req/min API limit."""
-        now = time.monotonic()
+        now = self.monotonic()
         elapsed = now - self._last_request_time
         if elapsed < SIGENERGY_MIN_REQUEST_INTERVAL:
-            await asyncio.sleep(SIGENERGY_MIN_REQUEST_INTERVAL - elapsed)
-        self._last_request_time = time.monotonic()
+            await self.sleep(SIGENERGY_MIN_REQUEST_INTERVAL - elapsed)
+        self._last_request_time = self.monotonic()
 
     async def _request(self, method, path, params=None, json_data=None, retries=SIGENERGY_MAX_RETRIES, log_response=True):
         """Perform an authenticated HTTP request with retry logic.
@@ -645,7 +683,7 @@ class SigenergyAPI(ComponentBase):
             await self._enforce_rate_limit()
             try:
                 timeout = aiohttp.ClientTimeout(total=SIGENERGY_TIMEOUT)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     if method == "GET":
                         ctx = session.get(url, headers=headers, params=params)
                     elif method == "POST":
@@ -676,7 +714,7 @@ class SigenergyAPI(ComponentBase):
                                 # so retrying only spends rate-limited calls on the same refusal
                                 return None
                             if attempt < retries - 1:
-                                await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                                await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
                                 continue
                             return None
 
@@ -699,7 +737,7 @@ class SigenergyAPI(ComponentBase):
                                 if attempt < retries - 1:
                                     wait = SIGENERGY_RATE_LIMIT_BACKOFF[min(attempt, len(SIGENERGY_RATE_LIMIT_BACKOFF) - 1)]
                                     self.log("Warn: SigenergyAPI: Rate limited (1201) — waiting {}s before retry (attempt {}/{})".format(wait, attempt + 1, retries))
-                                    await asyncio.sleep(wait)
+                                    await self.sleep(wait)
                                     continue
                                 self.log("Warn: SigenergyAPI: Rate limited (1201) — giving up after {} attempts".format(retries))
                             return None
@@ -729,12 +767,12 @@ class SigenergyAPI(ComponentBase):
                 self.log("Warn: SigenergyAPI: Timeout on {} {} (attempt {}/{})".format(method, path, attempt + 1, retries))
                 record_api_call("sigenergy", False, "connection_error")
                 if attempt < retries - 1:
-                    await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                    await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
             except Exception as e:
                 self.log("Warn: SigenergyAPI: Exception on {} {}: {}\n{}".format(method, path, e, traceback.format_exc()))
                 record_api_call("sigenergy", False, "connection_error")
                 if attempt < retries - 1:
-                    await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                    await self.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
 
         return None
 
@@ -1030,17 +1068,73 @@ class SigenergyAPI(ComponentBase):
         battery_kw = -_safe_float(data.get("batteryPower", 0))
         pv_kw = _safe_float(data.get("pvPower", 0))
         grid_kw = _safe_float(data.get("gridPower", 0))
+        load_kw = _safe_float(data.get("loadPower", 0))
+        ev_kw = _safe_float(data.get("evPower", 0))
+        # energyFlow's pvPower (and acPower) leave out a third-party PV inverter's output, although
+        # loadPower and gridPower include it: an AC-coupled site exporting 8.3kW reported pvPower 0,
+        # acPower 0, load 0.74kW, battery charging 0.2kW, while MQTT "PV power" read 9.4kW. Recover
+        # the missing PV from the energy balance, but only where the system has third-party PV, so
+        # a hybrid's PV is never inflated by measurement noise.
+        #
+        # loadPower excludes the DC EV charger, which is its own branch: a site importing 9.22kW at
+        # night with the battery idle reported load 0.42kW and evPower 8.8kW. heatPumpPower is left
+        # out because no live sample has shown whether loadPower covers it, and adding a term
+        # loadPower already holds would over-report PV, where leaving one out can only under-report.
+        if self._has_third_party_pv(system_id):
+            pv_kw = max(pv_kw, load_kw + ev_kw - battery_kw + grid_kw)
         self.energy_flow[system_id] = {
             "batterySoc": soc,
             "batteryPower": battery_kw,
             "pvPower": pv_kw,
             "gridPower": grid_kw,
-            "loadPower": _safe_float(data.get("loadPower", 0)),
-            "evPower": _safe_float(data.get("evPower", 0)),
+            "loadPower": load_kw,
+            "evPower": ev_kw,
         }
         self.log("SigenergyAPI: System {} — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW grid {:.2f}kW".format(system_id, soc, battery_kw, pv_kw, grid_kw))
         self._grid_load_unknown_warned.discard(system_id)  # measured again - warn afresh if it is lost later
         return True
+
+    def _has_third_party_pv(self, system_id):
+        """True when the system's lifetime totals show PV from a third-party (AC-coupled) inverter."""
+        return self.history_totals.get(system_id, {}).get("FROM_THIRD_PARTY_INV", 0.0) >= SIGENERGY_PV_PRESENT_KWH
+
+    def detect_ac_coupled(self, system_id):
+        """Return True (AC-coupled), False (hybrid) or None (undecided) for one system.
+
+        Read from the lifetime totals: native PV (FROM_SOLAR) means DC strings on the Sigenergy
+        inverter, so it is a hybrid even if a third-party inverter is fitted as well; only
+        third-party PV with no native PV is AC-coupled. No totals, or no PV yet, is undecided.
+        """
+        totals = self.history_totals.get(system_id)
+        if not totals:
+            return None
+        if totals.get("FROM_SOLAR", 0.0) >= SIGENERGY_PV_PRESENT_KWH:
+            return False
+        if self._has_third_party_pv(system_id):
+            return True
+        return None
+
+    async def apply_hybrid_verdict(self):
+        """Move switch.predbat_inverter_hybrid only on positive evidence of AC coupling.
+
+        inverter_hybrid is one of Predbat's OWN CONFIG_ITEMS switches rather than an apps.yaml
+        arg, so it is written with set_state_external. Predbat defaults it on, which suits the
+        DC-coupled SigenStor, and the errors are not symmetric: off on a real hybrid lets PV and
+        battery charge plan past inverter_limit, on for an AC-coupled site merely skips the
+        PV->battery conversion loss. So the switch only moves off, and only when every system
+        is AC-coupled.
+        """
+        system_ids = list(self.systems.keys())
+        if not system_ids:
+            return
+        verdicts = [self.detect_ac_coupled(sid) for sid in system_ids]
+        entity = "switch.{}_inverter_hybrid".format(self.prefix)
+        if all(verdict is True for verdict in verdicts):
+            self.log("Info: SigenergyAPI: detected AC coupling (third-party PV inverter, no native PV) for system(s) {}; setting {} off".format(", ".join(system_ids), entity))
+            await self.set_state_external(entity, False)
+            return
+        if any(verdict is None for verdict in verdicts):
+            self.log("Info: SigenergyAPI: could not determine hybrid versus AC coupling for system(s) {} yet; leaving {} at its current value".format(", ".join(system_ids), entity))
 
     async def fetch_daily_summary(self, system_id):
         """Fetch daily/lifetime generation summary for a system.
@@ -1130,22 +1224,22 @@ class SigenergyAPI(ComponentBase):
     # Control commands
     # -----------------------------------------------------------------------
 
+    @writes
     async def set_operating_mode(self, system_id, mode_int):
-        """Set the energy storage operating mode via both the MQTT (V1) and the REST endpoint.
+        """Set the energy storage operating mode via MQTT (V1 endpoint).
 
         Publishes to openapi/instruction/mode with the mode name string from
-        SIGENERGY_MODE_API_NAMES, then sends PUT /openapi/instruction/settings with the
-        integer mode. The MQTT publish is fire-and-forget (a broker ack only), so on a
-        system that ignores it - observed holding VPP for days in read-only - it fails
-        silently; the REST call returns Sigenergy's verdict. Both are sent and logged
-        separately to learn which one the device honours.
+        SIGENERGY_MODE_API_NAMES rather than the integer used by the REST endpoint.
+        MQTT only: PUT /openapi/instruction/settings was also sent for a while (#5692) but
+        did not change a system that ignored the MQTT switch, and every REST call counts
+        against the app key's rate limit, which all systems share.
 
         Args:
             system_id: Sigenergy system unique identifier.
             mode_int: Operating mode integer (SIGENERGY_MODE_MSC/FFG/VPP).
 
         Returns:
-            True if either switch was accepted, False if neither was.
+            True on success, False on failure.
         """
         mode_name = SIGENERGY_MODE_API_NAMES.get(mode_int)
         if mode_name is None:
@@ -1160,27 +1254,14 @@ class SigenergyAPI(ComponentBase):
             "systemId": system_id,
             "mode": mode_name,
         }
-        mqtt_ok = await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_MODE, payload)
-        if mqtt_ok:
-            self.log("SigenergyAPI: MQTT operating mode {} ({}) published for system {}".format(mode_name, mode_int, system_id))
-        else:
-            self.log("Warn: SigenergyAPI: MQTT operating mode {} ({}) publish failed for system {}".format(mode_name, mode_int, system_id))
-
-        # One attempt only: this runs every poll while the mode is wrong, so a rate-limit
-        # backoff here would stall the loop. _request logs the HTTP status or code/msg on refusal.
-        rest_result = await self._request("PUT", "/openapi/instruction/settings", json_data={"systemId": system_id, "energyStorageOperationMode": mode_int}, retries=1)
-        rest_ok = rest_result is not None
-        if rest_ok:
-            self.log("SigenergyAPI: REST operating mode {} ({}) accepted for system {}".format(mode_name, mode_int, system_id))
-        else:
-            self.log("Warn: SigenergyAPI: REST operating mode {} ({}) refused for system {}".format(mode_name, mode_int, system_id))
-
-        if not (mqtt_ok or rest_ok):
+        ok = await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_MODE, payload)
+        if not ok:
             self.log("Warn: SigenergyAPI: Failed to set operating mode {} ({}) for system {}".format(mode_name, mode_int, system_id))
             return False
         self.log("SigenergyAPI: Operating mode set to {} ({}) for system {}".format(mode_name, mode_int, system_id))
         return True
 
+    @writes
     async def onboard_systems(self, system_ids):
         """Onboard one or more systems into the Sigenergy platform.
 
@@ -1226,6 +1307,11 @@ class SigenergyAPI(ComponentBase):
                 self.onboard_status[str(sid)] = "firmware_no_vpp"
             self.log("Warn: SigenergyAPI: Onboard failed — system {} firmware does not support VPP (code={})".format(system_ids, code))
             return False
+        if code in (SIGENERGY_CODE_STATION_NOT_FOUND, SIGENERGY_CODE_STATION_INFO_NOT_FOUND, SIGENERGY_CODE_STATION_INFO_NOT_FOUND_TOP):
+            for sid in system_ids:
+                self.onboard_status[str(sid)] = "invalid_system_id"
+            self.log("Warn: SigenergyAPI: System ID {} not recognised by Sigenergy, check the ID and region (code={})".format(system_ids, code))
+            return False
         if code in (SIGENERGY_CODE_NO_PERMISSION_STATION, SIGENERGY_CODE_STATION_NOT_PERMITTED):
             for sid in system_ids:
                 self.onboard_status[str(sid)] = "no_permission"
@@ -1238,6 +1324,7 @@ class SigenergyAPI(ComponentBase):
         self.log("SigenergyAPI: Onboard accepted for {}: {}".format(system_ids, result))
         return True
 
+    @writes
     async def offboard_systems(self, system_ids):
         """Offboard (remove) one or more systems from the Sigenergy platform.
 
@@ -1315,6 +1402,7 @@ class SigenergyAPI(ComponentBase):
             return [SigenergyAPI.redact(value) for value in payload]
         return payload
 
+    @writes
     async def _publish_mqtt(self, topic, payload_dict):
         """Publish a JSON payload to the Sigenergy MQTT broker.
 
@@ -1333,7 +1421,7 @@ class SigenergyAPI(ComponentBase):
         """
         try:
             tls_context = self._build_tls_context()
-            async with aiomqtt.Client(
+            async with self.mqtt_client(
                 hostname=self.mqtt_host,
                 port=self.mqtt_port,
                 username=self.app_key,
@@ -1348,6 +1436,7 @@ class SigenergyAPI(ComponentBase):
             self.log("Warn: SigenergyAPI: MQTT publish to {} failed: {}".format(topic, e))
             return False
 
+    @writes
     async def send_battery_command(
         self,
         system_id,
@@ -1396,10 +1485,12 @@ class SigenergyAPI(ComponentBase):
         """
         # De-duplication: skip if identical command sent within the last 5 minutes
         command_hash = hash((active_mode, charging_power_kw, pv_power_kw, max_sell_power_kw, max_purchase_power_kw, charge_priority_type, discharge_priority_type))
-        last_hash, last_start_time = self._last_battery_command.get(system_id, (None, 0))
-        now_ts = int(time.time())
-        if last_hash == command_hash and (now_ts - last_start_time) < 300:
-            self.log("SigenergyAPI: Skipping duplicate battery command {} for system {} ({:.1f} min ago)".format(active_mode, system_id, (now_ts - last_start_time) / 60))
+        # The window is measured on the monotonic clock so a wall-clock step cannot stretch or shorten it
+        last_hash, last_sent = self._last_battery_command.get(system_id, (None, 0))
+        now_mono = self.monotonic()
+        now_ts = int(self.wall_time())  # wall time, because it goes in the command as its start time
+        if last_hash == command_hash and (now_mono - last_sent) < 300:
+            self.log("SigenergyAPI: Skipping duplicate battery command {} for system {} ({:.1f} min ago)".format(active_mode, system_id, (now_mono - last_sent) / 60))
             return True
 
         token = await self.get_access_token()
@@ -1426,7 +1517,7 @@ class SigenergyAPI(ComponentBase):
 
         ok = await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_COMMAND, payload)
         if ok:
-            self._last_battery_command[system_id] = (command_hash, now_ts)
+            self._last_battery_command[system_id] = (command_hash, now_mono)
         return ok
 
     @staticmethod
@@ -1465,6 +1556,7 @@ class SigenergyAPI(ComponentBase):
             command["dischargePriorityType"] = discharge_priority_type
         return command
 
+    @writes
     async def mqtt_command_probe(self, system_ids, active_mode=SIGENERGY_ACTIVE_MODE_SELF, duration_minutes=5, charging_power_kw=None, listen_seconds=60, try_v5=True):
         """Check end to end that the MQTT broker still accepts battery commands and pushes data.
 
@@ -1505,7 +1597,7 @@ class SigenergyAPI(ComponentBase):
         for protocol in protocols:
             report["protocol"] = protocol.name
             try:
-                async with aiomqtt.Client(
+                async with self.mqtt_client(
                     hostname=self.mqtt_host,
                     port=self.mqtt_port,
                     username=self.app_key,
@@ -1547,7 +1639,7 @@ class SigenergyAPI(ComponentBase):
                     for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
                         await _publish(sub_topic, {"accessToken": token, "systemIdList": list(system_ids)})
 
-                    now_ts = int(time.time())
+                    now_ts = int(self.wall_time())
                     for sid in system_ids:
                         command = self._build_battery_command(sid, active_mode, duration_minutes, now_ts, charging_power_kw=charging_power_kw)
                         self.log("SigenergyAPI: Probe sending command {}".format(command))
@@ -1635,7 +1727,7 @@ class SigenergyAPI(ComponentBase):
             report["protocol"] = protocol.name
             pending = None
             try:
-                client = aiomqtt.Client(
+                client = self.mqtt_client(
                     hostname=self.mqtt_host,
                     port=self.mqtt_port,
                     username=self.app_key,
@@ -1761,15 +1853,26 @@ class SigenergyAPI(ComponentBase):
                 return device["status"]
         return "Unknown"
 
-    def _get_battery_max_power_kw(self, system_id):
-        """Return the combined rated charge/discharge power in kW for a system."""
-        # Prefer device-level ratedChargePower
+    def _get_battery_max_power_kw(self, system_id, direction=None):
+        """Return the combined rated battery power in kW for a system, capped at the inverter rating.
+
+        direction "charge" sums the modules' ratedChargePower and "discharge" their ratedDischargePower,
+        which can be higher (a Sigenergy 8 kWh module is rated 4.2 kW charge, 4.8 kW discharge). A module
+        reporting no discharge rating falls back to its charge rating. With no direction, the larger of the
+        two is returned - the battery_rate_max that bounds both.
+        """
+        if direction is None:
+            return max(self._get_battery_max_power_kw(system_id, "charge"), self._get_battery_max_power_kw(system_id, "discharge"))
         power = 0.0
         inverter_power = self._get_inverter_max_power_kw(system_id)
         for device in self.devices.get(system_id, []):
             if device.get("deviceType") == SIGENERGY_DEVICE_BATTERY:
                 attr = device.get("attrMap", {})
-                power += _safe_float(attr.get("ratedChargePower", 0))
+                charge_kw = _safe_float(attr.get("ratedChargePower", 0))
+                if direction == "discharge":
+                    power += _safe_float(attr.get("ratedDischargePower", 0)) or charge_kw
+                else:
+                    power += charge_kw
 
         # Fallback: inverter rated power
         # Also cap battery power at inverter power
@@ -1926,10 +2029,11 @@ class SigenergyAPI(ComponentBase):
         changes (e.g. via the Sigenergy app or a remote API command), which can
         be days apart - hence grid_export is cached across restarts.
 
-        Per the user's clarification:
-          backupCutOffSOC%   → reserve (backup/emergency minimum)
-          chargeCutOffSOC%   → charge target_soc
-          dischargeCutOffSOC% → export target_soc (minimum discharge floor)
+        The SoC cut-offs are the plant's own settings, read-only to Predbat, kept in
+        ``self.device_cutoffs[system_id]`` (cached, as with grid_export):
+          backupCutOffSOC%    → battery_min_soc (the hard floor, via the battery_reserve_min sensor)
+          dischargeCutOffSOC% → reserve (the floor for discharging to the grid)
+          chargeCutOffSOC%    → charge target_soc
           antiReflux + gridMaxBackfeedPowerW → export limit (see _get_export_limit_w)
 
         Example message, from a plant with a 3.68 kW G98 export cap on a 12 kW inverter:
@@ -1958,21 +2062,21 @@ class SigenergyAPI(ComponentBase):
         if system_id not in self.controls:
             self.controls[system_id] = {}
 
-        reserve = _safe_float(value_dict.get("backupCutOffSOC%", None), None)
-        if reserve is not None:
-            self.controls[system_id]["reserve"] = reserve
+        # Merged field by field - a message may carry only the cut-off that changed
+        backup_cutoff = _safe_float(value_dict.get("backupCutOffSOC%", None), None)
+        if backup_cutoff is not None:
+            self.device_cutoffs.setdefault(system_id, {})["backup"] = backup_cutoff
+
+        discharge_cutoff = _safe_float(value_dict.get("dischargeCutOffSOC%", None), None)
+        if discharge_cutoff is not None:
+            self.device_cutoffs.setdefault(system_id, {})["discharge"] = discharge_cutoff
+            self.controls[system_id]["reserve"] = discharge_cutoff
 
         charge_target = _safe_float(value_dict.get("chargeCutOffSOC%", None), None)
         if charge_target is not None:
             if "charge" not in self.controls[system_id]:
                 self.controls[system_id]["charge"] = {}
             self.controls[system_id]["charge"]["target_soc"] = charge_target
-
-        export_target = _safe_float(value_dict.get("dischargeCutOffSOC%", None), None)
-        if export_target is not None:
-            if "export" not in self.controls[system_id]:
-                self.controls[system_id]["export"] = {}
-            self.controls[system_id]["export"]["target_soc"] = export_target
 
         # Update system capacity / power limits
         if system_id not in self.systems:
@@ -2001,8 +2105,8 @@ class SigenergyAPI(ComponentBase):
             self.grid_export.setdefault(system_id, {})["gridMaxBackfeedPowerW"] = backfeed_w
 
         self.log(
-            "SigenergyAPI: MQTT change {}: reserve={}% charge_target={}% export_target={}%".format(
-                system_id, reserve, charge_target, export_target
+            "SigenergyAPI: MQTT change {}: backup_cutoff={}% discharge_cutoff={}% charge_target={}%".format(
+                system_id, backup_cutoff, discharge_cutoff, charge_target
             )
         )
 
@@ -2014,6 +2118,41 @@ class SigenergyAPI(ComponentBase):
             payload_list: Parsed payload list from the MQTT message.
         """
         self.log("Warn: SigenergyAPI: MQTT alarm for system {}: {}".format(system_id, payload_list))
+
+    async def _restore_change_subscription(self, client, payload, cancelled_at):
+        """Best-effort bounded recovery of this connection's cancelled change push before disconnecting."""
+        async def restore():
+            """Keep the broker's resubscribe pause, then restore with the original connection and payload."""
+            remaining = max(0, cancelled_at + SIGENERGY_MQTT_RESUBSCRIBE_DELAY - self.monotonic())
+            if remaining:
+                await self.sleep(remaining)
+            await client.publish("openapi/subscription/change", payload=payload, qos=1)
+
+        try:
+            await asyncio.wait_for(restore(), timeout=SIGENERGY_MQTT_RESUBSCRIBE_DELAY + SIGENERGY_MQTT_RESTORE_TIMEOUT)
+        except asyncio.CancelledError:
+            self.log("Warn: SigenergyAPI: Change subscription restoration cancelled")
+            raise
+        except Exception as error:
+            # Exception text can contain credentials or payloads; only its class is diagnostic.
+            self.log("Warn: SigenergyAPI: Change subscription restoration failed ({})".format(type(error).__name__))
+
+    async def _request_mqtt_subscriptions(self, client, payload):
+        """Reset subscriptions without leaving the shared change push cancelled if setup is interrupted."""
+        change_pending = True
+        cancelled_at = None
+        try:
+            # The request may have reached the broker even when publishing raises or is cancelled.
+            await client.publish(SIGENERGY_MQTT_TOPIC_UNSUBSCRIBE_CHANGE, payload=payload, qos=1)
+            cancelled_at = self.monotonic()
+            await self.sleep(SIGENERGY_MQTT_RESUBSCRIBE_DELAY)
+            for topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
+                await client.publish(topic, payload=payload, qos=1)
+                if topic == "openapi/subscription/change":
+                    change_pending = False
+        finally:
+            if change_pending:
+                await self._restore_change_subscription(client, payload, self.monotonic() if cancelled_at is None else cancelled_at)
 
     async def _mqtt_listener_loop(self):
         """Persistent MQTT listener coroutine.
@@ -2046,7 +2185,7 @@ class SigenergyAPI(ComponentBase):
                 token = await self.get_access_token()
                 if not token:
                     self.log("Warn: SigenergyAPI: MQTT token refresh failed; retrying in {}s".format(reconnect_delay))
-                    await asyncio.sleep(reconnect_delay)
+                    await self.sleep(reconnect_delay)
                     continue
 
                 # Refresh system list for subscription if not yet known
@@ -2064,7 +2203,7 @@ class SigenergyAPI(ComponentBase):
                     topics.append(SIGENERGY_MQTT_TOPIC_ALARM.format(app_key=self.app_key, system_id=sid))
 
                 tls_context = self._build_tls_context()
-                async with aiomqtt.Client(
+                async with self.mqtt_client(
                     hostname=self.mqtt_host,
                     port=SIGENERGY_MQTT_PORT,
                     username=self.app_key,
@@ -2077,8 +2216,12 @@ class SigenergyAPI(ComponentBase):
                         await client.subscribe(topic)
 
                     sub_payload = json.dumps({"accessToken": token, "systemIdList": system_id_list})
-                    for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
-                        await client.publish(sub_topic, payload=sub_payload, qos=1)
+                    # Sigenergy only sends the full openapi/change snapshot (export limit, SoC cut-offs) when it registers
+                    # a new change subscription - re-subscribing after a restart gets nothing. Cancelling it first makes
+                    # every connect a new registration, so the snapshot comes straight back. The two go on different
+                    # topics, so their order isn't guaranteed - sent back to back, the cancel can land second and leave
+                    # the system with no change subscription at all (seen on 2 of 29 live plants), hence the pause.
+                    await self._request_mqtt_subscriptions(client, sub_payload)
                     self.log("SigenergyAPI: MQTT subscriptions published for {} system(s)".format(len(system_id_list)))
 
                     async for message in client.messages:
@@ -2114,10 +2257,26 @@ class SigenergyAPI(ComponentBase):
                                 # self.systems, but ignore anything outside that list in case
                                 # a stray message arrives (e.g. system list changed mid-connection).
                                 continue
-                            self.last_mqtt_update[entry_sid] = time.time()
+                            self.last_mqtt_update[entry_sid] = self.wall_time()
+                            self.last_mqtt_mono[entry_sid] = self.monotonic()
                             value_dict = entry.get("value", {})
                             self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(safe_topic, entry_sid, msg_type, value_dict))
                             if msg_type == "period":
+                                # statisticsTime is when the reading was taken. The broker can fall far behind
+                                # (2h on 2026-10-25) while still delivering on time, so arrival alone says nothing
+                                # A message without it cannot be judged, so it is taken as current, as before
+                                statistics_time = _safe_float(entry.get("statisticsTime", 0))
+                                lag = self.last_mqtt_update[entry_sid] - statistics_time if statistics_time > 0 else 0
+                                self.mqtt_data_lag[entry_sid] = lag
+                                if lag > SIGENERGY_MQTT_STALE_SECONDS:
+                                    # Keep the fields for later delta messages, but leave energy_flow to the REST poll
+                                    self.mqtt_period_raw.setdefault(entry_sid, {}).update(value_dict)
+                                    self.log(
+                                        "Warn: SigenergyAPI: MQTT period data for {} is {:.0f} minutes old (reading taken {}), ignoring it and using REST energyFlow instead".format(
+                                            entry_sid, lag / 60, datetime.fromtimestamp(statistics_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                                        )
+                                    )
+                                    continue
                                 self._handle_mqtt_period(entry_sid, value_dict)
                                 if self.api_started:
                                     await self.publish_system_entities(entry_sid)
@@ -2131,17 +2290,17 @@ class SigenergyAPI(ComponentBase):
 
                 # Broker closed connection cleanly
                 self.log("Warn: SigenergyAPI: MQTT connection closed by broker — reconnecting in {}s".format(reconnect_delay))
-                await asyncio.sleep(reconnect_delay)
+                await self.sleep(reconnect_delay)
 
             except aiomqtt.MqttError as e:
                 self.log("Warn: SigenergyAPI: MQTT error: {} — reconnecting in {}s".format(e, reconnect_delay))
-                await asyncio.sleep(reconnect_delay)
+                await self.sleep(reconnect_delay)
             except asyncio.CancelledError:
                 self.log("SigenergyAPI: MQTT listener cancelled")
                 return
             except Exception as e:
                 self.log("Warn: SigenergyAPI: MQTT unexpected error ({}): {} — reconnecting in {}s".format(type(e).__name__, e, reconnect_delay))
-                await asyncio.sleep(reconnect_delay)
+                await self.sleep(reconnect_delay)
 
         self.log("SigenergyAPI: MQTT listener stopped")
 
@@ -2176,6 +2335,8 @@ class SigenergyAPI(ComponentBase):
         capacity_kwh = self._get_battery_capacity_kwh(system_id)
         battery_soc_kwh = round(battery_soc_pct * capacity_kwh / 100.0, 3)
         battery_max_kw = self._get_battery_max_power_kw(system_id)
+        battery_charge_max_kw = self._get_battery_max_power_kw(system_id, "charge")
+        battery_discharge_max_kw = self._get_battery_max_power_kw(system_id, "discharge")
         inverter_max_kw = self._get_inverter_max_power_kw(system_id)
 
         # --- Battery SOC (kWh) ---
@@ -2322,6 +2483,26 @@ class SigenergyAPI(ComponentBase):
             },
             app="sigenergy",
         )
+        self.dashboard_item(
+            "sensor.{}_sigenergy_{}_battery_charge_rate_max".format(self.prefix, slug),
+            state=round(battery_charge_max_kw * 1000),
+            attributes={
+                "friendly_name": "Sigenergy {} Battery Max Charge Power".format(system_name),
+                "unit_of_measurement": "W",
+                "device_class": "power",
+            },
+            app="sigenergy",
+        )
+        self.dashboard_item(
+            "sensor.{}_sigenergy_{}_battery_discharge_rate_max".format(self.prefix, slug),
+            state=round(battery_discharge_max_kw * 1000),
+            attributes={
+                "friendly_name": "Sigenergy {} Battery Max Discharge Power".format(system_name),
+                "unit_of_measurement": "W",
+                "device_class": "power",
+            },
+            app="sigenergy",
+        )
 
         # --- Inverter limit (W) ---
         self.dashboard_item(
@@ -2346,6 +2527,20 @@ class SigenergyAPI(ComponentBase):
             },
             app="sigenergy",
         )
+
+        # --- Battery reserve min (%) ---
+        # Only published once the plant has reported its backup cut-off: until then the entity is absent and
+        # battery_min_soc falls back to Predbat's own default rather than a guess
+        if "backup" in self.device_cutoffs.get(system_id, {}):
+            self.dashboard_item(
+                "sensor.{}_sigenergy_{}_battery_reserve_min".format(self.prefix, slug),
+                state=round(self.device_cutoffs[system_id]["backup"]),
+                attributes={
+                    "friendly_name": "Sigenergy {} Battery Reserve Min".format(system_name),
+                    "unit_of_measurement": "%",
+                },
+                app="sigenergy",
+            )
 
         # --- Operational mode (string) ---
         # flow_status (from MQTT) is preferred as it's the freshest, but fall back to the
@@ -2415,6 +2610,121 @@ class SigenergyAPI(ComponentBase):
     # Automatic configuration
     # -----------------------------------------------------------------------
 
+    def _discovery_entities(self, system_id):
+        """Every setting automatic_config() binds for one system, as discovery entity descriptors.
+
+        Entity ids use _system_slug() and the same format strings automatic_config() uses, so the two
+        cannot drift; tests/test_sigenergy.py checks they agree both ways. reserve is read-only: SIGCLOUD
+        has no reserve control, and the component overwrites the entity from the discharge cut-off.
+        inverter_time carries the ISO format the sensor really publishes. pv_today is this system's own
+        native PV lifetime; automatic_config() also binds its third-party PV lifetime into the same summed
+        list, which the record's third_party_gen flag stands for.
+        """
+        stem = "{}_sigenergy_{}".format(self.prefix, self._system_slug(system_id))
+
+        def sensor(leaf, unit=None, **fields):
+            """A read-only binding to one of the system's published sensors."""
+            descriptor = {"entity_id": "sensor.{}_{}".format(stem, leaf), "access": "r", **fields}
+            if unit:
+                descriptor["unit"] = unit
+            return descriptor
+
+        def control(domain, leaf, access="rw", **fields):
+            """A binding to one of the control entities Predbat writes."""
+            return {"entity_id": "{}.{}_{}".format(domain, stem, leaf), "access": access, "domain": domain, **fields}
+
+        return {
+            "soc_kw": sensor("battery_soc", "kWh"),
+            "soc_max": sensor("battery_capacity", "kWh"),
+            "battery_power": sensor("battery_power", "W"),
+            "battery_rate_max": sensor("battery_rate_max", "W"),
+            "inverter_limit_charge": sensor("battery_charge_rate_max", "W"),
+            "inverter_limit_discharge": sensor("battery_discharge_rate_max", "W"),
+            "inverter_limit": sensor("inverter_limit", "W"),
+            "export_limit": sensor("export_limit", "W"),
+            "battery_min_soc": sensor("battery_reserve_min", "%"),
+            "pv_power": sensor("pv_power", "W"),
+            "grid_power": sensor("grid_power", "W"),
+            "load_power": sensor("load_power", "W"),
+            "pv_today": sensor("pv_lifetime", "kWh"),
+            "load_today": sensor("load_lifetime", "kWh"),
+            "import_today": sensor("grid_import_lifetime", "kWh"),
+            "export_today": sensor("grid_export_lifetime", "kWh"),
+            "inverter_time": sensor("time", format=SIGENERGY_DISCOVERY_CLOCK_FORMAT),
+            "charge_start_time": control("select", "charge_start_time", format="HH:MM:SS"),
+            "charge_end_time": control("select", "charge_end_time", format="HH:MM:SS"),
+            "charge_limit": control("number", "charge_target_soc", unit="%"),
+            "scheduled_charge_enable": control("switch", "charge_enable"),
+            "charge_rate": control("number", "charge_rate", unit="W"),
+            "discharge_start_time": control("select", "export_start_time", format="HH:MM:SS"),
+            "discharge_end_time": control("select", "export_end_time", format="HH:MM:SS"),
+            "discharge_target_soc": control("number", "export_target_soc", unit="%"),
+            "scheduled_discharge_enable": control("switch", "export_enable"),
+            "discharge_rate": control("number", "export_rate", unit="W"),
+            "reserve": control("number", "reserve", access="r", unit="%"),
+        }
+
+    def _discovery_ratings(self, system_id):
+        """The figures the system reports, under Predbat's setting names (spec D14).
+
+        soc_max is the system's own batteryCapacity, never the module sum that may be converted from Ah.
+        battery_rate_max is left out: _get_battery_max_power_kw() caps it at the inverter rating, so it is
+        derived. export_limit is given only when the plant has reported one (not the 99999 sentinel).
+        """
+        ratings = {}
+        inverter_kw = self._get_inverter_max_power_kw(system_id)
+        if inverter_kw > 0:
+            ratings["inverter_limit"] = round(inverter_kw * 1000, 1)
+        capacity = _safe_float(self.systems.get(system_id, {}).get("batteryCapacity", 0))
+        if capacity > 0:
+            ratings["soc_max"] = capacity
+        export_limit = self._get_export_limit_w(system_id)
+        if export_limit != 99999:
+            ratings["export_limit"] = export_limit
+        backup = self.device_cutoffs.get(system_id, {}).get("backup")
+        if backup is not None:
+            ratings["battery_min_soc"] = _safe_float(backup)
+        return ratings
+
+    def build_discovery(self):
+        """
+        Describe the Sigenergy systems for the discovery catalogue.
+
+        One record per system, in automatic_config()'s order, keyed by the system's first inverter (or
+        AIO) serial with every inverter's serial in serials when there is more than one. The system id is
+        not secret, so it is reported in hardware_ids beside the serial and stays readable, as do the
+        entity ids built from it. A system detect_ac_coupled() has found to be AC coupled - third-party PV,
+        no native PV - is battery only; otherwise it is a hybrid with solar and battery.
+
+        Never reported: the system name and the API credentials.
+
+        Returns None when no system has been discovered.
+        """
+        if not self.systems:
+            return None
+        inverters = []
+        for system_id in self.systems:
+            serials = [str(device["serialNumber"]) for device in self.devices.get(system_id, []) if device.get("deviceType") in (SIGENERGY_DEVICE_INVERTER, SIGENERGY_DEVICE_AIO) and device.get("serialNumber")]
+            hardware_ids = {"system_id": str(system_id)}
+            if serials:
+                hardware_ids = {"serial": serials[0], "system_id": str(system_id)}
+            inverters.append(
+                inverter_record(
+                    "sigenergy:{}".format(serials[0]) if serials else "sigenergy:system:{}".format(system_id),
+                    inverter_type="SIGCLOUD",
+                    composition="direct",
+                    serials=serials if len(serials) > 1 else None,
+                    functions=["battery"] if self.detect_ac_coupled(system_id) is True else ["solar", "battery"],
+                    capabilities=dict(SIGENERGY_CAPABILITIES),
+                    flags=["third_party_gen"],
+                    hardware_ids=hardware_ids,
+                    info={"vendor": "Sigenergy"},
+                    ratings=self._discovery_ratings(system_id),
+                    entities=self._discovery_entities(system_id),
+                )
+            )
+        return {"automatic": self.automatic, "inverters": inverters}
+
     async def automatic_config(self):
         """Wire Predbat config args to the published Sigenergy entity IDs.
 
@@ -2438,9 +2748,19 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("soc_max", ["sensor.{}_sigenergy_{}_battery_capacity".format(self.prefix, s) for s in slugs])
         self.set_arg("battery_power", ["sensor.{}_sigenergy_{}_battery_power".format(self.prefix, s) for s in slugs])
         self.set_arg("battery_rate_max", ["sensor.{}_sigenergy_{}_battery_rate_max".format(self.prefix, s) for s in slugs])
+        # The modules are rated separately to charge and discharge, and discharge can be the higher, so
+        # battery_rate_max is the larger and each direction's rating goes to inverter_limit_charge/_discharge.
+        # overwrite=False so a limit stated in apps.yaml still wins.
+        self.set_arg_auto("inverter_limit_charge", ["sensor.{}_sigenergy_{}_battery_charge_rate_max".format(self.prefix, s) for s in slugs], overwrite=False)
+        self.set_arg_auto("inverter_limit_discharge", ["sensor.{}_sigenergy_{}_battery_discharge_rate_max".format(self.prefix, s) for s in slugs], overwrite=False)
         self.set_arg("inverter_limit", ["sensor.{}_sigenergy_{}_inverter_limit".format(self.prefix, s) for s in slugs])
         # An export_limit the user wrote in apps.yaml wins - the sensor reads 99999 until the plant has reported its limit
         self.set_arg_auto("export_limit", ["sensor.{}_sigenergy_{}_export_limit".format(self.prefix, s) for s in slugs], overwrite=False)
+        # The plan's floor is the plant's backup cut-off, its hard low limit, rather than Predbat's 4% default, which a
+        # plant set to 0% never needs. Forced exports stop at it or at the discharge cut-off (the reserve), whichever is
+        # higher (apply_controls); the planner has no separate export floor, so a discharge cut-off above the backup
+        # cut-off is honoured at execution only. A battery_min_soc in apps.yaml still wins.
+        self.set_arg_auto("battery_min_soc", ["sensor.{}_sigenergy_{}_battery_reserve_min".format(self.prefix, s) for s in slugs], overwrite=False)
         self.set_arg("pv_power", ["sensor.{}_sigenergy_{}_pv_power".format(self.prefix, s) for s in slugs])
         self.set_arg("grid_power", ["sensor.{}_sigenergy_{}_grid_power".format(self.prefix, s) for s in slugs])
         self.set_arg("load_power", ["sensor.{}_sigenergy_{}_load_power".format(self.prefix, s) for s in slugs])
@@ -2468,6 +2788,8 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("scheduled_discharge_enable", ["switch.{}_sigenergy_{}_export_enable".format(self.prefix, s) for s in slugs])
         self.set_arg("discharge_rate", ["number.{}_sigenergy_{}_export_rate".format(self.prefix, s) for s in slugs])
         self.set_arg("reserve", ["number.{}_sigenergy_{}_reserve".format(self.prefix, s) for s in slugs])
+
+        await self.apply_hybrid_verdict()
 
         self.log("SigenergyAPI: automatic_config complete")
 
@@ -2516,7 +2838,7 @@ class SigenergyAPI(ComponentBase):
             max_value = 100
             default = 100 if direction == "charge" else 0
         elif field == "rate":
-            battery_max_w = round(self._get_battery_max_power_kw(system_id) * 1000)
+            battery_max_w = round(self._get_battery_max_power_kw(system_id, "discharge" if direction == "export" else "charge") * 1000)
             min_value = 0
             max_value = battery_max_w if battery_max_w > 0 else 10000
             default = max_value
@@ -2574,6 +2896,11 @@ class SigenergyAPI(ComponentBase):
             elif field_type == "switch":
                 if isinstance(state, str):
                     state = state.lower() == "on"
+            if field == "reserve" and "discharge" in self.device_cutoffs.get(system_id, {}):
+                # The reserve is read-only (SIGCLOUD has no reserve control), so the plant's discharge cut-off wins
+                # over the entity - on startup the change snapshot arrives before this runs, and the entity would
+                # otherwise put it back to the 10% default
+                state = _safe_int(self.device_cutoffs[system_id]["discharge"], default=default)
             self.controls[system_id][field] = state
 
     async def publish_controls(self, system_id=None):
@@ -2631,6 +2958,7 @@ class SigenergyAPI(ComponentBase):
             return not current
         return current
 
+    @writes
     async def _update_control(self, entity_id, value, direction, field, system_id):
         """Apply a single control update and re-publish."""
         if system_id not in self.controls:
@@ -2711,18 +3039,21 @@ class SigenergyAPI(ComponentBase):
 
         return None, None, None
 
+    @writes
     async def select_event(self, entity_id, value):
         """Handle a HA select change event."""
         system_id, direction, field = self._parse_entity_system(entity_id)
         if system_id:
             await self._update_control(entity_id, value, direction, field, system_id)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a HA number change event."""
         system_id, direction, field = self._parse_entity_system(entity_id)
         if system_id:
             await self._update_control(entity_id, value, direction, field, system_id)
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a HA switch service call event."""
         system_id, direction, field = self._parse_entity_system(entity_id)
@@ -2733,6 +3064,7 @@ class SigenergyAPI(ComponentBase):
     # Control application
     # -----------------------------------------------------------------------
 
+    @writes
     async def apply_controls(self, system_id):
         """Compute and apply the charge/discharge/eco command for a system.
 
@@ -2752,7 +3084,6 @@ class SigenergyAPI(ComponentBase):
 
         flow = self.energy_flow.get(system_id, {})
         battery_soc_pct = _safe_float(flow.get("batterySoc", 50))
-        battery_max_kw = self._get_battery_max_power_kw(system_id)
 
         now = datetime.now(self.local_tz)
 
@@ -2760,12 +3091,14 @@ class SigenergyAPI(ComponentBase):
         charge_start_str = self.controls[system_id].get("charge", {}).get("start_time", "00:00:00")
         charge_end_str = self.controls[system_id].get("charge", {}).get("end_time", "00:00:00")
         charge_target_soc = _safe_int(self.controls[system_id].get("charge", {}).get("target_soc", 100), 100)
-        charge_rate_w = _safe_int(self.controls[system_id].get("charge", {}).get("rate", round(battery_max_kw * 1000)), round(battery_max_kw * 1000))
+        charge_max_w = round(self._get_battery_max_power_kw(system_id, "charge") * 1000)
+        export_max_w = round(self._get_battery_max_power_kw(system_id, "discharge") * 1000)
+        charge_rate_w = _safe_int(self.controls[system_id].get("charge", {}).get("rate", charge_max_w), charge_max_w)
         export_enable = self.controls[system_id].get("export", {}).get("enable", False)
         export_start_str = self.controls[system_id].get("export", {}).get("start_time", "00:00:00")
         export_end_str = self.controls[system_id].get("export", {}).get("end_time", "00:00:00")
         export_target_soc = _safe_int(self.controls[system_id].get("export", {}).get("target_soc", 0), 0)
-        export_rate_w = _safe_int(self.controls[system_id].get("export", {}).get("rate", round(battery_max_kw * 1000)), round(battery_max_kw * 1000))
+        export_rate_w = _safe_int(self.controls[system_id].get("export", {}).get("rate", export_max_w), export_max_w)
         reserve_soc = _safe_int(self.controls[system_id].get("reserve", 10), 10)
         charge_power_kw = None
         charge_priority_type=None
@@ -2798,9 +3131,14 @@ class SigenergyAPI(ComponentBase):
                 export_window = True
 
         # Determine desired mode (export takes priority)
+        # Durations round up: the device times the window's end from startTime (now), so rounding
+        # down would stop it short by the seconds the run lands past the minute. Our next run past
+        # the end reverts the mode, which bounds any overrun of the rounded-up command.
         if export_window and export_start_dt and export_end_dt:
-            duration_min = max(1, int((export_end_dt - now).total_seconds() / 60))
-            effective_target = max(export_target_soc, reserve_soc)
+            duration_min = max(1, math.ceil((export_end_dt - now).total_seconds() / 60))
+            # The plant stops discharging at its backup cut-off as well as the discharge cut-off (the reserve)
+            backup_soc = _safe_int(self.device_cutoffs.get(system_id, {}).get("backup", 0), 0)
+            effective_target = max(export_target_soc, reserve_soc, backup_soc)
             if effective_target >= battery_soc_pct:
                 # Already at or below target — freeze (idle)
                 new_mode = "freeze_export"
@@ -2811,7 +3149,7 @@ class SigenergyAPI(ComponentBase):
                 discharge_priority_type = "PV"
                 charge_power_kw = export_rate_w / 1000.0
         elif charge_window and charge_start_dt and charge_end_dt:
-            duration_min = max(1, int((charge_end_dt - now).total_seconds() / 60))
+            duration_min = max(1, math.ceil((charge_end_dt - now).total_seconds() / 60))
             effective_target = max(charge_target_soc, reserve_soc)
             if effective_target <= reserve_soc or abs(effective_target - battery_soc_pct) < 1:
                 # Freeze charge — stay at current SOC
@@ -2871,6 +3209,18 @@ class SigenergyAPI(ComponentBase):
                 new_mode = "freeze_export_hold"
                 active_mode = SIGENERGY_ACTIVE_MODE_SELF
                 charge_power_kw = 0
+        elif export_rate_w == 0:
+            # A discharge hold on its own: "Hold for car" or an iBoost hold in demand. execute.py
+            # writes the export rate to 0 for these (no timed pause on SIGCLOUD) and leaves the
+            # charge rate at maximum, so plain self-consumption would ignore the hold and let the
+            # battery discharge into the car. Pin the bidirectional power to 0, the same lever as
+            # freeze_charge, so the battery holds its SoC. That also stops surplus PV charging the
+            # battery for the length of the hold - "charge allowed, discharge blocked" has no
+            # expression on this API - which costs far less than draining the battery into a car.
+            duration_min = 720
+            new_mode = "discharge_hold"
+            active_mode = SIGENERGY_ACTIVE_MODE_SELF
+            charge_power_kw = 0
         else:
             duration_min = 720
             new_mode = "eco"
@@ -2908,6 +3258,7 @@ class SigenergyAPI(ComponentBase):
             return False
         return fetch_axle_active(self)
 
+    @writes
     async def _exit_vpp_for_offboard(self, system_id):
         """Leave VPP mode so the owner's app regains control of an offboarded system.
 
@@ -2950,6 +3301,7 @@ class SigenergyAPI(ComponentBase):
             self._offboard_vpp_exit_done.add(system_id)
         return True
 
+    @writes
     async def _offboard_system_if_needed(self, system_id):
         """Take a system out of VPP and then off the platform, in that order.
 
@@ -2981,6 +3333,7 @@ class SigenergyAPI(ComponentBase):
         self._publish_onboard_status()
         return True
 
+    @writes
     async def _manage_vpp_registration(self, system_id, is_readonly, is_offboard=False):
         """Align the operating mode with the read-only and offboard switch settings.
 
@@ -3114,8 +3467,9 @@ class SigenergyAPI(ComponentBase):
         now = datetime.now(self.local_tz)
         self.data_age[key] = now
         if self.storage:
-            # Expire after a day so stale data doesn't linger in the cache forever
-            await self.storage.save("sigenergy", key, data, format="json", expiry=now + timedelta(days=1))
+            # Expire after a day so stale data doesn't linger in the cache forever; plant settings are kept longer
+            days = SIGENERGY_SETTINGS_CACHE_EXPIRY_DAYS if key in SIGENERGY_SETTINGS_CACHE_KEYS else SIGENERGY_CACHE_EXPIRY_DAYS
+            await self.storage.save("sigenergy", key, data, format="json", expiry=now + timedelta(days=days))
 
     async def _load_cache(self, key):
         """Load previously persisted poll-interval system state for a cache key.
@@ -3149,8 +3503,11 @@ class SigenergyAPI(ComponentBase):
         reboot during the API's own nightly dip window can't let a lower reading through. The
         rest (energy_flow, daily_summary, onboard_status) is restored too so entities publish
         sensible values immediately rather than "unknown"/0 while the first poll is in flight.
-        grid_export is restored because nothing but an openapi/change message reports it, and
-        those can be days apart - without it the export limit would read 99999 until the next one.
+        grid_export is restored because nothing but an openapi/change message reports it - without
+        it the export limit would read 99999 until the next one arrives.
+        device_cutoffs is restored for the same reason - without it battery_min_soc would fall back to
+        the 4% default after every restart and push set_reserve_min back up, and the reserve would
+        read the 10% default.
         """
         if not self.storage:
             return
@@ -3174,6 +3531,10 @@ class SigenergyAPI(ComponentBase):
         grid_export = await self._load_cache("grid_export")
         if grid_export is not None:
             self.grid_export = grid_export
+
+        device_cutoffs = await self._load_cache("device_cutoffs")
+        if device_cutoffs is not None:
+            self.device_cutoffs = device_cutoffs
 
 
         self.log("SigenergyAPI: Restored cached poll-interval state from storage")
@@ -3323,10 +3684,12 @@ class SigenergyAPI(ComponentBase):
         # every minute and the cache does not need rewriting that often.
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
             await self._save_cache("onboard_status", self.onboard_status)
-            # Rewritten every poll, not just when a change message arrives, because the cache expires
-            # after a day and the plant may go longer than that without reporting its export limit again
+            # Rewritten every poll, not just when a change message arrives, so the cache expiry runs from
+            # the last poll rather than the last snapshot
             if self.grid_export:
                 await self._save_cache("grid_export", self.grid_export)
+            if self.device_cutoffs:
+                await self._save_cache("device_cutoffs", self.device_cutoffs)
 
         # Fetch controls from HA on first run only
         if first:
@@ -3336,7 +3699,6 @@ class SigenergyAPI(ComponentBase):
 
         # Realtime data refresh — skip live power/SOC fetch when MQTT is providing fresh data
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
-            now_ts = time.time()
             energy_updated = False
             summary_updated = False
             history_updated = False
@@ -3348,9 +3710,11 @@ class SigenergyAPI(ComponentBase):
             refresh_summary = self._needs_refresh("daily_summary", SIGENERGY_POLL_INTERVAL / 60.0)
             refresh_history = self._needs_refresh("history_totals", SIGENERGY_POLL_INTERVAL / 60.0)
             for sid in list(self.systems.keys()):
-                last_update = self.last_mqtt_update.get(sid, 0)
-                mqtt_age = now_ts - last_update
-                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_POLL_INTERVAL
+                # Age is measured on the monotonic clock so a wall-clock step cannot keep stale MQTT looking fresh
+                last_update = self.last_mqtt_mono.get(sid)
+                mqtt_age = self.monotonic() - last_update if last_update is not None else 0
+                # Arriving recently is not enough - the reading it carried must be recent too
+                mqtt_fresh = last_update is not None and mqtt_age < SIGENERGY_MQTT_FRESH_SECONDS and self.mqtt_data_lag.get(sid, 0) <= SIGENERGY_MQTT_STALE_SECONDS
                 if mqtt_fresh:
                     # MQTT is genuinely keeping energy_flow live — worth persisting/re-timestamping.
                     self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))
@@ -3388,6 +3752,10 @@ class SigenergyAPI(ComponentBase):
         # Automatic configuration
         if first and self.automatic:
             await self.automatic_config()
+
+        # Filed every cycle that reaches here, outside the first-only block above, so a report that
+        # failed to file is retried. refresh_discovery() owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         # Apply controls
         # Treat an active Axle event as read-only: Axle is driving the battery, so Predbat
@@ -3535,13 +3903,15 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             e = (now + timedelta(minutes=offset_end_min)).strftime("%H:%M:%S")
             return s, e
 
-        battery_max_w = round(sig._get_battery_max_power_kw(sid) * 1000) or 5000
+        # Each window uses its own direction's ceiling, as apply_controls does, so the test asks for what the plant accepts
+        charge_max_w = round(sig._get_battery_max_power_kw(sid, "charge") * 1000) or 5000
+        export_max_w = round(sig._get_battery_max_power_kw(sid, "discharge") * 1000) or 5000
 
         if test_mode == "eco":
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
-                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": charge_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": export_max_w},
             }
             print("+ Configured for ECO mode (no active windows)")
 
@@ -3549,8 +3919,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             cs, ce = _window(-30, 120)
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": 95, "rate": battery_max_w},
-                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": 95, "rate": charge_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": export_max_w},
             }
             print("+ Configured for CHARGE mode ({} - {}, target 95%)".format(cs, ce))
 
@@ -3559,8 +3929,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             target = round(battery_soc_pct)  # same as current = freeze
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": target, "rate": battery_max_w},
-                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": target, "rate": charge_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": export_max_w},
             }
             print("+ Configured for FREEZE CHARGE mode ({} - {}, target=current {:.0f}%)".format(cs, ce, battery_soc_pct))
 
@@ -3568,8 +3938,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             es, ee = _window(-30, 120)
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
-                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": 15, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": charge_max_w},
+                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": 15, "rate": export_max_w},
             }
             print("+ Configured for EXPORT mode ({} - {}, target 15%)".format(es, ee))
 
@@ -3578,8 +3948,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             target = min(100, round(battery_soc_pct) + 10)  # above current = freeze
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
-                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": target, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": charge_max_w},
+                "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": target, "rate": export_max_w},
             }
             print("+ Configured for FREEZE EXPORT mode ({} - {}, current {:.0f}% target {}%)".format(es, ee, battery_soc_pct, target))
 

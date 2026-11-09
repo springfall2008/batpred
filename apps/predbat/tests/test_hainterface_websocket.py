@@ -61,7 +61,7 @@ def test_hainterface_socketloop_auth_ok(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -147,7 +147,7 @@ def test_hainterface_socketloop_auth_invalid(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -220,7 +220,7 @@ def test_hainterface_socketloop_state_changed(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -307,7 +307,7 @@ def test_hainterface_socketloop_call_service(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -371,7 +371,7 @@ def test_hainterface_socketloop_result_failed(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -424,7 +424,7 @@ def test_hainterface_socketloop_message_closed(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -474,7 +474,7 @@ def test_hainterface_socketloop_error_limit(my_predbat=None):
     async def mock_sleep(delay):
         pass
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -528,7 +528,7 @@ def test_hainterface_socketloop_error_count_limit(my_predbat=None):
         # Don't set api_stop here - let error_count build up
         pass
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -595,7 +595,7 @@ def test_hainterface_socketloop_exception_in_loop(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -634,7 +634,7 @@ def test_hainterface_socketloop_exception_in_startup(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -681,7 +681,7 @@ def test_hainterface_socketloop_update_pending(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -747,7 +747,7 @@ def test_hainterface_socketloop_connection_drop_unblocks_queued_command(my_predb
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -848,7 +848,7 @@ def test_hainterface_socketloop_result_null_success(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -907,7 +907,7 @@ def test_hainterface_socketloop_service_register(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -977,7 +977,7 @@ def test_hainterface_socketloop_call_service_target_field(my_predbat=None):
     async def mock_sleep(delay):
         ha_interface.api_stop = True
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -1045,7 +1045,7 @@ def run_socketloop_with_failing_connect(ha_interface, mock_base, exception, stop
 
     fake_time = make_fake_time(clock)
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -1168,7 +1168,7 @@ def test_hainterface_socketloop_auth_ok_ends_outage(my_predbat=None):
     async def mock_sleep(delay):
         clock[0] += delay
 
-    with patch("ha.ClientSession") as mock_session_class:
+    with patch("aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock()
@@ -1215,6 +1215,65 @@ def test_hainterface_socketloop_handshake_rejection(my_predbat=None):
     return failed
 
 
+def test_hainterface_socketloop_uses_base_session_factory(my_predbat=None):
+    """Test socketLoop() opens its websocket on a session from the base's http_session_factory"""
+    print("\n=== Testing HAInterface socketLoop() session factory ===")
+    from component_base import set_http_session_factory
+
+    failed = 0
+    mock_base = MockBase()
+    made = []
+    trap_made = []
+
+    mock_ws = MagicMock()
+    mock_ws.send_json = AsyncMock()
+    mock_session = MagicMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock()
+    mock_session.ws_connect = MagicMock()
+    mock_session.ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_session.ws_connect.return_value.__aexit__ = AsyncMock()
+
+    def base_factory(**kwargs):
+        made.append(kwargs)
+        return mock_session
+
+    def trap_factory(**kwargs):
+        trap_made.append(kwargs)
+        return mock_session
+
+    mock_base.http_session_factory = base_factory
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+
+    async def mock_receive():
+        ha_interface.api_stop = True
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
+
+    mock_ws.receive = mock_receive
+
+    async def mock_sleep(delay):
+        ha_interface.api_stop = True
+
+    set_http_session_factory(trap_factory)
+    try:
+        with patch("aiohttp.ClientSession", side_effect=AssertionError("the default session must not be built")):
+            with patch("ha.asyncio.sleep", new=mock_sleep):
+                run_async(ha_interface.socketLoop())
+    finally:
+        set_http_session_factory(None)
+
+    if trap_made:
+        print("ERROR: the global factory supplied the websocket session instead of the base factory")
+        failed += 1
+    elif not made:
+        print("ERROR: the base factory was never asked for the websocket session")
+        failed += 1
+    else:
+        print("✓ Websocket session came from the base factory")
+
+    return failed
+
+
 def run_hainterface_websocket_tests(my_predbat):
     """Run all HAInterface websocket tests"""
     print("\n" + "=" * 80)
@@ -1242,6 +1301,7 @@ def run_hainterface_websocket_tests(my_predbat):
     failed += test_hainterface_socketloop_other_startup_error_still_counted(my_predbat)
     failed += test_hainterface_socketloop_auth_ok_ends_outage(my_predbat)
     failed += test_hainterface_socketloop_handshake_rejection(my_predbat)
+    failed += test_hainterface_socketloop_uses_base_session_factory(my_predbat)
 
     print("\n" + "=" * 80)
     if failed == 0:
