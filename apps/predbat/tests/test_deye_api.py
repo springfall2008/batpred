@@ -259,6 +259,8 @@ def test_fetch_device_data_pv_fallback_keys():
         ("per-string sum when there is no total", _pv_payload_without_total_solar(strings), 3420.0),
         ("TotalSolarPower still wins", LIVE_DATA_LIST + [{"key": "TotalDCInputPower", "value": "9999.00", "unit": "W"}] + strings, 1584.0),
         ("0 W at night is a reading, not a miss", _pv_payload_without_total_solar([{"key": "TotalDCInputPower", "value": "0.00", "unit": "W"}, {"key": "DCPowerPV1", "value": "5.00", "unit": "W"}]), 0.0),
+        ("empty total falls through to the strings", _pv_payload_without_total_solar([{"key": "TotalDCInputPower", "value": "", "unit": "W"}] + strings), 3420.0),
+        ("null string reading is skipped in the sum", _pv_payload_without_total_solar(strings + [{"key": "DCPowerPV4", "value": None, "unit": "W"}]), 3420.0),
     ]
     for label, data_list, want in cases:
         pv, warnings = _fetch_pv(data_list)
@@ -269,14 +271,19 @@ def test_fetch_device_data_pv_fallback_keys():
             print(f"ERROR: {label}: unexpected missing-key warning: {warnings}")
             failed = True
 
-    # Nothing PV-like at all: still zero, and still warned about under the primary key name
-    pv, warnings = _fetch_pv(_pv_payload_without_total_solar([{"key": "DCPowerPVx", "value": "50", "unit": "W"}]))
-    if pv != 0.0:
-        print(f"ERROR: no PV keys: pv_power expected 0.0, got {pv}")
-        failed = True
-    if not any("TotalSolarPower" in m for m in warnings):
-        print(f"ERROR: no PV keys: expected a missing-key warning naming TotalSolarPower, got {warnings}")
-        failed = True
+    # Nothing usable at all: still zero, and still warned about under the primary key name
+    no_pv_cases = [
+        ("no PV keys", _pv_payload_without_total_solar([{"key": "DCPowerPVx", "value": "50", "unit": "W"}])),
+        ("only empty PV values", _pv_payload_without_total_solar([{"key": "TotalDCInputPower", "value": "", "unit": "W"}, {"key": "DCPowerPV1", "value": None, "unit": "W"}])),
+    ]
+    for label, data_list in no_pv_cases:
+        pv, warnings = _fetch_pv(data_list)
+        if pv != 0.0:
+            print(f"ERROR: {label}: pv_power expected 0.0, got {pv}")
+            failed = True
+        if not any("TotalSolarPower" in m for m in warnings):
+            print(f"ERROR: {label}: expected a missing-key warning naming TotalSolarPower, got {warnings}")
+            failed = True
     assert not failed, "test_fetch_device_data_pv_fallback_keys"
 
 

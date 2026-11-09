@@ -386,16 +386,20 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """Read one telemetry metric from a flattened dataList.
 
         Returns (value, found). Tries the primary key, then any model-specific fallbacks,
-        and for pv_power finally the sum of the per-string DCPowerPV<n> readings. found is
-        False only when none of them is present, so a genuine 0 W is not treated as missing.
+        and for pv_power finally the sum of the per-string DCPowerPV<n> readings. A key only
+        counts when its value is numeric: "0.00" at night is a real reading, while an empty
+        or null value falls through to the next source. found is False when nothing usable
+        is there, so the caller can warn instead of publishing a silent 0.
         """
         for key in (DEYE_TELEMETRY_KEYS[name],) + DEYE_TELEMETRY_FALLBACK_KEYS.get(name, ()):
-            if key in flat:
-                return self._as_float(flat.get(key)), True
+            value = self._as_float(flat.get(key), None)
+            if value is not None:
+                return value, True
         if name == "pv_power":
-            strings = [key for key in flat if key.startswith(DEYE_PV_STRING_KEY_PREFIX) and key[len(DEYE_PV_STRING_KEY_PREFIX) :].isdigit()]
+            strings = [self._as_float(flat.get(key), None) for key in flat if key.startswith(DEYE_PV_STRING_KEY_PREFIX) and key[len(DEYE_PV_STRING_KEY_PREFIX) :].isdigit()]
+            strings = [value for value in strings if value is not None]
             if strings:
-                return sum(self._as_float(flat.get(key)) for key in strings), True
+                return sum(strings), True
         return 0.0, False
 
     async def fetch_device_data(self, sn):
