@@ -80,9 +80,10 @@ def _test_helpers():
     azores = pytz.timezone("Atlantic/Azores")
     cases.append((azores.localize(datetime(2026, 10, 25, 10, 0)), azores, -60))
     cases.append((azores.localize(datetime(2026, 10, 25, 0, 30), is_dst=True), azores, 0))
-    # America/Havana goes forward at 00:00 to 01:00 in March, so 00:00 never happens; the day starts at 01:00
+    # America/Havana goes forward at 00:00 to 01:00 in March, so 00:00 never happens; the day starts at 01:00.
+    # Uses a past date: Cuba cancelled its changes from November 2026 to March 2027, so future dates depend on the installed timezone data
     havana = pytz.timezone("America/Havana")
-    cases.append((havana.localize(datetime(2027, 3, 14, 10, 0)), havana, 60))
+    cases.append((havana.localize(datetime(2024, 3, 10, 10, 0)), havana, 60))
     for now, tz, expected in cases:
         got = clock_change_minutes(now, tz)
         failed |= _check("clock_change_minutes at {} in {} is {}".format(now, tz, expected), got == expected, "got {}".format(got))
@@ -97,8 +98,8 @@ def _test_helpers():
         failed |= _check("local_day_end_minute at {} is {}".format(now, expected), got == expected, "got {}".format(got))
     start = start_of_local_day(date(2026, 10, 25), azores)
     failed |= _check("Azores autumn day starts at the first 00:00 (UTC+0)", start.utcoffset() == timedelta(0), "got {}".format(start))
-    start = start_of_local_day(date(2027, 3, 14), havana)
-    failed |= _check("Havana spring day starts at 01:00 CDT, 05:00 UTC", start.astimezone(timezone.utc) == datetime(2027, 3, 14, 5, 0, tzinfo=timezone.utc), "got {}".format(start.astimezone(timezone.utc)))
+    start = start_of_local_day(date(2024, 3, 10), havana)
+    failed |= _check("Havana spring day starts at 01:00 CDT, 05:00 UTC", start.astimezone(timezone.utc) == datetime(2024, 3, 10, 5, 0, tzinfo=timezone.utc), "got {}".format(start.astimezone(timezone.utc)))
     return failed
 
 
