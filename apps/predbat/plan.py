@@ -206,6 +206,35 @@ def select_window_candidates(entries, price_selected, allow_freeze, accept=None)
     return chosen
 
 
+def distinct_slot_trials(slot_choices, candidate_counts):
+    """
+    Slot counts worth trying for one side of the levels search, each with the freeze options it is new for.
+
+    candidate_counts maps each freeze option to the number of windows select_window_candidates made
+    available under it. A slot count selects the first min(max_slots, count) of those, so once a slot
+    count reaches the candidate count every larger one picks the same windows again. With a handful of
+    candidates and a slot length list that runs up to 48, most of the list is that repeat.
+
+    Returns [(max_slots, [freeze, ...]), ...] in slot_choices order, keeping for each freeze option only
+    the first slot count that reaches each effective count. A slot count that is a repeat under every
+    freeze option is dropped. Order matters as much as membership: the search breaks ties on the first
+    trial it sees and records that trial's slot counts to centre the fine pass on, so the survivors are
+    exactly the trials the full sweep would have run, in the order it would have run them.
+    """
+    seen = {freeze: set() for freeze in candidate_counts}
+    trials = []
+    for max_slots in slot_choices:
+        freeze_options = []
+        for freeze, count in candidate_counts.items():
+            effective = min(max_slots, count)
+            if effective not in seen[freeze]:
+                seen[freeze].add(effective)
+                freeze_options.append(freeze)
+        if freeze_options:
+            trials.append((max_slots, freeze_options))
+    return trials
+
+
 MASK_64 = (1 << 64) - 1
 
 
@@ -1332,12 +1361,25 @@ class Plan:
             charge_selection_cache = {}
             export_selection_cache = {}
 
-            def charge_selection_for(max_slots, allow_freeze, loop_price=loop_price):
-                """Charge windows this price threshold selects, capped at max_slots"""
+            def charge_candidates_for(allow_freeze, loop_price=loop_price):
+                """Every charge window this price threshold makes available, uncapped"""
                 candidates = charge_candidates.get(allow_freeze)
                 if candidates is None:
                     candidates = select_window_candidates(price_set_charge, lambda price: loop_price >= price, allow_freeze)
                     charge_candidates[allow_freeze] = candidates
+                return candidates
+
+            def export_candidates_for(allow_freeze, loop_price=loop_price):
+                """Every export window this price threshold makes available, uncapped"""
+                candidates = export_candidates.get(allow_freeze)
+                if candidates is None:
+                    candidates = select_window_candidates(price_set_export, lambda price: loop_price < price, allow_freeze, accept=export_window_allowed)
+                    export_candidates[allow_freeze] = candidates
+                return candidates
+
+            def charge_selection_for(max_slots, allow_freeze):
+                """Charge windows this price threshold selects, capped at max_slots"""
+                candidates = charge_candidates_for(allow_freeze)
                 count = min(max_slots, len(candidates))
                 entry = charge_selection_cache.get((count, allow_freeze))
                 if entry is None:
@@ -1346,12 +1388,9 @@ class Plan:
                     charge_selection_cache[(count, allow_freeze)] = entry
                 return entry
 
-            def export_selection_for(max_slots, allow_freeze, loop_price=loop_price):
+            def export_selection_for(max_slots, allow_freeze):
                 """Export windows this price threshold selects, capped at max_slots"""
-                candidates = export_candidates.get(allow_freeze)
-                if candidates is None:
-                    candidates = select_window_candidates(price_set_export, lambda price: loop_price < price, allow_freeze, accept=export_window_allowed)
-                    export_candidates[allow_freeze] = candidates
+                candidates = export_candidates_for(allow_freeze)
                 count = min(max_slots, len(candidates))
                 entry = export_selection_cache.get((count, allow_freeze))
                 if entry is None:
@@ -1382,10 +1421,18 @@ class Plan:
                     charge_freeze_options = [True, False] if (self.set_charge_freeze and not coarse) else [False]
                 export_freeze_options = [True, False] if (self.set_export_freeze and not coarse) else [False]
 
-                for max_charge_slots in charge_slot_choices:
-                    for max_export_slots in export_slot_choices:
-                        for try_charge_freeze in charge_freeze_options:
-                            for try_export_freeze in export_freeze_options:
+                # Sweep only the slot counts that select a set of windows not already selected by an
+                # earlier one. The rest would rebuild the same scenario and be turned away by tried_list
+                # below, having already paid for the selection, the export-on-charge pruning and the
+                # hash: on a typical dump that was several hundred thousand trials for a few hundred
+                # distinct plans. Each side is filtered on its own because the sweep is their product.
+                charge_trials = distinct_slot_trials(charge_slot_choices, {freeze: len(charge_candidates_for(freeze)) for freeze in charge_freeze_options})
+                export_trials = distinct_slot_trials(export_slot_choices, {freeze: len(export_candidates_for(freeze)) for freeze in export_freeze_options})
+
+                for max_charge_slots, charge_freeze_trials in charge_trials:
+                    for max_export_slots, export_freeze_trials in export_trials:
+                        for try_charge_freeze in charge_freeze_trials:
+                            for try_export_freeze in export_freeze_trials:
                                 # all_n is copied into pred_item below and charge_mods is only ever read,
                                 # so both cached objects can be shared between trials as they stand. The
                                 # export pair can be pruned just below, so it is copied on write.
