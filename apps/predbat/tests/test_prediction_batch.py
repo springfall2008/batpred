@@ -19,7 +19,6 @@ job the kernel will not take still runs on the engine the direct path would have
 handle in a multi-job batch comes back with its own job's result rather than a neighbour's.
 """
 
-
 import random
 
 import builtins

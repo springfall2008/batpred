@@ -88,6 +88,26 @@ def construct_numpy_dtype(loader, node):
 DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:numpy.dtype", construct_numpy_dtype)
 DEBUG_YAML_LOADER = DebugYamlLoader
 
+# Parsed debug dumps keyed by (path, mtime, size). None, the default, turns the cache off: Predbat replays
+# a dump once, so only the unit tests - which replay the same few dumps dozens of times, at about a second a
+# parse - switch it on. read_debug_yaml() copies everything it takes from the parsed dict, so a cached
+# parse is never changed by a replay.
+DEBUG_YAML_PARSE_CACHE = None
+
+
+def load_debug_yaml_file(filename):
+    """Parse a debug dump with DEBUG_YAML_LOADER, through DEBUG_YAML_PARSE_CACHE when that is switched on."""
+    cache = DEBUG_YAML_PARSE_CACHE
+    if cache is None:
+        with open(filename, "r") as file:
+            return yaml.load(file, Loader=DEBUG_YAML_LOADER)
+    stat = os.stat(filename)
+    key = (os.path.abspath(filename), stat.st_mtime_ns, stat.st_size)
+    if key not in cache:
+        with open(filename, "r") as file:
+            cache[key] = yaml.load(file, Loader=DEBUG_YAML_LOADER)
+    return cache[key]
+
 
 class DebugYamlDumper(yaml.Dumper):
     """
@@ -881,8 +901,7 @@ class UserInterface:
         """
         debug = {}
         if os.path.exists(filename):
-            with open(filename, "r") as file:
-                debug = yaml.load(file, Loader=DEBUG_YAML_LOADER)
+            debug = load_debug_yaml_file(filename)
         else:
             self.log("Warn: Debug file {} not found".format(filename))
             return
@@ -944,7 +963,7 @@ class UserInterface:
             if current:
                 # print("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                 if current.get("value", None) != item.get("value", None):
-                    current["value"] = item.get("value", None)
+                    current["value"] = copy.deepcopy(item.get("value", None))
         self.log("Restored debug settings - minutes now {}".format(self.minutes_now))
 
     def create_debug_yaml(self, write_file=True):

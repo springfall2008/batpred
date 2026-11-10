@@ -8236,7 +8236,7 @@ def get_plan_renderer_js():
         const limitMinutes = data.refresh_minutes ? Math.max(data.refresh_minutes + 5, 15) : (STALE_MINUTES_DEFAULT[currentView] || 15);
         const ageMs = new Date() - new Date(data.timestamp);
         if (ageMs > limitMinutes * 60000) {
-            staleWarning.textContent = '\u26A0\uFE0F Plan data is stale (last updated over ' + limitMinutes + ' minutes ago)';
+            staleWarning.textContent = '\u26a0\ufe0f Plan data is stale (last updated over ' + limitMinutes + ' minutes ago)';
             staleWarning.style.display = 'block';
         } else {
             staleWarning.style.display = 'none';

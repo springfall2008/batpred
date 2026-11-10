@@ -265,6 +265,20 @@ GE_SETTING_ERROR_CODES = {
     -7: {"retry": False, "reason": "inverter_locked", "text": "inverter locked - the device is currently locked and cannot be modified"},
 }
 GE_SETTING_RETRY_CODES = [code for code, info in GE_SETTING_ERROR_CODES.items() if info["retry"]]
+# Codes that describe the device rather than the request: -2 offline, -6 no response from the comms
+# server it was last connected to, -7 locked. Measured across Predbat Cloud over a day, a retry seconds
+# later almost never cleared them (-6 never, -2 in 2% of retry bursts, -7 kept failing for hours), so
+# retrying each setting 10 times and every write again each cycle only spent API calls - several
+# thousand a day for one locked or offline inverter. One of these codes holds off that device's setting
+# reads and writes, which then fail at once without a call, for DEVICE_HOLD_INITIAL_SECONDS, doubling
+# up to DEVICE_HOLD_MAX_SECONDS while the device keeps answering with one. The first request after a
+# hold is the probe, and any successful setting read or write clears it.
+GE_DEVICE_HOLD_CODES = [-2, -6, -7]
+DEVICE_HOLD_INITIAL_SECONDS = 5 * 60
+DEVICE_HOLD_MAX_SECONDS = 30 * 60
+# -1 (the device did not answer in time) does clear on a retry, nearly always by the third attempt, so it
+# keeps its retries but stops after this many timeouts instead of using the whole RETRIES budget.
+DEVICE_TIMEOUT_ATTEMPTS = 3
 # The endpoints whose "value" carries a result code rather than a reading
 GE_SETTING_ENDPOINTS = [GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_WRITE_SETTING]
 
@@ -690,6 +704,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.evc_data = {}
         self.evc_sessions = {}
         self.evc_status_unknown = set()
+        self.evc_start_skipped = set()
         self.api_fatal = False
         self.api_auth_failed = False
         self.auth_denied_reported = False
@@ -744,6 +759,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # API request metrics for monitoring
         self.requests_total = 0
         self.failures_total = 0
+        # Devices whose setting reads and writes are held off after a device-level failure, {serial: {"until": dt, "seconds": n, "code": c}}
+        self.device_hold = {}
 
     def set_account_timezone(self, account):
         """
@@ -2364,9 +2381,36 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         """A charger with no car plugged in is left alone - commanding it would achieve nothing and every command costs a retry loop."""
         return self.evc_car_connected(self.evc_device[uuid].get("status", None))
 
+    def evc_charging_now(self, uuid):
+        """Does the charger report that it is delivering a charge right now."""
+        return evc_status_key(self.evc_device[uuid].get("status", None)) == "charging"
+
+    def charger_control_drifted(self, uuid, charge):
+        """Has a charger Predbat stopped started charging again - its own schedule, or plug and go.
+
+        start-charge and stop-charge are one-off commands, so nothing stops the charger starting
+        itself afterwards. Without this a charger Predbat holds as stopped could charge all night
+        and the stop at the end of the window would never be sent, as it matches what is held.
+        Inside a window only a start skipped because the charger was already Charging is checked:
+        that status can be a poll old, so if the charger is back at Preparing (plugged in, no
+        session) the start is sent after all. A start GE Cloud accepted is not re-sent while the
+        status catches up, and a car that stops drawing itself (SuspendedEV - full, or its own
+        schedule) is not something another start-charge can fix.
+        """
+        if charge:
+            return uuid in self.evc_start_skipped and evc_status_key(self.evc_device[uuid].get("status", None)) == "preparing"
+        return self.evc_charging_now(uuid)
+
     @writes
     async def charger_control_send(self, uuid, charge, car_n):
         """Start the charger inside a planned window, stop it outside one."""
+        if charge and self.evc_charging_now(uuid):
+            # GE Cloud rejects start-charge on a charger that is already charging, and a start that
+            # keeps failing is never recorded, leaving the charger held as stopped while it charges
+            self.log("GECloud: EV charger {} for car {} is already charging, no start-charge needed".format(self.evc_device[uuid]["serial_number"], car_n))
+            self.evc_start_skipped.add(uuid)
+            return
+        self.evc_start_skipped.discard(uuid)
         command = EVC_COMMAND_START if charge else EVC_COMMAND_STOP
         self.log("GECloud: Sending {} to EV charger {} for car {}".format(command, self.evc_device[uuid]["serial_number"], car_n))
         if await self.async_send_evc_command(uuid, command, {}) is None:
@@ -2800,33 +2844,85 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 if pending["setting_id"] == setting_id:
                     return {"value": pending["value"], "context": "predbat"}
 
+        if self.device_held(serial):
+            return None
+
         data = None
+        timeouts = 0
         for retry in range(RETRIES):
             try:
                 data = await self.async_get_inverter_data(GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True)
             except GECloudTerminalError as e:
                 self.log("GECloud: Warn: Device {} read of setting id {} was rejected: {} (code {})".format(serial, setting_id, e.message, e.code))
+                self.hold_device(serial, e.code)
                 return None
             data_value = None
             if data:
                 data_value = data.get("value", -1)
             if data and data_value in GE_SETTING_RETRY_CODES:
+                if self.hold_device(serial, data.get("value", None)):
+                    return None
+                if data.get("value", None) == -1:
+                    timeouts += 1
                 data = None
+                if timeouts >= DEVICE_TIMEOUT_ATTEMPTS:
+                    break
                 # Inverter timeout, try to spread requests out
                 await asyncio.sleep(random.random() * (3 + retry))
             if data:
+                self.clear_device_hold(serial)
                 break
             await asyncio.sleep(RETRY_FACTOR * (retry + 1))
         if data is None:
             self.log("GECloud: Warn: Device {} Failed to read inverter setting id {}, got {}".format(serial, setting_id, data))
         return data
 
+    def device_held(self, serial):
+        """Whether this device's setting reads and writes are held off after a device-level failure (GE_DEVICE_HOLD_CODES)"""
+        hold = self.device_hold.get(serial, None)
+        return hold is not None and self.now_utc_exact < hold["until"]
+
+    def hold_device(self, serial, code):
+        """
+        Hold off a device's setting reads and writes if code says the device itself can not act.
+
+        Returns True when the device is held, whether this call set the hold or one was already running. The
+        hold doubles each time the probe after it fails again with any of GE_DEVICE_HOLD_CODES (not only the
+        code that started it), up to DEVICE_HOLD_MAX_SECONDS, and starts again from DEVICE_HOLD_INITIAL_SECONDS
+        once a hold has been over for longer than that.
+        """
+        if code not in GE_DEVICE_HOLD_CODES:
+            return False
+        now = self.now_utc_exact
+        hold = self.device_hold.get(serial, None)
+        if hold is not None and now < hold["until"]:
+            # Already held - a read running alongside the one that set it got the same answer
+            return True
+        if hold is None or (now - hold["until"]).total_seconds() > DEVICE_HOLD_MAX_SECONDS:
+            seconds = DEVICE_HOLD_INITIAL_SECONDS
+        else:
+            seconds = min(hold["seconds"] * 2, DEVICE_HOLD_MAX_SECONDS)
+        self.device_hold[serial] = {"until": now + timedelta(seconds=seconds), "seconds": seconds, "code": code}
+        reason = GE_SETTING_ERROR_CODES.get(code, {}).get("text", "unknown error")
+        self.log("GECloud: Warn: Device {} reports {} (code {}), holding off its setting reads and writes for {} minutes".format(serial, reason, code, seconds // 60))
+        return True
+
+    def clear_device_hold(self, serial):
+        """A setting read or write to the device worked, so any hold on it is over"""
+        if self.device_hold.pop(serial, None) is not None:
+            self.log("GECloud: Device {} is answering setting requests again, hold off cleared".format(serial))
+
     @writes
     async def async_write_inverter_setting(self, serial, setting_id, value):
         """
         Write a setting to the inverter
         """
+        if self.device_held(serial):
+            self.log("GECloud: Warn: Device {} is held off ({}), not writing setting id {} to {}".format(serial, self.device_hold[serial]["code"], setting_id, value))
+            return None
+
         data = None
+        timeouts = 0
         for retry in range(RETRIES):
             try:
                 data = await self.async_get_inverter_data(
@@ -2840,15 +2936,24 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 # GivEnergy will never accept this write on a repeat attempt (for example -7
                 # "Inverter Locked"), so abort it here instead of burning the retry budget
                 self.log("GECloud: Error: Device {} write of setting id {} to {} was rejected: {} (code {})".format(serial, setting_id, value, e.message, e.code))
+                self.hold_device(serial, e.code)
                 return None
             if data:
                 data_value = data.get("value", -1)
                 if data_value in GE_SETTING_RETRY_CODES:
+                    if self.hold_device(serial, data.get("value", None)):
+                        data = None
+                        break
+                    if data.get("value", None) == -1:
+                        timeouts += 1
                     data = None
+                    if timeouts >= DEVICE_TIMEOUT_ATTEMPTS:
+                        break
                     # Inverter timeout, try to spread requests out
                     await asyncio.sleep(random.random() * (3 + retry))
                 else:
                     self.pending_writes[serial].append({"setting_id": setting_id, "value": data_value})
+                    self.clear_device_hold(serial)
                     break
             await asyncio.sleep(RETRY_FACTOR * (retry + 1))
         if data is None:

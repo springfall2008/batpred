@@ -59,6 +59,7 @@ from tests.test_previous_value_provider import test_previous_value_provider
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
+from tests.test_clock_change_day import test_clock_change_day
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
@@ -66,6 +67,7 @@ from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_kernel_tests
 from tests.test_optimise_solar import run_optimise_solar_tests
 from tests.test_optimise_swap_charge import run_optimise_swap_charge_tests
+from tests.test_metric_series import run_metric_series_tests
 from tests.test_optimise_swap_export import run_optimise_swap_export_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
@@ -195,6 +197,7 @@ from tests.test_minute_data import test_minute_data, test_minute_data_load, test
 from tests.test_minute_data_import_export import test_minute_data_import_export
 from tests.test_faq_recorder_config import test_faq_recorder_config
 from tests.test_docs_marketplace import test_docs_marketplace
+from tests.test_docs_solax_mode8 import test_docs_solax_mode8
 from tests.test_plan_card_soc_symbols import test_plan_card_soc_symbols
 from tests.test_minute_data_state import test_minute_data_state
 from tests.test_minute_data_copy import run_minute_data_copy_tests
@@ -325,6 +328,9 @@ from tests.test_find_charge_window import test_find_charge_window
 from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
 from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests, run_random_scenario_reapply_tests
+from tests import network_guard
+from tests.test_network_guard import test_network_guard
+from tests.test_debug_yaml_cache import test_debug_yaml_cache
 from tests.test_gecloud_budget import run_gecloud_budget_harness_tests, run_gecloud_api_budget
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
@@ -434,7 +440,7 @@ def run_debug_cases(my_predbat):
         if basename == "random_scenarios.yaml":
             continue  # Skip the random scenarios template file
         case_predbat = create_predbat()
-        test_failed = run_single_debug(basename, case_predbat, filename, pathname + "/" + basename + ".expected.json")
+        test_failed = run_single_debug(basename, case_predbat, filename, pathname + "/" + basename + ".expected.json", write_debug_dump=False)
         total_calculate_plan_time += getattr(case_predbat, "last_calculate_plan_time", 0.0)
         case_count += 1
         if test_failed:
@@ -504,6 +510,11 @@ def create_predbat():
 
 
 def main():
+    # The suite replays the same few debug dumps dozens of times; parse each once (see DEBUG_YAML_PARSE_CACHE)
+    import userinterface
+
+    userinterface.DEBUG_YAML_PARSE_CACHE = {}
+
     # Test registry - table of all available tests
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
@@ -532,6 +543,7 @@ def main():
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
         ("clock", run_clock_tests, "update_time clock tests", False),
+        ("clock_change_day", test_clock_change_day, "Today's figures and yesterday's on a clock-change day (GH#5760)", False),
         ("rate_min_forward_calc", test_rate_min_forward_calc, "Rate min forward calc tests", False),
         ("rate_export_max_forward_calc", test_rate_export_max_forward_calc, "Rate export max forward calc tests", False),
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
@@ -550,6 +562,7 @@ def main():
         ("minute_data_import_export", test_minute_data_import_export, "Minute data import/export tests", False),
         ("faq_recorder_config", test_faq_recorder_config, "FAQ recorder filter example matches the entities Predbat reads history for", False),
         ("docs_marketplace", test_docs_marketplace, "Docs and templates cover the Marketplace wherever they give HACS install steps", False),
+        ("docs_solax_mode8", test_docs_solax_mode8, "Solax Mode 8 docs and template name the sensors the Mode 8 trigger needs enabled", False),
         ("plan_card_soc_symbols", test_plan_card_soc_symbols, "Plan card SoC symbol legend explains every symbol the plan shows on the SoC % cell", False),
         ("minute_data_no_smoothing_backwards", test_minute_data_no_smoothing_backwards, "Minute data no-smoothing backwards tests", False),
         ("minute_data_no_smoothing_forward", test_minute_data_no_smoothing_forward, "Minute data no-smoothing forward tests", False),
@@ -899,7 +912,10 @@ def main():
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),
+        ("metric_series", run_metric_series_tests, "run_prediction_metric skips the SoC series of its pv10 and pv90 runs", False),
         ("optimise_swap_export", run_optimise_swap_export_tests, "Optimise pairwise export-window swap tests", False),
+        ("network_guard", test_network_guard, "Unit tests may not reach the network: non-local lookups and connects fail the test", False),
+        ("debug_yaml_cache", test_debug_yaml_cache, "Debug dump parse cache used by the test runner", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", False),
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
@@ -1078,6 +1094,8 @@ def main():
         print(f"**** Shuffled test order with seed {shuffle_seed} ****")
 
     print(f"**** Running {len(tests_to_run)} test(s) ****")
+    # Any test that reaches past the loopback interface fails, naming the host - see tests/network_guard.py
+    network_guard.install()
     # Single loop to run all collected tests
     total_time = 0
     skipped_count = 0
@@ -1103,6 +1121,9 @@ def main():
         start_time = time.time()
         test_failed = func(my_predbat)
         elapsed = time.time() - start_time
+        for attempt in network_guard.take_attempts():
+            print(f"**** ERROR: Test {name} tried to reach the network: {attempt} - stub the call instead ****")
+            test_failed = True
         total_time += elapsed
         end_stamp = time.strftime("%H:%M:%S")
 

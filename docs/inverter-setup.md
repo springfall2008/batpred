@@ -66,6 +66,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
    | [Tesla Powerwall via Teslemetry component (beta)](#teslemetry-component-beta) | Predbat built-in | [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) |
+   | [Tesla Powerwall via Teslemetry local control](#teslemetry-local-control) | [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) paired with the local Powerwall gateway | [teslemetry_local.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry_local.yaml) |
    | [Victron](#victron) | [Victron GX](https://www.home-assistant.io/integrations/victron_gx/) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
@@ -2745,6 +2746,14 @@ max: 10
     - select.solax_inverter_remotecontrol_timeout_next_motion_mode_1_9
     - select.solax_remotecontrol_power_control_mode
     - button.solax_powercontrolmode8_trigger
+    - sensor.solax_house_load_alt
+    - sensor.solax_meter_2_measured_power
+
+- Mode 8 control also needs the 'House Load Alt' sensor (`sensor.solax_house_load_alt`) and the 'Meter 2 Measured Power' sensor (`sensor.solax_meter_2_measured_power`), one of the inputs House Load Alt is calculated from, to stay enabled.
+  As with the other entities, the prefix may differ on your system (e.g. `sensor.solax_inverter_house_load_alt`).
+  Recent versions of the Solax Modbus integration treat House Load Alt as a required input to the Mode 8 trigger: if it is disabled or unavailable the integration stops the trigger and sets the inverter's power control mode back to 'Disabled' straight after Predbat sends each command,
+  so the inverter ignores Predbat. House Load Alt is disabled by default, and both sensors have been found disabled after a Solax Modbus update, so re-check them after updating the integration.
+  The Home Assistant log then shows `SolaX: stopping powercontrolmode8_trigger because a required control input is invalid: ['house_load_alt']` (see [issue #6059](https://github.com/springfall2008/batpred/issues/6059)).
 
 - Predbat needs a 'Todays House Load' sensor, this can be created from inverter-supplied information by creating two custom helper entities:
 
@@ -3112,6 +3121,16 @@ Keep the token in `secrets.yaml` rather than in `apps.yaml` - see [Storing secre
 Copy the template [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) over the top of your `apps.yaml` and edit for your system. See [Tesla Powerwall Teslemetry API](components.md#tesla-powerwall-teslemetry-api-teslemetry) for details.
 
 `teslemetry_tbc_control` is on by default - that is the default *within* this beta component, which as a whole is still covered by the beta warning above; it is not a statement that the control path has graduated. Predbat pushes a control-signal tariff (0p over the charge window, 100p over the export window once it has started, 50p import elsewhere) and switches the Powerwall to Time-Based Control, so Tesla's own Opticaster runs the charge at full rate rather than the slower reserve-driven charge. When neither window is in the tariff it is a flat 50p, which gives Time-Based Control no reason to cover house load from the battery, so in that state Predbat uses Self-Powered mode instead and switches back to Time-Based Control as soon as a window is committed. Expect the Tesla app to move between the two modes during the day. While it is on, Predbat's charge and export target percentages are advisory, because Tesla decides how much energy actually moves. Grid charging under this mode is on inside a charge window that is below target, and off everywhere else (including the demand and export states) apart from the short top-up described next. Powerwall firmware since 25.18.4 honours a backup reserve of 0-80% or exactly 100%, nothing in between, and it fills a 100% reserve from the grid whatever the grid-charging setting says. So when Predbat wants to hold the battery somewhere from 81% to 96% - a freeze charge, a hold at a charge target, or a `set_reserve_min` set that high - it sets the reserve to 80% with grid charging off, so the battery covers the house, and once the battery falls more than 3% below the hold level it tops it back up with a 100% reserve, stopping at the hold level. A hold at 97% or above uses 100%, as the top-up is then at most a few percent. The hold is saved, so a restart within 30 minutes carries on from the same hold level. A change of control state (to charging, exporting or idle) ends the hold. The exception is a hold for the car: so the battery never feeds the car, above 80% it uses a 100% reserve, which tops the battery up from the grid while the car charges. Predbat logs this once, the first time it happens, and the same hold rule applies with `teslemetry_tbc_control` off. To opt out, set `teslemetry_tbc_control: False`: Predbat then pushes your real import/export rates and drives the charge through the backup reserve instead - slower, but the charge and export targets are enforced.
+
+### Teslemetry local control
+
+This setup drives the Powerwall through the [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) Home Assistant integration with the energy site paired to its local Powerwall gateway. Predbat reads everything from Home Assistant entities and controls the battery only with the integration's `teslemetry.dispatch_battery_power` and `teslemetry.resume_battery_operation` actions, so no Teslemetry token goes in `apps.yaml` and the commands go over your local network.
+
+- Install the [Teslemetry integration](https://github.com/Teslemetry/hass-teslemetry) v2026.10.24 or later from the [Marketplace](install.md#hacs-and-the-marketplace) (or HACS on Home Assistant 2026.10 or older), which provides `teslemetry.dispatch_battery_power` and `teslemetry.resume_battery_operation`, and pair your energy site with its local Powerwall gateway
+- Copy the template [teslemetry_local.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry_local.yaml) over the top of your `apps.yaml`, and edit for your system
+- Create the two Number helpers and the two pack-total template sensors that the template describes, and set `device_id` to your energy site's device id
+
+Charging dispatches the battery at minus the charge rate Predbat chose, exporting dispatches it at the discharge rate, and charge or export freeze dispatches 0 W to hold it. Predbat writes a new rate after it sends the dispatch, so the first dispatch of a charge or export window can run at the previous rate (after idle, the maximum) for one cycle. Each dispatch lasts 10 minutes and is re-sent every Predbat cycle, so the Powerwall returns to its normal operation on its own if Predbat stops. Predbat never changes the operation mode, export rule, grid charging or backup reserve with this template.
 
 ### How Predbat holds a Powerwall
 

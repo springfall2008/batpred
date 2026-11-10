@@ -517,9 +517,13 @@ class Prediction(PredictionBatch):
             self.prediction_cache_export_end[key] = end_socs
         return end_socs
 
-    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, cache=False, export_floor=True):
+    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, cache=False, export_floor=True, series=True):
         """
         Run a prediction scenario given a charge limit, return the results
+
+        Pass series=False when the per-step SoC series (field 11 of the result) will not be read. It
+        then comes back as an empty dict, from either engine, and the kernel skips producing it,
+        which is the larger part of what a single kernel run costs.
 
         PARITY RULE: The hot loop below is mirrored by the C++ kernel in prediction_kernel.cpp
         for the scenarios it supports. Any behavioural change here MUST be mirrored there,
@@ -558,7 +562,7 @@ class Prediction(PredictionBatch):
         # Try the C++ prediction kernel first; unsupported scenarios fall through to the Python engine.
         # The kernel understands all three pv_scenario values (see PkScenario.pv_scenario, ABI 3).
         if kernel_supported(self, save, step):
-            kernel_result = run_prediction_kernel(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, export_floor_soc=export_floor_soc)
+            kernel_result = run_prediction_kernel(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, export_floor_soc=export_floor_soc, series=series)
             if kernel_result is not None:
                 if sim_hash is not None:
                     # Store in cache without the SoC/car data to save memory, mirroring the Python engine
@@ -1600,7 +1604,7 @@ class Prediction(PredictionBatch):
             round(final_metric_keep, 4),
             round(final_iboost_kwh, 4),
             round(final_carbon_g, 4),
-            predict_soc,
+            predict_soc if series else {},
             car_charging_soc_next,
             iboost_next,
             iboost_running,
