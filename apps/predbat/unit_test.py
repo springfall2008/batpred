@@ -182,6 +182,7 @@ from tests.test_web_annual import (
     test_web_annual_validation_error_preserves_input,
 )
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests, run_clone_windows_tests, run_window_cache_tests
+from tests.test_trial_memo import run_trial_memo_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_export_encoding import run_export_encoding_tests
@@ -481,6 +482,16 @@ def run_window_cache_tests_isolated(my_predbat):
     return run_window_cache_tests(create_predbat())
 
 
+def run_trial_memo_tests_isolated(my_predbat):
+    """Run the trial memo tests against a freshly created instance.
+
+    my_predbat is unused for the reason run_window_cache_tests_isolated gives: the group ends by
+    replaying full plans from debug dumps with the memo validator on, which needs complete and
+    deterministic planning state rather than whatever earlier tests left on the shared instance.
+    """
+    return run_trial_memo_tests(create_predbat())
+
+
 def create_predbat():
     my_predbat = PredBat()
     my_predbat.states = {}
@@ -778,6 +789,7 @@ def main():
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
         ("clone_windows", run_clone_windows_tests, "Clone windows tests", False),
         ("window_cache", run_window_cache_tests_isolated, "Window bounds cache tests", False),
+        ("trial_memo", run_trial_memo_tests_isolated, "Batch trial memo: PV scenarios of one trial share its prepared inputs", False),
         ("hit_charge_cache", run_hit_charge_cache_tests, "Hit charge window cache tests", False),
         ("window_selection", run_window_selection_tests, "Window selection picker tests", False),
         ("kernel_static_cache", run_kernel_static_cache_tests, "Kernel static context cache tests", False),
