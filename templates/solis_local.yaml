@@ -436,6 +436,5 @@ pred_bat:
   #  - '{octopus_intelligent_slot}'
   #  - '{octopus_ready_time}'
   #  - '{octopus_charge_limit}'
-  #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
   #  - '+[car_charging_soc]'

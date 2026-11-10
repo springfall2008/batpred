@@ -2480,7 +2480,6 @@ In `apps.yaml`, uncomment (or add) the following lines, customising to the list 
     - '{octopus_intelligent_slot}'
     - '{octopus_ready_time}'
     - '{octopus_charge_limit}'
-    - '{octopus_saving_session}'
     - '+[car_charging_planned]'
     - '+[car_charging_soc]'
 ```
@@ -2489,6 +2488,8 @@ Note the notation for watch_list, a single value `apps.yaml` configuration item 
 but for `apps.yaml` configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
 
 **car_charging_now** does not need to be in the watch list: Predbat already checks it every 15 seconds and re-plans as soon as the car starts or stops charging.
+
+**octopus_saving_session** should not be in the watch list either: Predbat reads it on every update anyway, so watching it only adds extra re-plans that fall between the normal plan times.
 
 ## Load Forecast
 

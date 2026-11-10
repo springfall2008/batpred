@@ -1571,6 +1571,43 @@ def test_templates_ship_octopus_free_session(my_predbat):
     return failed
 
 
+def test_templates_do_not_watch_octopus_saving_session(my_predbat):
+    """
+    Test that no shipped template, the example apps.yaml or the watch list docs put octopus_saving_session in watch_list.
+    Predbat reads the session entity on every update cycle, so watching it only forces out-of-phase replans.
+    Covers GitHub issue #6106 (givenergy_ems.yaml shipped the entry live, every other template as a commented example).
+    """
+    print("Test apps.yaml templates and docs do not watch octopus_saving_session (issue #6106)")
+    failed = False
+
+    repo_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    templates_dir = os.path.join(repo_dir, "templates")
+    watch_entry = re.compile(r"^\s*(#\s*)?-\s*['\"]?\{octopus_saving_session\}['\"]?\s*$", re.MULTILINE)
+
+    # The check itself: finds live and commented watch_list entries, leaves the sensor regex that Predbat does read
+    for sample, expected in [("  watch_list:\n    - '{octopus_saving_session}'\n", True), ("  #  - '{octopus_saving_session}'\n", True), ("  octopus_saving_session: 're:(event.octopus_energy_saving_session_events)'\n", False)]:
+        if bool(watch_entry.search(sample)) != expected:
+            print(f"ERROR: watch entry pattern gave {not expected} for {sample!r}")
+            failed = True
+
+    paths = [os.path.join(templates_dir, name) for name in sorted(os.listdir(templates_dir)) if name.endswith(".yaml")]
+    paths += [os.path.join(repo_dir, "apps", "predbat", "config", "apps.yaml"), os.path.join(repo_dir, "docs", "apps-yaml.md")]
+    for path in paths:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        if watch_entry.search(text):
+            print(f"ERROR: {os.path.relpath(path, repo_dir)} lists octopus_saving_session in watch_list")
+            failed = True
+
+    if len(paths) < 12:
+        print(f"ERROR: expected the templates to be found and checked, only saw {len(paths)} files")
+        failed = True
+    elif not failed:
+        print(f"PASS: none of {len(paths)} files list octopus_saving_session in watch_list")
+
+    return failed
+
+
 def test_saving_session_zero_octopoints_joined_is_free_slot(my_predbat):
     """
     Test that the free/saving split is driven by eventType, not by the reward value.
