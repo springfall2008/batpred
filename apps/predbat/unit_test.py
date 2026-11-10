@@ -186,6 +186,7 @@ from tests.test_web_annual import (
 )
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests, run_clone_windows_tests, run_window_cache_tests
 from tests.test_trial_memo import run_trial_memo_tests
+from tests.test_batch_job_packing import run_batch_job_packing_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_export_encoding import run_export_encoding_tests
@@ -496,6 +497,15 @@ def run_trial_memo_tests_isolated(my_predbat):
     return run_trial_memo_tests(create_predbat())
 
 
+def run_batch_job_packing_tests_isolated(my_predbat):
+    """Run the batch job packing tests against a freshly created instance.
+
+    my_predbat is unused for the same reason as run_trial_memo_tests_isolated: the group replays full
+    plans from debug dumps, which needs complete and deterministic planning state.
+    """
+    return run_batch_job_packing_tests(create_predbat())
+
+
 def create_predbat():
     my_predbat = PredBat()
     my_predbat.states = {}
@@ -794,6 +804,7 @@ def main():
         ("clone_windows", run_clone_windows_tests, "Clone windows tests", False),
         ("window_cache", run_window_cache_tests_isolated, "Window bounds cache tests", False),
         ("trial_memo", run_trial_memo_tests_isolated, "Batch trial memo: PV scenarios of one trial share its prepared inputs", False),
+        ("batch_job_packing", run_batch_job_packing_tests_isolated, "Kernel batch jobs packed with struct match the per-field fill", False),
         ("hit_charge_cache", run_hit_charge_cache_tests, "Hit charge window cache tests", False),
         ("window_selection", run_window_selection_tests, "Window selection picker tests", False),
         ("kernel_static_cache", run_kernel_static_cache_tests, "Kernel static context cache tests", False),
