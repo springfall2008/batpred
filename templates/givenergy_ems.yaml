@@ -360,4 +360,3 @@ pred_bat:
     - '{octopus_ready_time}'
     - '{octopus_charge_limit}'
     - '+[car_charging_planned]'
-    - '+[car_charging_soc]'

@@ -737,7 +737,7 @@ def main():
         ("saving_session_min_octopoints_threshold", test_saving_session_min_octopoints_threshold, "Saving session configurable minimum octopoints threshold test (issue #4595)", False),
         ("saving_session_entity_regex_power_rename", test_saving_session_entity_regex_power_rename, "Saving/free session entity regex Power Down/Up rename test (issue #4548 point 2)", False),
         ("templates_octopus_free_session", test_templates_ship_octopus_free_session, "apps.yaml templates ship octopus_free_session alongside octopus_saving_session (issue #5912)", False),
-        ("templates_no_saving_session_watch", test_templates_do_not_watch_octopus_saving_session, "apps.yaml templates and docs do not watch octopus_saving_session (issue #6106)", False),
+        ("templates_no_saving_session_watch", test_templates_do_not_watch_octopus_saving_session, "apps.yaml templates and docs do not watch octopus_saving_session or car_charging_soc (issue #6106)", False),
         ("saving_session_select_entity_join_defers_notify", test_saving_session_select_entity_join_defers_notify, "Select-entity join defers the joined notification test (issue #4593)", False),
         ("saving_session_zero_octopoints_free_slot", test_saving_session_zero_octopoints_joined_is_free_slot, "Joined zero octopoints session becomes a free import slot test (issue #4851)", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
