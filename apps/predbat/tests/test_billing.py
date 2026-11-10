@@ -1235,6 +1235,10 @@ def test_match_credits():
     if part_billed[0]["credit"] is None or part_billed[1]["billed"] is not None or part_billed[1]["credit"] is not None:
         print("ERROR: an event not fully billed takes no credit, got {}".format(part_billed))
         return True
+    late = match_credits([dict(credits[0], posted="2026-11-13")], HAPPY_EVENTS, imports, LONDON)
+    if any(event["credit"] is not None for event in late):
+        print("ERROR: a credit posted more than BILLING_CREDIT_LAG_DAYS after an event should not pay for it, got {}".format(late))
+        return True
     pending = match_credits(credits[:1], HAPPY_EVENTS, imports, LONDON)
     if pending[0]["credit"] != 176.0 or pending[1]["credit"] is not None:
         print("ERROR: one credit should pay the closer event and leave the other pending, got {}".format(pending))
@@ -1328,6 +1332,24 @@ def test_attach_credits():
     pending = attach_billing(_plan([480, 510, 540]), dict(billing, credit_events=[dict(event, credit=None, posted=None)]), VIEW_MIDNIGHT, 30, {480: 0.0, 510: 0.0, 540: 30.0}, 55.52, {}, False, None, None)
     if [row.get("billing_credit") for row in pending["rows"]][:2] != ["pending", "pending"] or pending["billing_summary"].get("credits_pending") != 1 or pending["billing_summary"].get("diff") != 0.6:
         print("ERROR: an event with no credit yet should be flagged pending and not change the diff, got {}".format(pending["billing_summary"]))
+        return True
+    # Predbat recorded nothing for the 08:30 half-hour, so its bill is left out of the totals and so is its share of the credit
+    part = attach_billing(_plan([480, 510, 540]), billing, VIEW_MIDNIGHT, 30, {480: 0.0, 540: 30.0}, 55.52, {}, False, None, None)
+    if part["billing_summary"].get("credits") != 0.29 or part["billing_summary"].get("billed_cost") != 0.6 or part["billing_summary"].get("diff") != 0.01:
+        print("ERROR: only half the event's bill was counted, so only half its credit should be, got {}".format(part["billing_summary"]))
+        return True
+    # A half-hour of the event not billed yet shows no * on its dash
+    waiting = attach_billing(_plan([480, 510, 540]), dict(billing, slots={"import": {key: slot for key, slot in imports.items() if key != _key(510)}}), VIEW_MIDNIGHT, 30, {480: 0.0, 510: 0.0, 540: 30.0}, 55.52, {}, False, None, None)
+    if waiting["rows"][1].get("billing_credit") is not None or waiting["rows"][0].get("billing_credit") != "credited":
+        print("ERROR: a row not yet billed in the event should not be flagged, got {}".format([row.get("billing_credit") for row in waiting["rows"]]))
+        return True
+    # Predbat priced the event free; its full-rate bill must not make the day's rates look implausible and hide the billing
+    rated = _plan([480, 510, 540])
+    for row, rate in zip(rated["rows"], (0.0, 0.0, 6.0)):
+        row["import_rate"] = rate
+    priced = attach_billing(rated, dict(billing, slots={"import": dict(imports, **{_key(540): _slot(1.0, 6.0)})}), VIEW_MIDNIGHT, 30, {480: 0.0, 510: 0.0, 540: 6.0}, 55.52, {}, False, None, None)
+    if priced["rows"][0].get("billed") != 0.3 or "billing_summary" not in priced:
+        print("ERROR: a credited event's full-rate bill should be left out of the plausibility check, got {}".format(priced["rows"][0]))
         return True
     plain = attach_billing(_plan([480]), _billing_attrs(imports), VIEW_MIDNIGHT, 30, {480: 0.0}, 55.52, {}, False, None, None)
     if plain["rows"][0].get("billing_credit") is not None or plain["billing_summary"].get("credits") != 0.0:

@@ -4308,10 +4308,10 @@ class Output:
 
     @staticmethod
     def history_billing_mark(billing):
-        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, or an event's credit is posted; None without billing."""
+        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, or a credited event or its credit changes; None without billing."""
         slots = (billing or {}).get("slots") or {}
         mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] for leg in ("import", "export")]
-        mark.append([event.get("start") for event in (billing or {}).get("credit_events") or [] if event.get("credit") is not None])
+        mark.append([[event.get("start"), event.get("credit")] for event in (billing or {}).get("credit_events") or []])
         return mark if mark[0][0] else None
 
     def history_minute_data(self, suffix, days):

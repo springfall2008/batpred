@@ -23,7 +23,7 @@ figure is worse than none.
 import asyncio
 import random
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 BILLING_DAYS = 7
@@ -115,6 +115,9 @@ BILLING_CREDITS_QUERY = """query {{
 BILLING_CREDIT_TITLES = ("happy hour",)
 # Credits are kept this long, so one posted a few days after its event is still there to match
 BILLING_CREDIT_DAYS = BILLING_DAYS * 2
+# A credit is only matched to an event that started at most this many days before it was posted (Octopus posts
+# them a day or two after), so an older event's credit can't be pinned on a recent one
+BILLING_CREDIT_LAG_DAYS = 4
 # A credit is only matched to an event whose billed import it is within this ratio of, so a credit that pays
 # for an event outside the billing window isn't pinned on a different one
 BILLING_CREDIT_RATIO = (0.5, 2.0)
@@ -310,8 +313,8 @@ def match_credits(credits, events, import_slots, tz):
     """Pair each credit with the event it pays for; returns the events as dicts with their billed import and credit.
 
     events are {"start", "end"} UTC slot keys. A credit doesn't say which event it pays for, so each one, oldest
-    first, goes to the event not yet paid whose billed import is closest to it, among those that started on or
-    before the day it was posted and whose billed import it is within BILLING_CREDIT_RATIO of. An event whose
+    first, goes to the event not yet paid whose billed import is closest to it, among those that started on the
+    day it was posted or up to BILLING_CREDIT_LAG_DAYS before, and whose billed import it is within BILLING_CREDIT_RATIO of. An event whose
     half-hours aren't all billed has no billed figure and takes no credit. Each returned event is
     {"start", "end", "billed" (pence or None), "credit" (pence or None), "posted" (YYYY-MM-DD or None)}.
     """
@@ -326,8 +329,12 @@ def match_credits(credits, events, import_slots, tz):
         matched.append({"start": event["start"], "end": event["end"], "billed": billed, "credit": None, "posted": None, "day": day})
     for credit in credits or []:
         best = None
+        try:
+            earliest = (date.fromisoformat(credit["posted"]) - timedelta(days=BILLING_CREDIT_LAG_DAYS)).isoformat()
+        except ValueError:
+            continue
         for event in matched:
-            if event["credit"] is not None or not event["billed"] or event["day"] > credit["posted"]:
+            if event["credit"] is not None or not event["billed"] or event["day"] > credit["posted"] or event["day"] < earliest:
                 continue
             ratio = credit["amount"] / event["billed"]
             if not BILLING_CREDIT_RATIO[0] <= ratio <= BILLING_CREDIT_RATIO[1]:
@@ -694,8 +701,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
             buckets = {}
             for key in keys:
                 billed_pence += imports[key]["cost"] - (row_exports[key]["cost"] if key in row_exports else 0.0)
-                if row.get("import_rate") is not None:
-                    # The plausibility check is on the import bill alone, so a row waiting for its export still counts
+                if row.get("import_rate") is not None and key not in credit_slots:
+                    # The plausibility check is on the import bill alone, so a row waiting for its export still counts. A credited
+                    # event's half-hours are left out: they are billed at the full rate where Predbat priced them free
                     totals["rate_cost"] += imports[key]["cost"]
                     totals["rate_kwh"] += imports[key]["kwh"]
                     totals["predbat_rate_cost"] += imports[key]["kwh"] * row["import_rate"]
@@ -729,9 +737,12 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
             totals["predbat_export_kwh"] += (predbat_export_kwh or {}).get(slot_minute, 0.0)
         credit_event = next((credit_slots[key] for key in keys if key in credit_slots), None)
         if full and credit_event is not None:
-            # Counted once per event, by its start, in the view whose fully billed rows hold it
-            credited.setdefault(credit_event["start"], credit_event)
-        credit_state = None if credit_event is None else ("pending" if credit_event.get("credit") is None else "credited")
+            # Each event once, by its start, with the share of its billed import that went into the totals above, so
+            # its credit is only taken off the bill it pays for
+            entry = credited.setdefault(credit_event["start"], {"event": credit_event, "counted": 0.0})
+            if predbat_pence is not None:
+                entry["counted"] += sum(imports[key]["cost"] for key in keys if credit_slots.get(key) is credit_event)
+        credit_state = None if credit_event is None or billed_pence is None else ("pending" if credit_event.get("credit") is None else "credited")
         updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes), full, pending_export, credit_state))
     if not updates:
         return plan_json
@@ -752,7 +763,11 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     last_billed = max(index for index, update in enumerate(updates) if update[5])
     # Rows showing nothing before the last fully billed one; rows waiting for their export show their import and are counted apart
     missing_slots = sum(1 for update in updates[:last_billed] if not update[5] and not update[6])
-    credits = sum(credit_event.get("credit") or 0.0 for credit_event in credited.values())
+    credits = 0.0
+    for entry in credited.values():
+        credit = entry["event"].get("credit") or 0.0
+        event_billed = entry["event"].get("billed") or 0.0
+        credits += credit * min(1.0, entry["counted"] / event_billed) if event_billed > 0 else 0.0
     billed_until = (view_midnight_utc + timedelta(minutes=updates[last_billed][0]["slot_minute"] + plan_interval_minutes)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)
     plan_json["billing_summary"] = {
         "predbat_cost": _pounds(totals["predbat"]),
@@ -760,7 +775,7 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         # Credits paid back later for events billed at the full rate count against the bill
         "diff": _pounds(totals["billed"] - credits - totals["predbat"]),
         "credits": _pounds(credits),
-        "credits_pending": sum(1 for credit_event in credited.values() if credit_event.get("credit") is None),
+        "credits_pending": sum(1 for entry in credited.values() if entry["event"].get("credit") is None),
         "standing_predbat": _pounds(totals["standing_predbat"]),
         "standing_billed": _pounds(totals["standing_billed"]),
         "import_kwh": [None if predbat_import_kwh is None else round(totals["predbat_import_kwh"], 2), round(totals["import_kwh"], 2)],
