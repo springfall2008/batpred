@@ -1335,6 +1335,20 @@ This requires the LuxPython component which integrates with your Lux Power inver
     - **System Charge SOC Limit (%)** is set to 100% (default).
     - **On-Grid Cut-Off SOC (%)** is set to 100% minus battery depth of discharge(%). Depending on your battery, this is typically between 20% and 0%.
 
+- Make sure Predbat's minimum reserve is at least 1% above the inverter's **Start AC Charge SOC (%)**.
+  The inverter rejects an AC charge SOC limit at or below Start AC Charge SOC. When Predbat turns charging off, for
+  example outside a charge window or around an export, it writes its minimum reserve to that limit. That minimum is the
+  higher of **input_number.predbat_set_reserve_min** (4% by default) and `battery_min_soc` (in the template, the
+  inverter's On-Grid Cut-Off SOC). If it is too low, the write fails on every run with a warning like
+  `Trying to write 4 to charge_limit didn't complete` and the status shows errors.
+  Start AC Charge SOC is only shown in the LuxPowerTek app, not in the web portal, although some Home Assistant
+  integrations (such as the LuxPower cloud integration) expose it as an `ac_charge_start_soc` number. Either:
+
+    - raise `input_number.predbat_set_reserve_min` (and `predbat_set_reserve_min_1`, `_2`... for each further
+      inverter) to at least Start AC Charge SOC + 1% - for example 6% if Start AC Charge SOC is 5%. Predbat then also
+      plans never to use the battery below that level; or
+    - lower Start AC Charge SOC in the LuxPowerTek app to below Predbat's minimum reserve.
+
 - If you want to use Predbat in **Control charge** mode, go to the LuxPowerTek app or web portal and set all start and end time slots for AC Charge to `00:00`.
   For **Control charge and discharge** mode, set all AC Charge and Forced Discharge slots to `00:00`.
   Predbat only uses the first time slots and will set these automatically.
