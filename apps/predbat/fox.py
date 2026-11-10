@@ -25,11 +25,15 @@ import aiohttp
 import json
 import argparse
 import random
+import re
 from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from utils import dp2, load_apps_yaml
+
+# A decimal kW rating in a Fox deviceType, e.g. the 3.7 in H1-3.7-E-G2-WL or the 10.5 in KH10.5 (see FoxAPI.capacity_watts)
+FOX_DEVICE_TYPE_KW_RATING = re.compile(r"(\d+\.\d+)")
 
 # Define TIME_FORMAT_HA locally to avoid dependency issues
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
@@ -981,13 +985,18 @@ class FoxAPI(ComponentBase, OAuthMixin):
     def capacity_watts(detail):
         """
         Return the device's rated capacity in watts, correcting for Fox reporting the
-        device/detail 'capacity' field as a truncated integer on half-kW models (e.g. a
-        10.5kW KH10.5 inverter reports capacity=10). If deviceType ends in '.5' and the
-        raw capacity is an exact multiple of 1000W, bump it up to end in 500.
+        device/detail 'capacity' field as a truncated integer on fractional-kW models: a
+        10.5kW KH10.5 reports capacity=10, and a 3.7kW H1-3.7-E-G2-WL reports capacity=3
+        (GH#5938). When the raw capacity is a whole number of kW and deviceType carries a
+        decimal kW rating with that whole part, use the rating from deviceType.
         """
         capacity = detail.get("capacity", 0) * 1000.0
-        if capacity and capacity % 1000 == 0 and str(detail.get("deviceType", "")).endswith(".5"):
-            capacity += 500.0
+        if capacity and capacity % 1000 == 0:
+            for rating in FOX_DEVICE_TYPE_KW_RATING.findall(str(detail.get("deviceType", ""))):
+                rating_kw = float(rating)
+                if int(rating_kw) * 1000 == capacity:
+                    capacity = float(round(rating_kw * 1000.0))
+                    break
         return capacity
 
     @staticmethod
@@ -1632,7 +1641,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         if result is not None:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
             # XXX: Fox seems to be have an issue with FD Power max value being too high, cap it at the inverter capacity
-            # (inverter_capacity is already corrected for half-kW deviceTypes by capacity_watts())
+            # (inverter_capacity is already corrected for fractional-kW deviceTypes by capacity_watts())
             if inverter_capacity:
                 self.fdpwr_max[deviceSN] = min(inverter_capacity, self.fdpwr_max[deviceSN])
 
@@ -2593,8 +2602,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
         do, so it is a flag.
 
         ratings are figures the device reports, keyed by Predbat setting name. inverter_limit goes
-        through capacity_watts(), never capacity * 1000: Fox reports a half-kW model's capacity
-        truncated (a KH10.5 says 10), and capacity_watts() is what restores the 500 W. For a
+        through capacity_watts(), never capacity * 1000: Fox reports a fractional-kW model's capacity
+        truncated (a KH10.5 says 10, an H1-3.7 says 3), and capacity_watts() is what restores the fraction. For a
         battery device that is also the value of the _inverter_capacity sensor publish_data()
         publishes; for a PV-only device publish_data() sets that sensor to 0, while the catalogue
         still reports the device's own rating. export_limit and import_limit are the ExportLimit
