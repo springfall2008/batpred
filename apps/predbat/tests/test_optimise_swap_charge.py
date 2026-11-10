@@ -423,7 +423,7 @@ def run_swap_charge_batch_tests(my_predbat):
         return True
     kernel_modes = [False, True] if available else [False]
 
-    saved = (my_predbat.pv_metric90_weight, getattr(my_predbat, "prediction_kernel_enable", False), my_predbat.debug_enable)
+    saved = (my_predbat.pv_metric90_weight, my_predbat.prediction_kernel_enable, my_predbat.debug_enable)
     failed = False
     try:
         failed |= test_batched_metric_matches_run_prediction_metric(my_predbat, kernel_modes)

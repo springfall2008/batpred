@@ -285,7 +285,7 @@ def run_metric_series_tests(my_predbat):
         return True
     kernel_modes = [False, True] if available else [False]
 
-    saved = (my_predbat.pv_metric90_weight, getattr(my_predbat, "prediction_kernel_enable", False), my_predbat.debug_enable)
+    saved = (my_predbat.pv_metric90_weight, my_predbat.prediction_kernel_enable, my_predbat.debug_enable)
     failed = False
     try:
         failed |= test_series_off_changes_only_the_series(my_predbat, kernel_modes)

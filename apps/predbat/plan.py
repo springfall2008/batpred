@@ -1903,7 +1903,7 @@ class Plan:
         cost90 = None
         final_iboost90 = 0.0
         if handle90 is not None:
-            (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = handle90.get()
+            cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = handle90.get()
         metric, battery_value = self.compute_metric(
             self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
         )
