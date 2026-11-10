@@ -295,6 +295,7 @@ recorder:
       - predbat.cost_today_car
       - predbat.cost_yesterday
       - predbat.cost_yesterday_car
+      - predbat.inverter_register_writes
       - predbat.load_ml_stats
       - predbat.load_power
       - predbat.load_energy_actual
@@ -348,6 +349,7 @@ logger:
     homeassistant.components.recorder.db_schema:
       - "State attributes for predbat.cost_yesterday exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
       - "State attributes for predbat.savings_yesterday_predbat exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
+      - "State attributes for predbat.soc_kw_best exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
 ```
 
 ## Error - metric_octopus_import not set correctly in apps.yaml, or no energy rates can be read
