@@ -59,6 +59,7 @@ from tests.test_previous_value_provider import test_previous_value_provider
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
+from tests.test_clock_change_day import test_clock_change_day
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
@@ -66,6 +67,7 @@ from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_kernel_tests
 from tests.test_optimise_solar import run_optimise_solar_tests
 from tests.test_optimise_swap_charge import run_optimise_swap_charge_tests
+from tests.test_metric_series import run_metric_series_tests
 from tests.test_optimise_swap_export import run_optimise_swap_export_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
@@ -104,6 +106,9 @@ from tests.test_alert_feed import test_alert_feed
 from tests.test_solax import run_solax_tests
 from tests.test_sigenergy import run_sigenergy_tests
 from tests.test_single_debug import run_single_debug
+from tests.replay_forward import replay_forward, summarise, chart_replay, soc_rms_error, parse_override, capture_log, write_replay_json
+from tests.test_replay_forward import run_replay_forward_tests
+from tests.test_dummy_inverter import run_dummy_inverter_tests
 from tests.test_saving_session import (
     test_saving_session,
     test_saving_session_null_octopoints,
@@ -180,6 +185,8 @@ from tests.test_web_annual import (
     test_web_annual_validation_error_preserves_input,
 )
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests, run_clone_windows_tests, run_window_cache_tests
+from tests.test_trial_memo import run_trial_memo_tests
+from tests.test_batch_job_packing import run_batch_job_packing_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_export_encoding import run_export_encoding_tests
@@ -326,6 +333,9 @@ from tests.test_find_charge_window import test_find_charge_window
 from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
 from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests, run_random_scenario_reapply_tests
+from tests import network_guard
+from tests.test_network_guard import test_network_guard
+from tests.test_debug_yaml_cache import test_debug_yaml_cache
 from tests.test_gecloud_budget import run_gecloud_budget_harness_tests, run_gecloud_api_budget
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
@@ -336,6 +346,7 @@ from tests.test_ohme import test_ohme
 from tests.test_givtcp_component import test_givtcp_component
 from tests.test_debug_yaml_scope import run_debug_yaml_scope_tests
 from tests.test_log_replay_inputs import run_log_replay_inputs_tests
+from tests.test_replay_roundtrip import run_replay_roundtrip_tests, run_replay_roundtrip_day_tests
 from tests.test_memory_release import run_memory_release_tests
 from tests.test_inverter_write_poll import run_inverter_write_poll_tests
 from tests.test_givtcp_rest import run_givtcp_rest_tests
@@ -435,7 +446,7 @@ def run_debug_cases(my_predbat):
         if basename == "random_scenarios.yaml":
             continue  # Skip the random scenarios template file
         case_predbat = create_predbat()
-        test_failed = run_single_debug(basename, case_predbat, filename, pathname + "/" + basename + ".expected.json")
+        test_failed = run_single_debug(basename, case_predbat, filename, pathname + "/" + basename + ".expected.json", write_debug_dump=False)
         total_calculate_plan_time += getattr(case_predbat, "last_calculate_plan_time", 0.0)
         case_count += 1
         if test_failed:
@@ -476,6 +487,25 @@ def run_window_cache_tests_isolated(my_predbat):
     return run_window_cache_tests(create_predbat())
 
 
+def run_trial_memo_tests_isolated(my_predbat):
+    """Run the trial memo tests against a freshly created instance.
+
+    my_predbat is unused for the reason run_window_cache_tests_isolated gives: the group ends by
+    replaying full plans from debug dumps with the memo validator on, which needs complete and
+    deterministic planning state rather than whatever earlier tests left on the shared instance.
+    """
+    return run_trial_memo_tests(create_predbat())
+
+
+def run_batch_job_packing_tests_isolated(my_predbat):
+    """Run the batch job packing tests against a freshly created instance.
+
+    my_predbat is unused for the same reason as run_trial_memo_tests_isolated: the group replays full
+    plans from debug dumps, which needs complete and deterministic planning state.
+    """
+    return run_batch_job_packing_tests(create_predbat())
+
+
 def create_predbat():
     my_predbat = PredBat()
     my_predbat.states = {}
@@ -505,6 +535,11 @@ def create_predbat():
 
 
 def main():
+    # The suite replays the same few debug dumps dozens of times; parse each once (see DEBUG_YAML_PARSE_CACHE)
+    import userinterface
+
+    userinterface.DEBUG_YAML_PARSE_CACHE = {}
+
     # Test registry - table of all available tests
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
@@ -533,6 +568,7 @@ def main():
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
         ("clock", run_clock_tests, "update_time clock tests", False),
+        ("clock_change_day", test_clock_change_day, "Today's figures and yesterday's on a clock-change day (GH#5760)", False),
         ("rate_min_forward_calc", test_rate_min_forward_calc, "Rate min forward calc tests", False),
         ("rate_export_max_forward_calc", test_rate_export_max_forward_calc, "Rate export max forward calc tests", False),
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
@@ -767,6 +803,8 @@ def main():
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
         ("clone_windows", run_clone_windows_tests, "Clone windows tests", False),
         ("window_cache", run_window_cache_tests_isolated, "Window bounds cache tests", False),
+        ("trial_memo", run_trial_memo_tests_isolated, "Batch trial memo: PV scenarios of one trial share its prepared inputs", False),
+        ("batch_job_packing", run_batch_job_packing_tests_isolated, "Kernel batch jobs packed with struct match the per-field fill", False),
         ("hit_charge_cache", run_hit_charge_cache_tests, "Hit charge window cache tests", False),
         ("window_selection", run_window_selection_tests, "Window selection picker tests", False),
         ("kernel_static_cache", run_kernel_static_cache_tests, "Kernel static context cache tests", False),
@@ -836,6 +874,10 @@ def main():
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),
         ("debug_yaml_scope", run_debug_yaml_scope_tests, "create_debug_yaml() reachability/scope tests", False),
+        ("dummy_inverter", run_dummy_inverter_tests, "Simulated inverter and battery component (model physics, controls, automatic config)", False),
+        ("replay_forward", run_replay_forward_tests, "Forward replay of a log from a debug yaml (log parsing, history shifting, window comparison)", False),
+        ("replay_roundtrip", run_replay_roundtrip_tests, "Round trip: an hour of the main loop against the dummy inverter, then a replay of its log must match line for line", False),
+        ("replay_roundtrip_day", run_replay_roundtrip_day_tests, "Round trip: a recorded day of real load and PV through midnight, then a replay of its log must match line for line", True),
         ("log_replay_inputs", run_log_replay_inputs_tests, "Replay-input log lines (forecasts, rates, plan state, cars, inverter)", False),
         ("memory_release", run_memory_release_tests, "glibc malloc_trim()/arena cap helper tests", False),
         ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
@@ -901,7 +943,10 @@ def main():
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),
+        ("metric_series", run_metric_series_tests, "run_prediction_metric skips the SoC series of its pv10 and pv90 runs", False),
         ("optimise_swap_export", run_optimise_swap_export_tests, "Optimise pairwise export-window swap tests", False),
+        ("network_guard", test_network_guard, "Unit tests may not reach the network: non-local lookups and connects fail the test", False),
+        ("debug_yaml_cache", test_debug_yaml_cache, "Debug dump parse cache used by the test runner", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", False),
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
@@ -953,6 +998,12 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
+    parser.add_argument("--replay_log", action="store", help="With --debug_file: replay this Predbat log forwards from the debug yaml and compare each re-plan's export windows with the log's")
+    parser.add_argument("--replay_until", action="store", help="With --replay_log: stop the replay at the first HH:MM after the yaml (the next day if that time has passed)")
+    parser.add_argument("--replay_simulate", action="store_true", help="With --replay_log: simulate the battery under the replayed plan from actual PV and load, instead of taking SoC from the log")
+    parser.add_argument("--override", action="append", help="With --debug_file: override a setting after restoring the yaml, as name=value (repeatable), for what-if replays")
+    parser.add_argument("--replay_chart", action="store", help="With --replay_log: also write a PNG chart of SoC and the live vs replayed export plan to this file")
+    parser.add_argument("--replay_json", action="store", help="With --replay_log: also write the comparison as JSON to this file - a summary, then one record per run with the plans and prediction metrics that differ and the first differing plan line")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
     parser.add_argument("--compare", action="store_true", help="Run compare")
@@ -1044,8 +1095,36 @@ def main():
         )
         sys.exit(0)
 
+    overrides = dict(parse_override(text) for text in (args.override or []))
+    if args.debug_file and args.replay_log:
+        replay_lines = []
+        if args.replay_json:
+            capture_log(my_predbat, replay_lines)
+        rows = replay_forward(my_predbat, args.debug_file, args.replay_log, until=args.replay_until, simulate=args.replay_simulate, overrides=overrides)
+        if args.replay_json:
+            with open(args.replay_log, errors="replace") as handle:
+                live_lines = handle.readlines()
+            meta = {"debug_file": args.debug_file, "log_file": args.replay_log, "mode": "simulated" if args.replay_simulate else "exact", "until": args.replay_until, "overrides": overrides or {}}
+            write_replay_json(args.replay_json, rows, live_lines, replay_lines, meta)
+            print("Wrote replay JSON to {}".format(args.replay_json))
+        if args.replay_chart:
+            chart_replay(rows, args.replay_chart, title="Replay of {} from {}".format(os.path.basename(args.replay_log), os.path.basename(args.debug_file)))
+            print("Wrote replay chart to {}".format(args.replay_chart))
+        for after in (False, True):
+            if after and not any(row.get("after_version_change") for row in rows):
+                break
+            label = " after the version change" if after else ""
+            replanned, identical, same_start = summarise(rows, after_version_change=after)
+            print("Replay: adopted plans{} - of {} re-plans, {} identical to the log and {} with the same first export window start".format(label, replanned, identical, same_start))
+            replanned, identical, same_start = summarise(rows, logged="logged_candidate", replayed="replayed_candidate", after_version_change=after)
+            print("Replay: candidate plans{} - of {} re-plans, {} identical to the log and {} with the same first export window start".format(label, replanned, identical, same_start))
+        rms = soc_rms_error(rows)
+        if rms is not None:
+            print("Replay: simulated SoC differs from the logged SoC by {:.2f}% RMS over {} runs".format(rms, len(rows)))
+        sys.exit(0)
+
     if args.debug_file:
-        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo)
+        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo, overrides=overrides)
         sys.exit(0)
 
     # Collect tests to run based on arguments
@@ -1080,6 +1159,8 @@ def main():
         print(f"**** Shuffled test order with seed {shuffle_seed} ****")
 
     print(f"**** Running {len(tests_to_run)} test(s) ****")
+    # Any test that reaches past the loopback interface fails, naming the host - see tests/network_guard.py
+    network_guard.install()
     # Single loop to run all collected tests
     total_time = 0
     skipped_count = 0
@@ -1105,6 +1186,9 @@ def main():
         start_time = time.time()
         test_failed = func(my_predbat)
         elapsed = time.time() - start_time
+        for attempt in network_guard.take_attempts():
+            print(f"**** ERROR: Test {name} tried to reach the network: {attempt} - stub the call instead ****")
+            test_failed = True
         total_time += elapsed
         end_stamp = time.strftime("%H:%M:%S")
 

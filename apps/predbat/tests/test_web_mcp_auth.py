@@ -18,6 +18,7 @@ import asyncio
 import base64
 import hashlib
 import json
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 from datetime import datetime, timedelta, timezone
 
@@ -197,14 +198,21 @@ def test_mcp_refuses_default_secret(my_predbat):
     failed = False
     print("**** Testing MCP refuses the default secret ****")
 
+    real_sleep = asyncio.sleep
+
+    async def short_sleep(delay, *args, **kwargs):
+        """The refused server checks api_stop once a second; a shorter tick lets each case stop at once rather than a second later."""
+        return await real_sleep(min(delay, 0.01), *args, **kwargs)
+
     async def run_briefly(server):
         """Start the server, look at its state while it runs, then stop it."""
         server.api_stop = False
-        task = asyncio.create_task(server.start())
-        await asyncio.sleep(0.05)
-        state = (server.api_started, server.is_alive(), server.health_message(), server.mcp_server)
-        server.api_stop = True
-        await asyncio.wait_for(task, timeout=10)
+        with patch("asyncio.sleep", short_sleep):
+            task = asyncio.create_task(server.start())
+            await real_sleep(0.05)
+            state = (server.api_started, server.is_alive(), server.health_message(), server.mcp_server)
+            server.api_stop = True
+            await asyncio.wait_for(task, timeout=10)
         return state
 
     for secret in ("predbat_mcp_secret", "", "   ", None):

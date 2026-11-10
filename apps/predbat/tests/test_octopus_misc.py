@@ -34,6 +34,7 @@ async def test_octopus_misc(my_predbat):
     failed += await test_octopus_automatic_config_rewire(my_predbat)
     failed += test_octopus_automatic_config_respects_slot_claim(my_predbat)
     failed += await test_octopus_run(my_predbat)
+    failed += await test_octopus_run_wires_and_fetches_after_failed_first_fetch(my_predbat)
 
     if failed == 0:
         print("\n**** ✅ All Octopus Misc API tests PASSED ****")
@@ -1465,7 +1466,7 @@ def test_octopus_get_octopus_rates_direct(my_predbat):
     api5.tariffs = {
         "export": {
             "productCode": "TEST-EXPORT",
-            "tariffCode": "TEST-EXPORT-TARIFF"
+            "tariffCode": "TEST-EXPORT-TARIFF",
             # No "data" key
         }
     }
@@ -1660,7 +1661,7 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
         "test-device-888": {
             "weekday_target_time": "06:00",
             "weekday_target_soc": 77,
-            "weekend_target_time": "08:00"
+            "weekend_target_time": "08:00",
             # Missing weekend_target_soc
         }
     }
@@ -1784,7 +1785,7 @@ def test_octopus_get_intelligent_target_time(my_predbat):
         "test-device-999": {
             "weekday_target_soc": 80,
             "weekend_target_time": "08:00",
-            "weekend_target_soc": 90
+            "weekend_target_soc": 90,
             # Missing weekday_target_time
         }
     }
@@ -1810,7 +1811,7 @@ def test_octopus_get_intelligent_target_time(my_predbat):
         "test-device-888": {
             "weekday_target_time": "06:00",
             "weekday_target_soc": 80,
-            "weekend_target_soc": 90
+            "weekend_target_soc": 90,
             # Missing weekend_target_time
         }
     }
@@ -1884,7 +1885,7 @@ def test_octopus_get_intelligent_battery_size(my_predbat):
     api3.intelligent_devices = {
         "test-device-789": {
             "weekday_target_time": "06:30",
-            "weekday_target_soc": 80
+            "weekday_target_soc": 80,
             # Missing vehicle_battery_size_in_kwh
         }
     }
@@ -2026,7 +2027,7 @@ def test_octopus_get_intelligent_vehicle(my_predbat):
         "test-device-789": {
             "vehicle_battery_size_in_kwh": 60.0,
             "weekday_target_soc": 80,
-            "model": "Nissan Leaf"
+            "model": "Nissan Leaf",
             # Other fields missing - should be excluded from result
         }
     }
@@ -2614,6 +2615,64 @@ def _mock_run_api(my_predbat, key, account_id, automatic=False):
     api.save_octopus_cache = AsyncMock()
     api.process_commands = AsyncMock(return_value=False)
     return api
+
+
+async def test_octopus_run_wires_and_fetches_after_failed_first_fetch(my_predbat):
+    """
+    GH#5994: in automatic mode, a failed first account fetch must not leave the plan without rates.
+
+    Cycle 1 (first=True): the account fetch fails, so run()'s first-cycle configure runs with no tariffs. Cycle 2, a minute
+    later: the account fetch succeeds. That same cycle must wire metric_octopus_import and download the import rates,
+    although the 10-minute device refresh (which normally gates the rate download) is not yet due.
+    """
+    print("\n**** Running Octopus run() failed-first-fetch recovery test ****")
+    failed = False
+    args_before = dict(my_predbat.args)
+    my_predbat.args.pop("metric_octopus_import", None)
+    import_meterpoint = {
+        "mpan": "2324000000001",
+        "meters": [{"activeFrom": "2024-01-01", "activeTo": None, "smartImportElectricityMeter": {"deviceId": "IMPORT-DEVICE"}, "smartExportElectricityMeter": None}],
+        "agreements": [{"validFrom": "2024-01-01T00:00:00+00:00", "validTo": None, "tariff": {"tariffCode": "E-1R-IOG-24-01-01-A", "productCode": "IOG-24-01-01"}}],
+    }
+    try:
+        api = _mock_run_api(my_predbat, key="test-api-key", account_id="test-account", automatic=True)
+        # Real tariff discovery and automatic configuration; the account fetch and everything with I/O stay mocked
+        api.async_find_tariffs = OctopusAPI.async_find_tariffs.__get__(api)
+        api.refresh_discovery = MagicMock()
+        api.account_data = {}
+
+        async def failing_account(*args, **kwargs):
+            """Simulate a rate-limited account request: no data, the cached (empty) account kept."""
+            return None
+
+        async def working_account(*args, **kwargs):
+            """Simulate the account request succeeding on the next try."""
+            api.account_data = {"account": {"electricityAgreements": [{"meterPoint": import_meterpoint}], "gasAgreements": []}}
+            return api.account_data
+
+        api.async_get_account = AsyncMock(side_effect=failing_account)
+        await api.run(seconds=0, first=True)
+        if my_predbat.args.get("metric_octopus_import"):
+            print("ERROR: expected no import rates wired after the failed first fetch, got {}".format(my_predbat.args.get("metric_octopus_import")))
+            failed = True
+
+        api.async_get_account = AsyncMock(side_effect=working_account)
+        api.fetch_tariffs.reset_mock()
+        await api.run(seconds=60, first=False)
+        wired = my_predbat.args.get("metric_octopus_import")
+        fetched = [call.args[0] for call in api.fetch_tariffs.call_args_list]
+        if not wired or "import_rates" not in str(wired):
+            print("ERROR: expected the import rates wired once the account fetch succeeded, got {}".format(wired))
+            failed = True
+        elif not any("import" in tariffs for tariffs in fetched):
+            print("ERROR: expected the import rates downloaded in the cycle that found them, fetch_tariffs calls: {}".format(fetched))
+            failed = True
+        else:
+            print("PASS: rates wired and downloaded in the cycle the account fetch succeeded")
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(args_before)
+    return failed
 
 
 async def test_octopus_run(my_predbat):

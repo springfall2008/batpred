@@ -23,9 +23,13 @@ pass exists to push back.
 """
 
 from tests.test_infra import reset_rates, reset_inverter, update_rates_export, clear_manual_times
-from const import EXPORT_MODE_IDLE
-from utils import export_mode_of, export_target_of
+from const import EXPORT_MODE_IDLE, EXPORT_MODE_TARGET
+from utils import export_mode_of, export_target_of, pack_export_limit
 from prediction import Prediction
+
+# Export limits in the planner's own (mode, target, power) form: export down to 0%, or window off
+EXPORT_FULL = pack_export_limit(EXPORT_MODE_TARGET, 0)
+EXPORT_OFF = pack_export_limit(EXPORT_MODE_IDLE)
 
 
 def setup_swap_export(
@@ -160,7 +164,7 @@ def run_optimise_swap_export_tests(my_predbat):
         {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 15.0},
         {"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 60, "average": 15.0},
     ]
-    setup_swap_export(my_predbat, export_window_best, export_limits_best=[0.0, 100.0])
+    setup_swap_export(my_predbat, export_window_best, export_limits_best=[EXPORT_FULL, EXPORT_OFF])
     my_predbat.optimise_swap_export(0, len(export_window_best))
     if not (export_mode_of(my_predbat.export_limits_best[0]) == EXPORT_MODE_IDLE and export_target_of(my_predbat.export_limits_best[1]) == 0):
         print("ERROR: equal priced windows should defer the export to the later window, got limits {}".format(my_predbat.export_limits_best))
@@ -174,7 +178,7 @@ def run_optimise_swap_export_tests(my_predbat):
         {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 15.0},
         {"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 60, "average": 15.0},
     ]
-    setup_swap_export(my_predbat, export_window_best, export_limits_best=[100.0, 0.0])
+    setup_swap_export(my_predbat, export_window_best, export_limits_best=[EXPORT_OFF, EXPORT_FULL])
     my_predbat.optimise_swap_export(0, len(export_window_best))
     if not (export_mode_of(my_predbat.export_limits_best[0]) == EXPORT_MODE_IDLE and export_target_of(my_predbat.export_limits_best[1]) == 0):
         print("ERROR: an export already in the last window should be unchanged, got limits {}".format(my_predbat.export_limits_best))
@@ -187,10 +191,10 @@ def run_optimise_swap_export_tests(my_predbat):
         {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 15.0},
         {"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 60, "average": 15.0},
     ]
-    setup_swap_export(my_predbat, export_window_best, export_limits_best=[0.0, 100.0])
+    setup_swap_export(my_predbat, export_window_best, export_limits_best=[EXPORT_FULL, EXPORT_OFF])
     my_predbat.calculate_best_export = False
     my_predbat.optimise_swap_export(0, len(export_window_best))
-    if my_predbat.export_limits_best != [0.0, 100.0]:
+    if my_predbat.export_limits_best != [EXPORT_FULL, EXPORT_OFF]:
         print("ERROR: disabled export optimisation should be unchanged, got {}".format(my_predbat.export_limits_best))
         failed = True
     my_predbat.calculate_best_export = True
@@ -206,7 +210,7 @@ def run_optimise_swap_export_tests(my_predbat):
         {"start": now + 30, "end": now + 60, "average": 50.0},
         {"start": now + 80, "end": now + 90, "average": 50.0, "start_orig": now + 60},
     ]
-    setup_swap_export(my_predbat, export_window_best, export_limits_best=[100.0, 0.0, 0.0], rate_import=30.0, rate_export=50.0)
+    setup_swap_export(my_predbat, export_window_best, export_limits_best=[EXPORT_OFF, EXPORT_FULL, EXPORT_FULL], rate_import=30.0, rate_export=50.0)
     saved_manual_export_times = my_predbat.manual_export_times
     my_predbat.manual_export_times = [now]
     try:

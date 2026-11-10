@@ -19,7 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
+from utils import clock_change_minutes, minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -813,6 +813,14 @@ class Fetch:
         self.log("Filled load_today before its history starts {} minutes ago with {}kWh from {} history, data now goes back {} days".format(gap_start, dp2(added), entity_id, load_minutes_age))
         return data, load_minutes_age
 
+    def clock_change_minutes_today(self):
+        """Minutes the clocks have moved since the start of today: 60 after a spring change, -60 after an autumn one, otherwise 0 (see utils.clock_change_minutes)."""
+        return clock_change_minutes(self.now_utc, self.local_tz)
+
+    def minutes_since_day_start(self):
+        """Real minutes since the start of today, for reading history keyed by real minutes back from now; minutes_now on any day but a clock-change one (GH#5760)."""
+        return self.minutes_now - self.clock_change_minutes_today()
+
     def fetch_load_today(self):
         """
         Read the load_today history, backfill the days before it starts from load_energy_h0, then work out
@@ -822,7 +830,9 @@ class Fetch:
         self.log("Found {} load_today datapoints going back {} days".format(len(load_minutes), load_minutes_age))
         self.load_minutes, self.load_minutes_age = self.fill_load_from_history(load_minutes, load_minutes_age)
         self.load_minutes_source = "load_today"
-        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
+        # Today so far: the history is keyed by real minutes back from now, so read it back to the real start of the day,
+        # which on a clock-change day is not minutes_now back (GH#5760). The same applies to every "today" read below
+        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_since_day_start(), backwards=True)
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
 
     def previous_days_modal_filter(self, data):
@@ -1151,7 +1161,9 @@ class Fetch:
         Never raises - these run every cycle on the main loop, and a logging fault must not stop the plan.
         """
         try:
-            signature = signature_of()
+            # The values are keyed in minutes from midnight, so a day that repeats yesterday's (a fixed tariff) would
+            # match its signature while the replay, moving the old values back a day, runs a day short: log once a day
+            signature = (self.midnight_utc, signature_of())
             if signature == getattr(self, attribute, None):
                 return
             setattr(self, attribute, signature)
@@ -1303,6 +1315,77 @@ class Fetch:
             return "Replay input: rates changed, from {} {}".format(self.replay_clock(start), " ".join(parts))
 
         self.log_replay_changed("replay_rates_signature", lambda: hash(tuple(tuple(sorted((rates or {}).items())) for _, rates in series)), build, "rates")
+
+    def log_replay_dispatch_minutes(self):
+        """Log the minutes marked as Octopus Intelligent dispatches (io_adjusted) whenever they change.
+
+        The PV10 scenario assumes a planned dispatch more than half an hour away may be taken away, and finds those
+        minutes in io_adjusted, which the rates line does not carry. Without it a replay kept the yaml's dispatches and
+        its PV10 scenario drifted from live's once a new dispatch was planned. Logged as [minutes from now, length] for
+        each run of marked minutes. Never raises - this runs every cycle on the main loop.
+        """
+
+        def runs():
+            """The marked minutes as [start, length] runs, in order."""
+            out = []
+            for minute in sorted(minute for minute, marked in (self.io_adjusted or {}).items() if marked):
+                if out and minute == out[-1][0] + out[-1][1]:
+                    out[-1][1] += 1
+                else:
+                    out.append([minute, 1])
+            return out
+
+        def build():
+            """The dispatch line: each run of marked minutes as [minutes from now, length]."""
+            start = self.minutes_now
+            return "Replay input: dispatch minutes changed, from {} {}".format(self.replay_clock(start), [[minute - start, length] for minute, length in runs()])
+
+        self.log_replay_changed("replay_dispatch_signature", lambda: hash(tuple(tuple(run) for run in runs())), build, "dispatch minutes")
+
+    def log_replay_rate_sessions(self):
+        """Log which minutes a saving, free or Axle session priced, and each one's tariff rate beneath, whenever they change.
+
+        set_rate_thresholds() works out the tariff's own min/max/average with the session minutes mapped back to
+        their pre-session rate, so an event reward does not read as the tariff. The rates line carries the session
+        prices but not which minutes they are, so without this a replay counts a new event as tariff and sets the
+        thresholds far too high. Each side is logged as [minutes from now, value] at every change over the span of
+        its session minutes, then the minute it runs to: None outside a session, the pre-session rate inside one,
+        True for a session minute the tariff has no rate for. Never raises - this runs every cycle on the main loop.
+        """
+
+        def sides():
+            """Each side's name, session minutes and pre-session rates, read inside the caller's try."""
+            return (("import", self.rate_import_saving_minutes, self.rate_import_pre_saving), ("export", self.rate_export_saving_minutes, self.rate_export_pre_saving))
+
+        def value_at(minute, saving_minutes, pre_saving):
+            """None outside a session, else the pre-session rate, or True where the tariff has none."""
+            if minute not in saving_minutes:
+                return None
+            return pre_saving.get(minute, True) if pre_saving is not None else True
+
+        def build():
+            """The sessions line: each side as change points over the span of its session minutes, then the minute it runs to."""
+            start = self.minutes_now
+            parts = []
+            for name, saving_minutes, pre_saving in sides():
+                points = []
+                end = 0
+                if saving_minutes:
+                    last = object()
+                    for minute in range(min(saving_minutes), max(saving_minutes) + 1):
+                        value = value_at(minute, saving_minutes, pre_saving)
+                        if value != last or type(value) is not type(last):
+                            last = value
+                            points.append([minute - start, value])
+                    end = max(saving_minutes) + 1 - start
+                parts.append("{} {} {}".format(name, points, end))
+            return "Replay input: rate sessions changed, from {} {}".format(self.replay_clock(start), " ".join(parts))
+
+        def signature():
+            """The session minutes and their pre-session rates on both sides; the type keeps True apart from a rate of 1.0."""
+            return hash(tuple(tuple((minute, value, type(value).__name__) for minute in sorted(saving_minutes or ()) for value in [value_at(minute, saving_minutes, pre_saving)]) for _, saving_minutes, pre_saving in sides()))
+
+        self.log_replay_changed("replay_rate_sessions_signature", signature, build, "rate sessions")
 
     def log_replay_inverter(self):
         """Log the inverter's programmed state whenever it changes: the windows it holds now, whether it is charging or
@@ -1511,7 +1594,7 @@ class Fetch:
         if "iboost_energy_today" in self.args:
             self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0)
             if iboost_energy_age >= 1:
-                self.iboost_today = dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
+                self.iboost_today = dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_since_day_start()]))
                 self.log("iBoost energy today from sensor reads {} kWh".format(self.iboost_today))
 
         # Fetch ML forecast if enabled
@@ -1560,21 +1643,21 @@ class Fetch:
             # Load import today data
             if "import_today" in self.args:
                 self.import_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
+                self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_since_day_start(), backwards=True)
             else:
                 self.log("Warn: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data
             if "export_today" in self.args:
                 self.export_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
+                self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_since_day_start(), backwards=True)
             else:
                 self.log("Warn: You have not set export_today in apps.yaml, you will have no previous export data")
 
             # PV today data
             if "pv_today" in self.args:
                 self.pv_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "pv_today", required_unit="kWh")
-                self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
+                self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_since_day_start(), backwards=True)
             else:
                 self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous PV data")
 
@@ -1680,8 +1763,11 @@ class Fetch:
         # before the rates are built, so a cancelled dispatch never gets its cheap rate
         dynamic_load_car_changed = self.dynamic_load_car_check(save=save)
         if save:
-            # Remember the half hour a dispatch is running in, now it is known whether the car was cancelled
-            self.octopus_held_update()
+            # Remember the half hour a dispatch is running in, now it is known whether the car was cancelled. One
+            # let go here that the slots above still kept (the car's reading arrived in between) is in this cycle's
+            # rates, so run again
+            if self.octopus_held_update():
+                self.update_pending = True
         octopus_surplus_changed = False
 
         if "rates_export_octopus_url" in self.args:
@@ -1815,6 +1901,8 @@ class Fetch:
         # Not for the tariff comparison, which fetches with save off and would log every tariff it tries
         if save:
             self.log_replay_rates()
+            self.log_replay_rate_sessions()
+            self.log_replay_dispatch_minutes()
 
         # Set rate thresholds
         if self.rate_import or self.rate_export:
@@ -2792,33 +2880,33 @@ class Fetch:
         self.export_today, _ = minute_data(ge_cloud_data.filter_data(mdata, "export"), self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.pv_today, _ = minute_data(ge_cloud_data.filter_data(mdata, "pv"), self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
-        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
+        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_since_day_start(), backwards=True)
         self.load_minutes_source = "ge_cloud"
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
-        self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
-        self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
-        self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
+        self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_since_day_start(), backwards=True)
+        self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_since_day_start(), backwards=True)
+        self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_since_day_start(), backwards=True)
 
         # More up to date sensors for current values if set
         if "load_today" in self.args:
             load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0, interpolate=True)
-            self.load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_now, backwards=True)
+            self.load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_since_day_start(), backwards=True)
             self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             self.log("GECloudData load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
 
         if "import_today" in self.args:
             import_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.import_today_now = get_now_from_cumulative(import_today, self.minutes_now, backwards=True)
+            self.import_today_now = get_now_from_cumulative(import_today, self.minutes_since_day_start(), backwards=True)
 
         # Load export today data
         if "export_today" in self.args:
             export_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.export_today_now = get_now_from_cumulative(export_today, self.minutes_now, backwards=True)
+            self.export_today_now = get_now_from_cumulative(export_today, self.minutes_since_day_start(), backwards=True)
 
         # PV today data
         if "pv_today" in self.args:
             pv_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "pv_today", required_unit="kWh")
-            self.pv_today_now = get_now_from_cumulative(pv_today, self.minutes_now, backwards=True)
+            self.pv_today_now = get_now_from_cumulative(pv_today, self.minutes_since_day_start(), backwards=True)
 
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
