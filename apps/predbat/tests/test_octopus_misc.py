@@ -1465,7 +1465,7 @@ def test_octopus_get_octopus_rates_direct(my_predbat):
     api5.tariffs = {
         "export": {
             "productCode": "TEST-EXPORT",
-            "tariffCode": "TEST-EXPORT-TARIFF"
+            "tariffCode": "TEST-EXPORT-TARIFF",
             # No "data" key
         }
     }
@@ -1660,7 +1660,7 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
         "test-device-888": {
             "weekday_target_time": "06:00",
             "weekday_target_soc": 77,
-            "weekend_target_time": "08:00"
+            "weekend_target_time": "08:00",
             # Missing weekend_target_soc
         }
     }
@@ -1784,7 +1784,7 @@ def test_octopus_get_intelligent_target_time(my_predbat):
         "test-device-999": {
             "weekday_target_soc": 80,
             "weekend_target_time": "08:00",
-            "weekend_target_soc": 90
+            "weekend_target_soc": 90,
             # Missing weekday_target_time
         }
     }
@@ -1810,7 +1810,7 @@ def test_octopus_get_intelligent_target_time(my_predbat):
         "test-device-888": {
             "weekday_target_time": "06:00",
             "weekday_target_soc": 80,
-            "weekend_target_soc": 90
+            "weekend_target_soc": 90,
             # Missing weekend_target_time
         }
     }
@@ -1884,7 +1884,7 @@ def test_octopus_get_intelligent_battery_size(my_predbat):
     api3.intelligent_devices = {
         "test-device-789": {
             "weekday_target_time": "06:30",
-            "weekday_target_soc": 80
+            "weekday_target_soc": 80,
             # Missing vehicle_battery_size_in_kwh
         }
     }
@@ -2026,7 +2026,7 @@ def test_octopus_get_intelligent_vehicle(my_predbat):
         "test-device-789": {
             "vehicle_battery_size_in_kwh": 60.0,
             "weekday_target_soc": 80,
-            "model": "Nissan Leaf"
+            "model": "Nissan Leaf",
             # Other fields missing - should be excluded from result
         }
     }

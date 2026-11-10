@@ -13,6 +13,7 @@ The optimiser leaves every window in manual_all_times alone. It used to be store
 and a debug dump saved that copy: replaying a dump with a manual override cleared from its list still held the
 override's slots back from the optimiser, as the stored copy was never rebuilt (seen replaying the #5943 dump).
 """
+
 import os
 import tempfile
 

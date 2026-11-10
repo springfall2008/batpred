@@ -1521,7 +1521,7 @@ class Plan:
                     cost90 = None
                     final_iboost90 = 0.0
                     if handle90 is not None:
-                        (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = handle90.get()
+                        cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = handle90.get()
 
                     metric, battery_value = self.compute_metric(
                         end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
@@ -1876,7 +1876,7 @@ class Plan:
                 key = prediction_cache_key(charge_limit_best, charge_window_best, export_limits_best, export_window_best, PV_SCENARIO_NOMINAL, end_record, PREDICT_STEP)
                 self.prediction.prediction_cache_export_end[key] = export_end_soc_from_series(self.predict_soc, export_window_best, self.minutes_now, export_limits_best)
             if self.pv_metric90_weight > 0:
-                (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = self.run_prediction(
+                cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = self.run_prediction(
                     charge_limit_best,
                     charge_window_best,
                     export_window_best,
@@ -3023,13 +3023,13 @@ class Plan:
                 try_charge_limit[window_n] = try_soc
 
             # Simulate with medium PV
-            (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g) = resultmid[try_soc]
-            (cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10) = result10[try_soc]
+            cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = resultmid[try_soc]
+            cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10 = result10[try_soc]
             soc90 = None
             cost90 = None
             final_iboost90 = 0.0
             if try_soc in result90:
-                (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = result90[try_soc]
+                cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = result90[try_soc]
 
             # Compute the metric from simulation results
             metric, battery_value = self.compute_metric(
@@ -3351,7 +3351,7 @@ class Plan:
             cost90 = None
             final_iboost90 = 0.0
             if hanres90 is not None:
-                (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = hanres90
+                cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = hanres90
 
             # Compute the metric from simulation results
             metric, battery_value = self.compute_metric(

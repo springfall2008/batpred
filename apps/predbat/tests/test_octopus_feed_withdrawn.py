@@ -15,6 +15,7 @@ so for half an hour after Octopus withdrew the dispatch. A minute whose half hou
 cycle, and none covers now, goes back to the day rate; one no dispatch has ever covered is left alone. The half
 hours seen covered are saved to storage, so a restart while the feed is still stale does not bring the discount back.
 """
+
 import copy
 import shutil
 import tempfile
@@ -392,6 +393,8 @@ def _run_fetch(my_predbat):
         # play no part in them
         my_predbat.minute_data_load = lambda *args, **kwargs: ({}, 0)
         my_predbat.minute_data_import_export = lambda *args, **kwargs: {}
+        # Nor do free electricity sessions, and the fixture's octopus_free_url would otherwise fetch the live page
+        my_predbat.download_octopus_free = lambda url: []
         try:
             my_predbat.fetch_sensor_data(save=False)
             failed |= _check("t18 fetch reached rate_replicate()", False, "returned without importing rates")
