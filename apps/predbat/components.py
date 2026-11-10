@@ -102,6 +102,8 @@ COMPONENT_LIST = {
         "name": "Web Interface",
         "args": {
             "web_port": {"required": False, "config": "web_port", "default": 5052},
+            "web_username": {"required": False, "config": "web_username"},
+            "web_password": {"required": False, "secret": True, "config": "web_password"},
         },
         "phase": 0,
     },

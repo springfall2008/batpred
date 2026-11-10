@@ -431,6 +431,24 @@ Docker users can change the web port for the Predbat web interface by setting **
   web_port: 5052
 ```
 
+To stop accidental changes to your settings from the web interface (for example from other devices on your network) you can set a username and password with **web_username** and **web_password**.
+It is best to keep the password in `secrets.yaml`:
+
+```yaml
+  web_username: admin
+  web_password: !secret web_password
+```
+
+When both are set the browser asks for a login before it will open the WhatIf, Chat, Settings (Apps, Config, Components, Editor) and Advanced (Discovery, Browse, Internals, Kraken API Key) pages, the debug and download pages, or save any change (plan and rate overrides, restarts and so on).
+The views that only show data (Dash, Metrics, Plan, Charts, Entities, Compare and Log) can still be opened without a login.
+There is a single login with no different levels of access.
+
+- The login is HTTP Basic authentication, which is not encrypted, so on a network you do not trust put the web interface behind an HTTPS reverse proxy.
+- If only one of the two is set then every protected page is refused until you set the other.
+- Leave both unset (the default) for no login, which is what you need when using Predbat through Home Assistant ingress or behind your own authentication proxy.
+- The `/api/ping`, `/api/status`, `/api/state` (read), `/api/log`, `/api/entities` and `/metrics` data endpoints are not protected, nor is the `/images` route.
+- Pages added by plugins are only protected for changes (POST), not for viewing.
+
 ### notify_devices
 
 A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices

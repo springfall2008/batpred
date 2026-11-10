@@ -126,6 +126,8 @@ Provides a built-in web server that lets you view and manage Predbat through you
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `port` | Integer | No | 5052 | `web_port` | Port number for the web server |
+| `username` | String | No | None | `web_username` | Login for the settings pages, see [web interface](apps-yaml.md#web-interface) |
+| `password` | String | No | None | `web_password` | Password for the settings pages (keep it in `secrets.yaml`) |
 
 #### How to access (web)
 
