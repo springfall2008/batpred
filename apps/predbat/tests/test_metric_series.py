@@ -95,7 +95,7 @@ def metric_with_every_series(my_predbat, plan, end_record):
     Returns the metric tuple, the nominal run's series and the nominal run's other per-run state.
     """
     charge_limit, charge_window, export_window, export_limits = plan
-    (cost, import_kwh_battery, import_kwh_house, export_kwh, _, soc, _, battery_cycle, metric_keep, final_iboost, final_carbon_g) = my_predbat.run_prediction(
+    cost, import_kwh_battery, import_kwh_house, export_kwh, _, soc, _, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
         charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, end_record=end_record
     )
     nominal_series = my_predbat.predict_soc
@@ -104,8 +104,8 @@ def metric_with_every_series(my_predbat, plan, end_record):
     cost90 = None
     final_iboost90 = 0.0
     if my_predbat.pv_metric90_weight > 0:
-        (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = my_predbat.run_prediction(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV90, end_record=end_record)
-    (cost10, _, _, _, _, soc10, _, _, _, final_iboost10, _) = my_predbat.run_prediction(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, end_record=end_record)
+        cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = my_predbat.run_prediction(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV90, end_record=end_record)
+    cost10, _, _, _, _, soc10, _, _, _, final_iboost10, _ = my_predbat.run_prediction(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, end_record=end_record)
     metric, battery_value = my_predbat.compute_metric(
         my_predbat.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
     )
