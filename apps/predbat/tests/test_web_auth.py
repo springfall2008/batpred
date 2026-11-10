@@ -82,11 +82,11 @@ def test_web_auth_middleware(my_predbat):
             print("ERROR: {} {} should be open with no login configured".format(method, path))
             failed = True
 
-    secured = WebInterface(my_predbat, web_port=5058, web_username="admin", web_password="s3cret:pw")
+    secured = WebInterface(my_predbat, web_port=5058, web_username="admin", web_password="swordfish:pw")
     if not secured.web_auth_enabled():
         print("ERROR: login should be on when web_username and web_password are set")
         failed = True
-    good = _basic("admin", "s3cret:pw")
+    good = _basic("admin", "swordfish:pw")
 
     for path in open_gets:
         if _status(secured, "GET", path) != 200:
@@ -106,12 +106,12 @@ def test_web_auth_middleware(my_predbat):
         failed = True
 
     bad_logins = {
-        "wrong password": _basic("admin", "S3cret:pw"),
-        "wrong username": _basic("root", "s3cret:pw"),
-        "password prefix": _basic("admin", "s3cret"),
+        "wrong password": _basic("admin", "Swordfish:pw"),
+        "wrong username": _basic("root", "swordfish:pw"),
+        "password prefix": _basic("admin", "swordfish"),
         "empty": _basic("", ""),
         "not base64": "Basic !!!not-base64!!!",
-        "not basic": "Bearer s3cret:pw",
+        "not basic": "Bearer swordfish:pw",
         "no space": "Basic",
         "not utf8": "Basic " + base64.b64encode(b"admin:\xff\xfe").decode(),
     }
@@ -139,12 +139,12 @@ def test_web_auth_middleware(my_predbat):
         failed = True
 
     # Half configured fails closed, whichever half is missing
-    for kwargs in ({"web_username": "admin"}, {"web_password": "s3cret"}):
+    for kwargs in ({"web_username": "admin"}, {"web_password": "swordfish"}):
         half = WebInterface(my_predbat, web_port=5060, **kwargs)
         if not half.web_auth_enabled():
             print("ERROR: {} should still turn the login on".format(list(kwargs)))
             failed = True
-        if _status(half, "GET", "/apps", _basic("admin", "s3cret")) != 401 or _status(half, "GET", "/apps", _basic("admin", "")) != 401:
+        if _status(half, "GET", "/apps", _basic("admin", "swordfish")) != 401 or _status(half, "GET", "/apps", _basic("admin", "")) != 401:
             print("ERROR: {} alone must refuse every login".format(list(kwargs)))
             failed = True
         if _status(half, "GET", "/dash") != 200:
@@ -171,7 +171,7 @@ def test_web_auth_server(my_predbat):
         base_url = "http://127.0.0.1:{}".format(web_port)
         my_predbat.args["web_port"] = web_port
         my_predbat.args["web_username"] = "admin"
-        my_predbat.args["web_password"] = "s3cret"
+        my_predbat.args["web_password"] = "swordfish"
         my_predbat.components = Components(my_predbat)
         my_predbat.components.initialize()
         my_predbat.components.start("ha_interface")
@@ -194,7 +194,7 @@ def test_web_auth_server(my_predbat):
             print("ERROR: /apps should refuse a wrong password, got {}".format(res.status_code))
             failed = True
 
-        res = requests.get(base_url + "/apps", auth=("admin", "s3cret"))
+        res = requests.get(base_url + "/apps", auth=("admin", "swordfish"))
         if res.status_code != 200:
             print("ERROR: /apps should open with the right login, got {}".format(res.status_code))
             failed = True
