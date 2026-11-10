@@ -23,7 +23,7 @@ import re
 import time
 import pytz
 from datetime import datetime, timedelta
-from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES, SOLAX_SOLIS_MODES_FB00
+from config import INVERTER_DEF, INVERTER_DEF_KEYS, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES, SOLAX_SOLIS_MODES_FB00
 from const import (
     MINUTE_WATT,
     TIME_FORMAT,
@@ -70,6 +70,43 @@ def within_fuzzy(value, target, fuzzy, fuzzy_below=None):
     if fuzzy_below is not None and value < target:
         return target - value <= fuzzy_below
     return abs(value - target) <= fuzzy
+
+
+def find_misplaced_inverter_keys(args):
+    """
+    The inverter definition settings (has_rest_api, charge_time_format, ...) that sit at the top level of apps.yaml,
+    beside 'inverter:' rather than under it - the trace a template merge leaves when it loses an indent level (#6113).
+    """
+    return sorted(key for key in args if key in INVERTER_DEF_KEYS)
+
+
+def describe_inverter_definition_problem(args):
+    """
+    Why the apps.yaml 'inverter:' block cannot be applied, or None when it is a dictionary (or a list of them) or
+    absent. Shared by validate_config() and Inverter.refresh_config() so the startup check and the per-cycle log agree.
+    """
+    if "inverter" not in args:
+        return None
+    inverter_def = args["inverter"]
+    if isinstance(inverter_def, list):
+        bad_entries = [index for index, entry in enumerate(inverter_def) if not isinstance(entry, dict)]
+        if not bad_entries:
+            return None
+        problem = "'inverter:' list entries at index {} are not dictionaries of inverter settings, so those inverters ignore them".format(", ".join(str(index) for index in bad_entries))
+    elif isinstance(inverter_def, dict):
+        return None
+    elif inverter_def is None:
+        problem = "'inverter:' is empty, so it is ignored"
+    else:
+        problem = "'inverter:' is {!r}, not a dictionary of inverter settings, so it is ignored".format(inverter_def)
+
+    problem += " and the inverter_type's built-in definition is used instead (GivEnergy defaults for a custom type)"
+    misplaced = find_misplaced_inverter_keys(args)
+    if misplaced:
+        problem += " - these inverter settings are at the top level of apps.yaml instead of under 'inverter:', check they are indented one level deeper than 'inverter:': {}".format(", ".join(misplaced))
+    else:
+        problem += " - check the settings below 'inverter:' are indented one level deeper than 'inverter:' itself"
+    return problem
 
 
 def calibration_reported(value):
@@ -562,7 +599,10 @@ class Inverter:
                 for key in inverter_def:
                     INVERTER_DEF[self.inverter_type][key] = inverter_def[key]
             else:
-                self.log("Warn: Inverter {}: inverter definition is not a dictionary".format(self.id))
+                # Name the cause: left as a bare warning, a mis-indented template silently runs on GivEnergy
+                # defaults and fails later on a symptom that points somewhere else entirely (#6113)
+                problem = describe_inverter_definition_problem(self.base.args) or "'inverter:' is not a dictionary of inverter settings"
+                self.log("Error: Inverter {}: inverter definition is not a dictionary - apps.yaml {} (inverter_type {})".format(self.id, problem, self.inverter_type))
 
         if self.inverter_type in INVERTER_DEF:
             self.log(f"Inverter {self.id}: Type {self.inverter_type} {INVERTER_DEF[self.inverter_type]['name']}")

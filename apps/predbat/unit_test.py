@@ -321,7 +321,7 @@ from tests.test_integer_config import (
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
 from tests.test_metrics_dashboard_control_conflicts import test_control_conflicts_metrics_round_trip, test_control_conflicts_dashboard_renders_section
 from tests.test_metrics_dashboard_control_failures import test_control_failures_metrics_round_trip, test_control_failures_dashboard_renders_section
-from tests.test_validate_config import test_validate_config, test_validate_config_retry, test_validate_config_secrets
+from tests.test_validate_config import test_validate_config, test_validate_config_retry, test_validate_config_secrets, test_validate_config_inverter_definition
 from tests.test_get_arg_missing_index import test_get_arg_missing_index_uses_default_quietly
 from tests.test_get_arg_combine_units import test_get_arg_combine_units
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
@@ -826,6 +826,7 @@ def main():
         ("get_arg_combine_units", test_get_arg_combine_units, "get_arg combine=True converts each entry to required_unit", False),
         ("validate_config_retry", test_validate_config_retry, "Config validation retry-after-failure tests (#4379)", False),
         ("validate_config_secrets", test_validate_config_secrets, "check_apps_yaml_secrets() unmasked-credential detection tests (#4787)", False),
+        ("validate_config_inverter_definition", test_validate_config_inverter_definition, "Mis-indented or empty apps.yaml 'inverter:' block is a validation error (#6113)", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
         ("config_item_range_clamp", test_config_item_range_clamp, "Config item min/max range clamp tests", False),
         ("config_item_step_min_max_types", test_config_item_step_min_max_types_consistent, "Config item step/min/max type consistency tests", False),

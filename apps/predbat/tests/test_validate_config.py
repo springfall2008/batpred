@@ -567,6 +567,50 @@ def test_validate_config(my_predbat):
     return False
 
 
+def test_validate_config_inverter_definition(my_predbat):
+    """
+    An apps.yaml 'inverter:' block that cannot be applied is a validation error naming the inverter definition settings
+    stranded beside it at the top level (#6113) - a template merged one indent level too shallow leaves exactly that.
+    A stranded setting next to a usable 'inverter:' is inert, so it is only logged.
+    """
+    print("**** test_validate_config_inverter_definition ****")
+    saved_args = my_predbat.args.copy()
+    saved_log = my_predbat.log
+    log_messages = []
+    try:
+        my_predbat.args.pop("inverter", None)
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+
+        print("  the solis_local template merged one level too shallow: 'inverter:' empty, its settings beside it")
+        _run(my_predbat, {"inverter": None, "name": "SolisRC", "has_rest_api": False, "charge_time_format": "S"}, expect_errors=["inverter"])
+        problem = [msg for msg in log_messages if "Validation of apps.yaml" in msg and "'inverter:'" in msg]
+        assert problem, "no validation log line names 'inverter:': {}".format(log_messages)
+        assert "charge_time_format, has_rest_api, name" in problem[0] and "indented" in problem[0], "the log line does not name the stranded settings and the indent: {}".format(problem[0])
+
+        print("  a correctly indented 'inverter:' block is clean")
+        _run(my_predbat, {"inverter": {"name": "SolisRC", "has_rest_api": False, "charge_time_format": "S"}}, expect_clean=["inverter"])
+
+        print("  a list of definitions is clean, and an entry that is not a dictionary is an error")
+        _run(my_predbat, {"inverter": [{"name": "A"}, {"name": "B"}]}, expect_clean=["inverter"])
+        _run(my_predbat, {"inverter": [{"name": "A"}, None]}, expect_errors=["inverter"])
+
+        print("  a scalar 'inverter:' is an error")
+        _run(my_predbat, {"inverter": "SolisRC"}, expect_errors=["inverter"])
+
+        print("  no 'inverter:' at all is clean, and a stranded inverter setting beside it is logged, not an error")
+        _run(my_predbat, {}, expect_clean=["inverter"])
+        del log_messages[:]
+        _run(my_predbat, {"charge_control_immediate": False}, expect_clean=["inverter", "charge_control_immediate"])
+        assert any("top level" in msg and "charge_control_immediate" in msg for msg in log_messages), "the stranded setting was not logged: {}".format(log_messages)
+    finally:
+        my_predbat.log = saved_log
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    print("**** test_validate_config_inverter_definition PASSED ****")
+    return False
+
+
 def test_validate_config_secrets(my_predbat):
     """
     Tests check_apps_yaml_secrets() (#4787) - re-reads apps.yaml with the ruamel round-trip
