@@ -2054,6 +2054,29 @@ def test_charge_window_blocks_discharge_inverter_types():
     return failed
 
 
+def test_discharge_to_target_inverter_types():
+    """
+    Pin the inverter types that can discharge to a Hold charging target in demand mode (#5937, #5955).
+
+    The branch in execute_plan runs when no pause can hold (no timed pause) and the window cannot act as a floor
+    (no target SoC, or charge_window_blocks_discharge). It is reached by more types than Sigenergy and Hanchu,
+    the two in the issues: the service-driven ones (SE, SX4, SF, SFMB, HU, SIG) stop the charge as demand does,
+    FoxESS and HanchuCloud only when their reserve cannot hold at the target (reserve_max below it, or
+    set_reserve_enable off), and GS through mimic_target_soc (test_inverter solis_gs_discharge_to_target).
+    This pins the static flags only; the reserve conditions are runtime.
+    A type joining this set changes how its Hold charging behaves, so it has to be added here on purpose.
+    """
+    from config import INVERTER_DEF
+
+    failed = False
+    reached = sorted(name for name, idef in INVERTER_DEF.items() if not idef.get("has_timed_pause", False) and (not idef.get("has_target_soc", False) or idef.get("charge_window_blocks_discharge", False)))
+    expected = ["FoxESS", "GS", "HU", "HanchuCloud", "SE", "SF", "SFMB", "SIG", "SX4"]
+    if reached != expected:
+        print("ERROR: inverter types that can discharge to a Hold charging target should be {}, got {}".format(expected, reached))
+        failed = True
+    return failed
+
+
 def test_reserve_full_only_above_80_inverter_types():
     """Only the Powerwall, whose firmware honours no backup reserve between 80 and 100 (GH#6046), opts in."""
     from config import INVERTER_DEF
@@ -2102,6 +2125,7 @@ def run_execute_tests(my_predbat):
     failed |= test_fetch_inverter_data_battery_export_not_permitted(my_predbat)
     failed |= test_reserve_above_soc_inverter_types()
     failed |= test_charge_window_blocks_discharge_inverter_types()
+    failed |= test_discharge_to_target_inverter_types()
     failed |= test_reserve_full_only_above_80_inverter_types()
     failed |= test_reserve_full_only_above_80_reaches_the_inverter(my_predbat)
     if failed:

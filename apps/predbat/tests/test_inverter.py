@@ -5979,6 +5979,12 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_solis_energy_control("solis_gs_unavailable", my_predbat, ha, "GS", "unavailable", target, "Self-Use")
     failed |= test_solis_energy_control("solis_gs_charge_immediate_leaves_switch", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", charge, "Self-Use - No Timed Charge/Discharge")
     failed |= test_solis_energy_control("solis_gs_export_immediate_leaves_switch", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", export_freeze, "Self-Use - No Timed Charge/Discharge")
+    # Discharging to a Hold charging target (#5937): execute_plan clears the window (disable_charge_window writes 00:00-00:00) and, as GS has
+    # no target SoC, writes a 0% target while still charging, which reaches mimic_target_soc at the reserve. Above a reserve of more than 0% the
+    # timed charge bit goes off too. With set_reserve_min at 0 it takes the eco branch and leaves the bit on, as Demand does; the cleared window
+    # is then what keeps the battery from charging
+    discharge_to_target = lambda inv: inv.adjust_battery_target(0, isCharging=True, isExporting=False)
+    failed |= test_solis_energy_control("solis_gs_discharge_to_target", my_predbat, ha, "GS", "Self-Use", discharge_to_target, "Self-Use - No Timed Charge/Discharge")
     if failed:
         return failed
 
