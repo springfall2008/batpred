@@ -48,7 +48,27 @@ def test_web_auth_middleware(my_predbat):
     failed = False
     print("**** Testing web login middleware ****")
 
-    protected_gets = ["/annual", "/annual_run", "/chat", "/chat/history", "/apps", "/apps_value", "/config", "/components", "/component_config", "/apps_editor", "/discovery", "/browse", "/internals", "/api/internals", "/api/internals/download", "/kraken_key", "/download", "/debug_yaml", "/debug_apps_live"]
+    protected_gets = [
+        "/annual",
+        "/annual_run",
+        "/chat",
+        "/chat/history",
+        "/apps",
+        "/apps_value",
+        "/config",
+        "/components",
+        "/component_config",
+        "/apps_editor",
+        "/discovery",
+        "/browse",
+        "/internals",
+        "/api/internals",
+        "/api/internals/download",
+        "/kraken_key",
+        "/download",
+        "/debug_yaml",
+        "/debug_apps_live",
+    ]
     open_gets = ["/", "/dash", "/dash_content", "/metrics_dashboard", "/plan", "/charts", "/entity", "/compare", "/log", "/api/log", "/api/state", "/api/ping", "/api/status", "/api/entities", "/metrics", "/images/bat_logo.svg"]
     protected_posts = ["/apps", "/config", "/dash", "/entity", "/compare", "/plan_override", "/rate_override", "/restart", "/inverter_refresh", "/api/state", "/api/service", "/api/kraken_key", "/some_plugin_post"]
 
