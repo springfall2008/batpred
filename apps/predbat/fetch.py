@@ -81,6 +81,15 @@ REPLAY_INVERTER_FIELDS = (
 )
 
 
+class LoadSourceMissing(ValueError):
+    """No load source (load_today or load_forecast) is configured yet, so there is no load data to plan with.
+
+    plan_once() treats it as a failed pre-condition and skips the cycle without a traceback. It is often temporary:
+    a component's automatic configuration sets load_today once it has started (#5092). A ValueError subclass, as
+    the bare ValueError it replaces was, so other callers of fetch_sensor_data() see no change.
+    """
+
+
 class Fetch:
     """Data fetching mixin for loading energy rates, consumption, and forecasts.
 
@@ -1563,9 +1572,9 @@ class Fetch:
                     self.load_minutes_age = 0
                     self.load_last_period = 0
                 else:
-                    self.log("Error: You have not set load_today or load_forecast in apps.yaml, you will have no load data")
-                    self.record_status(message="Error: load_today not set correctly", had_errors=True)
-                    raise ValueError
+                    self.log("Error: No load data: load_today or load_forecast is not set. Set one in apps.yaml, or if your inverter component configures it automatically, wait for it to start. Skipping this cycle")
+                    self.record_status(message="Error: No load data - load_today not set (in apps.yaml, or by a component's automatic configuration)", had_errors=True)
+                    raise LoadSourceMissing("load_today or load_forecast is not set")
 
             # Load import today data
             if "import_today" in self.args:
