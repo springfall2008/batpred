@@ -30,6 +30,8 @@ Types covered (see APPS_SCHEMA in config.py):
 import os
 import tempfile
 
+from config import APPS_SCHEMA, CONFIG_ITEMS, INVERTER_DEF_KEYS
+
 
 def _run(my_predbat, extra_args, extra_states=None, expect_errors=(), expect_clean=()):
     """Inject args/states, run validate_config, assert per-field expectations.
@@ -574,6 +576,12 @@ def test_validate_config_inverter_definition(my_predbat):
     A stranded setting next to a usable 'inverter:' is inert, so it is only logged.
     """
     print("**** test_validate_config_inverter_definition ****")
+
+    print("  no inverter definition setting is also a top-level apps.yaml setting, so a stranded one cannot be a legitimate option")
+    config_item_names = {item["name"] for item in CONFIG_ITEMS}
+    assert not INVERTER_DEF_KEYS & config_item_names, "CONFIG_ITEMS names collide with inverter definition settings: {}".format(sorted(INVERTER_DEF_KEYS & config_item_names))
+    assert not INVERTER_DEF_KEYS & set(APPS_SCHEMA), "APPS_SCHEMA keys collide with inverter definition settings: {}".format(sorted(INVERTER_DEF_KEYS & set(APPS_SCHEMA)))
+
     saved_args = my_predbat.args.copy()
     saved_log = my_predbat.log
     log_messages = []
