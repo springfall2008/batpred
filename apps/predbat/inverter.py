@@ -497,6 +497,11 @@ class Inverter:
         # None until written (and in Monitor mode, where nothing is)
         self.requested_charge_w = None
         self.requested_discharge_w = None
+        # Directions ("charge", "discharge") mimic_target_soc is holding at 0 A on the timed current, which
+        # set_current_from_power() then writes as 0 A for every caller (#5972). See hold_current_at_zero()
+        self.current_holds = set()
+        # The holds this execute_plan() cycle's mimic_target_soc renewed; any other is released at the end of the loop
+        self.current_holds_renewed = set()
         self.battery_voltage = None
         self.pv_power = 0
         self.load_power = 0
@@ -2130,45 +2135,46 @@ class Inverter:
             if current_charge_limit == 100:
                 self.alt_charge_discharge_enable("eco", True)  # ECO Mode
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", discharge_power)
+                    self.release_current_to("discharge", discharge_power)
             elif self.soc_percent < float(current_charge_limit):
                 self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Discharge disabled.")
+                # A hold is left to end_current_hold_cycle(): it releases it, and restores the current unless the rate pass will
                 self.alt_charge_discharge_enable("discharge", False)
             elif self.soc_percent == float(current_charge_limit):  # If SoC target is reached
                 if self.inv_output_charge_control == "current":
                     self.alt_charge_discharge_enable("discharge", True)
-                    self.set_current_from_power("discharge", (0))  # Set charge current to zero (i.e hold SoC)
+                    self.hold_current_at_zero("discharge")  # Set discharge current to zero (i.e hold SoC)
                 else:
                     self.alt_charge_discharge_enable("discharge", False)
             else:
                 self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Discharge enabled.")
                 self.alt_charge_discharge_enable("discharge", True)
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", discharge_power)
+                    self.release_current_to("discharge", discharge_power)
                     self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Discharge enabled, amp rate written to inverter.")
         else:
             if current_charge_limit == 0:
                 self.alt_charge_discharge_enable("eco", True)  # ECO Mode
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
+                    self.release_current_to("charge", charge_power)  # Write previous current setting to inverter
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", discharge_power)  # Reset discharge power too
+                    self.release_current_to("discharge", discharge_power)  # Reset discharge power too
             elif self.soc_percent > float(current_charge_limit):
                 # If current SoC is above Target SoC, turn Grid Charging off
                 self.alt_charge_discharge_enable("charge", False)
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SoC)
+                    self.hold_current_at_zero("charge")  # Set charge current to zero (i.e hold SoC)
                 self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Charge disabled.")
             elif self.soc_percent == float(current_charge_limit):  # If SoC target is reached
                 self.alt_charge_discharge_enable("charge", True)  # Make sure charging is on
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SoC)
+                    self.hold_current_at_zero("charge")  # Set charge current to zero (i.e hold SoC)
                     self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is same as Target SoC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
             else:
                 # If we drop below the target, turn grid charging back on and make sure the charge current is correct
                 self.alt_charge_discharge_enable("charge", True)
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
+                    self.release_current_to("charge", charge_power)  # Write previous current setting to inverter
                     self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
                 self.base.log(
                     f"Inverter {self.id} Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
@@ -2382,6 +2388,92 @@ class Inverter:
         # actually needed, which is a no-op when nothing has drifted.
         if self.inv_output_charge_control == "current":
             self.set_current_from_power("charge", new_rate)
+
+    def hold_current_at_zero(self, direction):
+        """
+        Hold direction ("charge" or "discharge") at 0 A on the timed current, for mimic_target_soc.
+
+        On an inverter with no target SoC whose rate is controlled by current (GS), the timed current is the only
+        hold there is. Several writers set that current from the rate: the #4415 re-assert in adjust_charge_rate()
+        and adjust_discharge_rate() (from apply_inverter_rates() after mimic_target_soc, and from the 60 s
+        rebalance), and enable_charge_discharge_with_time_current() when a window or forced export is enabled
+        (before mimic_target_soc). They wrote the full current over the hold (#5972), so the hold is recorded in
+        current_holds and set_current_from_power() writes 0 A for a held direction whatever it is asked for.
+        Holding also renews the hold for this cycle: see start_current_hold_cycle(). The rate itself
+        (charge_rate / discharge_rate) is left alone.
+        """
+        self.current_holds.add(direction)
+        self.current_holds_renewed.add(direction)
+        self.set_current_from_power(direction, 0)
+
+    def release_current_to(self, direction, power):
+        """
+        End any hold on direction and write its timed current from power, for mimic_target_soc (#5972).
+        """
+        self.release_current_holds([direction])
+        self.set_current_from_power(direction, power)
+
+    def start_current_hold_cycle(self):
+        """
+        Begin an execute_plan() cycle: a hold now lasts past end_current_hold_cycle() only if mimic_target_soc renews it.
+
+        The holds themselves stay in force through the cycle, so a writer that runs before mimic_target_soc does not
+        lift a hold mimic_target_soc is about to keep - that briefly wrote the full current every cycle, and two
+        register writes per held cycle (#5972).
+        """
+        self.current_holds_renewed = set()
+
+    def end_current_hold_cycle(self, rate_pass_writes=(), read_only=False):
+        """
+        End an execute_plan() cycle's per-inverter pass: release every hold mimic_target_soc did not renew.
+
+        Covers the ways a hold stops being renewed in control: the plan moved on without mimic_target_soc running,
+        and Monitor or Control-SoC-only, which write no rates. A direction in rate_pass_writes is only released, as
+        apply_inverter_rates() is about to write its planned rate and so its current - restoring it here as well
+        would be a second register write. Any other direction has its current restored from the rate, as
+        get_current_charge_rate() / get_current_discharge_rate() read it, so 0 A is not stranded on the inverter.
+
+        In read-only (read_only, including an Axle event, which switches to read-only with no reset) nothing is
+        written and the holds stay as they are, as every other setting does: Predbat does not touch the inverter.
+        The first control cycle afterwards renews or releases them, and switching read-only on from Home Assistant
+        forces a reset that releases them first.
+
+        A hold is kept while battery_voltage is unknown, as set_current_from_power() could write neither the restore
+        nor the rate pass's re-assert.
+        """
+        if read_only:
+            return
+        for direction in sorted(self.current_holds - self.current_holds_renewed):
+            if not self.battery_voltage:
+                # Neither this restore nor the rate pass's re-assert can write a current without a voltage
+                self.base.log("Warn: Inverter {} {} current hold at 0 A can not be restored while battery_voltage is {}, keeping it".format(self.id, direction, self.battery_voltage))
+                continue
+            self.current_holds.discard(direction)
+            if self.inv_output_charge_control != "current":
+                # The inverter type changed under a persisted object: it has no timed current to restore
+                continue
+            if direction in rate_pass_writes:
+                self.base.log("Inverter {} {} current hold at 0 A no longer renewed, the rate pass restores the current".format(self.id, direction))
+                continue
+            power = self.get_current_charge_rate() if direction == "charge" else self.get_current_discharge_rate()
+            self.base.log("Inverter {} {} current hold at 0 A no longer renewed, restoring the current from {}W".format(self.id, direction, power))
+            self.set_current_from_power(direction, power)
+
+    def release_current_holds(self, directions=("charge", "discharge")):
+        """
+        Drop the holds on directions, so the writes that follow restore the current from the rate.
+
+        For paths that take the inverter out of Predbat's hold control and then write the full rates themselves:
+        reset_inverter(), per direction it rewrites, the calibration pass in execute_plan(), and mimic_target_soc's
+        own releases (#5972). While battery_voltage is unknown the holds are kept: set_current_from_power() could not
+        write the current that follows, and dropping the hold would leave 0 A on the inverter with nothing to restore it.
+        """
+        if not self.battery_voltage:
+            if self.current_holds.intersection(directions):
+                self.base.log("Warn: Inverter {} battery_voltage is {}, keeping its 0 A current holds {}".format(self.id, self.battery_voltage, sorted(self.current_holds)))
+            return
+        for direction in directions:
+            self.current_holds.discard(direction)
 
     def adjust_discharge_rate(self, new_rate, notify=True):
         """
@@ -3459,7 +3551,13 @@ class Inverter:
         the power target itself changes - this register can drift or get reset independently
         (#4415). write_and_poll_value() already no-ops when the live value already matches, so
         this is cheap when nothing has drifted.
+
+        A direction mimic_target_soc holds at 0 A (current_holds) is written as 0 A whatever power is asked
+        for, so no other writer of the register lifts the hold (#5972). mimic_target_soc releases the hold
+        before it writes a real current itself.
         """
+        if direction in self.current_holds:
+            power = 0
         if not self.battery_voltage:
             # None when update_status() has not run yet, so there is no real reading - a caller reached
             # the charge/discharge rate path before the inverter's own state was ever fetched - or a 0

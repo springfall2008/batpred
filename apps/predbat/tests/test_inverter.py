@@ -118,6 +118,125 @@ def test_solis_energy_control(test_name, my_predbat, ha, inverter_type, switch_s
     return failed
 
 
+def test_solis_gs_current_hold(my_predbat, ha):
+    """
+    A GS hold at 0 A survives every other writer of the timed current, in both directions, end to end on a real Inverter (#5972).
+
+    GS has no target SoC, so a hold at the target is mimic_target_soc writing 0 A to the timed current. In
+    execute_plan apply_inverter_rates then calls adjust_charge_rate / adjust_discharge_rate, whose #4415
+    re-assert used to write the full current straight back, and a forced export or a re-enabled charge
+    window wrote it before mimic_target_soc each cycle. cycle() runs one execute_plan's worth in order:
+    start the hold cycle, the in-loop body, end the hold cycle, then the rate pass. Each step is
+    (description, action, expected charge current, expected discharge current, expected register writes or
+    None), with the battery at 50 V.
+    """
+    failed = False
+    print("Test: solis_gs_current_hold")
+    charge_entity = "number.timed_charge_current"
+    discharge_entity = "number.timed_discharge_current"
+    touched = ["select.solis_energy_storage_control_switch", "number.charge_limit", charge_entity, discharge_entity]
+    saved_items = {key: ha.dummy_items[key] for key in touched if key in ha.dummy_items}
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["inverter_type"] = ["GS"]
+        my_predbat.args["energy_control_switch"] = "select.solis_energy_storage_control_switch"
+        my_predbat.args["timed_charge_current"] = charge_entity
+        my_predbat.args["timed_discharge_current"] = discharge_entity
+        ha.dummy_items["select.solis_energy_storage_control_switch"] = "Self-Use"
+        ha.dummy_items["number.charge_limit"] = 100
+        ha.dummy_items[charge_entity] = 60.0
+        ha.dummy_items[discharge_entity] = 60.0
+
+        inv = Inverter(my_predbat, 0, quiet=True)
+        inv.sleep = dummy_sleep
+        inv.rest_data = None
+        inv.rest_api = None
+        inv.battery_voltage = 50.0
+        inv.inv_current_dp = 1
+
+        def at_soc(soc, action):
+            """Set the SoC, then run action."""
+            inv.soc_percent = soc
+            action()
+
+        # The rates are the inverter's maxima, which the rate entities Predbat creates for GS are seeded with
+        charge_w = inv.battery_rate_max_charge * MINUTE_WATT
+        discharge_w = inv.battery_rate_max_discharge * MINUTE_WATT
+        full_charge = round(charge_w / 50.0, 1)
+        full_discharge = round(discharge_w / 50.0, 1)
+        rates = lambda: (inv.adjust_charge_rate(charge_w), inv.adjust_discharge_rate(discharge_w))
+
+        def cycle(*body):
+            """One execute_plan: start the hold cycle, run the in-loop body, end the hold cycle, then the rate pass."""
+            inv.start_current_hold_cycle()
+            for action in body:
+                action()
+            inv.end_current_hold_cycle()
+            rates()
+
+        hold_charge = lambda: inv.adjust_battery_target(50, isCharging=True)
+        hold_export = lambda: inv.adjust_battery_target(50, isExporting=True)
+        # The writers that run before mimic_target_soc in the loop: a re-enabled charge window and a forced export
+        enable_charge = lambda: inv.enable_charge_discharge_with_time_current("charge", True)
+        enable_export = lambda: inv.enable_charge_discharge_with_time_current("discharge", True)
+        steps = [
+            ("rates with no hold", rates, full_charge, full_discharge, None),
+            ("charge hold at the target", lambda: at_soc(50, lambda: cycle(hold_charge)), 0.0, full_discharge, None),
+            ("renewed hold: no writer lifts it and nothing is written", lambda: cycle(enable_charge, hold_charge), 0.0, full_discharge, 0),
+            ("60 s rebalance between cycles keeps the hold", rates, 0.0, full_discharge, 0),
+            ("a cycle that does not renew the hold restores the current, with no rate pass needed", lambda: (inv.start_current_hold_cycle(), inv.end_current_hold_cycle()), full_charge, full_discharge, None),
+            ("charge hold above the target (grid charge off)", lambda: at_soc(60, lambda: cycle(hold_charge)), 0.0, full_discharge, None),
+            ("below the target the hold ends within the cycle", lambda: at_soc(40, lambda: cycle(enable_charge, hold_charge)), full_charge, full_discharge, None),
+            ("export hold at the target", lambda: at_soc(50, lambda: cycle(enable_export, hold_export)), full_charge, 0.0, None),
+            ("renewed export hold: the forced export does not lift it and nothing is written", lambda: cycle(enable_export, hold_export), full_charge, 0.0, 0),
+            ("above the export target the hold ends within the cycle", lambda: at_soc(60, lambda: cycle(enable_export, hold_export)), full_charge, full_discharge, None),
+            ("export hold again", lambda: at_soc(50, lambda: cycle(hold_export)), full_charge, 0.0, None),
+            ("plan leaves export within the cycle: mimic's ECO path releases the hold", lambda: cycle(lambda: inv.adjust_battery_target(100)), full_charge, full_discharge, None),
+            ("export hold before dipping below its target", lambda: at_soc(50, lambda: cycle(hold_export)), full_charge, 0.0, None),
+            ("below the export target the end of the cycle restores the current", lambda: at_soc(40, lambda: (inv.start_current_hold_cycle(), hold_export(), inv.end_current_hold_cycle())), full_charge, full_discharge, None),
+            ("charge hold for the rate-pass test", lambda: at_soc(50, lambda: cycle(hold_charge)), 0.0, full_discharge, None),
+            ("unrenewed hold the rate pass will write is only released: no write here", lambda: (inv.start_current_hold_cycle(), inv.end_current_hold_cycle(rate_pass_writes={"charge", "discharge"})), 0.0, full_discharge, 0),
+            ("then the rate pass writes the current", rates, full_charge, full_discharge, None),
+            ("charge hold for the read-only test", lambda: at_soc(50, lambda: cycle(hold_charge)), 0.0, full_discharge, None),
+            ("read-only writes nothing and keeps the hold", lambda: (inv.start_current_hold_cycle(), inv.end_current_hold_cycle(read_only=True)), 0.0, full_discharge, 0),
+            ("a rebalance during read-only cannot lift it", lambda: inv.adjust_charge_rate(charge_w), 0.0, full_discharge, 0),
+            ("battery voltage unknown: the hold is kept, as the restore can not be written", lambda: (setattr(inv, "battery_voltage", None), inv.start_current_hold_cycle(), inv.end_current_hold_cycle()), 0.0, full_discharge, 0),
+            (
+                "battery voltage unknown with a rate pass due: still kept, as the re-assert can not write either",
+                lambda: (setattr(inv, "battery_voltage", None), inv.start_current_hold_cycle(), inv.end_current_hold_cycle(rate_pass_writes={"charge", "discharge"})),
+                0.0,
+                full_discharge,
+                0,
+            ),
+            ("first control cycle afterwards restores it", lambda: (setattr(inv, "battery_voltage", 50.0), inv.start_current_hold_cycle(), inv.end_current_hold_cycle()), full_charge, full_discharge, None),
+            ("hold for the reset test", lambda: at_soc(50, lambda: cycle(hold_charge, hold_export)), 0.0, 0.0, None),
+            ("an export-only reset releases only the export hold", lambda: (inv.release_current_holds(["discharge"]), rates()), 0.0, full_discharge, None),
+            ("voltage unknown: a release keeps the hold, as the write after it can not happen", lambda: (setattr(inv, "battery_voltage", None), inv.release_current_holds(), setattr(inv, "battery_voltage", 50.0), rates()), 0.0, full_discharge, None),
+            ("reset or calibration releases every hold before writing full rates", lambda: (inv.release_current_holds(), rates()), full_charge, full_discharge, None),
+        ]
+        for description, action, expect_charge, expect_discharge, expect_writes in steps:
+            writes_before = inv.count_register_writes
+            action()
+            charge_current = ha.get_state(charge_entity)
+            discharge_current = ha.get_state(discharge_entity)
+            if charge_current != expect_charge or discharge_current != expect_discharge:
+                print("ERROR: solis_gs_current_hold: {}: currents should be charge {} discharge {}, got {} {}".format(description, expect_charge, expect_discharge, charge_current, discharge_current))
+                failed = True
+            writes = inv.count_register_writes - writes_before
+            if expect_writes is not None and writes != expect_writes:
+                print("ERROR: solis_gs_current_hold: {}: expected {} register writes, got {}".format(description, expect_writes, writes))
+                failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        for key in touched:
+            if key in saved_items:
+                ha.dummy_items[key] = saved_items[key]
+            else:
+                ha.dummy_items.pop(key, None)
+    return failed
+
+
 def test_custom_type_respects_configured_time_entity(my_predbat):
     """
     Regression test for issue #4738: for an inverter type whose charge_time_format is not
@@ -5985,6 +6104,7 @@ def run_inverter_tests(my_predbat_dummy):
     # is then what keeps the battery from charging
     discharge_to_target = lambda inv: inv.adjust_battery_target(0, isCharging=True, isExporting=False)
     failed |= test_solis_energy_control("solis_gs_discharge_to_target", my_predbat, ha, "GS", "Self-Use", discharge_to_target, "Self-Use - No Timed Charge/Discharge")
+    failed |= test_solis_gs_current_hold(my_predbat, ha)
     if failed:
         return failed
 

@@ -47,6 +47,8 @@ class ActiveTestInverter:
         self.inv_has_target_soc = True
         self.inv_has_charge_enable_time = True
         self.inv_has_timed_pause = True
+        self.current_hold_cycle_calls = []
+        self.current_holds_released_directions = []
         self.inv_reserve_above_soc_charges_from_grid = False
         self.inv_charge_window_blocks_discharge = False
         self.inv_reserve_full_only_above_80 = False
@@ -163,6 +165,20 @@ class ActiveTestInverter:
         self.current_charge_limit = soc
         self.isCharging = isCharging
         self.isExporting = isExporting
+
+    def start_current_hold_cycle(self):
+        """Mirror Inverter.start_current_hold_cycle(); recorded so tests can check execute_plan() brackets every cycle."""
+        self.current_hold_cycle_calls.append("start")
+
+    def end_current_hold_cycle(self, rate_pass_writes=(), read_only=False):
+        """Mirror Inverter.end_current_hold_cycle(); recorded likewise, with what execute_plan() told it."""
+        self.current_hold_cycle_calls.append("end")
+        self.current_hold_cycle_end_args = (set(rate_pass_writes), read_only)
+
+    def release_current_holds(self, directions=("charge", "discharge")):
+        """Mirror Inverter.release_current_holds(), called by the reset and calibration paths."""
+        self.current_hold_cycle_calls.append("release")
+        self.current_holds_released_directions.extend(directions)
 
     def adjust_charge_rate(self, charge_rate, notify=True):
         self.charge_rate = charge_rate
@@ -412,6 +428,8 @@ def run_execute_test(
         my_predbat.args["threads"] = 0
         my_predbat.calculate_plan(recompute=False)
 
+    for inverter in my_predbat.inverters:
+        inverter.current_hold_cycle_calls = []
     status, status_extra = my_predbat.execute_plan()
 
     if assert_status_extra is not None and assert_status_extra != status_extra:
@@ -421,6 +439,35 @@ def run_execute_test(
     for inverter in my_predbat.inverters:
         if assert_status != status:
             print("ERROR: Inverter {} status should be {} got {}".format(inverter.id, assert_status, status))
+            failed = True
+        # Every cycle brackets its 0 A current holds once, whatever path it takes, releasing unrenewed holds before the rates are applied (#5972)
+        hold_calls = [call for call in inverter.current_hold_cycle_calls if call != "release"]
+        if hold_calls != ["start", "end"]:
+            print("ERROR: Inverter {} current hold cycle should be start then end once per execute_plan, got {}".format(inverter.id, inverter.current_hold_cycle_calls))
+            failed = True
+        # The end of the cycle is told which directions the rate pass writes, and that read-only writes nothing (#5972)
+        if hold_calls == ["start", "end"]:
+            rate_pass_writes, read_only = inverter.current_hold_cycle_end_args
+            calibrating_fleet = any(inv.in_calibration for inv in my_predbat.inverters)
+            if read_only != my_predbat.set_read_only:
+                print("ERROR: Inverter {} end_current_hold_cycle read_only should be {} got {}".format(inverter.id, my_predbat.set_read_only, read_only))
+                failed = True
+            if my_predbat.set_read_only or calibrating_fleet:
+                expect_writes = set()
+            elif my_predbat.set_charge_window or my_predbat.set_export_window:
+                expect_writes = {"charge", "discharge"}
+            else:
+                # Monitor / SoC-only: only the rates something claimed are written
+                entry = my_predbat.inverter_rate_intent.get(inverter.id, {})
+                expect_writes = {direction for direction in ("charge", "discharge") if entry.get(direction + "_rate", None) is not None}
+            if rate_pass_writes != expect_writes:
+                print("ERROR: Inverter {} end_current_hold_cycle rate_pass_writes should be {} got {}".format(inverter.id, expect_writes, rate_pass_writes))
+                failed = True
+        # Calibration runs at full rate, so it releases every inverter's holds before writing (#5972)
+        calibrating_now = any(inv.in_calibration for inv in my_predbat.inverters) and not my_predbat.set_read_only
+        calls = inverter.current_hold_cycle_calls
+        if calibrating_now and not (all(call in calls for call in ("start", "release", "end")) and calls.index("start") < calls.index("release") < calls.index("end")):
+            print("ERROR: Inverter {} calibration should release current holds within the cycle, got {}".format(inverter.id, inverter.current_hold_cycle_calls))
             failed = True
         inv_assert_charge_time_enable = assert_charge_time_enable_array[inverter.id] if assert_charge_time_enable_array else assert_charge_time_enable
         if inv_assert_charge_time_enable != inverter.charge_time_enable:
@@ -5180,7 +5227,15 @@ def run_execute_tests(my_predbat):
     )
 
     # Reset test
+    for inverter in my_predbat.inverters:
+        inverter.current_hold_cycle_calls = []
+        inverter.current_holds_released_directions = []
     my_predbat.reset_inverter()
+    # Safe mode is not a hold: reset releases the 0 A current holds of each direction it rewrites - here both windows are on (#5972)
+    for inverter in my_predbat.inverters:
+        if sorted(inverter.current_holds_released_directions) != ["charge", "discharge"]:
+            print("ERROR: reset_inverter should release inverter {} charge and discharge holds, got {}".format(inverter.id, inverter.current_holds_released_directions))
+            failed = True
     failed |= run_execute_test(
         my_predbat,
         "demand_after_reset",

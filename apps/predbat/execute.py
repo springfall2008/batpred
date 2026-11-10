@@ -529,6 +529,11 @@ class Execute:
         else:
             status = RUN_STATE_DEMAND
 
+        # A 0 A current hold stays in force through the cycle but must be renewed by this cycle's mimic_target_soc,
+        # or end_current_hold_cycle() below releases it and restores the current (#5972)
+        for inverter in self.inverters:
+            inverter.start_current_hold_cycle()
+
         if self.inverter_needs_reset:
             self.reset_inverter()
 
@@ -568,6 +573,8 @@ class Execute:
             calibrating_ids = ", ".join(str(inverter.id) for inverter in calibrating)
             self.log("Inverter(s) {} in calibration mode, not executing plan and enabling charge/discharge at full rate.".format(calibrating_ids))
             for inverter in self.inverters:
+                # Calibration runs at full rate, so a 0 A current hold must not survive into the writes below (#5972)
+                inverter.release_current_holds()
                 inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
                 inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                 inverter.adjust_battery_target(100.0, False)
@@ -1307,6 +1314,17 @@ class Execute:
 
         self.balance_inverter_rates(intent)
 
+        # Release the 0 A current holds no mimic_target_soc renewed this cycle, after balancing and before the rates are
+        # applied. A direction the rate pass below writes gets its current from there; read-only writes nothing (#5972)
+        for inverter in self.inverters:
+            entry = intent.get(inverter.id)
+            rate_pass_writes = set()
+            if entry:
+                for direction in ("charge", "discharge"):
+                    if entry.get(direction + "_rate", None) is not None or entry.get("reset_rates", True):
+                        rate_pass_writes.add(direction)
+            inverter.end_current_hold_cycle(rate_pass_writes=rate_pass_writes, read_only=self.set_read_only)
+
         # Single point at which rates reach the hardware. Runs after the loop so a balancer can see
         # the whole fleet before anything is written. Inverters that were skipped by the read-only
         # branch (continue), or skipped while an inverter calibrates, recorded no intent and are not written.
@@ -1447,6 +1465,10 @@ class Execute:
                     continue  # Local slot entities cannot confirm this asynchronous controller's cleanup.
                 self.log("Reset inverter settings to safe mode (set_charge_window={} set_export_window={} force={})".format(self.set_charge_window, self.set_export_window, self.inverter_needs_reset_force))
                 if self.set_charge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
+                    # Safe mode is not a hold, so a 0 A current hold must not survive into the rate write below. The
+                    # adjust_battery_target(100) below releases both directions on GS anyway, through mimic_target_soc's ECO
+                    # path; an export-only reset leaves the charge hold for end_current_hold_cycle() (#5972)
+                    inverter.release_current_holds(["charge"])
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
                     inverter.disable_charge_window()
                     inverter.adjust_charge_immediate(0)
@@ -1456,6 +1478,7 @@ class Execute:
                 if self.set_charge_window or self.set_export_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_reserve(0)
                 if self.set_export_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
+                    inverter.release_current_holds(["discharge"])
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                     inverter.adjust_force_export(False)
                     inverter.adjust_export_immediate(int(EXPORT_LIMIT_IDLE))
