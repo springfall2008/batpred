@@ -182,8 +182,8 @@ DEYE_TELEMETRY_KEYS = {
 
 # Not every model reports the keys above. A single-phase SUN-8K-SG05LP1-EU-AM2-P has no
 # TotalSolarPower and returns TotalDCInputPower plus one DCPowerPV<n> per string instead
-# (#5016). Fallbacks are only tried when the primary key is absent. Presence is what
-# counts, not the value: 0 W at night is a real reading and must not fall through.
+# (#5016). A key counts when its value is numeric: "0.00" at night is a real reading,
+# while a missing, empty or null value falls through to the next source.
 DEYE_TELEMETRY_FALLBACK_KEYS = {
     "pv_power": ("TotalDCInputPower",),
 }
