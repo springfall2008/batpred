@@ -38,7 +38,6 @@ from utils import (
     str2time,
 )
 
-
 # Log filter levels accepted by the get_log tool, matching the web log view's tabs
 LOG_FILTER_TYPES = ("all", "info", "warnings", "errors")
 

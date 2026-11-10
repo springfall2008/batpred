@@ -39,7 +39,6 @@ def make_window(start, end, average=10.0, target=None):
 def setup(my_predbat):
     reset_inverter(my_predbat)
     my_predbat.debug_enable = False
-    my_predbat.manual_all_times = []
     my_predbat.all_active_keep_max = {}
 
 
@@ -157,7 +156,7 @@ def test_no_combine_manual_times_start(my_predbat):
     print("**** test_no_combine_export_manual_times_start ****")
     failed = False
     setup(my_predbat)
-    my_predbat.manual_all_times = [750]
+    my_predbat.manual_export_times = [750]
 
     windows = [make_window(720, 750), make_window(750, 780)]
     limits = [50.0, 50.0]
@@ -178,7 +177,7 @@ def test_no_combine_manual_times_prev(my_predbat):
     print("**** test_no_combine_export_manual_times_prev ****")
     failed = False
     setup(my_predbat)
-    my_predbat.manual_all_times = [720]
+    my_predbat.manual_export_times = [720]
 
     windows = [make_window(720, 750), make_window(750, 780)]
     limits = [50.0, 50.0]

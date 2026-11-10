@@ -778,7 +778,7 @@ def create_kernel_context(pred, static_cache=None):
             static = (shape, build_static_context_arrays(pred, n_steps, minutes_now, num_cars))
             if static_cache is not None:
                 static_cache["arrays"] = static
-        (rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve) = static[1]
+        rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve = static[1]
 
         ctx = PkContext()
         ctx.rate_import = double_array(rate_import)
@@ -979,10 +979,10 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     buffers = []
     # The charge fan-outs reuse the same window lists across every job, so their start/end arrays are
     # marshalled once per distinct list instead of once per job - which is most of what those batches
-    # save. Export windows share this memo only when all_n is truthy; otherwise _prepare_export builds
-    # a fresh one per job. Keyed on identity, with the list retained so an id() cannot be recycled
-    # mid-batch. This relies on no caller mutating a window list between enqueue and flush (see
-    # prediction_batch.py).
+    # save. An export trial that moves a window's start builds its own list, which the trial's PV
+    # scenarios share (PredictionBatch.shared_trial), so it is marshalled once per trial. Keyed on
+    # identity, with the list retained so an id() cannot be recycled mid-batch. This relies on no
+    # caller mutating a window list between enqueue and flush (see prediction_batch.py).
     window_cache = {}
 
     def window_arrays(windows):
@@ -1002,6 +1002,18 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     export_end_buffers = []
     export_end_by_job = {}
 
+    # The scenarios of one trial share its charge limit list (PredictionBatch.shared_trial), and an export
+    # fan-out shares one across every trial, so the buffer is memoised on the same terms as the two above
+    charge_limit_cache = {}
+
+    def charge_limit_array(charge_limit):
+        """Marshal a charge limit list into a double buffer, reusing an earlier job's where possible"""
+        entry = charge_limit_cache.get(id(charge_limit))
+        if entry is None:
+            entry = (double_array(charge_limit), charge_limit)
+            charge_limit_cache[id(charge_limit)] = entry
+        return entry[0]
+
     def limit_arrays(export_limits):
         """Marshal an export limit list into its PkExportLimit buffer, reusing an earlier job's where possible"""
         entry = limits_cache.get(id(export_limits))
@@ -1013,7 +1025,7 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     for index, job in enumerate(jobs):
         charge_start, charge_end, _ = window_arrays(job.charge_window)
         export_start, export_end, _ = window_arrays(job.export_window)
-        charge_limit = double_array(job.charge_limit)
+        charge_limit = charge_limit_array(job.charge_limit)
         export_limits_buffer, _ = limit_arrays(job.export_limits)
         buffers.append((charge_limit, export_limits_buffer))
 
@@ -1077,12 +1089,15 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     return results
 
 
-def run_prediction_kernel(pred, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, export_floor_soc=None):
+def run_prediction_kernel(pred, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, export_floor_soc=None, series=True):
     """Run one prediction scenario through the C++ kernel.
 
     The caller's requested step is intentionally ignored - the kernel always simulates at
     PREDICT_STEP (5 minutes), see kernel_supported() - so a coarse "fast mode" step never
     reaches the kernel or the shared library ABI.
+
+    With series=False, or for a cached run, the per-step SoC series is not produced and the
+    series field of the result is an empty dict.
 
     Returns the same 17-tuple as Prediction.run_prediction() or None when the
     kernel could not run the scenario (caller falls back to the Python engine).
@@ -1105,11 +1120,13 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     scenario.charge_start, scenario.charge_end = window_bound_arrays(charge_window)
     scenario.export_limits = export_limit_array(export_limits)
     scenario.export_start, scenario.export_end = window_bound_arrays(export_window)
-    # A cached run discards the per-minute SoC series (see the `if not cache` block below), so the
-    # buffer is not allocated and the kernel is told to skip filling it. That skips a round_py per
-    # step, which is snprintf+strtod and the single most expensive thing in the kernel's hot loop -
-    # measured 52.8us -> 28.5us per scenario, for a value that was being thrown away.
-    soc_out = (ctypes.c_double * n_steps)() if not cache else None
+    # A cached run discards the per-minute SoC series, and a caller that passes series=False does not
+    # want it (see the `if want_series` block below), so the buffer is not allocated and the kernel
+    # is told to skip filling it. That skips a round_py per step, which is snprintf+strtod and the
+    # single most expensive thing in the kernel's hot loop - measured 52.8us -> 28.5us per scenario,
+    # for a value that was being thrown away. Building the dict from the buffer costs more again.
+    want_series = series and not cache
+    soc_out = (ctypes.c_double * n_steps)() if want_series else None
     scenario.soc_out = soc_out
     floor_buffer = None
     if export_floor_soc is not None and len(export_floor_soc) == len(export_window):
@@ -1130,7 +1147,7 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
 
     # Assemble the same return value as the Python engine
     predict_soc = {}
-    if not cache:
+    if want_series:
         # Indexed loop, not dict(zip(range(...), soc_out)): iterating a ctypes array boxes each double
         # through the sequence protocol and measured 34% slower than subscripting it.
         for k in range(n_steps):

@@ -40,6 +40,7 @@ from const import (
     FULL_EXPORT_POWER,
 )
 import copy
+import pytz
 import hashlib
 import json
 import time as time_module
@@ -2021,6 +2022,54 @@ def window2minutes(start, end, minutes_now):
     return compute_window_minutes(start, end, minutes_now)
 
 
+def start_of_local_day(day, local_tz):
+    """
+    The first instant of local date day in local_tz, as an aware datetime
+
+    Usually 00:00. Where the clocks go back across midnight, so 00:00 happens twice, it is the first 00:00; where they go
+    forward at midnight, so 00:00 never happens, it is the instant the day really starts (pytz's standard-time reading of
+    00:00 is that instant). zoneinfo's default fold=0 gives the same answers.
+    """
+    naive = datetime(day.year, day.month, day.day)
+    if not hasattr(local_tz, "localize"):
+        return naive.replace(tzinfo=local_tz)
+    try:
+        return local_tz.localize(naive, is_dst=None)
+    except pytz.exceptions.AmbiguousTimeError:
+        return local_tz.localize(naive, is_dst=True)
+    except pytz.exceptions.NonExistentTimeError:
+        return local_tz.localize(naive, is_dst=False)
+
+
+def clock_change_minutes(now, local_tz):
+    """
+    How far the clocks have moved since the start of today in local_tz: 60 after a spring change, -60 after an autumn one,
+    otherwise 0
+
+    Predbat's midnight_utc is now with the clock set to 00:00, so it carries now's UTC offset; on a clock-change day that
+    instant is this many minutes away from the real start of the day, and minutes_now (minutes since midnight_utc) is this
+    many minutes more than the real time elapsed since the day began. History from minute_data(backwards=True) is keyed by
+    real minutes back from now, so "since local midnight" reads of it use minutes_now - clock_change_minutes(...) (GH#5760).
+    """
+    now_local = now.astimezone(local_tz)
+    day_start = start_of_local_day(now_local.date(), local_tz)
+    return int((now_local.utcoffset() - day_start.utcoffset()).total_seconds() // 60)
+
+
+def local_day_end_minute(now, local_tz):
+    """
+    Where the end of today in local_tz falls, in minutes from Predbat's midnight_utc (now with the clock set to 00:00)
+
+    1440 on most days. On a clock-change day it is the real length of the day measured from midnight_utc: before an
+    autumn change (midnight_utc still on summer time) the day has an extra hour to run, so 1500; before a spring change,
+    1380; once the change has happened midnight_utc moves with it and it is 1440 again (GH#5760).
+    """
+    now_local = now.astimezone(local_tz)
+    midnight = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = start_of_local_day(now_local.date() + timedelta(days=1), local_tz)
+    return int((day_end - midnight).total_seconds() // 60)
+
+
 def minutes_since_midnight(now, midnight):
     """
     Compute minutes from midnight to now, floored to a PREDICT_STEP boundary
@@ -2748,6 +2797,10 @@ HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
 # still picked up within the hour.
 TOKEN_MINT_BACKOFF_BASE_SECONDS = 300
 TOKEN_MINT_BACKOFF_MAX_SECONDS = 3600
+# A mint refused with KT-CT-1199 ("Too many requests") is a per-key limit on obtainKrakenToken,
+# and an hourly retry has been seen to keep it tripped for days (4 Nov 2026 onwards). Keep
+# doubling past the hour for that refusal, up to this cap, so the key gets a real rest.
+TOKEN_MINT_RATE_LIMIT_BACKOFF_MAX_SECONDS = 4 * 3600
 # After a rate limit (KT-CT-1199, HTTP 429 or an edge/WAF block) the Kraken-based components pause
 # their GraphQL queries rather than sending the rest of the poll into the same limit. The pause
 # doubles per consecutive rate limit, capped so a limit that lifts is picked up within the half
@@ -2796,6 +2849,7 @@ class Backoff:
         count: Consecutive refusals so far, 0 when not backing off.
         until: Aware UTC time the backoff ends, or None.
         reason: How the last request was refused, for the log.
+        started_at: Aware UTC time of the first refusal in this run, or None.
     """
 
     def __init__(self, base_seconds, max_seconds):
@@ -2806,22 +2860,27 @@ class Backoff:
         self.until = None
         self.logged_at = None
         self.reason = None
+        self.started_at = None
 
-    def start(self, reason, retry_after=None):
+    def start(self, reason, retry_after=None, max_seconds=None):
         """Record another refusal and start (or extend) the backoff.
 
         Args:
             reason: How the request was refused, e.g. "rate limited" or "edge/WAF blocked".
             retry_after: Seconds the server asked us to wait, or None.
+            max_seconds: A cap for this refusal in place of the schedule's own, or None.
 
         Returns:
             int: The delay in seconds.
         """
+        cap = max_seconds if max_seconds is not None else self.max_seconds
         self.count += 1
-        delay = exponential_backoff_seconds(self.count, self.base_seconds, self.max_seconds)
+        delay = exponential_backoff_seconds(self.count, self.base_seconds, cap)
         if retry_after:
-            delay = min(max(delay, retry_after), self.max_seconds)
+            delay = min(max(delay, retry_after), cap)
         now = datetime.now(timezone.utc)
+        if self.started_at is None:
+            self.started_at = now
         self.until = now + timedelta(seconds=delay)
         self.logged_at = now
         self.reason = reason
@@ -2850,6 +2909,7 @@ class Backoff:
         self.until = None
         self.logged_at = None
         self.reason = None
+        self.started_at = None
         return count
 
 

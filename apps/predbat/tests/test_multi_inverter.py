@@ -31,6 +31,7 @@ def run_inverter_multi_test(
     failed = False
     inverter.battery_rate_max_charge = battery_rate_max_charge
     inverter.battery_rate_max_charge_dc = battery_rate_max_charge
+    inverter.battery_rate_max_discharge = battery_rate_max_charge
     inverter.soc_max = soc_max
     inverter.soc_kw = soc_kw
     inverter.soc_percent = calc_percent_limit(soc_kw, soc_max)
@@ -38,6 +39,18 @@ def run_inverter_multi_test(
     my_predbat.soc_kw = soc_kw_all
     my_predbat.battery_rate_max_charge = battery_rate_max_charge_all
     my_predbat.battery_rate_max_charge_dc = battery_rate_max_charge_all
+
+    # The target split shares the fleet's change between the inverters in my_predbat.inverters, so they must add up to the
+    # fleet totals set above. The inverter under test is one of them and a second inverter stands in for all the others
+    my_predbat.inverters = [inverter]
+    if soc_max_all > soc_max or battery_rate_max_charge_all > battery_rate_max_charge:
+        others = DummyInverter(my_predbat.log, inverter_id=1)
+        others.soc_kw = soc_kw_all - soc_kw
+        others.soc_max = soc_max_all - soc_max
+        others.battery_rate_max_charge = battery_rate_max_charge_all - battery_rate_max_charge
+        others.battery_rate_max_charge_dc = others.battery_rate_max_charge
+        others.battery_rate_max_discharge = others.battery_rate_max_charge
+        my_predbat.inverters.append(others)
 
     my_predbat.adjust_battery_target_multi(inverter, soc, isCharging, isExporting)
     if assert_soc != inverter.soc_target:
@@ -54,6 +67,8 @@ def run_inverter_multi_tests(my_predbat):
 
     failed = False
     inverter = DummyInverter(my_predbat.log)
+    saved_inverters = my_predbat.inverters
+    saved_totals = (my_predbat.soc_max, my_predbat.soc_kw, my_predbat.battery_rate_max_charge, my_predbat.battery_rate_max_charge_dc)
 
     failed |= run_inverter_multi_test("charge", my_predbat, inverter, 50, isCharging=False, assert_soc=50)
     failed |= run_inverter_multi_test("charge_soc", my_predbat, inverter, 50, isCharging=False, assert_soc=50, soc_kw=50.0, soc_kw_all=50.0)
@@ -62,4 +77,9 @@ def run_inverter_multi_tests(my_predbat):
     failed |= run_inverter_multi_test("charge4", my_predbat, inverter, 50, isCharging=True, assert_soc=67, battery_rate_max_charge=2.0, battery_rate_max_charge_all=3.0, soc_max_all=200.0)
     failed |= run_inverter_multi_test("charge5", my_predbat, inverter, 50, isCharging=True, assert_soc=33, battery_rate_max_charge=1.0, battery_rate_max_charge_all=3.0, soc_max_all=200.0)
     failed |= run_inverter_multi_test("discharge", my_predbat, inverter, 50, isCharging=False, assert_soc=50, soc_max_all=200.0, soc_max=100.0, soc_kw=100.0, soc_kw_all=200.0, battery_rate_max_charge_all=2.0)
+    # The other inverter is already full, so this one takes all of the 50kWh to add: 0kWh -> 50kWh, where it used to be given only its half (25%) and the rest was lost (#4856 F2)
+    failed |= run_inverter_multi_test("charge_other_full", my_predbat, inverter, 75, isCharging=True, assert_soc=50, soc_max_all=200.0, soc_max=100.0, soc_kw=0.0, soc_kw_all=100.0, battery_rate_max_charge_all=2.0)
+
+    my_predbat.inverters = saved_inverters
+    my_predbat.soc_max, my_predbat.soc_kw, my_predbat.battery_rate_max_charge, my_predbat.battery_rate_max_charge_dc = saved_totals
     return failed

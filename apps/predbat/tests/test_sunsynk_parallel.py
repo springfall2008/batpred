@@ -436,7 +436,7 @@ def test_parallel_automatic_config_registers_one_inverter():
         if isinstance(value, list) and any(SLAVE in str(item) for item in value):
             print(f"ERROR: {setting} is bound to the slave: {value}")
             failed = True
-    for setting in ("soc_max", "battery_rate_max", "inverter_limit", "export_limit", "import_today", "export_today", "battery_charge_today", "battery_discharge_today", "schedule_write_button"):
+    for setting in ("soc_max_fallback", "battery_rate_max", "inverter_limit", "export_limit", "import_today", "export_today", "battery_charge_today", "battery_discharge_today", "schedule_write_button"):
         if setting not in captured:
             print(f"ERROR: {setting} was not bound")
             failed = True
@@ -714,9 +714,13 @@ def test_parallel_cli_never_writes_to_a_slave():
 
     args = argparse.Namespace(username=None, password=None, region="sunsynk", auth_method="password", serial=None, dump_settings=False, write_test=False, tou_test=True, automatic=False)
     buffer = io.StringIO()
-    with patch("sunsynk._build_sunsynk", return_value=client), patch.object(client, "run", side_effect=_async_true), patch("sunsynk._tou_round_trip", side_effect=fake_round_trip), _clock(
-        client, LONDON.localize(datetime(2026, 10, 18, 9, 5))
-    ), redirect_stdout(buffer):
+    with (
+        patch("sunsynk._build_sunsynk", return_value=client),
+        patch.object(client, "run", side_effect=_async_true),
+        patch("sunsynk._tou_round_trip", side_effect=fake_round_trip),
+        _clock(client, LONDON.localize(datetime(2026, 10, 18, 9, 5))),
+        redirect_stdout(buffer),
+    ):
         run_async_local(run_cli_once(args))
     output = buffer.getvalue()
     if tested != [MASTER]:

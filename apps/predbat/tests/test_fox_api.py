@@ -1580,15 +1580,16 @@ def test_api_get_device_detail(my_predbat):
     return False
 
 
-def test_capacity_watts_half_kw_device_type(my_predbat):
+def test_capacity_watts_fractional_kw_device_type(my_predbat):
     """
-    Test capacity_watts() corrects the truncated 'capacity' field for half-kW models.
+    Test capacity_watts() corrects the truncated 'capacity' field for fractional-kW models.
 
     Fox's device/detail 'capacity' field is an integer, so a 10.5kW KH10.5 inverter
-    reports capacity=10. Only a deviceType ending in '.5' with a whole-kW capacity
-    should be bumped up to end in 500; anything else passes through unchanged.
+    reports capacity=10 and a 3.7kW H1-3.7 reports capacity=3. A whole-kW capacity takes
+    the decimal rating in deviceType whose whole part matches it; anything else passes
+    through unchanged.
     """
-    print("  - test_capacity_watts_half_kw_device_type")
+    print("  - test_capacity_watts_fractional_kw_device_type")
 
     # Whole-kW model is untouched
     assert FoxAPI.capacity_watts({"capacity": 8, "deviceType": "KH8"}) == 8000
@@ -1601,6 +1602,12 @@ def test_capacity_watts_half_kw_device_type(my_predbat):
     assert FoxAPI.capacity_watts({"capacity": 0, "deviceType": "KH10.5"}) == 0
     # A capacity that isn't a whole kW multiple is left alone (already carries a fraction)
     assert FoxAPI.capacity_watts({"capacity": 10.3, "deviceType": "KH10.5"}) == 10300
+    # Any decimal kW rating in deviceType restores the truncated fraction, not only .5 (GH#5938: H1-3.7 reports capacity=3)
+    assert FoxAPI.capacity_watts({"capacity": 3, "deviceType": "H1-3.7-E-G2-WL"}) == 3700
+    # ...but only when the rating's whole part matches the reported capacity
+    assert FoxAPI.capacity_watts({"capacity": 5, "deviceType": "H1-3.7-E-G2-WL"}) == 5000
+    # A whole-kW rating written with a decimal leaves the capacity as it is
+    assert FoxAPI.capacity_watts({"capacity": 10, "deviceType": "H3-10.0-E"}) == 10000
 
     return False
 
@@ -2243,12 +2250,13 @@ def test_api_get_scheduler(my_predbat):
 
 def test_api_get_scheduler_half_kw_capacity(my_predbat):
     """
-    Test get_scheduler doesn't clamp fdpwr_max below a genuine half-kW rating.
+    Test get_scheduler doesn't clamp fdpwr_max below a genuine fractional-kW rating.
 
     Fox's device/detail 'capacity' field is an integer, so a 10.5kW KH10.5 inverter reports
     capacity=10 even though the scheduler API correctly reports a 10500W fdpwr max. The clamp
-    uses capacity_watts(), which corrects the half-kW deviceType before capping, so it should
-    still clamp to the true 10500W rather than the truncated 10000W.
+    uses capacity_watts(), which corrects the fractional-kW deviceType before capping, so it should
+    still clamp to the true 10500W rather than the truncated 10000W. The same holds for a 3.7kW
+    H1-3.7-E-G2-WL reporting capacity=3 (GH#5938): it clamps to 3700W, not 3000W.
     """
     print("  - test_api_get_scheduler_half_kw_capacity")
 
@@ -2272,6 +2280,23 @@ def test_api_get_scheduler_half_kw_capacity(my_predbat):
     asyncio.run(fox.get_scheduler(deviceSN))
 
     assert fox.fdpwr_max[deviceSN] == 10500
+
+    # GH#5938: a 3.7kW H1 reports capacity=3, and Fox's own fdpwr max is the usual inflated 8000
+    fox = MockFoxAPIWithRequests()
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 3, "deviceType": "H1-3.7-E-G2-WL"}
+    fox.set_mock_response(
+        "/op/v1/device/scheduler/get",
+        {
+            "enable": 1,
+            "groups": [],
+            "properties": {
+                "fdpwr": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 8000.0}},
+                "fdsoc": {"unit": "%", "precision": 1.0, "range": {"min": 10.0, "max": 100.0}},
+            },
+        },
+    )
+    asyncio.run(fox.get_scheduler(deviceSN))
+    assert fox.fdpwr_max[deviceSN] == 3700
 
     return False
 
@@ -5700,8 +5725,8 @@ def test_publish_data_device_info_half_kw_capacity(my_predbat):
     Test publish_data corrects a half-kW model's truncated capacity.
 
     Fox reports the device/detail 'capacity' field as an integer, so a 10.5kW KH10.5
-    inverter reports capacity=10. deviceType ending in '.5' with a whole-kW capacity
-    should bump the reported watts up to end in 500 rather than 000.
+    inverter reports capacity=10. A deviceType carrying the decimal rating restores the
+    fraction, so the reported watts end in 500 rather than 000.
     """
     print("  - test_publish_data_device_info_half_kw_capacity")
 
@@ -8189,7 +8214,7 @@ def run_fox_api_tests(my_predbat):
         # API endpoint tests with mocked request_get
         failed |= test_api_get_device_list(my_predbat)
         failed |= test_api_get_device_detail(my_predbat)
-        failed |= test_capacity_watts_half_kw_device_type(my_predbat)
+        failed |= test_capacity_watts_fractional_kw_device_type(my_predbat)
         failed |= test_api_get_device_history(my_predbat)
         failed |= test_api_get_device_history_empty(my_predbat)
         failed |= test_api_get_available_variables(my_predbat)

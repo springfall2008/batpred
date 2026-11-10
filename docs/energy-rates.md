@@ -54,6 +54,8 @@ Put the account number in `apps.yaml` and the API key in `secrets.yaml`, referen
 
 The API key can read and change your Octopus account, so keep it out of `apps.yaml`, which is more likely to be shared or attached to a bug report - see [Storing secrets](apps-yaml.md#storing-secrets).
 
+Predbat also reads your half-hourly billing from Octopus every few hours, for your import meter and your export meter if you have one, and shows it next to its own costs on the [History view](web-interface.md#plan-view) and in `sensor.predbat_billing` (see [Cost saving data](output-data.md#cost-saving-data)).
+
 ### Octopus Free energy sessions
 
 Predbat can obtain details of Free energy sessions directly from the Octopus Web Site.
@@ -197,6 +199,22 @@ If necessary, a pre-charge may happen at some point during the day to maintain t
 This needs the automatic import threshold (**input_number.predbat_rate_low_threshold** set to 0): a manual threshold is a cap
 Predbat will not charge above, even ahead of a session - see [rate thresholds](customisation.md#battery-margins-and-metrics-options).
 
+#### How Octopus calculates the reward (battery owners)
+
+Octopus rewards a Power Down session on the *change* in your net energy use (import minus export) compared with your typical use for the same half-hours:
+the average over the last 10 weekdays for a weekday session, or the last 4 weekend days for a weekend or bank holiday session
+(see the [Octopus Saving Sessions FAQ](https://octopus.energy/blog/saving-sessions-faqs/#down)).
+
+Predbat cannot know that baseline, so it values every kWh exported (or import avoided) during the session at the full reward rate, as if your typical use at that time were zero.
+If your battery normally covers your evening peak, or Predbat normally exports at that time, your baseline is already low and the reward you actually receive can be much
+smaller than the plan assumes. Predbat may then hold the battery charged for hours before the session, importing at your normal rate meanwhile, for income that does not arrive.
+
+If that matches your experience, you can reduce or remove the session's influence on the plan while still letting Predbat auto-join, so you keep whatever reward you do earn:
+
+- Increase **octopus_saving_session_octopoints_per_penny** in `apps.yaml`. The session rate is the octopoints per kWh divided by this value, so e.g. `100000` makes it
+  effectively zero and Predbat plans the session like any other day (any **input_number.predbat_load_scaling_saving** you have set below 1.0 still applies to the session).
+- Or raise **octopus_saving_session_min_octopoints_per_kwh** so low-value sessions are not joined at all.
+
 Note that Predbat's operational mode **select.predbat_mode** must be set to either 'Control charge'
 or 'Control charge & discharge' for Predbat to be able to manage the battery for the saving session.
 
@@ -301,6 +319,9 @@ The following entries are required for the Kraken component in `apps.yaml`:
 ```
 
 Full details of what to configure are given in the [component documentation](components.md#kraken-energy-kraken)
+
+As with Octopus, Predbat reads your half-hourly billing every few hours and shows it on the [History view](web-interface.md#plan-view) and in `sensor.predbat_billing`.
+E.ON Next publishes each half hour as a single charge rather than split into rate buckets.
 
 If you have an EV on a smart-charging tariff with Eon.Next (such as Next Drive Smart), Eon bills every half hour of a planned charging dispatch at the cheap rate whether or not the car charged in it, unlike Octopus Intelligent.
 With `kraken_provider: eon` Predbat prices dispatches that way automatically; see **intelligent_dispatch_billing** in the [car charging documentation](car-charging.md) to change it.

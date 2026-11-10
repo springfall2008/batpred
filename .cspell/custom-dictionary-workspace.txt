@@ -38,6 +38,7 @@ armhf
 armv
 ASHP
 asn
+asname
 astimezone
 asyncio
 atfork
@@ -118,6 +119,7 @@ coro
 corruptleg
 corruptplans
 cprofile
+CREAT
 creds
 crosscharge
 ctrdis
@@ -271,9 +273,11 @@ generationmix
 generationpower
 geserial
 geseriale
+getaddrinfo
 getaffinity
 getall
 getattr
+getframe
 getmembers
 getrusage
 Ginlong
@@ -392,6 +396,7 @@ lmt
 loadml
 loadmlpower
 loadspower
+localdomain
 localfolder
 locationless
 lockstep
@@ -425,6 +430,7 @@ metricmid
 microinverters
 middlebox
 middleboxes
+middot
 milli
 minb
 minmax
@@ -448,6 +454,7 @@ monokai
 Mosquitto
 mousedown
 mpan
+mpans
 mppt
 mprn
 mpxn
@@ -473,6 +480,7 @@ nocharge
 NODETAIL
 nodischarge
 nohup
+NONAME
 noopener
 nord
 nordpool
@@ -800,6 +808,7 @@ workstreams
 worktree
 writeonly
 wrongsha
+WRONLY
 wwxxabcdefyyzz
 x1
 xaxis
