@@ -1868,6 +1868,43 @@ class Plan:
         )
         return metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh_battery + import_kwh_house, export_kwh
 
+    def launch_run_prediction_metric(self, charge_limit, charge_window, export_window, export_limits, end_record):
+        """
+        Queue the scenarios one plan metric needs and return their handles for get_run_prediction_metric
+
+        The batched counterpart of run_prediction_metric, for a pass that prices many independent
+        trials: queue them all, then read the metrics back. The whole queue then runs as one kernel
+        batch across the configured threads, or on the Python engine when the kernel is not in use,
+        and no trial pays for the per-step SoC series that run_prediction_metric produces and a
+        metric never reads. It returns the same metric, to the last digit.
+
+        Nothing runs here. The usual batch rule applies: nothing passed in may be mutated until the
+        handles have been read, so give each trial its own limit lists.
+        """
+        handle = self.launch_run_prediction_single(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, end_record=end_record)
+        handle10 = self.launch_run_prediction_single(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, end_record=end_record)
+        handle90 = self.launch_run_prediction_single(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV90, end_record=end_record) if self.pv_metric90_weight > 0 else None
+        return handle, handle10, handle90
+
+    def get_run_prediction_metric(self, handles):
+        """
+        Return what run_prediction_metric returns, for a trial queued with launch_run_prediction_metric
+
+        The first call after a round of queueing runs every queued trial.
+        """
+        handle, handle10, handle90 = handles
+        cost, import_kwh_battery, import_kwh_house, export_kwh, _, soc, _, battery_cycle, metric_keep, final_iboost, final_carbon_g = handle.get()
+        cost10, _, _, _, _, soc10, _, _, _, final_iboost10, _ = handle10.get()
+        soc90 = None
+        cost90 = None
+        final_iboost90 = 0.0
+        if handle90 is not None:
+            (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = handle90.get()
+        metric, battery_value = self.compute_metric(
+            self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
+        )
+        return metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh_battery + import_kwh_house, export_kwh
+
     def in_charge_window(self, charge_window, minute_abs):
         """
         Work out if this minute is within the a charge window
@@ -4718,6 +4755,11 @@ class Plan:
 
         Only strictly improving swaps are kept so the pass converges monotonically and can
         never make the plan worse.
+
+        A target's partners are priced as one batch rather than one at a time. A swap that is not
+        kept is undone, so every partner of a target is tried against the same plan and none
+        depends on another; the results are then read in partner order and the first that passes is
+        kept, which is the swap a one-at-a-time search would have stopped at.
         """
         curr = self.currency_symbols[1]
 
@@ -4734,9 +4776,7 @@ class Plan:
         swapped = True
         first = True
         while swapped:
-            selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, selected_export = self.run_prediction_metric(
-                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
-            )
+            selected_metric, _, selected_cost, _, _, _, _, _ = self.get_run_prediction_metric(self.launch_run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, self.end_record))
             if first:
                 self.log("Swap charge optimisation started metric {}{}, cost {}{}, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, min_improvement_swap, curr))
             swapped = False
@@ -4755,7 +4795,9 @@ class Plan:
                 if not self.allow_this_charge_window(window_n_target):
                     continue
 
-                # Try swapping the charge limit with an earlier window on the same day
+                # Try swapping the charge limit with an earlier window on the same day. Every partner
+                # is queued first, each on its own copy of the limits, so they run as one batch.
+                trials = []
                 for window_n in range(max(window_n_target - 32, 0), window_n_target, 1):
                     window_start = self.charge_window_best[window_n]["start"]
                     charge_limit = self.charge_limit_best[window_n]
@@ -4772,13 +4814,14 @@ class Plan:
                     if not self.allow_this_charge_window(window_n):
                         continue
 
-                    # Perform the swap and evaluate the resulting plan
-                    self.charge_limit_best[window_n] = charge_limit_target
-                    self.charge_limit_best[window_n_target] = charge_limit
+                    try_charge_limit = self.charge_limit_best.copy()
+                    try_charge_limit[window_n] = charge_limit_target
+                    try_charge_limit[window_n_target] = charge_limit
+                    trials.append((window_n, charge_limit, self.launch_run_prediction_metric(try_charge_limit, self.charge_window_best, self.export_window_best, self.export_limits_best, self.end_record)))
 
-                    best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
-                        self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
-                    )
+                # Read the results in partner order and keep the first swap that passes
+                for window_n, charge_limit, handles in trials:
+                    best_metric, _, best_cost, _, _, _, _, _ = self.get_run_prediction_metric(handles)
 
                     if self.debug_enable:
                         self.log(
@@ -4792,15 +4835,13 @@ class Plan:
                                     window_n, charge_limit, window_n_target, charge_limit_target, dp2(best_metric), curr, dp2(selected_metric), curr, dp2(best_cost), curr
                                 )
                             )
+                        self.charge_limit_best[window_n] = charge_limit_target
+                        self.charge_limit_best[window_n_target] = charge_limit
                         selected_metric = best_metric
                         selected_cost = best_cost
                         swapped = True
                         swapped_target[window_n_target] = True
                         break
-                    else:
-                        # Revert the change
-                        self.charge_limit_best[window_n] = charge_limit
-                        self.charge_limit_best[window_n_target] = charge_limit_target
 
             self.log("Swap charge optimisation finished metric {}{}, cost {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr))
 
