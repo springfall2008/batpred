@@ -1535,7 +1535,8 @@ class Fetch:
 
         # Fetch ML forecast if enabled
         load_ml_forecast = {}
-        if self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False):
+        load_ml_forecast_wanted = self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False)
+        if load_ml_forecast_wanted:
             load_ml_forecast = self.fetch_ml_load_forecast(self.now_utc, save=save)
             if load_ml_forecast:
                 self.load_forecast_only = True  # Use only ML forecast for load if enabled and we have data
@@ -1571,6 +1572,11 @@ class Fetch:
                     self.load_minutes_source = "load_forecast"
                     self.load_minutes_age = 0
                     self.load_last_period = 0
+                elif ("load_forecast" in self.args) or load_ml_forecast_wanted:
+                    # A source is configured but gave nothing yet: an unavailable sensor, or a Load ML forecast still warming up
+                    self.log("Error: No load data: load_today is not set and the load forecast returned no data. Skipping this cycle")
+                    self.record_status(message="Error: No load data - load_today not set and the load forecast returned no data", had_errors=True)
+                    raise LoadSourceMissing("load_today is not set and the load forecast returned no data")
                 else:
                     self.log("Error: No load data: load_today or load_forecast is not set. Set one in apps.yaml, or if your inverter component configures it automatically, wait for it to start. Skipping this cycle")
                     self.record_status(message="Error: No load data - load_today not set (in apps.yaml, or by a component's automatic configuration)", had_errors=True)

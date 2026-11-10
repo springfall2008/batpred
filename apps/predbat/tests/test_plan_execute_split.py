@@ -356,7 +356,7 @@ def _scenario_plan_once_unscheduled_forces(my_predbat):
 
 
 def _scenario_plan_once_failures(my_predbat):
-    """plan_once returns None on inverter-fetch failure, zero rates and template configuration."""
+    """plan_once returns None on inverter-fetch failure, zero rates, template configuration and no load source."""
     failed = 0
     my_predbat.plan_valid = True
     my_predbat.plan_last_updated = my_predbat.now_utc
