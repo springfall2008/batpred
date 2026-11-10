@@ -14,6 +14,7 @@ executor's isCharging / isCharging_Target once into charge_keep_target rather th
 call doing so. optimise_charge_limit()'s use of it is covered by the optimise_windows tests, and the executor
 setting isCharging for a Control SOC only charge (#5991) by the execute tests.
 """
+
 from tests.test_infra import reset_inverter
 from utils import calc_percent_limit
 

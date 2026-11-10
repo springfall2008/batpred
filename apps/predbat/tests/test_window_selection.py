@@ -18,6 +18,7 @@ pins exactly that against a reference implementation of the original capped loop
 change makes the cap interact with the dedup or the accept filter, it fails here rather than
 silently changing plans.
 """
+
 from plan import select_window_candidates
 
 

@@ -105,7 +105,7 @@ def load_debug_dump(my_predbat, debug_file):
     my_predbat.args["threads"] = 0
 
 
-def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
+def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False, write_debug_dump=True):
     print("**** Running debug test {} ****\n".format(debug_file))
     # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
     # debug_cases regression suite exercise the same code path and produce the same result.
@@ -350,6 +350,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     open(filename, "w").write(actual_json)
     print("Wrote plan json to {}".format(filename))
 
-    my_predbat.create_debug_yaml(write_file=True)
+    # A fresh dump of the replayed state, for whoever is investigating with --debug_file. The golden cases turn it off:
+    # nothing reads it back, writing the two dumps was about 70% of debug_cases' runtime, and test_debug_yaml_scope
+    # already covers create_debug_yaml()
+    if write_debug_dump:
+        my_predbat.create_debug_yaml(write_file=True)
 
     return failed

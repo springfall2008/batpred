@@ -6,6 +6,7 @@ token (EMQX CONNACK code 134 "Bad user name or password") and never refreshed,
 so PredBat lost all gateway control until the pod/config was rebuilt. The fix
 makes the reconnect loop force a token refresh when the broker rejects auth.
 """
+
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 

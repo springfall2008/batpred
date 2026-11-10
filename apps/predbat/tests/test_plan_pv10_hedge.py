@@ -24,6 +24,7 @@ with a hand-built scenario: cheap 23:30-06:30 import, an expensive day, nothing 
 0.5 kW load and a sunny nominal day. The plan is made twice, once with a PV10 equal to nominal and once
 with a PV10 at 10% of it, and the battery's predicted SoC at the end of the cheap window is compared.
 """
+
 import io
 import math
 import contextlib

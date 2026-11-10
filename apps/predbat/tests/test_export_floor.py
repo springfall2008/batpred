@@ -16,6 +16,7 @@ floor rule, how run_prediction_metric feeds it the nominal run it has already ma
 steps clipping leaves are merged back into one export at the end. The prediction-layer behaviour (direct
 runs, the batch and its fallbacks) is pinned in test_prediction_batch.
 """
+
 from tests.test_infra import reset_inverter
 from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 from prediction_batch import export_end_soc_from_series, floor_export_limits, prediction_cache_key
