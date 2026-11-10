@@ -979,10 +979,10 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     buffers = []
     # The charge fan-outs reuse the same window lists across every job, so their start/end arrays are
     # marshalled once per distinct list instead of once per job - which is most of what those batches
-    # save. Export windows share this memo only when all_n is truthy; otherwise _prepare_export builds
-    # a fresh one per job. Keyed on identity, with the list retained so an id() cannot be recycled
-    # mid-batch. This relies on no caller mutating a window list between enqueue and flush (see
-    # prediction_batch.py).
+    # save. An export trial that moves a window's start builds its own list, which the trial's PV
+    # scenarios share (PredictionBatch.shared_trial), so it is marshalled once per trial. Keyed on
+    # identity, with the list retained so an id() cannot be recycled mid-batch. This relies on no
+    # caller mutating a window list between enqueue and flush (see prediction_batch.py).
     window_cache = {}
 
     def window_arrays(windows):
@@ -1002,6 +1002,18 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     export_end_buffers = []
     export_end_by_job = {}
 
+    # The scenarios of one trial share its charge limit list (PredictionBatch.shared_trial), and an export
+    # fan-out shares one across every trial, so the buffer is memoised on the same terms as the two above
+    charge_limit_cache = {}
+
+    def charge_limit_array(charge_limit):
+        """Marshal a charge limit list into a double buffer, reusing an earlier job's where possible"""
+        entry = charge_limit_cache.get(id(charge_limit))
+        if entry is None:
+            entry = (double_array(charge_limit), charge_limit)
+            charge_limit_cache[id(charge_limit)] = entry
+        return entry[0]
+
     def limit_arrays(export_limits):
         """Marshal an export limit list into its PkExportLimit buffer, reusing an earlier job's where possible"""
         entry = limits_cache.get(id(export_limits))
@@ -1013,7 +1025,7 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     for index, job in enumerate(jobs):
         charge_start, charge_end, _ = window_arrays(job.charge_window)
         export_start, export_end, _ = window_arrays(job.export_window)
-        charge_limit = double_array(job.charge_limit)
+        charge_limit = charge_limit_array(job.charge_limit)
         export_limits_buffer, _ = limit_arrays(job.export_limits)
         buffers.append((charge_limit, export_limits_buffer))
 
