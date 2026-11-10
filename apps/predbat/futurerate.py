@@ -156,7 +156,7 @@ class FutureRate:
                 diff = 0
                 for minute in real_mdata:
                     minute_mod = minute % (24 * 60)
-                    # Add the discount back on, to synthesise the Agile prices from the original Agile formula
+
                     rate_real = real_mdata[minute]
                     rate_nord = mdata.get(minute, None)
                     if rate_nord is not None:
