@@ -1582,10 +1582,15 @@ def test_templates_do_not_watch_octopus_saving_session(my_predbat):
 
     repo_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     templates_dir = os.path.join(repo_dir, "templates")
-    watch_entry = re.compile(r"^\s*(#\s*)?-\s*['\"]?\{octopus_saving_session\}['\"]?\s*$", re.MULTILINE)
+    watch_entry = re.compile(r"^\s*(#\s*)?-\s*['\"]?\{octopus_saving_session\}['\"]?(?:\s+#.*)?\s*$", re.MULTILINE)
 
     # The check itself: finds live and commented watch_list entries, leaves the sensor regex that Predbat does read
-    for sample, expected in [("  watch_list:\n    - '{octopus_saving_session}'\n", True), ("  #  - '{octopus_saving_session}'\n", True), ("  octopus_saving_session: 're:(event.octopus_energy_saving_session_events)'\n", False)]:
+    for sample, expected in [
+        ("  watch_list:\n    - '{octopus_saving_session}'\n", True),
+        ("  #  - '{octopus_saving_session}'\n", True),
+        ("  #  - '{octopus_saving_session}'  # example only\n", True),
+        ("  octopus_saving_session: 're:(event.octopus_energy_saving_session_events)'\n", False),
+    ]:
         if bool(watch_entry.search(sample)) != expected:
             print(f"ERROR: watch entry pattern gave {not expected} for {sample!r}")
             failed = True
