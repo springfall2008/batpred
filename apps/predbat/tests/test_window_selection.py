@@ -23,6 +23,7 @@ The sweep itself then skips slot counts that would only select the same windows 
 four-deep sweep: the trials that survive must be exactly the ones that were the first to select each
 set of windows, in the same order, because the search breaks ties on the first trial it sees.
 """
+
 from plan import distinct_slot_trials, select_window_candidates, slots_around
 
 # The slot length lists optimise_charge_limit_price_threads sweeps (local to that function)
