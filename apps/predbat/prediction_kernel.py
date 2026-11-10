@@ -459,6 +459,39 @@ _EXPORT_LIMIT_STRUCT_USABLE = _EXPORT_LIMIT_STRUCT.size == ctypes.sizeof(PkExpor
     struct.calcsize("@ii0d"),
 )
 
+
+# One PkBatchJob, packed the same way: a batch fills tens of thousands of jobs per plan, and setting
+# its seventeen fields one at a time through ctypes cost about four times as much as packing the
+# record with struct and copying the whole batch into the job array at once. The format is derived
+# from PkBatchJob._fields_ rather than written out, so a field added to the struct changes it too -
+# and the positional pack in run_prediction_kernel_batch then fails loudly on the argument count
+# instead of packing the wrong fields.
+#
+# A pointer field is packed as the buffer's address (ctypes.addressof, 0 for None), which is exactly
+# what assigning the buffer to the field stores. What assigning also does is keep the buffer alive
+# through the job array's _objects; a packed job does not, so run_prediction_kernel_batch holds every
+# buffer it points at in its own locals until pk_run_batch returns.
+#
+# The layout is checked rather than trusted, on the same terms as the export limits above: the size
+# and every field offset are compared with what struct computes from the same format, and a mismatch
+# falls back to filling the fields one by one.
+def _batch_job_format_code(ctype):
+    """Return the struct format code for one PkBatchJob field type (P for a pointer, i for an int32)"""
+    if ctype is ctypes.c_int32:
+        return "i"
+    if issubclass(ctype, ctypes._Pointer):
+        return "P"
+    raise TypeError("PkBatchJob field type {} has no struct packing code".format(ctype))
+
+
+_BATCH_JOB_CODES = [_batch_job_format_code(ctype) for _, ctype in PkBatchJob._fields_]
+_BATCH_JOB_STRUCT = struct.Struct("@" + "".join(_BATCH_JOB_CODES))
+_BATCH_JOB_STRUCT_USABLE = (
+    struct.calcsize("@i") == ctypes.sizeof(ctypes.c_int32)
+    and _BATCH_JOB_STRUCT.size == ctypes.sizeof(PkBatchJob)
+    and [getattr(PkBatchJob, name).offset for name, _ in PkBatchJob._fields_] == [struct.calcsize("@" + "".join(_BATCH_JOB_CODES[:index]) + "0" + code) for index, code in enumerate(_BATCH_JOB_CODES)]
+)
+
 # Contents-keyed cache of marshalled export-limit buffers for the single-run path
 # (run_prediction_kernel). The batch path caches by list identity, which never hits here because
 # every prediction is handed a fresh list; a search fans out thousands of simulations over the same
@@ -963,11 +996,18 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     caller_jobs = jobs
     jobs = [caller_jobs[index] for index in order]
     n_jobs = len(jobs)
-    job_array = (PkBatchJob * n_jobs)()
+    # Packed jobs are copied into the job array after the loop; the per-field fallback fills it in place
+    pack_jobs = _BATCH_JOB_STRUCT_USABLE
+    job_array = None if pack_jobs else (PkBatchJob * n_jobs)()
+    packed_jobs = []
+    pack_job = _BATCH_JOB_STRUCT.pack
+    addressof = ctypes.addressof
     result_array = (PkBatchResult * n_jobs)()
-    # Every ctypes buffer behind a pointer field has to outlive the call. ctypes' own keepalive already
-    # covers this (b_base walks up to job_array._objects), so this list is belt-and-braces: the limit
-    # arrays are held explicitly here rather than relying on ctypes' container keepalive.
+    # Every ctypes buffer behind a pointer field has to outlive the call. A packed job holds only the
+    # buffer's address, so ctypes' container keepalive (job_array._objects) does not cover it: the
+    # locals of this function do. The window arrays live in window_cache, the charge and export limit
+    # buffers in their caches and this list, the window-end SoC buffers in export_end_buffers, and a
+    # floor either here or on its job (a twin's floor is that twin's export_end_buffers entry).
     buffers = []
     # The charge fan-outs reuse the same window lists across every job, so their start/end arrays are
     # marshalled once per distinct list instead of once per job - which is most of what those batches
@@ -1021,35 +1061,65 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
         export_limits_buffer, _ = limit_arrays(job.export_limits)
         buffers.append((charge_limit, export_limits_buffer))
 
-        pk_job = job_array[index]
-        pk_job.charge_limit = charge_limit
-        pk_job.charge_start = charge_start
-        pk_job.charge_end = charge_end
-        pk_job.export_limits = export_limits_buffer
-        pk_job.export_start = export_start
-        pk_job.export_end = export_end
-        pk_job.soc_out = None
         export_end_buffer = (ctypes.c_double * len(job.export_window))() if (job.want_export_end_soc or job.need_export_end_soc) and job.export_window else None
-        pk_job.export_end_soc_out = export_end_buffer
         export_end_buffers.append(export_end_buffer)
         export_end_by_job[id(job)] = export_end_buffer
         floor_buffer = None
-        pk_job.phase = 0
+        phase = 0
         if job.floor_twin is not None:
             floor_buffer = export_end_by_job.get(id(job.floor_twin))
-            pk_job.phase = 1
+            phase = 1
         elif job.export_floor_soc is not None and len(job.export_floor_soc) == len(job.export_window):
             # A memo entry is either a ctypes buffer kept from an earlier twin or a list from the direct path
             floor_buffer = job.export_floor_soc if isinstance(job.export_floor_soc, ctypes.Array) else double_array(job.export_floor_soc)
             buffers.append(floor_buffer)
-        pk_job.export_floor_soc = floor_buffer
-        pk_job.n_charge = len(job.charge_window)
-        pk_job.n_export = len(job.export_window)
-        pk_job.pv_scenario = int(job.pv_scenario)
-        pk_job.end_record = job.end_record
-        pk_job.step = PREDICT_STEP  # the caller's step is ignored - see run_prediction_kernel
-        pk_job.soc_range_start_step = job.soc_range_start_step
-        pk_job.soc_range_end_step = job.soc_range_end_step
+
+        # The caller's step is ignored - see run_prediction_kernel. Field order is PkBatchJob._fields_;
+        # soc_out is always NULL because batched jobs never materialise the SoC series.
+        if pack_jobs:
+            packed_jobs.append(
+                pack_job(
+                    addressof(charge_limit),
+                    addressof(charge_start),
+                    addressof(charge_end),
+                    addressof(export_limits_buffer),
+                    addressof(export_start),
+                    addressof(export_end),
+                    0,
+                    addressof(export_end_buffer) if export_end_buffer is not None else 0,
+                    addressof(floor_buffer) if floor_buffer is not None else 0,
+                    len(job.charge_window),
+                    len(job.export_window),
+                    int(job.pv_scenario),
+                    job.end_record,
+                    PREDICT_STEP,
+                    job.soc_range_start_step,
+                    job.soc_range_end_step,
+                    phase,
+                )
+            )
+        else:
+            pk_job = job_array[index]
+            pk_job.charge_limit = charge_limit
+            pk_job.charge_start = charge_start
+            pk_job.charge_end = charge_end
+            pk_job.export_limits = export_limits_buffer
+            pk_job.export_start = export_start
+            pk_job.export_end = export_end
+            pk_job.soc_out = None
+            pk_job.export_end_soc_out = export_end_buffer
+            pk_job.export_floor_soc = floor_buffer
+            pk_job.n_charge = len(job.charge_window)
+            pk_job.n_export = len(job.export_window)
+            pk_job.pv_scenario = int(job.pv_scenario)
+            pk_job.end_record = job.end_record
+            pk_job.step = PREDICT_STEP
+            pk_job.soc_range_start_step = job.soc_range_start_step
+            pk_job.soc_range_end_step = job.soc_range_end_step
+            pk_job.phase = phase
+
+    if pack_jobs:
+        job_array = (PkBatchJob * n_jobs).from_buffer_copy(b"".join(packed_jobs))
 
     return_code = lib.pk_run_batch(pred.kernel_handle, job_array, n_jobs, result_array, max(int(n_threads), 1))
     if return_code != 0:
