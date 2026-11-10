@@ -14,10 +14,21 @@ optimise_swap_charge exchanges the charge limits of two charge windows on the sa
 keeps the swap only when it strictly lowers the overall metric. This escapes a local optimum
 that single-window coordinate descent cannot reach, where the same charge is better placed in
 a different (equal or similar priced) window.
+
+The pass prices all of a target's partners as one prediction batch, so they run in the C++ kernel
+across the configured threads. The batch tests below pin what that relies on: that a batched metric
+is the metric run_prediction_metric returns, that the pass ends on the plan a one-at-a-time search
+ends on, and that the trials do reach the kernel as a batch with the configured thread count.
 """
 
-from tests.test_infra import reset_rates, reset_inverter, update_rates_import, clear_manual_times
+import random
+
+import prediction_batch
+from const import EXPORT_MODE_TARGET
 from prediction import Prediction
+from tests.test_infra import reset_rates, reset_inverter, update_rates_import, update_rates_export, clear_manual_times
+from tests.test_kernel_parity import kernel_available
+from utils import pack_export_limit
 
 
 def setup_swap_charge(
@@ -157,8 +168,270 @@ def run_optimise_swap_charge_tests(my_predbat):
         print("ERROR: disabled charge optimisation should be unchanged, got {}".format(my_predbat.charge_limit_best))
         failed = True
 
+    failed |= run_swap_charge_batch_tests(my_predbat)
+
     if failed:
         print("**** Optimise swap charge tests FAILED ****")
     else:
         print("**** Optimise swap charge tests passed ****")
+    return failed
+
+
+def setup_swap_scenario(my_predbat, seed, kernel, pv90_weight=0.0, n_windows=14):
+    """Build an afternoon of half-hour charge windows with seeded prices and limits, returning the starting limits.
+
+    Unlike setup_swap_charge's two-window plans this one has enough windows, at enough different
+    prices, for a target to have many partners and for some swaps to be worth keeping. It also has
+    solar with a PV10/PV90 spread and a target export after the charge windows, so all three
+    scenarios differ and the PV10 run takes its export floor from the nominal one.
+    """
+    rng = random.Random(seed)
+    minutes_now = my_predbat.minutes_now
+    soc_max = 10.0
+
+    charge_window_best = [{"start": minutes_now + n * 30, "end": minutes_now + (n + 1) * 30, "average": rng.choice([4.0, 7.5, 11.0, 16.0, 24.0, 31.0])} for n in range(n_windows)]
+    charge_limit_best = [rng.choice([0.0, 0.0, 0.0, 4.0, soc_max]) for _ in range(n_windows)]
+    setup_swap_charge(my_predbat, charge_window_best, charge_limit_best, battery_size=soc_max, charge_rate=6.0)
+
+    export_start = minutes_now + n_windows * 30
+    export_window_best = [{"start": export_start, "end": export_start + 60, "average": 28.0}]
+    update_rates_export(my_predbat, export_window_best)
+    my_predbat.export_window_best = export_window_best
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 30)]
+
+    pv_step = {}
+    pv10_step = {}
+    pv90_step = {}
+    load_step = {}
+    load10_step = {}
+    load90_step = {}
+    for minute in range(0, my_predbat.forecast_minutes, 5):
+        pv_kw = 3.0 * max(0.0, 1.0 - minute / 180.0)
+        load_kw = round(rng.uniform(0.4, 1.2), 3)
+        pv_step[minute] = pv_kw / 12.0
+        pv10_step[minute] = pv_kw * 0.3 / 12.0
+        pv90_step[minute] = pv_kw * 1.4 / 12.0
+        load_step[minute] = load_kw / 12.0
+        load10_step[minute] = load_kw * 1.1 / 12.0
+        load90_step[minute] = load_kw * 0.95 / 12.0
+    my_predbat.load_minutes_step = load_step
+    my_predbat.load_minutes_step10 = load10_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.pv_forecast_minute10_step = pv10_step
+
+    # The Prediction reads the kernel and debug switches when it is built. Debug stays off: a debug
+    # run is never given to the kernel.
+    my_predbat.pv_metric90_weight = pv90_weight
+    my_predbat.prediction_kernel_enable = kernel
+    my_predbat.debug_enable = False
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step)
+    return list(charge_limit_best)
+
+
+def swap_charge_one_at_a_time(my_predbat, record_charge_windows):
+    """The search optimise_swap_charge ran before it batched its trials, returning (swaps kept, of those not the first partner tried).
+
+    Each swap is made in place, priced with run_prediction_metric and undone if it is not kept. This
+    is the reference the batched pass is checked against, so it is a copy of that loop and not a
+    call into anything the pass now shares.
+    """
+    min_improvement_swap = 0.1
+    kept = 0
+    kept_later_partner = 0
+    swapped_target = {}
+    swapped = True
+    while swapped:
+        selected_metric = my_predbat.run_prediction_metric(my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, end_record=my_predbat.end_record)[0]
+        swapped = False
+        for window_n_target in range(record_charge_windows - 1, 0, -1):
+            window_start_target = my_predbat.charge_window_best[window_n_target]["start"]
+            charge_limit_target = my_predbat.charge_limit_best[window_n_target]
+            if window_start_target in my_predbat.manual_all_times or swapped_target.get(window_n_target, False) or not my_predbat.allow_this_charge_window(window_n_target):
+                continue
+            tried = 0
+            for window_n in range(max(window_n_target - 32, 0), window_n_target, 1):
+                window_start = my_predbat.charge_window_best[window_n]["start"]
+                charge_limit = my_predbat.charge_limit_best[window_n]
+                if window_start in my_predbat.manual_all_times or window_start // 1440 != window_start_target // 1440 or charge_limit == charge_limit_target or not my_predbat.allow_this_charge_window(window_n):
+                    continue
+                my_predbat.charge_limit_best[window_n] = charge_limit_target
+                my_predbat.charge_limit_best[window_n_target] = charge_limit
+                best_metric = my_predbat.run_prediction_metric(my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, end_record=my_predbat.end_record)[0]
+                tried += 1
+                if best_metric < (selected_metric - min_improvement_swap):
+                    selected_metric = best_metric
+                    swapped = True
+                    swapped_target[window_n_target] = True
+                    kept += 1
+                    if tried > 1:
+                        kept_later_partner += 1
+                    break
+                my_predbat.charge_limit_best[window_n] = charge_limit
+                my_predbat.charge_limit_best[window_n_target] = charge_limit_target
+    return kept, kept_later_partner
+
+
+def test_batched_metric_matches_run_prediction_metric(my_predbat, kernel_modes):
+    """A metric queued through launch_run_prediction_metric is the one run_prediction_metric returns, returns True on failure.
+
+    Equal, not close: the swap pass compares metrics against a threshold, so a batched metric that
+    differed in the last digit could keep or drop a different swap. Checked on the Python engine and
+    the kernel, with and without the PV90 scenario, on plans with a target export so the PV10 run is
+    floored from the nominal one on both paths.
+    """
+    print("**** Running batched prediction metric tests ****")
+    failed = False
+    for kernel in kernel_modes:
+        for pv90_weight in (0.0, 0.2):
+            for seed in range(4):
+                charge_limit = setup_swap_scenario(my_predbat, seed, kernel, pv90_weight=pv90_weight)
+                if kernel and not my_predbat.prediction.kernel_handle:
+                    print("ERROR: seed {} expected the prediction kernel but it is not in use".format(seed))
+                    failed = True
+                args = (charge_limit, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best)
+                single = my_predbat.run_prediction_metric(*args, end_record=my_predbat.end_record)
+
+                handles = my_predbat.launch_run_prediction_metric(*args, my_predbat.end_record)
+                want_jobs = 3 if pv90_weight > 0 else 2
+                if len(my_predbat.prediction.pending_batch) != want_jobs:
+                    print("ERROR: kernel {} pv90 weight {} queued {} jobs, expected {} waiting to run".format(kernel, pv90_weight, len(my_predbat.prediction.pending_batch), want_jobs))
+                    failed = True
+                if (handles[2] is not None) != (pv90_weight > 0):
+                    print("ERROR: kernel {} pv90 weight {} PV90 should only be queued when it is weighted".format(kernel, pv90_weight))
+                    failed = True
+                batched = my_predbat.get_run_prediction_metric(handles)
+                if batched != single:
+                    print("ERROR: kernel {} pv90 weight {} seed {} batched metric {} differs from run_prediction_metric {}".format(kernel, pv90_weight, seed, batched, single))
+                    failed = True
+    if not failed:
+        print("Batched prediction metric tests passed")
+    return failed
+
+
+def test_swap_charge_matches_one_at_a_time(my_predbat, kernel_modes):
+    """The batched pass ends on the plan the one-at-a-time search ends on, returns True on failure.
+
+    Batching queues every partner of a target before it knows which swap will be kept, so the two
+    could part company if a result were read out of order, or if a kept swap did not reach the plan
+    the later targets are tried against. Both show up as different final limits, so the limits are
+    compared over seeded plans, on the Python engine and on the kernel at one and four threads. The
+    plans must between them keep some swaps, some of them with a partner other than the first tried,
+    or the comparison would pass without having tested the order.
+    """
+    print("**** Running batched swap charge search tests ****")
+    failed = False
+    total_kept = 0
+    total_later_partner = 0
+    for kernel in kernel_modes:
+        for pv90_weight in (0.0, 0.2):
+            for seed in range(8):
+                start = setup_swap_scenario(my_predbat, seed, kernel, pv90_weight=pv90_weight)
+                kept, kept_later_partner = swap_charge_one_at_a_time(my_predbat, len(start))
+                expected = list(my_predbat.charge_limit_best)
+                total_kept += kept
+                total_later_partner += kept_later_partner
+
+                for threads in (1, 4) if kernel else (1,):
+                    my_predbat.charge_limit_best = list(start)
+                    my_predbat.prediction.batch_threads = threads
+                    my_predbat.prediction.prediction_cache = {}
+                    my_predbat.optimise_swap_charge(len(start))
+                    if my_predbat.charge_limit_best != expected:
+                        print("ERROR: kernel {} threads {} pv90 weight {} seed {} batched pass ended on {} but one at a time ended on {} (from {})".format(kernel, threads, pv90_weight, seed, my_predbat.charge_limit_best, expected, start))
+                        failed = True
+                    if my_predbat.prediction.pending_batch:
+                        print("ERROR: kernel {} threads {} seed {} the pass left {} jobs queued".format(kernel, threads, seed, len(my_predbat.prediction.pending_batch)))
+                        failed = True
+    if total_kept == 0 or total_later_partner == 0:
+        print("ERROR: the plans kept {} swaps, {} with a later partner - too few to test the order".format(total_kept, total_later_partner))
+        failed = True
+    if not failed:
+        print("Batched swap charge search tests passed - {} swaps kept, {} with a later partner".format(total_kept, total_later_partner))
+    return failed
+
+
+def test_swap_charge_runs_on_kernel_batch(my_predbat):
+    """With the kernel on, every swap trial reaches it as a batch with the configured thread count, returns True on failure.
+
+    This is the point of the pass queueing its trials. It fails if the pass prices a trial through
+    run_prediction_metric again, if any queued job falls back to the Python engine, if the thread
+    count set from the threads option does not reach the kernel call, or if each trial is flushed on
+    its own (a metric is two jobs here, so a batch of more than two holds more than one trial).
+    """
+    print("**** Running swap charge kernel batch tests ****")
+    failed = False
+    start = setup_swap_scenario(my_predbat, 1, True)
+    prediction = my_predbat.prediction
+    prediction.batch_threads = 3
+
+    kernel_calls = []
+    single_calls = []
+    python_jobs = []
+    real_batch = prediction_batch.run_prediction_kernel_batch
+    real_metric = my_predbat.run_prediction_metric
+    real_python_job = prediction.run_batch_job_python
+
+    def spy_batch(pred, jobs, n_threads):
+        """Record the size and thread count of each kernel batch"""
+        kernel_calls.append((len(jobs), n_threads))
+        return real_batch(pred, jobs, n_threads)
+
+    def spy_metric(*args, **kwargs):
+        """Record a metric priced outside the batch"""
+        single_calls.append(1)
+        return real_metric(*args, **kwargs)
+
+    def spy_python_job(job):
+        """Record a queued job the kernel did not take"""
+        python_jobs.append(1)
+        return real_python_job(job)
+
+    prediction_batch.run_prediction_kernel_batch = spy_batch
+    my_predbat.run_prediction_metric = spy_metric
+    prediction.run_batch_job_python = spy_python_job
+    try:
+        my_predbat.optimise_swap_charge(len(start))
+    finally:
+        prediction_batch.run_prediction_kernel_batch = real_batch
+        del my_predbat.run_prediction_metric
+        del prediction.run_batch_job_python
+
+    if not kernel_calls:
+        print("ERROR: the swap pass made no kernel batch call")
+        failed = True
+    if any(n_threads != 3 for _, n_threads in kernel_calls):
+        print("ERROR: kernel batches should all use the 3 configured threads, got {}".format(sorted(set(n_threads for _, n_threads in kernel_calls))))
+        failed = True
+    if kernel_calls and max(n_jobs for n_jobs, _ in kernel_calls) <= 2:
+        print("ERROR: no kernel batch held more than one trial, sizes {}".format([n_jobs for n_jobs, _ in kernel_calls]))
+        failed = True
+    if single_calls:
+        print("ERROR: the swap pass priced {} metrics through run_prediction_metric instead of the batch".format(len(single_calls)))
+        failed = True
+    if python_jobs:
+        print("ERROR: {} queued jobs fell back to the Python engine with the kernel on".format(len(python_jobs)))
+        failed = True
+    if not failed:
+        print("Swap charge kernel batch tests passed - {} batches, largest {} jobs".format(len(kernel_calls), max(n_jobs for n_jobs, _ in kernel_calls)))
+    return failed
+
+
+def run_swap_charge_batch_tests(my_predbat):
+    """Run the batch tests on the Python engine and, where it is available, the kernel, returns True on failure."""
+    available, required_failure = kernel_available()
+    if required_failure:
+        return True
+    kernel_modes = [False, True] if available else [False]
+
+    saved = (my_predbat.pv_metric90_weight, getattr(my_predbat, "prediction_kernel_enable", False), my_predbat.debug_enable)
+    failed = False
+    try:
+        failed |= test_batched_metric_matches_run_prediction_metric(my_predbat, kernel_modes)
+        failed |= test_swap_charge_matches_one_at_a_time(my_predbat, kernel_modes)
+        if available:
+            failed |= test_swap_charge_runs_on_kernel_batch(my_predbat)
+        else:
+            print("WARNING: Prediction kernel not available - swap charge kernel batch test SKIPPED")
+    finally:
+        my_predbat.pv_metric90_weight, my_predbat.prediction_kernel_enable, my_predbat.debug_enable = saved
     return failed
