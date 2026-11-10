@@ -29,7 +29,7 @@ import sys
 import weakref
 
 from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPORT_POWER
-from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
+from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 10
@@ -470,12 +470,9 @@ _EXPORT_LIMIT_BUFFER_CACHE_MAX = 512
 
 
 def _build_export_limit_array(export_limits):
-    """Pack one export-limit list into a PkExportLimit array (see export_limit_array).
+    """Pack one export-limit list of (mode, target, power) tuples into a PkExportLimit array.
 
-    export_limits is documented as already-tuple-shaped by the time it reaches this function - the
-    normalisation, if any is needed, happens in export_limit_array before the cache key is built
-    below, not here, because an unnormalised legacy element (a list or a dict) is unhashable and
-    would break tuple(export_limits) itself, not just this packing loop.
+    The entries must already be tuples - see export_limit_array for where stored forms are converted.
     """
     buffer = PkExportLimit * len(export_limits)
     if not _EXPORT_LIMIT_STRUCT_USABLE:
@@ -504,19 +501,14 @@ def export_limit_array(export_limits):
     The result is cached on the tuple contents: the kernel only ever reads the buffer, and a
     fan-out re-marshals the same few plans thousands of times.
 
-    export_limits is documented as already-tuple-shaped, and both the packing loop in
-    _build_export_limit_array and the cache key below trust that - but an unnormalised legacy
-    element (a bare packed float, a malformed short sequence, or a stored mapping) would otherwise
-    either unpack wrong in the packer or, if it is a list or dict, make tuple(export_limits) itself
-    unhashable and raise before the packer is even reached, rather than falling back to idle as
-    every other entry point into this encoding does (GitHub Copilot review, PR #5047).
-    export_limit_from_stored is the general decoder - it also validates a 3-element sequence's
-    fields rather than trusting it, unlike the narrower unpack_export_limit. The isinstance check is
-    one pass per call, not per element normalised, so a plan already in tuple form - every plan once
-    it has been through a real cycle - pays nothing beyond the check itself.
+    export_limits must already be (mode, target, power) tuples. Stored and legacy forms (a bare
+    packed float, a list from a YAML or JSON round trip, or a mapping) are converted where a plan
+    enters Predbat - restoring a saved plan or loading a debug dump (export_limits_from_stored) -
+    and the planner only builds tuples (pack_export_limit). Checking every entry again here cost a
+    full pass over the plan on every call, thousands of times per optimisation, so it is not
+    repeated. Anything else fails loudly rather than being packed wrong: a list or mapping entry
+    makes the cache key unhashable, and a bare float cannot be unpacked into three fields.
     """
-    if not all(isinstance(limit, tuple) for limit in export_limits):
-        export_limits = [export_limit_from_stored(limit) for limit in export_limits]
     key = tuple(export_limits)
     buffer = _EXPORT_LIMIT_BUFFER_CACHE.get(key)
     if buffer is None:
