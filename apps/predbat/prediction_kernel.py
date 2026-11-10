@@ -1077,12 +1077,15 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     return results
 
 
-def run_prediction_kernel(pred, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, export_floor_soc=None):
+def run_prediction_kernel(pred, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, export_floor_soc=None, series=True):
     """Run one prediction scenario through the C++ kernel.
 
     The caller's requested step is intentionally ignored - the kernel always simulates at
     PREDICT_STEP (5 minutes), see kernel_supported() - so a coarse "fast mode" step never
     reaches the kernel or the shared library ABI.
+
+    With series=False, or for a cached run, the per-step SoC series is not produced and the
+    series field of the result is an empty dict.
 
     Returns the same 17-tuple as Prediction.run_prediction() or None when the
     kernel could not run the scenario (caller falls back to the Python engine).
@@ -1105,11 +1108,13 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     scenario.charge_start, scenario.charge_end = window_bound_arrays(charge_window)
     scenario.export_limits = export_limit_array(export_limits)
     scenario.export_start, scenario.export_end = window_bound_arrays(export_window)
-    # A cached run discards the per-minute SoC series (see the `if not cache` block below), so the
-    # buffer is not allocated and the kernel is told to skip filling it. That skips a round_py per
-    # step, which is snprintf+strtod and the single most expensive thing in the kernel's hot loop -
-    # measured 52.8us -> 28.5us per scenario, for a value that was being thrown away.
-    soc_out = (ctypes.c_double * n_steps)() if not cache else None
+    # A cached run discards the per-minute SoC series, and a caller that passes series=False does not
+    # want it (see the `if want_series` block below), so the buffer is not allocated and the kernel
+    # is told to skip filling it. That skips a round_py per step, which is snprintf+strtod and the
+    # single most expensive thing in the kernel's hot loop - measured 52.8us -> 28.5us per scenario,
+    # for a value that was being thrown away. Building the dict from the buffer costs more again.
+    want_series = series and not cache
+    soc_out = (ctypes.c_double * n_steps)() if want_series else None
     scenario.soc_out = soc_out
     floor_buffer = None
     if export_floor_soc is not None and len(export_floor_soc) == len(export_window):
@@ -1130,7 +1135,7 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
 
     # Assemble the same return value as the Python engine
     predict_soc = {}
-    if not cache:
+    if want_series:
         # Indexed loop, not dict(zip(range(...), soc_out)): iterating a ctypes array boxes each double
         # through the sequence protocol and measured 34% slower than subscripting it.
         for k in range(n_steps):

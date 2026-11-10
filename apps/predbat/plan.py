@@ -1846,6 +1846,8 @@ class Plan:
         # recorded for it here rather than simulated a second time. Plan.run_prediction overwrites
         # self.predict_soc, car_charging_soc_next, iboost_next and iboost_running* on every call, and
         # every consumer reads the nominal run's, so those are put back after the other scenarios.
+        # That makes the pv10 and pv90 SoC series write-only, so those two runs ask for none
+        # (series=False): producing it is the larger part of what a single kernel run costs.
         (
             cost,
             import_kwh_battery,
@@ -1883,6 +1885,7 @@ class Plan:
                     export_limits_best,
                     PV_SCENARIO_PV90,
                     end_record=end_record,
+                    series=False,
                 )
             (
                 cost10,
@@ -1903,6 +1906,7 @@ class Plan:
                 export_limits_best,
                 True,
                 end_record=end_record,
+                series=False,
             )
             self.predict_soc, self.car_charging_soc_next, self.iboost_next, self.iboost_running, self.iboost_running_solar, self.iboost_running_full = nominal_state
         if nominal_only:
@@ -1946,7 +1950,7 @@ class Plan:
         cost90 = None
         final_iboost90 = 0.0
         if handle90 is not None:
-            (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = handle90.get()
+            cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = handle90.get()
         metric, battery_value = self.compute_metric(
             self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
         )
@@ -5624,9 +5628,12 @@ class Plan:
                 else:
                     self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
 
-    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP):
+    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, series=True):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
+
+        With series=False the per-step SoC series is not produced and self.predict_soc is left as an
+        empty dict, so only pass it when the caller restores or never reads self.predict_soc.
         """
 
         # Call the prediction model
@@ -5649,7 +5656,7 @@ class Plan:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = pred.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save, step)
+        ) = pred.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save, step, series=series)
         self.predict_soc = predict_soc
         self.car_charging_soc_next = car_charging_soc_next
         self.iboost_next = iboost_next

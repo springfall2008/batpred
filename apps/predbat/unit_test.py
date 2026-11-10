@@ -67,6 +67,7 @@ from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_kernel_tests
 from tests.test_optimise_solar import run_optimise_solar_tests
 from tests.test_optimise_swap_charge import run_optimise_swap_charge_tests
+from tests.test_metric_series import run_metric_series_tests
 from tests.test_optimise_swap_export import run_optimise_swap_export_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
@@ -911,6 +912,7 @@ def main():
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),
+        ("metric_series", run_metric_series_tests, "run_prediction_metric skips the SoC series of its pv10 and pv90 runs", False),
         ("optimise_swap_export", run_optimise_swap_export_tests, "Optimise pairwise export-window swap tests", False),
         ("network_guard", test_network_guard, "Unit tests may not reach the network: non-local lookups and connects fail the test", False),
         ("debug_yaml_cache", test_debug_yaml_cache, "Debug dump parse cache used by the test runner", False),
