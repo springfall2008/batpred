@@ -7439,6 +7439,11 @@ def get_plan_renderer_js():
                             billedStr += ` <span style="font-size: 11px;" title="Import only: the export for this slot hasn't been billed yet, so there is no Diff">(import, export not billed yet)</span>`;
                         }
                     }
+                    if (row.billing_credit) {
+                        // Billed at the full rate here and refunded later as an account credit, counted in the day's Credits
+                        const creditTitle = row.billing_credit === 'pending' ? 'Weekend Happy Hour: billed at the full rate, refunded later as an account credit (not posted yet)' : 'Weekend Happy Hour: billed at the full rate and refunded as an account credit, shown in the Credits total';
+                        billedStr += `<span title="${escapeAttr(creditTitle)}">*</span>`;
+                    }
                     if (row.billing_event) {
                         billedStr += ` <span style="font-size: 11px;" title="${escapeAttr(row.billing_event + ' in this slot: the bill may not show it the way Predbat priced it')}">(${row.billing_event})</span>`;
                     }
@@ -8211,13 +8216,17 @@ def get_plan_renderer_js():
         let html = '<div class="billing-summary" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px;">';
         html += tile('Predbat cost', money(summary.predbat_cost));
         html += tile(`Billed (${escapeAttr(supplier)})`, money(summary.billed_cost));
+        if (summary.credits > 0 || summary.credits_pending > 0) {
+            html += tile('Credits*', summary.credits > 0 ? money(-summary.credits) : 'pending');
+        }
         html += tile('Difference', (summary.diff > 0 ? '+' : '') + money(summary.diff), `color: ${diffColor};`);
         html += tile('Import kWh', kwh(summary.import_kwh));
         html += tile('Export kWh', kwh(summary.export_kwh));
         html += tile('Standing charge', `${money(summary.standing_predbat)} vs ${money(summary.standing_billed)}`);
         html += '</div>';
         const pending = summary.export_pending_slots > 0 ? `${summary.export_pending_slots} slot${summary.export_pending_slots === 1 ? '' : 's'} billed for import only (export not billed yet), left out of these totals` : '';
-        const notes = [complete, pending, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
+        const credits = (summary.credits > 0 || summary.credits_pending > 0) ? `* Weekend Happy Hour import is billed at the full rate and refunded as a credit${summary.credits_pending > 0 ? ` (${summary.credits_pending} not posted yet)` : ''}; the Difference is after credits` : '';
+        const notes = [complete, pending, credits, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
         html += `<p style="font-size: 12px; margin: 0 0 8px 0; opacity: 0.8;">${notes.join(' &middot; ')}</p>`;
         return html;
     }

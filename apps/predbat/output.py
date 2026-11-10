@@ -4303,13 +4303,15 @@ class Output:
             "legs": self.get_state_wrapper(entity_id=entity, attribute="legs", default=None) or {},
             "complete_until": self.get_state_wrapper(entity_id=entity, attribute="complete_until", default=None),
             "supplier": self.get_state_wrapper(entity_id=entity, attribute="supplier", default=None),
+            "credit_events": self.get_state_wrapper(entity_id=entity, attribute="credit_events", default=None) or [],
         }
 
     @staticmethod
     def history_billing_mark(billing):
-        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included; None without billing."""
+        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, or an event's credit is posted; None without billing."""
         slots = (billing or {}).get("slots") or {}
         mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] for leg in ("import", "export")]
+        mark.append([event.get("start") for event in (billing or {}).get("credit_events") or [] if event.get("credit") is not None])
         return mark if mark[0][0] else None
 
     def history_minute_data(self, suffix, days):
