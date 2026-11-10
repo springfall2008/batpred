@@ -64,8 +64,10 @@ def rebuild_battery_value_rates(my_predbat):
         my_predbat.rate_export_min_base = my_predbat.rate_minmax(my_predbat.rate_export_base)[0]
 
 
-def restore_debug_state(my_predbat, debug_file):
-    """Reset the shared fixture and load a debug yaml into it, leaving it ready to plan from."""
+def load_debug_dump(my_predbat, debug_file):
+    """
+    Load a debug dump into my_predbat ready to plan from it, resetting the derived state the dump does not carry.
+    """
     reset_inverter(my_predbat)
     # Some derived state is neither saved in the debug yaml (so read_debug_yaml cannot restore it) nor
     # reset by reset_inverter, so inside the full suite it leaks from a previous test and makes the debug
@@ -179,7 +181,7 @@ def rescan_rate_windows(my_predbat, verbose=True):
         my_predbat.find_low_rate_windows(alt_rates=my_predbat.rate_export, pv_light_dark=pv_light_dark)
 
 
-def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False, overrides=None):
+def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False, overrides=None, write_debug_dump=True):
     print("**** Running debug test {} ****\n".format(debug_file))
     # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
     # debug_cases regression suite exercise the same code path and produce the same result.
@@ -191,7 +193,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     failed = False
 
     print("**** Test {} ****".format(test_name))
-    restore_debug_state(my_predbat, debug_file)
+    load_debug_dump(my_predbat, debug_file)
     apply_overrides(my_predbat, overrides)
     # my_predbat.fetch_config_options()
 
@@ -227,7 +229,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.carbon_enable = False
         # my_predbat.metric_battery_value_scaling = 0.50
         # my_predbat.manual_export_times = []
-        # my_predbat.manual_all_times = []
         # my_predbat.manual_charge_times = []
         # my_predbat.manual_demand_times = []
         # my_predbat.manual_freeze_charge_times = []
@@ -340,7 +341,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     )
     my_predbat.log("Final plan soc_min {} final_soc {}".format(soc_min, soc))
 
-    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record, show_scenarios=True)
     filename = "plan_final.html"
     open(filename, "w").write(html_plan)
     filename = "plan_final.json"
@@ -376,6 +377,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     open(filename, "w").write(actual_json)
     print("Wrote plan json to {}".format(filename))
 
-    my_predbat.create_debug_yaml(write_file=True)
+    # A fresh dump of the replayed state, for whoever is investigating with --debug_file. The golden cases turn it off:
+    # nothing reads it back, writing the two dumps was about 70% of debug_cases' runtime, and test_debug_yaml_scope
+    # already covers create_debug_yaml()
+    if write_debug_dump:
+        my_predbat.create_debug_yaml(write_file=True)
 
     return failed

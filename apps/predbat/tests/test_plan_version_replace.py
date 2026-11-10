@@ -14,6 +14,7 @@ both on their pre-clip snapshots. An incumbent restored after an upgrade was cli
 code, but its snapshot can tie with the new plan's, so without this rule the old code's decisions stay in
 force until something else moves the metric.
 """
+
 from tests.test_infra import reset_inverter
 from tests.test_random_scenarios import load_scenarios, run_scenario
 

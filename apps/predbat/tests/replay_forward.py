@@ -29,6 +29,7 @@ run has them they take precedence.
 
 The replay carries on across midnight (roll_over_midnight), so a late-evening yaml replays the whole next day.
 """
+
 import array
 import ast
 import json
@@ -39,7 +40,7 @@ from datetime import date, datetime, timedelta
 from const import PREDICT_STEP, EXPORT_MODE_TARGET
 from utils import MinuteArray, pack_export_limit, calc_percent_limit
 from prediction import Prediction
-from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models, rescan_rate_windows, apply_overrides, rebuild_battery_value_rates
+from tests.test_single_debug import load_debug_dump, rebuild_load_pv_models, rescan_rate_windows, apply_overrides, rebuild_battery_value_rates
 
 RUN_RE = re.compile(r"PredBat - update at (\S+ \S+) with clock skew .*minutes now (\d+)")
 # Inverter 0's SoC, power and percentage. Older versions wrote "SOC: 1.9kW 20% ... Current power -1134.0W"
@@ -698,7 +699,7 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, si
     overrides maps instance attribute names to values set after the yaml is restored, for what-if replays such as
     a different pv_metric90_weight (--override).
     """
-    restore_debug_state(my_predbat, debug_file)
+    load_debug_dump(my_predbat, debug_file)
     apply_overrides(my_predbat, overrides)
     my_predbat.plan_valid = True
     rebuild_load_pv_models(my_predbat)

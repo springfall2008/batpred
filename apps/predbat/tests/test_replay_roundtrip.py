@@ -56,6 +56,8 @@ def new_predbat(config_root):
     my_predbat.save_restore_dir = config_root
     # Never reach out to GitHub from a test
     my_predbat.download_predbat_releases = lambda *args, **kwargs: None
+    # ...or to the Octopus free electricity page, which the fixture's octopus_free_url would fetch
+    my_predbat.download_octopus_free = lambda url: []
     return my_predbat
 
 

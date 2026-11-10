@@ -7,6 +7,8 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+import os
+import re
 import yaml
 import json
 from datetime import timedelta, datetime
@@ -41,9 +43,7 @@ next_joined_event_end: null
 next_joined_event_duration_in_minutes: null
 icon: mdi:leaf
 friendly_name: Octoplus Saving Session (A-4DD6C5EE)
-""".format(
-        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday, tz_offset=tz_offset
-    )
+""".format(date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday, tz_offset=tz_offset)
 
     session_sensor = f"""
 state: '2025-01-23T12:10:11.108+{tz_offset}:00'
@@ -84,9 +84,7 @@ joined_events:
       rewarded_octopoints: null
       octopoints_per_kwh: 448
 friendly_name: Octoplus Saving Session Events (A-12345678)
-""".format(
-        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, tz_offset=tz_offset
-    )
+""".format(date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, tz_offset=tz_offset)
     ha.dummy_items["binary_sensor.octopus_energy_a_12345678_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
     ha.dummy_items["event.octopus_energy_a_12345678_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
     ha.dummy_items["sensor.octopus_free_session"] = {}
@@ -1522,6 +1520,53 @@ def test_saving_session_entity_regex_power_rename(my_predbat):
                 failed = True
             else:
                 print(f"PASS: {description} resolved to {resolved}")
+
+    return failed
+
+
+def test_templates_ship_octopus_free_session(my_predbat):
+    """
+    Test that every apps.yaml template that ships an octopus_saving_session entry also ships an
+    octopus_free_session entry, and that the shipped pattern picks up a free-session event entity.
+    Without it Octopus free electricity / Power Up events never get their 0p rate in the plan.
+    Covers GitHub issue #5912 (the Tesla templates had the saving-session block but not this one).
+    """
+    print("Test apps.yaml templates ship octopus_free_session alongside octopus_saving_session (issue #5912)")
+    failed = False
+
+    templates_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "templates")
+    saving_line = re.compile(r"^\s+octopus_saving_session:", re.MULTILINE)
+    free_line = re.compile(r"^\s+octopus_free_session:\s*'([^']*)'", re.MULTILINE)
+    free_entities = ["event.octopus_energy_a4dd6c5ee_octoplus_free_electricity_session_events", "event.octopus_energy_a4dd6c5ee_octoplus_power_up_events"]
+    power_down_entity = "event.octopus_energy_a4dd6c5ee_octoplus_power_down_events"
+
+    checked = 0
+    for name in sorted(os.listdir(templates_dir)):
+        if not name.endswith(".yaml"):
+            continue
+        with open(os.path.join(templates_dir, name), encoding="utf-8") as handle:
+            text = handle.read()
+        if not saving_line.search(text):
+            continue
+        checked += 1
+        match = free_line.search(text)
+        if not match:
+            print(f"ERROR: {name} ships octopus_saving_session but not octopus_free_session")
+            failed = True
+            continue
+        pattern = match.group(1)
+        if not any(my_predbat.resolve_arg_re("octopus_free_session", pattern, [entity])[0] for entity in free_entities):
+            print(f"ERROR: {name} octopus_free_session pattern {pattern} matches no free-session event entity")
+            failed = True
+        if my_predbat.resolve_arg_re("octopus_free_session", pattern, [power_down_entity])[0]:
+            print(f"ERROR: {name} octopus_free_session pattern {pattern} cross-matches the Power Down entity")
+            failed = True
+
+    if checked < 10:
+        print(f"ERROR: expected the templates to be found and checked, only saw {checked}")
+        failed = True
+    elif not failed:
+        print(f"PASS: {checked} templates ship a working octopus_free_session alongside octopus_saving_session")
 
     return failed
 

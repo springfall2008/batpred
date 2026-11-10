@@ -36,6 +36,7 @@ constant or an hourly profile. Every setting lives in one apps.yaml block:
 The model is deliberately independent of Predbat's prediction engine, so it can catch a prediction that
 disagrees with what an inverter would actually do.
 """
+
 import math
 from datetime import datetime, timedelta
 

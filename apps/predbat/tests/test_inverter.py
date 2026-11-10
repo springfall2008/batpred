@@ -806,6 +806,68 @@ def test_reserve_dummy_percent(test_name, my_predbat, ha, stale_state=None):
     return failed
 
 
+def test_reserve_min_published_floor(test_name, my_predbat, ha):
+    """
+    Test
+       refresh_config() publishes the reserve floor as set_reserve_min's min, following it up and back down.
+
+    The entity used to carry the config item's static min of 0, so a UI driven by its attributes
+    accepted a value under battery_min_soc that the raise in refresh_config() reverted a cycle later
+    (GH#5995). The min must follow the floor down again without moving the value, fall back to the
+    declared 0 with no floor bound, and fold in the reserve register's own minimum.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    snapshot = _snapshot_fixture(my_predbat)
+    item = my_predbat.config_index["set_reserve_min"]
+    saved_value = item.get("value", None)
+    saved_min = item["min"]
+    entity = item["entity"]
+
+    def check(stage, expect_min, expect_value):
+        """Check the published min and value, and the item min the web slider reads"""
+        published_min = ha.get_state(entity, attribute="min")
+        published_value = ha.get_state(entity)
+        if published_min != expect_min or item["min"] != expect_min or published_value != expect_value:
+            print("ERROR: {}: {}: expected min {} value {}, published min {} value {}, item min {}".format(test_name, stage, expect_min, expect_value, published_min, published_value, item["min"]))
+            return True
+        return False
+
+    try:
+        my_predbat.args["inverter_type"] = ["GE"]
+        my_predbat.args["reserve"] = ["number.reserve"]
+        ha.dummy_items["number.reserve"] = 4.0
+        my_predbat.args["battery_min_soc"] = 15
+        my_predbat.expose_config("set_reserve_min", 12)
+
+        inv = Inverter(my_predbat, 0)
+        inv.refresh_config()
+        failed |= check("floor raised", 15, 15)
+
+        # The plant's cut-off is lowered: the min follows, the value stays where it was
+        my_predbat.args["battery_min_soc"] = 10
+        inv.refresh_config()
+        failed |= check("floor lowered", 10, 15)
+
+        # No floor bound at all: back to the declared min
+        del my_predbat.args["battery_min_soc"]
+        inv.refresh_config()
+        failed |= check("no floor", 0, 15)
+
+        # The reserve register's own minimum is a floor too
+        ha.dummy_items["number.reserve"] = {"state": 20.0, "min": 20, "max": 100}
+        inv.refresh_config()
+        failed |= check("register floor", 20, 15)
+    finally:
+        _restore_fixture(my_predbat, snapshot)
+        item["min"] = saved_min
+        item.pop("declared_min", None)
+        my_predbat.expose_config("set_reserve_min", saved_value, force_ha=True)
+
+    return failed
+
+
 def test_write_and_poll_non_entity(test_name, my_predbat, inv):
     """
     Test
@@ -4877,7 +4939,7 @@ def test_charge_window_stuck_enable_presses_button_once(test_name, ha, inv, my_p
                 ha.dummy_items.pop(key, None)
             else:
                 ha.dummy_items[key] = value
-        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+        inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending = saved_fields
 
     return failed
 
@@ -5021,7 +5083,7 @@ def test_charge_window_unmapped_minute_entity_commits_once(test_name, ha, inv, m
                 ha.dummy_items.pop(key, None)
             else:
                 ha.dummy_items[key] = value
-        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+        inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending = saved_fields
 
     return failed
 
@@ -5391,7 +5453,7 @@ def _save_inverter_fields(inv):
 
 def _restore_inverter_fields(inv, saved):
     """Put back what _save_inverter_fields() copied"""
-    (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.reserve_percent, inv.last_committed, inv.commit_pending) = saved
+    inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.reserve_percent, inv.last_committed, inv.commit_pending = saved
 
 
 def _setup_hm_charge_window(ha, inv, start, end):
@@ -6108,6 +6170,8 @@ def run_inverter_tests(my_predbat_dummy):
     # first created and when an earlier version already seeded it with the kWh reserve
     failed |= test_reserve_dummy_percent("reserve_dummy_seeded_percent", my_predbat, ha)
     failed |= test_reserve_dummy_percent("reserve_dummy_kwh_seed_corrected", my_predbat, ha, stale_state=5.0)
+    # GH#5995: set_reserve_min publishes the reserve floor as its min, both up and back down
+    failed |= test_reserve_min_published_floor("reserve_min_published_floor", my_predbat, ha)
     if failed:
         return failed
 

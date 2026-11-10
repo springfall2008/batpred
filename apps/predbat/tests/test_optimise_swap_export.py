@@ -22,7 +22,7 @@ only reaches the near-term windows, so it can only ever add exports at the front
 pass exists to push back.
 """
 
-from tests.test_infra import reset_rates, reset_inverter, update_rates_export
+from tests.test_infra import reset_rates, reset_inverter, update_rates_export, clear_manual_times
 from const import EXPORT_MODE_IDLE
 from utils import export_mode_of, export_target_of
 from prediction import Prediction
@@ -49,7 +49,7 @@ def setup_swap_export(
     my_predbat.soc_kw = battery_soc
     my_predbat.reserve = 0.0
     my_predbat.best_soc_keep = 0.0
-    my_predbat.manual_all_times = set()
+    clear_manual_times(my_predbat)
     my_predbat.iboost_enable = False
     my_predbat.iboost_plan = []
     my_predbat.iboost_on_export = False
@@ -207,12 +207,12 @@ def run_optimise_swap_export_tests(my_predbat):
         {"start": now + 80, "end": now + 90, "average": 50.0, "start_orig": now + 60},
     ]
     setup_swap_export(my_predbat, export_window_best, export_limits_best=[100.0, 0.0, 0.0], rate_import=30.0, rate_export=50.0)
-    saved_manual_all_times = my_predbat.manual_all_times
-    my_predbat.manual_all_times = {now}
+    saved_manual_export_times = my_predbat.manual_export_times
+    my_predbat.manual_export_times = [now]
     try:
         my_predbat.optimise_swap_export(0, len(export_window_best))
     finally:
-        my_predbat.manual_all_times = saved_manual_all_times
+        my_predbat.manual_export_times = saved_manual_export_times
     middle = my_predbat.export_window_best[1]
     if middle["start"] < now + 30:
         print("ERROR: partial combine grew window 1 back to {} into the manual slot ending {}, windows {}".format(middle["start"], now + 30, my_predbat.export_window_best))

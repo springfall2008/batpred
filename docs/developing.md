@@ -770,6 +770,10 @@ Tips for writing good tests:
 - Each test gets its own `PredBat`, so you can change settings and attributes on `my_predbat` freely: the changes don't reach other tests.
   State that is *not* rebuilt for each test is different - module-level variables, class attributes, and anything you monkey patch. If a test changes one of those,
   restore it afterwards, using `try`/`finally` so that it is restored even if the test fails (see [finding test order dependencies](#finding-test-order-dependencies)).
+- Tests may not use the network. The test runner blocks every DNS lookup and connection to anything other than the loopback address, and fails a
+  test that tries, with a message naming the host and the line that asked for it (`tests/network_guard.py`). If a test drives a component's
+  `run()` or a fetch, stub each call that would go to a cloud API: patch the method, or mark the data it would fetch as already read.
+  Otherwise the fake credentials go to the vendor's real service, and the test waits for the reply.
 - Some config items are only published to Home Assistant when another setting is on (for example `expert_mode`).
   If a test reads an entity that isn't there, check for an `enable` condition on the item in `config.py`.
 - The test messages and comments are spell checked like the rest of the code (see [enforced standards](#enforced-standards)).
