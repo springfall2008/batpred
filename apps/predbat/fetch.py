@@ -81,6 +81,15 @@ REPLAY_INVERTER_FIELDS = (
 )
 
 
+class LoadSourceMissing(ValueError):
+    """No load source (load_today or load_forecast) is configured yet, so there is no load data to plan with.
+
+    plan_once() treats it as a failed pre-condition and skips the cycle without a traceback. It is often temporary:
+    a component's automatic configuration sets load_today once it has started (#5092). A ValueError subclass, as
+    the bare ValueError it replaces was, so other callers of fetch_sensor_data() see no change.
+    """
+
+
 class Fetch:
     """Data fetching mixin for loading energy rates, consumption, and forecasts.
 
@@ -1161,7 +1170,9 @@ class Fetch:
         Never raises - these run every cycle on the main loop, and a logging fault must not stop the plan.
         """
         try:
-            signature = signature_of()
+            # The values are keyed in minutes from midnight, so a day that repeats yesterday's (a fixed tariff) would
+            # match its signature while the replay, moving the old values back a day, runs a day short: log once a day
+            signature = (self.midnight_utc, signature_of())
             if signature == getattr(self, attribute, None):
                 return
             setattr(self, attribute, signature)
@@ -1313,6 +1324,77 @@ class Fetch:
             return "Replay input: rates changed, from {} {}".format(self.replay_clock(start), " ".join(parts))
 
         self.log_replay_changed("replay_rates_signature", lambda: hash(tuple(tuple(sorted((rates or {}).items())) for _, rates in series)), build, "rates")
+
+    def log_replay_dispatch_minutes(self):
+        """Log the minutes marked as Octopus Intelligent dispatches (io_adjusted) whenever they change.
+
+        The PV10 scenario assumes a planned dispatch more than half an hour away may be taken away, and finds those
+        minutes in io_adjusted, which the rates line does not carry. Without it a replay kept the yaml's dispatches and
+        its PV10 scenario drifted from live's once a new dispatch was planned. Logged as [minutes from now, length] for
+        each run of marked minutes. Never raises - this runs every cycle on the main loop.
+        """
+
+        def runs():
+            """The marked minutes as [start, length] runs, in order."""
+            out = []
+            for minute in sorted(minute for minute, marked in (self.io_adjusted or {}).items() if marked):
+                if out and minute == out[-1][0] + out[-1][1]:
+                    out[-1][1] += 1
+                else:
+                    out.append([minute, 1])
+            return out
+
+        def build():
+            """The dispatch line: each run of marked minutes as [minutes from now, length]."""
+            start = self.minutes_now
+            return "Replay input: dispatch minutes changed, from {} {}".format(self.replay_clock(start), [[minute - start, length] for minute, length in runs()])
+
+        self.log_replay_changed("replay_dispatch_signature", lambda: hash(tuple(tuple(run) for run in runs())), build, "dispatch minutes")
+
+    def log_replay_rate_sessions(self):
+        """Log which minutes a saving, free or Axle session priced, and each one's tariff rate beneath, whenever they change.
+
+        set_rate_thresholds() works out the tariff's own min/max/average with the session minutes mapped back to
+        their pre-session rate, so an event reward does not read as the tariff. The rates line carries the session
+        prices but not which minutes they are, so without this a replay counts a new event as tariff and sets the
+        thresholds far too high. Each side is logged as [minutes from now, value] at every change over the span of
+        its session minutes, then the minute it runs to: None outside a session, the pre-session rate inside one,
+        True for a session minute the tariff has no rate for. Never raises - this runs every cycle on the main loop.
+        """
+
+        def sides():
+            """Each side's name, session minutes and pre-session rates, read inside the caller's try."""
+            return (("import", self.rate_import_saving_minutes, self.rate_import_pre_saving), ("export", self.rate_export_saving_minutes, self.rate_export_pre_saving))
+
+        def value_at(minute, saving_minutes, pre_saving):
+            """None outside a session, else the pre-session rate, or True where the tariff has none."""
+            if minute not in saving_minutes:
+                return None
+            return pre_saving.get(minute, True) if pre_saving is not None else True
+
+        def build():
+            """The sessions line: each side as change points over the span of its session minutes, then the minute it runs to."""
+            start = self.minutes_now
+            parts = []
+            for name, saving_minutes, pre_saving in sides():
+                points = []
+                end = 0
+                if saving_minutes:
+                    last = object()
+                    for minute in range(min(saving_minutes), max(saving_minutes) + 1):
+                        value = value_at(minute, saving_minutes, pre_saving)
+                        if value != last or type(value) is not type(last):
+                            last = value
+                            points.append([minute - start, value])
+                    end = max(saving_minutes) + 1 - start
+                parts.append("{} {} {}".format(name, points, end))
+            return "Replay input: rate sessions changed, from {} {}".format(self.replay_clock(start), " ".join(parts))
+
+        def signature():
+            """The session minutes and their pre-session rates on both sides; the type keeps True apart from a rate of 1.0."""
+            return hash(tuple(tuple((minute, value, type(value).__name__) for minute in sorted(saving_minutes or ()) for value in [value_at(minute, saving_minutes, pre_saving)]) for _, saving_minutes, pre_saving in sides()))
+
+        self.log_replay_changed("replay_rate_sessions_signature", signature, build, "rate sessions")
 
     def log_replay_inverter(self):
         """Log the inverter's programmed state whenever it changes: the windows it holds now, whether it is charging or
@@ -1562,10 +1644,16 @@ class Fetch:
                     self.load_minutes_source = "load_forecast"
                     self.load_minutes_age = 0
                     self.load_last_period = 0
+                elif self.get_arg("load_forecast", None, indirect=False):
+                    # A forecast sensor is configured but gave nothing: it is unavailable. Load ML is not a
+                    # source here, as it trains on load_today and so cannot forecast without it
+                    self.log("Error: No load data: load_today is not set and the load forecast returned no data. Skipping this cycle")
+                    self.record_status(message="Error: No load data - load_today not set and the load forecast returned no data", had_errors=True)
+                    raise LoadSourceMissing("load_today is not set and the load forecast returned no data")
                 else:
-                    self.log("Error: You have not set load_today or load_forecast in apps.yaml, you will have no load data")
-                    self.record_status(message="Error: load_today not set correctly", had_errors=True)
-                    raise ValueError
+                    self.log("Error: No load data: load_today or load_forecast is not set. Set one in apps.yaml, or if your inverter component configures it automatically, wait for it to start. Skipping this cycle")
+                    self.record_status(message="Error: No load data - load_today not set (in apps.yaml, or by a component's automatic configuration)", had_errors=True)
+                    raise LoadSourceMissing("load_today or load_forecast is not set")
 
             # Load import today data
             if "import_today" in self.args:
@@ -1828,6 +1916,8 @@ class Fetch:
         # Not for the tariff comparison, which fetches with save off and would log every tariff it tries
         if save:
             self.log_replay_rates()
+            self.log_replay_rate_sessions()
+            self.log_replay_dispatch_minutes()
 
         # Set rate thresholds
         if self.rate_import or self.rate_export:
@@ -3836,6 +3926,8 @@ class Fetch:
         """
         self.car_charging_planned = [False for c in range(self.num_cars)]
         self.car_charging_now = [False for c in range(self.num_cars)]
+        # True charging, False not charging, None no reading (no car_charging_now sensor, or unknown/unavailable)
+        self.car_charging_now_state = [None for c in range(self.num_cars)]
         self.car_charging_plan_smart = [False for c in range(self.num_cars)]
         self.car_charging_plan_max_price = [0 for c in range(self.num_cars)]
         self.car_charging_plan_time = ["07:00:00" for c in range(self.num_cars)]
@@ -3856,7 +3948,9 @@ class Fetch:
             self.car_charging_planned[car_n] = bool(self.car_plugged_in_now(car_n))
 
             # Car is charging now sensor - an on/off sensor, or a charging power sensor read in watts
-            self.car_charging_now[car_n] = bool(self.car_charging_now_value(self.get_arg("car_charging_now", "no", index=car_n, required_unit="W")))
+            # (no sensor configured reads None, so the state is None: no reading)
+            self.car_charging_now_state[car_n] = self.car_charging_now_value(self.get_arg("car_charging_now", None, index=car_n, required_unit="W"))
+            self.car_charging_now[car_n] = bool(self.car_charging_now_state[car_n])
 
             # Other car related configuration
             self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", True)

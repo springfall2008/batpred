@@ -1178,6 +1178,47 @@ When **alphaess_automatic** is set to `true`, Predbat will discover every batter
 
 See [AlphaESS Cloud setup](inverter-setup.md#alphaess-cloud) for the diagnostics CLI walkthrough.
 
+### Growatt Cloud OpenAPI
+
+Predbat.com completes Growatt's OAuth flow and injects the short-lived access token, its expiry, the refresh handle, regional API base and the customer's selected inverter serial. The normal SaaS configuration is therefore generated for the instance rather than copied into a user's `apps.yaml`:
+
+```yaml
+  growatt_key: !secret growatt_key
+  growatt_auth_method: oauth
+  growatt_token_expires_at: '2026-10-20T23:00:00Z'
+  growatt_token_hash: !secret growatt_token_hash
+  growatt_inverter_sn: SPH123456
+  growatt_base_url: https://opencloud.growatt.com
+  growatt_automatic: true
+  growatt_control_enable: true
+```
+
+The token and token hash are credentials and must stay in `secrets.yaml` on a self-hosted installation. A raw access token without the Predbat.com refresh route will stop working when it expires.
+
+Configuration keys:
+
+- `growatt_key`, `growatt_token_expires_at`, `growatt_token_hash` and `growatt_auth_method`: the OAuth state supplied by Predbat.com
+- `growatt_inverter_sn`: one serial or a list of serials authorised for this token
+- `growatt_base_url`: the regional OpenAPI host supplied with the Growatt application registration
+- `growatt_automatic`: automatically bind all monitoring and schedule entities (recommended)
+- `growatt_automatic_ignore_pv`: preserve a manually configured `pv_power` source
+- `growatt_control_enable`: allow dispatch writes, default `true`; set false for monitoring only
+- `growatt_battery_rate_max`: optional W override when the reported battery rating is wrong or absent
+- `growatt_api_delay`: delay between different-device calls, default `0.2` seconds
+- `growatt_min_write_interval`: dispatch pacing, default and minimum `5` seconds
+
+Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from one-minute telemetry. When the charge target is reached the charge slot stays in place at 0% power, so the battery holds until the window ends (full power resumes if the charge level falls more than 1% below the target); when the export floor is reached the export slot is removed. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval of overshoot and confirm the behaviour on the target model before relying on it.
+
+Growatt has no reserve Predbat can hold the battery with, so the reserve functions (`switch.predbat_set_reserve_enable` and the reserve-based holds) are turned off for this inverter. Outside a slot the inverter runs its own self-consumption down to its local minimum.
+
+The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat hands control back to the inverter's own settings.
+
+The API times are UTC. Predbat converts the local planned windows on every apply, including the current daylight-saving offset, and splits a window that crosses UTC midnight.
+
+The OpenAPI does not report the site's grid export cap. Set `export_limit` manually if the DNO cap is below the inverter's nominal rating.
+
+See [Components - Growatt OpenAPI](components.md#growatt-openapi-growatt) and [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi).
+
 ### num_inverters
 
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
@@ -1197,6 +1238,7 @@ inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should 
   GE: GivEnergy via GivTCP
   GEC: GivEnergy Cloud integration
   GEE: GivEnergy EMC
+  GrowattCloud: Growatt public OpenAPI integration (EXPERIMENTAL)
   GS: Ginlong Solis
   HU: Huawei Solar
   SA: Solar Assistant
@@ -1784,6 +1826,22 @@ or
 - **idle_end_time** - end time for idle (Eco) mode - for GivEnergy EMS
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
+
+**Warning - window times are set to 00:00:00 on inverters with no enable switch:** if your inverter type has
+[has_discharge_enable_time](inverter-setup.md#has_discharge_enable_time) set to False, Predbat has no switch to turn timed discharge off,
+so it disables the discharge window by writing 00:00:00 to both **discharge_start_time** and **discharge_end_time** instead.
+In Control charge & discharge mode it sets them back to 00:00:00 whenever no export is planned or running, and in any mode it also does it
+when the Predbat mode or the read-only switch is changed. Predbat also keeps writing its planned charge window to **charge_start_time** and **charge_end_time**,
+and if [has_charge_enable_time](inverter-setup.md#has_charge_enable_time) is also False it turns the charge window off the same way, by writing 00:00:00 to both:
+in Control charge and Control charge & discharge modes whenever no charge is planned or running (for example while it waits for the next planned charge),
+and in any mode when the Predbat mode or the read-only switch is changed.
+
+If your inverter is controlled through services or a script and its **charge_time_format** is not "HH:MM:SS" (for example the SolaX Gen4+ Mode 8
+template), leave **charge_start_time**, **charge_end_time**, **discharge_start_time** and **discharge_end_time** out of `apps.yaml`.
+Predbat then creates its own `sensor.predbat_<inverter type>_<inverter number>_...` entities for them, e.g. `sensor.predbat_SOLAX_0_discharge_end_time`, and
+writes the window times there. If you point them at your inverter's real time entities, Predbat overwrites those instead, and the 00:00:00 write
+closes any window you set on the inverter yourself - for example a SolaX discharge window kept at 00:00-23:59 so the battery supplies the house.
+Adding `set_charge_window: false` or `set_discharge_window: false` to `apps.yaml` does not stop these writes, see [has_time_window](inverter-setup.md#has_time_window).
 
 Some inverters require a "button press" to be triggered by Predbat to update the charge/discharge schedules in the inverter after the appropriate HA entities have been set.
 
@@ -2500,15 +2558,17 @@ In `apps.yaml`, uncomment (or add) the following lines, customising to the list 
     - '{octopus_intelligent_slot}'
     - '{octopus_ready_time}'
     - '{octopus_charge_limit}'
-    - '{octopus_saving_session}'
     - '+[car_charging_planned]'
-    - '+[car_charging_soc]'
 ```
 
 Note the notation for watch_list, a single value `apps.yaml` configuration item such as **octopus_intelligent_slot** is surrounded by curly bracket parenthesis {},
-but for `apps.yaml` configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
+but for `apps.yaml` configuration items that can be a list such as **car_charging_planned** they are surrounded by +[ and ].
 
 **car_charging_now** does not need to be in the watch list: Predbat already checks it every 15 seconds and re-plans as soon as the car starts or stops charging.
+
+**octopus_saving_session** should not be in the watch list either: Predbat reads it on every update anyway, so watching it only adds extra re-plans that fall between the normal plan times.
+
+**car_charging_soc** is best left out of the watch list too: Predbat reads it to plan the car's charge on every update, and a car SoC from a cloud integration changes while the car is out driving, so watching it re-plans for changes that do not matter.
 
 ## Load Forecast
 

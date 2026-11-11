@@ -640,7 +640,10 @@ def test_octopus_run_publishes_billing(my_predbat):
     api = OctopusAPI(my_predbat, key="test-key", account_id="A-TEST", automatic=False)
     api.async_get_account = AsyncMock(return_value=True)
     api.async_find_tariffs = AsyncMock(return_value={})
-    api.async_get_flexibility_events = AsyncMock(return_value={})
+    # A Weekend Happy Hour joined yesterday 10:00-11:00 UTC, whose two billed half-hours (10p each) Octopus credits today
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    happy_hour = {"eventId": 1, "eventType": "WEEKEND_HAPPY_HOUR", "startAt": yesterday.isoformat(), "endAt": (yesterday + timedelta(hours=1)).isoformat()}
+    api.async_get_flexibility_events = AsyncMock(return_value={"events": [], "account": {"joinedEvents": [happy_hour]}})
     api.get_saving_session_data = lambda: None
     api.fetch_tariffs = AsyncMock(return_value=None)
     api.async_update_intelligent_devices = AsyncMock(return_value=None)
@@ -654,6 +657,8 @@ def test_octopus_run_publishes_billing(my_predbat):
     async def fake_query(query, context, **kwargs):
         """Answer billing queries with a full day; nothing else is expected to reach the API."""
         queries.append(query)
+        if "transactions" in query:
+            return _credits_response([_credit_node("1", datetime.now(timezone.utc).date().isoformat(), 19)])
         if "GENERATION" in query:
             return _day_response(_query_day(query), kwh=0.5, cost=7.5, stat_type="GENERATION_VALUE")
         return _day_response(_query_day(query))
@@ -679,6 +684,13 @@ def test_octopus_run_publishes_billing(my_predbat):
     legs = my_predbat.get_state_wrapper("sensor.predbat_billing", attribute="legs")
     if state is None or legs != {"import": True, "export": True}:
         print("ERROR: sensor.predbat_billing should be published with both legs, got state {} legs {}".format(state, legs))
+        return True
+    if not any('accountNumber: "A-TEST"' in query and "transactions" in query for query in queries):
+        print("ERROR: billing should read the account's credits")
+        return True
+    events = my_predbat.get_state_wrapper("sensor.predbat_billing", attribute="credit_events") or []
+    if len(events) != 1 or events[0].get("credit") != 19 or events[0].get("billed") != 20.0:
+        print("ERROR: the joined Happy Hour should be published with its 19p credit against 20p billed, got {}".format(events))
         return True
     return False
 
@@ -1159,6 +1171,265 @@ def test_attach_shows_gaps():
     return False
 
 
+def _credit_node(transaction_id, posted, amount, title="Weekend Happy Hour", typename="Credit"):
+    """One account transaction node the way the transactions query returns it."""
+    return {"__typename": typename, "id": transaction_id, "postedDate": posted, "createdAt": posted + "T16:00:00+00:00", "title": title, "amounts": {"gross": amount}}
+
+
+def _credits_response(nodes):
+    """Wrap transaction nodes in the transactions response envelope."""
+    return {"account": {"transactions": {"edges": [{"node": node} for node in nodes]}}}
+
+
+# Sunday 8 Nov 2026 on a live Octopus account: two Weekend Happy Hours billed at the full rate (08:00-09:00 and
+# 11:00-12:00 UTC: 88.7p + 92.2p and 92.7p + 75.9p), refunded by two credits posted on Tuesday 10 Nov
+HAPPY_SUNDAY = {"2026-11-08T08:00:00Z": 88.7, "2026-11-08T08:30:00Z": 92.2, "2026-11-08T11:00:00Z": 92.7, "2026-11-08T11:30:00Z": 75.9}
+HAPPY_EVENTS = [{"start": "2026-11-08T08:00:00Z", "end": "2026-11-08T09:00:00Z"}, {"start": "2026-11-08T11:00:00Z", "end": "2026-11-08T12:00:00Z"}]
+
+
+def test_parse_credits():
+    """Only Happy Hour credits posted within BILLING_CREDIT_DAYS are kept, oldest first; a failed read is None."""
+    from billing import parse_credits
+
+    now_utc = datetime(2026, 11, 10, 22, 0, tzinfo=timezone.utc)
+    nodes = [
+        _credit_node("3", "2026-11-10", 175),
+        _credit_node("2", "2026-11-10", 176),
+        _credit_node("1", "2026-11-01", 179),
+        _credit_node("9", "2026-11-09", 9340, title="Electricity", typename="Charge"),
+        _credit_node("8", "2026-11-09", 500, title="Referral reward"),
+        _credit_node("7", "2026-10-01", 120),
+    ]
+    credits = parse_credits(_credits_response(nodes), now_utc)
+    if [credit["id"] for credit in credits] != ["1", "2", "3"] or credits[0]["amount"] != 179.0 or credits[0]["posted"] != "2026-11-01":
+        print("ERROR: expected the three recent Happy Hour credits oldest first, got {}".format(credits))
+        return True
+    if parse_credits(None, now_utc) is not None or parse_credits({"account": {}}, now_utc) is not None:
+        print("ERROR: a failed transactions read should give None")
+        return True
+    if parse_credits(_credits_response([]), now_utc) != []:
+        print("ERROR: a read with no transactions should give an empty list")
+        return True
+    return False
+
+
+def test_match_credits():
+    """Each credit goes to the closest-billed unpaid event that started by the day it was posted."""
+    from billing import match_credits
+
+    imports = {key: _slot(2.9, cost) for key, cost in HAPPY_SUNDAY.items()}
+    credits = [{"id": "2", "posted": "2026-11-10", "created": "a", "title": "Weekend Happy Hour", "amount": 176.0}, {"id": "3", "posted": "2026-11-10", "created": "b", "title": "Weekend Happy Hour", "amount": 175.0}]
+    events = match_credits(credits, HAPPY_EVENTS, imports, LONDON)
+    if [event["credit"] for event in events] != [176.0, 175.0] or [event["billed"] for event in events] != [180.9, 168.6] or any(event["posted"] != "2026-11-10" for event in events):
+        print("ERROR: both Sunday Happy Hours should take a credit, got {}".format(events))
+        return True
+    early = match_credits([dict(credits[0], posted="2026-11-07")], HAPPY_EVENTS, imports, LONDON)
+    if any(event["credit"] is not None for event in early):
+        print("ERROR: a credit posted before an event can't pay for it, got {}".format(early))
+        return True
+    far_off = match_credits([dict(credits[0], amount=1000.0)], HAPPY_EVENTS, imports, LONDON)
+    if any(event["credit"] is not None for event in far_off):
+        print("ERROR: a credit far from any event's billed import should not be matched, got {}".format(far_off))
+        return True
+    part_billed = match_credits(credits, HAPPY_EVENTS, {key: slot for key, slot in imports.items() if not key.startswith("2026-11-08T11")}, LONDON)
+    if part_billed[0]["credit"] is None or part_billed[1]["billed"] is not None or part_billed[1]["credit"] is not None:
+        print("ERROR: an event not fully billed takes no credit, got {}".format(part_billed))
+        return True
+    late = match_credits([dict(credits[0], posted="2026-11-13")], HAPPY_EVENTS, imports, LONDON)
+    if any(event["credit"] is not None for event in late):
+        print("ERROR: a credit posted more than BILLING_CREDIT_LAG_DAYS after an event should not pay for it, got {}".format(late))
+        return True
+    pending = match_credits(credits[:1], HAPPY_EVENTS, imports, LONDON)
+    if pending[0]["credit"] != 176.0 or pending[1]["credit"] is not None:
+        print("ERROR: one credit should pay the closer event and leave the other pending, got {}".format(pending))
+        return True
+    return False
+
+
+def test_sensor_credits():
+    """The sensor totals each day's matched credits and publishes the events; without events nothing changes."""
+    now_utc = datetime(2026, 11, 10, 22, 0, tzinfo=timezone.utc)
+    cache = {"import": _slots_for_day(date(2026, 11, 8))}
+    for key, cost in HAPPY_SUNDAY.items():
+        cache["import"][key] = _slot(2.9, cost)
+    credits = [{"id": "2", "posted": "2026-11-10", "created": "a", "title": "Weekend Happy Hour", "amount": 176.0}, {"id": "3", "posted": "2026-11-10", "created": "b", "title": "Weekend Happy Hour", "amount": 175.0}]
+    state, attributes = build_billing_sensor(cache, {"import": True, "export": None}, "octopus", now_utc, LONDON, credits, HAPPY_EVENTS)
+    day = attributes["days"]["2026-11-08"]
+    if day.get("credits") != 351.0 or day.get("credits_pending") != 0 or len(attributes.get("credit_events") or []) != 2:
+        print("ERROR: Sunday should total 351p of credits with both events published, got {} {}".format(day, attributes.get("credit_events")))
+        return True
+    if "day" in attributes["credit_events"][0]:
+        print("ERROR: the published events should not carry the internal day key")
+        return True
+    plain_state, plain = build_billing_sensor(cache, {"import": True, "export": None}, "octopus", now_utc, LONDON, credits, [])
+    if "credit_events" in plain or "credits" in plain["days"]["2026-11-08"] or plain_state != state:
+        print("ERROR: without credit events the sensor should be unchanged, got {}".format(plain["days"]["2026-11-08"]))
+        return True
+    return False
+
+
+def test_reader_reads_credits():
+    """With credits_account set a refresh reads the credits once and saves them; a failed read keeps them; without it none are read."""
+    import asyncio
+    from billing import BillingReader
+
+    now_utc = datetime(2026, 11, 10, 22, 0, tzinfo=timezone.utc)
+    storage = _FakeStorage()
+    reader = BillingReader(_Owner(storage), "octopus_user", "billing")
+    reader.credits_account = "A-1"
+    answer = {"credits": _credits_response([_credit_node("2", "2026-11-10", 176)])}
+    queries = []
+
+    async def query_fn(query, context):
+        """Billing days are full; credits answer from answer."""
+        queries.append(query)
+        if "transactions" in query:
+            return answer["credits"]
+        return _day_response(_query_day(query))
+
+    asyncio.run(reader.refresh(query_fn, {"import": ("A-1", "MPAN-IMP"), "export": None}, now_utc))
+    if sum(1 for query in queries if "transactions" in query) != 1 or [credit["id"] for credit in reader.credits] != ["2"]:
+        print("ERROR: the refresh should read the credits once, got {}".format(reader.credits))
+        return True
+    if storage.data[("octopus_user", "billing")].get("credits") != reader.credits:
+        print("ERROR: the credits should be saved with the cache")
+        return True
+    restored = BillingReader(_Owner(storage), "octopus_user", "billing")
+    asyncio.run(restored.load())
+    if restored.credits != reader.credits:
+        print("ERROR: the credits should be restored after a restart, got {}".format(restored.credits))
+        return True
+    answer["credits"] = None
+    asyncio.run(reader.refresh(query_fn, {"import": ("A-1", "MPAN-IMP"), "export": None}, now_utc))
+    if [credit["id"] for credit in reader.credits] != ["2"]:
+        print("ERROR: a failed credits read should keep the credits already read, got {}".format(reader.credits))
+        return True
+    queries.clear()
+    plain = BillingReader(_Owner(_FakeStorage()), "kraken", "billing")
+    asyncio.run(plain.refresh(query_fn, {"import": ("A-1", "MPAN-IMP"), "export": None}, now_utc))
+    if any("transactions" in query for query in queries):
+        print("ERROR: without credits_account no credits should be read")
+        return True
+    return False
+
+
+def test_attach_credits():
+    """Rows inside a credited event are flagged, and the summary's diff is after the event's credit."""
+    from billing import attach_billing
+
+    imports = {_key(m): _slot(1.0, 30.0) for m in (480, 510, 540)}
+    event = {"start": _key(480), "end": _key(540), "billed": 60.0, "credit": 58.0, "posted": "2026-11-03"}
+    billing = dict(_billing_attrs(imports), credit_events=[event])
+    plan = attach_billing(_plan([480, 510, 540]), billing, VIEW_MIDNIGHT, 30, {480: 0.0, 510: 0.0, 540: 30.0}, 55.52, {}, False, None, None)
+    flags = [row.get("billing_credit") for row in plan["rows"]]
+    summary = plan["billing_summary"]
+    if flags != ["credited", "credited", None]:
+        print("ERROR: only the event's rows should be flagged credited, got {}".format(flags))
+        return True
+    if summary.get("credits") != 0.58 or summary.get("credits_pending") != 0 or summary.get("billed_cost") != 0.9 or summary.get("diff") != 0.02:
+        print("ERROR: the summary should take the 58p credit off a 90p bill against 30p, got {}".format(summary))
+        return True
+    pending = attach_billing(_plan([480, 510, 540]), dict(billing, credit_events=[dict(event, credit=None, posted=None)]), VIEW_MIDNIGHT, 30, {480: 0.0, 510: 0.0, 540: 30.0}, 55.52, {}, False, None, None)
+    if [row.get("billing_credit") for row in pending["rows"]][:2] != ["pending", "pending"] or pending["billing_summary"].get("credits_pending") != 1 or pending["billing_summary"].get("diff") != 0.6:
+        print("ERROR: an event with no credit yet should be flagged pending and not change the diff, got {}".format(pending["billing_summary"]))
+        return True
+    # Predbat recorded nothing for the 08:30 half-hour, so its bill is left out of the totals and so is its share of the credit
+    part = attach_billing(_plan([480, 510, 540]), billing, VIEW_MIDNIGHT, 30, {480: 0.0, 540: 30.0}, 55.52, {}, False, None, None)
+    if part["billing_summary"].get("credits") != 0.29 or part["billing_summary"].get("billed_cost") != 0.6 or part["billing_summary"].get("diff") != 0.01:
+        print("ERROR: only half the event's bill was counted, so only half its credit should be, got {}".format(part["billing_summary"]))
+        return True
+    # A half-hour of the event not billed yet shows no * on its dash
+    waiting = attach_billing(_plan([480, 510, 540]), dict(billing, slots={"import": {key: slot for key, slot in imports.items() if key != _key(510)}}), VIEW_MIDNIGHT, 30, {480: 0.0, 510: 0.0, 540: 30.0}, 55.52, {}, False, None, None)
+    if waiting["rows"][1].get("billing_credit") is not None or waiting["rows"][0].get("billing_credit") != "credited":
+        print("ERROR: a row not yet billed in the event should not be flagged, got {}".format([row.get("billing_credit") for row in waiting["rows"]]))
+        return True
+    # Predbat priced the event free; its full-rate bill must not make the day's rates look implausible and hide the billing
+    rated = _plan([480, 510, 540])
+    for row, rate in zip(rated["rows"], (0.0, 0.0, 6.0)):
+        row["import_rate"] = rate
+    priced = attach_billing(rated, dict(billing, slots={"import": dict(imports, **{_key(540): _slot(1.0, 6.0)})}), VIEW_MIDNIGHT, 30, {480: 0.0, 510: 0.0, 540: 6.0}, 55.52, {}, False, None, None)
+    if priced["rows"][0].get("billed") != 0.3 or "billing_summary" not in priced:
+        print("ERROR: a credited event's full-rate bill should be left out of the plausibility check, got {}".format(priced["rows"][0]))
+        return True
+    plain = attach_billing(_plan([480]), _billing_attrs(imports), VIEW_MIDNIGHT, 30, {480: 0.0}, 55.52, {}, False, None, None)
+    if plain["rows"][0].get("billing_credit") is not None or plain["billing_summary"].get("credits") != 0.0:
+        print("ERROR: billing without credit events should flag nothing, got {}".format(plain["billing_summary"]))
+        return True
+    return False
+
+
+def test_attach_credits_straddle():
+    """An hour row holding the end of one event and the start of the next counts each half-hour towards its own event's credit."""
+    from billing import attach_billing
+
+    imports = {_key(m): _slot(1.0, 30.0) for m in range(480, 660, 30)}
+    first = {"start": _key(510), "end": _key(570), "billed": 60.0, "credit": 58.0, "posted": "2026-11-03"}
+    second = {"start": _key(570), "end": _key(630), "billed": 60.0, "credit": 50.0, "posted": "2026-11-03"}
+    billing = dict(_billing_attrs(imports), credit_events=[first, second])
+    # Rows 08:00, 09:00 and 10:00; the 09:00 row holds the first event's 09:00 half-hour and the second's 09:30
+    plan = attach_billing(_plan([480, 540, 600]), billing, VIEW_MIDNIGHT, 60, {480: 0.0, 540: 0.0, 600: 30.0}, 55.52, {}, False, None, None)
+    summary = plan["billing_summary"]
+    if summary.get("credits") != 1.08 or summary.get("billed_cost") != 1.8 or summary.get("diff") != 0.42:
+        print("ERROR: both events' credits should be taken off in full (58p + 50p), got {}".format(summary))
+        return True
+    if [row.get("billing_credit") for row in plan["rows"]] != ["credited", "credited", "credited"]:
+        print("ERROR: every row holding a credited half-hour should be flagged, got {}".format([row.get("billing_credit") for row in plan["rows"]]))
+        return True
+    pending = attach_billing(_plan([480, 540, 600]), dict(billing, credit_events=[first, dict(second, credit=None, posted=None)]), VIEW_MIDNIGHT, 60, {480: 0.0, 540: 0.0, 600: 30.0}, 55.52, {}, False, None, None)
+    if [row.get("billing_credit") for row in pending["rows"]] != ["credited", "pending", "pending"] or pending["billing_summary"].get("credits_pending") != 1 or pending["billing_summary"].get("credits") != 0.58:
+        print("ERROR: a row holding half of an event with no credit yet should be flagged pending, got {} {}".format([row.get("billing_credit") for row in pending["rows"]], pending["billing_summary"]))
+        return True
+    return False
+
+
+def test_history_billing_mark():
+    """The History views' rebuild mark changes when a credit event appears, its credit posts or its amount moves, with the same slots."""
+    from output import Output
+
+    imports = {_key(m): _slot(1.0, 30.0) for m in (480, 510)}
+    event = {"start": _key(480), "end": _key(540), "billed": 60.0, "credit": None, "posted": None}
+    plain = Output.history_billing_mark(_billing_attrs(imports))
+    with_pending = Output.history_billing_mark(dict(_billing_attrs(imports), credit_events=[event]))
+    posted = Output.history_billing_mark(dict(_billing_attrs(imports), credit_events=[dict(event, credit=58.0, posted="2026-11-03")]))
+    moved = Output.history_billing_mark(dict(_billing_attrs(imports), credit_events=[dict(event, credit=57.0, posted="2026-11-03")]))
+    if len({repr(mark) for mark in (plain, with_pending, posted, moved)}) != 4:
+        print("ERROR: the mark should differ for no event, a pending event, a posted credit and a changed credit, got {} {} {} {}".format(plain, with_pending, posted, moved))
+        return True
+    if Output.history_billing_mark(dict(_billing_attrs(imports), credit_events=[dict(event, credit=58.0, posted="2026-11-03")])) != posted:
+        print("ERROR: the same billing should give the same mark")
+        return True
+    if Output.history_billing_mark({}) is not None or Output.history_billing_mark(None) is not None:
+        print("ERROR: no billing should give no mark")
+        return True
+    return False
+
+
+def test_octopus_billing_credit_events():
+    """Only joined Weekend Happy Hours become credit events, the type falling back to the events list."""
+    from types import SimpleNamespace
+    from octopus import OctopusAPI
+
+    sessions = {
+        "events": [{"id": 2, "eventType": "WEEKEND_HAPPY_HOUR"}],
+        "account": {
+            "joinedEvents": [
+                {"eventId": 1, "eventType": "WEEKEND_HAPPY_HOUR", "startAt": "2026-11-08T08:00:00+00:00", "endAt": "2026-11-08T09:00:00+00:00"},
+                {"eventId": 2, "eventType": None, "startAt": "2026-11-08T11:00:00+00:00", "endAt": "2026-11-08T12:00:00+00:00"},
+                {"eventId": 3, "eventType": "TURN_DOWN", "startAt": "2026-11-03T17:30:00+00:00", "endAt": "2026-11-03T18:30:00+00:00"},
+                {"eventId": 4, "eventType": "WEEKEND_HAPPY_HOUR", "startAt": None, "endAt": None},
+            ]
+        },
+    }
+    spans = OctopusAPI.billing_credit_events(SimpleNamespace(saving_sessions=sessions))
+    if spans != HAPPY_EVENTS:
+        print("ERROR: expected the two Sunday Happy Hours, got {}".format(spans))
+        return True
+    if OctopusAPI.billing_credit_events(SimpleNamespace(saving_sessions={})) != []:
+        print("ERROR: no saving sessions should give no credit events")
+        return True
+    return False
+
+
 def run_billing_tests(my_predbat):
     """Run the billing tests."""
     failed = False
@@ -1211,6 +1482,14 @@ def run_billing_tests(my_predbat):
         test_attach_shows_gaps,
         test_attach_export_pending,
         test_attach_columns_when_nothing_billed,
+        test_parse_credits,
+        test_match_credits,
+        test_sensor_credits,
+        test_reader_reads_credits,
+        test_attach_credits,
+        test_attach_credits_straddle,
+        test_history_billing_mark,
+        test_octopus_billing_credit_events,
     ):
         print("billing: {}".format(test.__name__))
         if test():

@@ -2525,8 +2525,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         Every auto-configured arg is an entity name built from a serial number, so without one there
         is nothing to bind. A restart while the daily API allowance is exhausted cannot discover, so
-        before this it left load_today and the rest unset and fetch_sensor_data raising ValueError
-        every cycle until the allowance came back (issue #5087). Only ever a fallback: a successful
+        before this it left load_today and the rest unset, so no plan ran (a ValueError traceback every
+        cycle then, a skipped cycle since #5092) until the allowance came back (issue #5087). Only ever a fallback: a successful
         discovery overwrites it, and the details are re-read as soon as the API answers again.
         """
         if not self.storage:
@@ -5195,7 +5195,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # first-cycle-only step: when the first cycle can't read the inverter details (an exhausted
         # API allowance, a cloud outage) there is nothing to bind the args to, and without a retry
         # load_today and the rest stay unset until Predbat is restarted - which is what left
-        # fetch_sensor_data raising ValueError every cycle in issue #5087.
+        # every cycle failing with no load source in issue #5087 (a traceback then, a skipped cycle since #5092).
         if self.automatic and self.inverter_sn and not self.automatic_config_done:
             self.automatic_config_done = bool(await self.automatic_config())
 

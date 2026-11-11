@@ -91,6 +91,7 @@ pred_bat:
   # published rate limit, so this default is deliberately mild.
   #hanchu_api_delay: 1
   #hanchu_min_write_interval: 60
+  #hanchu_write_debounce: 10
 
   # Every API request and response is logged by default, because that is what is needed
   # to look into a problem with your inverter. It writes thousands of long lines a day:
@@ -469,7 +470,4 @@ pred_bat:
   #  - '{octopus_intelligent_slot}'
   #  - '{octopus_ready_time}'
   #  - '{octopus_charge_limit}'
-  #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
-  #  - '+[car_charging_soc]'
-  #  - '{car_charging_now}'

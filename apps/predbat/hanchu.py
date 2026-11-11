@@ -138,6 +138,11 @@ from hanchu_const import (
     window_is_empty,
 )
 
+# How far above a running charge window's target the SoC must be before the window is left out so the
+# battery can cover the house - the same 1% the plan uses before it holds at a charge target (prediction.py,
+# set_discharge_during_charge). See _discharging_to_target().
+HANCHU_HOLD_DISCHARGE_MARGIN = 1.0
+
 # The behaviour a HanchuCloud inverter has, stated for the discovery record's capabilities. A
 # literal, never read back from INVERTER_DEF: the record has to rebuild the row on its own, or the
 # completeness test proves nothing.
@@ -181,6 +186,7 @@ class HanchuAPI(ComponentBase):
         api_delay=1,
         min_write_interval=60,
         api_debug=True,
+        write_debounce=10.0,
         **kwargs,
     ):
         """Initialise the Hanchu component from its resolved config args.
@@ -211,6 +217,14 @@ class HanchuAPI(ComponentBase):
         self.write_failure_notified = set()
         self.api_delay = max(0, float(api_delay or 0))
         self.min_write_interval = max(0, int(min_write_interval or 0))
+        # Seconds to wait after a press of the write button before sending, restarted by every
+        # further press. Predbat commits a window in stages (times, then target SoC, then rates)
+        # and presses after each, so writing on the first press sends the new slot with the
+        # previous cycle's power and grid-charge limit - a live grid charge at full power until
+        # the corrected payload clears min_write_interval (batpred#6074). See _schedule_write().
+        self.write_debounce = max(0.0, float(write_debounce or 0))
+        # The pending debounced write per serial, so a later press can supersede it.
+        self.write_debounce_tasks = {}
         # An instance attribute rather than the constant used inline, so the unit tests can zero it:
         # it is a real wall-clock pause between a failed write and its one retry, and nothing in a
         # test talks to the real cloud. Not a config key - there is no reason a user would tune it.
@@ -1471,10 +1485,82 @@ class HanchuAPI(ComponentBase):
                 # from here on. Marked on the press itself rather than on a successful write: a
                 # failed write still means Predbat owns this inverter and the next tick should retry.
                 self.control_active.add(sn)
-                await self._on_component_loop(self.apply_schedule(sn))
+                if self._write_debounce_available():
+                    await self._on_component_loop(self._schedule_write(sn))
+                else:
+                    await self._on_component_loop(self.apply_schedule(sn))
             return
         self.update_local_schedule(sn, entity_id, value)
+        if self._write_debounce_available():
+            # Predbat writes the charge and discharge rates after its per-inverter loop with no
+            # press of their own, and the zero discharge rate is what turns a charge slot into a
+            # hold. A change while a write is waiting therefore restarts the wait, so it goes out
+            # with the rates rather than ahead of them (batpred#6074).
+            await self._on_component_loop(self._restart_pending_write(sn))
         await self.publish_schedule_settings_ha(sn)
+
+    async def _restart_pending_write(self, sn):
+        """Restart sn's debounced write if one is waiting; with none waiting, leave the change for the next press or tick."""
+        if self._write_pending(sn):
+            await self._schedule_write(sn)
+            return True
+        return False
+
+    def _write_debounce_available(self):
+        """Return whether a press can be debounced: a delay is configured and the component's loop is running.
+
+        The delayed write has to live on the loop run() ticks on, which owns the HTTP session and
+        write_lock. Before that loop starts, or after it stops, there is nowhere to park it, so the
+        press writes at once exactly as it did before debouncing existed.
+        """
+        loop = self._loop
+        return bool(self.write_debounce) and loop is not None and not loop.is_closed() and loop.is_running()
+
+    def _write_pending(self, sn):
+        """Return whether a debounced write for sn is still waiting to be sent."""
+        task = self.write_debounce_tasks.get(sn)
+        return task is not None and not task.done()
+
+    async def _schedule_write(self, sn):
+        """Start, or restart, the debounced write for sn on the component's loop.
+
+        Predbat presses the write button after each stage of a schedule change - the window times,
+        then the target SoC, then the charge and discharge rates - within a few seconds of each
+        other. Sending on the first press put a half-applied schedule on the inverter: on a HESS-HY-S-5.0K
+        a hold starting with a new 08:00-16:00 window went out with CHG_PWR_LMT 4000 and
+        DTU_AC_CHG_SOC_LMT 100, and the hold values that followed were then held by
+        min_write_interval, so the battery charged from the grid for about 95 seconds
+        (batpred#6074). Each press now restarts a short timer instead, and only the settled
+        schedule is sent, in one call.
+        """
+        task = self.write_debounce_tasks.get(sn)
+        if task is not None and not task.done():
+            task.cancel()
+        self.write_debounce_tasks[sn] = asyncio.get_running_loop().create_task(self._debounced_write(sn))
+        return True
+
+    async def _debounced_write(self, sn):
+        """Wait out the debounce, then send sn's schedule unless a later press superseded this one."""
+        try:
+            await asyncio.sleep(self.write_debounce)
+        except asyncio.CancelledError:
+            # A later press restarted the timer, or the component is stopping.
+            return
+        # Released before the write, not after: a press arriving while this write is in flight
+        # must start its own timer rather than cancel a write that is already on its way.
+        if self.write_debounce_tasks.get(sn) is asyncio.current_task():
+            self.write_debounce_tasks.pop(sn, None)
+        try:
+            await self.apply_schedule(sn)
+        except Exception as error:
+            self.log("Warn: Hanchu schedule apply failed for {}: {}".format(sn, error))
+
+    def _cancel_pending_writes(self):
+        """Cancel every debounced write still waiting; the next press or tick sends the schedule again."""
+        for task in self.write_debounce_tasks.values():
+            if not task.done():
+                task.cancel()
+        self.write_debounce_tasks.clear()
 
     async def _on_component_loop(self, coro):
         """Await coro on the component's own event loop, handing it over when called from another one.
@@ -1612,12 +1698,19 @@ class HanchuAPI(ComponentBase):
         Every one of the three charge and three discharge slots is written, and any the plan does
         not use is set to 00:00-00:00 - see HANCHU_SLOT_DISABLED. User-defined mode runs all six,
         so a slot left over from the Hanchu app would otherwise fight the plan.
+
+        A running charge window whose target is already more than 1% below the SoC, with discharge
+        allowed, is left out of the slot table so the battery can cover the house down to the target -
+        see _discharging_to_target().
         """
         ranges = self.ranges_for(sn)
         charge, export = self._resolve_overlap(sn, schedule.get("charge", {}), schedule.get("export", {}))
         payload = {}
-        signal, extra_direction = self._rate_signal(sn, charge, export)
         soc = self.device_values.get(sn, {}).get("soc")
+        if self._discharging_to_target(sn, charge, export, soc, ranges):
+            # Only the slot goes: the target stays, so the grid-charge limit still carries it when the slot returns.
+            charge = dict(charge, enable=False)
+        signal, extra_direction = self._rate_signal(sn, charge, export)
 
         pairs = {"charge": self._slot_pairs(sn, "charge", charge), "export": self._slot_pairs(sn, "export", export)}
         if extra_direction:
@@ -1665,6 +1758,31 @@ class HanchuAPI(ComponentBase):
         if self.work_mode_control and (charge.get("enable") or export.get("enable") or signal):
             payload[HANCHU_KEY_WORK_MODE] = self.slot_work_mode(sn)
         return payload
+
+    def _discharging_to_target(self, sn, charge, export, soc, ranges):
+        """Return whether a running charge window should be left out so the battery can discharge to its target.
+
+        Above the target, Predbat's Hold charging keeps the window armed and leaves the discharge rate
+        set, because the plan has the battery cover the house until it is within 1% of the target and
+        then hold there. HARDWARE (batpred#5955): this firmware will not discharge at all inside an armed
+        charge slot, even above DTU_AC_CHG_SOC_LMT - it held 84% against a 68% target at 0 W until the
+        slot was overridden by hand - so the armed slot froze the battery instead. Leaving the slot out
+        until the SoC is within 1% lets it discharge; the reconcile loop rebuilds this payload every tick,
+        so the slot comes back as the SoC reaches the target and then holds there as before.
+
+        Only when discharge is allowed: a zero discharge rate is how Predbat asks this inverter for a hold
+        (set_discharge_during_charge off, a car or iBoost hold, freeze charge - see _rate_signal()), and that
+        keeps the slot. The target compared is the one actually written, after the device's 20% floor, so a
+        plan target below 20% brings the slot back at 21% rather than at 11%, where it would charge from
+        the grid to 20%. A running export window owns the battery, and with no SoC reading nothing can be
+        judged, so both leave the window as planned.
+        """
+        if soc is None or not self._window_active_now(charge) or self._window_active_now(export):
+            return False
+        if self._as_float(export.get("power"), 0) <= 0:
+            return False
+        written_target, _ = clamp_range(HANCHU_KEY_GRID_CHARGE_SOC, charge.get("soc", 0), ranges)
+        return self._as_float(soc, 0) > self._as_float(written_target, 0) + HANCHU_HOLD_DISCHARGE_MARGIN
 
     def _hold_grid_target(self, sn, target, soc, ranges):
         """Return the grid-charge limit to write during a hold: the charge target, but never above the current SoC.
@@ -1952,6 +2070,11 @@ class HanchuAPI(ComponentBase):
         """
         if sn not in self.control_active or self._is_read_only() or not self.control_enable:
             return
+        if self._write_pending(sn):
+            # Predbat is part-way through committing a change; the debounced write will send the
+            # settled schedule, and re-applying now would send the half-applied one it exists to
+            # avoid (batpred#6074).
+            return
         try:
             await self.apply_schedule(sn)
         except Exception as error:
@@ -2154,6 +2277,7 @@ class HanchuAPI(ComponentBase):
 
     async def final(self):
         """Persist state on shutdown so a restart resumes without re-polling, then close the HTTP session."""
+        self._cancel_pending_writes()
         await self.save_static()
         await self.save_config()
         await self.save_control()
