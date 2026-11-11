@@ -638,9 +638,12 @@ Before enabling control for a first tester:
 2. Confirm the reported battery capacity, battery maximum power and inverter rating
 3. Set the customer's real `export_limit` manually if it is below the inverter rating
 4. Enable control and test one future charge window at a modest rate. Growatt receives UTC slots, so confirm the Growatt app shows the intended local time after conversion. The Predbat log records each slot table sent, as an `Info: Growatt API request /oauth2/deviceDispatch` line
-5. Test a discharge window above the inverter's own minimum SoC. Confirm forced discharge works on that model and stops when Predbat removes the slot at its software floor
+5. Within 10 minutes `sensor.predbat_growatt_<serial>_dispatch_slots` should show the same table, read back from the device. A `slot table read-back was not understood` warning means the read answer has a shape Predbat does not know yet: report the logged answer
+6. Let the charge slot end and confirm the empty table Predbat then writes actually clears it in the Growatt app and in the read-back sensor
+7. Test a discharge window above the inverter's own minimum SoC. Confirm forced discharge works on that model and stops when Predbat removes the slot at its software floor
+8. Turn on `switch.predbat_set_read_only` and confirm the log shows `OpenAPI control released` and the inverter returns to the mode set in the Growatt app
 
-The important limitation is that Growatt's public dispatch has no writable SoC target or reserve. Predbat watches one-minute telemetry and removes a charge slot at the target or a discharge slot at the greatest of the planned export floor, Predbat reserve and the inverter's reported `dischargeCutOffSOC`. This can react up to one poll late, and ordinary self-consumption after a forced-discharge slot is removed may still use the battery down to its local inverter minimum. Treat the first live run as a hardware test, not as confirmation that every Growatt model behaves identically.
+The important limitation is that Growatt's public dispatch has no writable SoC target or reserve. Predbat watches one-minute telemetry and removes a charge slot at the target or a discharge slot at the greater of the planned export floor and the inverter's reported `dischargeCutOffSOC`. This can react up to one poll late, and ordinary self-consumption after a slot is removed may still use the battery down to its local inverter minimum. For that reason Predbat's reserve functions are off for this inverter. Treat the first live run as a hardware test, not as confirmation that every Growatt model behaves identically.
 
 If the customer cannot use the OpenAPI route, the existing Solar Assistant setup below remains available.
 

@@ -6,8 +6,8 @@
 
 """Constants and pure helpers for Growatt's public OAuth OpenAPI."""
 
+import json
 from datetime import datetime, timedelta, timezone
-
 
 GROWATT_BASE_URL = "https://opencloud.growatt.com"
 
@@ -16,6 +16,7 @@ GROWATT_ENDPOINTS = {
     "device_info": "/oauth2/getDeviceInfo",
     "device_data": "/oauth2/getDeviceData",
     "dispatch": "/oauth2/deviceDispatch",
+    "read_dispatch": "/oauth2/readDeviceDispatch",
 }
 
 GROWATT_RETURN_CODES = {
@@ -46,9 +47,21 @@ GROWATT_TTL_LIVE = 1
 # reading - several missed one-minute polls, so a single slow response does not trip it.
 GROWATT_TELEMETRY_STALE = 5
 GROWATT_DISPATCH_INTERVAL = 5
+# Minutes between reads of the slot table actually held by the device. The read shares the
+# five-second dispatch pacing, so it is kept infrequent; it catches a table changed in the
+# Growatt app, or one a write reported as accepted but the device never applied.
+GROWATT_TTL_READBACK = 10
 
 GROWATT_SET_TIME_SLOTS = "time_slot_charge_discharge"
 GROWATT_SET_ENABLE_CONTROL = "enable_control"
+# enable_control values: 1 hands the battery schedule to the OpenAPI, 0 hands it back to the
+# inverter's own settings.
+GROWATT_CONTROL_ON = 1
+GROWATT_CONTROL_OFF = 0
+
+# Storage component module and file for the control state that must survive a restart
+GROWATT_STORAGE_MODULE = "growatt"
+GROWATT_CACHE_CONTROL = "control"
 
 GROWATT_CAPABILITIES = {
     "support_charge_freeze": False,
@@ -151,3 +164,37 @@ def normalize_slots(value):
             continue
         slots.append({"startTime": start, "endTime": end, "percentage": clamp_percent(item.get("percentage", 0))})
     return sorted(slots, key=lambda slot: (slot["startTime"], slot["endTime"], slot["percentage"]))
+
+
+def _is_slot_list(value):
+    """Return True for a list whose every entry looks like a Growatt time slot."""
+    return isinstance(value, list) and all(isinstance(item, dict) and "startTime" in item and "endTime" in item for item in value)
+
+
+def parse_dispatch_slots(data, _depth=0):
+    """Extract the slot table from a readDeviceDispatch answer, or None when it holds none.
+
+    Growatt's documentation gives the write shape (a list of startTime/endTime/percentage)
+    but not the read answer's envelope, so this accepts the list itself, the list encoded
+    as a JSON string, or a dict carrying it under "value" or any other key. Anything else
+    is None - unknown - which callers must not mistake for an empty table.
+    """
+    if _depth > 3:
+        return None
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except ValueError:
+            return None
+    if _is_slot_list(data):
+        return normalize_slots(data)
+    if isinstance(data, dict):
+        keys = ["value"] + [key for key in data if key != "value"]
+        for key in keys:
+            if key in data:
+                found = parse_dispatch_slots(data[key], _depth + 1)
+                # Only "value" may report an empty table: an empty list under some other
+                # key is far more likely to be an unrelated field than the slot table.
+                if found is not None and (key == "value" or found):
+                    return found
+    return None

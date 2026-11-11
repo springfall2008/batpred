@@ -8,6 +8,8 @@
 
 # cspell:ignore echarge edischarge
 
+import json
+import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,16 +24,36 @@ from growatt_const import (
     GROWATT_ENDPOINTS,
     GROWATT_SET_ENABLE_CONTROL,
     GROWATT_SET_TIME_SLOTS,
+    GROWATT_CONTROL_OFF,
+    GROWATT_CONTROL_ON,
     local_window_to_utc_slots,
+    parse_dispatch_slots,
 )
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_infra import run_async as run_async_local
 
 
+class FakeStorage:
+    """In-memory stand-in for the Storage component."""
+
+    def __init__(self):
+        """Start empty."""
+        self.data = {}
+
+    async def load(self, module, name):
+        """Return a saved entry, or None as the real Storage component does when absent."""
+        return self.data.get((module, name))
+
+    async def save(self, module, name, payload, format="yaml", expiry=None, indent=None):
+        """Record a copy taken through JSON, as a real save serialises the payload."""
+        self.data[(module, name)] = json.loads(json.dumps(payload))
+
+
 class MockGrowatt(GrowattAPI):
     """Small Growatt component double without the lifecycle thread."""
 
-    def __init__(self, automatic=False):
+    def __init__(self, automatic=False, store=None):
+        self._store = store
         self.prefix = "predbat"
         self.local_tz = pytz.timezone("Europe/London")
         self.log_messages = []
@@ -67,9 +89,14 @@ class MockGrowatt(GrowattAPI):
     def update_success_timestamp(self):
         return None
 
+    @property
+    def storage(self):
+        """Return the fake store, or None for no Storage component."""
+        return self._store
 
-def _ready_client(automatic=False):
-    client = MockGrowatt(automatic=automatic)
+
+def _ready_client(automatic=False, store=None):
+    client = MockGrowatt(automatic=automatic, store=store)
     sn = "SPH123"
     client.device_list = [sn]
     client.device_detail[sn] = {
@@ -88,7 +115,6 @@ def _ready_client(automatic=False):
 
 def _schedule():
     return {
-        "reserve": 15,
         "charge": {"enable": True, "soc": 80, "power": 2500, "start": "01:00:00", "end": "03:00:00"},
         "export": {"enable": True, "soc": 20, "power": 1000, "start": "17:00:00", "end": "19:00:00"},
     }
@@ -200,7 +226,8 @@ def test_growatt_control_entities_round_trip():
     run_async_local(client.publish_schedule_settings_ha(sn))
     read_back = run_async_local(client.get_schedule_settings_ha(sn))
     assert read_back == _schedule()
-    assert client.published["number.predbat_growatt_sph123_battery_schedule_reserve"]["attributes"]["min"] == 10
+    # No reserve control: GrowattCloud does not claim has_reserve_soc
+    assert not any("reserve" in entity for entity in client.published)
 
 
 def test_growatt_apply_schedule_enables_control_then_deduplicates():
@@ -260,7 +287,8 @@ def test_growatt_inverter_definition_is_complete():
     assert not (reference - set(entry))
     assert entry["output_charge_control"] == "power"
     assert entry["has_target_soc"] is True
-    assert entry["has_reserve_soc"] is True
+    # The inverter's own self-consumption ignores any reserve outside a slot, so none is claimed
+    assert entry["has_reserve_soc"] is False
     assert entry["support_charge_freeze"] is False
     assert entry["support_discharge_freeze"] is False
     assert entry["write_and_poll_sleep"] == 5
@@ -293,6 +321,215 @@ def test_growatt_refresh_threshold_fits_two_hour_tokens():
         assert client._token_needs_refresh() is True
 
 
+def _recording_dispatch(client, result=True):
+    """Replace client.dispatch with a recorder; return the list of (serial, set_type, value) calls."""
+    calls = []
+
+    async def dispatch(serial, set_type, value):
+        calls.append((serial, set_type, value))
+        return result
+
+    client.dispatch = dispatch
+    return calls
+
+
+def _idle_schedule():
+    """A schedule with both windows disabled, so Predbat wants an empty slot table."""
+    schedule = _schedule()
+    schedule["charge"]["enable"] = False
+    schedule["export"]["enable"] = False
+    return schedule
+
+
+def test_growatt_unknown_table_is_written_even_when_empty():
+    """With no known table, an empty one is still written, clearing slots a previous run left behind."""
+    client, sn = _ready_client()
+    client.local_schedule[sn] = _idle_schedule()
+    calls = _recording_dispatch(client)
+    with patch("growatt.asyncio.sleep", new=AsyncMock()):
+        assert run_async_local(client.apply_schedule(sn))
+    assert calls == [(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_ON), (sn, GROWATT_SET_TIME_SLOTS, [])]
+    # Now the empty table is known, so it is not sent again
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+    assert len(calls) == 2
+
+
+def test_growatt_control_state_survives_restart():
+    """The last written table and who holds control are restored, so a restart neither rewrites nor forgets them."""
+    store = FakeStorage()
+    first, sn = _ready_client(store=store)
+    first.local_schedule[sn] = _schedule()
+    first.control_active.add(sn)
+    _recording_dispatch(first)
+    with patch("growatt.asyncio.sleep", new=AsyncMock()):
+        assert run_async_local(first.apply_schedule(sn))
+    written = first.applied_slots[sn]
+    assert written
+
+    second, _ = _ready_client(store=store)
+    run_async_local(second.restore_state())
+    assert second._state_restored
+    assert second.applied_slots[sn] == written
+    assert second.control_active == {sn}
+    assert second.control_claimed == {sn}
+    # The table is known again, so the same plan sends nothing
+    second.local_schedule[sn] = _schedule()
+    calls = _recording_dispatch(second)
+    assert run_async_local(second.apply_schedule(sn))
+    assert calls == []
+    # A changed plan re-sends enable_control once in the new process, then the table
+    second.local_schedule[sn] = _idle_schedule()
+    with patch("growatt.asyncio.sleep", new=AsyncMock()):
+        assert run_async_local(second.apply_schedule(sn))
+    assert [call[1] for call in calls] == [GROWATT_SET_ENABLE_CONTROL, GROWATT_SET_TIME_SLOTS]
+
+
+def test_growatt_restore_without_storage_is_a_no_op():
+    """No Storage component means nothing to restore, and it is not retried every run."""
+    client, _ = _ready_client()
+    run_async_local(client.restore_state())
+    assert client._state_restored
+    assert client.applied_slots == {}
+
+
+def test_growatt_parse_dispatch_slots_shapes():
+    """The read-back parser accepts the plausible envelopes and refuses to guess on anything else."""
+    slot = {"startTime": "01:00", "endTime": "03:00", "percentage": 50}
+    expected = [slot]
+    assert parse_dispatch_slots([slot]) == expected
+    assert parse_dispatch_slots(json.dumps([slot])) == expected
+    assert parse_dispatch_slots({"setType": GROWATT_SET_TIME_SLOTS, "value": json.dumps([slot])}) == expected
+    assert parse_dispatch_slots({"result": {"timeSlots": [slot]}}) == expected
+    # Seconds are dropped to match the write format
+    assert parse_dispatch_slots([{"startTime": "01:00:00", "endTime": "03:00:00", "percentage": 50}]) == expected
+    # An empty table is only believed under "value"
+    assert parse_dispatch_slots({"value": []}) == []
+    assert parse_dispatch_slots([]) == []
+    assert parse_dispatch_slots({"errors": []}) is None
+    for unknown in (None, "", "not json", 5, {"value": "1"}, [{"start": "01:00"}]):
+        assert parse_dispatch_slots(unknown) is None, unknown
+
+
+def test_growatt_readback_adopts_device_table():
+    """A read-back replaces the known table, so a table changed on the device is rewritten on the next apply."""
+    client, sn = _ready_client()
+    client.local_schedule[sn] = _schedule()
+    client.applied_slots[sn] = client.build_time_slots(sn, client.local_schedule[sn])
+    client.control_enabled.add(sn)
+    device_table = [{"startTime": "10:00", "endTime": "11:00", "percentage": 100}]
+    client.read_dispatch = AsyncMock(return_value=(True, {"value": device_table}))
+    assert run_async_local(client.refresh_readback(sn))
+    assert client.applied_slots[sn] == device_table
+    assert any("differ from the" in message for message in client.log_messages)
+    run_async_local(client.publish_data())
+    sensor = client.published["sensor.predbat_growatt_sph123_dispatch_slots"]
+    assert sensor["state"] == 1
+    assert sensor["attributes"]["slots"] == device_table
+    assert not client.tier_expired("readback:{}".format(sn), 10)
+
+    calls = _recording_dispatch(client)
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+    assert [call[1] for call in calls] == [GROWATT_SET_TIME_SLOTS]
+    assert client.applied_slots[sn] == calls[0][2]
+
+
+def test_growatt_readback_unknown_answer_keeps_written_table():
+    """An answer the parser does not understand, or a failed read, leaves the last written table in place."""
+    client, sn = _ready_client()
+    written = [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+    client.applied_slots[sn] = list(written)
+    client.read_dispatch = AsyncMock(return_value=(True, {"something": "else"}))
+    assert not run_async_local(client.refresh_readback(sn))
+    assert client.applied_slots[sn] == written
+    assert any("read-back was not understood" in message for message in client.log_messages)
+    assert sn not in client.readback_slots
+
+    client.last_write_time[sn] = 0
+    client.read_dispatch = AsyncMock(return_value=(False, None))
+    assert not run_async_local(client.refresh_readback(sn))
+    assert client.applied_slots[sn] == written
+
+
+def test_growatt_readback_waits_for_dispatch_pacing():
+    """A read straight after a write waits for the next run instead of breaking the per-device limit."""
+    client, sn = _ready_client()
+    client.read_dispatch = AsyncMock(return_value=(True, {"value": []}))
+    client.last_write_time[sn] = time.monotonic()
+    assert not run_async_local(client.refresh_readback(sn))
+    client.read_dispatch.assert_not_called()
+    assert client.tier_expired("readback:{}".format(sn), 10)
+
+
+def test_growatt_release_control():
+    """Releasing sends enable_control 0 once, forgets the table, and keeps retrying a refused release."""
+    store = FakeStorage()
+    client, sn = _ready_client(store=store)
+    client.control_claimed.add(sn)
+    client.control_enabled.add(sn)
+    client.applied_slots[sn] = [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+
+    calls = _recording_dispatch(client, result=False)
+    assert not run_async_local(client.release_control(sn))
+    assert client.control_claimed == {sn}
+
+    client.last_write_time[sn] = 0
+    calls = _recording_dispatch(client)
+    assert run_async_local(client.release_control(sn))
+    assert calls == [(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_OFF)]
+    assert client.control_claimed == set()
+    assert client.control_enabled == set()
+    assert sn not in client.applied_slots
+    assert store.data[("growatt", "control")]["control_claimed"] == []
+    # Nothing left to release
+    assert run_async_local(client.release_control(sn))
+    assert len(calls) == 1
+
+
+def test_growatt_run_releases_control_when_read_only():
+    """run() releases control while read-only, and resumes writing (re-enabling first) once it is turned off."""
+    client, sn = _ready_client()
+    client.local_schedule[sn] = _schedule()
+    client.control_active.add(sn)
+    client.control_claimed.add(sn)
+    client.control_enabled.add(sn)
+    client.refresh_discovery = MagicMock()
+    now = time.time()
+    client._tier_refreshed = {"static": now, "live": now, "readback:{}".format(sn): now}
+    run_async_local(client.publish_schedule_settings_ha(sn))
+    calls = _recording_dispatch(client)
+
+    client.state["switch.predbat_set_read_only"] = "on"
+    assert run_async_local(client.run(60, False))
+    assert calls == [(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_OFF)]
+    assert client.control_claimed == set()
+    # Still read-only: nothing further is sent
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.run(60, False))
+    assert len(calls) == 1
+
+    client.state["switch.predbat_set_read_only"] = "off"
+    client.last_write_time[sn] = 0
+    with patch("growatt.asyncio.sleep", new=AsyncMock()):
+        assert run_async_local(client.run(60, False))
+    assert [call[1] for call in calls[1:]] == [GROWATT_SET_ENABLE_CONTROL, GROWATT_SET_TIME_SLOTS]
+    assert client.control_claimed == {sn}
+
+
+def test_growatt_monitoring_only_releases_claimed_control():
+    """growatt_control_enable false releases control Predbat still holds from before, as read-only does."""
+    client, sn = _ready_client()
+    client.control_enable = False
+    client.control_claimed.add(sn)
+    client.refresh_discovery = MagicMock()
+    now = time.time()
+    client._tier_refreshed = {"static": now, "live": now, "readback:{}".format(sn): now}
+    calls = _recording_dispatch(client)
+    assert run_async_local(client.run(60, False))
+    assert calls == [(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_OFF)]
+
+
 def run_growatt_tests(my_predbat):
     """Run the Growatt component tests in Predbat's custom test harness."""
     failed = False
@@ -311,6 +548,16 @@ def run_growatt_tests(my_predbat):
         ("discovery_contract", test_growatt_discovery_matches_definition_and_automatic_config),
         ("request_id", test_growatt_request_ids_are_unique_32_character_hex),
         ("refresh_threshold", test_growatt_refresh_threshold_fits_two_hour_tokens),
+        ("unknown_table_written", test_growatt_unknown_table_is_written_even_when_empty),
+        ("state_survives_restart", test_growatt_control_state_survives_restart),
+        ("restore_without_storage", test_growatt_restore_without_storage_is_a_no_op),
+        ("parse_dispatch_slots", test_growatt_parse_dispatch_slots_shapes),
+        ("readback_adopts_device", test_growatt_readback_adopts_device_table),
+        ("readback_unknown_answer", test_growatt_readback_unknown_answer_keeps_written_table),
+        ("readback_pacing", test_growatt_readback_waits_for_dispatch_pacing),
+        ("release_control", test_growatt_release_control),
+        ("run_read_only_release", test_growatt_run_releases_control_when_read_only),
+        ("monitoring_only_release", test_growatt_monitoring_only_releases_claimed_control),
     ]
     for name, test in tests:
         try:

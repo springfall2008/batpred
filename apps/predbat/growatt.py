@@ -11,10 +11,15 @@
 """Growatt public OAuth OpenAPI component.
 
 The public API supplies one-minute telemetry and UTC charge/discharge time slots. It does
-not expose writable battery SoC limits. Predbat therefore keeps its target and reserve in
-Home Assistant and removes a slot when the latest telemetry reaches that threshold. That
-is deliberately visible in the logs and documentation because it is software enforcement,
-not a limit stored in the inverter.
+not expose writable battery SoC limits. Predbat therefore keeps its charge target and export
+floor in Home Assistant and removes a slot when the latest telemetry reaches that threshold.
+That is deliberately visible in the logs and documentation because it is software
+enforcement, not a limit stored in the inverter. No reserve is claimed: outside a slot the
+inverter's own self-consumption runs to its local minimum, which Predbat cannot hold above.
+
+The slot table last written, and whether Predbat holds OpenAPI control, are saved through the
+Storage component so a restart neither forgets slots it left on the device nor a release it
+still owes. The device's own table is read back every GROWATT_TTL_READBACK minutes.
 """
 
 # cspell:ignore echarge edischarge
@@ -42,12 +47,18 @@ from growatt_const import (
     GROWATT_TTL_LIVE,
     GROWATT_TELEMETRY_STALE,
     GROWATT_DISPATCH_INTERVAL,
+    GROWATT_TTL_READBACK,
     GROWATT_SET_TIME_SLOTS,
     GROWATT_SET_ENABLE_CONTROL,
+    GROWATT_CONTROL_ON,
+    GROWATT_CONTROL_OFF,
+    GROWATT_STORAGE_MODULE,
+    GROWATT_CACHE_CONTROL,
     GROWATT_CAPABILITIES,
     clamp_percent,
     local_window_to_utc_slots,
     normalize_slots,
+    parse_dispatch_slots,
 )
 
 
@@ -103,10 +114,21 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         self.telemetry_time = {}
         self.device_energy = {}
         self.local_schedule = {}
+        # The slot table believed to be on each device: what was last written, replaced by
+        # the device's own answer whenever a read-back succeeds. A serial absent from it is
+        # unknown, which is not the same as an empty table.
         self.applied_slots = {}
+        # The last slot table the device itself reported, for the published read-back sensor
+        self.readback_slots = {}
         self.last_write_time = {}
         self.control_active = set()
+        # control_enabled: enable_control was sent by this process, so a write can skip it.
+        # control_claimed: persisted - Predbat holds OpenAPI control and must release it when
+        # it goes read-only, even after a restart. A restart re-sends enable_control once
+        # rather than trusting that the device still has it.
         self.control_enabled = set()
+        self.control_claimed = set()
+        self._state_restored = False
         self._tier_refreshed = {}
         self._write_lock = asyncio.Lock()
         self.last_api_error = ""
@@ -163,7 +185,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         timeout = aiohttp.ClientTimeout(total=GROWATT_TIMEOUT)
         for attempt in range(GROWATT_RETRIES):
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     request = session.post(url, headers=headers, json=payload) if payload is not None else session.post(url, headers=headers)
                     async with request as response:
                         if response.status == 401 and not _retry_after_refresh:
@@ -350,6 +372,14 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                     attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "measurement", "friendly_name": "Growatt {} {}".format(sn, leaf.replace("_", " ").title())},
                     app="growatt",
                 )
+            if sn in self.readback_slots:
+                slots = self.readback_slots[sn]
+                self.dashboard_item(
+                    self._sensor_name(sn, "dispatch_slots"),
+                    state=len(slots),
+                    attributes={"slots": slots, "time_zone": "UTC", "friendly_name": "Growatt {} Dispatch Slots (device read-back)".format(sn), "icon": "mdi:calendar-clock"},
+                    app="growatt",
+                )
             for leaf, value, unit in (
                 ("battery_capacity", self.battery_capacity(sn), "kWh"),
                 ("inverter_limit", self.inverter_limit(sn), "W"),
@@ -384,7 +414,8 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 self.set_arg_auto(arg, [self._sensor_name(sn, leaf) for sn in devices])
         self.log("Warn: Growatt does not report the site's grid export limit; set export_limit manually when the connection is capped below the inverter rating")
 
-        self.set_arg_auto("reserve", [self._control_name("number", sn, "battery_schedule_reserve") for sn in devices])
+        # No reserve is bound: GrowattCloud does not claim has_reserve_soc, so inverter.py gives
+        # it a Predbat-owned reserve entity instead (see INVERTER_DEF["GrowattCloud"]).
         self.set_arg_auto("charge_start_time", [self._control_name("select", sn, "battery_schedule_charge_start_time") for sn in devices])
         self.set_arg_auto("charge_end_time", [self._control_name("select", sn, "battery_schedule_charge_end_time") for sn in devices])
         self.set_arg_auto("charge_limit", [self._control_name("number", sn, "battery_schedule_charge_soc") for sn in devices])
@@ -400,7 +431,6 @@ class GrowattAPI(ComponentBase, OAuthMixin):
     @staticmethod
     def _empty_schedule():
         return {
-            "reserve": 0,
             "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
             "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
         }
@@ -408,13 +438,6 @@ class GrowattAPI(ComponentBase, OAuthMixin):
     async def publish_schedule_settings_ha(self, sn):
         local = self.local_schedule.get(sn, self._empty_schedule())
         power_max = max(100, int(self.battery_rate_max(sn) or 10000))
-        device_floor = int(self._as_float(self.device_detail.get(sn, {}).get("dischargeCutOffSOC"), 0))
-        self.dashboard_item(
-            self._control_name("number", sn, "battery_schedule_reserve"),
-            state=int(local.get("reserve", 0)),
-            attributes={"min": device_floor, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": "Growatt {} Battery Schedule Reserve".format(sn), "icon": "mdi:gauge"},
-            app="growatt",
-        )
         for direction in ("charge", "export"):
             window = local.get(direction, {})
             self.dashboard_item(
@@ -450,7 +473,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         self.dashboard_item(self._control_name("switch", sn, "battery_schedule_charge_write"), state="off", attributes={"friendly_name": "Growatt {} Schedule Write".format(sn), "icon": "mdi:content-save"}, app="growatt")
 
     async def get_schedule_settings_ha(self, sn):
-        schedule = {"reserve": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, "battery_schedule_reserve"), default=0), 0))}
+        schedule = {}
         for direction in ("charge", "export"):
             schedule[direction] = {
                 "enable": self.get_state_wrapper(self._control_name("switch", sn, "battery_schedule_{}_enable".format(direction)), default="off") == "on",
@@ -485,9 +508,6 @@ class GrowattAPI(ComponentBase, OAuthMixin):
     def update_local_schedule(self, sn, entity_id, value):
         schedule = self.local_schedule.setdefault(sn, self._empty_schedule())
         leaf = str(entity_id).split("_growatt_{}_".format(str(sn).lower()), 1)[-1]
-        if leaf == "battery_schedule_reserve":
-            schedule["reserve"] = int(self._as_float(value, 0))
-            return
         for direction in ("charge", "export"):
             prefix = "battery_schedule_{}_".format(direction)
             if not leaf.startswith(prefix):
@@ -517,7 +537,9 @@ class GrowattAPI(ComponentBase, OAuthMixin):
             return
         if str(entity_id).endswith("battery_schedule_charge_write"):
             if self._to_bool(value):
-                self.control_active.add(sn)
+                if sn not in self.control_active:
+                    self.control_active.add(sn)
+                    await self.save_state()
                 await self.apply_schedule(sn)
             return
         self.update_local_schedule(sn, entity_id, value)
@@ -543,7 +565,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 return "SoC {:.1f}% reached charge target {}%".format(soc, int(target))
             return None
         device_floor = self._as_float(self.device_detail.get(sn, {}).get("dischargeCutOffSOC"), 0)
-        floor = max(self._as_float(schedule.get("reserve"), 0), self._as_float(window.get("soc"), 0), device_floor)
+        floor = max(self._as_float(window.get("soc"), 0), device_floor)
         if soc <= floor:
             return "SoC {:.1f}% reached discharge floor {}%".format(soc, int(floor))
         return None
@@ -584,39 +606,138 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         code, _ = await self._post("dispatch", body)
         return code == GROWATT_CODE_OK
 
+    async def read_dispatch(self, sn, set_type):
+        """Read one dispatch setting back from the device, returning (ok, data)."""
+        body = {"deviceSn": sn, "setType": set_type, "requestId": self.request_id()}
+        code, data = await self._post("read_dispatch", body)
+        return code == GROWATT_CODE_OK, data
+
     def _is_read_only(self):
         return self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
 
+    def _pacing_wait(self, sn):
+        """Seconds until the per-device dispatch limit allows another request, 0 when it does."""
+        return max(0.0, self.min_write_interval - (time.monotonic() - self.last_write_time.get(sn, 0)))
+
     async def apply_schedule(self, sn, force=False):
-        """Write one complete slot table, with change detection and endpoint pacing."""
+        """Write one complete slot table, with change detection and endpoint pacing.
+
+        The write is skipped only when the table matches the one the device is known to hold.
+        A serial with no known table - a first run with nothing saved - is always written, so
+        slots an earlier run left on the device are cleared even when Predbat now wants none.
+        """
         if not self.control_enable or self._is_read_only():
             return False
         schedule = self.local_schedule.get(sn)
         if not schedule:
             return False
         slots = self.build_time_slots(sn, schedule)
-        if not force and normalize_slots(self.applied_slots.get(sn)) == slots:
+        if not force and sn in self.applied_slots and normalize_slots(self.applied_slots[sn]) == slots:
             return True
 
         async with self._write_lock:
-            now = time.monotonic()
-            elapsed = now - self.last_write_time.get(sn, 0)
-            if elapsed < self.min_write_interval:
-                self.log("Info: Growatt {} schedule update deferred for {:.1f}s by the documented dispatch rate limit".format(sn, self.min_write_interval - elapsed))
+            wait = self._pacing_wait(sn)
+            if wait > 0:
+                self.log("Info: Growatt {} schedule update deferred for {:.1f}s by the documented dispatch rate limit".format(sn, wait))
                 return False
             if sn not in self.control_enabled:
-                if not await self.dispatch(sn, GROWATT_SET_ENABLE_CONTROL, 1):
+                ok = await self.dispatch(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_ON)
+                self.last_write_time[sn] = time.monotonic()
+                if not ok:
                     return False
                 self.control_enabled.add(sn)
-                self.last_write_time[sn] = time.monotonic()
+                self.control_claimed.add(sn)
                 await asyncio.sleep(GROWATT_DISPATCH_INTERVAL)
             ok = await self.dispatch(sn, GROWATT_SET_TIME_SLOTS, slots)
             self.last_write_time[sn] = time.monotonic()
-            if not ok:
+            if ok:
+                self.applied_slots[sn] = list(slots)
+                self.log("Info: Growatt wrote {} UTC charge/discharge slot(s) for {}".format(len(slots), sn))
+        await self.save_state()
+        return ok
+
+    async def refresh_readback(self, sn):
+        """Read the slot table the device actually holds and adopt it as the known table.
+
+        The read shares the dispatch pacing, so it waits for the next run when a write has
+        just gone out (which then confirms that write). An answer that cannot be parsed
+        leaves the last written table in place, as the device's state is then still unknown.
+        """
+        async with self._write_lock:
+            if self._pacing_wait(sn) > 0:
                 return False
-            self.applied_slots[sn] = list(slots)
-            self.log("Info: Growatt wrote {} UTC charge/discharge slot(s) for {}".format(len(slots), sn))
+            ok, data = await self.read_dispatch(sn, GROWATT_SET_TIME_SLOTS)
+            self.last_write_time[sn] = time.monotonic()
+        self.mark_refreshed("readback:{}".format(sn))
+        if not ok:
+            self.log("Warn: Growatt {} slot table read-back failed: {}".format(sn, self.last_api_error))
+            return False
+        slots = parse_dispatch_slots(data)
+        if slots is None:
+            self.log("Warn: Growatt {} slot table read-back was not understood, keeping the last written table: {}".format(sn, json.dumps(self.redact(data), default=str)[:1000]))
+            return False
+        known = self.applied_slots.get(sn)
+        if known is not None and normalize_slots(known) != slots:
+            self.log("Warn: Growatt {} holds {} slot(s) {} that differ from the {} last written {}; Predbat rewrites them on its next schedule apply".format(sn, len(slots), slots, len(known), known))
+        self.readback_slots[sn] = slots
+        self.applied_slots[sn] = slots
+        await self.save_state()
+        return True
+
+    async def release_control(self, sn):
+        """Hand the battery schedule back to the inverter's own settings.
+
+        Called while Predbat is read-only, or growatt_control_enable is off, for a device it
+        still holds OpenAPI control of. Paced like any dispatch, and retried each run until
+        Growatt accepts it. What the device holds afterwards is unknown, so the known table is
+        dropped and the next enable writes the full table.
+        """
+        if sn not in self.control_claimed:
             return True
+        async with self._write_lock:
+            if self._pacing_wait(sn) > 0:
+                return False
+            ok = await self.dispatch(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_OFF)
+            self.last_write_time[sn] = time.monotonic()
+        if not ok:
+            self.log("Warn: Growatt {} could not release OpenAPI control ({}), retrying next run".format(sn, self.last_api_error))
+            return False
+        self.control_claimed.discard(sn)
+        self.control_enabled.discard(sn)
+        self.applied_slots.pop(sn, None)
+        self.log("Info: Growatt {} OpenAPI control released, the inverter now follows its own settings".format(sn))
+        await self.save_state()
+        return True
+
+    async def save_state(self):
+        """Persist the control state a restart must not forget: the known slot tables and who holds control."""
+        storage = self.storage
+        if storage is None:
+            return
+        payload = {"applied_slots": self.applied_slots, "control_active": sorted(self.control_active), "control_claimed": sorted(self.control_claimed)}
+        try:
+            await storage.save(GROWATT_STORAGE_MODULE, GROWATT_CACHE_CONTROL, payload)
+        except Exception as error:
+            self.log("Warn: Growatt could not save control state: {}".format(error))
+
+    async def restore_state(self):
+        """Restore the saved control state once; a storage failure is retried on the next run."""
+        storage = self.storage
+        if storage is None:
+            self._state_restored = True
+            return
+        try:
+            data = await storage.load(GROWATT_STORAGE_MODULE, GROWATT_CACHE_CONTROL)
+        except Exception as error:
+            self.log("Warn: Growatt could not load control state: {}".format(error))
+            return
+        data = data if isinstance(data, dict) else {}
+        for sn, slots in (data.get("applied_slots") or {}).items():
+            if isinstance(slots, list) and sn not in self.applied_slots:
+                self.applied_slots[str(sn)] = normalize_slots(slots)
+        self.control_active |= {str(sn) for sn in data.get("control_active") or []}
+        self.control_claimed |= {str(sn) for sn in data.get("control_claimed") or []}
+        self._state_restored = True
 
     async def _reconcile_control(self, sn):
         if sn not in self.control_active or self._is_read_only() or not self.control_enable:
@@ -633,7 +754,6 @@ class GrowattAPI(ComponentBase, OAuthMixin):
             "grid_power": {"entity_id": self._sensor_name(sn, "grid_power"), "access": "r", "unit": "W"},
             "load_power": {"entity_id": self._sensor_name(sn, "load_power"), "access": "r", "unit": "W"},
             "pv_power": {"entity_id": self._sensor_name(sn, "pv_power"), "access": "r", "unit": "W"},
-            "reserve": {"entity_id": self._control_name("number", sn, "battery_schedule_reserve"), "access": "rw", "unit": "%"},
             "charge_start_time": {"entity_id": self._control_name("select", sn, "battery_schedule_charge_start_time"), "access": "rw", "domain": "select", "format": "HH:MM:SS"},
             "charge_end_time": {"entity_id": self._control_name("select", sn, "battery_schedule_charge_end_time"), "access": "rw", "domain": "select", "format": "HH:MM:SS"},
             "charge_limit": {"entity_id": self._control_name("number", sn, "battery_schedule_charge_soc"), "access": "rw", "unit": "%"},
@@ -700,6 +820,8 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         if not self.access_token:
             self.log("Warn: Growatt needs an OAuth access token from Predbat.com")
             return False
+        if not self._state_restored:
+            await self.restore_state()
         if self.tier_expired("static", GROWATT_TTL_STATIC) or not self.device_list:
             await self.refresh_static()
         if not self.device_list:
@@ -713,7 +835,17 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 await self.get_schedule_settings_ha(sn)
             except Exception as error:
                 self.log("Warn: Growatt schedule read failed for {}: {}".format(sn, error))
-            await self._reconcile_control(sn)
+            try:
+                if self._is_read_only() or not self.control_enable:
+                    await self.release_control(sn)
+                else:
+                    await self._reconcile_control(sn)
+                # After the write, so a table just sent is confirmed on the next run rather
+                # than the read pushing the write back by one pacing interval.
+                if self.tier_expired("readback:{}".format(sn), GROWATT_TTL_READBACK):
+                    await self.refresh_readback(sn)
+            except Exception as error:
+                self.log("Warn: Growatt control update failed for {}: {}".format(sn, error))
             await self.publish_schedule_settings_ha(sn)
         await self.publish_data()
         self.refresh_discovery()
