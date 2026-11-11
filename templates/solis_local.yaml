@@ -62,8 +62,8 @@ pred_bat:
     has_timed_pause: false
 
     support_charge_freeze: false
-    support_discharge_freeze: false
-    support_feedin_first: false
+    support_discharge_freeze: true
+    support_feedin_first: true
 
     has_ge_inverter_mode: false
     has_ge_eco_toggle: false
@@ -99,8 +99,13 @@ pred_bat:
   discharge_rate:
     - 're:(number\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_battery_discharge_power)'
 
-  # ---- RC operating mode ----
+  # ---- RC operating mode combined with non volatile writes. Hybrid mode ----
   charge_start_service:
+    - service: select.select_option
+      entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_storage_mode)'
+      option: "Self-Use"
+    - service: switch.turn_on
+      entity_id: 're:(switch\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_allow_grid_to_charge_the_battery)'
     - service: select.select_option
       entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_charge_discharge)'
       option: "Solis RC Force Battery Charge"
@@ -110,8 +115,13 @@ pred_bat:
     - service: select.select_option
       entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_charge_discharge)'
       option: "None"
+    - service: switch.turn_off
+      entity_id: 're:(switch\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_allow_grid_to_charge_the_battery)'
 
   discharge_start_service:
+    - service: select.select_option
+      entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_storage_mode)'
+      option: "Self-Use"
     - service: select.select_option
       entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_charge_discharge)'
       option: "Solis RC Force Battery Discharge"
@@ -121,6 +131,18 @@ pred_bat:
     - service: select.select_option
       entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_charge_discharge)'
       option: "None"
+    - service: select.select_option
+      entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_storage_mode)'
+      option: "Self-Use"
+
+  # ---- Freeze Export ----
+  discharge_freeze_service:
+    - service: select.select_option
+      entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_rc_force_charge_discharge)'
+      option: "None"
+    - service: select.select_option
+      entity_id: 're:(select\.solis(_[a-z0-9]{2}[a-z0-9]{1,6})?_storage_mode)'
+      option: "Feed-in Priority"
 
   # Set these to match solcast sensor names if not using the cloud interface
   # The regular expression (re:) makes the solcast bit optional
