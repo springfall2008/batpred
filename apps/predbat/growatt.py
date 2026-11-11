@@ -27,6 +27,8 @@ still owes. The device's own table is read back every GROWATT_TTL_READBACK minut
 
 import asyncio
 import json
+import os
+import sys
 import time
 import uuid
 from datetime import datetime
@@ -413,9 +415,14 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 continue
             if all(leaf in self.device_energy.get(sn, {}) for sn in devices):
                 self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices])
+        # A rating is bound only when every device reports it. A live SPH reports batteryCapacity 0
+        # (top level and batteryList alike), so soc_max is then left unset and Predbat estimates
+        # the battery size from charge history (battery_scaling_auto / find_battery_size).
         for arg, leaf, getter in (("soc_max", "battery_capacity", self.battery_capacity), ("inverter_limit", "inverter_limit", self.inverter_limit), ("battery_rate_max", "battery_rate_max", self.battery_rate_max)):
             if all(getter(sn) > 0 for sn in devices):
                 self.set_arg_auto(arg, [self._sensor_name(sn, leaf) for sn in devices])
+            elif arg == "soc_max":
+                self.log("Info: Growatt does not report a battery capacity for {}; soc_max is left unset so Predbat estimates the battery size from charge history".format(", ".join(sn for sn in devices if getter(sn) <= 0)))
         self.log("Warn: Growatt does not report the site's grid export limit; set export_limit manually when the connection is capped below the inverter rating")
 
         # No reserve is bound: GrowattCloud does not claim has_reserve_soc, so inverter.py gives
@@ -894,3 +901,186 @@ class GrowattAPI(ComponentBase, OAuthMixin):
 
     async def final(self):
         return None
+
+
+# ----------------------------------------------------------------------
+# Command-line diagnostics
+#
+#   python3 growatt.py --config apps.yaml          read the growatt_* settings from apps.yaml
+#   python3 growatt.py --key <token> ...           or give them individually
+#
+# Runs one read-only cycle of run() with automatic configuration on, then prints what the
+# component found. Control is off, so nothing is written to the inverter; the slot table is
+# read back. Run it from apps/predbat.
+# ----------------------------------------------------------------------
+
+# Command-line fields, mapped to the apps.yaml key --config fills each from. user_id is the shared
+# Predbat.com instance id OAuthMixin's refresh sends, not a Growatt-specific setting.
+GROWATT_CLI_CONFIG_KEYS = {
+    "key": "growatt_key",
+    "auth_method": "growatt_auth_method",
+    "token_expires_at": "growatt_token_expires_at",
+    "token_hash": "growatt_token_hash",
+    "inverter_sn": "growatt_inverter_sn",
+    "base_url": "growatt_base_url",
+    "battery_rate_max": "growatt_battery_rate_max",
+    "user_id": "user_id",
+    # Present in a Predbat.com-generated apps.yaml; the token refresh needs both
+    "supabase_url": "supabase_url",
+    "supabase_key": "supabase_key",
+}
+
+
+def merge_growatt_cli_args(cli, config):
+    """Fill any command-line field left empty from an apps.yaml pred_bat section.
+
+    An explicit command-line value always wins, and an empty apps.yaml value fills nothing. An
+    unquoted ISO timestamp loads from YAML as a datetime, which OAuthMixin cannot parse, so it is
+    turned back into ISO text. Returns (merged, used): used names the apps.yaml keys taken.
+    """
+    merged = {field: cli.get(field) for field in GROWATT_CLI_CONFIG_KEYS}
+    used = []
+    for field, config_key in GROWATT_CLI_CONFIG_KEYS.items():
+        if merged.get(field) not in (None, "", []):
+            continue
+        value = config.get(config_key)
+        if value in (None, "", []):
+            continue
+        if isinstance(value, datetime):
+            value = value.isoformat()
+        merged[field] = value
+        used.append(config_key)
+    return merged, used
+
+
+def _cli_slot_text(slots):
+    """Format a UTC slot table as one short line, e.g. "01:00-03:00 +50%, 17:00-19:00 -20%"."""
+    if not slots:
+        return "empty"
+    return ", ".join("{}-{} {:+d}%".format(slot["startTime"], slot["endTime"], slot["percentage"]) for slot in slots)
+
+
+def _cli_print_device(client, sn):
+    """Print what one inverter reported, for checking against the Growatt app."""
+    detail = client.device_detail.get(sn, {})
+    values = client.device_values.get(sn, {})
+    energy = client.device_energy.get(sn, {})
+    print("\n=== {} ===".format(sn))
+    print("  model {}   battery {}   firmware {}   status {}".format(detail.get("model", "?"), detail.get("batteryModel", "?"), detail.get("communicationVersion", "?"), detail.get("status", "?")))
+    if "soc" in values:
+        print("  SoC {:.1f}%   battery {:.0f} W   grid {:.0f} W   PV {:.0f} W   load {:.0f} W".format(values["soc"], values.get("battery_power", 0), values.get("grid_power", 0), values.get("pv_power", 0), values.get("load_power", 0)))
+        print("  (Predbat signs: battery positive = discharging, grid negative = importing)")
+    else:
+        print("  no telemetry")
+    if energy:
+        print("  today: " + "   ".join("{} {:.2f} kWh".format(leaf.replace("_today", "").replace("_", " "), value) for leaf, value in sorted(energy.items())))
+    print("  battery capacity {:.2f} kWh   battery rate max {:.0f} W   inverter limit {:.0f} W   discharge cut-off {}%".format(client.battery_capacity(sn), client.battery_rate_max(sn), client.inverter_limit(sn), detail.get("dischargeCutOffSOC", "?")))
+    if sn in client.readback_slots:
+        print("  slot table on the device (UTC): {}".format(_cli_slot_text(client.readback_slots[sn])))
+    else:
+        print("  slot table on the device: not read back - see the Warn: lines above")
+
+
+async def test_growatt_api(key=None, auth_method="oauth", token_expires_at=None, token_hash=None, inverter_sn=None, base_url=None, battery_rate_max=None, user_id=None, supabase_url=None, supabase_key=None, trace=True):
+    """Run one read-only cycle of the Growatt component with automatic configuration on.
+
+    Builds the component on a MockBase with control off, so run() discovers, polls, binds
+    Predbat's settings (printed as "Set arg" lines) and reads the slot table back, but writes
+    nothing. supabase_url/supabase_key go into the environment, where OAuthMixin's refresh reads
+    them; user_id goes into the base args, where it reads the instance id.
+
+    Returns True only when the cycle completed.
+    """
+    from mock_base import MockBase
+
+    if supabase_url:
+        os.environ["SUPABASE_URL"] = supabase_url
+    if supabase_key:
+        os.environ["SUPABASE_KEY"] = supabase_key
+
+    kwargs = {"key": key or "", "auth_method": auth_method or "oauth", "token_expires_at": token_expires_at, "token_hash": token_hash or "", "inverter_sn": inverter_sn, "automatic": True, "control_enable": False}
+    if base_url:
+        kwargs["base_url"] = base_url
+    if battery_rate_max:
+        kwargs["battery_rate_max"] = battery_rate_max
+    client = GrowattAPI(MockBase(user_id=user_id), **kwargs)
+    client.api_debug = trace
+
+    print("Calling run() once with automatic configuration on (read-only: control is off, nothing is written to the inverter)...")
+    ok = await client.run(seconds=0, first=True)
+    await client.final()
+    if not ok:
+        if client.oauth_failed:
+            print("\nFAILED: the Growatt OAuth token needs re-authorising - reconnect Growatt in Predbat.com")
+        elif not client.access_token:
+            print("\nFAILED: no OAuth access token - pass --key (or GROWATT_KEY), or --token-hash with --user-id, --supabase-url and --supabase-key so it can be refreshed")
+        elif client.discovery_ok is False:
+            print("\nFAILED: the device list call failed{}".format(": {}".format(client.last_api_error) if client.last_api_error else ""))
+        elif not client.device_list:
+            print("\nFAILED: no authorised battery inverter found{}".format(" matching serial {}".format(inverter_sn) if inverter_sn else ""))
+        else:
+            print("\nFAILED: discovery found {}, but the first telemetry poll came back empty - see the Warn: lines above".format(", ".join(client.device_list)))
+        return False
+    for sn in client.device_list:
+        _cli_print_device(client, sn)
+    print("\nThe 'Set arg' lines above are what growatt_automatic: true would put in apps.yaml.")
+    print("PASSED")
+    return True
+
+
+def main():  # pragma: no cover
+    """Command-line entry point: one read-only Growatt cycle from apps.yaml or individual settings."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Growatt OpenAPI diagnostics: run one read-only cycle of the component with automatic configuration on, and print what it found.",
+        epilog="Run from apps/predbat. The access token can also come from GROWATT_KEY or --config, which keep it out of shell history.",
+    )
+    parser.add_argument("--config", help="Read the growatt_* settings, user_id, supabase_url and supabase_key from an apps.yaml, resolving !secret as Predbat does; any option below overrides the file")
+    parser.add_argument("--key", help="Growatt OAuth access token (growatt_key)")
+    parser.add_argument("--auth-method", default=None, help="Authentication mode (growatt_auth_method), default oauth")
+    parser.add_argument("--token-expires-at", help="Access token expiry as an ISO timestamp (growatt_token_expires_at)")
+    parser.add_argument("--token-hash", help="Predbat.com refresh handle (growatt_token_hash)")
+    parser.add_argument("--serial", action="append", help="Only this inverter serial (growatt_inverter_sn); repeat for several")
+    parser.add_argument("--base-url", help="Regional OpenAPI base (growatt_base_url), default {}".format(GROWATT_BASE_URL))
+    parser.add_argument("--battery-rate-max", type=float, help="Battery rate override in W (growatt_battery_rate_max)")
+    parser.add_argument("--user-id", help="Predbat.com instance id, needed to refresh the token")
+    parser.add_argument("--supabase-url", help="Supabase URL for the token refresh (or SUPABASE_URL)")
+    parser.add_argument("--supabase-key", help="Supabase service key for the token refresh (or SUPABASE_KEY)")
+    parser.add_argument("--no-trace", action="store_true", help="Stop printing every API request and response")
+    args = parser.parse_args()
+
+    cli = {
+        "key": args.key,
+        "auth_method": args.auth_method,
+        "token_expires_at": args.token_expires_at,
+        "token_hash": args.token_hash,
+        "inverter_sn": args.serial,
+        "base_url": args.base_url,
+        "battery_rate_max": args.battery_rate_max,
+        "user_id": args.user_id,
+        "supabase_url": args.supabase_url,
+        "supabase_key": args.supabase_key,
+    }
+    merged = dict(cli)
+    if args.config:
+        import yaml
+        from utils import load_apps_yaml
+
+        try:
+            config, _ = load_apps_yaml(args.config)
+        except (yaml.YAMLError, KeyError, OSError, ValueError) as error:
+            parser.error("could not read Growatt settings from {}: {}".format(args.config, error))
+        merged, used = merge_growatt_cli_args(cli, config or {})
+        print("Read from {}: {}".format(args.config, ", ".join(used) if used else "nothing - no growatt_ keys found"))
+    if not merged.get("key"):
+        merged["key"] = os.environ.get("GROWATT_KEY")
+    if not merged.get("key") and not merged.get("token_hash"):
+        parser.error("no credential: pass --key (or set GROWATT_KEY), --token-hash, or --config pointing at an apps.yaml holding growatt_key")
+
+    ok = asyncio.run(test_growatt_api(trace=not args.no_trace, **merged))
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
