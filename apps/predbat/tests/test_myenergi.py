@@ -2262,6 +2262,45 @@ def test_rewire_keeps_the_eddi_through_a_missed_reply():
     print("  ✓ A re-wire on a poll that missed the first Eddi keeps iboost_energy_today on it")
 
 
+def test_offline_grace_survives_a_restart():
+    """A restart while a live Zappi is mid-dropout keeps its car; a restart once its grace has run out does not.
+
+    Without the saved last-online times, the restarted component would read the Zappi as dead since start-up and drop
+    it at once, then give it its car back when it reported - renumbering the cars twice.
+    """
+    storage = _MemoryStorage()
+    alive = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    dead = normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)
+    live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    hours = 60 * 60
+
+    component = _zappi_liveness_component()
+    component.base.components = storage
+    _poll_at(component, 0.0, [alive, live], first=True)
+    _poll_at(component, 60.0, [dead, live])
+    saved = storage.saved[("myenergi", "zappi_last_online")]["last_online"]
+    # The Zappi going quiet is saved at once, with the last time it was online
+    assert saved == {"Z11110000": 0.0, "Z12345678": 60.0}, saved
+    # Nothing changed and the re-save is not due, so a poll does not rewrite it
+    _poll_at(component, 120.0, [dead, live])
+    assert storage.saved[("myenergi", "zappi_last_online")]["last_online"]["Z12345678"] == 60.0, storage.saved
+
+    # Restarted an hour later, the Zappi still silent: it keeps car 0
+    restarted = _zappi_liveness_component()
+    restarted.base.components = storage
+    _poll_at(restarted, 1 * hours, [dead, live], first=True)
+    assert restarted.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], restarted.base.args["car_charging_energy"]
+    assert not any("is offline" in message for message in restarted.log_messages), restarted.log_messages
+
+    # Restarted after its grace has run out: dropped at once, and forgotten in storage
+    late = _zappi_liveness_component()
+    late.base.components = storage
+    _poll_at(late, 8 * hours + 60, [dead, live], first=True)
+    assert late.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], late.base.args["car_charging_energy"]
+    assert "Z11110000" not in storage.saved[("myenergi", "zappi_last_online")]["last_online"], storage.saved
+    print("  ✓ The offline grace survives a restart, and a Zappi past it is dropped and forgotten")
+
+
 def test_control_leaves_a_zappi_missing_from_the_poll_alone():
     """A Zappi kept from an earlier poll still holds its car number, but is not commanded from its frozen reading.
 
@@ -3227,6 +3266,7 @@ def test_myenergi(my_predbat=None):
     test_rewire_respects_automatic_zappi_off()
     test_rewire_wires_an_eddi_added_later()
     test_rewire_keeps_the_eddi_through_a_missed_reply()
+    test_offline_grace_survives_a_restart()
     test_control_leaves_a_zappi_missing_from_the_poll_alone()
     test_rewire_respects_automatic_eddi_off()
     test_automatic_config_ignores_unsupported_kinds()

@@ -124,6 +124,8 @@ MYENERGI_STORAGE_MODULE = "myenergi"
 MYENERGI_CONTROL_STATE = "control_state"
 # And each held Zappi's own mode, so a restart cannot lose where to put it back.
 MYENERGI_CONTROL_MODES = "control_saved_modes"
+# When each Zappi was last seen online, so the offline grace survives a restart (#6117)
+MYENERGI_ZAPPI_LIVENESS = "zappi_last_online"
 
 # aiohttp only grew DigestAuthMiddleware and ClientSession(middlewares=...) in 3.12, and
 # the direct transport cannot authenticate without them. requirements.txt pins the floor,
@@ -776,6 +778,9 @@ MAX_POLL_SECONDS = 30 * 60
 # MAX_POLL_SECONDS. A Zappi never seen online since start-up is left out at once, and one that starts reporting again
 # gets its car back on the next poll, so only the unit that has genuinely gone waits this long.
 ZAPPI_OFFLINE_GRACE_SECONDS = 8 * 60 * 60
+# How often the last-online times are re-saved while nothing changes. A change in which Zappis are online is saved at
+# once, so this only bounds how much of the grace a restart can lose for a Zappi that is still online.
+ZAPPI_LIVENESS_SAVE_SECONDS = 30 * 60
 
 
 class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
@@ -820,6 +825,10 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.wired_zappi_ids = None
         self.wired_eddi_id = None
         self.zappi_offline_logged = set()
+        # Persistence of zappi_last_online: whether it has been read back yet, and the online set and time it was last saved at
+        self.zappi_liveness_loaded = False
+        self.zappi_liveness_saved_online = None
+        self.zappi_liveness_saved_at = None
         self.transport = None
 
         if configured_auth_method == "oauth":
@@ -1049,6 +1058,10 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             last_seen = self.device_last_seen.get(device_id)
             if last_seen is not None and (now - last_seen) < self.zappi_offline_grace:
                 kept[device_id] = device
+        # A time past the grace decides nothing any more, so a device removed from the account is forgotten here too
+        for times in (self.device_last_seen, self.zappi_last_online):
+            for device_id in [device_id for device_id, when in times.items() if (now - when) >= self.zappi_offline_grace]:
+                del times[device_id]
         return kept
 
     def log_zappi_liveness(self):
@@ -1145,6 +1158,53 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 raise OSError("storage refused the save")
         except Exception as exc:
             self.log("Warn: myenergi: could not save the Zappi modes to restore on release, a restart may lose them: {}".format(exc))
+
+    async def load_zappi_liveness(self, now):
+        """Read back when each Zappi was last online, so a restart mid-dropout does not cost a live Zappi its car.
+
+        Without this a Zappi that happened to be offline at start-up would be treated as dead since start-up - left out
+        at once, then given its car back when it reported, renumbering the cars twice. A restored time only ever moves a
+        Zappi's last-online later, and one already past the grace is dropped. Fails soft, like the saved modes.
+        """
+        self.zappi_liveness_loaded = True
+        if self.storage is None:
+            return
+        try:
+            saved = await self.storage.load(MYENERGI_STORAGE_MODULE, MYENERGI_ZAPPI_LIVENESS)
+        except Exception as exc:
+            self.log("Warn: myenergi: could not read when each Zappi was last online, an offline Zappi may lose its car early: {}".format(exc))
+            return
+        last_online = saved.get("last_online") if isinstance(saved, dict) else None
+        if not isinstance(last_online, dict):
+            return
+        for device_id, when in last_online.items():
+            when = _to_float(when, None)
+            if when is None or (now - when) >= self.zappi_offline_grace:
+                continue
+            device_id = str(device_id)
+            self.zappi_last_online[device_id] = max(when, self.zappi_last_online.get(device_id, when))
+
+    async def save_zappi_liveness(self, now):
+        """Save when each Zappi was last online - at once when which Zappis are online changes, otherwise every ZAPPI_LIVENESS_SAVE_SECONDS.
+
+        Only times still inside the grace are kept, so a Zappi removed from the account is forgotten here once its grace
+        has run out. Fails soft: a failed save is retried on the next poll.
+        """
+        if self.storage is None:
+            return
+        online_now = frozenset(device_id for device_id, when in self.zappi_last_online.items() if when == now)
+        due = self.zappi_liveness_saved_at is None or (now - self.zappi_liveness_saved_at) >= ZAPPI_LIVENESS_SAVE_SECONDS
+        if online_now == self.zappi_liveness_saved_online and not due:
+            return
+        current = {device_id: when for device_id, when in self.zappi_last_online.items() if (now - when) < self.zappi_offline_grace}
+        try:
+            if await self.storage.save(MYENERGI_STORAGE_MODULE, MYENERGI_ZAPPI_LIVENESS, {"last_online": current}) is False:
+                raise OSError("storage refused the save")
+        except Exception as exc:
+            self.log("Warn: myenergi: could not save when each Zappi was last online, a restart may cost an offline Zappi its car early: {}".format(exc))
+            return
+        self.zappi_liveness_saved_online = online_now
+        self.zappi_liveness_saved_at = now
 
     async def load_control_modes(self):
         """Restore the saved Zappi modes from storage - called once control has been decided.
@@ -1255,7 +1315,12 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 self.log("Warn: myenergi: poll failed: {}".format(exc))
                 return False
             if devices:
-                self.devices = self.update_device_liveness(devices, time.time())
+                now = time.time()
+                if not self.zappi_liveness_loaded:
+                    # Before the first liveness update, so a Zappi offline at start-up is judged on when it was last online
+                    await self.load_zappi_liveness(now)
+                self.devices = self.update_device_liveness(devices, now)
+                await self.save_zappi_liveness(now)
                 self.log_zappi_liveness()
                 if first:
                     # Before the first publish: the switch has to carry its restored state
