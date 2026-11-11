@@ -210,14 +210,65 @@ def test_growatt_time_slots_use_power_percentages_and_soc_gates():
     slots = client.build_time_slots(sn, client.local_schedule[sn])
     assert sorted(slot["percentage"] for slot in slots) == [-20, 50]
 
+    # At the charge target the charge slot is kept at 0% power, so the battery holds
     client.device_values[sn]["soc"] = 80
     slots = client.build_time_slots(sn, client.local_schedule[sn])
-    assert [slot["percentage"] for slot in slots] == [-20]
-    assert any("public API has no writable SoC limit" in message for message in client.log_messages)
+    assert sorted(slot["percentage"] for slot in slots) == [-20, 0]
+    charge = [slot for slot in slots if slot["percentage"] == 0][0]
+    assert (charge["startTime"], charge["endTime"]) in (("01:00", "03:00"), ("00:00", "02:00"))
+    assert any("holding the charge slot at 0% power" in message for message in client.log_messages)
 
+    # At the export floor the export slot is still withheld
     client.device_values[sn]["soc"] = 15
     slots = client.build_time_slots(sn, client.local_schedule[sn])
     assert [slot["percentage"] for slot in slots] == [50]
+    assert any("public API has no writable SoC limit" in message for message in client.log_messages)
+
+
+def test_growatt_charge_hold_hysteresis():
+    """The 0% hold lasts until SoC falls more than one point below target, then full power resumes."""
+    client, sn = _ready_client()
+    schedule = _schedule()
+    schedule["export"]["enable"] = False
+    client.local_schedule[sn] = schedule
+
+    def charge_percent(soc):
+        """Build the table at this SoC and return the charge slot's percentage."""
+        client.device_values[sn]["soc"] = soc
+        return [slot["percentage"] for slot in client.build_time_slots(sn, schedule)]
+
+    assert charge_percent(79.5) == [50]
+    assert charge_percent(80) == [0]
+    # Inside the band the hold stays, so the table (and the device) is not rewritten
+    assert charge_percent(79.5) == [0]
+    assert charge_percent(79) == [0]
+    assert charge_percent(78.5) == [50]
+    assert any("resuming the charge" in message for message in client.log_messages)
+    # Back below target without having held: charging, not holding
+    assert charge_percent(79.5) == [50]
+    assert charge_percent(81) == [0]
+    # A disabled window forgets the hold, so the next window starts by charging
+    schedule["charge"]["enable"] = False
+    assert charge_percent(79.5) == []
+    schedule["charge"]["enable"] = True
+    assert charge_percent(79.5) == [50]
+
+
+def test_growatt_hold_slot_is_written_once():
+    """Reaching the target rewrites the table once, to the 0% slot; holding there sends nothing more."""
+    client, sn = _ready_client()
+    client.local_schedule[sn] = _schedule()
+    client.control_enabled.add(sn)
+    calls = _recording_dispatch(client)
+    assert run_async_local(client.apply_schedule(sn))
+    client.device_values[sn]["soc"] = 80
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+    assert sorted(slot["percentage"] for slot in calls[-1][2]) == [-20, 0]
+    client.device_values[sn]["soc"] = 79.4
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+    assert len(calls) == 2
 
 
 def test_growatt_control_entities_round_trip():
@@ -540,6 +591,8 @@ def run_growatt_tests(my_predbat):
         ("device_info_failure", test_growatt_device_info_failure_keeps_known_device),
         ("telemetry", test_growatt_telemetry_signs_and_energy_balance),
         ("slots_soc_gates", test_growatt_time_slots_use_power_percentages_and_soc_gates),
+        ("charge_hold_hysteresis", test_growatt_charge_hold_hysteresis),
+        ("hold_slot_written_once", test_growatt_hold_slot_is_written_once),
         ("control_round_trip", test_growatt_control_entities_round_trip),
         ("write_dedup", test_growatt_apply_schedule_enables_control_then_deduplicates),
         ("automatic_publish", test_growatt_automatic_config_and_publish),

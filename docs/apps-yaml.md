@@ -1187,7 +1187,7 @@ Configuration keys:
 - `growatt_api_delay`: delay between different-device calls, default `0.2` seconds
 - `growatt_min_write_interval`: dispatch pacing, default and minimum `5` seconds
 
-Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from one-minute telemetry by removing a slot after the threshold is reached. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval of overshoot and confirm the behaviour on the target model before relying on it.
+Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from one-minute telemetry. When the charge target is reached the charge slot stays in place at 0% power, so the battery holds until the window ends (full power resumes if the charge level falls more than 1% below the target); when the export floor is reached the export slot is removed. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval of overshoot and confirm the behaviour on the target model before relying on it.
 
 Growatt has no reserve Predbat can hold the battery with, so the reserve functions (`switch.predbat_set_reserve_enable` and the reserve-based holds) are turned off for this inverter. Outside a slot the inverter runs its own self-consumption down to its local minimum.
 

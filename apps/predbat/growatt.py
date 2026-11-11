@@ -12,8 +12,9 @@
 
 The public API supplies one-minute telemetry and UTC charge/discharge time slots. It does
 not expose writable battery SoC limits. Predbat therefore keeps its charge target and export
-floor in Home Assistant and removes a slot when the latest telemetry reaches that threshold.
-That is deliberately visible in the logs and documentation because it is software
+floor in Home Assistant. When the latest telemetry reaches the charge target the charge slot
+is kept at 0% power, so the battery holds; when it reaches the export floor the export slot
+is removed. That is deliberately visible in the logs and documentation because it is software
 enforcement, not a limit stored in the inverter. No reserve is claimed: outside a slot the
 inverter's own self-consumption runs to its local minimum, which Predbat cannot hold above.
 
@@ -46,6 +47,7 @@ from growatt_const import (
     GROWATT_TTL_STATIC,
     GROWATT_TTL_LIVE,
     GROWATT_TELEMETRY_STALE,
+    GROWATT_HOLD_HYSTERESIS,
     GROWATT_DISPATCH_INTERVAL,
     GROWATT_TTL_READBACK,
     GROWATT_SET_TIME_SLOTS,
@@ -134,6 +136,8 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         self.last_api_error = ""
         self.discovery_ok = None
         self._soc_gate_state = {}
+        # Serials whose charge slot is holding at 0% power at the charge target
+        self._charge_hold = set()
 
         self._init_oauth(auth_method=auth_method or "oauth", key=key, token_expires_at=token_expires_at, provider_name="growatt")
         self.token_hash = token_hash or ""
@@ -550,8 +554,12 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         received = self.telemetry_time.get(sn)
         return received is not None and time.time() - received > GROWATT_TELEMETRY_STALE * 60
 
-    def _gate_reason(self, sn, direction, window, schedule):
-        """Return why a slot must be withheld at the latest observed SoC, or None."""
+    def _gate_reason(self, sn, direction, window):
+        """Return why a slot must be withheld at the latest observed SoC, or None.
+
+        Reaching the charge target is not a reason to withhold: the charge slot is kept at 0%
+        power instead (see _charge_at_target), so the battery holds rather than discharging.
+        """
         soc = self.device_values.get(sn, {}).get("soc")
         if soc is None:
             return None
@@ -561,14 +569,32 @@ class GrowattAPI(ComponentBase, OAuthMixin):
             target = self._as_float(window.get("soc"), 0)
             if target <= 0:
                 return "charge target is not ready"
-            if soc >= target:
-                return "SoC {:.1f}% reached charge target {}%".format(soc, int(target))
             return None
         device_floor = self._as_float(self.device_detail.get(sn, {}).get("dischargeCutOffSOC"), 0)
         floor = max(self._as_float(window.get("soc"), 0), device_floor)
         if soc <= floor:
             return "SoC {:.1f}% reached discharge floor {}%".format(soc, int(floor))
         return None
+
+    def _charge_at_target(self, sn, window):
+        """Return True while the charge slot should hold at 0% power rather than charge.
+
+        Holding starts when SoC reaches the charge target and lasts until SoC falls more than
+        GROWATT_HOLD_HYSTERESIS below it, matching the planner's own 1% tolerance at the limit
+        (prediction.py holds a charge window within 1% of its limit). Without the band the slot
+        would flip between 0% and full power, and be rewritten, on every one-percent wobble.
+        """
+        soc = self.device_values.get(sn, {}).get("soc")
+        target = self._as_float(window.get("soc"), 0)
+        holding = sn in self._charge_hold
+        at_target = soc is not None and (soc >= target or (holding and soc >= target - GROWATT_HOLD_HYSTERESIS))
+        if at_target and not holding:
+            self.log("Info: Growatt {} SoC {:.1f}% reached charge target {}%, holding the charge slot at 0% power. The public API has no writable SoC limit, so Predbat enforces this from one-minute telemetry.".format(sn, soc, int(target)))
+            self._charge_hold.add(sn)
+        elif holding and not at_target:
+            self.log("Info: Growatt {} SoC {} fell below charge target {}%, resuming the charge".format(sn, "unknown" if soc is None else "{:.1f}%".format(soc), int(target)))
+            self._charge_hold.discard(sn)
+        return at_target
 
     def build_time_slots(self, sn, schedule):
         """Build Growatt's UTC slot array, applying software SoC gates."""
@@ -581,18 +607,27 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         for direction, sign in (("charge", 1), ("export", -1)):
             window = schedule.get(direction, {})
             if not window.get("enable"):
+                if direction == "charge":
+                    self._charge_hold.discard(sn)
                 continue
-            reason = self._gate_reason(sn, direction, window, schedule)
+            reason = self._gate_reason(sn, direction, window)
             gate_key = (sn, direction)
             if reason:
                 if self._soc_gate_state.get(gate_key) != reason:
                     self.log("Info: Growatt {} withholding {} slot because {}. The public API has no writable SoC limit, so Predbat enforces this from one-minute telemetry.".format(sn, direction, reason))
                 self._soc_gate_state[gate_key] = reason
+                if direction == "charge":
+                    self._charge_hold.discard(sn)
                 continue
             if gate_key in self._soc_gate_state:
                 self.log("Info: Growatt {} restoring {} slot after its software SoC gate cleared".format(sn, direction))
                 self._soc_gate_state.pop(gate_key, None)
             percentage = sign * clamp_percent(self._as_float(window.get("power"), 0) / rate_max * 100.0)
+            # At the charge target the slot is kept, at 0% power, so the battery holds and the
+            # house runs from the grid - as the plan expects - instead of self-consumption
+            # draining it in the gap a removed slot would leave.
+            if direction == "charge" and self._charge_at_target(sn, window):
+                percentage = 0
             slots.extend(local_window_to_utc_slots(window.get("start"), window.get("end"), percentage, now_local))
         return normalize_slots(slots)[:16]
 

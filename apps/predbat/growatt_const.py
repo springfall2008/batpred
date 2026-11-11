@@ -46,6 +46,9 @@ GROWATT_TTL_LIVE = 1
 # Minutes without fresh telemetry before the software SoC gates stop trusting the last
 # reading - several missed one-minute polls, so a single slow response does not trip it.
 GROWATT_TELEMETRY_STALE = 5
+# Percentage points SoC may fall below the charge target while the charge slot holds at 0%
+# power, before the full charge rate resumes
+GROWATT_HOLD_HYSTERESIS = 1
 GROWATT_DISPATCH_INTERVAL = 5
 # Minutes between reads of the slot table actually held by the device. The read shares the
 # five-second dispatch pacing, so it is kept infrequent; it catches a table changed in the
