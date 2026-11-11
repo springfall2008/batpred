@@ -345,6 +345,11 @@ def _test_history_days_real_replay(my_predbat, failed):
     elif days["2024-10-02"]["rows"][0].get("import_rate") != 25.0:
         print("ERROR: older-day rows should show the recorded 25p rate, got {}".format(days["2024-10-02"]["rows"][0].get("import_rate")))
         failed = True
+    elif any(day.get("refresh_minutes") != 25 * 60 + my_predbat.history_refresh_minutes() for day in days.values()):
+        # Older days are rebuilt once a local day (25 hours at a clock change), on a re-plan that can land a slot and a run later than the day
+        # before, so the web page's stale warning must allow that
+        print("ERROR: each older day should carry a refresh_minutes of 25 hours plus the history's own, got {}".format({name: day.get("refresh_minutes") for name, day in days.items()}))
+        failed = True
     if my_predbat.rate_import is not rate_import_before or my_predbat.midnight_utc != midnight_before:
         print("ERROR: the plan's rates and midnight must be put back after building the older days")
         failed = True

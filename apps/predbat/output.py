@@ -236,6 +236,8 @@ def dominant_slot_status(minute_counts, precedence):
 
 # How long after building no older days the History view tries again
 HISTORY_DAYS_RETRY_MINUTES = 180
+# The longest local day, at a clock change: older History days are rebuilt once in each
+HISTORY_DAY_MINUTES = 25 * 60
 # The event entities whose recorded on/off history marks the History view's rows, and the event tag each records
 HISTORY_EVENT_ENTITIES = (("octopus_saving_session", "saving"), ("octopus_free_electricity", "free"), ("axle_session", "axle"))
 # The rate tags that are a user's override: a manual rate (manual) or an apps.yaml rates_import/export_override (user, increment)
@@ -3616,6 +3618,12 @@ class Output:
         """The longest the plan history should go between rebuilds: a slot, the run it waits, and up to one re-plan interval."""
         return self.plan_interval_minutes + RUN_EVERY + self.calculate_plan_every
 
+    def history_day_refresh_minutes(self):
+        """The longest an older History day should go between rebuilds: calculate_history_days() rebuilds them on the first full re-plan of
+        each local day, which can land a slot, a run and a re-plan interval later than the day before, so the web page's stale warning on one
+        means the daily rebuild has stopped."""
+        return HISTORY_DAY_MINUTES + self.history_refresh_minutes()
+
     def calculate_yesterday(self):
         """
         Calculate the base plan for yesterday
@@ -4643,6 +4651,8 @@ class Output:
                 if billing:
                     self.minutes_now = minutes_now
                     self.attach_history_billing(plan_json, billing, view_midnight, view_minutes, status_offset, cost_data, import_cost_data, events)
+                # Rebuilt once a day rather than once a slot, as the rolling History view is (replay_history_day() set that)
+                plan_json["refresh_minutes"] = self.history_day_refresh_minutes()
                 days[day.isoformat()] = plan_json
         finally:
             for name in HISTORY_DAY_FAKED_STATE:
