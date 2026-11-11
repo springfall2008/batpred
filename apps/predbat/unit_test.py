@@ -60,6 +60,7 @@ from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
 from tests.test_clock_change_day import test_clock_change_day
+from tests.test_car_charging_sentence import test_car_charging_sentence
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
@@ -125,6 +126,7 @@ from tests.test_saving_session import (
     test_saving_session_min_octopoints_threshold,
     test_saving_session_entity_regex_power_rename,
     test_templates_ship_octopus_free_session,
+    test_templates_do_not_watch_octopus_saving_session,
     test_saving_session_select_entity_join_defers_notify,
     test_saving_session_zero_octopoints_joined_is_free_slot,
 )
@@ -203,6 +205,7 @@ from tests.test_minute_data import test_minute_data, test_minute_data_load, test
 from tests.test_minute_data_import_export import test_minute_data_import_export
 from tests.test_faq_recorder_config import test_faq_recorder_config
 from tests.test_docs_marketplace import test_docs_marketplace
+from tests.test_docs_time_window import test_docs_time_window
 from tests.test_docs_solax_mode8 import test_docs_solax_mode8
 from tests.test_plan_card_soc_symbols import test_plan_card_soc_symbols
 from tests.test_minute_data_state import test_minute_data_state
@@ -332,6 +335,7 @@ from tests.test_plan_scenario_summary import run_test_plan_scenario_summary
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
 from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
+from tests.test_fetch_no_load_source import test_fetch_no_load_source
 from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests, run_random_scenario_reapply_tests
 from tests import network_guard
@@ -584,6 +588,7 @@ def main():
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
         ("car_plan_windows", test_car_plan_windows, "parse_car_plan_windows year anchoring: New Year either side, long windows, leap day", False),
+        ("car_charging_sentence", test_car_charging_sentence, "Plan details say the car is charging only when it reports charging (GH#3017)", False),
         ("hass_watcher", test_hass_watcher, "Standalone-mode file watcher tests (#4397/#4396)", False),
         ("hass_timer", test_hass_timer, "Standalone-mode scheduler keeps its pace across clock changes (#5770)", False),
         ("new_install_detection", test_new_install_detection, "New-install misdetection tests (Bug B, #4397/#4396, #3259, #3306)", False),
@@ -597,6 +602,7 @@ def main():
         ("minute_data_import_export", test_minute_data_import_export, "Minute data import/export tests", False),
         ("faq_recorder_config", test_faq_recorder_config, "FAQ recorder filter example matches the entities Predbat reads history for", False),
         ("docs_marketplace", test_docs_marketplace, "Docs and templates cover the Marketplace wherever they give HACS install steps", False),
+        ("docs_time_window", test_docs_time_window, "Script-controlled templates leave window times to Predbat's placeholders and the docs warn about the 00:00:00 charge and discharge disable", False),
         ("docs_solax_mode8", test_docs_solax_mode8, "Solax Mode 8 docs and template name the sensors the Mode 8 trigger needs enabled", False),
         ("plan_card_soc_symbols", test_plan_card_soc_symbols, "Plan card SoC symbol legend explains every symbol the plan shows on the SoC % cell", False),
         ("minute_data_no_smoothing_backwards", test_minute_data_no_smoothing_backwards, "Minute data no-smoothing backwards tests", False),
@@ -737,6 +743,7 @@ def main():
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
         ("fetch_pv_mid_cycle", test_fetch_pv_mid_cycle, "PV forecasts not empty part way through fetch_sensor_data (#4317)", False),
+        ("fetch_no_load_source", test_fetch_no_load_source, "No load source raises LoadSourceMissing with the right status (#5092)", False),
         ("set_rate_thresholds", run_set_rate_thresholds_tests, "Rate threshold saving-session exclusion tests (GH#5050)", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
         ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
@@ -760,6 +767,7 @@ def main():
         ("saving_session_min_octopoints_threshold", test_saving_session_min_octopoints_threshold, "Saving session configurable minimum octopoints threshold test (issue #4595)", False),
         ("saving_session_entity_regex_power_rename", test_saving_session_entity_regex_power_rename, "Saving/free session entity regex Power Down/Up rename test (issue #4548 point 2)", False),
         ("templates_octopus_free_session", test_templates_ship_octopus_free_session, "apps.yaml templates ship octopus_free_session alongside octopus_saving_session (issue #5912)", False),
+        ("templates_no_saving_session_watch", test_templates_do_not_watch_octopus_saving_session, "apps.yaml templates and docs do not watch octopus_saving_session or car_charging_soc (issue #6106)", False),
         ("saving_session_select_entity_join_defers_notify", test_saving_session_select_entity_join_defers_notify, "Select-entity join defers the joined notification test (issue #4593)", False),
         ("saving_session_zero_octopoints_free_slot", test_saving_session_zero_octopoints_joined_is_free_slot, "Joined zero octopoints session becomes a free import slot test (issue #4851)", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),

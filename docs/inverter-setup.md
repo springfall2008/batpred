@@ -647,8 +647,9 @@ If you set `load_today`, `import_today`, `export_today` or `pv_today` in `apps.y
 - **Your Hanchu app schedule is cleared.** At its first write Predbat writes all six slots, and sets the ones its plan does not use to 00:00-00:00. In User-defined mode every enabled slot runs, so a slot left over from the app would run alongside Predbat's plan and fight it. Nothing is cleared while Predbat is only monitoring.
 - **No Freeze Export.** The charge power limit only limits charging from the grid, so a zero charge rate cannot stop solar charging the battery. Predbat turns Freeze Export off and does not plan it, logging *Inverter 0 does not support discharge freeze - disabled*; forced export is not affected. If any inverter in a multi-inverter system does not support Freeze Export then it is turned off for all of them.
 - **Holds.** Freeze charge and other holds are written as a charge slot at zero power. During a hold the grid-charge limit is also capped at the current SoC, so the battery cannot charge from the grid even if the zero-power setting does not take.
+- **Hold charging above the target.** This inverter will not discharge at all while a charge slot is running, even when the battery is above the slot's target. When a charge slot is due but the battery is more than 1% above its target, and `switch.predbat_set_discharge_during_charge` is on, Predbat leaves the slot out so the battery covers the house down to the target. The slot is written again once the battery is within 1% of the target, and holds it there. A target below 20% is treated as 20%, the lowest charge target this hardware accepts.
 - **SoC limits.** This hardware accepts a charge target of only 20-100% and a discharge floor of only 5-45%. Predbat clamps anything outside those ranges and says so in the log. The app's "Maximum Charge SOC" is never changed, because it limits solar charging too.
-- **Write pacing.** All of Predbat's settings changes go to the cloud in one call per cycle, at most once per `hanchu_min_write_interval` seconds (default 60). A setting changed in the Hanchu app is noticed when Predbat next reads the settings back (every 30 minutes) and is put back.
+- **Write pacing.** All of Predbat's settings changes go to the cloud in one call per cycle, at most once per `hanchu_min_write_interval` seconds (default 60). Predbat sets a new window in stages (times, then target, then rates), so after each change it waits `hanchu_write_debounce` seconds (default 10) for the stages to finish and sends only the finished settings - otherwise a hold starting with a new window could briefly go out as a full-power charge from the grid. Set it to 0 to write on every change. A setting changed in the Hanchu app is noticed when Predbat next reads the settings back (every 30 minutes) and is put back.
 
 ### Hanchu ESS Cloud power ratings
 
@@ -1334,6 +1335,20 @@ This requires the LuxPython component which integrates with your Lux Power inver
 
     - **System Charge SOC Limit (%)** is set to 100% (default).
     - **On-Grid Cut-Off SOC (%)** is set to 100% minus battery depth of discharge(%). Depending on your battery, this is typically between 20% and 0%.
+
+- Make sure Predbat's minimum reserve is at least 1% above the inverter's **Start AC Charge SOC (%)**.
+  The inverter rejects an AC charge SOC limit at or below Start AC Charge SOC. When Predbat turns charging off, for
+  example outside a charge window or around an export, it writes its minimum reserve to that limit. That minimum is the
+  higher of **input_number.predbat_set_reserve_min** (4% by default) and `battery_min_soc` (in the template, the
+  inverter's On-Grid Cut-Off SOC). If it is too low, the write fails on every run with a warning like
+  `Trying to write 4 to charge_limit didn't complete` and the status shows errors.
+  Start AC Charge SOC is only shown in the LuxPowerTek app, not in the web portal, although some Home Assistant
+  integrations (such as the LuxPower cloud integration) expose it as an `ac_charge_start_soc` number. Either:
+
+    - raise `input_number.predbat_set_reserve_min` (and `predbat_set_reserve_min_1`, `_2`... for each further
+      inverter) to at least Start AC Charge SOC + 1% - for example 6% if Start AC Charge SOC is 5%. Predbat then also
+      plans never to use the battery below that level; or
+    - lower Start AC Charge SOC in the LuxPowerTek app to below Predbat's minimum reserve.
 
 - If you want to use Predbat in **Control charge** mode, go to the LuxPowerTek app or web portal and set all start and end time slots for AC Charge to `00:00`.
   For **Control charge and discharge** mode, set all AC Charge and Forced Discharge slots to `00:00`.
@@ -4263,7 +4278,17 @@ When True, the inverter has an idle time register which must be set to the start
 
 ### has_time_window
 
-Not currently used by Predbat.
+Not currently used by Predbat: setting it to True or False makes no difference to which entities Predbat writes, and
+in particular it does not stop Predbat writing the charge and discharge start and end times.
+
+**set_charge_window** and **set_discharge_window** are not `apps.yaml` options either. If you add them to `apps.yaml`
+they are ignored, even when set to `false`. Whether Predbat writes the charge and discharge windows is decided by the
+[Predbat mode](customisation.md#predbat-mode) alone: Control charge writes the charge window, Control charge & discharge
+writes both, and Monitor and Control SoC only write neither (except to reset them when the Predbat mode or the read-only switch is changed).
+
+On an inverter with **has_discharge_enable_time** set to False, a discharge window that is turned off is written as
+00:00:00 - 00:00:00, and likewise a charge window that is turned off when **has_charge_enable_time** is False. See the warning in the [apps.yaml schedule settings](apps-yaml.md#schedule) on why you should not map the
+window times to your inverter's real time entities when it is controlled through services or a script.
 
 ### charge_time_format
 

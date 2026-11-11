@@ -819,14 +819,20 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         if full:
             totals["predbat_import_kwh"] += row_import_kwh
             totals["predbat_export_kwh"] += row_export_kwh
-        credit_event = next((credit_slots[key] for key in keys if key in credit_slots), None)
-        if full and credit_event is not None:
-            # Each event once, by its start, with the share of its billed import that went into the totals above, so
-            # its credit is only taken off the bill it pays for
-            entry = credited.setdefault(credit_event["start"], {"event": credit_event, "counted": 0.0})
-            if predbat_pence is not None:
-                entry["counted"] += sum(imports[key]["cost"] for key in keys if credit_slots.get(key) is credit_event)
-        credit_state = None if credit_event is None or billed_pence is None else ("pending" if credit_event.get("credit") is None else "credited")
+        # A row longer than a half-hour can hold parts of two adjacent events, so each half-hour is credited to its own event
+        row_credit_events = [credit_slots[key] for key in keys if key in credit_slots]
+        if full:
+            for key in keys:
+                credit_event = credit_slots.get(key)
+                if credit_event is not None:
+                    # Each event once, by its start, with the share of its billed import that went into the totals above, so
+                    # its credit is only taken off the bill it pays for
+                    entry = credited.setdefault(credit_event["start"], {"event": credit_event, "counted": 0.0})
+                    if predbat_pence is not None:
+                        entry["counted"] += imports[key]["cost"]
+        credit_state = None
+        if row_credit_events and billed_pence is not None:
+            credit_state = "pending" if any(credit_event.get("credit") is None for credit_event in row_credit_events) else "credited"
         updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes), full, pending_export, credit_state, axle_pence))
     if not updates:
         return plan_json

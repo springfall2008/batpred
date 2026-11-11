@@ -124,7 +124,10 @@ You can also [create a Predbat Plan card](predbat-plan-card.md) to show Predbat'
 The Charts view provides an easy way of viewing a number of pre-created Predbat charts:
 
 - **Battery** - Shows the historic Battery SoC for today and the predicted SoC for the plan duration under the Base/Base10/Best and Best10 scenarios (see [explanation of these terms](what-does-predbat-do.md#basic-terminology).
-The chart also shows where charging is planned under the Base and Best scenarios and forced Export under the Best scenario
+The chart also shows where charging is planned under the Base and Best scenarios and forced Export under the Best scenario.
+If you have more than one inverter, the chart also has an **Actual Inverter N** line for each battery, which is hidden until you click its name in the legend.
+Each line shows that battery's SoC so far today as a percentage of its own capacity, on a separate 0-100% axis on the right, so one battery can be at 100% while the total is still short of full.
+There is no predicted SoC per battery, as Predbat plans all your batteries as one
 - **Power** - Shows predicted Power for the plan duration. This includes battery charge and discharge, solar generation (PV), house load, iBoost load, car charging load, and grid import/export
 - **Cost** - Shows the historic import, export and net total cost incurred for today and the predicted cost for the plan duration under the Base/Base10/Best and Best10 scenarios
 - **Rates** - Shows historic and future import and export rates along with historic hourly and today pence per kWh so you can see where you have earned or spent the most on electricity during today

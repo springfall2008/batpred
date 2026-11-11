@@ -1358,6 +1358,30 @@ def test_attach_credits():
     return False
 
 
+def test_attach_credits_straddle():
+    """An hour row holding the end of one event and the start of the next counts each half-hour towards its own event's credit."""
+    from billing import attach_billing
+
+    imports = {_key(m): _slot(1.0, 30.0) for m in range(480, 660, 30)}
+    first = {"start": _key(510), "end": _key(570), "billed": 60.0, "credit": 58.0, "posted": "2026-11-03"}
+    second = {"start": _key(570), "end": _key(630), "billed": 60.0, "credit": 50.0, "posted": "2026-11-03"}
+    billing = dict(_billing_attrs(imports), credit_events=[first, second])
+    # Rows 08:00, 09:00 and 10:00; the 09:00 row holds the first event's 09:00 half-hour and the second's 09:30
+    plan = attach_billing(_plan([480, 540, 600]), billing, VIEW_MIDNIGHT, 60, {480: 0.0, 540: 0.0, 600: 30.0}, 55.52, {}, False, None, None)
+    summary = plan["billing_summary"]
+    if summary.get("credits") != 1.08 or summary.get("billed_cost") != 1.8 or summary.get("diff") != 0.42:
+        print("ERROR: both events' credits should be taken off in full (58p + 50p), got {}".format(summary))
+        return True
+    if [row.get("billing_credit") for row in plan["rows"]] != ["credited", "credited", "credited"]:
+        print("ERROR: every row holding a credited half-hour should be flagged, got {}".format([row.get("billing_credit") for row in plan["rows"]]))
+        return True
+    pending = attach_billing(_plan([480, 540, 600]), dict(billing, credit_events=[first, dict(second, credit=None, posted=None)]), VIEW_MIDNIGHT, 60, {480: 0.0, 540: 0.0, 600: 30.0}, 55.52, {}, False, None, None)
+    if [row.get("billing_credit") for row in pending["rows"]] != ["credited", "pending", "pending"] or pending["billing_summary"].get("credits_pending") != 1 or pending["billing_summary"].get("credits") != 0.58:
+        print("ERROR: a row holding half of an event with no credit yet should be flagged pending, got {} {}".format([row.get("billing_credit") for row in pending["rows"]], pending["billing_summary"]))
+        return True
+    return False
+
+
 def test_parse_axle_events():
     """Axle events are read in the sensor's time format, and ones without a time, direction or price are dropped."""
     from billing import parse_axle_events
@@ -1524,6 +1548,28 @@ def test_plan_renderer_js_parses():
     return False
 
 
+def test_history_billing_mark():
+    """The History views' rebuild mark changes when a credit event appears, its credit posts or its amount moves, with the same slots."""
+    from output import Output
+
+    imports = {_key(m): _slot(1.0, 30.0) for m in (480, 510)}
+    event = {"start": _key(480), "end": _key(540), "billed": 60.0, "credit": None, "posted": None}
+    plain = Output.history_billing_mark(_billing_attrs(imports))
+    with_pending = Output.history_billing_mark(dict(_billing_attrs(imports), credit_events=[event]))
+    posted = Output.history_billing_mark(dict(_billing_attrs(imports), credit_events=[dict(event, credit=58.0, posted="2026-11-03")]))
+    moved = Output.history_billing_mark(dict(_billing_attrs(imports), credit_events=[dict(event, credit=57.0, posted="2026-11-03")]))
+    if len({repr(mark) for mark in (plain, with_pending, posted, moved)}) != 4:
+        print("ERROR: the mark should differ for no event, a pending event, a posted credit and a changed credit, got {} {} {} {}".format(plain, with_pending, posted, moved))
+        return True
+    if Output.history_billing_mark(dict(_billing_attrs(imports), credit_events=[dict(event, credit=58.0, posted="2026-11-03")])) != posted:
+        print("ERROR: the same billing should give the same mark")
+        return True
+    if Output.history_billing_mark({}) is not None or Output.history_billing_mark(None) is not None:
+        print("ERROR: no billing should give no mark")
+        return True
+    return False
+
+
 def test_history_billing_mark_axle():
     """The History views rebuild when an Axle event appears or changes."""
     from output import Output
@@ -1631,6 +1677,8 @@ def run_billing_tests(my_predbat):
         test_sensor_credits,
         test_reader_reads_credits,
         test_attach_credits,
+        test_attach_credits_straddle,
+        test_history_billing_mark,
         test_parse_axle_events,
         test_attach_axle,
         test_history_billing_mark_axle,
