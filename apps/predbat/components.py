@@ -576,7 +576,7 @@ COMPONENT_LIST = {
             "automatic": {"required": False, "default": False, "config": "growatt_automatic"},
             "automatic_ignore_pv": {"required": False, "default": False, "config": "growatt_automatic_ignore_pv"},
             "control_enable": {"required": False, "default": True, "config": "growatt_control_enable"},
-            "base_url": {"required": False, "default": "https://opencloud.growatt.com", "config": "growatt_base_url"},
+            "base_url": {"required": False, "default": "https://opencloud.growatt.com/prod-api", "config": "growatt_base_url"},
             "battery_rate_max": {"required": False, "config": "growatt_battery_rate_max"},
             "api_delay": {"required": False, "default": 0.2, "config": "growatt_api_delay"},
             # Growatt documents one deviceDispatch call per five seconds per device.

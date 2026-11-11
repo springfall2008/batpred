@@ -9,7 +9,9 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-GROWATT_BASE_URL = "https://opencloud.growatt.com"
+# The API lives under /prod-api: endpoint paths such as /oauth2/getDeviceInfo are appended to this
+# whole base, so a host alone (https://opencloud.growatt.com) misses every endpoint.
+GROWATT_BASE_URL = "https://opencloud.growatt.com/prod-api"
 
 GROWATT_ENDPOINTS = {
     "devices": "/oauth2/getDeviceListAuthed",
@@ -36,7 +38,18 @@ GROWATT_CODE_OK = 0
 GROWATT_CODE_TOKEN_INVALID = 2
 
 GROWATT_TIMEOUT = 30
+# Transport attempts for a read. A dispatch write is sent once: a timed-out write may still have
+# been applied, so it is confirmed by reading it back (as Growatt's docs advise) rather than
+# re-sent blind.
 GROWATT_RETRIES = 3
+# Attempts at a verified write (write, then read back) and at a dispatch read, and the back-off
+# between them in seconds. A live SPH answered PARAMETER_SETTING_FAILED to a table it did apply,
+# so one retry is worth having; but it also went on answering READ_DEVICE_PARAM_FAIL for over
+# ten minutes, and three nested levels of retries then held one write for about four minutes.
+# Two of each bounds a write at about a minute and a half; the next run tries again.
+GROWATT_WRITE_ATTEMPTS = 2
+GROWATT_READ_ATTEMPTS = 2
+GROWATT_RETRY_BACKOFF = 5
 
 # Public documentation is inconsistent for getDeviceData: its endpoint page says one
 # request per minute per device, while Appendix E says one per ten seconds. Use the
@@ -44,8 +57,10 @@ GROWATT_RETRIES = 3
 GROWATT_TTL_STATIC = 8 * 60
 GROWATT_TTL_LIVE = 1
 # Minutes without fresh telemetry before the software SoC gates stop trusting the last
-# reading - several missed one-minute polls, so a single slow response does not trip it.
-GROWATT_TELEMETRY_STALE = 5
+# reading. Polled every minute, but a live SPH's datalogger uploads a new sample only every
+# five minutes (utcTime 21:06:37, then 21:11:37), so this allows two missed uploads; five
+# would trip whenever an upload was a few seconds late.
+GROWATT_TELEMETRY_STALE = 12
 # Percentage points SoC may fall below the charge target while the charge slot holds at 0%
 # power, before the full charge rate resumes
 GROWATT_HOLD_HYSTERESIS = 1
@@ -61,6 +76,12 @@ GROWATT_SET_ENABLE_CONTROL = "enable_control"
 # inverter's own settings.
 GROWATT_CONTROL_ON = 1
 GROWATT_CONTROL_OFF = 0
+
+# The device holds 16 slots and reads an unused one back as 00:00-00:00 at 0%. Writing an empty
+# list is refused (WRONG_PARAMETER_VALUE, code 14, on a live SPH), so an empty table is written
+# as 16 of these - the shape the device itself reports, which it accepted.
+GROWATT_SLOT_COUNT = 16
+GROWATT_UNUSED_SLOT = {"startTime": "00:00", "endTime": "00:00", "percentage": 0}
 
 # Storage component module and file for the control state that must survive a restart
 GROWATT_STORAGE_MODULE = "growatt"
@@ -154,7 +175,12 @@ def local_window_to_utc_slots(start, end, percentage, now_local):
 
 
 def normalize_slots(value):
-    """Canonicalise a read/write slot list for equality checks."""
+    """Canonicalise a read/write slot list for equality checks.
+
+    A zero-length slot is dropped: readDeviceDispatch always answers with all 16 slots and
+    shows an unused one as 00:00-00:00 at 0% (seen on a live SPH), and Predbat never writes a
+    zero-length slot, so the device's empty table must compare equal to Predbat's [].
+    """
     if not isinstance(value, list):
         return []
     slots = []
@@ -163,10 +189,21 @@ def normalize_slots(value):
             continue
         start = str(item.get("startTime", ""))[:5]
         end = str(item.get("endTime", ""))[:5]
-        if not start or not end:
+        if not start or not end or start == end:
             continue
         slots.append({"startTime": start, "endTime": end, "percentage": clamp_percent(item.get("percentage", 0))})
     return sorted(slots, key=lambda slot: (slot["startTime"], slot["endTime"], slot["percentage"]))
+
+
+def dispatch_slot_payload(slots):
+    """Return the value to send for a slot table: the slots themselves, or 16 unused slots for an empty table.
+
+    Growatt refuses an empty list, so "no slots" is sent the way the device reports it.
+    """
+    table = normalize_slots(slots)
+    if not table:
+        return [dict(GROWATT_UNUSED_SLOT) for _ in range(GROWATT_SLOT_COUNT)]
+    return table
 
 
 def _is_slot_list(value):
@@ -177,10 +214,10 @@ def _is_slot_list(value):
 def parse_dispatch_slots(data, _depth=0):
     """Extract the slot table from a readDeviceDispatch answer, or None when it holds none.
 
-    Growatt's documentation gives the write shape (a list of startTime/endTime/percentage)
-    but not the read answer's envelope, so this accepts the list itself, the list encoded
-    as a JSON string, or a dict carrying it under "value" or any other key. Anything else
-    is None - unknown - which callers must not mistake for an empty table.
+    A live SPH answers with the bare list of all 16 slots as the response data, unused ones as
+    00:00-00:00 at 0%. Growatt does not document the envelope, so this also accepts the list
+    encoded as a JSON string, or a dict carrying it under "value" or any other key. Anything
+    else is None - unknown - which callers must not mistake for an empty table.
     """
     if _depth > 3:
         return None

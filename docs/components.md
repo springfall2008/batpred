@@ -1791,14 +1791,14 @@ Connects to Growatt's public OAuth OpenAPI, discovers the inverter authorised du
 - **EXPERIMENTAL:** the request shapes follow Growatt's published OpenAPI, but the component has not yet been proven on project-owned hardware. API requests and responses are logged with credentials redacted while it beds in
 - Growatt accepts charge/discharge power as a percentage of the reported battery rating. Predbat converts its watt targets before dispatch
 - Growatt documents schedule times in UTC. Predbat converts its local `HH:MM:SS` controls to UTC and splits a window at UTC midnight rather than relying on undocumented wrap-around behaviour
-- The public dispatch API has **no writable SoC target or reserve field**. Predbat keeps the charge target and export floor locally. When its one-minute telemetry sees the charge target reached, the charge slot stays in place at 0% power so the battery holds (full power resumes if the charge level falls more than 1% below the target); when it sees the export floor reached, the export slot is removed. This is software enforcement and can react up to one telemetry interval late. The inverter's own `dischargeCutOffSOC` remains the hard local minimum and is never lowered by Predbat
+- The public dispatch API has **no writable SoC target or reserve field**. Predbat keeps the charge target and export floor locally. When its telemetry, which Growatt updates about every five minutes, sees the charge target reached, the charge slot stays in place at 0% power so the battery holds (full power resumes if the charge level falls more than 1% below the target); when it sees the export floor reached, the export slot is removed. This is software enforcement and can react up to one telemetry interval (about five minutes) late. The inverter's own `dischargeCutOffSOC` remains the hard local minimum and is never lowered by Predbat
 - No reserve is claimed, so Predbat's reserve functions (Set Reserve Enable and the reserve-based holds) are off for this inverter: outside a slot the inverter's own self-consumption runs to its local minimum
 - The slot table last written and whether Predbat holds OpenAPI control are saved across restarts. The device's own table is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots`, and a table that differs from Predbat's plan is rewritten
 - While `switch.predbat_set_read_only` is on, or `growatt_control_enable` is false, Predbat releases OpenAPI control (`enable_control` 0) so the inverter follows its own settings
-- If telemetry stops updating for more than five minutes (device offline, or Growatt repeating the same sample), Predbat can no longer enforce those SoC limits, so it withholds both slots until fresh telemetry returns
+- If telemetry stops updating for more than twelve minutes - two missed uploads - (device offline, or Growatt repeating the same sample), Predbat can no longer enforce those SoC limits, so it withholds both slots until fresh telemetry returns
 - Freeze Charge and Freeze Export are not advertised as capabilities. A zero percentage only applies inside a configured slot and cannot hold the battery in ordinary self-consumption
 - Device dispatch is limited to one request per five seconds per device. Predbat changes only a differing slot table and enforces that interval
-- `getDeviceData`'s endpoint page says one request per minute, while the rate-limit appendix says one per ten seconds. Predbat uses the stricter one-minute interval
+- `getDeviceData`'s endpoint page says one request per minute, while the rate-limit appendix says one per ten seconds. Predbat polls at the stricter one-minute interval, although a live SPH's datalogger uploads a new sample only about every five minutes
 - The API reports the inverter and battery ratings, but not the site's grid export cap. Set `export_limit` manually when the DNO limit is below the inverter rating
 
 #### Configuration Options (growatt)
@@ -1813,12 +1813,12 @@ Connects to Growatt's public OAuth OpenAPI, discovers the inverter authorised du
 | `automatic` | Boolean | No | false | `growatt_automatic` | Automatically configure Predbat's monitoring and control entities |
 | `automatic_ignore_pv` | Boolean | No | false | `growatt_automatic_ignore_pv` | Keep an existing `pv_power` configuration when automatic setup is enabled |
 | `control_enable` | Boolean | No | true | `growatt_control_enable` | Permit time-slot dispatch. Set false for monitoring only |
-| `base_url` | String | No | `https://opencloud.growatt.com` | `growatt_base_url` | Regional OpenAPI base supplied with the Growatt application registration |
+| `base_url` | String | No | `https://opencloud.growatt.com/prod-api` | `growatt_base_url` | OpenAPI base URL for the Growatt application registration. Must include the `/prod-api` path, not just the host; a trailing slash is ignored |
 | `battery_rate_max` | Float | No | Reported rating | `growatt_battery_rate_max` | Optional battery charge/discharge rating override in W |
 | `api_delay` | Float | No | 0.2 | `growatt_api_delay` | Courtesy pause between calls for different devices |
 | `min_write_interval` | Integer | No | 5 | `growatt_min_write_interval` | Minimum seconds between dispatch writes for one inverter, never below Growatt's five-second limit |
 
-See [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi) for the setup and field-testing notes.
+For a read-only check from the command line, `python3 growatt.py --config apps.yaml` (run from `apps/predbat`) runs one cycle with automatic configuration on and prints what it found. See [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi) for the command-line options, setup and field-testing notes.
 
 ---
 

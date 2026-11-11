@@ -2433,7 +2433,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": True,
         # Growatt's public dispatch API has no writable SoC fields. The charge target is
         # nevertheless a real component control: growatt.py observes it and drops the charge
-        # slot to 0% power (a hold) when one-minute telemetry reaches the target.
+        # slot to 0% power (a hold) when telemetry reaches the target.
         "has_target_soc": True,
         # No reserve is claimed. Outside a slot the inverter runs its own self-consumption down
         # to its local dischargeCutOffSOC, so a reserve Predbat raised to hold the battery

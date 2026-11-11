@@ -1168,7 +1168,7 @@ Predbat.com completes Growatt's OAuth flow and injects the short-lived access to
   growatt_token_expires_at: '2026-10-20T23:00:00Z'
   growatt_token_hash: !secret growatt_token_hash
   growatt_inverter_sn: SPH123456
-  growatt_base_url: https://opencloud.growatt.com
+  growatt_base_url: https://opencloud.growatt.com/prod-api
   growatt_automatic: true
   growatt_control_enable: true
 ```
@@ -1179,7 +1179,7 @@ Configuration keys:
 
 - `growatt_key`, `growatt_token_expires_at`, `growatt_token_hash` and `growatt_auth_method`: the OAuth state supplied by Predbat.com
 - `growatt_inverter_sn`: one serial or a list of serials authorised for this token
-- `growatt_base_url`: the regional OpenAPI host supplied with the Growatt application registration
+- `growatt_base_url`: the OpenAPI base URL for the Growatt application registration, default `https://opencloud.growatt.com/prod-api`. It must include the `/prod-api` path, not just the host, because the endpoint paths (such as `/oauth2/getDeviceInfo`) are appended to it. A trailing slash is ignored
 - `growatt_automatic`: automatically bind all monitoring and schedule entities (recommended)
 - `growatt_automatic_ignore_pv`: preserve a manually configured `pv_power` source
 - `growatt_control_enable`: allow dispatch writes, default `true`; set false for monitoring only
@@ -1187,7 +1187,7 @@ Configuration keys:
 - `growatt_api_delay`: delay between different-device calls, default `0.2` seconds
 - `growatt_min_write_interval`: dispatch pacing, default and minimum `5` seconds
 
-Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from one-minute telemetry. When the charge target is reached the charge slot stays in place at 0% power, so the battery holds until the window ends (full power resumes if the charge level falls more than 1% below the target); when the export floor is reached the export slot is removed. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval of overshoot and confirm the behaviour on the target model before relying on it.
+Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from telemetry, which Growatt updates about every five minutes. When the charge target is reached the charge slot stays in place at 0% power, so the battery holds until the window ends (full power resumes if the charge level falls more than 1% below the target); when the export floor is reached the export slot is removed. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval (about five minutes) of overshoot and confirm the behaviour on the target model before relying on it.
 
 Growatt has no reserve Predbat can hold the battery with, so the reserve functions (`switch.predbat_set_reserve_enable` and the reserve-based holds) are turned off for this inverter. Outside a slot the inverter runs its own self-consumption down to its local minimum.
 

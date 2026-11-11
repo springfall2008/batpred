@@ -10,7 +10,8 @@
 
 """Growatt public OAuth OpenAPI component.
 
-The public API supplies one-minute telemetry and UTC charge/discharge time slots. It does
+The public API supplies telemetry (polled each minute, uploaded about every five minutes)
+and UTC charge/discharge time slots. It does
 not expose writable battery SoC limits. Predbat therefore keeps its charge target and export
 floor in Home Assistant. When the latest telemetry reaches the charge target the charge slot
 is kept at 0% power, so the battery holds; when it reaches the export floor the export slot
@@ -27,9 +28,11 @@ still owes. The device's own table is read back every GROWATT_TTL_READBACK minut
 
 import asyncio
 import json
+import os
+import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import aiohttp
 
@@ -44,6 +47,9 @@ from growatt_const import (
     GROWATT_CODE_TOKEN_INVALID,
     GROWATT_TIMEOUT,
     GROWATT_RETRIES,
+    GROWATT_WRITE_ATTEMPTS,
+    GROWATT_READ_ATTEMPTS,
+    GROWATT_RETRY_BACKOFF,
     GROWATT_TTL_STATIC,
     GROWATT_TTL_LIVE,
     GROWATT_TELEMETRY_STALE,
@@ -58,6 +64,7 @@ from growatt_const import (
     GROWATT_CACHE_CONTROL,
     GROWATT_CAPABILITIES,
     clamp_percent,
+    dispatch_slot_payload,
     local_window_to_utc_slots,
     normalize_slots,
     parse_dispatch_slots,
@@ -187,7 +194,10 @@ class GrowattAPI(ComponentBase, OAuthMixin):
 
         last_error = ""
         timeout = aiohttp.ClientTimeout(total=GROWATT_TIMEOUT)
-        for attempt in range(GROWATT_RETRIES):
+        # A dispatch write is sent once: a timed-out write may have been applied anyway, so
+        # write_verified() reads it back rather than this loop re-sending it blind.
+        attempts = 1 if endpoint_key == "dispatch" else GROWATT_RETRIES
+        for attempt in range(attempts):
             try:
                 async with self.http_session(timeout=timeout) as session:
                     request = session.post(url, headers=headers, json=payload) if payload is not None else session.post(url, headers=headers)
@@ -216,7 +226,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                             return code, result.get("data")
             except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
                 last_error = str(error)
-            if attempt < GROWATT_RETRIES - 1:
+            if attempt < attempts - 1:
                 await asyncio.sleep(1 + attempt)
         self.last_api_error = last_error or "request failed"
         self.log("Warn: Growatt {} transport failure: {}".format(path, self.last_api_error))
@@ -413,9 +423,14 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 continue
             if all(leaf in self.device_energy.get(sn, {}) for sn in devices):
                 self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices])
+        # A rating is bound only when every device reports it. A live SPH reports batteryCapacity 0
+        # (top level and batteryList alike), so soc_max is then left unset and Predbat estimates
+        # the battery size from charge history (battery_scaling_auto / find_battery_size).
         for arg, leaf, getter in (("soc_max", "battery_capacity", self.battery_capacity), ("inverter_limit", "inverter_limit", self.inverter_limit), ("battery_rate_max", "battery_rate_max", self.battery_rate_max)):
             if all(getter(sn) > 0 for sn in devices):
                 self.set_arg_auto(arg, [self._sensor_name(sn, leaf) for sn in devices])
+            elif arg == "soc_max":
+                self.log("Info: Growatt does not report a battery capacity for {}; soc_max is left unset so Predbat estimates the battery size from charge history".format(", ".join(sn for sn in devices if getter(sn) <= 0)))
         self.log("Warn: Growatt does not report the site's grid export limit; set export_limit manually when the connection is capped below the inverter rating")
 
         # No reserve is bound: GrowattCloud does not claim has_reserve_soc, so inverter.py gives
@@ -589,7 +604,11 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         holding = sn in self._charge_hold
         at_target = soc is not None and (soc >= target or (holding and soc >= target - GROWATT_HOLD_HYSTERESIS))
         if at_target and not holding:
-            self.log("Info: Growatt {} SoC {:.1f}% reached charge target {}%, holding the charge slot at 0% power. The public API has no writable SoC limit, so Predbat enforces this from one-minute telemetry.".format(sn, soc, int(target)))
+            self.log(
+                "Info: Growatt {} SoC {:.1f}% reached charge target {}%, holding the charge slot at 0% power. The public API has no writable SoC limit, so Predbat enforces this from telemetry, which Growatt updates about every five minutes.".format(
+                    sn, soc, int(target)
+                )
+            )
             self._charge_hold.add(sn)
         elif holding and not at_target:
             self.log("Info: Growatt {} SoC {} fell below charge target {}%, resuming the charge".format(sn, "unknown" if soc is None else "{:.1f}%".format(soc), int(target)))
@@ -614,7 +633,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
             gate_key = (sn, direction)
             if reason:
                 if self._soc_gate_state.get(gate_key) != reason:
-                    self.log("Info: Growatt {} withholding {} slot because {}. The public API has no writable SoC limit, so Predbat enforces this from one-minute telemetry.".format(sn, direction, reason))
+                    self.log("Info: Growatt {} withholding {} slot because {}. The public API has no writable SoC limit, so Predbat enforces this from telemetry, which Growatt updates about every five minutes.".format(sn, direction, reason))
                 self._soc_gate_state[gate_key] = reason
                 if direction == "charge":
                     self._charge_hold.discard(sn)
@@ -654,6 +673,63 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         """Seconds until the per-device dispatch limit allows another request, 0 when it does."""
         return max(0.0, self.min_write_interval - (time.monotonic() - self.last_write_time.get(sn, 0)))
 
+    async def _sleep(self, seconds):
+        """Wait, as a method so tests can skip the pacing and back-off waits."""
+        await asyncio.sleep(seconds)
+
+    async def _paced(self, sn, call):
+        """Wait out the per-device dispatch limit, make one dispatch read or write, and stamp it."""
+        wait = self._pacing_wait(sn)
+        if wait > 0:
+            await self._sleep(wait)
+        try:
+            return await call()
+        finally:
+            self.last_write_time[sn] = time.monotonic()
+
+    async def read_dispatch_retry(self, sn, set_type, attempts=GROWATT_READ_ATTEMPTS):
+        """Read one dispatch setting, retrying with back-off while the device is busy, offline or slow.
+
+        Returns (ok, data). A live SPH answered READ_DEVICE_PARAM_FAIL (18) for a few minutes
+        after a slow write, so one failed read is not taken as the answer.
+        """
+        for attempt in range(attempts):
+            if attempt:
+                await self._sleep(GROWATT_RETRY_BACKOFF * attempt)
+            ok, data = await self._paced(sn, lambda: self.read_dispatch(sn, set_type))
+            if ok:
+                return True, data
+        return False, None
+
+    async def write_verified(self, sn, set_type, value, matches, attempts=GROWATT_WRITE_ATTEMPTS):
+        """Write one dispatch setting and confirm it by reading it back, retrying until it reads as written.
+
+        The read-back decides, not the write's own answer: Growatt's docs say to reconcile a
+        timed-out write with readDeviceDispatch, and a live SPH answered PARAMETER_SETTING_FAILED
+        to a table it did apply. matches(data) says whether a read shows the write took effect.
+        Returns True once a read-back matches.
+        """
+        for attempt in range(attempts):
+            if attempt:
+                await self._sleep(GROWATT_RETRY_BACKOFF * attempt)
+            wrote = await self._paced(sn, lambda: self.dispatch(sn, set_type, value))
+            ok, data = await self.read_dispatch_retry(sn, set_type)
+            if ok and matches(data):
+                if not wrote:
+                    self.log("Info: Growatt {} {} answered {}, but the read-back shows it applied".format(sn, set_type, self.last_api_error or "a failure"))
+                return True
+            self.log("Warn: Growatt {} {} attempt {} of {} not confirmed by read-back ({})".format(sn, set_type, attempt + 1, attempts, "read failed" if not ok else "device holds {}".format(json.dumps(data, default=str)[:300])))
+        return False
+
+    async def write_slots_verified(self, sn, slots):
+        """Write a slot table (16 unused slots for an empty one) and confirm it by reading it back."""
+        target = normalize_slots(slots)
+        return await self.write_verified(sn, GROWATT_SET_TIME_SLOTS, dispatch_slot_payload(target), lambda data: parse_dispatch_slots(data) == target)
+
+    async def set_control_verified(self, sn, value):
+        """Set enable_control and confirm it by reading it back."""
+        return await self.write_verified(sn, GROWATT_SET_ENABLE_CONTROL, value, lambda data: data == value)
+
     async def apply_schedule(self, sn, force=False):
         """Write one complete slot table, with change detection and endpoint pacing.
 
@@ -676,18 +752,19 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 self.log("Info: Growatt {} schedule update deferred for {:.1f}s by the documented dispatch rate limit".format(sn, wait))
                 return False
             if sn not in self.control_enabled:
-                ok = await self.dispatch(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_ON)
-                self.last_write_time[sn] = time.monotonic()
-                if not ok:
+                if not await self.set_control_verified(sn, GROWATT_CONTROL_ON):
+                    self.log("Warn: Growatt {} could not confirm enable_control 1, retrying next run".format(sn))
                     return False
                 self.control_enabled.add(sn)
                 self.control_claimed.add(sn)
-                await asyncio.sleep(GROWATT_DISPATCH_INTERVAL)
-            ok = await self.dispatch(sn, GROWATT_SET_TIME_SLOTS, slots)
-            self.last_write_time[sn] = time.monotonic()
+            ok = await self.write_slots_verified(sn, slots)
             if ok:
                 self.applied_slots[sn] = list(slots)
-                self.log("Info: Growatt wrote {} UTC charge/discharge slot(s) for {}".format(len(slots), sn))
+                self.log("Info: Growatt wrote {} UTC charge/discharge slot(s) for {}, confirmed by read-back".format(len(slots), sn))
+            else:
+                # What the device holds is now unknown, so the next apply writes the table in full
+                self.applied_slots.pop(sn, None)
+                self.log("Warn: Growatt {} slot table could not be confirmed after {} attempts, retrying next run".format(sn, GROWATT_WRITE_ATTEMPTS))
         await self.save_state()
         return ok
 
@@ -701,8 +778,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         async with self._write_lock:
             if self._pacing_wait(sn) > 0:
                 return False
-            ok, data = await self.read_dispatch(sn, GROWATT_SET_TIME_SLOTS)
-            self.last_write_time[sn] = time.monotonic()
+            ok, data = await self._paced(sn, lambda: self.read_dispatch(sn, GROWATT_SET_TIME_SLOTS))
         self.mark_refreshed("readback:{}".format(sn))
         if not ok:
             self.log("Warn: Growatt {} slot table read-back failed: {}".format(sn, self.last_api_error))
@@ -732,10 +808,9 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         async with self._write_lock:
             if self._pacing_wait(sn) > 0:
                 return False
-            ok = await self.dispatch(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_OFF)
-            self.last_write_time[sn] = time.monotonic()
+            ok = await self.set_control_verified(sn, GROWATT_CONTROL_OFF)
         if not ok:
-            self.log("Warn: Growatt {} could not release OpenAPI control ({}), retrying next run".format(sn, self.last_api_error))
+            self.log("Warn: Growatt {} could not confirm the release of OpenAPI control ({}), retrying next run".format(sn, self.last_api_error))
             return False
         self.control_claimed.discard(sn)
         self.control_enabled.discard(sn)
@@ -894,3 +969,539 @@ class GrowattAPI(ComponentBase, OAuthMixin):
 
     async def final(self):
         return None
+
+
+# ----------------------------------------------------------------------
+# Command-line diagnostics
+#
+#   python3 growatt.py --config apps.yaml          read the growatt_* settings from apps.yaml
+#   python3 growatt.py --key <token> ...           or give them individually
+#
+# Runs one read-only cycle of run() with automatic configuration on, then prints what the
+# component found. Control is off, so nothing is written to the inverter; the slot table is
+# read back. Run it from apps/predbat.
+# ----------------------------------------------------------------------
+
+# Command-line fields, mapped to the apps.yaml key --config fills each from. user_id is the shared
+# Predbat.com instance id OAuthMixin's refresh sends, not a Growatt-specific setting.
+GROWATT_CLI_CONFIG_KEYS = {
+    "key": "growatt_key",
+    "auth_method": "growatt_auth_method",
+    "token_expires_at": "growatt_token_expires_at",
+    "token_hash": "growatt_token_hash",
+    "inverter_sn": "growatt_inverter_sn",
+    "base_url": "growatt_base_url",
+    "battery_rate_max": "growatt_battery_rate_max",
+    "user_id": "user_id",
+    # Present in a Predbat.com-generated apps.yaml; the token refresh needs both
+    "supabase_url": "supabase_url",
+    "supabase_key": "supabase_key",
+}
+
+
+def merge_growatt_cli_args(cli, config):
+    """Fill any command-line field left empty from an apps.yaml pred_bat section.
+
+    An explicit command-line value always wins, and an empty apps.yaml value fills nothing. An
+    unquoted ISO timestamp loads from YAML as a datetime, which OAuthMixin cannot parse, so it is
+    turned back into ISO text. Returns (merged, used): used names the apps.yaml keys taken.
+    """
+    merged = {field: cli.get(field) for field in GROWATT_CLI_CONFIG_KEYS}
+    used = []
+    for field, config_key in GROWATT_CLI_CONFIG_KEYS.items():
+        if merged.get(field) not in (None, "", []):
+            continue
+        value = config.get(config_key)
+        if value in (None, "", []):
+            continue
+        if isinstance(value, datetime):
+            value = value.isoformat()
+        merged[field] = value
+        used.append(config_key)
+    return merged, used
+
+
+def _cli_slot_text(slots):
+    """Format a UTC slot table as one short line, e.g. "01:00-03:00 +50%, 17:00-19:00 -20%"."""
+    if not slots:
+        return "empty"
+    return ", ".join("{}-{} {:+d}%".format(slot["startTime"], slot["endTime"], slot["percentage"]) for slot in slots)
+
+
+def _cli_print_device(client, sn):
+    """Print what one inverter reported, for checking against the Growatt app."""
+    detail = client.device_detail.get(sn, {})
+    values = client.device_values.get(sn, {})
+    energy = client.device_energy.get(sn, {})
+    print("\n=== {} ===".format(sn))
+    print("  model {}   battery {}   firmware {}   status {}".format(detail.get("model", "?"), detail.get("batteryModel", "?"), detail.get("communicationVersion", "?"), detail.get("status", "?")))
+    if "soc" in values:
+        print("  SoC {:.1f}%   battery {:.0f} W   grid {:.0f} W   PV {:.0f} W   load {:.0f} W".format(values["soc"], values.get("battery_power", 0), values.get("grid_power", 0), values.get("pv_power", 0), values.get("load_power", 0)))
+        print("  (Predbat signs: battery positive = discharging, grid negative = importing)")
+    else:
+        print("  no telemetry")
+    if energy:
+        print("  today: " + "   ".join("{} {:.2f} kWh".format(leaf.replace("_today", "").replace("_", " "), value) for leaf, value in sorted(energy.items())))
+    print("  battery capacity {:.2f} kWh   battery rate max {:.0f} W   inverter limit {:.0f} W   discharge cut-off {}%".format(client.battery_capacity(sn), client.battery_rate_max(sn), client.inverter_limit(sn), detail.get("dischargeCutOffSOC", "?")))
+    if sn in client.readback_slots:
+        print("  slot table on the device (UTC): {}".format(_cli_slot_text(client.readback_slots[sn])))
+    else:
+        print("  slot table on the device: not read back - see the Warn: lines above")
+
+
+# Write tests (--write-test): what each should make the battery do, printed before it is written.
+GROWATT_CLI_EXPECTATION = {
+    "charge": "the battery CHARGES (Predbat battery power negative) at about the requested power",
+    "export": "the battery DISCHARGES (Predbat battery power positive), covering the house and exporting the rest",
+    "hold": "the battery neither charges nor discharges (a 0% charge slot); the house runs from the grid",
+}
+GROWATT_CLI_SCENARIOS = ("charge", "export", "hold")
+GROWATT_CLI_DEFAULT_POWER_W = 1000
+# Longest watch per test. A live SPH uploads telemetry about every five minutes, so this allows
+# two fresh readings after the settle time; the watch ends early once it has them.
+GROWATT_CLI_DEFAULT_MINUTES = 12
+# Readings this soon after a write are shown but not judged: the cloud relays the slot table to
+# the inverter and the inverter ramps, so the first reading can still show the old behaviour.
+GROWATT_CLI_SETTLE_SECONDS = 60
+# Fresh, settled readings that end a test's watch early.
+GROWATT_CLI_FRESH_NEEDED = 2
+# A write test refuses to start when the latest telemetry upload is older than this many minutes:
+# uploads come about every five, so older means the inverter or datalogger is not reporting.
+GROWATT_CLI_MAX_TELEMETRY_AGE = 10
+# Battery power below this many watts counts as idle when judging.
+GROWATT_CLI_THRESHOLD_W = 100
+# getDeviceData's endpoint page allows one call a minute per device.
+GROWATT_CLI_SAMPLE_SECONDS = 60
+
+
+def _build_cli_client(key=None, auth_method="oauth", token_expires_at=None, token_hash=None, inverter_sn=None, base_url=None, battery_rate_max=None, user_id=None, supabase_url=None, supabase_key=None, trace=True):
+    """Construct a GrowattAPI on a MockBase for a standalone run, with control off.
+
+    supabase_url/supabase_key go into the environment, where OAuthMixin's refresh reads them;
+    user_id goes into the base args, where it reads the instance id. Control stays off so run()
+    and the reconcile loop never write: the write tests below write directly, after asking.
+    """
+    from mock_base import MockBase
+
+    if supabase_url:
+        os.environ["SUPABASE_URL"] = supabase_url
+    if supabase_key:
+        os.environ["SUPABASE_KEY"] = supabase_key
+
+    kwargs = {"key": key or "", "auth_method": auth_method or "oauth", "token_expires_at": token_expires_at, "token_hash": token_hash or "", "inverter_sn": inverter_sn, "automatic": True, "control_enable": False}
+    if base_url:
+        kwargs["base_url"] = base_url
+    if battery_rate_max:
+        kwargs["battery_rate_max"] = battery_rate_max
+    client = GrowattAPI(MockBase(user_id=user_id), **kwargs)
+    client.api_debug = trace
+    return client
+
+
+async def test_growatt_api(
+    key=None,
+    auth_method="oauth",
+    token_expires_at=None,
+    token_hash=None,
+    inverter_sn=None,
+    base_url=None,
+    battery_rate_max=None,
+    user_id=None,
+    supabase_url=None,
+    supabase_key=None,
+    trace=True,
+    write_test=None,
+    power=GROWATT_CLI_DEFAULT_POWER_W,
+    minutes=GROWATT_CLI_DEFAULT_MINUTES,
+    confirm=None,
+    snapshot_dir=".",
+    settle_seconds=GROWATT_CLI_SETTLE_SECONDS,
+):
+    """Run one read-only cycle of the Growatt component with automatic configuration on.
+
+    run() discovers, polls, binds Predbat's settings (printed as "Set arg" lines) and reads the
+    slot table back, but writes nothing. With write_test ("charge", "export", "hold" or "all")
+    it then runs those live tests on the one inverter (see growatt_write_test()).
+
+    Returns True only when the cycle, and any write test, passed.
+    """
+    client = _build_cli_client(key, auth_method, token_expires_at, token_hash, inverter_sn, base_url, battery_rate_max, user_id, supabase_url, supabase_key, trace)
+
+    print("Calling run() once with automatic configuration on (read-only: control is off, nothing is written to the inverter)...")
+    ok = await client.run(seconds=0, first=True)
+    await client.final()
+    if not ok:
+        if client.oauth_failed:
+            print("\nFAILED: the Growatt OAuth token needs re-authorising - reconnect Growatt in Predbat.com")
+        elif not client.access_token:
+            print("\nFAILED: no OAuth access token - pass --key (or GROWATT_KEY), or --token-hash with --user-id, --supabase-url and --supabase-key so it can be refreshed")
+        elif client.discovery_ok is False:
+            print("\nFAILED: the device list call failed{}".format(": {}".format(client.last_api_error) if client.last_api_error else ""))
+        elif not client.device_list:
+            print("\nFAILED: no authorised battery inverter found{}".format(" matching serial {}".format(inverter_sn) if inverter_sn else ""))
+        else:
+            print("\nFAILED: discovery found {}, but the first telemetry poll came back empty - see the Warn: lines above".format(", ".join(client.device_list)))
+        return False
+    for sn in client.device_list:
+        _cli_print_device(client, sn)
+    print("\nThe 'Set arg' lines above are what growatt_automatic: true would put in apps.yaml.")
+    if not write_test:
+        print("PASSED")
+        return True
+    if len(client.device_list) != 1:
+        print("\nFAILED: the write tests drive one inverter, but this token reaches {} - choose one with --serial".format(", ".join(client.device_list)))
+        return False
+    scenarios = list(GROWATT_CLI_SCENARIOS) if write_test == "all" else [write_test]
+    return await growatt_write_test(client, client.device_list[0], scenarios, power, minutes, confirm or (lambda prompt: True), snapshot_dir, settle_seconds=settle_seconds)
+
+
+def build_cli_test_slots(scenario, now_utc, minutes, percentage):
+    """Return the one-slot table a write test sends: from this UTC minute for minutes + 2.
+
+    The extra two minutes keep the slot open while the last reading is taken. Charge uses
+    +percentage, export -percentage and hold 0%. Slots cannot cross UTC midnight, so a window
+    that would is cut at 23:59; with under five minutes left before midnight it returns None.
+    """
+    start = now_utc.replace(second=0, microsecond=0)
+    end_minutes = start.hour * 60 + start.minute + minutes + 2
+    if 24 * 60 - (start.hour * 60 + start.minute) < 5:
+        return None
+    end_text = "23:59" if end_minutes >= 24 * 60 else "{:02d}:{:02d}".format(end_minutes // 60, end_minutes % 60)
+    signed = {"charge": clamp_percent(percentage), "export": -clamp_percent(percentage), "hold": 0}[scenario]
+    return [{"startTime": start.strftime("%H:%M"), "endTime": end_text, "percentage": signed}]
+
+
+def cli_slot_end(built_utc, slots):
+    """Return the UTC datetime a write test's slot ends, from the time it was built and its endTime.
+
+    build_cli_test_slots() never crosses UTC midnight, so the end is on the same UTC day - and it
+    may be earlier than the watch would run, when the slot was cut at 23:59.
+    """
+    hour, minute = (int(part) for part in slots[-1]["endTime"].split(":"))
+    return built_utc.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def classify_cli_reading(power, sample_utc, written_utc, slot_end, seen):
+    """Decide whether one telemetry reading is judged, returning (judged, label for the poll line).
+
+    Only a new upload taken after the write and before the slot ends counts: an older one shows
+    the battery before the write, and a later one the battery after the slot has stopped.
+    """
+    if power is None or sample_utc is None:
+        return False, "no reading"
+    if sample_utc <= written_utc:
+        return False, "old reading from {}".format(sample_utc.strftime("%H:%M:%S"))
+    if sample_utc in seen:
+        return False, "same reading as the last poll"
+    if sample_utc > slot_end:
+        return False, "reading from {}, after the slot ended - not judged".format(sample_utc.strftime("%H:%M:%S"))
+    return True, "new reading, taken {:.0f}s after the write".format((sample_utc - written_utc).total_seconds())
+
+
+def judge_cli_window(scenario, samples, settle_seconds=GROWATT_CLI_SETTLE_SECONDS, threshold=GROWATT_CLI_THRESHOLD_W):
+    """Judge a write test from its telemetry samples, returning (verdict, reason).
+
+    samples are (seconds_since_write, battery_power) with Predbat's sign (positive = discharging).
+    Only samples at or after settle_seconds count. verdict is "PASS", "FAIL" or "INCONCLUSIVE"
+    when no sample counted.
+    """
+    judged = [power for elapsed, power in samples if elapsed >= settle_seconds]
+    if not judged:
+        return "INCONCLUSIVE", "no reading was taken after the {}s settle time".format(settle_seconds)
+    checks = {
+        "charge": (lambda power: power <= -threshold, "charging at {} W or more".format(threshold)),
+        "export": (lambda power: power >= threshold, "discharging at {} W or more".format(threshold)),
+        "hold": (lambda power: abs(power) < threshold, "within {} W of idle".format(threshold)),
+    }
+    check, wanted = checks[scenario]
+    bad = [power for power in judged if not check(power)]
+    readings = ", ".join("{:.0f} W".format(power) for power in judged)
+    if bad:
+        return "FAIL", "battery not {} in every settled reading ({})".format(wanted, readings)
+    return "PASS", "battery {} in every settled reading ({})".format(wanted, readings)
+
+
+def _parse_utc_time(value):
+    """Parse getDeviceData's utcTime ("2026-11-11 21:06:37") as a UTC datetime, or None."""
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _cli_sample(client, sn):
+    """Poll telemetry for one device, returning (Predbat battery power, sample utcTime), either None when unknown."""
+    code, data = await client._post("device_data", {"deviceSn": sn})
+    if code != GROWATT_CODE_OK or not client._apply_telemetry(sn, data):
+        return None, None
+    return client.device_values[sn].get("battery_power"), _parse_utc_time(data.get("utcTime"))
+
+
+async def _cli_read_baseline(client, sn):
+    """Read the device's enable_control value and raw slot table, or (None, None) when either cannot be read."""
+    ok, enable = await client.read_dispatch_retry(sn, GROWATT_SET_ENABLE_CONTROL)
+    if not ok or not isinstance(enable, (int, float)):
+        print("Could not read enable_control ({}): {}".format(client.last_api_error, enable))
+        return None, None
+    ok, slots = await client.read_dispatch_retry(sn, GROWATT_SET_TIME_SLOTS)
+    if not ok or not isinstance(slots, list) or parse_dispatch_slots(slots) is None:
+        print("Could not read the slot table in a shape Predbat can restore ({}): {}".format(client.last_api_error, slots))
+        return None, None
+    return int(enable), slots
+
+
+async def _cli_restore_table(client, sn, slots):
+    """Write back the saved slot table, confirmed by read-back with retries; return True once it reads as saved.
+
+    An empty saved table goes out as 16 unused slots, since Growatt refuses an empty list.
+    """
+    table_ok = await client.write_slots_verified(sn, slots)
+    print("  restore slot table: {} - {}".format("OK" if table_ok else "FAILED", "device holds {}".format(_cli_slot_text(normalize_slots(slots))) if table_ok else "see the Warn: lines above"))
+    return table_ok
+
+
+async def _cli_restore_enable(client, sn, enable):
+    """Put enable_control back to its saved value if it differs, confirmed by read-back with retries."""
+    ok, now_enable = await client.read_dispatch_retry(sn, GROWATT_SET_ENABLE_CONTROL)
+    enable_ok = (ok and now_enable == enable) or await client.set_control_verified(sn, enable)
+    print("  restore enable_control: {} - {}".format("OK" if enable_ok else "FAILED", "device reads {}".format(enable) if enable_ok else "see the Warn: lines above"))
+    return enable_ok
+
+
+async def _cli_restore(client, sn, enable, slots):
+    """Restore both the slot table and enable_control, returning True when both read back as saved."""
+    table_ok = await _cli_restore_table(client, sn, slots)
+    enable_ok = await _cli_restore_enable(client, sn, enable)
+    return table_ok and enable_ok
+
+
+def save_cli_snapshot(folder, sn, enable, slots):
+    """Save the pre-test enable_control value and raw slot table to a JSON file and return its path."""
+    path = os.path.join(folder, "growatt_snapshot_{}_{}.json".format(sn, datetime.now().strftime("%Y%m%d_%H%M%S")))
+    with open(path, "w") as handle:
+        json.dump({"deviceSn": sn, "enable_control": enable, "time_slot_charge_discharge": slots}, handle, indent=2)
+    return path
+
+
+def load_cli_snapshot(path):
+    """Load a snapshot written by save_cli_snapshot(), returning (sn, enable, slots); raises ValueError when malformed."""
+    with open(path, "r") as handle:
+        data = json.load(handle)
+    sn, enable, slots = data.get("deviceSn"), data.get("enable_control"), data.get("time_slot_charge_discharge")
+    if not sn or not isinstance(enable, int) or not isinstance(slots, list):
+        raise ValueError("{} is not a Growatt snapshot".format(path))
+    return sn, enable, slots
+
+
+async def growatt_write_test(client, sn, scenarios, power, minutes, confirm, snapshot_dir, settle_seconds=GROWATT_CLI_SETTLE_SECONDS, sample_seconds=GROWATT_CLI_SAMPLE_SECONDS):
+    """Write each scenario's slot table, read it back, watch the battery, then restore what the device held.
+
+    The device's enable_control value and raw slot table are read first and saved to a snapshot
+    file; refusing to start when they cannot be read, as there would be nothing to restore. Each
+    scenario is restored before the next starts, and the final restore runs whatever happens.
+    Returns True only when every scenario passed and every restore read back as saved.
+    """
+    rate_max = client.battery_rate_max(sn)
+    if rate_max <= 0:
+        print("\nFAILED: {} reports no battery power rating, so a power cannot be turned into a percentage - pass --battery-rate-max".format(sn))
+        return False
+    percentage = clamp_percent(power / rate_max * 100.0)
+    print("\nWrite tests on {}: {} at {} W ({}% of the {:.0f} W battery rating), watching up to {} minutes each".format(sn, ", ".join(scenarios), power, percentage, rate_max, minutes))
+    print("Make sure no running Predbat instance is controlling this inverter, or it will overwrite the test slots.")
+
+    # Pre-flight: a device whose telemetry has stopped arriving cannot be judged, and in a live
+    # run that went with settings reads failing for over ten minutes, so a restore could not be
+    # confirmed either. Refuse rather than write to it.
+    _, last_upload = await _cli_sample(client, sn)
+    age_minutes = (datetime.now(timezone.utc) - last_upload).total_seconds() / 60 if last_upload else None
+    if age_minutes is None or age_minutes > GROWATT_CLI_MAX_TELEMETRY_AGE:
+        print(
+            "\nFAILED: the latest telemetry is {} - the inverter or its datalogger is not reporting to Growatt, so nothing was written. Check it is online in the Growatt app and try again".format(
+                "missing" if age_minutes is None else "{:.0f} minutes old (from {} UTC)".format(age_minutes, last_upload.strftime("%H:%M:%S"))
+            )
+        )
+        return False
+    enable, saved_slots = await _cli_read_baseline(client, sn)
+    if enable is None:
+        print("\nFAILED: the current settings could not be read, so they could not be restored - nothing was written")
+        return False
+    path = save_cli_snapshot(snapshot_dir, sn, enable, saved_slots)
+    print("Current settings: enable_control {}, slot table {}".format(enable, _cli_slot_text(parse_dispatch_slots(saved_slots))))
+    print("Saved them to {} - if this run is killed, put them back with --restore {}".format(path, path))
+    if not confirm("Write test slots to {} now? [y/N] ".format(sn)):
+        print("Cancelled - nothing was written")
+        return True
+
+    results = []
+    # Set while the device holds something the test wrote and the restore has not yet undone, so
+    # the finally block puts it back however the run ends (a failure, an exception or Ctrl-C).
+    table_dirty = False
+    enable_dirty = False
+    polls_per_test = int(minutes * 60 // sample_seconds) + 1
+    try:
+        if enable != GROWATT_CONTROL_ON:
+            enable_dirty = True
+            if not await client.set_control_verified(sn, GROWATT_CONTROL_ON):
+                print("\nFAILED: enable_control 1 could not be confirmed by read-back")
+                results.append(("enable_control 1", "FAIL"))
+                return False
+        for scenario in scenarios:
+            print("\n--- {} ---  expect: {}".format(scenario, GROWATT_CLI_EXPECTATION[scenario]))
+            built_utc = datetime.now(timezone.utc)
+            slots = build_cli_test_slots(scenario, built_utc, minutes, percentage)
+            if slots is None:
+                print("  skipped: too close to UTC midnight for a slot that does not cross it")
+                results.append((scenario, "INCONCLUSIVE"))
+                continue
+            print("  writing {}".format(_cli_slot_text(slots)))
+            table_dirty = True
+            if not await client.write_slots_verified(sn, slots):
+                print("  the write could not be confirmed by read-back after {} attempts".format(GROWATT_WRITE_ATTEMPTS))
+                results.append((scenario, "FAIL"))
+            else:
+                written_utc = datetime.now(timezone.utc)
+                slot_end = cli_slot_end(built_utc, slots)
+                print("  confirmed by read-back. Growatt uploads telemetry about every 5 minutes, so only readings taken after the write and before the slot ends ({} UTC) are judged".format(slot_end.strftime("%H:%M")))
+                samples = []
+                seen = set()
+                for index in range(polls_per_test):
+                    if index:
+                        if datetime.now(timezone.utc) >= slot_end:
+                            print("  the slot has ended, so watching stops here")
+                            break
+                        await asyncio.sleep(sample_seconds)
+                    power_now, sample_utc = await _cli_sample(client, sn)
+                    values = client.device_values.get(sn, {})
+                    fresh, age = classify_cli_reading(power_now, sample_utc, written_utc, slot_end, seen)
+                    print(
+                        "  poll {:2}  SoC {}%  battery {} W  grid {} W  load {} W  ({})".format(index + 1, values.get("soc", "?"), "?" if power_now is None else "{:.0f}".format(power_now), values.get("grid_power", "?"), values.get("load_power", "?"), age)
+                    )
+                    if fresh:
+                        seen.add(sample_utc)
+                        samples.append(((sample_utc - written_utc).total_seconds(), power_now))
+                        if sum(1 for elapsed, _ in samples if elapsed >= settle_seconds) >= GROWATT_CLI_FRESH_NEEDED:
+                            break
+                verdict, reason = judge_cli_window(scenario, samples, settle_seconds=settle_seconds)
+                print("  {}: {}".format(verdict, reason))
+                results.append((scenario, verdict))
+            print("  clearing: restoring the saved slot table")
+            if await _cli_restore_table(client, sn, saved_slots):
+                table_dirty = False
+            else:
+                results.append(("restore after " + scenario, "FAIL"))
+                break
+    finally:
+        if table_dirty:
+            print("\nStopped before the slot table was restored - restoring it now")
+            if not await _cli_restore_table(client, sn, saved_slots):
+                results.append(("final slot table restore", "FAIL"))
+        if enable_dirty:
+            print("\nRestoring enable_control to {}".format(enable))
+            if not await _cli_restore_enable(client, sn, enable):
+                results.append(("enable_control restore", "FAIL"))
+
+    print("\nSummary:")
+    for name, verdict in results:
+        print("  {:22} {}".format(name, verdict))
+    passed = all(verdict == "PASS" for _, verdict in results) and len(results) == len(scenarios)
+    print("PASSED" if passed else "NOT PASSED - see above")
+    return passed
+
+
+async def restore_growatt_snapshot(client, path):
+    """Write back a snapshot file a write test saved, and report whether it read back as saved."""
+    sn, enable, slots = load_cli_snapshot(path)
+    print("Restoring {} from {}: enable_control {}, slot table {}".format(sn, path, enable, _cli_slot_text(parse_dispatch_slots(slots))))
+    ok = await _cli_restore(client, sn, enable, slots)
+    print("PASSED" if ok else "FAILED")
+    return ok
+
+
+def main():  # pragma: no cover
+    """Command-line entry point: one read-only Growatt cycle from apps.yaml or individual settings."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Growatt OpenAPI diagnostics: run one read-only cycle of the component with automatic configuration on, and print what it found.",
+        epilog="Run from apps/predbat. The access token can also come from GROWATT_KEY or --config, which keep it out of shell history.",
+    )
+    parser.add_argument("--config", help="Read the growatt_* settings, user_id, supabase_url and supabase_key from an apps.yaml, resolving !secret as Predbat does; any option below overrides the file")
+    parser.add_argument("--key", help="Growatt OAuth access token (growatt_key)")
+    parser.add_argument("--auth-method", default=None, help="Authentication mode (growatt_auth_method), default oauth")
+    parser.add_argument("--token-expires-at", help="Access token expiry as an ISO timestamp (growatt_token_expires_at)")
+    parser.add_argument("--token-hash", help="Predbat.com refresh handle (growatt_token_hash)")
+    parser.add_argument("--serial", action="append", help="Only this inverter serial (growatt_inverter_sn); repeat for several")
+    parser.add_argument("--base-url", help="Regional OpenAPI base (growatt_base_url), default {}".format(GROWATT_BASE_URL))
+    parser.add_argument("--battery-rate-max", type=float, help="Battery rate override in W (growatt_battery_rate_max)")
+    parser.add_argument("--user-id", help="Predbat.com instance id, needed to refresh the token")
+    parser.add_argument("--supabase-url", help="Supabase URL for the token refresh (or SUPABASE_URL)")
+    parser.add_argument("--supabase-key", help="Supabase service key for the token refresh (or SUPABASE_KEY)")
+    parser.add_argument("--no-trace", action="store_true", help="Stop printing every API request and response")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--write-test",
+        choices=list(GROWATT_CLI_SCENARIOS) + ["all"],
+        help="After the read-only cycle, write a slot starting now (charge, export, hold or all three in turn), read it back, watch the battery, then restore what the inverter held before",
+    )
+    mode.add_argument("--restore", metavar="SNAPSHOT", help="Write back a snapshot file a write test saved")
+    parser.add_argument("--power", type=int, default=GROWATT_CLI_DEFAULT_POWER_W, help="Charge or export power for the write tests in W (default {})".format(GROWATT_CLI_DEFAULT_POWER_W))
+    parser.add_argument("--minutes", type=int, default=GROWATT_CLI_DEFAULT_MINUTES, help="How long to watch each write test, in minutes (default {})".format(GROWATT_CLI_DEFAULT_MINUTES))
+    parser.add_argument("--snapshot-dir", default=".", help="Where a write test saves the settings it will restore (default: the current directory)")
+    parser.add_argument("--yes", action="store_true", help="Do not ask before writing")
+    args = parser.parse_args()
+    if args.minutes < 1:
+        parser.error("--minutes must be at least 1")
+    if args.power <= 0:
+        parser.error("--power must be positive")
+
+    cli = {
+        "key": args.key,
+        "auth_method": args.auth_method,
+        "token_expires_at": args.token_expires_at,
+        "token_hash": args.token_hash,
+        "inverter_sn": args.serial,
+        "base_url": args.base_url,
+        "battery_rate_max": args.battery_rate_max,
+        "user_id": args.user_id,
+        "supabase_url": args.supabase_url,
+        "supabase_key": args.supabase_key,
+    }
+    merged = dict(cli)
+    if args.config:
+        import yaml
+        from utils import load_apps_yaml
+
+        try:
+            config, _ = load_apps_yaml(args.config)
+        except (yaml.YAMLError, KeyError, OSError, ValueError) as error:
+            parser.error("could not read Growatt settings from {}: {}".format(args.config, error))
+        merged, used = merge_growatt_cli_args(cli, config or {})
+        print("Read from {}: {}".format(args.config, ", ".join(used) if used else "nothing - no growatt_ keys found"))
+    if not merged.get("key"):
+        merged["key"] = os.environ.get("GROWATT_KEY")
+    if not merged.get("key") and not merged.get("token_hash"):
+        parser.error("no credential: pass --key (or set GROWATT_KEY), --token-hash, or --config pointing at an apps.yaml holding growatt_key")
+
+    if args.restore:
+        client = _build_cli_client(trace=not args.no_trace, **merged)
+        try:
+            ok = asyncio.run(restore_growatt_snapshot(client, args.restore))
+        except (OSError, ValueError) as error:
+            parser.error(str(error))
+        sys.exit(0 if ok else 1)
+
+    def confirm(prompt):
+        """Ask before writing, unless --yes was given."""
+        if args.yes:
+            return True
+        try:
+            return input(prompt).strip().lower() in ("y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            return False
+
+    ok = asyncio.run(test_growatt_api(trace=not args.no_trace, write_test=args.write_test, power=args.power, minutes=args.minutes, confirm=confirm, snapshot_dir=args.snapshot_dir, **merged))
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
