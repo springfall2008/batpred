@@ -344,6 +344,7 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - `CHG_PWR_LMT` limits grid charging only, so freeze export is never requested. A hold caps `DTU_AC_CHG_SOC_LMT` at the current SoC (`_hold_grid_target()`).
 - Floors and caps: `CHG_BAT_SOC_LMT` ≥ 50 (read, never written), `DTU_AC_CHG_SOC_LMT` ≥ 20, `DSCHG_BAT_SOC_LMT` ≤ 45, so a hold below 50% or a discharge target above 45% cannot be set. A hold is a 0 W charge slot.
 - One batched `iotSet` per change; a partial accept is never cached; overlapping writes fail with error 300004. The one-hour rolling hold slot is deliberate.
+- Predbat commits a window in stages (times, target, rates), pressing the write button after each. Writing on the first press sent a new slot with the previous cycle's `CHG_PWR_LMT`/`DTU_AC_CHG_SOC_LMT` (e.g. 4000 W / 100% from `inverter_soc_reset`), and `hanchu_min_write_interval` then held the hold values back ~95 s: a live grid charge at a hold's start. Presses are now debounced (`hanchu_write_debounce`, default 10 s); the rates arrive after the loop with no press, so any schedule change while a write is pending restarts the wait too, and the reconcile tick skips while one is pending. Look for two `iotSet`s a minute or more apart at a window start. (GH#6074)
 - HC-HY-SL-*-G2 is missing from the `devModel` table, so it always takes the fallback.
 
 ### Growatt Cloud OpenAPI (`growatt.py`, `growatt_const.py`)
