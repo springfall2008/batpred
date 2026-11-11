@@ -10,7 +10,8 @@
 
 """Growatt public OAuth OpenAPI component.
 
-The public API supplies one-minute telemetry and UTC charge/discharge time slots. It does
+The public API supplies telemetry (polled each minute, uploaded about every five minutes)
+and UTC charge/discharge time slots. It does
 not expose writable battery SoC limits. Predbat therefore keeps its charge target and export
 floor in Home Assistant. When the latest telemetry reaches the charge target the charge slot
 is kept at 0% power, so the battery holds; when it reaches the export floor the export slot
@@ -46,6 +47,9 @@ from growatt_const import (
     GROWATT_CODE_TOKEN_INVALID,
     GROWATT_TIMEOUT,
     GROWATT_RETRIES,
+    GROWATT_WRITE_ATTEMPTS,
+    GROWATT_READ_ATTEMPTS,
+    GROWATT_RETRY_BACKOFF,
     GROWATT_TTL_STATIC,
     GROWATT_TTL_LIVE,
     GROWATT_TELEMETRY_STALE,
@@ -60,6 +64,7 @@ from growatt_const import (
     GROWATT_CACHE_CONTROL,
     GROWATT_CAPABILITIES,
     clamp_percent,
+    dispatch_slot_payload,
     local_window_to_utc_slots,
     normalize_slots,
     parse_dispatch_slots,
@@ -189,7 +194,10 @@ class GrowattAPI(ComponentBase, OAuthMixin):
 
         last_error = ""
         timeout = aiohttp.ClientTimeout(total=GROWATT_TIMEOUT)
-        for attempt in range(GROWATT_RETRIES):
+        # A dispatch write is sent once: a timed-out write may have been applied anyway, so
+        # write_verified() reads it back rather than this loop re-sending it blind.
+        attempts = 1 if endpoint_key == "dispatch" else GROWATT_RETRIES
+        for attempt in range(attempts):
             try:
                 async with self.http_session(timeout=timeout) as session:
                     request = session.post(url, headers=headers, json=payload) if payload is not None else session.post(url, headers=headers)
@@ -218,7 +226,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                             return code, result.get("data")
             except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
                 last_error = str(error)
-            if attempt < GROWATT_RETRIES - 1:
+            if attempt < attempts - 1:
                 await asyncio.sleep(1 + attempt)
         self.last_api_error = last_error or "request failed"
         self.log("Warn: Growatt {} transport failure: {}".format(path, self.last_api_error))
@@ -596,7 +604,11 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         holding = sn in self._charge_hold
         at_target = soc is not None and (soc >= target or (holding and soc >= target - GROWATT_HOLD_HYSTERESIS))
         if at_target and not holding:
-            self.log("Info: Growatt {} SoC {:.1f}% reached charge target {}%, holding the charge slot at 0% power. The public API has no writable SoC limit, so Predbat enforces this from one-minute telemetry.".format(sn, soc, int(target)))
+            self.log(
+                "Info: Growatt {} SoC {:.1f}% reached charge target {}%, holding the charge slot at 0% power. The public API has no writable SoC limit, so Predbat enforces this from telemetry, which Growatt updates about every five minutes.".format(
+                    sn, soc, int(target)
+                )
+            )
             self._charge_hold.add(sn)
         elif holding and not at_target:
             self.log("Info: Growatt {} SoC {} fell below charge target {}%, resuming the charge".format(sn, "unknown" if soc is None else "{:.1f}%".format(soc), int(target)))
@@ -621,7 +633,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
             gate_key = (sn, direction)
             if reason:
                 if self._soc_gate_state.get(gate_key) != reason:
-                    self.log("Info: Growatt {} withholding {} slot because {}. The public API has no writable SoC limit, so Predbat enforces this from one-minute telemetry.".format(sn, direction, reason))
+                    self.log("Info: Growatt {} withholding {} slot because {}. The public API has no writable SoC limit, so Predbat enforces this from telemetry, which Growatt updates about every five minutes.".format(sn, direction, reason))
                 self._soc_gate_state[gate_key] = reason
                 if direction == "charge":
                     self._charge_hold.discard(sn)
@@ -661,6 +673,63 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         """Seconds until the per-device dispatch limit allows another request, 0 when it does."""
         return max(0.0, self.min_write_interval - (time.monotonic() - self.last_write_time.get(sn, 0)))
 
+    async def _sleep(self, seconds):
+        """Wait, as a method so tests can skip the pacing and back-off waits."""
+        await asyncio.sleep(seconds)
+
+    async def _paced(self, sn, call):
+        """Wait out the per-device dispatch limit, make one dispatch read or write, and stamp it."""
+        wait = self._pacing_wait(sn)
+        if wait > 0:
+            await self._sleep(wait)
+        try:
+            return await call()
+        finally:
+            self.last_write_time[sn] = time.monotonic()
+
+    async def read_dispatch_retry(self, sn, set_type, attempts=GROWATT_READ_ATTEMPTS):
+        """Read one dispatch setting, retrying with back-off while the device is busy, offline or slow.
+
+        Returns (ok, data). A live SPH answered READ_DEVICE_PARAM_FAIL (18) for a few minutes
+        after a slow write, so one failed read is not taken as the answer.
+        """
+        for attempt in range(attempts):
+            if attempt:
+                await self._sleep(GROWATT_RETRY_BACKOFF * attempt)
+            ok, data = await self._paced(sn, lambda: self.read_dispatch(sn, set_type))
+            if ok:
+                return True, data
+        return False, None
+
+    async def write_verified(self, sn, set_type, value, matches, attempts=GROWATT_WRITE_ATTEMPTS):
+        """Write one dispatch setting and confirm it by reading it back, retrying until it reads as written.
+
+        The read-back decides, not the write's own answer: Growatt's docs say to reconcile a
+        timed-out write with readDeviceDispatch, and a live SPH answered PARAMETER_SETTING_FAILED
+        to a table it did apply. matches(data) says whether a read shows the write took effect.
+        Returns True once a read-back matches.
+        """
+        for attempt in range(attempts):
+            if attempt:
+                await self._sleep(GROWATT_RETRY_BACKOFF * attempt)
+            wrote = await self._paced(sn, lambda: self.dispatch(sn, set_type, value))
+            ok, data = await self.read_dispatch_retry(sn, set_type)
+            if ok and matches(data):
+                if not wrote:
+                    self.log("Info: Growatt {} {} answered {}, but the read-back shows it applied".format(sn, set_type, self.last_api_error or "a failure"))
+                return True
+            self.log("Warn: Growatt {} {} attempt {} of {} not confirmed by read-back ({})".format(sn, set_type, attempt + 1, attempts, "read failed" if not ok else "device holds {}".format(json.dumps(data, default=str)[:300])))
+        return False
+
+    async def write_slots_verified(self, sn, slots):
+        """Write a slot table (16 unused slots for an empty one) and confirm it by reading it back."""
+        target = normalize_slots(slots)
+        return await self.write_verified(sn, GROWATT_SET_TIME_SLOTS, dispatch_slot_payload(target), lambda data: parse_dispatch_slots(data) == target)
+
+    async def set_control_verified(self, sn, value):
+        """Set enable_control and confirm it by reading it back."""
+        return await self.write_verified(sn, GROWATT_SET_ENABLE_CONTROL, value, lambda data: data == value)
+
     async def apply_schedule(self, sn, force=False):
         """Write one complete slot table, with change detection and endpoint pacing.
 
@@ -683,18 +752,19 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 self.log("Info: Growatt {} schedule update deferred for {:.1f}s by the documented dispatch rate limit".format(sn, wait))
                 return False
             if sn not in self.control_enabled:
-                ok = await self.dispatch(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_ON)
-                self.last_write_time[sn] = time.monotonic()
-                if not ok:
+                if not await self.set_control_verified(sn, GROWATT_CONTROL_ON):
+                    self.log("Warn: Growatt {} could not confirm enable_control 1, retrying next run".format(sn))
                     return False
                 self.control_enabled.add(sn)
                 self.control_claimed.add(sn)
-                await asyncio.sleep(GROWATT_DISPATCH_INTERVAL)
-            ok = await self.dispatch(sn, GROWATT_SET_TIME_SLOTS, slots)
-            self.last_write_time[sn] = time.monotonic()
+            ok = await self.write_slots_verified(sn, slots)
             if ok:
                 self.applied_slots[sn] = list(slots)
-                self.log("Info: Growatt wrote {} UTC charge/discharge slot(s) for {}".format(len(slots), sn))
+                self.log("Info: Growatt wrote {} UTC charge/discharge slot(s) for {}, confirmed by read-back".format(len(slots), sn))
+            else:
+                # What the device holds is now unknown, so the next apply writes the table in full
+                self.applied_slots.pop(sn, None)
+                self.log("Warn: Growatt {} slot table could not be confirmed after {} attempts, retrying next run".format(sn, GROWATT_WRITE_ATTEMPTS))
         await self.save_state()
         return ok
 
@@ -708,8 +778,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         async with self._write_lock:
             if self._pacing_wait(sn) > 0:
                 return False
-            ok, data = await self.read_dispatch(sn, GROWATT_SET_TIME_SLOTS)
-            self.last_write_time[sn] = time.monotonic()
+            ok, data = await self._paced(sn, lambda: self.read_dispatch(sn, GROWATT_SET_TIME_SLOTS))
         self.mark_refreshed("readback:{}".format(sn))
         if not ok:
             self.log("Warn: Growatt {} slot table read-back failed: {}".format(sn, self.last_api_error))
@@ -739,10 +808,9 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         async with self._write_lock:
             if self._pacing_wait(sn) > 0:
                 return False
-            ok = await self.dispatch(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_OFF)
-            self.last_write_time[sn] = time.monotonic()
+            ok = await self.set_control_verified(sn, GROWATT_CONTROL_OFF)
         if not ok:
-            self.log("Warn: Growatt {} could not release OpenAPI control ({}), retrying next run".format(sn, self.last_api_error))
+            self.log("Warn: Growatt {} could not confirm the release of OpenAPI control ({}), retrying next run".format(sn, self.last_api_error))
             return False
         self.control_claimed.discard(sn)
         self.control_enabled.discard(sn)
@@ -989,10 +1057,14 @@ GROWATT_CLI_EXPECTATION = {
 }
 GROWATT_CLI_SCENARIOS = ("charge", "export", "hold")
 GROWATT_CLI_DEFAULT_POWER_W = 1000
-GROWATT_CLI_DEFAULT_MINUTES = 3
+# Longest watch per test. A live SPH uploads telemetry about every five minutes, so this allows
+# two fresh readings after the settle time; the watch ends early once it has them.
+GROWATT_CLI_DEFAULT_MINUTES = 12
 # Readings this soon after a write are shown but not judged: the cloud relays the slot table to
 # the inverter and the inverter ramps, so the first reading can still show the old behaviour.
 GROWATT_CLI_SETTLE_SECONDS = 60
+# Fresh, settled readings that end a test's watch early.
+GROWATT_CLI_FRESH_NEEDED = 2
 # Battery power below this many watts counts as idle when judging.
 GROWATT_CLI_THRESHOLD_W = 100
 # getDeviceData's endpoint page allows one call a minute per device.
@@ -1119,32 +1191,29 @@ def judge_cli_window(scenario, samples, settle_seconds=GROWATT_CLI_SETTLE_SECOND
     return "PASS", "battery {} in every settled reading ({})".format(wanted, readings)
 
 
-async def _cli_paced(client, sn, call):
-    """Wait out the five-second per-device dispatch limit, then make one dispatch read or write."""
-    wait = client._pacing_wait(sn)
-    if wait > 0:
-        await asyncio.sleep(wait)
+def _parse_utc_time(value):
+    """Parse getDeviceData's utcTime ("2026-11-11 21:06:37") as a UTC datetime, or None."""
     try:
-        return await call()
-    finally:
-        client.last_write_time[sn] = time.monotonic()
+        return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
 
 
 async def _cli_sample(client, sn):
-    """Poll telemetry for one device, returning Predbat's battery power, or None when the poll failed."""
+    """Poll telemetry for one device, returning (Predbat battery power, sample utcTime), either None when unknown."""
     code, data = await client._post("device_data", {"deviceSn": sn})
     if code != GROWATT_CODE_OK or not client._apply_telemetry(sn, data):
-        return None
-    return client.device_values[sn].get("battery_power")
+        return None, None
+    return client.device_values[sn].get("battery_power"), _parse_utc_time(data.get("utcTime"))
 
 
 async def _cli_read_baseline(client, sn):
     """Read the device's enable_control value and raw slot table, or (None, None) when either cannot be read."""
-    ok, enable = await _cli_paced(client, sn, lambda: client.read_dispatch(sn, GROWATT_SET_ENABLE_CONTROL))
+    ok, enable = await client.read_dispatch_retry(sn, GROWATT_SET_ENABLE_CONTROL)
     if not ok or not isinstance(enable, (int, float)):
         print("Could not read enable_control ({}): {}".format(client.last_api_error, enable))
         return None, None
-    ok, slots = await _cli_paced(client, sn, lambda: client.read_dispatch(sn, GROWATT_SET_TIME_SLOTS))
+    ok, slots = await client.read_dispatch_retry(sn, GROWATT_SET_TIME_SLOTS)
     if not ok or not isinstance(slots, list) or parse_dispatch_slots(slots) is None:
         print("Could not read the slot table in a shape Predbat can restore ({}): {}".format(client.last_api_error, slots))
         return None, None
@@ -1152,28 +1221,20 @@ async def _cli_read_baseline(client, sn):
 
 
 async def _cli_restore_table(client, sn, slots):
-    """Write back a saved slot table exactly as it was read, read it back, and return True when it matches."""
-    restored = await _cli_paced(client, sn, lambda: client.dispatch(sn, GROWATT_SET_TIME_SLOTS, slots))
-    if not restored:
-        # The device may refuse its own unused placeholder slots back; try the same table without them
-        print("  writing the saved table as read was refused ({}); retrying without the unused 00:00-00:00 slots".format(client.last_api_error))
-        restored = await _cli_paced(client, sn, lambda: client.dispatch(sn, GROWATT_SET_TIME_SLOTS, normalize_slots(slots)))
-    ok, now_slots = await _cli_paced(client, sn, lambda: client.read_dispatch(sn, GROWATT_SET_TIME_SLOTS))
-    now_parsed = parse_dispatch_slots(now_slots) if ok else None
-    table_ok = bool(restored) and now_parsed == normalize_slots(slots)
-    print("  restore slot table: {} - device now holds: {}".format("OK" if table_ok else "FAILED", _cli_slot_text(now_parsed) if now_parsed is not None else "unreadable"))
+    """Write back the saved slot table, confirmed by read-back with retries; return True once it reads as saved.
+
+    An empty saved table goes out as 16 unused slots, since Growatt refuses an empty list.
+    """
+    table_ok = await client.write_slots_verified(sn, slots)
+    print("  restore slot table: {} - {}".format("OK" if table_ok else "FAILED", "device holds {}".format(_cli_slot_text(normalize_slots(slots))) if table_ok else "see the Warn: lines above"))
     return table_ok
 
 
 async def _cli_restore_enable(client, sn, enable):
-    """Put enable_control back to its saved value if it differs, and return True when it reads back as saved."""
-    ok, now_enable = await _cli_paced(client, sn, lambda: client.read_dispatch(sn, GROWATT_SET_ENABLE_CONTROL))
-    if not (ok and now_enable == enable):
-        written = await _cli_paced(client, sn, lambda: client.dispatch(sn, GROWATT_SET_ENABLE_CONTROL, enable))
-        ok, now_enable = await _cli_paced(client, sn, lambda: client.read_dispatch(sn, GROWATT_SET_ENABLE_CONTROL))
-        ok = ok and bool(written)
-    enable_ok = ok and now_enable == enable
-    print("  restore enable_control: {} - device now reads {}".format("OK" if enable_ok else "FAILED", now_enable if ok else "unreadable"))
+    """Put enable_control back to its saved value if it differs, confirmed by read-back with retries."""
+    ok, now_enable = await client.read_dispatch_retry(sn, GROWATT_SET_ENABLE_CONTROL)
+    enable_ok = (ok and now_enable == enable) or await client.set_control_verified(sn, enable)
+    print("  restore enable_control: {} - {}".format("OK" if enable_ok else "FAILED", "device reads {}".format(enable) if enable_ok else "see the Warn: lines above"))
     return enable_ok
 
 
@@ -1215,7 +1276,7 @@ async def growatt_write_test(client, sn, scenarios, power, minutes, confirm, sna
         print("\nFAILED: {} reports no battery power rating, so a power cannot be turned into a percentage - pass --battery-rate-max".format(sn))
         return False
     percentage = clamp_percent(power / rate_max * 100.0)
-    print("\nWrite tests on {}: {} at {} W ({}% of the {:.0f} W battery rating), {} minutes each".format(sn, ", ".join(scenarios), power, percentage, rate_max, minutes))
+    print("\nWrite tests on {}: {} at {} W ({}% of the {:.0f} W battery rating), watching up to {} minutes each".format(sn, ", ".join(scenarios), power, percentage, rate_max, minutes))
     print("Make sure no running Predbat instance is controlling this inverter, or it will overwrite the test slots.")
 
     enable, saved_slots = await _cli_read_baseline(client, sn)
@@ -1234,12 +1295,12 @@ async def growatt_write_test(client, sn, scenarios, power, minutes, confirm, sna
     # the finally block puts it back however the run ends (a failure, an exception or Ctrl-C).
     table_dirty = False
     enable_dirty = False
-    samples_per_test = int(minutes * 60 // sample_seconds) + 1
+    polls_per_test = int(minutes * 60 // sample_seconds) + 1
     try:
         if enable != GROWATT_CONTROL_ON:
             enable_dirty = True
-            if not await _cli_paced(client, sn, lambda: client.dispatch(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_ON)):
-                print("\nFAILED: enable_control 1 was refused ({})".format(client.last_api_error))
+            if not await client.set_control_verified(sn, GROWATT_CONTROL_ON):
+                print("\nFAILED: enable_control 1 could not be confirmed by read-back")
                 results.append(("enable_control 1", "FAIL"))
                 return False
         for scenario in scenarios:
@@ -1251,32 +1312,34 @@ async def growatt_write_test(client, sn, scenarios, power, minutes, confirm, sna
                 continue
             print("  writing {}".format(_cli_slot_text(slots)))
             table_dirty = True
-            if not await _cli_paced(client, sn, lambda: client.dispatch(sn, GROWATT_SET_TIME_SLOTS, slots)):
-                print("  write refused ({})".format(client.last_api_error))
+            if not await client.write_slots_verified(sn, slots):
+                print("  the write could not be confirmed by read-back after {} attempts".format(GROWATT_WRITE_ATTEMPTS))
                 results.append((scenario, "FAIL"))
             else:
-                written_at = time.monotonic()
-                ok, read_back = await _cli_paced(client, sn, lambda: client.read_dispatch(sn, GROWATT_SET_TIME_SLOTS))
-                read_parsed = parse_dispatch_slots(read_back) if ok else None
-                match = read_parsed == normalize_slots(slots)
-                print("  read back: {} ({})".format("matches" if match else "DIFFERS", _cli_slot_text(read_parsed) if read_parsed is not None else "unreadable"))
+                written_utc = datetime.now(timezone.utc)
+                print("  confirmed by read-back. Growatt uploads telemetry about every 5 minutes, so only readings taken after the write are judged")
                 samples = []
-                for index in range(samples_per_test):
+                seen = set()
+                for index in range(polls_per_test):
                     if index:
                         await asyncio.sleep(sample_seconds)
-                    power_now = await _cli_sample(client, sn)
+                    power_now, sample_utc = await _cli_sample(client, sn)
                     values = client.device_values.get(sn, {})
-                    print(
-                        "  +{:3.0f}s  SoC {}%  battery {} W  grid {} W  load {} W".format(
-                            time.monotonic() - written_at, values.get("soc", "?"), "?" if power_now is None else "{:.0f}".format(power_now), values.get("grid_power", "?"), values.get("load_power", "?")
-                        )
+                    fresh = power_now is not None and sample_utc is not None and sample_utc > written_utc and sample_utc not in seen
+                    age = (
+                        "new reading, taken {:.0f}s after the write".format((sample_utc - written_utc).total_seconds())
+                        if fresh
+                        else ("no reading" if power_now is None else "old reading from {}".format(sample_utc.strftime("%H:%M:%S") if sample_utc else "?"))
                     )
-                    if power_now is not None:
-                        # Judged on the planned offset, which the real one only ever exceeds
-                        samples.append((index * sample_seconds, power_now))
+                    print(
+                        "  poll {:2}  SoC {}%  battery {} W  grid {} W  load {} W  ({})".format(index + 1, values.get("soc", "?"), "?" if power_now is None else "{:.0f}".format(power_now), values.get("grid_power", "?"), values.get("load_power", "?"), age)
+                    )
+                    if fresh:
+                        seen.add(sample_utc)
+                        samples.append(((sample_utc - written_utc).total_seconds(), power_now))
+                        if sum(1 for elapsed, _ in samples if elapsed >= settle_seconds) >= GROWATT_CLI_FRESH_NEEDED:
+                            break
                 verdict, reason = judge_cli_window(scenario, samples, settle_seconds=settle_seconds)
-                if not match and verdict == "PASS":
-                    verdict, reason = "FAIL", "the read-back did not match the table written; " + reason
                 print("  {}: {}".format(verdict, reason))
                 results.append((scenario, verdict))
             print("  clearing: restoring the saved slot table")

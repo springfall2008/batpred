@@ -39,6 +39,9 @@ from growatt_const import (
     GROWATT_SET_TIME_SLOTS,
     GROWATT_CONTROL_OFF,
     GROWATT_CONTROL_ON,
+    GROWATT_UNUSED_SLOT,
+    GROWATT_WRITE_ATTEMPTS,
+    dispatch_slot_payload,
     local_window_to_utc_slots,
     parse_dispatch_slots,
 )
@@ -101,6 +104,10 @@ class MockGrowatt(GrowattAPI):
 
     def update_success_timestamp(self):
         return None
+
+    async def _sleep(self, seconds):
+        """Record the pacing and back-off waits instead of sleeping."""
+        self.slept = getattr(self, "slept", []) + [seconds]
 
     @property
     def storage(self):
@@ -218,15 +225,20 @@ def test_growatt_stale_telemetry_withholds_slots():
     with patch("growatt.time.time", return_value=1_000_000):
         assert client._apply_telemetry(sn, payload)
         assert len(client.build_time_slots(sn, client.local_schedule[sn])) == 2
-    # The cloud keeps serving the same sample: the freshness clock does not advance.
+    # Growatt uploads about every five minutes, so one late upload (6 minutes) is not stale...
     with patch("growatt.time.time", return_value=1_000_000 + 6 * 60):
+        assert client._apply_telemetry(sn, dict(payload))
+        assert not client.telemetry_stale(sn)
+        assert len(client.build_time_slots(sn, client.local_schedule[sn])) == 2
+    # ...but two missed uploads (13 minutes of the same sample) are, and both slots are withheld.
+    with patch("growatt.time.time", return_value=1_000_000 + 13 * 60):
         assert client._apply_telemetry(sn, dict(payload))
         assert client.telemetry_stale(sn)
         assert client.build_time_slots(sn, client.local_schedule[sn]) == []
         assert any("telemetry has not updated" in message for message in client.log_messages)
     # A new sample restores both slots.
-    with patch("growatt.time.time", return_value=1_000_000 + 7 * 60):
-        assert client._apply_telemetry(sn, {"soc": 50, "utcTime": "2026-01-15 12:07:00"})
+    with patch("growatt.time.time", return_value=1_000_000 + 14 * 60):
+        assert client._apply_telemetry(sn, {"soc": 50, "utcTime": "2026-01-15 12:14:00"})
         assert not client.telemetry_stale(sn)
         assert len(client.build_time_slots(sn, client.local_schedule[sn])) == 2
 
@@ -352,20 +364,14 @@ def test_growatt_control_entities_round_trip():
 def test_growatt_apply_schedule_enables_control_then_deduplicates():
     client, sn = _ready_client()
     client.local_schedule[sn] = _schedule()
-    calls = []
-
-    async def dispatch(serial, set_type, value):
-        calls.append((serial, set_type, value))
-        return True
-
-    client.dispatch = dispatch
-    # Avoid a real five-second wait while still proving the enable-control call is issued.
-    with patch("growatt.asyncio.sleep", new=AsyncMock()):
-        assert run_async_local(client.apply_schedule(sn))
-        assert [call[1] for call in calls] == [GROWATT_SET_ENABLE_CONTROL, GROWATT_SET_TIME_SLOTS]
-        # Same payload is accepted as a no-op, without a third API call.
-        assert run_async_local(client.apply_schedule(sn))
-        assert len(calls) == 2
+    calls = _recording_dispatch(client)
+    assert run_async_local(client.apply_schedule(sn))
+    assert [call[1] for call in calls] == [GROWATT_SET_ENABLE_CONTROL, GROWATT_SET_TIME_SLOTS]
+    # Each write is read back before the next request, paced at the five-second limit
+    assert calls.reads == [GROWATT_SET_ENABLE_CONTROL, GROWATT_SET_TIME_SLOTS]
+    # Same payload is accepted as a no-op, without a third API call.
+    assert run_async_local(client.apply_schedule(sn))
+    assert len(calls) == 2
 
 
 def test_growatt_automatic_config_and_publish():
@@ -440,16 +446,120 @@ def test_growatt_refresh_threshold_fits_two_hour_tokens():
         assert client._token_needs_refresh() is True
 
 
-def _recording_dispatch(client, result=True):
-    """Replace client.dispatch with a recorder; return the list of (serial, set_type, value) calls."""
-    calls = []
+class _DeviceCalls(list):
+    """The (serial, set_type, value) writes a simulated device received, with its state and reads."""
+
+
+def _recording_dispatch(client, result=True, applies=None, enable=0):
+    """Put a simulated device behind client.dispatch/read_dispatch; return the list of writes it received.
+
+    result is each write's answer, and applies (default: result) whether the device takes it, so
+    a write can answer failure yet apply, as a live SPH did. Reads return what the device holds:
+    the slot table as all 16 entries, unused ones 00:00-00:00, or the enable_control value. An
+    empty list is refused like the live device (WRONG_PARAMETER_VALUE) and changes nothing.
+    """
+    calls = _DeviceCalls()
+    calls.reads = []
+    calls.enable = enable
+    calls.table = [dict(GROWATT_UNUSED_SLOT) for _ in range(16)]
+    applies = result if applies is None else applies
 
     async def dispatch(serial, set_type, value):
+        """Record a write, and apply it unless the device is set to ignore writes or it is an empty list."""
         calls.append((serial, set_type, value))
+        if set_type == GROWATT_SET_TIME_SLOTS and value == []:
+            return False
+        if applies:
+            if set_type == GROWATT_SET_ENABLE_CONTROL:
+                calls.enable = value
+            else:
+                active = [dict(slot) for slot in value if slot["startTime"] != slot["endTime"]]
+                calls.table = active + [dict(GROWATT_UNUSED_SLOT) for _ in range(16 - len(active))]
         return result
 
+    async def read_dispatch(serial, set_type):
+        """Answer a read with what the device holds."""
+        calls.reads.append(set_type)
+        if set_type == GROWATT_SET_ENABLE_CONTROL:
+            return True, calls.enable
+        return True, [dict(slot) for slot in calls.table]
+
     client.dispatch = dispatch
+    client.read_dispatch = read_dispatch
     return calls
+
+
+def test_growatt_empty_table_payload():
+    """An empty table is sent as 16 unused slots, which the device accepts; a real table is sent as it is."""
+    assert dispatch_slot_payload([]) == [dict(GROWATT_UNUSED_SLOT) for _ in range(16)]
+    assert dispatch_slot_payload(None) == [dict(GROWATT_UNUSED_SLOT) for _ in range(16)]
+    # The device's own empty read-back normalises to [] and is sent back the same way
+    assert dispatch_slot_payload([dict(GROWATT_UNUSED_SLOT) for _ in range(16)]) == [dict(GROWATT_UNUSED_SLOT) for _ in range(16)]
+    table = [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+    assert dispatch_slot_payload(table) == table
+    # And the placeholders read back as an empty table
+    assert parse_dispatch_slots(dispatch_slot_payload([])) == []
+
+
+def test_growatt_write_answering_failure_but_applied_is_confirmed():
+    """A write that answers failure but reads back as written counts as done, without a second write."""
+    client, sn = _ready_client()
+    calls = _recording_dispatch(client, result=False, applies=True)
+    table = [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+    assert run_async_local(client.write_slots_verified(sn, table))
+    assert len(calls) == 1
+    assert any("but the read-back shows it applied" in message for message in client.log_messages)
+
+
+def test_growatt_write_never_applied_is_retried_then_fails():
+    """A write the device never takes is retried with back-off, and the known table becomes unknown."""
+    client, sn = _ready_client()
+    client.local_schedule[sn] = _schedule()
+    client.control_enabled.add(sn)
+    client.applied_slots[sn] = []
+    calls = _recording_dispatch(client, result=True, applies=False)
+    assert not run_async_local(client.apply_schedule(sn))
+    assert len(calls) == GROWATT_WRITE_ATTEMPTS
+    assert len(calls.reads) == GROWATT_WRITE_ATTEMPTS
+    # Back-off of 5 s then 10 s between the attempts, on top of the pacing waits
+    assert 5 in client.slept and 10 in client.slept
+    assert sn not in client.applied_slots
+    assert any("could not be confirmed after" in message for message in client.log_messages)
+
+
+def test_growatt_reads_retry_while_the_device_is_busy():
+    """READ_DEVICE_PARAM_FAIL is retried with back-off, so one busy answer is not taken as the result."""
+    client, sn = _ready_client()
+    answers = [(False, None), (False, None), (True, 1)]
+    client.read_dispatch = AsyncMock(side_effect=answers)
+    assert run_async_local(client.read_dispatch_retry(sn, GROWATT_SET_ENABLE_CONTROL)) == (True, 1)
+    assert client.read_dispatch.await_count == 3
+    client.read_dispatch = AsyncMock(return_value=(False, None))
+    assert run_async_local(client.read_dispatch_retry(sn, GROWATT_SET_ENABLE_CONTROL)) == (False, None)
+    assert client.read_dispatch.await_count == 3
+
+
+def test_growatt_dispatch_is_not_resent_after_a_transport_failure():
+    """A dispatch write is sent once and confirmed by reading back; a read is retried on transport failure."""
+    import aiohttp
+
+    for endpoint, expected_posts in (("dispatch", 1), ("device_info", 3)):
+        client = MockGrowatt()
+        posts = []
+
+        class _FailingSession(_RecordingSession):
+            """A session whose every post times out."""
+
+            def post(self, url, headers=None, json=None):
+                """Record the URL, then fail like a timeout."""
+                self.urls.append(url)
+                raise aiohttp.ClientError("timed out")
+
+        client.http_session = lambda **kwargs: _FailingSession(posts)
+        with patch("growatt.asyncio.sleep", new=AsyncMock()):
+            code, _ = run_async_local(client._request(endpoint, {"deviceSn": "SPH123"}))
+        assert code == -1
+        assert len(posts) == expected_posts, (endpoint, posts)
 
 
 def _idle_schedule():
@@ -465,9 +575,9 @@ def test_growatt_unknown_table_is_written_even_when_empty():
     client, sn = _ready_client()
     client.local_schedule[sn] = _idle_schedule()
     calls = _recording_dispatch(client)
-    with patch("growatt.asyncio.sleep", new=AsyncMock()):
-        assert run_async_local(client.apply_schedule(sn))
-    assert calls == [(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_ON), (sn, GROWATT_SET_TIME_SLOTS, [])]
+    assert run_async_local(client.apply_schedule(sn))
+    # Growatt refuses an empty list, so the empty table goes out as 16 unused slots
+    assert calls == [(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_ON), (sn, GROWATT_SET_TIME_SLOTS, [dict(GROWATT_UNUSED_SLOT) for _ in range(16)])]
     # Now the empty table is known, so it is not sent again
     client.last_write_time[sn] = 0
     assert run_async_local(client.apply_schedule(sn))
@@ -610,7 +720,8 @@ def test_growatt_release_control():
     client.control_enabled.add(sn)
     client.applied_slots[sn] = [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
 
-    calls = _recording_dispatch(client, result=False)
+    # The device refuses and still reads enable_control 1, so the release is not confirmed
+    calls = _recording_dispatch(client, result=False, enable=1)
     assert not run_async_local(client.release_control(sn))
     assert client.control_claimed == {sn}
 
@@ -801,18 +912,24 @@ class FakeGrowattDevice:
     Holds enable_control and a 16-entry slot table (unused entries 00:00-00:00, as a live SPH
     reads), records every request, and reports battery power from the table: a slot's
     percentage of a 5000 W rating, Growatt's sign (positive = charging), or a 250 W discharge
-    with no slot. hold_works=False makes a 0% slot behave like no slot at all.
+    with no slot. hold_works=False makes a 0% slot behave like no slot at all. An empty slot list
+    is refused (WRONG_PARAMETER_VALUE, 14) as the live device does. Telemetry carries a utcTime:
+    the first stale_polls polls of a test repeat a sample taken before the write (the 250 W
+    discharge), as the five-minute upload interval does; later polls are new uploads.
     """
 
     UNUSED = {"percentage": 0, "startTime": "00:00", "endTime": "00:00"}
 
-    def __init__(self, enable=0, hold_works=True, fail_reads=False, raise_on_sample=None):
+    def __init__(self, enable=0, hold_works=True, fail_reads=False, raise_on_sample=None, stale_polls=0):
         """Start with the given enable_control value and an empty 16-slot table."""
         self.enable = enable
         self.table = [dict(self.UNUSED) for _ in range(16)]
         self.hold_works = hold_works
         self.fail_reads = fail_reads
         self.raise_on_sample = raise_on_sample
+        self.stale_polls = stale_polls
+        self.polls_since_write = 0
+        self.clock = datetime.now(pytz.utc)
         self.samples = 0
         self.requests = []
 
@@ -824,8 +941,11 @@ class FakeGrowattDevice:
             if body["setType"] == GROWATT_SET_ENABLE_CONTROL:
                 self.enable = body["value"]
             else:
+                if body["value"] == []:
+                    return 14, None
                 active = [slot for slot in body["value"] if slot["startTime"] != slot["endTime"]]
                 self.table = [dict(slot) for slot in active] + [dict(self.UNUSED) for _ in range(16 - len(active))]
+                self.polls_since_write = 0
             return 0, None
         if endpoint_key == "read_dispatch":
             if self.fail_reads:
@@ -833,15 +953,22 @@ class FakeGrowattDevice:
             return 0, (self.enable if body["setType"] == GROWATT_SET_ENABLE_CONTROL else [dict(slot) for slot in self.table])
         if endpoint_key == "device_data":
             self.samples += 1
+            self.polls_since_write += 1
             if self.raise_on_sample == self.samples:
                 raise RuntimeError("connection dropped")
-            active = [slot for slot in self.table if slot["startTime"] != slot["endTime"]]
-            percentage = active[0]["percentage"] if active else None
-            if percentage is None or (percentage == 0 and not self.hold_works):
+            if self.polls_since_write <= self.stale_polls:
+                # The last upload, from before the write: the old 250 W discharge
+                sample_time = self.clock - timedelta(minutes=1)
                 bat_power = -250.0
             else:
-                bat_power = percentage / 100.0 * 5000
-            return 0, {"soc": 60, "batPower": bat_power, "meterPower": 0, "ppv": 0, "payLoadPower": 300, "utcTime": "t{}".format(self.samples)}
+                sample_time = self.clock + timedelta(minutes=5 * self.samples)
+                active = [slot for slot in self.table if slot["startTime"] != slot["endTime"]]
+                percentage = active[0]["percentage"] if active else None
+                if percentage is None or (percentage == 0 and not self.hold_works):
+                    bat_power = -250.0
+                else:
+                    bat_power = percentage / 100.0 * 5000
+            return 0, {"soc": 60, "batPower": bat_power, "meterPower": 0, "ppv": 0, "payLoadPower": 300, "utcTime": sample_time.strftime("%Y-%m-%d %H:%M:%S")}
         return -1, None
 
     def writes(self):
@@ -849,12 +976,12 @@ class FakeGrowattDevice:
         return [(set_type, value) for endpoint, set_type, value in self.requests if endpoint == "dispatch"]
 
 
-def _write_test(device, scenarios, tmp_dir, confirm=None):
+def _write_test(device, scenarios, tmp_dir, confirm=None, minutes=2):
     """Run growatt_write_test() against a fake device with sleeps skipped, returning (result, client)."""
     client, sn = _ready_client()
     client._post = device.post
     with patch("growatt.asyncio.sleep", new=AsyncMock()), contextlib.redirect_stdout(io.StringIO()) as output:
-        result = run_async_local(growatt_write_test(client, sn, scenarios, 1000, 2, confirm or (lambda prompt: True), tmp_dir, settle_seconds=0))
+        result = run_async_local(growatt_write_test(client, sn, scenarios, 1000, minutes, confirm or (lambda prompt: True), tmp_dir, settle_seconds=0))
     client.cli_output = output.getvalue()
     return result, client
 
@@ -904,6 +1031,29 @@ def test_growatt_cli_write_test_restores_each_time():
     assert writes[-1] == (GROWATT_SET_ENABLE_CONTROL, 0)
     assert device.table == original and device.enable == 0
     assert "PASSED" in client.cli_output
+
+
+def test_growatt_cli_write_test_ignores_old_readings():
+    """Readings uploaded before the write are shown but never judged; the verdict waits for new uploads."""
+    import tempfile
+
+    # The old reading is a 250 W discharge, which would fail a charge test if it were judged
+    device = FakeGrowattDevice(enable=1, stale_polls=3)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        result, client = _write_test(device, ["charge"], tmp_dir, minutes=12)
+    assert result, client.cli_output
+    assert client.cli_output.count("old reading from") == 3
+    assert "PASS: battery charging" in client.cli_output
+    # Stops once two new readings are in: three old polls, then two new ones
+    assert device.samples == 5
+
+    # Only old readings within the 12-minute watch (13 polls): no verdict either way
+    device = FakeGrowattDevice(enable=1, stale_polls=20)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        result, client = _write_test(device, ["charge"], tmp_dir, minutes=12)
+    assert not result
+    assert "INCONCLUSIVE" in client.cli_output
+    assert device.table == [dict(FakeGrowattDevice.UNUSED) for _ in range(16)]
 
 
 def test_growatt_cli_write_test_failed_hold_still_restores():
@@ -1001,6 +1151,11 @@ def run_growatt_tests(my_predbat):
         ("request_id", test_growatt_request_ids_are_unique_32_character_hex),
         ("refresh_threshold", test_growatt_refresh_threshold_fits_two_hour_tokens),
         ("unknown_table_written", test_growatt_unknown_table_is_written_even_when_empty),
+        ("empty_table_payload", test_growatt_empty_table_payload),
+        ("write_failed_but_applied", test_growatt_write_answering_failure_but_applied_is_confirmed),
+        ("write_never_applied", test_growatt_write_never_applied_is_retried_then_fails),
+        ("reads_retry_busy", test_growatt_reads_retry_while_the_device_is_busy),
+        ("dispatch_not_resent", test_growatt_dispatch_is_not_resent_after_a_transport_failure),
         ("state_survives_restart", test_growatt_control_state_survives_restart),
         ("restore_without_storage", test_growatt_restore_without_storage_is_a_no_op),
         ("parse_dispatch_slots", test_growatt_parse_dispatch_slots_shapes),
@@ -1018,6 +1173,7 @@ def run_growatt_tests(my_predbat):
         ("cli_test_slots", test_growatt_cli_test_slots),
         ("cli_judge_window", test_growatt_cli_judge_window),
         ("cli_write_test_restores", test_growatt_cli_write_test_restores_each_time),
+        ("cli_write_test_old_readings", test_growatt_cli_write_test_ignores_old_readings),
         ("cli_write_test_failed_hold", test_growatt_cli_write_test_failed_hold_still_restores),
         ("cli_write_test_exception", test_growatt_cli_write_test_restores_after_an_exception),
         ("cli_write_test_no_baseline", test_growatt_cli_write_test_refuses_without_a_baseline),
