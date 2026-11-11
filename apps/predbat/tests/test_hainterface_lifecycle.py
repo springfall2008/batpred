@@ -167,7 +167,7 @@ def test_hainterface_initialize_retries_transient_statuses(my_predbat=None):
     return 0
 
 
-def test_hainterface_initialize_rejects_nonretryable_status(my_predbat=None):
+def test_hainterface_initialize_rejects_non_retryable_status(my_predbat=None):
     """A non-retryable 4xx response fails immediately without sleeping."""
     mock_base = MockBase()
     ha_interface = _make_uninitialized_ha_interface(mock_base)
@@ -559,7 +559,7 @@ def run_hainterface_lifecycle_tests(my_predbat):
     failed += test_hainterface_initialize_no_key_no_db(my_predbat)
     failed += test_hainterface_initialize_api_check_failed(my_predbat)
     failed += test_hainterface_initialize_retries_transient_statuses(my_predbat)
-    failed += test_hainterface_initialize_rejects_nonretryable_status(my_predbat)
+    failed += test_hainterface_initialize_rejects_non_retryable_status(my_predbat)
     failed += test_hainterface_initialize_retry_deadline(my_predbat)
     failed += test_predbat_stops_phase0_start_without_ha_interface(my_predbat)
     failed += test_hainterface_initialize_db_mirror(my_predbat)
