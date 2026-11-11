@@ -607,8 +607,8 @@ def test_predheat_temperature_units(my_predbat):
         units["sensor.boiler_f"] = "°F"
         my_predbat.args["predheat"]["flow_temp"] = "sensor.boiler_f$setpoint"
         real_get_state = my_predbat.ha_interface.get_state
-        my_predbat.ha_interface.get_state = (
-            lambda entity_id=None, default=None, attribute=None, refresh=False, raw=False: default if attribute == "setpoint" else ("°F" if attribute == "unit_of_measurement" else real_get_state(entity_id, default, attribute, refresh, raw))
+        my_predbat.ha_interface.get_state = lambda entity_id=None, default=None, attribute=None, refresh=False, raw=False: (
+            default if attribute == "setpoint" else ("°F" if attribute == "unit_of_measurement" else real_get_state(entity_id, default, attribute, refresh, raw))
         )
         try:
             if predheat.get_temperature_arg("flow_temp", 40.0) != 40.0:

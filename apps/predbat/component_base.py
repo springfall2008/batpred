@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from unittest.mock import NonCallableMock
 
-from utils import minutes_since_midnight
+from utils import clock_change_minutes, minutes_since_midnight
 import aiohttp
 import asyncio
 import math
@@ -475,6 +475,11 @@ class ComponentBase(ABC):
         """
         now_utc = self.base.now_utc
         return minutes_since_midnight(now_utc, now_utc.replace(hour=0, minute=0, second=0, microsecond=0))
+
+    def minutes_since_day_start(self):
+        """Real minutes since the start of today, for reading history keyed by real minutes back from now; minutes_now on any day but a clock-change one (GH#5760)."""
+        now_utc = self.base.now_utc
+        return minutes_since_midnight(now_utc, now_utc.replace(hour=0, minute=0, second=0, microsecond=0)) - clock_change_minutes(now_utc, self.base.local_tz)
 
     @property
     def plan_interval_minutes(self):

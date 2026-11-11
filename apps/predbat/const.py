@@ -42,6 +42,11 @@ DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
 # How long a half hour an Octopus Intelligent planned dispatch ran in keeps the dispatch rate after it ends,
 # while waiting for Octopus to list it as a completed dispatch - seen to take 15 to 60 minutes (GH#5520)
 OCTOPUS_DISPATCH_HOLD_MINUTES = 90
+# For this many minutes into the half hour after a held one, a car seen charging is taken for the tail of
+# the charge before it rather than an unlisted smart charge: car_charging_now can lag a car that stopped at the boundary while
+# Octopus still reports the smart charge in progress (GH#5884). One cycle, so a car that really charges on is held
+# at the next one
+OCTOPUS_DISPATCH_TAIL_MINUTES = 5
 # The same hold under the window billing rule (E.ON Next Drive Smart, GH#5521): the supplier bills every half hour a
 # planned dispatch was in force off-peak and never lists the ones the car did not charge in, so the hold is the
 # record - kept for a day, so today's cost and the hours either side of midnight are priced from it

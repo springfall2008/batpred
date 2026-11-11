@@ -38,7 +38,24 @@ from const import (
     RUN_STATE_NAMES,
     STATUS_STATE_MAX_LENGTH,
 )
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
+from utils import (
+    local_day_end_minute,
+    start_of_local_day,
+    dp0,
+    dp1,
+    dp2,
+    dp3,
+    calc_percent_limit,
+    minute_data,
+    minute_data_state,
+    find_charge_rate,
+    export_mode_of,
+    export_target_of,
+    export_power_of,
+    export_limit_sort_key,
+    pack_export_limit,
+    export_limit_from_stored,
+)
 from prediction import Prediction
 from billing import attach_billing, billing_entity_id, BILLING_DAYS, BILLING_EVENT_LABELS
 
@@ -2306,7 +2323,7 @@ class Output:
         # Work out change in battery value
         battery_level_now = self.soc_kwh_history.get(0, 0)
         battery_level_hour = self.soc_kwh_history.get(60, 0)
-        battery_level_midnight = self.soc_kwh_history.get(self.minutes_now, 0)
+        battery_level_midnight = self.soc_kwh_history.get(self.minutes_since_day_start(), 0)
         battery_change_hour = battery_level_now - battery_level_hour
         battery_change_midnight = battery_level_now - battery_level_midnight
         # Shared with the planner's own metric so the reported battery value matches the plan it
@@ -2390,9 +2407,13 @@ class Output:
                 )
             )
 
-        for minute in range(self.minutes_now):
+        # Today runs from the real start of the day. On a clock-change day that is not minute 0 of this plan-aligned loop
+        # (whose history reads line up with the rate tables), but the change away from it: an hour earlier after the autumn
+        # change, later after the spring one. Starting at 0 dropped today's first hour or counted yesterday's last (GH#5760)
+        day_start_minute = self.clock_change_minutes_today()
+        for minute in range(day_start_minute, self.minutes_now):
             # Add in standing charge
-            if (minute % (24 * 60)) == 0:
+            if minute == day_start_minute:
                 day_cost += self.metric_standing_charge
 
             minute_back = self.minutes_now - minute - 1
@@ -3144,7 +3165,17 @@ class Output:
         total_forecast_value_pred = 0
         total_forecast_value_pred_now = 0
 
-        for minute in range(0, 24 * 60, step):
+        # The day runs from its real start, which on a clock-change day is the change away from minute 0 of this plan-aligned
+        # loop: today then lasts 25 hours (autumn) or 23 (spring), and starting at 0 dropped its first hour or counted
+        # yesterday's last (GH#5760). The history reads below stay aligned with the plan minutes
+        day_start_minute = self.clock_change_minutes_today()
+        day_end_minute = local_day_end_minute(self.now_utc, self.local_tz)
+        for minute in range(day_start_minute, day_end_minute, step):
+            # Just before an autumn change the day's extra hour can reach beyond a day ahead of now, where a same-time-yesterday
+            # read has no data and would wrap round to two days back, so those rows are left out (GH#5760)
+            if minute + step - 1 - minutes_now > 24 * 60:
+                continue
+
             import_value_today = 0
             load_value_today = 0
             load_value_today_raw = 0
@@ -3154,11 +3185,12 @@ class Output:
                     import_value_today += self.get_from_incrementing(import_minutes, minutes_now - minute - offset - 1)
                     load_value_today, load_value_today_raw = self.get_filtered_load_minute(load_minutes, minutes_now - minute - 1, historical=False, step=step)
 
-            import_value_pred = 0
             forecast_value_pred = 0
             for offset in range(step):
-                import_value_pred += self.get_historical(import_minutes, minute - minutes_now + offset)
-                forecast_value_pred += self.get_from_incrementing(load_forecast, minute + offset, backwards=False)
+                # The load forecast starts at midnight_utc; before it (today's first hour after an autumn change) there is
+                # none, and a negative index would wrap round to tonight's forecast
+                if minute + offset >= 0:
+                    forecast_value_pred += self.get_from_incrementing(load_forecast, minute + offset, backwards=False)
 
             if self.load_forecast_only:
                 load_value_pred, load_value_pred_raw = (0, 0)
@@ -3247,12 +3279,15 @@ class Output:
 
         # Fetch yesterday's in-day adjustment factor from history
         yesterday_adjustment = 1.0
-        yesterday_adjustment_data = self.get_history_wrapper(entity_id=self.prefix + ".load_inday_adjustment", days=1, required=False)
+        # Yesterday's last minute is more than a day back late on an autumn clock-change day (a 25-hour day), so fetch two
+        # days of history then (GH#5760)
+        yesterday_adjustment_days = 2 if minutes_now - day_start_minute + 1 > 24 * 60 else 1
+        yesterday_adjustment_data = self.get_history_wrapper(entity_id=self.prefix + ".load_inday_adjustment", days=yesterday_adjustment_days, required=False)
         if yesterday_adjustment_data:
             # Extract yesterday's final adjustment value at midnight position
             yesterday_data, _ = minute_data(
                 yesterday_adjustment_data[0],
-                1,
+                yesterday_adjustment_days,
                 self.now_utc,
                 "state",
                 "last_updated",
@@ -3262,7 +3297,10 @@ class Output:
                 divide_by=1.0,
                 scale=1.0,
             )
-            minutes_back = minutes_now + 1
+            # minute_data() keys history by real minutes back from now, and minutes_now counts from midnight_utc, which on a
+            # clock-change day is not the real start of the day - without the correction the lookup lands an hour off
+            # yesterday's final value (GH#5760)
+            minutes_back = minutes_now - day_start_minute + 1
             yesterday_adjustment_pct = yesterday_data.get(minutes_back, 100.0)
             yesterday_adjustment = yesterday_adjustment_pct / 100.0  # Convert from percentage to factor
 
@@ -3271,7 +3309,8 @@ class Output:
             yesterday_adjustment = min(yesterday_adjustment, 2.0)
 
         difference = 1.0
-        if minutes_now >= 180 and actual_total_now >= 1.0 and actual_total_today > 0.0:
+        # Three hours of today's data, counted in real minutes since the day began (GH#5760)
+        if minutes_now - day_start_minute >= 180 and actual_total_now >= 1.0 and actual_total_today > 0.0:
             # Make a ratio only if we have enough data to consider the outcome
             difference = 1.0 + ((actual_total_today - load_total_pred) / actual_total_today)
 
@@ -3613,7 +3652,14 @@ class Output:
             yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         finally:
             self.forecast_minutes = forecast_minutes_before_yesterday_step
-        minutes_back = self.minutes_now + 1
+        # How far back yesterday's last minute is in the history below. minute_data() keys history by real minutes back from
+        # now, and minutes_now counts from midnight_utc, which on a clock-change day is not the real start of the day: without
+        # the correction the autumn lookup lands an hour into today (reading today's standing charge as yesterday's cost) and
+        # the spring one an hour before yesterday ended (GH#5760)
+        minutes_back = self.minutes_since_day_start() + 1
+        # The per-minute arrays below stay on the History view's own axis - minute m is midnight_utc - 1 day + m, the axis
+        # load, PV, rates, status and billing are all built on - so they keep the uncorrected offset
+        minutes_back_axis = self.minutes_now + 1
 
         # Get yesterday's SoC
         try:
@@ -3684,14 +3730,17 @@ class Output:
             carbon_data, _ = minute_data(carbon_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
             carbon_yesterday = carbon_data.get(minutes_back, 0.0)
         cost_yesterday_array = {}
+        day_start_row = end_record + self.clock_change_minutes_today()
         for minute in range(0, end_record + self.minutes_now):
-            cost_value = cost_data.get(minutes_back + 24 * 60 - minute - 5, 0.0)  # -5 gives 4 minutes into new data to allow for reset
+            cost_value = cost_data.get(minutes_back_axis + 24 * 60 - minute - 5, 0.0)  # -5 gives 4 minutes into new data to allow for reset
             # After midnight (minute >= end_record), add the final cost from yesterday to make
             # the cost cumulative across the midnight boundary. Without this adjustment, the
             # cost_today sensor reset would cause incorrect negative deltas in the plan display
             # (e.g., -376p instead of the actual slot cost like +26p) because metric_change
-            # is calculated as metric_end - metric_start in publish_html_plan.
-            if minute >= end_record:
+            # is calculated as metric_end - metric_start in publish_html_plan. On a clock-change
+            # day local midnight - where cost_today resets - sits the change away from row
+            # end_record on this axis (an hour earlier in autumn, later in spring)
+            if minute >= day_start_row:
                 cost_value += cost_yesterday
             cost_yesterday_array[minute] = cost_value
 
@@ -3707,7 +3756,7 @@ class Output:
         battery_soc_yesterday = battery_data.get(minutes_back, soc_yesterday)
         battery_soc_yesterday_array = {}
         for minute in range(0, end_record + self.minutes_now):
-            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute - 5, soc_yesterday)  # -5 gives 4 minutes into new data to allow for reset
+            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back_axis + 24 * 60 - minute - 5, soc_yesterday)  # -5 gives 4 minutes into new data to allow for reset
 
         # Get status history
         predbat_status_data = self.get_history_wrapper(entity_id=self.prefix + ".status", days=2, required=False)
@@ -4466,8 +4515,7 @@ class Output:
 
     def local_midnight_utc(self, day):
         """Local midnight at the start of date day, as a local-time aware datetime like self.midnight_utc (the plan table shows its times as they are)."""
-        naive = datetime(day.year, day.month, day.day)
-        return self.local_tz.localize(naive) if hasattr(self.local_tz, "localize") else naive.replace(tzinfo=self.local_tz)
+        return start_of_local_day(day, self.local_tz)
 
     def calculate_history_days(self):
         """Build the History view for the days before yesterday, for the day picker, and publish them as predbat.plan_history.
