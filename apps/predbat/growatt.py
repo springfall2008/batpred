@@ -1344,8 +1344,8 @@ def main():  # pragma: no cover
     parser.add_argument("--snapshot-dir", default=".", help="Where a write test saves the settings it will restore (default: the current directory)")
     parser.add_argument("--yes", action="store_true", help="Do not ask before writing")
     args = parser.parse_args()
-    if args.minutes < 2:
-        parser.error("--minutes must be at least 2")
+    if args.minutes < 1:
+        parser.error("--minutes must be at least 1")
     if args.power <= 0:
         parser.error("--power must be positive")
 
