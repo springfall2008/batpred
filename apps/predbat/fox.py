@@ -15,6 +15,8 @@ Feedin), real-time monitoring, and device settings via the Fox ESS Cloud API.
 """
 
 import asyncio
+import math
+import re
 from datetime import datetime, timedelta, timezone
 import os
 import yaml
@@ -37,6 +39,36 @@ FOX_DEVICE_TYPE_KW_RATING = re.compile(r"(\d+\.\d+)")
 
 # Define TIME_FORMAT_HA locally to avoid dependency issues
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
+
+
+def _sample_time(value):
+    """Decode Fox's report time only with an explicit, valid UTC offset, else unknown."""
+    match = re.fullmatch(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ?[A-Za-z]{0,6} ?([+-])(\d{2}):?(\d{2})", value) if isinstance(value, str) else None
+    if match is None:
+        return None
+    local, sign, hours, minutes = match.groups()
+    if int(minutes) >= 60 or int(hours) > 14 or (int(hours) == 14 and int(minutes)):
+        return None
+    offset = timedelta(hours=int(hours), minutes=int(minutes))
+    try:
+        return datetime.strptime(local, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(offset if sign == "+" else -offset))
+    except ValueError:
+        return None
+
+
+def _combined_soc(values):
+    """Return the rounded mean of positive battery SoCs and its contributing field names."""
+    parts = {}
+    for key, item in values.items():
+        if key.lower().startswith("soc_"):
+            try:
+                value = float(item.get("value"))
+                if not isinstance(item.get("value"), bool) and math.isfinite(value) and value > 0:
+                    parts[key] = value
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return (round(sum(parts.values()) / len(parts), 0), set(parts)) if parts else (None, set())
+
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(0, 24 * 60, 1)]
@@ -901,20 +933,35 @@ class FoxAPI(ComponentBase, OAuthMixin):
         result = await self.request_get(GET_REAL_TIME_DATA, post=True, datain=query)
         if result is not None and isinstance(result, list):
             for item in result:
-                if "datas" in item:
+                if isinstance(item, dict) and item.get("deviceSN", deviceSN) == deviceSN and isinstance(item.get("datas"), list):
                     timestamp = item.get("time", "")
                     datas = item["datas"]
+                    updated = set()
                     for data_item in datas:
+                        if not isinstance(data_item, dict):
+                            continue
                         unit = data_item.get("unit", "")
                         name = data_item.get("name", "")
                         variable = data_item.get("variable", "")
                         value = data_item.get("value", None)
                         if unit == "℃":
                             unit = "°C"
-                        if name and (value is not None):
+                        if name and isinstance(variable, str) and variable and (value is not None):
                             if deviceSN not in self.device_values:
                                 self.device_values[deviceSN] = {}
                             self.device_values[deviceSN][variable] = {"timestamp": timestamp, "value": value, "unit": unit, "name": name}
+                            updated.add(variable)
+                    if updated and len(result) == 1 and self.telemetry_observer is not None:
+                        values = {key: entry.get("value") for key, entry in self.device_values[deviceSN].items()}
+                        soc, inputs = _combined_soc(self.device_values[deviceSN])
+                        if inputs:
+                            # Match publish_data's aggregate, but never renew an input held from a previous response.
+                            updated = {key for key in updated if key.lower() != "soc"}
+                            values = {key: value for key, value in values.items() if key.lower() != "soc"}
+                            values["SoC"] = soc
+                            if inputs <= updated:
+                                updated.add("SoC")
+                        self.report_telemetry(deviceSN, values, source="real_time", sample_time=_sample_time(timestamp), updated_fields=updated)
         return result
 
     async def get_device_history(self, deviceSN):
@@ -1861,9 +1908,9 @@ class FoxAPI(ComponentBase, OAuthMixin):
         if status_code in [200, 201]:
             if data is None:
                 data = {}
-            errno = data.get("errno", 0)
+            errno = data.get("errno")
             msg = data.get("msg", "")
-            if errno != 0:
+            if type(errno) is not int or errno != 0:
                 self.failures_total += 1
                 if errno in [40400, 41200, 41201, 41202, 41203, 41935, 44098]:
                     # Rate limiting detected
@@ -1962,26 +2009,14 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         # If we have soc_x sensors then sum them for total soc and store as _soc so that Predbat gets a single SOC value
         for sn in self.device_values:
-            soc_total = 0
-            soc_total_count = 0
-            for item_name in self.device_values[sn]:
-                if item_name.lower().startswith("soc_"):
-                    item = self.device_values[sn][item_name]
-                    soc = item.get("value", None)
-                    try:
-                        soc = float(soc)
-                    except ValueError:
-                        soc = None
-                    if soc is not None and soc > 0:
-                        soc_total += soc
-                        soc_total_count += 1
-            if soc_total_count > 0:
+            soc, inputs = _combined_soc(self.device_values[sn])
+            if inputs:
                 # Remove the SOC dictionary key (any case) otherwise we might create a duplicate (different case)
                 for key in list(self.device_values[sn].keys()):
                     if key.lower() == "soc":
                         del self.device_values[sn][key]
                 # Add total SOC
-                self.device_values[sn]["SoC"] = {"name": "State of Charge Total", "unit": "%", "value": round(soc_total / soc_total_count, 0)}
+                self.device_values[sn]["SoC"] = {"name": "State of Charge Total", "unit": "%", "value": soc}
 
         # Publish device values
         for sn in self.device_values:
