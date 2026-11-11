@@ -27,7 +27,6 @@ ROW_DEFAULTS = {
     "target_soc_used_for_discharge": True,
     "rate_step_percent_of_capacity": 0,
     "reserve_above_soc_charges_from_grid": False,
-    "charge_window_blocks_discharge": False,
     "reserve_full_only_above_80": False,
 }
 

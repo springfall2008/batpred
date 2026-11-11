@@ -48,7 +48,6 @@ class ActiveTestInverter:
         self.inv_has_charge_enable_time = True
         self.inv_has_timed_pause = True
         self.inv_reserve_above_soc_charges_from_grid = False
-        self.inv_charge_window_blocks_discharge = False
         self.inv_reserve_full_only_above_80 = False
         self.inv_has_discharge_enable_time = True
         self.inv_has_ge_eco_toggle = False
@@ -237,7 +236,6 @@ def run_execute_test(
     has_timed_pause=True,
     has_timed_pause_array=None,
     reserve_above_soc_charges_from_grid=False,
-    charge_window_blocks_discharge=False,
     reserve_full_only_above_80=False,
     has_target_soc=True,
     has_charge_enable_time=True,
@@ -353,7 +351,6 @@ def run_execute_test(
         inverter.battery_rate_max_export = inv_export_w / 1000.0 / 60.0
         inverter.inv_has_timed_pause = has_timed_pause_array[inverter.id] if has_timed_pause_array else has_timed_pause
         inverter.inv_reserve_above_soc_charges_from_grid = reserve_above_soc_charges_from_grid
-        inverter.inv_charge_window_blocks_discharge = charge_window_blocks_discharge
         inverter.inv_reserve_full_only_above_80 = reserve_full_only_above_80
         inverter.inv_has_target_soc = has_target_soc
         inverter.inv_has_charge_enable_time = has_charge_enable_time
@@ -2042,35 +2039,24 @@ def test_reserve_above_soc_inverter_types():
     return failed
 
 
-def test_charge_window_blocks_discharge_inverter_types():
-    """Only the inverter types that will not discharge inside an armed charge window opt in to disarming it to discharge to a Hold charging target."""
-    from config import INVERTER_DEF
-
-    failed = False
-    opted_in = sorted(name for name, idef in INVERTER_DEF.items() if idef.get("charge_window_blocks_discharge", False))
-    if opted_in != ["HanchuCloud"]:
-        print("ERROR: charge_window_blocks_discharge should be set for HanchuCloud only, got {}".format(opted_in))
-        failed = True
-    return failed
-
-
 def test_discharge_to_target_inverter_types():
     """
-    Pin the inverter types that can discharge to a Hold charging target in demand mode (#5937, #5955).
+    Pin the inverter types that can discharge to a Hold charging target in demand mode (#5937).
 
     The branch in execute_plan runs when no pause can hold (no timed pause) and the window cannot act as a floor
-    (no target SoC, or charge_window_blocks_discharge). It is reached by more types than Sigenergy and Hanchu,
-    the two in the issues: the service-driven ones (SE, SX4, SF, SFMB, HU, SIG) stop the charge as demand does,
-    FoxESS and HanchuCloud only when their reserve cannot hold at the target (reserve_max below it, or
-    set_reserve_enable off), and GS through mimic_target_soc (test_inverter solis_gs_discharge_to_target).
+    (no target SoC). It is reached by more types than Sigenergy, the one in the issue: the service-driven ones
+    (SE, SX4, SF, SFMB, HU, SIG) stop the charge as demand does, FoxESS only when its reserve cannot hold at the
+    target (reserve_max below it, or set_reserve_enable off), and GS through mimic_target_soc (test_inverter
+    solis_gs_discharge_to_target). HanchuCloud has a target SoC, so it is not here: its component leaves the
+    charge slot out itself (#5955, #6127).
     This pins the static flags only; the reserve conditions are runtime.
     A type joining this set changes how its Hold charging behaves, so it has to be added here on purpose.
     """
     from config import INVERTER_DEF
 
     failed = False
-    reached = sorted(name for name, idef in INVERTER_DEF.items() if not idef.get("has_timed_pause", False) and (not idef.get("has_target_soc", False) or idef.get("charge_window_blocks_discharge", False)))
-    expected = ["FoxESS", "GS", "HU", "HanchuCloud", "SE", "SF", "SFMB", "SIG", "SX4"]
+    reached = sorted(name for name, idef in INVERTER_DEF.items() if not idef.get("has_timed_pause", False) and not idef.get("has_target_soc", False))
+    expected = ["FoxESS", "GS", "HU", "SE", "SF", "SFMB", "SIG", "SX4"]
     if reached != expected:
         print("ERROR: inverter types that can discharge to a Hold charging target should be {}, got {}".format(expected, reached))
         failed = True
@@ -2124,7 +2110,6 @@ def run_execute_tests(my_predbat):
     failed |= test_inverter_reads_battery_export_permitted(my_predbat)
     failed |= test_fetch_inverter_data_battery_export_not_permitted(my_predbat)
     failed |= test_reserve_above_soc_inverter_types()
-    failed |= test_charge_window_blocks_discharge_inverter_types()
     failed |= test_discharge_to_target_inverter_types()
     failed |= test_reserve_full_only_above_80_inverter_types()
     failed |= test_reserve_full_only_above_80_reaches_the_inverter(my_predbat)
@@ -3151,93 +3136,6 @@ def run_execute_tests(my_predbat):
     )
     for inverter in my_predbat.inverters:
         inverter.inv_charge_discharge_with_rate = False
-    if failed:
-        return failed
-
-    # Target SoC but no reserve that reaches it, on an inverter that will not discharge in an armed window (Hanchu):
-    # disarm the window so the battery covers the house down to the target, keeping the target in place for the re-arm (#5955)
-    failed |= run_execute_test(
-        my_predbat,
-        "charge_hold_window_blocks_discharge",
-        charge_window_best=charge_window_best,
-        charge_limit_best=charge_limit_best2,
-        assert_charge_time_enable=False,
-        set_charge_window=True,
-        set_export_window=True,
-        assert_status="Hold charging",
-        soc_kw=9,
-        assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=-1,
-        assert_discharge_rate=1000,
-        assert_pause_discharge=False,
-        assert_soc_target=50,
-        assert_immediate_soc_target=0,
-        reserve_max=10,
-        has_timed_pause=False,
-        assert_reserve_array=[0, 0],
-        charge_window_blocks_discharge=True,
-    )
-    # Within 1% of the target it holds on the armed window, as before
-    failed |= run_execute_test(
-        my_predbat,
-        "charge_hold_window_blocks_discharge_at_target",
-        charge_window_best=charge_window_best,
-        charge_limit_best=charge_limit_best2,
-        assert_charge_time_enable=True,
-        set_charge_window=True,
-        set_export_window=True,
-        assert_status="Hold charging",
-        soc_kw=5.1,
-        assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=780,
-        assert_discharge_rate=1000,
-        assert_pause_discharge=False,
-        assert_soc_target=50,
-        reserve_max=10,
-        has_timed_pause=False,
-        assert_reserve_array=[0, 0],
-        charge_window_blocks_discharge=True,
-    )
-    # A reserve that reaches the target still holds there, as for any inverter
-    failed |= run_execute_test(
-        my_predbat,
-        "charge_hold_window_blocks_discharge_reserve",
-        charge_window_best=charge_window_best,
-        charge_limit_best=charge_limit_best2,
-        assert_charge_time_enable=False,
-        set_charge_window=True,
-        set_export_window=True,
-        assert_status="Hold charging",
-        soc_kw=9,
-        assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=-1,
-        assert_soc_target=100,
-        assert_immediate_soc_target=50,
-        assert_reserve=51,
-        charge_window_blocks_discharge=True,
-    )
-    # With set_discharge_during_charge off the plan never discharges in the window, so keep holding
-    failed |= run_execute_test(
-        my_predbat,
-        "charge_hold_window_blocks_discharge_no_discharge",
-        charge_window_best=charge_window_best,
-        charge_limit_best=charge_limit_best2,
-        assert_charge_time_enable=True,
-        set_charge_window=True,
-        set_export_window=True,
-        assert_status="Hold charging",
-        soc_kw=9,
-        assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=780,
-        assert_discharge_rate=0,
-        assert_pause_discharge=False,
-        assert_soc_target=50,
-        reserve_max=10,
-        has_timed_pause=False,
-        set_discharge_during_charge=False,
-        assert_reserve_array=[0, 0],
-        charge_window_blocks_discharge=True,
-    )
     if failed:
         return failed
 
