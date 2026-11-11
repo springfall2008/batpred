@@ -54,6 +54,8 @@ Put the account number in `apps.yaml` and the API key in `secrets.yaml`, referen
 
 The API key can read and change your Octopus account, so keep it out of `apps.yaml`, which is more likely to be shared or attached to a bug report - see [Storing secrets](apps-yaml.md#storing-secrets).
 
+Predbat also reads your half-hourly billing from Octopus every few hours, for your import meter and your export meter if you have one, and shows it next to its own costs on the [History view](web-interface.md#plan-view) and in `sensor.predbat_billing` (see [Cost saving data](output-data.md#cost-saving-data)).
+
 ### Octopus Free energy sessions
 
 Predbat can obtain details of Free energy sessions directly from the Octopus Web Site.
@@ -197,6 +199,22 @@ If necessary, a pre-charge may happen at some point during the day to maintain t
 This needs the automatic import threshold (**input_number.predbat_rate_low_threshold** set to 0): a manual threshold is a cap
 Predbat will not charge above, even ahead of a session - see [rate thresholds](customisation.md#battery-margins-and-metrics-options).
 
+#### How Octopus calculates the reward (battery owners)
+
+Octopus rewards a Power Down session on the *change* in your net energy use (import minus export) compared with your typical use for the same half-hours:
+the average over the last 10 weekdays for a weekday session, or the last 4 weekend days for a weekend or bank holiday session
+(see the [Octopus Saving Sessions FAQ](https://octopus.energy/blog/saving-sessions-faqs/#down)).
+
+Predbat cannot know that baseline, so it values every kWh exported (or import avoided) during the session at the full reward rate, as if your typical use at that time were zero.
+If your battery normally covers your evening peak, or Predbat normally exports at that time, your baseline is already low and the reward you actually receive can be much
+smaller than the plan assumes. Predbat may then hold the battery charged for hours before the session, importing at your normal rate meanwhile, for income that does not arrive.
+
+If that matches your experience, you can reduce or remove the session's influence on the plan while still letting Predbat auto-join, so you keep whatever reward you do earn:
+
+- Increase **octopus_saving_session_octopoints_per_penny** in `apps.yaml`. The session rate is the octopoints per kWh divided by this value, so e.g. `100000` makes it
+  effectively zero and Predbat plans the session like any other day (any **input_number.predbat_load_scaling_saving** you have set below 1.0 still applies to the session).
+- Or raise **octopus_saving_session_min_octopoints_per_kwh** so low-value sessions are not joined at all.
+
 Note that Predbat's operational mode **select.predbat_mode** must be set to either 'Control charge'
 or 'Control charge & discharge' for Predbat to be able to manage the battery for the saving session.
 
@@ -302,8 +320,15 @@ The following entries are required for the Kraken component in `apps.yaml`:
 
 Full details of what to configure are given in the [component documentation](components.md#kraken-energy-kraken)
 
+As with Octopus, Predbat reads your half-hourly billing every few hours and shows it on the [History view](web-interface.md#plan-view) and in `sensor.predbat_billing`.
+E.ON Next publishes each half hour as a single charge rather than split into rate buckets.
+
 If you have an EV on a smart-charging tariff with Eon.Next (such as Next Drive Smart), Eon bills every half hour of a planned charging dispatch at the cheap rate whether or not the car charged in it, unlike Octopus Intelligent.
 With `kraken_provider: eon` Predbat prices dispatches that way automatically; see **intelligent_dispatch_billing** in the [car charging documentation](car-charging.md) to change it.
+
+With `kraken_provider: edf`, free hours you have booked through EDF Flextras are read from EDF every 30 minutes and priced at 0p in the plan, in the same way as [Octopus free electricity sessions](#octopus-free-power-up-events).
+They are published on `sensor.predbat_kraken_<account>_free_electricity`.
+EDF Power Perks sessions are announced by text message only and are not available from EDF's API, so they are not picked up automatically - use the [manual rate overrides](#manually-over-riding-energy-rates) to add one.
 
 ## Energidataservice Integration
 
@@ -539,6 +564,12 @@ You can also override the import or export energy rates (regardless of whether t
 Rate override is used to set the specific date and time period where your rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two),
 or the British Gas half-price electricity on Sundays.
 
+Overrides are meant for events and adjustments on top of your tariff, not for describing the tariff itself.
+Set your normal day-to-day rates with [rate bands](#rate-bands-to-manually-configure-energy-rates) (or the Octopus integration/URL) and use overrides only for the periods that differ.
+Some features measure prices against your normal tariff with overrides left out: for example the
+[marginal cost cheap/moderate sensors](output-data.md#cheapmoderate-binary-sensors), so a free Power Up session entered as an override
+does not stop other slots reading as cheap.
+
 Unfortunately, there aren't any API's available to feed this information automatically into Predbat so you will have to define your own input controls and use the [Predbat Manual API](manual-api.md#example-solution-to-over-ride-predicted-house-load),
 or edit `apps.yaml` manually to set the appropriate rate over-ride dates and times:
 
@@ -648,6 +679,28 @@ Or, if you prefer to set import/export calibration manually rather than auto-det
   futurerate_peak_start: "16:00:00"
   futurerate_peak_end: "19:00:00"
 ```
+
+### AgilePredict forecast
+
+Nord Pool day-ahead prices only reach the end of tomorrow, and only once the day-ahead auction has run (late morning UK time).
+[AgilePredict](https://agilepredict.com) publishes a forecast of Octopus Agile prices for each region up to 14 days ahead, so it can also fill the
+hours that neither Octopus nor Nord Pool has published yet - for example the second day of the plan before 4pm.
+
+- **futurerate_agilepredict** - When `true`, Predbat fetches the AgilePredict forecast and uses it for any future minute that has no published Agile
+  rate and no Nord Pool price. Published rates always take priority, then Nord Pool prices (if `futurerate_url` is set), then the forecast.
+  It uses the same `futurerate_adjust_import`, `futurerate_adjust_export` and `futurerate_adjust_auto` settings to decide whether to apply the
+  forecast to import, export or both. The forecast is already in Agile prices so it is not calibrated.
+- **futurerate_agilepredict_region** - Optional Octopus region letter (A-P). By default the region is taken from the end of the Octopus tariff
+  code of `metric_octopus_import` (or `metric_octopus_export`).
+- **futurerate_agilepredict_url** - Optional, overrides the AgilePredict API address (default `https://prices.fly.dev/api/`).
+
+```yaml
+  futurerate_agilepredict: true
+  futurerate_adjust_auto: true
+```
+
+Predbat fetches the next five days of the forecast and caches it for three hours. AgilePredict is a free community service, so please do not poll it more often.
+The forecast is only applied to your Agile import/export rates, not to gas or to tariffs being compared.
 
 ## Axle VPP
 

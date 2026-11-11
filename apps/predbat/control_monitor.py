@@ -25,7 +25,6 @@ This module has no engine dependencies so it can be tested standalone.
 
 from datetime import datetime
 
-
 MODE_CHARGING = "Charging"
 MODE_EXPORTING = "Exporting"
 MODE_FREEZE_CHARGING = "Freeze charging"

@@ -13,6 +13,7 @@ import pytz
 import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
+from component_base import ComponentBase
 from hanchu import HanchuAPI
 from hanchu_const import (
     HANCHU_KEY_CHARGE_POWER,
@@ -27,13 +28,17 @@ from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_s
 class MockHanchu(HanchuAPI):
     """Test double: build a HanchuAPI without the full component lifecycle."""
 
-    def __init__(self, account="tester@example.com", password="hunter2", inverter_sn=None, control_enable=True, automatic=False, automatic_ignore_pv=False, work_mode_control=True, min_write_interval=0):
+    def __init__(self, account="tester@example.com", password="hunter2", inverter_sn=None, control_enable=True, automatic=False, automatic_ignore_pv=False, work_mode_control=True, min_write_interval=0, write_debounce=0):
         """Set up a minimal HanchuAPI instance for tests, bypassing ComponentBase.__init__."""
         self.prefix = "predbat"
         self.log_messages = []
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
         self.base.args = {"user_id": "test-hanchu-1"}
+        # What apps.yaml set, as PredBat.initialize() snapshots it. Empty, not a MagicMock attribute:
+        # set_arg_auto(overwrite=False) reads it, and a MagicMock would make every key look user-set.
+        self.base.args_from_apps_yaml = {}
+        self.base.apps_yaml_override_warned = set()
         # A real clock, not a MagicMock attribute: ComponentBase.minutes_now derives from
         # base.now_utc, so the mock base has to carry a coherent now_utc/midnight_utc pair.
         # set_mock_clock() below moves it; writing base.minutes_now alone does nothing.
@@ -61,6 +66,9 @@ class MockHanchu(HanchuAPI):
             # its trace, which the log assertions in these tests do not want to wade through. A test about the
             # trace turns it on itself; test_hanchu_api_trace_is_on_unless_turned_off pins the real default.
             api_debug=False,
+            # 0 so a write-button press writes at once, as every existing test expects; the debounce
+            # tests set their own short value on a running component loop.
+            write_debounce=write_debounce,
         )
         # The write-retry pause is a real 5s wait against a real cloud. Nothing here talks to one,
         # so it is zeroed - a test that wants to prove the retry happens counts the requests, which
@@ -89,9 +97,13 @@ class MockHanchu(HanchuAPI):
         """Read back whatever the test (or dashboard_item) put in self.state."""
         return self.state.get(entity_id, default)
 
-    def set_arg_auto(self, arg, value):
-        """Record an auto-discovered apps.yaml binding."""
+    def set_arg(self, arg, value):
+        """Record an apps.yaml binding in the mock base's args."""
         self.base.args[arg] = value
+
+    def set_arg_auto(self, arg, value, overwrite=True):
+        """The real set_arg_auto, which honours base.args_from_apps_yaml and delegates to set_arg."""
+        return ComponentBase.set_arg_auto(self, arg, value, overwrite=overwrite)
 
     def refresh_discovery(self):
         """No-op: the discovery record has its own tests and needs no coordinator here."""

@@ -997,7 +997,7 @@ def test_gap_and_tail_slots_are_logged_separately(my_predbat=None):
 
     run_async(component.run(seconds=0, first=True))
 
-    gap =[m for m in messages if m.startswith("Warn: GivTCP: no inverter has answered yet")]
+    gap = [m for m in messages if m.startswith("Warn: GivTCP: no inverter has answered yet")]
     tail = [m for m in messages if "leaving inverter(s)" in m]
     if len(gap) != 1 or "http://dead:6345" not in gap[0] or "inverter(s) 0 keep their own slot" not in gap[0]:
         print("ERROR: expected one warning naming gap slot 0 and its URL, got {}".format(gap))
@@ -1645,6 +1645,29 @@ def test_gen2_hybrid_suppresses_its_export_target(my_predbat=None):
     assert not _publishes_discharge_target(invertor_type="Gen2 Hybrid"), "a Gen2 Hybrid must not publish the export target control"
     assert not _publishes_discharge_target(invertor_type="Gen2 Hybrid", raw_model="Hybrid_gen2"), "an explicit Hybrid_gen2 raw model must still suppress it"
     print("PASS: Gen2 Hybrid suppresses its export target")
+    return 0
+
+
+def test_discharge_target_not_claimed_for_unsupported_models(my_predbat=None):
+    """
+    automatic_config() leaves discharge_target_soc alone for a model with no working register (#5679).
+
+    The entity is never published for such a model, so claiming it would bind the setting to an entity
+    that does not exist, and Inverter would log "No current discharge target to read" on every export
+    cycle. Left unclaimed, the discovery record agrees with what automatic_config() bound. Uses the real
+    Gen2 Hybrid capture as recorded.
+    """
+    component, record = _v3_capture_record(invertor_type=None)
+    assert "discharge_target_soc" not in record["entities"], "the Gen2 capture must not list a discharge target entity"
+    captured = capture_automatic_config(component)
+    assert "discharge_target_soc" not in captured, "an unsupported model must not have discharge_target_soc claimed, got {}".format(captured.get("discharge_target_soc"))
+    assert_record_agrees(record, captured, index=0)
+
+    # a model that does have the register is still claimed, as the relabelled capture shows
+    component, record = _v3_capture_record()
+    assert "discharge_target_soc" in record["entities"], "a supported model must list the discharge target entity"
+    assert "discharge_target_soc" in capture_automatic_config(component), "a supported model must have discharge_target_soc claimed"
+    print("PASS: discharge_target_soc is claimed only for models that have the register")
     return 0
 
 
@@ -2660,7 +2683,7 @@ def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
     assert record["hardware_ids"] == {"serial": "EA2303G082"}
     assert record["info"]["model"] == "Gen2 Hybrid"
     assert record["info"]["firmware"] == "D0.913-A0.913"
-    assert record["ratings"] == {"soc_max": 9.52, "battery_rate_max": 3600, "inverter_limit": 3600}
+    assert record["ratings"] == {"soc_max": 9.52, "battery_rate_max": 3600, "inverter_limit": 3600, "export_limit": 6000}
     assert "battery_kwh" not in record["ratings"] and "max_charge_w" not in record["ratings"]
     assert len(record["entities"]) == len(original["entities"])
     for name, descriptor in original["entities"].items():
@@ -2673,9 +2696,9 @@ def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
     return 0
 
 
-def _v3_capture_record():
-    """The real rest_v3.json capture published by a component, and the one validated inverter record build_discovery() makes of it."""
-    base, component = _rest_from_fixture("cases/rest_v3.json", invertor_type=SUPPORTED_DISCHARGE_TARGET_TYPE)
+def _v3_capture_record(invertor_type=SUPPORTED_DISCHARGE_TARGET_TYPE):
+    """The real rest_v3.json capture (relabelled as invertor_type, or as recorded with None) published by a component, and the one validated inverter record build_discovery() makes of it."""
+    base, component = _rest_from_fixture("cases/rest_v3.json", invertor_type=invertor_type)
     _mark_discovered(component)
     run_async(component.publish_data())
     records = validated_inverters(component.build_discovery())
@@ -2963,6 +2986,157 @@ def test_a_partial_first_report_is_replaced_once_the_inverter_fills_it_in(my_pre
     return 0
 
 
+def _export_limit_fixture(export_limit=6000):
+    """A component holding the real v3 capture, with its inverter block's Export_Limit set (or removed when None)."""
+    base, component = _rest_from_fixture("cases/rest_v3.json")
+    block = component.rest[0].inverter.rest_data["EA2303G082"]
+    if export_limit is None:
+        block.pop("Export_Limit", None)
+    else:
+        block["Export_Limit"] = export_limit
+    _mark_discovered(component)
+    return base, component
+
+
+def test_export_limit_sensor_is_published(my_predbat=None):
+    """GivTCP's Export_Limit (holding register 26) is published as a power sensor in W."""
+    base, component = _export_limit_fixture(3680)
+    run_async(component.publish_data())
+
+    entity_id = "sensor.predbat_givtcp_0_export_limit"
+    assert entity_id in base.entities, "export_limit sensor was not published"
+    assert base.entities[entity_id]["state"] == 3680, f"expected 3680, got {base.entities[entity_id]['state']}"
+    attrs = base.entities[entity_id]["attributes"]
+    assert attrs.get("unit_of_measurement") == "W", attrs
+    assert attrs.get("device_class") == "power", attrs
+    print("PASS: export_limit sensor is published from GivTCP's Export_Limit")
+    return 0
+
+
+def test_export_limit_zero_is_a_real_zero(my_predbat=None):
+    """
+    An Export_Limit of 0 is a zero-export site, not a missing reading.
+
+    The gateway reads the same register (HR 26) and treats 0 as a real 0 W limit, as GE Cloud does
+    for an enforced zero. Dropping it as falsy would plan exports the inverter refuses to make.
+    """
+    base, component = _export_limit_fixture(0)
+    run_async(component.publish_data())
+    entity_id = "sensor.predbat_givtcp_0_export_limit"
+    assert entity_id in base.entities, "a zero export limit must still be published"
+    assert base.entities[entity_id]["state"] == 0, f"expected 0, got {base.entities[entity_id]['state']}"
+
+    run_async(component.automatic_config())
+    assert base.args.get("export_limit") == [entity_id], f"a zero export limit should still be auto-configured, got {base.args.get('export_limit')}"
+    print("PASS: a zero export limit is published and claimed as a real zero")
+    return 0
+
+
+def test_export_limit_not_published_or_claimed_when_unreported(my_predbat=None):
+    """No Export_Limit in the snapshot (GivTCP v2, three-phase) publishes nothing and leaves export_limit to apps.yaml."""
+    base, component = _export_limit_fixture(None)
+    base.args["export_limit"] = [5000]
+    run_async(component.publish_data())
+    assert "sensor.predbat_givtcp_0_export_limit" not in base.entities, "export_limit must not be published when GivTCP does not report it"
+
+    run_async(component.automatic_config())
+    assert base.args.get("export_limit") == [5000], f"export_limit must be left as configured, got {base.args.get('export_limit')}"
+    print("PASS: an unreported export limit is neither published nor claimed")
+    return 0
+
+
+def test_export_limit_auto_configured_when_apps_yaml_is_silent(my_predbat=None):
+    """With no export_limit in apps.yaml, auto-config points it at the inverter's own sensor."""
+    base, component = _export_limit_fixture(3680)
+    base.args_from_apps_yaml = {}
+    base.apps_yaml_override_warned = set()
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+    assert base.args.get("export_limit") == ["sensor.predbat_givtcp_0_export_limit"], f"got {base.args.get('export_limit')}"
+    print("PASS: export_limit is auto-configured when apps.yaml does not set it")
+    return 0
+
+
+def test_export_limit_apps_yaml_value_wins(my_predbat=None):
+    """
+    An export_limit written in apps.yaml is kept, unlike inverter_limit which auto-discovery overwrites.
+
+    Existing installs carry a hand-typed export_limit from the template; the inverter's reading
+    replaces it only once the user deletes that line. When the two disagree a note says so, naming
+    both figures, so a stale apps.yaml value can be spotted.
+    """
+    base, component = _export_limit_fixture(6000)
+    base.args_from_apps_yaml = {"export_limit": [3600]}
+    base.apps_yaml_override_warned = set()
+    base.args["export_limit"] = [3600]
+    messages = _capture_logs(component)
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    assert base.args.get("export_limit") == [3600], f"the apps.yaml export_limit must be kept, got {base.args.get('export_limit')}"
+    assert "sensor.predbat_givtcp_0_export_limit" in base.entities, "the sensor is still published when apps.yaml wins"
+    notes = [m for m in messages if "export_limit" in m and "3600W" in m and "6000W" in m]
+    assert len(notes) == 1, f"expected one note naming both export limits, got {messages}"
+    assert "remove export_limit" in notes[0], f"with the key claimed, removing the line hands it to the inverter's own sensor: {notes[0]}"
+    print("PASS: the apps.yaml export_limit wins and a mismatch is noted")
+    return 0
+
+
+def test_export_limit_no_mismatch_note_when_values_agree(my_predbat=None):
+    """An apps.yaml export_limit equal to the inverter's own reading is kept without a mismatch note."""
+    base, component = _export_limit_fixture(3600)
+    base.args_from_apps_yaml = {"export_limit": [3600]}
+    base.apps_yaml_override_warned = set()
+    base.args["export_limit"] = [3600]
+    messages = _capture_logs(component)
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    assert base.args.get("export_limit") == [3600]
+    notes = [m for m in messages if "export_limit" in m and "reports" in m]
+    assert not notes, f"no mismatch note expected when the values agree, got {notes}"
+    print("PASS: no mismatch note when apps.yaml agrees with the inverter")
+    return 0
+
+
+def test_export_limit_mismatch_noted_in_a_mixed_fleet(my_predbat=None):
+    """
+    A stale apps.yaml export_limit is still noted when only some inverters report their own limit.
+
+    export_limit is claimed only when every inverter publishes it, so with one inverter that reports
+    6000W and one that reports nothing (GivTCP v2, three-phase) the key stays with apps.yaml. The
+    reporting inverter's figure still shows the hand-typed 3600W is stale, so the note fires for it -
+    but deleting the line would leave both inverters unlimited, not on their own limits, so the
+    advice is to correct the figure rather than to remove it.
+    """
+    base, component = _make_component(rest_urls=["http://a:6345", "http://b:6345"])
+    for n in (0, 1):
+        with open("cases/rest_v3.json", "r") as handle:
+            component.rest[n].inverter.rest_data = json.load(handle)
+    component.rest[0].inverter.rest_data["EA2303G082"]["Export_Limit"] = 6000
+    component.rest[1].inverter.rest_data["EA2303G082"].pop("Export_Limit", None)
+    _mark_discovered(component)
+    base.args_from_apps_yaml = {"export_limit": [3600, 5000]}
+    base.apps_yaml_override_warned = set()
+    base.args["export_limit"] = [3600, 5000]
+    messages = _capture_logs(component)
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    assert base.args.get("export_limit") == [3600, 5000], f"an unclaimed export_limit must be left as configured, got {base.args.get('export_limit')}"
+    notes = [m for m in messages if "export_limit" in m and "reports" in m]
+    assert len(notes) == 1, f"expected one note, for the inverter that reports a limit, got {notes}"
+    assert "3600W" in notes[0] and "6000W" in notes[0] and "inverter 0" in notes[0], notes[0]
+    assert "remove export_limit" not in notes[0], f"removing the line would leave every inverter unlimited, so the note must not advise it: {notes[0]}"
+    assert "6000" in notes[0].split("-", 1)[1], f"the advice should name the figure to set: {notes[0]}"
+
+    run_async(component.automatic_config())
+    notes = [m for m in messages if "export_limit" in m and "reports" in m]
+    assert len(notes) == 1, f"the note must not repeat on the next pass, got {notes}"
+    print("PASS: a stale export_limit is noted in a mixed fleet, with advice that holds there")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -3006,6 +3180,7 @@ def test_givtcp_component(my_predbat=None):
         ("dt_mixed_fleet", test_discharge_target_needs_v3_on_every_inverter, "discharge target needs v3 everywhere"),
         ("dt_type_match", test_unsupported_model_detected_from_invertor_type, "unsupported model from Invertor_Type"),
         ("dt_gen2_suppressed", test_gen2_hybrid_suppresses_its_export_target, "Gen2 Hybrid suppresses its export target"),
+        ("dt_not_claimed", test_discharge_target_not_claimed_for_unsupported_models, "discharge target not claimed for unsupported models"),
         ("dt_raw_model", test_raw_model_matching_is_unchanged, "raw.invertor.model matching unchanged"),
         ("reserve_min_default", test_reserve_entity_min_defaults_to_the_ge_floor, "reserve entity min defaults to 4"),
         ("reserve_min_lower", test_reserve_entity_min_respects_a_lower_battery_min_soc, "lower battery_min_soc respected"),
@@ -3092,6 +3267,13 @@ def test_givtcp_component(my_predbat=None):
         ("discovery_report_failure_contained", test_report_discovery_failure_does_not_degrade_component_health, "a build_discovery failure is contained, not left to degrade health"),
         ("discovery_rediscovery_ordering", test_rediscovered_inverter_is_reported_only_once_its_entities_exist, "rediscovered inverter reported only once its entities exist"),
         ("discovery_partial_replaced", test_a_partial_first_report_is_replaced_once_the_inverter_fills_it_in, "a partial first report is replaced, an unchanged one is not re-filed"),
+        ("export_limit_published", test_export_limit_sensor_is_published, "export_limit sensor published from Export_Limit"),
+        ("export_limit_zero", test_export_limit_zero_is_a_real_zero, "a zero export limit is a real zero"),
+        ("export_limit_unreported", test_export_limit_not_published_or_claimed_when_unreported, "unreported export limit is neither published nor claimed"),
+        ("export_limit_auto", test_export_limit_auto_configured_when_apps_yaml_is_silent, "export_limit auto-configured when apps.yaml is silent"),
+        ("export_limit_user_wins", test_export_limit_apps_yaml_value_wins, "apps.yaml export_limit wins, mismatch noted"),
+        ("export_limit_no_note", test_export_limit_no_mismatch_note_when_values_agree, "no mismatch note when values agree"),
+        ("export_limit_mixed_fleet", test_export_limit_mismatch_noted_in_a_mixed_fleet, "stale export_limit noted in a mixed fleet, advice holds there"),
     ]
 
     passed = 0

@@ -49,7 +49,7 @@ import statistics
 import time
 from datetime import datetime
 import aiohttp
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from hanchu_const import (
     HANCHU_ACK_MAP,
@@ -181,6 +181,7 @@ class HanchuAPI(ComponentBase):
         api_delay=1,
         min_write_interval=60,
         api_debug=True,
+        write_debounce=10.0,
         **kwargs,
     ):
         """Initialise the Hanchu component from its resolved config args.
@@ -211,6 +212,14 @@ class HanchuAPI(ComponentBase):
         self.write_failure_notified = set()
         self.api_delay = max(0, float(api_delay or 0))
         self.min_write_interval = max(0, int(min_write_interval or 0))
+        # Seconds to wait after a press of the write button before sending, restarted by every
+        # further press. Predbat commits a window in stages (times, then target SoC, then rates)
+        # and presses after each, so writing on the first press sends the new slot with the
+        # previous cycle's power and grid-charge limit - a live grid charge at full power until
+        # the corrected payload clears min_write_interval (batpred#6074). See _schedule_write().
+        self.write_debounce = max(0.0, float(write_debounce or 0))
+        # The pending debounced write per serial, so a later press can supersede it.
+        self.write_debounce_tasks = {}
         # An instance attribute rather than the constant used inline, so the unit tests can zero it:
         # it is a real wall-clock pause between a failed write and its one retry, and nothing in a
         # test talks to the real cloud. Not a config key - there is no reason a user would tune it.
@@ -420,7 +429,7 @@ class HanchuAPI(ComponentBase):
         closed, or anything that is not a real session, is replaced rather than trusted.
         """
         if self._session is None or getattr(self._session, "closed", True) is not False:
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            self._session = self.http_session(timeout=timeout)
         return self._session
 
     async def close_session(self):
@@ -1129,11 +1138,18 @@ class HanchuAPI(ComponentBase):
             self.set_arg_auto(flag, [False for _ in devices])
 
         # Only map an arg when EVERY device reports the underlying value.
+        #
+        # overwrite=False: these four are the daily energy totals whose recorder HISTORY Predbat
+        # reads (the load model and the day's cost), so a sensor the user named in apps.yaml wins and
+        # keeps its history - set_arg_auto still fills the key in when they named nothing. Claimed
+        # per key, as GivTCP does. The case that needs it: an EV charger wired outside the Hanchu
+        # grid meter, so Hanchu's own import_today misses the car and the user points the key at
+        # their smart meter instead.
         for leaf in ("load_today", "import_today", "export_today", "pv_today"):
             if leaf == "pv_today" and self.automatic_ignore_pv:
                 continue
             if all(leaf in self.device_energy.get(sn, {}) for sn in devices):
-                self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices])
+                self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices], overwrite=False)
             else:
                 self.log("Warn: Hanchu not every device reports {}, it must be set manually in apps.yaml".format(leaf))
 
@@ -1431,18 +1447,22 @@ class HanchuAPI(ComponentBase):
                 window["enable"] = self._to_bool(value, window.get("enable", False))
             return
 
+    @writes
     async def select_event(self, entity_id, value):
         """Handle a select entity change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a number entity value change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a switch entity service call."""
         await self._handle_control_event(entity_id, service)
 
+    @writes
     async def _handle_control_event(self, entity_id, value):
         """Route one control-entity event to the right device and apply it."""
         sn = self._sn_from_entity(entity_id)
@@ -1460,10 +1480,82 @@ class HanchuAPI(ComponentBase):
                 # from here on. Marked on the press itself rather than on a successful write: a
                 # failed write still means Predbat owns this inverter and the next tick should retry.
                 self.control_active.add(sn)
-                await self._on_component_loop(self.apply_schedule(sn))
+                if self._write_debounce_available():
+                    await self._on_component_loop(self._schedule_write(sn))
+                else:
+                    await self._on_component_loop(self.apply_schedule(sn))
             return
         self.update_local_schedule(sn, entity_id, value)
+        if self._write_debounce_available():
+            # Predbat writes the charge and discharge rates after its per-inverter loop with no
+            # press of their own, and the zero discharge rate is what turns a charge slot into a
+            # hold. A change while a write is waiting therefore restarts the wait, so it goes out
+            # with the rates rather than ahead of them (batpred#6074).
+            await self._on_component_loop(self._restart_pending_write(sn))
         await self.publish_schedule_settings_ha(sn)
+
+    async def _restart_pending_write(self, sn):
+        """Restart sn's debounced write if one is waiting; with none waiting, leave the change for the next press or tick."""
+        if self._write_pending(sn):
+            await self._schedule_write(sn)
+            return True
+        return False
+
+    def _write_debounce_available(self):
+        """Return whether a press can be debounced: a delay is configured and the component's loop is running.
+
+        The delayed write has to live on the loop run() ticks on, which owns the HTTP session and
+        write_lock. Before that loop starts, or after it stops, there is nowhere to park it, so the
+        press writes at once exactly as it did before debouncing existed.
+        """
+        loop = self._loop
+        return bool(self.write_debounce) and loop is not None and not loop.is_closed() and loop.is_running()
+
+    def _write_pending(self, sn):
+        """Return whether a debounced write for sn is still waiting to be sent."""
+        task = self.write_debounce_tasks.get(sn)
+        return task is not None and not task.done()
+
+    async def _schedule_write(self, sn):
+        """Start, or restart, the debounced write for sn on the component's loop.
+
+        Predbat presses the write button after each stage of a schedule change - the window times,
+        then the target SoC, then the charge and discharge rates - within a few seconds of each
+        other. Sending on the first press put a half-applied schedule on the inverter: on a HESS-HY-S-5.0K
+        a hold starting with a new 08:00-16:00 window went out with CHG_PWR_LMT 4000 and
+        DTU_AC_CHG_SOC_LMT 100, and the hold values that followed were then held by
+        min_write_interval, so the battery charged from the grid for about 95 seconds
+        (batpred#6074). Each press now restarts a short timer instead, and only the settled
+        schedule is sent, in one call.
+        """
+        task = self.write_debounce_tasks.get(sn)
+        if task is not None and not task.done():
+            task.cancel()
+        self.write_debounce_tasks[sn] = asyncio.get_running_loop().create_task(self._debounced_write(sn))
+        return True
+
+    async def _debounced_write(self, sn):
+        """Wait out the debounce, then send sn's schedule unless a later press superseded this one."""
+        try:
+            await asyncio.sleep(self.write_debounce)
+        except asyncio.CancelledError:
+            # A later press restarted the timer, or the component is stopping.
+            return
+        # Released before the write, not after: a press arriving while this write is in flight
+        # must start its own timer rather than cancel a write that is already on its way.
+        if self.write_debounce_tasks.get(sn) is asyncio.current_task():
+            self.write_debounce_tasks.pop(sn, None)
+        try:
+            await self.apply_schedule(sn)
+        except Exception as error:
+            self.log("Warn: Hanchu schedule apply failed for {}: {}".format(sn, error))
+
+    def _cancel_pending_writes(self):
+        """Cancel every debounced write still waiting; the next press or tick sends the schedule again."""
+        for task in self.write_debounce_tasks.values():
+            if not task.done():
+                task.cancel()
+        self.write_debounce_tasks.clear()
 
     async def _on_component_loop(self, coro):
         """Await coro on the component's own event loop, handing it over when called from another one.
@@ -1820,6 +1912,7 @@ class HanchuAPI(ComponentBase):
             interval = min(interval, HANCHU_FAILED_WRITE_INTERVAL)
         return (time.time() - last) >= interval
 
+    @writes
     async def _write_payload(self, sn, payload, force=False):
         """Serialise every settings write through one lock, then send it.
 
@@ -1829,6 +1922,7 @@ class HanchuAPI(ComponentBase):
         async with self.write_lock:
             return await self._write_payload_locked(sn, payload, force=force)
 
+    @writes
     async def _write_payload_locked(self, sn, payload, force=False):
         """Send one batched payload if it differs from the last accepted one and pacing allows.
 
@@ -1907,6 +2001,7 @@ class HanchuAPI(ComponentBase):
             self.write_failure_notified.discard(sn)
         self.write_failures.pop(sn, None)
 
+    @writes
     async def apply_schedule(self, sn, force=False):
         """Build and send the locally held schedule for one device.
 
@@ -1925,6 +2020,7 @@ class HanchuAPI(ComponentBase):
             return False
         return await self._write_payload(sn, self.build_write_payload(sn, schedule), force=force)
 
+    @writes
     async def _reconcile_control(self, sn):
         """Re-apply sn's schedule if Predbat already controls it, unforced.
 
@@ -1936,6 +2032,11 @@ class HanchuAPI(ComponentBase):
         Predbat was in read-only mode.
         """
         if sn not in self.control_active or self._is_read_only() or not self.control_enable:
+            return
+        if self._write_pending(sn):
+            # Predbat is part-way through committing a change; the debounced write will send the
+            # settled schedule, and re-applying now would send the half-applied one it exists to
+            # avoid (batpred#6074).
             return
         try:
             await self.apply_schedule(sn)
@@ -2139,6 +2240,7 @@ class HanchuAPI(ComponentBase):
 
     async def final(self):
         """Persist state on shutdown so a restart resumes without re-polling, then close the HTTP session."""
+        self._cancel_pending_writes()
         await self.save_static()
         await self.save_config()
         await self.save_control()

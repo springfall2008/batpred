@@ -23,6 +23,7 @@ Covers:
   - a re-plan requested during the comparison survives it, and the state is restored even if the config restore raises
 """
 
+import copy
 import inspect
 import os
 import tempfile
@@ -88,6 +89,7 @@ CALCULATE_PLAN_REBUILT = (
     "metric_cloud_coverage",
     "metric_load_divergence",
     "plan_last_duration_seconds",
+    "charge_keep_target",
 )
 
 
@@ -604,7 +606,6 @@ def test_compare(my_predbat):
     pb.manual_freeze_charge_times = None
     pb.manual_freeze_export_times = None
     pb.manual_demand_times = None
-    pb.manual_all_times = None
     pb.octopus_intelligent_charging = False
     pb.iboost_plan = ["stale_plan_from_live_tariff"]
 
@@ -653,7 +654,6 @@ def test_compare(my_predbat):
     pb.manual_freeze_charge_times = None
     pb.manual_freeze_export_times = None
     pb.manual_demand_times = None
-    pb.manual_all_times = None
     pb.octopus_intelligent_charging = False
     pb.iboost_plan = ["stale_plan_from_live_tariff"]
     pb.plan_iboost_smart = lambda: tariff_plan_calls.append(1) or []
@@ -1124,7 +1124,13 @@ def test_compare(my_predbat):
     pb.rate_export_max = 15.0
     pb.rate_scan = lambda rates, print=True: None
     pb.rate_scan_export = lambda rates, print=True: None
-    pb.rate_replicate = lambda rates, io_adjusted=None, is_import=True: (dict(rates), {})
+    pb.rate_min_forward_calc = lambda rates: {}
+    pb.rate_min_forward = {}
+    pb.rate_export_max_forward_calc = lambda rates: {}
+    pb.rate_export_max_forward = {}
+    pb.rate_minmax = lambda rates: (0, 0, 0, 0, 0)
+    pb.rate_export_min_base = None
+    pb.rate_replicate = lambda rates, io_adjusted=None, is_import=True, **kwargs: (dict(rates), {})
     pb.set_rate_thresholds = lambda: None
     pb.rate_scan_window = lambda rates, *args: ([], 0, 0)
     pb.find_low_rate_windows = lambda: None
@@ -1188,6 +1194,49 @@ def test_compare(my_predbat):
         failed += 1
     else:
         print("PASS T32: the existing tariff is recognised during a saving session or dispatch, against the live rates without them")
+
+    # ------------------------------------------------------------------
+    # T33: predicted future rates (futurerate) fill only the user's own tariff. A compared tariff
+    #      whose published rates are the live tariff's gets them - so it is still recognised as
+    #      the existing tariff - and any other tariff keeps its own copied prices
+    # ------------------------------------------------------------------
+    t33_errors = []
+    cmp = Compare.__new__(Compare)
+    cmp.pb = my_predbat
+    cmp.log = lambda msg: None
+    cmp.live_saving_state = None
+    # fetch_rates() and the real rate_replicate()/rate_scan() rebuild rate tables and scan state on the shared
+    # fixture, so snapshot all of its attributes and put them back even if something in here raises
+    saved = {key: (copy.copy(value) if isinstance(value, (dict, list, set)) else value) for key, value in vars(my_predbat).items()}
+    try:
+        published = {minute: 15.0 for minute in range(-1440, 1380)}
+        future = {minute: 20.0 for minute in range(1380, 3 * 1440)}
+        other = {minute: 10.0 for minute in range(-1440, 1380)}
+        with patch.object(my_predbat, "get_arg", side_effect=lambda key, default=None, *a, **k: True if key == "futurerate_adjust_import" else (False if key == "futurerate_adjust_export" else default)):
+            my_predbat.minutes_now = 600
+            my_predbat.forecast_minutes = 2880
+            my_predbat.future_energy_rates_import = future
+            my_predbat.future_energy_rates_export = {}
+            my_predbat.metric_future_rate_offset_import = 0
+            my_predbat.metric_future_rate_offset_export = 0
+            my_predbat.io_adjusted = {}
+            live, _ = my_predbat.rate_replicate(dict(published), {}, is_import=True, use_future=True)
+            for label, rates, expected_existing, expected_2000 in [("the live tariff refetched", published, True, 20.0), ("another tariff", other, False, 10.0)]:
+                with patch.object(my_predbat, "basic_rates", side_effect=lambda *a, rates=rates, **k: dict(rates)), patch.object(my_predbat, "find_low_rate_windows", lambda: None), patch.object(my_predbat, "set_rate_thresholds", lambda: None):
+                    got = cmp.fetch_rates({"id": "t33", "rates_import": [{"rate": 0}]}, dict(live), {}, {}, rate_import_match=dict(live), rate_export_match={})
+                    if got is not expected_existing:
+                        t33_errors.append("{}: existing should be {}, got {}".format(label, expected_existing, got))
+                    if my_predbat.rate_import.get(2000) != expected_2000:
+                        t33_errors.append("{}: minute 2000 should be {}, got {}".format(label, expected_2000, my_predbat.rate_import.get(2000)))
+    finally:
+        vars(my_predbat).clear()
+        vars(my_predbat).update(saved)
+    if t33_errors:
+        for error in t33_errors:
+            print("ERROR T33: {}".format(error))
+        failed += 1
+    else:
+        print("PASS T33: future rates fill only a compared tariff that is the live one")
 
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))
