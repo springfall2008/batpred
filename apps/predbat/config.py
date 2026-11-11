@@ -2948,6 +2948,7 @@ APPS_SCHEMA = {
     "fox_auth_method": {"type": "string", "empty": False},
     "fox_token_expires_at": {"type": "string", "empty": False},
     "fox_token_hash": {"type": "string", "empty": False},
+    "fox_poll_seconds": {"type": "integer", "zero": False},
     "deye_key": {"type": "string", "empty": False},
     "deye_app_id": {"type": "string", "empty": False},
     "deye_app_secret": {"type": "string", "empty": False},

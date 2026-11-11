@@ -1199,6 +1199,12 @@ The OpenAPI does not report the site's grid export cap. Set `export_limit` manua
 
 See [Components - Growatt OpenAPI](components.md#growatt-openapi-growatt) and [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi).
 
+### Fox Cloud API
+
+Predbat can talk to Fox ESS inverters directly through the Fox Cloud API, configured with `fox_key` and the other `fox_` settings in `apps.yaml`.
+These include `fox_poll_seconds`, which sets how often the live data such as battery SoC is fetched (default `300`).
+See [Components - Fox ESS API](components.md#fox-ess-api-fox) for the full list of settings and what each one does.
+
 ### num_inverters
 
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
