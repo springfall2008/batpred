@@ -121,6 +121,20 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
     if octopus_free_slots:
         print("ERROR: Expecting no free slots")
         failed = 1
+    # Every joined session is kept for the History view's billing comparison, last year's included, which the planner drops
+    if [event.get("id") for event in my_predbat.octopus_saving_joined_events] != [1327, 1334, 1335, 1336]:
+        print("ERROR: Expecting every joined session kept for History, got {}".format(my_predbat.octopus_saving_joined_events))
+        failed = 1
+    # ... and handed to it priced as the planner prices them (here 10 Octopoints a penny)
+    billing_entity = "sensor." + my_predbat.prefix + "_billing"
+    my_predbat.dashboard_item(billing_entity, state=0.0, attributes={"slots": {"import": {"2026-11-09T17:00:00Z": {"kwh": 0.0, "cost": 0.0, "standing": 0.0, "buckets": {}}}}})
+    try:
+        history_sessions = (my_predbat.history_billing() or {}).get("saving_events")
+    finally:
+        my_predbat.dashboard_item(billing_entity, state=None, attributes={})
+    if [(event["id"], event["pence_per_kwh"]) for event in history_sessions or []] != [(1327, 57.6), (1334, 19.2), (1335, 44.8), (1336, 44.8)]:
+        print("ERROR: Expecting the History billing to carry the joined sessions at their p/kWh, got {}".format(history_sessions))
+        failed = 1
 
     rate_import_replicated = {}
     my_predbat.rate_import = {n: 0 for n in range(-24 * 60, 48 * 60)}

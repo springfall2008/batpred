@@ -67,6 +67,14 @@ def _check_js(failed):
         ("picker rendered for the History view only", "currentView === 'yesterday'" in _function_source(js, "renderHistoryPicker")),
         ("picker flags days with a recorded event", "historyDayEvents" in _function_source(js, "renderHistoryPicker") and "history_events" in _function_source(js, "renderHistoryPicker")),
         ("plan_data refresh keeps the day events", "window.historyDayEvents = data.history_day_events" in js),
+        ("saving session rows are marked with their points", "billing_saving" in table and "&sect;" in table),
+        (
+            "saving session tile is in points and left out of the Difference",
+            "saving_points" in _function_source(js, "renderBillingSummary")
+            and "pts" in _function_source(js, "renderBillingSummary")
+            and "saving_awarded" in _function_source(js, "renderBillingSummary")
+            and "not money" in _function_source(js, "renderBillingSummary"),
+        ),
     ]
     for label, ok in checks:
         if not ok:

@@ -7448,6 +7448,10 @@ def get_plan_renderer_js():
                         // Paid by Axle, not on the bill: an estimate from Predbat's own kWh, counted in the day's Axle total
                         billedStr += `<span title="${escapeAttr('Axle VPP event: Predbat priced in the event price, which isn\\'t on the bill; ' + Math.round(row.billing_axle * 100) + minor + ' estimated from Predbat\\'s recorded kWh, taken off the Diff and shown in the Axle (est.) total')}">&dagger;</span>`;
                     }
+                    if (row.billing_saving !== null && row.billing_saving !== undefined) {
+                        // Rewarded in Octopoints, not money: Predbat's price for the session is left out of its cost, and estimated here in points
+                        billedStr += `<span title="${escapeAttr('Octopus saving session: rewarded in Octopoints, not money, so the price Predbat gave the session is left out of its cost and the Diff; about ' + row.billing_saving + ' points estimated from Predbat\\'s recorded kWh, counted in the Saving session (est.) total')}">&sect;</span>`;
+                    }
                     if (row.billing_event) {
                         billedStr += ` <span style="font-size: 11px;" title="${escapeAttr(row.billing_event + ' in this slot: the bill may not show it the way Predbat priced it')}">(${row.billing_event})</span>`;
                     }
@@ -8226,6 +8230,11 @@ def get_plan_renderer_js():
         if (summary.axle_slots > 0) {
             html += tile('Axle (est.)&dagger;', money(-summary.axle));
         }
+        if (summary.saving_slots > 0) {
+            // Not money, so shown in points and left out of the Difference
+            const awarded = summary.saving_awarded > 0 ? ` (${summary.saving_awarded} awarded${summary.saving_awarded_pending > 0 ? ', more to come' : ''})` : (summary.saving_awarded_pending > 0 ? ' (not awarded yet)' : '');
+            html += tile('Saving session (est.)&sect;', `${summary.saving_points} pts${awarded}`);
+        }
         html += tile('Difference', (summary.diff > 0 ? '+' : '') + money(summary.diff), `color: ${diffColor};`);
         html += tile('Import kWh', kwh(summary.import_kwh));
         html += tile('Export kWh', kwh(summary.export_kwh));
@@ -8233,8 +8242,9 @@ def get_plan_renderer_js():
         html += '</div>';
         const pending = summary.export_pending_slots > 0 ? `${summary.export_pending_slots} slot${summary.export_pending_slots === 1 ? '' : 's'} billed for import only (export not billed yet), left out of these totals` : '';
         const credits = (summary.credits > 0 || summary.credits_pending > 0) ? `* Weekend Happy Hour import is billed at the full rate and refunded as a credit${summary.credits_pending > 0 ? ` (${summary.credits_pending} not posted yet)` : ''}; the Difference is after credits` : '';
+        const saving = summary.saving_slots > 0 ? `&sect; Octopus saving session slots: rewarded in Octopoints, not money, so the price Predbat gave the session (${money(summary.saving_value)} here) is left out of the Predbat cost, Diff and Difference; the points are estimated from Predbat\\'s recorded kWh at the session\\'s rate, while Octopus awards them for the import cut against its own baseline, so what it awards can differ` : '';
         const axle = summary.axle_slots > 0 ? '&dagger; Axle VPP event slots: Predbat priced in the event price, which Axle pays separately and isn\\'t on the bill (on import during an export event it is only a planning cost); estimated from Predbat\\'s recorded kWh, and the Diff and Difference are after it' : '';
-        const notes = [complete, pending, credits, axle, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
+        const notes = [complete, pending, credits, axle, saving, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
         html += `<p style="font-size: 12px; margin: 0 0 8px 0; opacity: 0.8;">${notes.join(' &middot; ')}</p>`;
         return html;
     }

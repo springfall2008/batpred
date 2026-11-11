@@ -469,6 +469,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.carbon_today_sofar = 0
         self.octopus_free_slots = []
         self.octopus_saving_slots = []
+        self.octopus_saving_joined_events = []
         self.car_charging_slots = []
         self.car_charging_now_slots = []
         self.reserve = 0

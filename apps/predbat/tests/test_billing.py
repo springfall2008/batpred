@@ -1521,6 +1521,122 @@ def test_attach_axle():
     return False
 
 
+def _saving_event(start_minute, end_minute, points=149, rewarded=None, event_type="TURN_DOWN", event_id=8342):
+    """A joined saving session as the octopus_saving_session sensor lists it, by minutes after the view's midnight."""
+    return {
+        "start": (VIEW_MIDNIGHT + timedelta(minutes=start_minute)).strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "end": (VIEW_MIDNIGHT + timedelta(minutes=end_minute)).strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "octopoints_per_kwh": points,
+        "rewarded_octopoints": rewarded,
+        "id": event_id,
+        "code": "EVENT_{}".format(event_id),
+        "event_type": event_type,
+    }
+
+
+def test_saving_session_events():
+    """Joined saving sessions are priced as the planner prices them, and Happy Hours, unpriced and unreadable events are left out."""
+    from billing import saving_session_events
+
+    joined = [
+        _saving_event(1020, 1080, points=149, rewarded=392),
+        _saving_event(480, 540, points=0, event_type="WEEKEND_HAPPY_HOUR", event_id=1),
+        _saving_event(600, 660, points=None, event_id=2),
+        _saving_event(700, 760, points=0, event_id=3),
+        {"start": "not a time", "end": None, "octopoints_per_kwh": 100},
+        "junk",
+    ]
+    events = saving_session_events(joined, 8, 0.0)
+    if [(event["id"], event["pence_per_kwh"], event["octopoints_per_kwh"], event["rewarded_octopoints"]) for event in events] != [(8342, 18.625, 149.0, 392.0)]:
+        print("ERROR: only the priced turn-down session should be kept, at 149 points / 8 = 18.625p, got {}".format(events))
+        return True
+    # With octopus_saving_session_rate set, an event that reports no reward is priced at it, as the planner does
+    defaulted = saving_session_events(joined, 8, 50.0)
+    if [(event["id"], event["pence_per_kwh"], event["octopoints_per_kwh"]) for event in defaulted] != [(8342, 18.625, 149.0), (2, 50.0, 400.0)]:
+        print("ERROR: an event with no reward should take the default rate, got {}".format(defaulted))
+        return True
+    return False
+
+
+def test_attach_saving():
+    """A saving session's price is left out of Predbat's cost and the Diff, and estimated in points, with what Octopus awarded."""
+    from billing import attach_billing, saving_session_events
+
+    # 2.5 kWh exported in each half-hour of a 17:00-18:00 session at Agile Outgoing 15p, which Predbat priced 18.625p/kWh higher
+    minutes = [1020, 1050, 1080]
+    imports = {_key(1020): _slot(0.0, 0.0), _key(1050): _slot(0.0, 0.0), _key(1080): _slot(1.0, 30.0)}
+    exports = {_key(1020): _slot(2.5, 2.5 * 15.0), _key(1050): _slot(2.5, 2.5 * 15.0), _key(1080): _slot(0.0, 0.0)}
+    billing = dict(_billing_attrs(imports, exports, legs={"import": True, "export": True}))
+    predbat_cost = {1020: -2.5 * 33.625, 1050: -2.5 * 33.625, 1080: 30.0}
+    import_kwh = {1020: 0.0, 1050: 0.0, 1080: 1.0}
+    export_kwh = {1020: 2.5, 1050: 2.5, 1080: 0.0}
+    sessions = saving_session_events([_saving_event(1020, 1080)], 8, 0.0)
+    plan = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {minute: "saving" for minute in range(1020, 1080)}, False, import_kwh, export_kwh, None, sessions)
+    summary = plan["billing_summary"]
+    # 2.5 kWh at 149 points/kWh is 372.5 points a half-hour
+    if [row.get("billing_saving") for row in plan["rows"]] != [372, 372, None]:
+        print("ERROR: each session row should carry its 2.5 kWh at 149 points, got {}".format([row.get("billing_saving") for row in plan["rows"]]))
+        return True
+    if summary.get("predbat_cost") != -0.45 or summary.get("diff") != 0.0 or summary.get("saving_points") != 745 or summary.get("saving_value") != 0.93 or summary.get("saving_slots") != 2:
+        print("ERROR: Predbat's cost should be at the tariff's rates, with the session's 93p shown as 745 points, got {}".format(summary))
+        return True
+    if [row.get("billing_diff") for row in plan["rows"]] != [0.0, 0.0, 0.0] or plan["rows"][0].get("billing_event") is not None:
+        print("ERROR: each session row's Diff should leave the session price out, and its label go, got {}".format([(row.get("billing_diff"), row.get("billing_event")) for row in plan["rows"]]))
+        return True
+    if summary.get("saving_awarded") != 0 or summary.get("saving_awarded_pending") != 1:
+        print("ERROR: a session Octopus hasn't awarded yet should be counted as pending, got {}".format(summary))
+        return True
+    awarded = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1080, rewarded=392)], 8, 0.0))
+    if awarded["billing_summary"].get("saving_awarded") != 392 or awarded["billing_summary"].get("saving_awarded_pending") != 0 or awarded["billing_summary"].get("diff") != 0.0:
+        print("ERROR: the points Octopus awarded should be shown, and not change the Difference, got {}".format(awarded["billing_summary"]))
+        return True
+    # Without the session the same day shows its price as a gap against the bill
+    plain = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh)
+    if plain["billing_summary"].get("diff") != 0.93 or plain["billing_summary"].get("saving_slots") != 0 or plain["rows"][0].get("billing_saving") is not None:
+        print("ERROR: without saving sessions nothing should be left out, got {}".format(plain["billing_summary"]))
+        return True
+    # A session row's import rate carries the session price, so it mustn't make the day's rates look implausible
+    rated = _plan(minutes)
+    for row, rate in zip(rated["rows"], (48.625, 48.625, 30.0)):
+        row["import_rate"] = rate
+    rated_billing = dict(billing, slots={"import": {key: _slot(1.0, 30.0) for key in imports}, "export": exports})
+    priced = attach_billing(rated, rated_billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, sessions)
+    if "billing_summary" not in priced:
+        print("ERROR: a saving session row's import rate should be checked without the session price")
+        return True
+    # Import during a session: Predbat priced it 18.625p/kWh higher, which the bill doesn't charge
+    import_cost = {**predbat_cost, 1080: 1.0 * 48.625}
+    during = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, import_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1110)], 8, 0.0))
+    if during["rows"][2].get("billing_saving") != -149 or during["billing_summary"].get("diff") != 0.0:
+        print("ERROR: import during a session should count against its points and come off Predbat's cost, got {} {}".format(during["rows"][2].get("billing_saving"), during["billing_summary"]))
+        return True
+    # Without Predbat's recorded kWh there is nothing to estimate from, so the row isn't flagged
+    unmetered = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, None, None, None, sessions)
+    if unmetered["rows"][0].get("billing_saving") is not None or unmetered["billing_summary"].get("saving_slots") != 0:
+        print("ERROR: without recorded kWh no saving session estimate should be made, got {}".format(unmetered["billing_summary"]))
+        return True
+    return False
+
+
+def test_history_billing_mark_saving():
+    """The History views rebuild when a saving session over the billed half-hours appears or Octopus awards its points."""
+    from billing import saving_session_events
+    from output import Output
+
+    billing = _billing_attrs({_key(480): _slot(1.0, 30.0), _key(1050): _slot(1.0, 30.0)})
+    base = Output.history_billing_mark(billing)
+    pending = Output.history_billing_mark(dict(billing, saving_events=saving_session_events([_saving_event(1020, 1080)], 8, 0.0)))
+    awarded = Output.history_billing_mark(dict(billing, saving_events=saving_session_events([_saving_event(1020, 1080, rewarded=392)], 8, 0.0)))
+    if len({repr(mark) for mark in (base, pending, awarded)}) != 3:
+        print("ERROR: the mark should change with a session and with its award, got {} {} {}".format(base, pending, awarded))
+        return True
+    later = Output.history_billing_mark(dict(billing, saving_events=saving_session_events([_saving_event(1020, 1080), _saving_event(1200, 1260, event_id=9)], 8, 0.0)))
+    if later != pending:
+        print("ERROR: a session after the billed half-hours shouldn't change the mark, got {} {}".format(later, pending))
+        return True
+    return False
+
+
 def test_plan_renderer_js_parses():
     """The plan renderer's JavaScript, billing columns and summary included, parses: one bad escape stops every plan view rendering."""
     import re
@@ -1683,6 +1799,9 @@ def run_billing_tests(my_predbat):
         test_attach_axle,
         test_history_billing_mark_axle,
         test_plan_renderer_js_parses,
+        test_saving_session_events,
+        test_attach_saving,
+        test_history_billing_mark_saving,
         test_octopus_billing_credit_events,
     ):
         print("billing: {}".format(test.__name__))

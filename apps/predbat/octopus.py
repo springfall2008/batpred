@@ -5524,6 +5524,8 @@ class Octopus:
 
         # Octopus saving session
         octopus_saving_slots = []
+        # Every joined session the sensor lists, past ones included, for the History view's billing comparison
+        self.octopus_saving_joined_events = []
         if "octopus_saving_session" in self.args:
             saving_rate = 200  # Default rate if not reported
             octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per penny
@@ -5553,6 +5555,7 @@ class Octopus:
                         available_events = fallback_available_events
                 joined_events = [] if joined_events is _ATTRIBUTE_UNSET else joined_events
                 available_events = [] if available_events is _ATTRIBUTE_UNSET else available_events
+                self.octopus_saving_joined_events = list(joined_events or [])
 
             if available_events and not self.get_arg("octopus_saving_auto_join", True):
                 self.log("Octopus: Saving session auto-join is disabled, not joining available events")
