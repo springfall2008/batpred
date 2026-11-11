@@ -786,7 +786,7 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 #### What it does (axle)
 
 Connects to Axle Energy's Virtual Power Plant (VPP) [UK] service to receive and track demand response events.
-When Axle schedules export events, this component will track them and store the history for up to 7 days.
+When Axle schedules export events, this component will track them and store the history for up to 9 days.
 The component publishes a binary sensor that turns on when an event is currently active.
 
 If configured in Predbat's `apps.yaml` Predbat will control your inverter to export in response to the Axle event and adjusts the export energy rate to account for the extra payment from Axle.
@@ -804,7 +804,7 @@ Select control my battery for 'Events Only'.
 #### Important notes (axle)
 
 - Polls the Axle API every 10 minutes for updates
-- Stores event history for up to 7 days
+- Stores event history for up to 9 days
 - Events are added to history as soon as they start (become active)
 - Binary sensor (default name `binary_sensor.predbat_axle_event`) is `on` when an event is currently active, `off` otherwise
 - Current event details and event history are available as sensor attributes ('event_current' and 'event_history')
@@ -839,7 +839,7 @@ The binary sensor `binary_sensor.predbat_axle_event` provides the following attr
     - `import_export`: Event type ("import" or "export")
     - `updated_at`: Last update timestamp
     - `pence_per_kwh`: Payment rate for this event
-- `event_history`: List of past events (up to 7 days) with the same fields as above
+- `event_history`: List of past events (up to 9 days) with the same fields as above
 
 ---
 
