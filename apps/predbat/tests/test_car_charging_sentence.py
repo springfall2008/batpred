@@ -18,6 +18,8 @@ is described as planned to charge; without a sensor reading the plan's word stan
 
 import copy
 
+from tests.test_infra import reset_inverter, reset_rates
+
 
 def _check(label, got, expected):
     """Print a pass/fail line and return True when the check failed."""
@@ -53,6 +55,33 @@ def _test_fetch_records_reading(my_predbat):
     return failed
 
 
+def _test_plan_text_wiring(my_predbat):
+    """short_textual_plan() carries the car line from car_charging_now_sentence(), so reverting its call site fails here."""
+    failed = False
+    reset_inverter(my_predbat)
+    my_predbat.forecast_minutes = 24 * 60
+    reset_rates(my_predbat, 10.0, 5.0)
+    my_predbat.predict_soc_best = {0: 0.0}
+    my_predbat.predict_metric_best = {}
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    flat_step = {minute: 0.0 for minute in range(0, my_predbat.forecast_minutes, 5)}
+    my_predbat.num_cars = 1
+    my_predbat.minutes_now = 610
+    my_predbat.car_charging_slots = [[{"start": 600, "end": 660, "kwh": 6.0}]]
+    for label, state, expected, unexpected in (
+        ("plan text, sensor says not charging", False, "- Your car is planned to charge now.\n", "- Your car is currently charging.\n"),
+        ("plan text, no sensor reading", None, "- Your car is currently charging.\n", "- Your car is planned to charge now.\n"),
+    ):
+        my_predbat.car_charging_now_state = [state]
+        my_predbat.car_charging_now = [bool(state)]
+        text = my_predbat.short_textual_plan(0.0, 0, flat_step, flat_step, flat_step, flat_step, my_predbat.forecast_minutes, publish=False)
+        failed |= _check(label, expected in text and unexpected not in text, True)
+    return failed
+
+
 def test_car_charging_sentence(my_predbat):
     """car_charging_now_sentence() follows car_charging_now, and falls back to plan intent."""
     print("**** Running car charging sentence tests ****")
@@ -85,6 +114,7 @@ def test_car_charging_sentence(my_predbat):
             my_predbat.car_charging_now = [bool(state) for state in states]
             my_predbat.car_charging_slots = copy.deepcopy(slots)
             failed |= _check(label, my_predbat.car_charging_now_sentence(), expected)
+        failed |= _test_plan_text_wiring(my_predbat)
     finally:
         for field, value in saved.items():
             setattr(my_predbat, field, value)
