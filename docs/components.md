@@ -1106,7 +1106,7 @@ With Zappi control on, Predbat drives your Zappi from the car charging plan it h
 
 Inside a planned charging window Predbat puts the Zappi in **Fast**, and outside one it puts it in **Stopped**. Fast is used because the window was chosen for its electricity rate rather than for sunshine — Eco or Eco+ would only charge from surplus, and the car would not get what the plan assumed.
 
-Each Zappi follows its own car. Zappis are matched to cars in serial number order, the same order `car_charging_energy` and `car_charging_planned` are wired in, so your first Zappi follows car 0's plan, your second follows car 1's, and so on.
+Each Zappi follows its own car. Online Zappis are matched to cars in serial number order, the same order `car_charging_energy` and `car_charging_planned` are wired in, so your first online Zappi follows car 0's plan, your second follows car 1's, and so on. An offline Zappi is skipped, as described under "Important notes (myenergi)" above.
 
 Predbat re-checks the Zappi every minute. If the mode is changed in the myenergi app while Predbat is in control, it is put back — otherwise control would drift away silently.
 
