@@ -24,6 +24,8 @@ from config import APPS_SCHEMA, INVERTER_DEF
 from growatt import (
     GrowattAPI,
     build_cli_test_slots,
+    classify_cli_reading,
+    cli_slot_end,
     growatt_write_test,
     judge_cli_window,
     load_cli_snapshot,
@@ -40,6 +42,7 @@ from growatt_const import (
     GROWATT_CONTROL_OFF,
     GROWATT_CONTROL_ON,
     GROWATT_UNUSED_SLOT,
+    GROWATT_READ_ATTEMPTS,
     GROWATT_WRITE_ATTEMPTS,
     dispatch_slot_payload,
     local_window_to_utc_slots,
@@ -521,8 +524,8 @@ def test_growatt_write_never_applied_is_retried_then_fails():
     assert not run_async_local(client.apply_schedule(sn))
     assert len(calls) == GROWATT_WRITE_ATTEMPTS
     assert len(calls.reads) == GROWATT_WRITE_ATTEMPTS
-    # Back-off of 5 s then 10 s between the attempts, on top of the pacing waits
-    assert 5 in client.slept and 10 in client.slept
+    # A 5 s back-off between the attempts, on top of the pacing waits
+    assert 5 in client.slept
     assert sn not in client.applied_slots
     assert any("could not be confirmed after" in message for message in client.log_messages)
 
@@ -530,13 +533,14 @@ def test_growatt_write_never_applied_is_retried_then_fails():
 def test_growatt_reads_retry_while_the_device_is_busy():
     """READ_DEVICE_PARAM_FAIL is retried with back-off, so one busy answer is not taken as the result."""
     client, sn = _ready_client()
-    answers = [(False, None), (False, None), (True, 1)]
+    answers = [(False, None), (True, 1)]
     client.read_dispatch = AsyncMock(side_effect=answers)
     assert run_async_local(client.read_dispatch_retry(sn, GROWATT_SET_ENABLE_CONTROL)) == (True, 1)
-    assert client.read_dispatch.await_count == 3
+    assert client.read_dispatch.await_count == 2
+    # A device that keeps failing is given up on after GROWATT_READ_ATTEMPTS, not retried indefinitely
     client.read_dispatch = AsyncMock(return_value=(False, None))
     assert run_async_local(client.read_dispatch_retry(sn, GROWATT_SET_ENABLE_CONTROL)) == (False, None)
-    assert client.read_dispatch.await_count == 3
+    assert client.read_dispatch.await_count == GROWATT_READ_ATTEMPTS == 2
 
 
 def test_growatt_dispatch_is_not_resent_after_a_transport_failure():
@@ -961,7 +965,8 @@ class FakeGrowattDevice:
                 sample_time = self.clock - timedelta(minutes=1)
                 bat_power = -250.0
             else:
-                sample_time = self.clock + timedelta(minutes=5 * self.samples)
+                # A new upload each poll, 20 s apart, so every one lands inside even a short test slot
+                sample_time = self.clock + timedelta(seconds=20 * self.samples)
                 active = [slot for slot in self.table if slot["startTime"] != slot["endTime"]]
                 percentage = active[0]["percentage"] if active else None
                 if percentage is None or (percentage == 0 and not self.hold_works):
@@ -995,6 +1000,30 @@ def test_growatt_cli_test_slots():
     late = datetime(2026, 11, 11, 23, 50, tzinfo=pytz.utc)
     assert build_cli_test_slots("charge", late, 10, 20) == [{"startTime": "23:50", "endTime": "23:59", "percentage": 20}]
     assert build_cli_test_slots("charge", datetime(2026, 11, 11, 23, 57, tzinfo=pytz.utc), 3, 20) is None
+
+
+def test_growatt_cli_readings_judged_only_inside_the_slot():
+    """A slot cut at 23:59 ends before the watch would: readings after its end are shown but not judged."""
+    built = datetime(2026, 11, 11, 23, 52, 10, tzinfo=pytz.utc)
+    slots = build_cli_test_slots("charge", built, 10, 28)
+    assert slots == [{"startTime": "23:52", "endTime": "23:59", "percentage": 28}]
+    slot_end = cli_slot_end(built, slots)
+    assert slot_end == datetime(2026, 11, 11, 23, 59, tzinfo=pytz.utc)
+    written = built + timedelta(seconds=20)
+    seen = set()
+    # Inside the slot: judged
+    assert classify_cli_reading(-1000, datetime(2026, 11, 11, 23, 57, 0, tzinfo=pytz.utc), written, slot_end, seen)[0]
+    # After the cut slot has ended (the review's t=480-600 s readings): not judged, and labelled as such
+    judged, label = classify_cli_reading(20, datetime(2026, 11, 12, 0, 1, 0, tzinfo=pytz.utc), written, slot_end, seen)
+    assert not judged and "after the slot ended" in label
+    # Before the write, a repeat, or no reading at all: not judged
+    assert not classify_cli_reading(250, datetime(2026, 11, 11, 23, 50, tzinfo=pytz.utc), written, slot_end, seen)[0]
+    seen.add(datetime(2026, 11, 11, 23, 57, 0, tzinfo=pytz.utc))
+    assert classify_cli_reading(-1000, datetime(2026, 11, 11, 23, 57, 0, tzinfo=pytz.utc), written, slot_end, seen) == (False, "same reading as the last poll")
+    assert classify_cli_reading(None, None, written, slot_end, seen) == (False, "no reading")
+    # A normal, uncut slot ends minutes + 2 after its start minute
+    normal = datetime(2026, 11, 11, 21, 40, 30, tzinfo=pytz.utc)
+    assert cli_slot_end(normal, build_cli_test_slots("hold", normal, 12, 28)) == datetime(2026, 11, 11, 21, 54, tzinfo=pytz.utc)
 
 
 def test_growatt_cli_judge_window():
@@ -1044,8 +1073,8 @@ def test_growatt_cli_write_test_ignores_old_readings():
     assert result, client.cli_output
     assert client.cli_output.count("old reading from") == 3
     assert "PASS: battery charging" in client.cli_output
-    # Stops once two new readings are in: three old polls, then two new ones
-    assert device.samples == 5
+    # Stops once two new readings are in: the pre-flight check, three old polls, then two new ones
+    assert device.samples == 6
 
     # Only old readings within the 12-minute watch (13 polls): no verdict either way
     device = FakeGrowattDevice(enable=1, stale_polls=20)
@@ -1054,6 +1083,22 @@ def test_growatt_cli_write_test_ignores_old_readings():
     assert not result
     assert "INCONCLUSIVE" in client.cli_output
     assert device.table == [dict(FakeGrowattDevice.UNUSED) for _ in range(16)]
+
+
+def test_growatt_cli_write_test_refuses_when_telemetry_has_stopped():
+    """A device whose last upload is over ten minutes old is not written to at all."""
+    import tempfile
+
+    # The only reading the device has is 31 minutes old, as in the live run whose datalogger stopped
+    device = FakeGrowattDevice(enable=0, stale_polls=99)
+    device.clock = datetime.now(pytz.utc) - timedelta(minutes=30)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        result, client = _write_test(device, ["charge"], tmp_dir)
+        assert os.listdir(tmp_dir) == []
+    assert not result
+    assert "not reporting to Growatt, so nothing was written" in client.cli_output
+    assert device.writes() == []
+    assert all(endpoint == "device_data" for endpoint, _, _ in device.requests)
 
 
 def test_growatt_cli_write_test_failed_hold_still_restores():
@@ -1171,9 +1216,11 @@ def run_growatt_tests(my_predbat):
         ("cli_single_cycle", test_growatt_cli_single_cycle),
         ("cli_failures", test_growatt_cli_failures_are_explained),
         ("cli_test_slots", test_growatt_cli_test_slots),
+        ("cli_readings_inside_slot", test_growatt_cli_readings_judged_only_inside_the_slot),
         ("cli_judge_window", test_growatt_cli_judge_window),
         ("cli_write_test_restores", test_growatt_cli_write_test_restores_each_time),
         ("cli_write_test_old_readings", test_growatt_cli_write_test_ignores_old_readings),
+        ("cli_write_test_stale_telemetry", test_growatt_cli_write_test_refuses_when_telemetry_has_stopped),
         ("cli_write_test_failed_hold", test_growatt_cli_write_test_failed_hold_still_restores),
         ("cli_write_test_exception", test_growatt_cli_write_test_restores_after_an_exception),
         ("cli_write_test_no_baseline", test_growatt_cli_write_test_refuses_without_a_baseline),

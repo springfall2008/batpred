@@ -1065,6 +1065,9 @@ GROWATT_CLI_DEFAULT_MINUTES = 12
 GROWATT_CLI_SETTLE_SECONDS = 60
 # Fresh, settled readings that end a test's watch early.
 GROWATT_CLI_FRESH_NEEDED = 2
+# A write test refuses to start when the latest telemetry upload is older than this many minutes:
+# uploads come about every five, so older means the inverter or datalogger is not reporting.
+GROWATT_CLI_MAX_TELEMETRY_AGE = 10
 # Battery power below this many watts counts as idle when judging.
 GROWATT_CLI_THRESHOLD_W = 100
 # getDeviceData's endpoint page allows one call a minute per device.
@@ -1166,6 +1169,33 @@ def build_cli_test_slots(scenario, now_utc, minutes, percentage):
     end_text = "23:59" if end_minutes >= 24 * 60 else "{:02d}:{:02d}".format(end_minutes // 60, end_minutes % 60)
     signed = {"charge": clamp_percent(percentage), "export": -clamp_percent(percentage), "hold": 0}[scenario]
     return [{"startTime": start.strftime("%H:%M"), "endTime": end_text, "percentage": signed}]
+
+
+def cli_slot_end(built_utc, slots):
+    """Return the UTC datetime a write test's slot ends, from the time it was built and its endTime.
+
+    build_cli_test_slots() never crosses UTC midnight, so the end is on the same UTC day - and it
+    may be earlier than the watch would run, when the slot was cut at 23:59.
+    """
+    hour, minute = (int(part) for part in slots[-1]["endTime"].split(":"))
+    return built_utc.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def classify_cli_reading(power, sample_utc, written_utc, slot_end, seen):
+    """Decide whether one telemetry reading is judged, returning (judged, label for the poll line).
+
+    Only a new upload taken after the write and before the slot ends counts: an older one shows
+    the battery before the write, and a later one the battery after the slot has stopped.
+    """
+    if power is None or sample_utc is None:
+        return False, "no reading"
+    if sample_utc <= written_utc:
+        return False, "old reading from {}".format(sample_utc.strftime("%H:%M:%S"))
+    if sample_utc in seen:
+        return False, "same reading as the last poll"
+    if sample_utc > slot_end:
+        return False, "reading from {}, after the slot ended - not judged".format(sample_utc.strftime("%H:%M:%S"))
+    return True, "new reading, taken {:.0f}s after the write".format((sample_utc - written_utc).total_seconds())
 
 
 def judge_cli_window(scenario, samples, settle_seconds=GROWATT_CLI_SETTLE_SECONDS, threshold=GROWATT_CLI_THRESHOLD_W):
@@ -1279,6 +1309,18 @@ async def growatt_write_test(client, sn, scenarios, power, minutes, confirm, sna
     print("\nWrite tests on {}: {} at {} W ({}% of the {:.0f} W battery rating), watching up to {} minutes each".format(sn, ", ".join(scenarios), power, percentage, rate_max, minutes))
     print("Make sure no running Predbat instance is controlling this inverter, or it will overwrite the test slots.")
 
+    # Pre-flight: a device whose telemetry has stopped arriving cannot be judged, and in a live
+    # run that went with settings reads failing for over ten minutes, so a restore could not be
+    # confirmed either. Refuse rather than write to it.
+    _, last_upload = await _cli_sample(client, sn)
+    age_minutes = (datetime.now(timezone.utc) - last_upload).total_seconds() / 60 if last_upload else None
+    if age_minutes is None or age_minutes > GROWATT_CLI_MAX_TELEMETRY_AGE:
+        print(
+            "\nFAILED: the latest telemetry is {} - the inverter or its datalogger is not reporting to Growatt, so nothing was written. Check it is online in the Growatt app and try again".format(
+                "missing" if age_minutes is None else "{:.0f} minutes old (from {} UTC)".format(age_minutes, last_upload.strftime("%H:%M:%S"))
+            )
+        )
+        return False
     enable, saved_slots = await _cli_read_baseline(client, sn)
     if enable is None:
         print("\nFAILED: the current settings could not be read, so they could not be restored - nothing was written")
@@ -1305,7 +1347,8 @@ async def growatt_write_test(client, sn, scenarios, power, minutes, confirm, sna
                 return False
         for scenario in scenarios:
             print("\n--- {} ---  expect: {}".format(scenario, GROWATT_CLI_EXPECTATION[scenario]))
-            slots = build_cli_test_slots(scenario, datetime.now(timezone.utc), minutes, percentage)
+            built_utc = datetime.now(timezone.utc)
+            slots = build_cli_test_slots(scenario, built_utc, minutes, percentage)
             if slots is None:
                 print("  skipped: too close to UTC midnight for a slot that does not cross it")
                 results.append((scenario, "INCONCLUSIVE"))
@@ -1317,20 +1360,19 @@ async def growatt_write_test(client, sn, scenarios, power, minutes, confirm, sna
                 results.append((scenario, "FAIL"))
             else:
                 written_utc = datetime.now(timezone.utc)
-                print("  confirmed by read-back. Growatt uploads telemetry about every 5 minutes, so only readings taken after the write are judged")
+                slot_end = cli_slot_end(built_utc, slots)
+                print("  confirmed by read-back. Growatt uploads telemetry about every 5 minutes, so only readings taken after the write and before the slot ends ({} UTC) are judged".format(slot_end.strftime("%H:%M")))
                 samples = []
                 seen = set()
                 for index in range(polls_per_test):
                     if index:
+                        if datetime.now(timezone.utc) >= slot_end:
+                            print("  the slot has ended, so watching stops here")
+                            break
                         await asyncio.sleep(sample_seconds)
                     power_now, sample_utc = await _cli_sample(client, sn)
                     values = client.device_values.get(sn, {})
-                    fresh = power_now is not None and sample_utc is not None and sample_utc > written_utc and sample_utc not in seen
-                    age = (
-                        "new reading, taken {:.0f}s after the write".format((sample_utc - written_utc).total_seconds())
-                        if fresh
-                        else ("no reading" if power_now is None else "old reading from {}".format(sample_utc.strftime("%H:%M:%S") if sample_utc else "?"))
-                    )
+                    fresh, age = classify_cli_reading(power_now, sample_utc, written_utc, slot_end, seen)
                     print(
                         "  poll {:2}  SoC {}%  battery {} W  grid {} W  load {} W  ({})".format(index + 1, values.get("soc", "?"), "?" if power_now is None else "{:.0f}".format(power_now), values.get("grid_power", "?"), values.get("load_power", "?"), age)
                     )

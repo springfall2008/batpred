@@ -43,10 +43,12 @@ GROWATT_TIMEOUT = 30
 # re-sent blind.
 GROWATT_RETRIES = 3
 # Attempts at a verified write (write, then read back) and at a dispatch read, and the back-off
-# step between them in seconds (5 s, then 10 s). A live SPH answered PARAMETER_SETTING_FAILED
-# to a table it did apply, then READ_DEVICE_PARAM_FAIL to reads for a few minutes.
-GROWATT_WRITE_ATTEMPTS = 3
-GROWATT_READ_ATTEMPTS = 3
+# between them in seconds. A live SPH answered PARAMETER_SETTING_FAILED to a table it did apply,
+# so one retry is worth having; but it also went on answering READ_DEVICE_PARAM_FAIL for over
+# ten minutes, and three nested levels of retries then held one write for about four minutes.
+# Two of each bounds a write at about a minute and a half; the next run tries again.
+GROWATT_WRITE_ATTEMPTS = 2
+GROWATT_READ_ATTEMPTS = 2
 GROWATT_RETRY_BACKOFF = 5
 
 # Public documentation is inconsistent for getDeviceData: its endpoint page says one
