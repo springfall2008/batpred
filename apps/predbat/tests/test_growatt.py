@@ -134,7 +134,7 @@ def _schedule():
 
 
 def test_growatt_constants_and_utc_conversion():
-    assert GROWATT_BASE_URL == "https://opencloud.growatt.com"
+    assert GROWATT_BASE_URL == "https://opencloud.growatt.com/prod-api"
     assert GROWATT_ENDPOINTS["dispatch"] == "/oauth2/deviceDispatch"
     london = pytz.timezone("Europe/London")
     winter = london.localize(datetime(2026, 1, 15, 12, 0))
@@ -142,6 +142,61 @@ def test_growatt_constants_and_utc_conversion():
     assert local_window_to_utc_slots("01:00:00", "03:00:00", 50, winter) == [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
     assert local_window_to_utc_slots("01:00:00", "03:00:00", 50, summer) == [{"startTime": "00:00", "endTime": "02:00", "percentage": 50}]
     assert local_window_to_utc_slots("00:00:00", "00:00:00", 50, summer) == []
+
+
+class _RecordingResponse:
+    """A 200 response with an empty successful Growatt answer."""
+
+    status = 200
+
+    async def __aenter__(self):
+        """Enter the response context."""
+        return self
+
+    async def __aexit__(self, *exc):
+        """Leave the response context."""
+        return False
+
+    async def json(self):
+        """Return a successful, empty Growatt answer."""
+        return {"code": 0, "data": []}
+
+
+class _RecordingSession:
+    """Stands in for the HTTP session _request() opens, recording each URL it posts to."""
+
+    def __init__(self, urls):
+        """Record into the given list."""
+        self.urls = urls
+
+    async def __aenter__(self):
+        """Enter the session context."""
+        return self
+
+    async def __aexit__(self, *exc):
+        """Leave the session context."""
+        return False
+
+    def post(self, url, headers=None, json=None):
+        """Record the URL and answer with a successful response."""
+        self.urls.append(url)
+        return _RecordingResponse()
+
+
+def test_growatt_request_url_includes_prod_api():
+    """Requests built from the default base reach /prod-api/oauth2/..., with or without a trailing slash."""
+    registry_default = COMPONENT_LIST["growatt"]["args"]["base_url"]["default"]
+    assert registry_default == GROWATT_BASE_URL
+    for base_url in (None, registry_default, GROWATT_BASE_URL + "/"):
+        client = MockGrowatt()
+        if base_url is not None:
+            client.initialize(key="access-token", auth_method="oauth", token_expires_at=(datetime.now(pytz.utc) + timedelta(days=1)).isoformat(), base_url=base_url, api_delay=0)
+        urls = []
+        client.http_session = lambda **kwargs: _RecordingSession(urls)
+        code, _ = run_async_local(client._request("device_info", {"deviceSn": "SPH123"}))
+        assert code == 0
+        assert urls == ["https://opencloud.growatt.com/prod-api/oauth2/getDeviceInfo"], (base_url, urls)
+        assert urls[0].startswith("https://opencloud.growatt.com/prod-api/oauth2/")
 
 
 def test_growatt_utc_midnight_split():
@@ -930,6 +985,7 @@ def run_growatt_tests(my_predbat):
     tests = [
         ("constants_utc", test_growatt_constants_and_utc_conversion),
         ("utc_midnight_split", test_growatt_utc_midnight_split),
+        ("request_url_prod_api", test_growatt_request_url_includes_prod_api),
         ("stale_telemetry", test_growatt_stale_telemetry_withholds_slots),
         ("device_info_failure", test_growatt_device_info_failure_keeps_known_device),
         ("telemetry", test_growatt_telemetry_signs_and_energy_balance),

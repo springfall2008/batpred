@@ -1168,7 +1168,7 @@ Predbat.com completes Growatt's OAuth flow and injects the short-lived access to
   growatt_token_expires_at: '2026-10-20T23:00:00Z'
   growatt_token_hash: !secret growatt_token_hash
   growatt_inverter_sn: SPH123456
-  growatt_base_url: https://opencloud.growatt.com
+  growatt_base_url: https://opencloud.growatt.com/prod-api
   growatt_automatic: true
   growatt_control_enable: true
 ```
@@ -1179,7 +1179,7 @@ Configuration keys:
 
 - `growatt_key`, `growatt_token_expires_at`, `growatt_token_hash` and `growatt_auth_method`: the OAuth state supplied by Predbat.com
 - `growatt_inverter_sn`: one serial or a list of serials authorised for this token
-- `growatt_base_url`: the regional OpenAPI host supplied with the Growatt application registration
+- `growatt_base_url`: the OpenAPI base URL for the Growatt application registration, default `https://opencloud.growatt.com/prod-api`. It must include the `/prod-api` path, not just the host, because the endpoint paths (such as `/oauth2/getDeviceInfo`) are appended to it. A trailing slash is ignored
 - `growatt_automatic`: automatically bind all monitoring and schedule entities (recommended)
 - `growatt_automatic_ignore_pv`: preserve a manually configured `pv_power` source
 - `growatt_control_enable`: allow dispatch writes, default `true`; set false for monitoring only

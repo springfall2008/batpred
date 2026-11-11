@@ -9,7 +9,9 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-GROWATT_BASE_URL = "https://opencloud.growatt.com"
+# The API lives under /prod-api: endpoint paths such as /oauth2/getDeviceInfo are appended to this
+# whole base, so a host alone (https://opencloud.growatt.com) misses every endpoint.
+GROWATT_BASE_URL = "https://opencloud.growatt.com/prod-api"
 
 GROWATT_ENDPOINTS = {
     "devices": "/oauth2/getDeviceListAuthed",

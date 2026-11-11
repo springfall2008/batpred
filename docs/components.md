@@ -1812,7 +1812,7 @@ Connects to Growatt's public OAuth OpenAPI, discovers the inverter authorised du
 | `automatic` | Boolean | No | false | `growatt_automatic` | Automatically configure Predbat's monitoring and control entities |
 | `automatic_ignore_pv` | Boolean | No | false | `growatt_automatic_ignore_pv` | Keep an existing `pv_power` configuration when automatic setup is enabled |
 | `control_enable` | Boolean | No | true | `growatt_control_enable` | Permit time-slot dispatch. Set false for monitoring only |
-| `base_url` | String | No | `https://opencloud.growatt.com` | `growatt_base_url` | Regional OpenAPI base supplied with the Growatt application registration |
+| `base_url` | String | No | `https://opencloud.growatt.com/prod-api` | `growatt_base_url` | OpenAPI base URL for the Growatt application registration. Must include the `/prod-api` path, not just the host; a trailing slash is ignored |
 | `battery_rate_max` | Float | No | Reported rating | `growatt_battery_rate_max` | Optional battery charge/discharge rating override in W |
 | `api_delay` | Float | No | 0.2 | `growatt_api_delay` | Courtesy pause between calls for different devices |
 | `min_write_interval` | Integer | No | 5 | `growatt_min_write_interval` | Minimum seconds between dispatch writes for one inverter, never below Growatt's five-second limit |
