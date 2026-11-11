@@ -2185,11 +2185,29 @@ def test_run_keeps_a_zappi_missing_from_one_poll():
     print("  ✓ A Zappi missing from one poll keeps its car until the grace period runs out")
 
 
-def test_zappi_offline_grace_spans_several_polls():
-    """With a long poll interval the grace stretches, so one missed poll can never be the whole grace period."""
-    assert _make_component(poll_seconds=60).zappi_offline_grace == 30 * 60
-    assert _make_component(poll_seconds=30 * 60).zappi_offline_grace == 3 * 30 * 60
-    print("  ✓ The Zappi offline grace always spans more than one poll")
+def test_zappi_offline_grace_is_eight_hours():
+    """A Zappi silent for most of a night keeps its car; only past 8 hours is it dropped, and one poll back restores it.
+
+    The window is long on purpose: a Wi-Fi dropout or myenergi outage lasting a few hours must not renumber the cars,
+    which would hand the Intelligent Octopus car 0 to the other Zappi. Coming back is not delayed at all.
+    """
+    hours = 60 * 60
+    for poll_seconds in (60, 30 * 60):
+        component = _zappi_liveness_component()
+        component.poll_seconds = poll_seconds
+        assert component.zappi_offline_grace == 8 * hours, component.zappi_offline_grace
+        alive = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+        dead = normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)
+        live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+
+        _poll_at(component, 0.0, [alive, live], first=True)
+        _poll_at(component, 8 * hours - 60, [dead, live])
+        assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], (poll_seconds, component.base.args["car_charging_energy"])
+        _poll_at(component, 8 * hours + 60, [dead, live])
+        assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], (poll_seconds, component.base.args["car_charging_energy"])
+        _poll_at(component, 8 * hours + 120, [alive, live])
+        assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], (poll_seconds, component.base.args["car_charging_energy"])
+    print("  ✓ A Zappi keeps its car for 8 hours offline and gets it back on the first poll it reports")
 
 
 def test_rewire_respects_automatic_zappi_off():
@@ -3124,7 +3142,7 @@ def test_myenergi(my_predbat=None):
     test_run_leaves_a_zappi_dead_since_start_up_out_at_once()
     test_run_rewires_when_a_zappi_dies_and_when_it_comes_back()
     test_run_keeps_a_zappi_missing_from_one_poll()
-    test_zappi_offline_grace_spans_several_polls()
+    test_zappi_offline_grace_is_eight_hours()
     test_rewire_respects_automatic_zappi_off()
     test_automatic_config_ignores_unsupported_kinds()
     test_templates_accept_the_connected_zappi_plug_states()

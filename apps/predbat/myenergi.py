@@ -772,10 +772,10 @@ MAX_POLL_SECONDS = 30 * 60
 
 # How long a Zappi that has been seen online keeps its car after it stops reporting as online, or drops out of a
 # poll altogether. Cars are numbered by position in the live Zappi list, so dropping a unit renumbers the ones after
-# it: one missed poll must not do that. A Zappi never seen online since start-up is left out at once. The component
-# stretches this to ZAPPI_OFFLINE_GRACE_POLLS polls when poll_seconds is long, so it always spans more than one poll.
-ZAPPI_OFFLINE_GRACE_SECONDS = 30 * 60
-ZAPPI_OFFLINE_GRACE_POLLS = 3
+# it: a Wi-Fi dropout, a hub restart or a myenergi outage must not do that, so the window is long - many times
+# MAX_POLL_SECONDS. A Zappi never seen online since start-up is left out at once, and one that starts reporting again
+# gets its car back on the next poll, so only the unit that has genuinely gone waits this long.
+ZAPPI_OFFLINE_GRACE_SECONDS = 8 * 60 * 60
 
 
 class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
@@ -811,7 +811,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         # Zappi liveness (#6117): when each Zappi was last seen online and last seen at all, the time of the last
         # poll those were judged against, the live Zappi device_ids the car inputs were last wired from, and the
         # Zappis already logged as left out, so the reason is logged once per change rather than every poll
-        self.zappi_offline_grace = max(ZAPPI_OFFLINE_GRACE_SECONDS, ZAPPI_OFFLINE_GRACE_POLLS * self.poll_seconds)
+        self.zappi_offline_grace = ZAPPI_OFFLINE_GRACE_SECONDS
         self.zappi_last_online = {}
         self.zappi_last_seen = {}
         self.zappi_liveness_time = None
