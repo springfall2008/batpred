@@ -676,13 +676,29 @@ def parse_axle_events(axle_events):
     return parsed
 
 
-def saving_session_events(joined_events, octopoints_per_penny, default_rate_pence):
+def saving_session_rate(octopoints_per_kwh, octopoints_per_penny, default_rate_pence):
+    """The pence/kWh Predbat adds to its rates for a joined saving session, or None when it adds nothing.
+
+    The session's Octopoints per kWh over octopus_saving_session_octopoints_per_penny, or default_rate_pence (the
+    octopus_saving_session_rate setting) when the session reports none. Shared by fetch_octopus_sessions() and the History view.
+    """
+    points = _to_float(octopoints_per_kwh)
+    per_penny = _to_float(octopoints_per_penny) or 0.0
+    if points is not None:
+        rate = points / per_penny if per_penny > 0 else None
+    else:
+        rate = _to_float(default_rate_pence)
+    return rate if rate is not None and rate > 0 else None
+
+
+def saving_session_events(joined_events, octopoints_per_penny, default_rate_pence, on_export=True):
     """The joined Octopus saving sessions (the octopus_saving_session sensor's joined_events) as Predbat priced them, for the History view.
 
-    Each is {start, end, pence_per_kwh, octopoints_per_kwh, rewarded_octopoints, id}, with the rate fetch_octopus_sessions() adds to the
-    import and export rates: the event's Octopoints per kWh over octopus_saving_session_octopoints_per_penny, or default_rate_pence (the
-    octopus_saving_session_rate setting) when the event reports none. A Weekend Happy Hour is free import, not a saving session, and an
-    event Predbat priced at nothing added nothing, so both are left out, as are events that can't be read.
+    Each is {start, end, pence_per_kwh, octopoints_per_kwh, on_export, rewarded_octopoints, rewarded_known, id}, with the rate
+    saving_session_rate() gives, as fetch_octopus_sessions() prices it for the planner. on_export says whether Predbat adds it to
+    the export rate too, which it only does with an export tariff that pays (rate_export_max above 0). rewarded_known says the
+    feed reports awards at all, so a session without one yet is waiting for it. A Weekend Happy Hour is free import, not a saving
+    session, and an event Predbat priced at nothing added nothing, so both are left out, as are events that can't be read.
     """
     events = []
     per_penny = _to_float(octopoints_per_penny) or 0.0
@@ -691,22 +707,18 @@ def saving_session_events(joined_events, octopoints_per_penny, default_rate_penc
             continue
         start = _parse_event_time(event.get("start"))
         end = _parse_event_time(event.get("end"))
-        points = _to_float(event.get("octopoints_per_kwh"))
-        if points is not None and per_penny > 0:
-            pence = points / per_penny
-        elif points is None and (_to_float(default_rate_pence) or 0.0) > 0:
-            pence = _to_float(default_rate_pence)
-            points = pence * per_penny
-        else:
-            continue
-        if start and end and start < end and pence > 0:
+        pence = saving_session_rate(event.get("octopoints_per_kwh"), octopoints_per_penny, default_rate_pence)
+        if start and end and start < end and pence is not None:
+            points = _to_float(event.get("octopoints_per_kwh"))
             events.append(
                 {
                     "start": event.get("start"),
                     "end": event.get("end"),
                     "pence_per_kwh": pence,
-                    "octopoints_per_kwh": points,
+                    "octopoints_per_kwh": points if points is not None else pence * per_penny,
+                    "on_export": bool(on_export),
                     "rewarded_octopoints": _to_float(event.get("rewarded_octopoints")),
+                    "rewarded_known": "rewarded_octopoints" in event,
                     "id": event.get("id"),
                 }
             )
@@ -714,7 +726,7 @@ def saving_session_events(joined_events, octopoints_per_penny, default_rate_penc
 
 
 def parse_saving_events(saving_events):
-    """saving_session_events() entries as (start, end, pence_per_kwh, octopoints_per_kwh, rewarded_octopoints, id); unreadable ones are dropped."""
+    """saving_session_events() entries as (start, end, pence_per_kwh, octopoints_per_kwh, on_export, rewarded_octopoints, rewarded_known, id); unreadable ones are dropped."""
     spans = []
     for event in saving_events or []:
         if not isinstance(event, dict):
@@ -724,39 +736,44 @@ def parse_saving_events(saving_events):
         pence = _to_float(event.get("pence_per_kwh"))
         points = _to_float(event.get("octopoints_per_kwh"))
         if start and end and start < end and pence is not None and points is not None:
-            spans.append((start, end, pence, points, _to_float(event.get("rewarded_octopoints")), event.get("id") or event.get("start")))
+            spans.append((start, end, pence, points, event.get("on_export", True) is not False, _to_float(event.get("rewarded_octopoints")), bool(event.get("rewarded_known", True)), event.get("id") or event.get("start")))
     return spans
 
 
-def _row_axle(axle_events, row_start, row_end):
-    """The Axle premiums Predbat priced into one row: (export event pence/kWh, import event pence/kWh), each weighted by how much of the row the event covers, or None when no event overlaps it.
+def _span_average(spans, row_start, row_end):
+    """The values of the (start, end, value) spans that overlap a row, each weighted by how much of the row it covers, summed; None when none overlaps it.
 
-    A premium can be negative (a managed price curve can go below zero) or the two can cancel, so being inside an event is not judged by the premiums' sign.
-    The premium is spread over the row's kWh by time, which is exact for events on the half-hour boundaries the rows use.
+    A value can be negative (a managed price curve can go below zero) or values can cancel, so overlapping is not judged by the sum's sign.
+    Spreading over the row's kWh by time is exact for events on the half-hour boundaries the rows use.
     """
-    export_premium = 0.0
-    import_premium = 0.0
+    total = 0.0
     inside = False
     row_seconds = (row_end - row_start).total_seconds()
-    for start, end, direction, pence in axle_events:
+    for start, end, value in spans:
         overlap = (min(end, row_end) - max(start, row_start)).total_seconds()
-        if overlap <= 0:
-            continue
-        inside = True
-        if direction == "export":
-            export_premium += pence * overlap / row_seconds
-        else:
-            import_premium += pence * overlap / row_seconds
-    return (export_premium, import_premium) if inside else None
+        if overlap > 0:
+            inside = True
+            total += value * overlap / row_seconds
+    return total if inside else None
+
+
+def _span_value_at(spans, when):
+    """The summed values of the (start, end, value) spans in force at one instant, such as a row's first minute, where its import_rate is read."""
+    return sum(value for start, end, value in spans if start <= when < end)
+
+
+def _row_axle(axle_events, row_start, row_end):
+    """The Axle premiums Predbat priced into one row: (export event pence/kWh, import event pence/kWh), each weighted by how much of the row the event covers, or None when no event overlaps it."""
+    export_premium = _span_average([(start, end, pence) for start, end, direction, pence in axle_events if direction == "export"], row_start, row_end)
+    import_premium = _span_average([(start, end, pence) for start, end, direction, pence in axle_events if direction != "export"], row_start, row_end)
+    if export_premium is None and import_premium is None:
+        return None
+    return (export_premium or 0.0, import_premium or 0.0)
 
 
 def _row_axle_at_start(axle_events, row_start):
     """The Axle premium Predbat added to the import rate at a row's first minute, where the row's import_rate is read: an export event's pence/kWh less an import event's."""
-    premium = 0.0
-    for start, end, direction, pence in axle_events:
-        if start <= row_start < end:
-            premium += pence if direction == "export" else -pence
-    return premium
+    return _span_value_at([(start, end, pence if direction == "export" else -pence) for start, end, direction, pence in axle_events], row_start)
 
 
 def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes, predbat_slot_cost, standing_pence, events, import_only, predbat_import_kwh, predbat_export_kwh, axle_events=None, saving_events=None):
@@ -805,10 +822,13 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     credited = {}
     axle = parse_axle_events(axle_events)
     saving = parse_saving_events(saving_events)
-    # As export-direction premiums, which is how Predbat prices a saving session: on both rates, in pence and in points
-    saving_pence = [(start, end, "export", pence) for start, end, pence, _, _, _ in saving]
-    saving_points = [(start, end, "export", points) for start, end, _, points, _, _ in saving]
-    saving_seen = {}
+    # Predbat adds a session's price to its import rate, and to its export rate when its export tariff pays; in pence and in points
+    saving_import = [(start, end, pence) for start, end, pence, _, _, _, _, _ in saving]
+    saving_export = [(start, end, pence) for start, end, pence, _, on_export, _, _, _ in saving if on_export]
+    saving_import_points = [(start, end, points) for start, end, _, points, _, _, _, _ in saving]
+    saving_export_points = [(start, end, points) for start, end, _, points, on_export, _, _, _ in saving if on_export]
+    # Each session's seconds inside rows whose figures were compared, so its award is only set against a whole session
+    saving_covered = {}
     day_half_hours = {}
     updates = []
     totals = {"predbat": 0.0, "billed": 0.0, "standing_predbat": 0.0, "standing_billed": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "predbat_import_kwh": 0.0, "predbat_export_kwh": 0.0, "rate_cost": 0.0, "rate_kwh": 0.0, "predbat_rate_cost": 0.0}
@@ -821,11 +841,10 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
             continue
         keys = _row_slot_keys(view_midnight_utc, slot_minute, plan_interval_minutes)
         row_start = view_midnight_utc + timedelta(minutes=slot_minute)
-        premiums = _row_axle(axle, row_start, row_start + timedelta(minutes=plan_interval_minutes))
-        axle_row = premiums is not None
         row_end = row_start + timedelta(minutes=plan_interval_minutes)
-        saving_premiums = _row_axle(saving_pence, row_start, row_end)
-        saving_row = saving_premiums is not None
+        premiums = _row_axle(axle, row_start, row_end)
+        axle_row = premiums is not None
+        saving_row = _span_average(saving_import, row_start, row_end) is not None
         billed_pence = None
         buckets = None
         full = False
@@ -843,7 +862,7 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
                     # event's half-hours are left out: they are billed at the full rate where Predbat priced them free. An Axle row's
                     # import rate is checked without the Axle premium Predbat added to it, which the bill doesn't carry
                     # ... and a saving session's likewise
-                    import_rate = row["import_rate"] - (_row_axle_at_start(axle, row_start) if axle_row else 0.0) - (_row_axle_at_start(saving_pence, row_start) if saving_row else 0.0)
+                    import_rate = row["import_rate"] - (_row_axle_at_start(axle, row_start) if axle_row else 0.0) - _span_value_at(saving_import, row_start)
                     totals["rate_cost"] += imports[key]["cost"]
                     totals["rate_kwh"] += imports[key]["kwh"]
                     totals["predbat_rate_cost"] += imports[key]["kwh"] * import_rate
@@ -882,14 +901,15 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
                 axle_total += axle_pence
             if saving_row and predbat_import_kwh is not None:
                 # What Predbat priced the session at on what crossed the meter, put back on its cost: Octopus pays in points, not on the bill
-                saving_value = saving_premiums[0] * (row_export_kwh - row_import_kwh)
-                saving_row_points = _row_axle(saving_points, row_start, row_end)[0] * (row_export_kwh - row_import_kwh)
+                saving_value = (_span_average(saving_export, row_start, row_end) or 0.0) * row_export_kwh - _span_average(saving_import, row_start, row_end) * row_import_kwh
+                saving_row_points = (_span_average(saving_export_points, row_start, row_end) or 0.0) * row_export_kwh - _span_average(saving_import_points, row_start, row_end) * row_import_kwh
                 predbat_pence += saving_value
                 saving_total += saving_value
                 saving_points_total += saving_row_points
-                for start, end, _, _, rewarded, event_id in saving:
-                    if start < row_end and end > row_start:
-                        saving_seen[event_id] = rewarded
+                for start, end, _, _, _, _, _, event_id in saving:
+                    overlap = (min(end, row_end) - max(start, row_start)).total_seconds()
+                    if overlap > 0:
+                        saving_covered[event_id] = saving_covered.get(event_id, 0.0) + overlap
             # A row's Diff is after its Axle estimate, as the summary's is
             diff = _pounds(billed_pence - (axle_pence or 0.0) - predbat_pence)
             totals["predbat"] += predbat_pence
@@ -939,6 +959,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         credit = entry["event"].get("credit") or 0.0
         event_billed = entry["event"].get("billed") or 0.0
         credits += credit * min(1.0, entry["counted"] / event_billed) if event_billed > 0 else 0.0
+    # Octopus awards a session as a whole, so only sessions whose every minute is in the compared rows are set against the estimate
+    whole_sessions = [span for span in saving if saving_covered.get(span[7], 0.0) >= (span[1] - span[0]).total_seconds() - 1]
+    awarded = [span[5] for span in whole_sessions if span[5] is not None]
     billed_until = (view_midnight_utc + timedelta(minutes=updates[last_billed][0]["slot_minute"] + plan_interval_minutes)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)
     plan_json["billing_summary"] = {
         "predbat_cost": _pounds(totals["predbat"]),
@@ -954,8 +977,8 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         "saving_slots": sum(1 for update in updates if update[9] is not None),
         "saving_points": round(saving_points_total),
         "saving_value": _pounds(saving_total),
-        "saving_awarded": round(sum(rewarded for rewarded in saving_seen.values() if rewarded is not None)),
-        "saving_awarded_pending": sum(1 for rewarded in saving_seen.values() if rewarded is None),
+        "saving_awarded": None if not awarded else round(sum(awarded)),
+        "saving_awarded_pending": sum(1 for _, _, _, _, _, rewarded, known, _ in whole_sessions if known and rewarded is None),
         "credits_pending": sum(1 for entry in credited.values() if entry["event"].get("credit") is None),
         "standing_predbat": _pounds(totals["standing_predbat"]),
         "standing_billed": _pounds(totals["standing_billed"]),

@@ -1547,7 +1547,7 @@ def test_saving_session_events():
         "junk",
     ]
     events = saving_session_events(joined, 8, 0.0)
-    if [(event["id"], event["pence_per_kwh"], event["octopoints_per_kwh"], event["rewarded_octopoints"]) for event in events] != [(8342, 18.625, 149.0, 392.0)]:
+    if [(event["id"], event["pence_per_kwh"], event["octopoints_per_kwh"], event["rewarded_octopoints"], event["rewarded_known"], event["on_export"]) for event in events] != [(8342, 18.625, 149.0, 392.0, True, True)]:
         print("ERROR: only the priced turn-down session should be kept, at 149 points / 8 = 18.625p, got {}".format(events))
         return True
     # With octopus_saving_session_rate set, an event that reports no reward is priced at it, as the planner does
@@ -1583,12 +1583,41 @@ def test_attach_saving():
     if [row.get("billing_diff") for row in plan["rows"]] != [0.0, 0.0, 0.0] or plan["rows"][0].get("billing_event") is not None:
         print("ERROR: each session row's Diff should leave the session price out, and its label go, got {}".format([(row.get("billing_diff"), row.get("billing_event")) for row in plan["rows"]]))
         return True
-    if summary.get("saving_awarded") != 0 or summary.get("saving_awarded_pending") != 1:
+    if summary.get("saving_awarded") is not None or summary.get("saving_awarded_pending") != 1:
         print("ERROR: a session Octopus hasn't awarded yet should be counted as pending, got {}".format(summary))
         return True
     awarded = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1080, rewarded=392)], 8, 0.0))
     if awarded["billing_summary"].get("saving_awarded") != 392 or awarded["billing_summary"].get("saving_awarded_pending") != 0 or awarded["billing_summary"].get("diff") != 0.0:
         print("ERROR: the points Octopus awarded should be shown, and not change the Difference, got {}".format(awarded["billing_summary"]))
+        return True
+    # An award of nothing is still an award, shown as 0 rather than as nothing posted
+    nothing = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1080, rewarded=0)], 8, 0.0))
+    if nothing["billing_summary"].get("saving_awarded") != 0 or nothing["billing_summary"].get("saving_awarded_pending") != 0:
+        print("ERROR: a posted award of 0 should show as 0 awarded, got {}".format(nothing["billing_summary"]))
+        return True
+    # Octopus awards a whole session, so with only its first half-hour compared (the second waits for its export) the award isn't set against it
+    part_billing = dict(billing, slots={"import": imports, "export": {key: slot for key, slot in exports.items() if key != _key(1050)}})
+    part = attach_billing(_plan(minutes), part_billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1080, rewarded=392)], 8, 0.0))
+    if part["billing_summary"].get("saving_points") != 372 or part["billing_summary"].get("saving_awarded") is not None or part["billing_summary"].get("saving_awarded_pending") != 0:
+        print("ERROR: a session only partly compared should show its points so far and no award, got {}".format(part["billing_summary"]))
+        return True
+    # A feed that doesn't report awards at all leaves nothing pending
+    unreported = [dict(event, rewarded_known=False) for event in sessions]
+    quiet = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, unreported)
+    if quiet["billing_summary"].get("saving_awarded_pending") != 0:
+        print("ERROR: a feed without awards shouldn't show one pending, got {}".format(quiet["billing_summary"]))
+        return True
+    # With an export tariff that pays nothing Predbat doesn't add the session to its export rate, so nothing is put back on export
+    unpaid_cost = {1020: -2.5 * 15.0, 1050: -2.5 * 15.0, 1080: 30.0}
+    unpaid = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, unpaid_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1080)], 8, 0.0, on_export=False))
+    if unpaid["billing_summary"].get("diff") != 0.0 or unpaid["billing_summary"].get("saving_points") != 0:
+        print("ERROR: a session not priced on export should leave export alone, got {}".format(unpaid["billing_summary"]))
+        return True
+    # Import only: Predbat's import cost carries the session price on import, which is taken back off
+    night_imports = {_key(1020): _slot(1.0, 30.0), _key(1050): _slot(1.0, 30.0)}
+    import_only = attach_billing(_plan([1020, 1050]), _billing_attrs(night_imports), VIEW_MIDNIGHT, 30, {1020: 48.625, 1050: 48.625}, 55.52, {}, True, {1020: 1.0, 1050: 1.0}, None, None, sessions)
+    if import_only["billing_summary"].get("diff") != 0.0 or import_only["billing_summary"].get("saving_points") != -298:
+        print("ERROR: an import-only comparison should take the session price off the import, got {}".format(import_only["billing_summary"]))
         return True
     # Without the session the same day shows its price as a gap against the bill
     plain = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh)

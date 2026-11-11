@@ -4326,6 +4326,8 @@ class Output:
                 self.octopus_saving_joined_events,
                 self.get_arg("octopus_saving_session_octopoints_per_penny", 8),
                 self.get_arg("octopus_saving_session_rate", 0.0),
+                # fetch_octopus_sessions() only adds a session to the export rate when the export tariff pays
+                on_export=self.rate_export_max > 0,
             ),
         }
 
@@ -4344,7 +4346,8 @@ class Output:
             mark.append([list(span) for span in spans if span[0] <= keys[-1] and span[1] > keys[0]])
             # ... and the saving sessions over them, an award being posted included
             sessions = [
-                (start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), pence, rewarded) for start, end, pence, _, rewarded, _ in parse_saving_events((billing or {}).get("saving_events"))
+                (start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), pence, on_export, rewarded)
+                for start, end, pence, _, on_export, rewarded, _, _ in parse_saving_events((billing or {}).get("saving_events"))
             ]
             mark.append([list(span) for span in sessions if span[0] <= keys[-1] and span[1] > keys[0]])
         return mark if mark[0][0] else None

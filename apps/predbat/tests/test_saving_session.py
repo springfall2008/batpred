@@ -125,6 +125,13 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
     if [event.get("id") for event in my_predbat.octopus_saving_joined_events] != [1327, 1334, 1335, 1336]:
         print("ERROR: Expecting every joined session kept for History, got {}".format(my_predbat.octopus_saving_joined_events))
         failed = 1
+    # An entity HA doesn't have for a moment (after a restart, before the integration loads) leaves the list as it was rather than emptying it
+    kept = ha.dummy_items.pop("event.octopus_energy_a_12345678_octoplus_saving_session_event")
+    my_predbat.fetch_octopus_sessions()
+    ha.dummy_items["event.octopus_energy_a_12345678_octoplus_saving_session_event"] = kept
+    if [event.get("id") for event in my_predbat.octopus_saving_joined_events] != [1327, 1334, 1335, 1336]:
+        print("ERROR: Expecting the joined sessions kept while the entity has no attributes, got {}".format(my_predbat.octopus_saving_joined_events))
+        failed = 1
     # ... and handed to it priced as the planner prices them (here 10 Octopoints a penny)
     billing_entity = "sensor." + my_predbat.prefix + "_billing"
     my_predbat.dashboard_item(billing_entity, state=0.0, attributes={"slots": {"import": {"2026-11-09T17:00:00Z": {"kwh": 0.0, "cost": 0.0, "standing": 0.0, "buckets": {}}}}})

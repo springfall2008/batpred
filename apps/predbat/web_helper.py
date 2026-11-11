@@ -8232,7 +8232,8 @@ def get_plan_renderer_js():
         }
         if (summary.saving_slots > 0) {
             // Not money, so shown in points and left out of the Difference
-            const awarded = summary.saving_awarded > 0 ? ` (${summary.saving_awarded} awarded${summary.saving_awarded_pending > 0 ? ', more to come' : ''})` : (summary.saving_awarded_pending > 0 ? ' (not awarded yet)' : '');
+            const hasAward = summary.saving_awarded !== null && summary.saving_awarded !== undefined;
+            const awarded = hasAward ? ` (${summary.saving_awarded} awarded${summary.saving_awarded_pending > 0 ? ', more to come' : ''})` : (summary.saving_awarded_pending > 0 ? ' (not awarded yet)' : '');
             html += tile('Saving session (est.)&sect;', `${summary.saving_points} pts${awarded}`);
         }
         html += tile('Difference', (summary.diff > 0 ? '+' : '') + money(summary.diff), `color: ${diffColor};`);
