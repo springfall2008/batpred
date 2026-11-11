@@ -203,6 +203,7 @@ from tests.test_minute_data import test_minute_data, test_minute_data_load, test
 from tests.test_minute_data_import_export import test_minute_data_import_export
 from tests.test_faq_recorder_config import test_faq_recorder_config
 from tests.test_docs_marketplace import test_docs_marketplace
+from tests.test_docs_time_window import test_docs_time_window
 from tests.test_docs_solax_mode8 import test_docs_solax_mode8
 from tests.test_plan_card_soc_symbols import test_plan_card_soc_symbols
 from tests.test_minute_data_state import test_minute_data_state
@@ -597,6 +598,7 @@ def main():
         ("minute_data_import_export", test_minute_data_import_export, "Minute data import/export tests", False),
         ("faq_recorder_config", test_faq_recorder_config, "FAQ recorder filter example matches the entities Predbat reads history for", False),
         ("docs_marketplace", test_docs_marketplace, "Docs and templates cover the Marketplace wherever they give HACS install steps", False),
+        ("docs_time_window", test_docs_time_window, "Script-controlled templates leave window times to Predbat's placeholders and the docs warn about the 00:00:00 charge and discharge disable", False),
         ("docs_solax_mode8", test_docs_solax_mode8, "Solax Mode 8 docs and template name the sensors the Mode 8 trigger needs enabled", False),
         ("plan_card_soc_symbols", test_plan_card_soc_symbols, "Plan card SoC symbol legend explains every symbol the plan shows on the SoC % cell", False),
         ("minute_data_no_smoothing_backwards", test_minute_data_no_smoothing_backwards, "Minute data no-smoothing backwards tests", False),
