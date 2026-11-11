@@ -86,6 +86,7 @@ from utils import (
     get_override_time_from_string,
     history_attribute,
     is_entity_id,
+    minute_data,
     prune_today,
     mask_secret_args,
     mask_secret_yaml_text,
@@ -2061,7 +2062,11 @@ var options = {
         text += "    formatter: function(seriesName, opts) {\n"
         text += "        var units = [{}];\n".format(units_array)
         text += "        var unit = units[opts.seriesIndex] !== undefined ? units[opts.seriesIndex] : '{}';\n".format(yaxis_name)
-        text += "        return [opts.w.globals.series[opts.seriesIndex].at(-1), ' ', unit, ' <br> ', seriesName]\n"
+        text += "        var last = opts.w.globals.series[opts.seriesIndex].at(-1);\n"
+        text += "        if (last === null || typeof last === 'undefined') {\n"
+        text += "            return seriesName;\n"
+        text += "        }\n"
+        text += "        return [last, ' ', unit, ' <br> ', seriesName]\n"
         text += "    }\n"
         text += "  },\n"
         text += "  annotations: {\n"
@@ -3347,9 +3352,9 @@ chart.render();
 
         Each battery is on its own scale, so one can reach 100% while the fleet total is still short of full.
         Empty for a single-inverter install, whose one line is already the chart's Actual.
-        Read from each inverter's own soc_percent sensor, or its soc_kw sensor scaled the way
-        Inverter.update_status() scales it. There is no predicted SoC per inverter: the plan treats the
-        batteries as one.
+        Read from each inverter's own soc_percent sensor, or its soc_kw sensor converted to kWh and scaled
+        the way Inverter.update_status() scales it, and sampled on the same grid as the chart's Actual line.
+        There is no predicted SoC per inverter: the plan treats the batteries as one.
         """
         inverters = self.base.inverters
         if len(inverters) <= 1:
@@ -3367,9 +3372,28 @@ chart.render();
                 if not inverter.soc_max:
                     continue
                 scale = (inverter.battery_scaling or 1.0) * 100.0 / inverter.soc_max
-            history = history_attribute(self.get_history_wrapper(sensor, 1, required=False, tracked=False))
-            history = prune_today(history, self.now_utc, self.midnight_utc, prune=True, group=self.plan_interval_minutes)
-            data = {stamp: dp2(value * scale) for stamp, value in history.items()}
+            history = self.get_history_wrapper(sensor, 1, required=False, tracked=False)
+            data = {}
+            if history:
+                # Keyed by minutes ago, like soc_kwh_history; required_unit converts a Wh sensor the way update_status() does
+                soc_history, _ = minute_data(
+                    history[0],
+                    1,
+                    self.now_utc,
+                    "state",
+                    "last_updated",
+                    backwards=True,
+                    clean_increment=False,
+                    smoothing=False,
+                    divide_by=1.0,
+                    scale=1.0,
+                    required_unit=None if use_percent else "kWh",
+                )
+                for minute in range(0, self.minutes_now, self.plan_interval_minutes):
+                    minutes_ago = self.minutes_now - minute
+                    if minutes_ago in soc_history:
+                        stamp = (self.midnight_utc + timedelta(minutes=minute)).strftime(TIME_FORMAT)
+                        data[stamp] = dp2(soc_history[minutes_ago] * scale)
             if inverter.soc_percent is not None:
                 data[now_str] = inverter.soc_percent
             results.append((inverter.id, data))
@@ -3447,7 +3471,7 @@ chart.render();
             ]
             # Multi-inverter installs: each battery's actual SoC in % of its own capacity, on a 0-100% axis
             # of their own, off until picked in the legend
-            inverter_colors = ["#1f77b4", "#2ca02c", "#d62728", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"]
+            inverter_colors = ["#2ca02c", "#ff7f0e", "#17becf", "#8c564b", "#e377c2", "#bcbd22", "#7f7f7f", "#393b79"]
             inverter_series_names = []
             for inv_id, inv_soc in self.get_inverter_soc_history():
                 if not inv_soc:
