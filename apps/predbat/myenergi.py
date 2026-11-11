@@ -814,6 +814,8 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.zappi_offline_grace = ZAPPI_OFFLINE_GRACE_SECONDS
         self.zappi_last_online = {}
         self.device_last_seen = {}
+        # The device_ids the latest poll actually read, as opposed to ones carried over from an earlier poll
+        self.polled_device_ids = None
         self.zappi_liveness_time = None
         self.wired_zappi_ids = None
         self.wired_eddi_id = None
@@ -1036,6 +1038,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         """
         self.zappi_liveness_time = now
         kept = {device.device_id: device for device in devices}
+        self.polled_device_ids = set(kept)
         for device in devices:
             self.device_last_seen[device.device_id] = now
             if device.kind == DEVICE_KIND_ZAPPI and device.online:
@@ -1097,6 +1100,16 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
     def charger_control_car_plugged(self, device):
         """Is a car plugged in to this Zappi - an unknown or faulted plug state reads as plugged in."""
         return device.plug_status != ZAPPI_PLUG_STATES["A"]
+
+    def charger_control_connected(self, device):
+        """Can Predbat act on this Zappi this cycle - only when this poll actually read it.
+
+        A Zappi missing from the poll is kept, with its last reading, so it keeps its car (update_device_liveness()).
+        That reading is frozen, so judging drift from it would re-send the same mode every poll to a unit that is not
+        answering. Returning False leaves it alone, and held as it was, until it is read again. Before any poll has
+        been tracked every Zappi counts as read.
+        """
+        return self.polled_device_ids is None or device.device_id in self.polled_device_ids
 
     def charger_control_drifted(self, device, charge):
         """Has the Zappi been put in a different mode, e.g. from the myenergi app."""

@@ -2262,6 +2262,37 @@ def test_rewire_keeps_the_eddi_through_a_missed_reply():
     print("  ✓ A re-wire on a poll that missed the first Eddi keeps iboost_energy_today on it")
 
 
+def test_control_leaves_a_zappi_missing_from_the_poll_alone():
+    """A Zappi kept from an earlier poll still holds its car number, but is not commanded from its frozen reading.
+
+    Without this, a Zappi whose cloud status call kept failing read as still Stopped inside a window, so every poll
+    logged it as drifted and re-sent Fast to a unit that was not answering, for up to the whole grace period.
+    """
+    component = _control_component(plans={0: [NIGHT_WINDOW]})
+    component.log_messages = []
+    component.log = component.log_messages.append
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    # Read and settled Stopped outside the window
+    component.devices = component.update_device_liveness([_zappi(12345678, mode_index=4)], 0.0)
+    run_async(component.charger_control_apply(OUT_OF_WINDOW))
+    commands_before = component.transport.set_mode.await_count
+
+    # The window opens while every status call for it fails: kept, still car 0, but nothing is sent
+    for poll in range(1, 6):
+        component.devices = component.update_device_liveness([], 60.0 * poll)
+        run_async(component.charger_control_apply(IN_WINDOW))
+    assert [key for key, _ in component.charger_control_chargers()] == ["Z12345678"], component.charger_control_chargers()
+    assert component.transport.set_mode.await_count == commands_before, component.transport.set_mode.await_args_list
+    assert not any("re-applying" in message for message in component.log_messages), component.log_messages
+
+    # Read again, and still Stopped inside the window: driven to Fast once
+    component.devices = component.update_device_liveness([_zappi(12345678, mode_index=4)], 360.0)
+    run_async(component.charger_control_apply(IN_WINDOW))
+    assert [call.args[1] for call in component.transport.set_mode.await_args_list[commands_before:]] == ["Fast"], component.transport.set_mode.await_args_list
+    print("  ✓ Charge control leaves a Zappi missing from the poll alone, and drives it again once it is read")
+
+
 def test_rewire_respects_automatic_eddi_off():
     """With automatic_eddi off an Eddi appearing is not a reason to re-wire or claim iboost_energy_today."""
     component = _zappi_liveness_component()
@@ -3196,6 +3227,7 @@ def test_myenergi(my_predbat=None):
     test_rewire_respects_automatic_zappi_off()
     test_rewire_wires_an_eddi_added_later()
     test_rewire_keeps_the_eddi_through_a_missed_reply()
+    test_control_leaves_a_zappi_missing_from_the_poll_alone()
     test_rewire_respects_automatic_eddi_off()
     test_automatic_config_ignores_unsupported_kinds()
     test_templates_accept_the_connected_zappi_plug_states()
