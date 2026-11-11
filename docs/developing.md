@@ -1100,7 +1100,7 @@ on Predbat.
 
 ## The C++ prediction kernel
 
-Predbat has a compiled C++ "kernel" (`apps/predbat/prediction_kernel.cpp`) that is a fast, bit-for-bit-identical mirror of the Python simulation engine (`Prediction.run_prediction()` in `apps/predbat/prediction.py`). It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the `prediction_kernel_enable` `apps.yaml` setting (see [apps-yaml.md](apps-yaml.md#prediction_kernel_enable)), On by default; it automatically falls back to the Python engine if the binary for your architecture can't be loaded.
+Predbat has a compiled C++ "kernel" (`apps/predbat/prediction_kernel.cpp`) that is a fast mirror of the Python simulation engine (`Prediction.run_prediction()` in `apps/predbat/prediction.py`). The simulation itself is bit-for-bit identical; the one deliberate difference is that the kernel rounds its ten scalar results (metric, import/export kWh, minimum and final SoC, cycles, metric keep, iBoost and carbon) to 4 decimal places with a fast scale-and-round, so a value that falls exactly on a halfway point can land one unit in the 4th decimal place away from Python's `round(x, 4)`. It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the `prediction_kernel_enable` `apps.yaml` setting (see [apps-yaml.md](apps-yaml.md#prediction_kernel_enable)), On by default; it automatically falls back to the Python engine if the binary for your architecture can't be loaded.
 
 ### Building the C++ kernel locally
 
@@ -1126,7 +1126,7 @@ A GitHub Actions job (`kernel-binaries` in `.github/workflows/code-quality.yml`)
 
 Three test targets exercise the kernel:
 
-- `./run_all --test kernel_parity` - dual-runs a large set of deterministic edge cases and seeded random scenarios through both engines and asserts the results match to within `1e-6`
+- `./run_all --test kernel_parity` - dual-runs a large set of deterministic edge cases and seeded random scenarios through both engines and asserts the SoC series and `soc_min_minute` match to within `1e-6`, and the ten rounded scalar results to within one unit in the 4th decimal place (`ROUNDED_RESULT_TOLERANCE`)
 - `./run_all --test model_kernel` - runs the standard model test suite (`./run_all --test model`) with the kernel enabled
 - `./run_all --test optimise_windows_kernel` - runs the optimiser test suite with and without the kernel, checking results match and reporting the speedup
 
