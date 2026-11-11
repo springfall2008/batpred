@@ -823,6 +823,8 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.polled_device_ids = None
         self.zappi_liveness_time = None
         self.wired_zappi_ids = None
+        # The Zappi ids charge control last drove, in car order, so a renumber can clear what was kept per car number
+        self.control_zappi_ids = None
         self.wired_eddi_id = None
         self.zappi_offline_logged = set()
         # Persistence of zappi_last_online: whether it has been read back yet, and the online set and time it was last saved at
@@ -1095,6 +1097,25 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         eddi_changed = self.automatic_eddi and (eddi.device_id if eddi else None) != self.wired_eddi_id
         return bool(zappis_changed or eddi_changed)
 
+    def forget_renumbered_cars(self):
+        """Clear what charge control keeps per car number for each car whose Zappi changed this poll.
+
+        charger_control_octopus_cars and charger_control_discovery_since are keyed by car number, not by Zappi,
+        so when a Zappi drops out or comes back and the cars renumber, the Zappi now behind a car would otherwise
+        inherit the last one's "left alone" reason - its own reason never logged - and its discovery wait clock.
+        Cars whose Zappi did not move keep theirs. The plan windows are left alone: they are re-read from the
+        car's slot sensor every cycle, and follow the new numbering once Predbat next publishes the car plans.
+        """
+        zappi_ids = [device.device_id for device in self.controlled_zappis()]
+        previous = self.control_zappi_ids
+        self.control_zappi_ids = zappi_ids
+        if previous is None or previous == zappi_ids:
+            return
+        for cache in (self.charger_control_octopus_cars, self.charger_control_discovery_since):
+            for car_n in list(cache):
+                if car_n >= len(zappi_ids) or car_n >= len(previous) or zappi_ids[car_n] != previous[car_n]:
+                    del cache[car_n]
+
     def charger_control_chargers(self):
         """The Zappis to drive, in car order - see controlled_zappis()."""
         return [(device.device_id, device) for device in self.controlled_zappis()]
@@ -1322,6 +1343,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 self.devices = self.update_device_liveness(devices, now)
                 await self.save_zappi_liveness(now)
                 self.log_zappi_liveness()
+                self.forget_renumbered_cars()
                 if first:
                     # Before the first publish: the switch has to carry its restored state
                     # from the start, or a restart with control switched off would show it

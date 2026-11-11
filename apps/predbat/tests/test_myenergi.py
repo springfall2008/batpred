@@ -2332,6 +2332,37 @@ def test_control_leaves_a_zappi_missing_from_the_poll_alone():
     print("  ✓ Charge control leaves a Zappi missing from the poll alone, and drives it again once it is read")
 
 
+def test_renumbered_cars_forget_what_was_kept_per_car():
+    """When a Zappi drops out and the cars renumber, the Zappi now behind a car must not inherit the last one's per-car state.
+
+    charger_control_octopus_cars holds the "left alone" reason last logged for each car number, and
+    charger_control_discovery_since its discovery wait clock. A car whose Zappi did not move keeps both.
+    """
+    component = _zappi_liveness_component()
+    grace = component.zappi_offline_grace
+    first = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    middle = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    middle_dead = normalise_direct_device(dict(MOCK_DIRECT_DEAD_ZAPPI, sno=12345678), DEVICE_KIND_ZAPPI)
+    last = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=33330000), DEVICE_KIND_ZAPPI)
+    since = datetime.datetime(2026, 8, 22, 20, 0)
+
+    _poll_at(component, 1000.0, [first, middle, last], first=True)
+    component.charger_control_octopus_cars = {0: "octopus", 1: "unknown", 2: "car"}
+    component.charger_control_discovery_since = {0: since, 1: since, 2: since}
+
+    # No renumbering, nothing forgotten - including through the grace period, while the middle Zappi still holds car 1
+    _poll_at(component, 1060.0, [first, middle_dead, last])
+    assert component.charger_control_octopus_cars == {0: "octopus", 1: "unknown", 2: "car"}, component.charger_control_octopus_cars
+    assert component.charger_control_discovery_since == {0: since, 1: since, 2: since}, component.charger_control_discovery_since
+
+    # The middle Zappi's grace runs out: the last Zappi moves up to car 1, and car 2 is gone. Car 0 keeps its state
+    _poll_at(component, 1000.0 + grace + 60, [first, middle_dead, last])
+    assert [key for key, _ in component.charger_control_chargers()] == [first.device_id, last.device_id], component.charger_control_chargers()
+    assert component.charger_control_octopus_cars == {0: "octopus"}, component.charger_control_octopus_cars
+    assert component.charger_control_discovery_since == {0: since}, component.charger_control_discovery_since
+    print("  ✓ Renumbered cars forget their per-car control state, and cars that kept their Zappi keep theirs")
+
+
 def test_rewire_respects_automatic_eddi_off():
     """With automatic_eddi off an Eddi appearing is not a reason to re-wire or claim iboost_energy_today."""
     component = _zappi_liveness_component()
@@ -3269,6 +3300,7 @@ def test_myenergi(my_predbat=None):
     test_offline_grace_survives_a_restart()
     test_control_leaves_a_zappi_missing_from_the_poll_alone()
     test_rewire_respects_automatic_eddi_off()
+    test_renumbered_cars_forget_what_was_kept_per_car()
     test_automatic_config_ignores_unsupported_kinds()
     test_templates_accept_the_connected_zappi_plug_states()
     test_controls_queue_rather_than_call()
