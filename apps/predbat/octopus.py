@@ -56,7 +56,7 @@ from utils import (
     strptime_aware,
 )
 from component_base import ComponentBase, new_http_session
-from billing import BillingReader
+from billing import BillingReader, billing_slot_key
 from mock_base import MockBase as SharedMockBase
 import aiohttp
 import hashlib
@@ -1005,6 +1005,9 @@ class OctopusAPI(ComponentBase):
             return
         now_utc = datetime.now(timezone.utc)
         self.billing.random_delay = self.get_arg("plan_random_delay", 0) > 0
+        # Weekend Happy Hours are billed at the full rate and refunded later as an account credit
+        self.billing.credits_account = self.account_id
+        self.billing.credit_events = self.billing_credit_events()
         # The first run only publishes what was cached, keeping a restart free of API calls; the read follows a cycle later
         if not first and self.billing.due(now_utc):
             export_mpan = (self.tariffs.get("export") or {}).get("mpan")
@@ -1012,6 +1015,22 @@ class OctopusAPI(ComponentBase):
             await self.billing.read(self.async_graphql_query, mpans, now_utc, "octopus", app="octopus")
         elif first:
             self.billing.publish("octopus", now_utc, app="octopus")
+
+    def billing_credit_events(self):
+        """The joined Weekend Happy Hours, as {"start", "end"} UTC slot keys, whose billed import Octopus refunds later as a credit.
+
+        A joined event's own eventType is used, falling back to the events list's, as get_saving_session_data() does.
+        """
+        event_type = {event.get("id"): event.get("eventType") for event in (self.saving_sessions or {}).get("events", []) or [] if event}
+        spans = []
+        for event in ((self.saving_sessions or {}).get("account", {}) or {}).get("joinedEvents", []) or []:
+            if not event or (event.get("eventType") or event_type.get(event.get("eventId"))) != "WEEKEND_HAPPY_HOUR":
+                continue
+            start = billing_slot_key(event.get("startAt"))
+            end = billing_slot_key(event.get("endAt"))
+            if start and end and start < end:
+                spans.append({"start": start, "end": end})
+        return spans
 
     async def final(self):
         """
