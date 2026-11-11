@@ -2356,9 +2356,9 @@ def _test_clock_change_reads_yesterday_final_value(my_predbat, failed):
     # the 27th and reads 22:03 (500.0; shifted it would read 23:03, 900.0)
     axis_checks = [(1379, 10.0), (1379, 500.0)]
     # And where yesterday's total starts being added (cost_today resets at local midnight, row 1440 + the change): autumn row
-    # 1380 is 23:00 UTC, local midnight, and reads 10.0 + 1087.25; spring row 1440 is still yesterday (23:00 UTC on the 27th,
-    # reading 900.0 with nothing added) and row 1500 is local midnight (reading 5.0 + 910.0)
-    midnight_checks = [[(1380, 1097.25)], [(1440, 900.0), (1500, 915.0)]]
+    # 1380 is 23:00 UTC, local midnight, and is pinned to yesterday's total 1087.25 (today's running total is 0 at its midnight);
+    # spring row 1440 is still yesterday (23:00 UTC on the 27th, reading 900.0 with nothing added) and row 1500 is local midnight (910.0)
+    midnight_checks = [[(1380, 1087.25)], [(1440, 900.0), (1500, 910.0)]]
     try:
         for (label, wall_now, points, expected, wrong), (axis_row, axis_value), midnight_rows in zip(cases, axis_checks, midnight_checks):
             now_utc_base = _setup_base(my_predbat)

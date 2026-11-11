@@ -8222,11 +8222,12 @@ def get_plan_renderer_js():
         html += tile('Difference', (summary.diff > 0 ? '+' : '') + money(summary.diff), `color: ${diffColor};`);
         html += tile('Import kWh', kwh(summary.import_kwh));
         html += tile('Export kWh', kwh(summary.export_kwh));
-        html += tile('Standing charge', `${money(summary.standing_predbat)} vs ${money(summary.standing_billed)}`);
+        html += tile('Standing charge&Dagger;', `${money(summary.standing_predbat)} vs ${money(summary.standing_billed)}`);
         html += '</div>';
         const pending = summary.export_pending_slots > 0 ? `${summary.export_pending_slots} slot${summary.export_pending_slots === 1 ? '' : 's'} billed for import only (export not billed yet), left out of these totals` : '';
+        const standing = '&Dagger; Cost includes the day\\'s standing charge in the midnight slot, as on the other plan views, while the bill spreads it over every half hour; the Predbat cost, Billed, Diff and Difference leave it out and it is compared here instead';
         const credits = (summary.credits > 0 || summary.credits_pending > 0) ? `* Weekend Happy Hour import is billed at the full rate and refunded as a credit${summary.credits_pending > 0 ? ` (${summary.credits_pending} not posted yet)` : ''}; the Difference is after credits` : '';
-        const notes = [complete, pending, credits, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
+        const notes = [complete, pending, credits, standing, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
         html += `<p style="font-size: 12px; margin: 0 0 8px 0; opacity: 0.8;">${notes.join(' &middot; ')}</p>`;
         return html;
     }

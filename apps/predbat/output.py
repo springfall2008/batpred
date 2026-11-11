@@ -3746,7 +3746,14 @@ class Output:
             carbon_yesterday = carbon_data.get(minutes_back, 0.0)
         cost_yesterday_array = {}
         day_start_row = end_record + self.clock_change_minutes_today()
+        # cost_today is published as 0 at midnight and only takes in the day's standing charge with Predbat's next full
+        # update, so each day's total is pinned to 0 at its midnight, as history_cumulative_array() does: the standing charge
+        # then always shows in the row that starts there, however soon after midnight that update lands
+        midnight_rows = set(self.history_day_boundaries(self.midnight_utc - timedelta(days=1), end_record + self.minutes_now))
         for minute in range(0, end_record + self.minutes_now):
+            if minute in midnight_rows:
+                cost_yesterday_array[minute] = cost_yesterday if minute >= day_start_row else 0.0
+                continue
             cost_value = cost_data.get(minutes_back_axis + 24 * 60 - minute - 5, 0.0)  # -5 gives 4 minutes into new data to allow for reset
             # After midnight (minute >= end_record), add the final cost from yesterday to make
             # the cost cumulative across the midnight boundary. Without this adjustment, the
@@ -4352,7 +4359,7 @@ class Output:
         return data or None
 
     def history_day_boundaries(self, view_midnight, view_minutes):
-        """The view minutes (after 0, up to view_minutes) at which a local midnight falls, from real instants.
+        """The view minutes (from 0 up to view_minutes) at which a local midnight falls, from real instants.
 
         A day is 23 or 25 hours long when the clocks change, and the yesterday + today view can start an hour
         either side of a midnight, so these are never assumed to be multiples of 1440.
@@ -4360,13 +4367,13 @@ class Output:
         start = view_midnight.astimezone(timezone.utc)
         end = start + timedelta(minutes=view_minutes)
         boundaries = []
-        day = start.astimezone(self.local_tz).date() + timedelta(days=1)
+        day = start.astimezone(self.local_tz).date()
         while True:
             midnight = self.local_midnight_utc(day).astimezone(timezone.utc)
             if midnight > end:
                 break
             minute = int((midnight - start).total_seconds() // 60)
-            if minute > 0:
+            if minute >= 0:
                 boundaries.append(minute)
             day += timedelta(days=1)
         return boundaries
@@ -4376,29 +4383,36 @@ class Output:
         """Turn a per-day running total that resets at local midnight (keyed by minutes ago) into one running total from the view's minute 0.
 
         Read 4 minutes into each minute's data, and at each midnight in boundaries carry the day's final value
-        across the reset, the same way calculate_yesterday() builds cost_yesterday_array.
+        across the reset, as calculate_yesterday() does for cost_yesterday_array.
+
+        At a midnight the new day's total is taken as 0 rather than read: cost_today is published as 0 at the reset and
+        only takes in the day's standing charge with Predbat's next full update, often more than 4 minutes later. Pinning it
+        to 0 puts the standing charge in the row that starts at midnight however late that update lands.
         """
         array = {}
         carry = 0.0
         resets = set(boundaries)
         for minute in range(0, view_minutes + 1):
             if minute in resets:
-                carry += data.get(status_offset - minute + 1, 0.0)
-            array[minute] = data.get(status_offset - minute - 4, 0.0) + carry
+                if minute > 0:
+                    carry += data.get(status_offset - minute + 1, 0.0)
+                array[minute] = carry
+            else:
+                array[minute] = data.get(status_offset - minute - 4, 0.0) + carry
         return array
 
     def history_row_costs(self, cost_array, view_minutes, standing_pence, boundaries):
         """Predbat's cost for each History row, in pence, from a running cost array, without the standing charge.
 
-        The running array is read 4 minutes into each minute, so its value at a midnight already includes the new
-        day's standing charge: the row that ends at (or spans) a midnight in boundaries carries it, and it is taken off there.
+        The running array starts each day at 0 at its midnight (history_cumulative_array()), so the row that starts at
+        (or spans) a midnight in boundaries carries that day's standing charge, and it is taken off there.
         """
         costs = {}
         for minute in range(0, view_minutes, self.plan_interval_minutes):
             start = cost_array.get(minute, 0.0)
             end_minute = min(minute + self.plan_interval_minutes, view_minutes)
             cost = cost_array.get(end_minute, start) - start
-            cost -= standing_pence * sum(1 for boundary in boundaries if minute < boundary <= end_minute)
+            cost -= standing_pence * sum(1 for boundary in boundaries if minute <= boundary < end_minute)
             costs[minute] = cost
         return costs
 
