@@ -2192,6 +2192,8 @@ def test_zappi_offline_grace_is_eight_hours():
     which would hand the Intelligent Octopus car 0 to the other Zappi. Coming back is not delayed at all.
     """
     hours = 60 * 60
+    # Polled every minute and every 30 minutes through the whole dropout: however often the dead
+    # Zappi is seen without a plug state, the grace is measured from when it was last online
     for poll_seconds in (60, 30 * 60):
         component = _zappi_liveness_component()
         component.poll_seconds = poll_seconds
@@ -2201,8 +2203,12 @@ def test_zappi_offline_grace_is_eight_hours():
         live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
 
         _poll_at(component, 0.0, [alive, live], first=True)
+        for now in range(poll_seconds, 8 * hours - 60, poll_seconds):
+            _poll_at(component, float(now), [dead, live])
+            assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], (poll_seconds, now, component.base.args["car_charging_energy"])
         _poll_at(component, 8 * hours - 60, [dead, live])
         assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], (poll_seconds, component.base.args["car_charging_energy"])
+        assert not any("re-wiring" in message for message in component.log_messages), (poll_seconds, component.log_messages)
         _poll_at(component, 8 * hours + 60, [dead, live])
         assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], (poll_seconds, component.base.args["car_charging_energy"])
         _poll_at(component, 8 * hours + 120, [alive, live])
