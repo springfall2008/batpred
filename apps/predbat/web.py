@@ -85,6 +85,7 @@ from utils import (
     format_time_ago,
     get_override_time_from_string,
     history_attribute,
+    is_entity_id,
     prune_today,
     mask_secret_args,
     mask_secret_yaml_text,
@@ -1851,9 +1852,11 @@ class WebInterface(ComponentBase):
         self.update_success_timestamp()
         return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
 
-    def get_chart_series(self, name, results, chart_type, color):
+    def get_chart_series(self, name, results, chart_type, color, hidden=False):
         """
         Return HTML for a chart series
+
+        hidden: start the series switched off; clicking its legend entry shows it.
         """
         text = ""
         text += "   {\n"
@@ -1861,6 +1864,8 @@ class WebInterface(ComponentBase):
         text += "    type: '{}',\n".format(chart_type)
         if color:
             text += "    color: '{}',\n".format(color)
+        if hidden:
+            text += "    hidden: true,\n"
         text += "    data: [\n"
         first = True
         for key in results:
@@ -1959,12 +1964,13 @@ var options = {
             chart_type = series.get("chart_type", "line")
             color = series.get("color", "")
             unit_name = series.get("unit", yaxis_name) or ""
+            hidden = series.get("hidden", False)
 
             if results:
                 if not first:
                     text += ","
                 first = False
-                text += self.get_chart_series(name, results, chart_type, color)
+                text += self.get_chart_series(name, results, chart_type, color, hidden=hidden)
                 opacity.append(opacity_value)
                 stroke_width.append(stroke_width_value)
                 stroke_curve.append("'{}'".format(stroke_curve_value))
@@ -2035,6 +2041,10 @@ var options = {
                 axis_parts.append("      decimalsInFloat: {}".format(decimals))
                 if opposite:
                     axis_parts.append("      opposite: true")
+                if "min" in axis:
+                    axis_parts.append("      min: {}".format(axis["min"]))
+                if "max" in axis:
+                    axis_parts.append("      max: {}".format(axis["max"]))
                 if labels_formatter:
                     axis_parts.append("      labels: {{ formatter: function(val) {{ {} }} }}".format(labels_formatter))
 
@@ -3330,6 +3340,41 @@ chart.render();
         # Redirect back to dashboard
         raise web.HTTPFound("./dash")
 
+    def get_inverter_soc_history(self):
+        """
+        Today's actual SoC of each inverter as a percentage of its own capacity, for the Battery chart,
+        as a list of (inverter id, {stamp: %}).
+
+        Each battery is on its own scale, so one can reach 100% while the fleet total is still short of full.
+        Empty for a single-inverter install, whose one line is already the chart's Actual.
+        Read from each inverter's own soc_percent sensor, or its soc_kw sensor scaled the way
+        Inverter.update_status() scales it. There is no predicted SoC per inverter: the plan treats the
+        batteries as one.
+        """
+        inverters = self.base.inverters
+        if len(inverters) <= 1:
+            return []
+        use_percent = "soc_percent" in self.base.args
+        now_str = self.now_utc.strftime(TIME_FORMAT)
+        results = []
+        for inverter in inverters:
+            sensor = self.base.get_arg("soc_percent" if use_percent else "soc_kw", indirect=False, index=inverter.id)
+            if not is_entity_id(sensor):
+                continue
+            if use_percent:
+                scale = 1.0
+            else:
+                if not inverter.soc_max:
+                    continue
+                scale = (inverter.battery_scaling or 1.0) * 100.0 / inverter.soc_max
+            history = history_attribute(self.get_history_wrapper(sensor, 1, required=False, tracked=False))
+            history = prune_today(history, self.now_utc, self.midnight_utc, prune=True, group=self.plan_interval_minutes)
+            data = {stamp: dp2(value * scale) for stamp, value in history.items()}
+            if inverter.soc_percent is not None:
+                data[now_str] = inverter.soc_percent
+            results.append((inverter.id, data))
+        return results
+
     def get_chart(self, chart):
         """
         Return the HTML for a chart
@@ -3400,7 +3445,31 @@ chart.render();
                 {"name": "Best Export Limit", "data": best_export_limit_kw, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#15eb1c"},
                 {"name": "Record", "data": record, "opacity": "0.5", "stroke_width": "4", "stroke_curve": "stepline", "color": "#000000", "chart_type": "area"},
             ]
-            text += self.render_chart(series_data, "kWh", "Battery SoC Prediction", now_str)
+            # Multi-inverter installs: each battery's actual SoC in % of its own capacity, on a 0-100% axis
+            # of their own, off until picked in the legend
+            inverter_colors = ["#1f77b4", "#2ca02c", "#d62728", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"]
+            inverter_series_names = []
+            for inv_id, inv_soc in self.get_inverter_soc_history():
+                if not inv_soc:
+                    continue
+                name = "Actual Inverter {}".format(inv_id)
+                inverter_series_names.append(name)
+                series_data.append(
+                    {
+                        "name": name,
+                        "data": inv_soc,
+                        "opacity": "1.0",
+                        "stroke_width": "2",
+                        "stroke_curve": "smooth",
+                        "color": inverter_colors[inv_id % len(inverter_colors)],
+                        "unit": "%",
+                        "hidden": True,
+                    }
+                )
+            extra_yaxis = None
+            if inverter_series_names:
+                extra_yaxis = {"title": "Inverter SoC (%)", "series_names": inverter_series_names, "decimals": 0, "opposite": True, "min": 0, "max": 100}
+            text += self.render_chart(series_data, "kWh", "Battery SoC Prediction", now_str, extra_yaxis=extra_yaxis)
         elif chart == "Power":
             series_data = [
                 {"name": "battery", "data": battery_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},

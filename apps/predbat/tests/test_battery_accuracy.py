@@ -158,6 +158,86 @@ def test_battery_chart_lookahead_starts_today(my_predbat):
     return failed
 
 
+def test_battery_chart_inverter_soc(my_predbat):
+    """A multi-inverter Battery chart carries each inverter's actual SoC, in % of its own capacity, hidden.
+
+    Each battery is on its own 0-100% scale, so a 5 kWh battery at 4 kWh reads 80% whatever the fleet
+    total is. A single-inverter chart gets no extra lines: its one battery is already Actual.
+    """
+    print("  - test_battery_chart_inverter_soc")
+    from types import SimpleNamespace
+    from web import WebInterface
+
+    failed = False
+    fmt = "%Y-%m-%dT%H:%M:%S.%f%z"
+    stamp = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime(fmt)
+    kwh_history = {"sensor.inv0_soc_kw": "4.0", "sensor.inv1_soc_kw": "2.0"}
+
+    saved_args = my_predbat.args
+    saved_inverters = my_predbat.inverters
+    try:
+        my_predbat.args = dict(saved_args)
+        my_predbat.args.pop("soc_percent", None)
+        my_predbat.args["soc_kw"] = ["sensor.inv0_soc_kw", "sensor.inv1_soc_kw"]
+        my_predbat.inverters = [
+            SimpleNamespace(id=0, soc_max=5.0, battery_scaling=1.0, soc_percent=82),
+            SimpleNamespace(id=1, soc_max=10.0, battery_scaling=1.0, soc_percent=21),
+        ]
+
+        web = WebInterface(my_predbat, web_port=5053)
+        web.get_history_wrapper = lambda entity_id, days, required=True, tracked=True: [[{"state": kwh_history.get(entity_id, "0"), "last_updated": stamp}]]
+        web.get_history_with_now_attrs = lambda entity_id, days: []
+        web.get_entity_results = lambda entity_id: {my_predbat.now_utc.strftime(fmt): 1.0}
+        captured = {}
+
+        def capture(series_data, *args, **kwargs):
+            captured["series"] = series_data
+            captured["extra_yaxis"] = kwargs.get("extra_yaxis")
+            return ""
+
+        web.render_chart = capture
+        web.get_chart("Battery")
+        series = {item["name"]: item for item in captured.get("series", [])}
+        now_str = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+        for name, expect_past, expect_now in (("Actual Inverter 0", 80.0, 82), ("Actual Inverter 1", 20.0, 21)):
+            item = series.get(name)
+            if not item:
+                print("ERROR: the {} series is missing, got {}".format(name, list(series)))
+                failed = True
+                continue
+            if not item.get("hidden") or item.get("unit") != "%":
+                print("ERROR: {} should be hidden and in %, got hidden={} unit={}".format(name, item.get("hidden"), item.get("unit")))
+                failed = True
+            values = list(item["data"].values())
+            if not values or values[0] != expect_past:
+                print("ERROR: {} past SoC should be {}% of its own capacity, got {}".format(name, expect_past, item["data"]))
+                failed = True
+            if item["data"].get(now_str) != expect_now:
+                print("ERROR: {} should end at the inverter's current {}%, got {}".format(name, expect_now, item["data"]))
+                failed = True
+        axis = captured.get("extra_yaxis") or {}
+        if axis.get("series_names") != ["Actual Inverter 0", "Actual Inverter 1"] or axis.get("max") != 100:
+            print("ERROR: the inverter lines should share a 0-100% axis, got {}".format(axis))
+            failed = True
+
+        # The real renderer emits the hidden flag and the fixed axis range
+        del web.render_chart
+        html = web.get_chart("Battery")
+        if "hidden: true" not in html or "max: 100" not in html:
+            print("ERROR: the rendered chart should start the inverter lines hidden on a 0-100 axis")
+            failed = True
+
+        # One inverter: nothing extra
+        my_predbat.inverters = my_predbat.inverters[:1]
+        if web.get_inverter_soc_history():
+            print("ERROR: a single-inverter install should get no per-inverter lines")
+            failed = True
+    finally:
+        my_predbat.args = saved_args
+        my_predbat.inverters = saved_inverters
+    return failed
+
+
 def run_battery_accuracy_tests(my_predbat):
     """Run every battery prediction-accuracy test."""
     print("**** Running battery accuracy tests ****\n")
@@ -165,6 +245,7 @@ def run_battery_accuracy_tests(my_predbat):
     failed |= test_lookahead_offset_aligns_with_actual(my_predbat)
     failed |= test_lookahead_prune_keeps_what_lands_today(my_predbat)
     failed |= test_battery_chart_lookahead_starts_today(my_predbat)
+    failed |= test_battery_chart_inverter_soc(my_predbat)
     failed |= test_load_power_less_car(my_predbat)
     failed |= test_load_power_less_car_matches_chart(my_predbat)
     return failed
