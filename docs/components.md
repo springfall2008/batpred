@@ -1817,7 +1817,7 @@ Connects to Growatt's public OAuth OpenAPI, discovers the inverter authorised du
 | `api_delay` | Float | No | 0.2 | `growatt_api_delay` | Courtesy pause between calls for different devices |
 | `min_write_interval` | Integer | No | 5 | `growatt_min_write_interval` | Minimum seconds between dispatch writes for one inverter, never below Growatt's five-second limit |
 
-See [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi) for the setup and field-testing notes.
+For a read-only check from the command line, `python3 growatt.py --config apps.yaml` (run from `apps/predbat`) runs one cycle with automatic configuration on and prints what it found. See [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi) for the command-line options, setup and field-testing notes.
 
 ---
 

@@ -154,7 +154,12 @@ def local_window_to_utc_slots(start, end, percentage, now_local):
 
 
 def normalize_slots(value):
-    """Canonicalise a read/write slot list for equality checks."""
+    """Canonicalise a read/write slot list for equality checks.
+
+    A zero-length slot is dropped: readDeviceDispatch always answers with all 16 slots and
+    shows an unused one as 00:00-00:00 at 0% (seen on a live SPH), and Predbat never writes a
+    zero-length slot, so the device's empty table must compare equal to Predbat's [].
+    """
     if not isinstance(value, list):
         return []
     slots = []
@@ -163,7 +168,7 @@ def normalize_slots(value):
             continue
         start = str(item.get("startTime", ""))[:5]
         end = str(item.get("endTime", ""))[:5]
-        if not start or not end:
+        if not start or not end or start == end:
             continue
         slots.append({"startTime": start, "endTime": end, "percentage": clamp_percent(item.get("percentage", 0))})
     return sorted(slots, key=lambda slot: (slot["startTime"], slot["endTime"], slot["percentage"]))
@@ -177,10 +182,10 @@ def _is_slot_list(value):
 def parse_dispatch_slots(data, _depth=0):
     """Extract the slot table from a readDeviceDispatch answer, or None when it holds none.
 
-    Growatt's documentation gives the write shape (a list of startTime/endTime/percentage)
-    but not the read answer's envelope, so this accepts the list itself, the list encoded
-    as a JSON string, or a dict carrying it under "value" or any other key. Anything else
-    is None - unknown - which callers must not mistake for an empty table.
+    A live SPH answers with the bare list of all 16 slots as the response data, unused ones as
+    00:00-00:00 at 0%. Growatt does not document the envelope, so this also accepts the list
+    encoded as a JSON string, or a dict carrying it under "value" or any other key. Anything
+    else is None - unknown - which callers must not mistake for an empty table.
     """
     if _depth > 3:
         return None

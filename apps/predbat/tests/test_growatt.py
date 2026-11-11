@@ -8,7 +8,10 @@
 
 # cspell:ignore echarge edischarge
 
+import contextlib
+import io
 import json
+import os
 import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,7 +21,7 @@ import pytz
 
 from components import COMPONENT_LIST
 from config import APPS_SCHEMA, INVERTER_DEF
-from growatt import GrowattAPI
+from growatt import GrowattAPI, merge_growatt_cli_args, test_growatt_api as growatt_cli_run
 from growatt_const import (
     GROWATT_BASE_URL,
     GROWATT_ENDPOINTS,
@@ -462,6 +465,27 @@ def test_growatt_parse_dispatch_slots_shapes():
         assert parse_dispatch_slots(unknown) is None, unknown
 
 
+def test_growatt_readback_live_empty_table():
+    """A live SPH answers with all 16 slots, unused ones as 00:00-00:00 at 0%: that is an empty table, equal to Predbat's []."""
+    unused = {"percentage": 0, "startTime": "00:00", "endTime": "00:00"}
+    live_empty = [dict(unused) for _ in range(16)]
+    assert parse_dispatch_slots(live_empty) == []
+    used = [{"percentage": 50, "startTime": "01:00", "endTime": "03:00"}] + [dict(unused) for _ in range(15)]
+    assert parse_dispatch_slots(used) == [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+
+    # Read back as empty while Predbat also wants nothing: no mismatch and no rewrite
+    client, sn = _ready_client()
+    client.local_schedule[sn] = _idle_schedule()
+    client.applied_slots[sn] = []
+    client.read_dispatch = AsyncMock(return_value=(True, live_empty))
+    assert run_async_local(client.refresh_readback(sn))
+    assert not any("differ from the" in message for message in client.log_messages)
+    calls = _recording_dispatch(client)
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+    assert calls == []
+
+
 def test_growatt_readback_adopts_device_table():
     """A read-back replaces the known table, so a table changed on the device is rewritten on the next apply."""
     client, sn = _ready_client()
@@ -581,6 +605,131 @@ def test_growatt_monitoring_only_releases_claimed_control():
     assert calls == [(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_OFF)]
 
 
+def test_growatt_zero_capacity_leaves_soc_max_unset():
+    """A device reporting batteryCapacity 0 (as a live SPH does) binds no soc_max, so Predbat estimates the size."""
+    client, sn = _ready_client(automatic=True)
+    client.device_detail[sn]["batteryCapacity"] = 0
+    client.device_detail[sn]["batteryList"] = [{"batteryCapacity": 0, "batteryNominalPower": 3680}]
+    client.device_values[sn].update({"battery_power": 0, "grid_power": 0, "pv_power": 0, "load_power": 0})
+    run_async_local(client.publish_data())
+    run_async_local(client.automatic_config())
+    assert "soc_max" not in client.base.args
+    assert "sensor.predbat_growatt_sph123_battery_capacity" not in client.published
+    assert any("soc_max is left unset" in message for message in client.log_messages)
+    # The discovery record carries no capacity either, and still agrees with automatic_config()
+    records = validated_inverters(client.build_discovery())
+    assert "soc_max" not in records[0].get("ratings", {})
+    assert "soc_max" not in records[0].get("entities", {})
+    captured = capture_automatic_config(client)
+    assert_record_agrees(records[0], captured)
+    assert_record_binds_nothing_extra(records[0], captured)
+
+
+def test_growatt_cli_merge_args():
+    """apps.yaml fills only what the command line left out, and a parsed timestamp becomes ISO text."""
+    config = {
+        "growatt_key": "file-token",
+        "growatt_token_hash": "file-hash",
+        "growatt_token_expires_at": datetime(2026, 11, 11, 20, 0, tzinfo=pytz.utc),
+        "growatt_inverter_sn": ["SPH1", "SPH2"],
+        "growatt_base_url": "",
+        "growatt_battery_rate_max": 4800,
+        "user_id": "instance-1",
+        "supabase_url": "https://example.invalid",
+        "supabase_key": "file-service-key",
+        "unrelated": "ignored",
+    }
+    merged, used = merge_growatt_cli_args({"key": "cli-token", "inverter_sn": None, "base_url": None, "supabase_key": "cli-service-key"}, config)
+    assert merged["key"] == "cli-token"
+    assert merged["token_hash"] == "file-hash"
+    # Unquoted ISO timestamps load from YAML as datetimes; OAuthMixin parses only strings and numbers
+    assert merged["token_expires_at"] == "2026-11-11T20:00:00+00:00"
+    assert merged["inverter_sn"] == ["SPH1", "SPH2"]
+    assert merged["battery_rate_max"] == 4800
+    assert merged["user_id"] == "instance-1"
+    # The refresh settings come from the file too, and the command line still wins
+    assert merged["supabase_url"] == "https://example.invalid"
+    assert merged["supabase_key"] == "cli-service-key"
+    # An empty apps.yaml value fills nothing
+    assert merged["base_url"] is None
+    assert "growatt_key" not in used and "growatt_base_url" not in used
+    assert sorted(used) == ["growatt_battery_rate_max", "growatt_inverter_sn", "growatt_token_expires_at", "growatt_token_hash", "supabase_url", "user_id"]
+    assert "unrelated" not in merged
+
+
+def _cli_fake_post(calls, devices_code=0):
+    """Return a GrowattAPI._post replacement answering one battery inverter, recording each endpoint."""
+
+    async def fake_post(self, endpoint_key, body=None):
+        """Answer like the Growatt cloud for the read endpoints a read-only cycle uses."""
+        calls.append((endpoint_key, body, dict(self.base.args)))
+        if endpoint_key == "devices":
+            return (0, [{"deviceSn": "SPH123", "deviceType": "sph"}]) if devices_code == 0 else (devices_code, None)
+        if endpoint_key == "device_info":
+            return 0, {"model": "SPH 6000TL", "nominalPower": 6000, "existBattery": True, "batteryCapacity": 10000, "batteryNominalPower": 5000, "dischargeCutOffSOC": 10}
+        if endpoint_key == "device_data":
+            return 0, {
+                "soc": 55,
+                "batPower": 1200,
+                "meterPower": 300,
+                "ppv": 0,
+                "payLoadPower": 900,
+                "etoUserToday": 3.0,
+                "etoGridToday": 0.0,
+                "epvToday": 0.0,
+                "batteryList": [{"echargeToday": 2.0, "edischargeToday": 1.0}],
+                "utcTime": "2026-11-11 20:00:00",
+            }
+        if endpoint_key == "read_dispatch":
+            return 0, {"value": [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]}
+        return -1, None
+
+    return fake_post
+
+
+def test_growatt_cli_single_cycle():
+    """One read-only run() with automatic config: binds Predbat's settings, reads the slot table back, writes nothing."""
+    calls = []
+    output = io.StringIO()
+    with patch.object(GrowattAPI, "_post", _cli_fake_post(calls)), patch.dict(os.environ, {}, clear=False), contextlib.redirect_stdout(output):
+        ok = run_async_local(growatt_cli_run(key="token", token_expires_at="2099-01-01T00:00:00Z", token_hash="hash", user_id="instance-1", supabase_url="https://example.invalid", supabase_key="service", trace=False))
+        assert os.environ["SUPABASE_URL"] == "https://example.invalid"
+        assert os.environ["SUPABASE_KEY"] == "service"
+    text = output.getvalue()
+    assert ok, text
+    endpoints = [call[0] for call in calls]
+    assert endpoints[:3] == ["devices", "device_info", "device_data"]
+    assert "read_dispatch" in endpoints
+    assert "dispatch" not in endpoints, "the CLI must not write to the inverter"
+    # user_id reaches the base args, where OAuthMixin's refresh reads the instance id
+    assert calls[0][2]["user_id"] == "instance-1"
+    assert "Set arg inverter_type = ['GrowattCloud']" in text
+    assert "Set arg soc_percent = ['sensor.predbat_growatt_sph123_soc']" in text
+    assert "=== SPH123 ===" in text
+    assert "SoC 55.0%" in text
+    assert "01:00-03:00 +50%" in text
+    assert "PASSED" in text
+
+
+def test_growatt_cli_failures_are_explained():
+    """A run that cannot complete returns False and says which step failed."""
+    # No token and no refresh route: nothing is requested at all
+    calls = []
+    output = io.StringIO()
+    environ = {key: value for key, value in os.environ.items() if key not in ("SUPABASE_URL", "SUPABASE_KEY")}
+    with patch.object(GrowattAPI, "_post", _cli_fake_post(calls)), patch.dict(os.environ, environ, clear=True), contextlib.redirect_stdout(output):
+        assert not run_async_local(growatt_cli_run(key=None, trace=False))
+    assert calls == []
+    assert "no OAuth access token" in output.getvalue()
+
+    # The device list call is refused
+    calls = []
+    output = io.StringIO()
+    with patch.object(GrowattAPI, "_post", _cli_fake_post(calls, devices_code=2)), contextlib.redirect_stdout(output):
+        assert not run_async_local(growatt_cli_run(key="token", token_expires_at="2099-01-01T00:00:00Z", trace=False))
+    assert "device list call failed" in output.getvalue()
+
+
 def run_growatt_tests(my_predbat):
     """Run the Growatt component tests in Predbat's custom test harness."""
     failed = False
@@ -605,12 +754,17 @@ def run_growatt_tests(my_predbat):
         ("state_survives_restart", test_growatt_control_state_survives_restart),
         ("restore_without_storage", test_growatt_restore_without_storage_is_a_no_op),
         ("parse_dispatch_slots", test_growatt_parse_dispatch_slots_shapes),
+        ("readback_live_empty_table", test_growatt_readback_live_empty_table),
         ("readback_adopts_device", test_growatt_readback_adopts_device_table),
         ("readback_unknown_answer", test_growatt_readback_unknown_answer_keeps_written_table),
         ("readback_pacing", test_growatt_readback_waits_for_dispatch_pacing),
         ("release_control", test_growatt_release_control),
         ("run_read_only_release", test_growatt_run_releases_control_when_read_only),
         ("monitoring_only_release", test_growatt_monitoring_only_releases_claimed_control),
+        ("zero_capacity_soc_max", test_growatt_zero_capacity_leaves_soc_max_unset),
+        ("cli_merge_args", test_growatt_cli_merge_args),
+        ("cli_single_cycle", test_growatt_cli_single_cycle),
+        ("cli_failures", test_growatt_cli_failures_are_explained),
     ]
     for name, test in tests:
         try:

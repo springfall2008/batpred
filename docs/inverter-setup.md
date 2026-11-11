@@ -632,6 +632,15 @@ Predbat's built-in Growatt component uses Growatt's public OAuth OpenAPI. On Pre
 
 The component publishes live SoC, battery, grid, PV and load power, device ratings and the available daily energy counters. With automatic setup enabled, it also creates Predbat's standard schedule controls and registers the inverter as `GrowattCloud`.
 
+To check an installation from the command line, run the component once from `apps/predbat`. It runs one read-only cycle with automatic configuration on: it discovers the inverter, reads its telemetry and its slot table, prints the `Set arg` lines automatic setup would apply and a summary per inverter, and writes nothing to the inverter.
+
+```bash
+python3 growatt.py --config /path/to/apps.yaml
+python3 growatt.py --key <access token> --serial SPH123456
+```
+
+`--config` reads the `growatt_` settings, `user_id`, `supabase_url` and `supabase_key` from an apps.yaml, resolving `!secret` as Predbat does, and any option given alongside it overrides the file. The access token can also come from the `GROWATT_KEY` environment variable. An expired token can only be refreshed through Predbat.com, which needs the token hash, the instance's user id and the Supabase URL and key, all present in a Predbat.com-generated apps.yaml. Run `python3 growatt.py --help` for every option.
+
 Before enabling control for a first tester:
 
 1. Start with `growatt_control_enable: false` and confirm the five power-flow values and their signs against the Growatt app. Predbat should show battery power negative while charging and positive while discharging, and grid power negative while importing
