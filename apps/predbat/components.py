@@ -30,6 +30,11 @@ to tell "a source is configured but has not answered yet" - transient, retry nex
 apart from "no source is configured at all", which is a setup gap that will never resolve.
 Before the tag existed that question was asked as "givtcp_rest or ge_cloud_direct", which
 was simply the two sources that happened to have been wired up when the check was written.
+
+Set "align_minute": True on an entry whose run() acts on minute-resolution schedule edges, so its
+loop runs just after each wall-clock minute boundary instead of every 60 seconds from process start
+(see ComponentBase.start()). Leave it off otherwise: the free-running loops spread components across
+the minute, where aligning them all would put every API call and its processing in the same second.
 """
 
 import importlib
@@ -39,6 +44,7 @@ import asyncio
 import os
 
 from coordinator import Coordinator
+from const import MCP_DEFAULT_SECRET
 
 
 def serves_inverter(component):
@@ -104,7 +110,7 @@ COMPONENT_LIST = {
         "name": "MCP Server",
         "args": {
             "mcp_enable": {"required": True, "config": "mcp_enable", "default": False},
-            "mcp_secret": {"required": False, "secret": True, "config": "mcp_secret", "default": "predbat_mcp_secret"},
+            "mcp_secret": {"required": False, "secret": True, "config": "mcp_secret", "default": MCP_DEFAULT_SECRET},
             "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
         },
         "phase": 1,
@@ -189,6 +195,11 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": True,
                 "config": "ge_cloud_inverter_control",
+            },
+            "poll_settings": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_poll_settings",
             },
         },
         # ge_cloud_direct monitors the inverter (and EV charger), ge_cloud_evc_direct the EV charger alone
@@ -712,6 +723,23 @@ COMPONENT_LIST = {
         },
         "phase": 1,
         "can_restart": True,
+        # Each export/charge command starts on the first run inside the window, and carries a
+        # duration to the window's end, so an unaligned loop starts every window up to a minute late.
+        "align_minute": True,
+    },
+    "dummy_inverter": {
+        "class": "dummy_inverter.DummyInverter",
+        "name": "Dummy Inverter",
+        "inverter": True,
+        "event_filter": "predbat_dummy_",
+        # A simulated inverter and battery for demos and log replay, enabled by a dummy_inverter apps.yaml block.
+        # Defaults for every setting in the block live in dummy_inverter.py beside the model that uses them.
+        "args": {
+            "config": {"required": True, "config": "dummy_inverter"},
+            "automatic": {"required": False, "config": "dummy_inverter_automatic", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
     },
     "teslemetry": {
         "class": "teslemetry.TeslemetryAPI",
@@ -726,12 +754,17 @@ COMPONENT_LIST = {
             "tbc_control": {"required": False, "default": True, "config": "teslemetry_tbc_control"},
             # No default: unset must reach the component as None ("decide from the Powerwall model"), not False
             "hybrid": {"required": False, "config": "teslemetry_hybrid"},
+            # No default either: unset means "decide from site_info's net_meter_mode" (GH#5710)
+            "battery_export": {"required": False, "config": "teslemetry_battery_export"},
             "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
             "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
             "token_hash": {"required": False, "secret": True, "config": "teslemetry_token_hash"},
         },
         "phase": 1,
         "can_restart": True,
+        # The signal tariff's export band is pushed on the first run inside its window (GH#5960), so
+        # an unaligned loop starts every export up to a minute late, more as run() durations drift it.
+        "align_minute": True,
     },
     "solax": {
         "class": "solax.SolaxAPI",
@@ -752,6 +785,9 @@ COMPONENT_LIST = {
         },
         "phase": 1,
         "can_restart": True,
+        # Remote-control commands carry no duration: a window starts on the first run inside it and
+        # ends on the first run after it, so an unaligned loop is late on both edges.
+        "align_minute": True,
     },
     "solis": {
         "class": "solis.SolisAPI",
@@ -771,6 +807,8 @@ COMPONENT_LIST = {
             "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
             "control_enable": {"required": False, "config": "solis_control_enable", "default": True},
             "nominal_voltage": {"required": False, "config": "solis_nominal_voltage"},
+            "parallel_slaves": {"required": False, "config": "solis_parallel_slaves"},
+            "parallel_slot_current_max": {"required": False, "config": "solis_parallel_slot_current_max"},
         },
         # Gate activation on having at least one auth path — HMAC (api_key) OR OAuth
         # (access_token). Without this the component would start for every instance
@@ -856,9 +894,9 @@ class Components:
 
         The coordinator lives here - never as a PredBat attribute - because create_debug_yaml()
         dumps every non-excluded member of PredBat.__dict__, and the coordinator holds the raw
-        unredacted reports plus the pseudonym salt. "components" is in DEBUG_EXCLUDE_LIST (as is
-        "coordinator", defensively), so nothing under self.components is dumped automatically at
-        all; create_debug_yaml() instead adds a plain redacted dict via coordinator.catalogue().
+        raw reports. "components" is in DEBUG_EXCLUDE_LIST (as is "coordinator", defensively),
+        so nothing under self.components is dumped automatically at all; create_debug_yaml() instead
+        adds a plain dict via coordinator.catalogue(), which scrubs email addresses.
         """
         self.components = {}
         self.component_tasks = {}
@@ -928,6 +966,7 @@ class Components:
                     # Overrides the class-name fallback ComponentBase.__init__ set, with the
                     # registry key report_discovery() should file this component's reports under.
                     self.components[component_name].component_name = component_name
+                    self.components[component_name].align_minute = component_info.get("align_minute", False)
                 except Exception as e:
                     # A component that will not import (a missing package, a syntax error) or
                     # construct must not take Predbat down with it: record why, leave it inactive

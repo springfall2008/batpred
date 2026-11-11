@@ -1382,6 +1382,38 @@ def test_control_saved_modes_are_dropped_when_control_is_off():
     print("  ✓ Stale saved Zappi modes are dropped when control is off")
 
 
+def test_control_off_in_config_releases_a_held_zappi():
+    """#5788: with myenergi_zappi_control turned off and a restart, a Zappi an earlier session held Stopped
+    is released on the first poll, to the mode it had before - not left Stopped."""
+    storage = _MemoryStorage()
+    storage.saved[("myenergi", "control_state")] = {"control_enabled": True, "held": {"Z12345678": False}}
+    storage.saved[("myenergi", "control_saved_modes")] = {"modes": {"Z12345678": "Eco"}}
+    component = _controlling_component(zappi_control=False)
+    component.base.components = storage
+    zappi = _zappi(12345678)
+    zappi.mode = "Stopped"
+    component.transport.fetch_devices = AsyncMock(return_value=[zappi])
+
+    assert run_async(component.run(0, True)) is True
+    assert component.charger_control_active is False
+    assert component.transport.set_mode.await_args.args[1] == "Eco", component.transport.set_mode.await_args
+    assert component.charger_control_state == {} and storage.saved[("myenergi", "control_state")]["held"] == {}
+    assert storage.saved[("myenergi", "control_saved_modes")] == {"modes": {}}, "Released, so its mode is forgotten"
+    print("  ✓ Control turned off in config still releases a held Zappi")
+
+
+def test_control_off_with_controls_disabled_writes_nothing():
+    """With myenergi_enable_controls off Predbat must not write to the Zappi, so a held one is left as it is."""
+    storage = _MemoryStorage()
+    storage.saved[("myenergi", "control_state")] = {"control_enabled": True, "held": {"Z12345678": False}}
+    component = _controlling_component(zappi_control=False, enable_controls=False)
+    component.base.components = storage
+    component.transport.fetch_devices = AsyncMock(return_value=[_zappi(12345678)])
+    assert run_async(component.run(0, True)) is True
+    component.transport.set_mode.assert_not_awaited()
+    print("  ✓ With controls disabled a held Zappi is not written to")
+
+
 def test_control_releases_to_eco_plus_when_nothing_was_saved():
     """With no saved mode - a restart, or a mode that cannot be set - release falls back to Eco+."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
@@ -1521,7 +1553,8 @@ def test_run_enables_control_and_drives_the_zappi():
     zappi = _zappi(12345678)
     component.transport.fetch_devices = AsyncMock(return_value=[zappi])
     component.transport.set_mode = AsyncMock(return_value=True)
-    component.charger_control_load_enabled = AsyncMock()
+    # As the real load does, it marks the saved state as read
+    component.charger_control_load_enabled = AsyncMock(side_effect=lambda: setattr(component, "charger_control_loaded", True))
 
     assert run_async(component.run(0, True)) is True
     assert component.charger_control_active is True
@@ -1598,12 +1631,15 @@ def test_control_failure_does_not_break_the_poll():
     zappi = _zappi(12345678)
     component.transport.fetch_devices = AsyncMock(return_value=[zappi])
     component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("myenergi refused the mode"))
-    component.charger_control_load_enabled = AsyncMock()
+    # As the real load does, it marks the saved state as read
+    component.charger_control_load_enabled = AsyncMock(side_effect=lambda: setattr(component, "charger_control_loaded", True))
 
     assert run_async(component.run(0, True)) is True, "A refused mode must not fail the cycle"
     assert component.last_success_timestamp is not None, "Monitoring still succeeded, so the poll counts"
-    # Nothing was recorded as set, so the next cycle tries again rather than assuming it stuck
-    assert component.charger_control_state == {}, component.charger_control_state
+    # A stop is held as soon as it is sent (it may still have landed) but stays unconfirmed, so the next
+    # cycle tries again rather than assuming it stuck
+    assert component.charger_control_state == {"Z12345678": False}, component.charger_control_state
+    assert "Z12345678" in component.charger_control_unconfirmed
     print("  ✓ A refused mode command warns without failing the poll")
 
 
@@ -2703,6 +2739,124 @@ def test_templates_accept_the_connected_zappi_plug_states():
     print("  ✓ {} templates accept every connected Zappi plug state".format(checked))
 
 
+# Discovery catalogue reporter
+
+
+def _eddi(serial):
+    """Build a direct-API Eddi."""
+    return normalise_direct_device(dict(MOCK_DIRECT_EDDI, sno=serial), DEVICE_KIND_EDDI)
+
+
+def _discovery_component(devices, **overrides):
+    """A component polled once with these devices, its entities published, and its reports captured.
+
+    The hub serial differs from every device serial so a leak of it into the report is detectable.
+    """
+    overrides.setdefault("hub_serial", "99887766")
+    component = _make_component(**overrides)
+    component.transport.fetch_devices = AsyncMock(return_value=list(devices))
+    component.filed_reports = []
+    component.report_discovery = component.filed_reports.append
+    assert run_async(component.run(0, True)) is True
+    return component
+
+
+def test_discovery_none_without_zappi():
+    """An account with only an Eddi has no charger to describe."""
+    component = _discovery_component([_eddi(87654321)])
+    assert component.build_discovery() is None
+    assert component.filed_reports == []
+    print("  ✓ Discovery reports nothing without a Zappi")
+
+
+def test_discovery_zappi_record():
+    """A Zappi is a charger keyed by its hardware serial, with a stub car and the four bound entities."""
+    component = _discovery_component([_zappi(12345678), _eddi(87654321)])
+    report = component.build_discovery()
+    assert report["automatic"] is True
+    assert len(report["chargers"]) == 1, report
+    charger, car = report["chargers"][0], report["cars"][0]
+    assert charger["device_id"] == "myenergi:12345678", charger
+    assert charger["hardware_ids"] == {"serial": "12345678"}, charger
+    assert charger["info"] == {"vendor": "myenergi", "model": "zappi"}, charger
+    assert charger["serves_cars"] == ["myenergi:12345678:car"], charger
+    assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_energy", "car_charging_power"}, charger["entities"]
+    assert charger["entities"]["car_charging_planned"]["entity_id"] == "sensor.predbat_myenergi_zappi_12345678_plug_status"
+    assert charger["entities"]["car_charging_plugged"]["entity_id"] == "binary_sensor.predbat_myenergi_zappi_12345678_plugged"
+    assert car == {"device_id": "myenergi:12345678:car", "charged_by": "myenergi:12345678", "flags": ["stub"]}, car
+    assert "87654321" not in str(report), "the Eddi is not a charger and must not be reported"
+    print("  ✓ Discovery reports a Zappi with a stub car and its bound entities")
+
+
+def test_discovery_automatic_follows_automatic_zappi():
+    """With myenergi_automatic_zappi off no Zappi entity is bound, so the report must not claim automatic."""
+    component = _discovery_component([_zappi(12345678)], automatic_zappi=False)
+    assert "car_charging_energy" not in component.base.args, "the Zappi must not have been wired"
+    assert component.build_discovery()["automatic"] is False
+    print("  ✓ Discovery automatic flag follows myenergi_automatic_zappi")
+
+def test_discovery_cloud_alias_never_reported():
+    """The cloud transport's user-chosen alias and the hub serial (a login identifier) never reach the report."""
+    cloud_zappi = normalise_cloud_device(MOCK_CLOUD_ZAPPI_STATUS, MOCK_CLOUD_ZAPPI_META)
+    assert cloud_zappi.name == "Driveway"
+    component = _discovery_component([cloud_zappi])
+    report = component.build_discovery()
+    assert report["chargers"][0]["device_id"] == "myenergi:12345678", "cloud and direct must give the same identity"
+    assert "Driveway" not in str(report), report
+    assert "99887766" not in str(report), report
+    print("  ✓ Discovery never reports the cloud alias or the hub serial")
+
+
+def test_discovery_round_trip():
+    """The report survives the real Coordinator: every entity, the stub flag, and a readable serial."""
+    from coordinator import Coordinator
+
+    component = _discovery_component([_zappi(12345678)])
+    logs = []
+    base = MockBase()
+    coordinator = Coordinator(base)
+    coordinator.log = logs.append
+    coordinator.report("myenergi", component.build_discovery())
+    cleaned = coordinator.reports["myenergi"]
+    assert len(cleaned["chargers"][0]["entities"]) == 4, cleaned
+    assert cleaned["cars"][0]["flags"] == ["stub"], cleaned
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    coordinator.assemble()
+    assert "12345678" in str(coordinator.catalogue()), "the Zappi serial is hardware, and stays readable"
+    print("  ✓ Discovery report round-trips through the Coordinator")
+
+
+def test_discovery_serial_readable_without_hub():
+    """With no hub the Zappi's serial doubles as the login username - still an identifier, so it is published readable.
+
+    Identifiers are not secret (maintainer decision, 2 Nov 2026); only the API key is, and it never
+    enters the record.
+    """
+    from coordinator import Coordinator
+
+    component = _discovery_component([_zappi(12345678)], hub_serial="12345678")
+    charger = component.build_discovery()["chargers"][0]
+    assert charger["hardware_ids"] == {"serial": "12345678"}, charger
+    assert "account_ids" not in charger, charger
+    coordinator = Coordinator(MockBase())
+    coordinator.report("myenergi", component.build_discovery())
+    catalogue = coordinator.catalogue()
+    assert catalogue["chargers"][0]["device_id"] == "myenergi:12345678", catalogue["chargers"]
+    assert "secret-key" not in str(catalogue), "the API key never enters the catalogue"
+    print("  ✓ Discovery keeps a hub-less Zappi's serial readable")
+
+
+def test_discovery_refreshed_on_non_poll_cycle():
+    """A report that failed to build on a poll cycle is retried on the next run(), poll or not."""
+    component = _discovery_component([_zappi(12345678)])
+    assert len(component.filed_reports) == 1, "the first cycle files the report"
+    component.filed_reports.clear()
+    component._discovery_report = None
+    assert run_async(component.run(30, False)) is True
+    assert len(component.filed_reports) == 1, "a non-poll cycle still refreshes the report"
+    print("  ✓ Discovery is refreshed on a non-poll cycle")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -2779,6 +2933,8 @@ def test_myenergi(my_predbat=None):
     test_control_releases_to_a_saved_stopped()
     test_control_saved_modes_survive_a_restart()
     test_control_saved_modes_are_dropped_when_control_is_off()
+    test_control_off_in_config_releases_a_held_zappi()
+    test_control_off_with_controls_disabled_writes_nothing()
     test_control_releases_to_eco_plus_when_nothing_was_saved()
     test_control_release_retry_keeps_the_saved_mode()
     test_control_release_forgets_the_saved_mode()
@@ -2838,6 +2994,13 @@ def test_myenergi(my_predbat=None):
     test_queued_boost_rejection_is_logged_as_a_failure()
     test_device_for_entity_requires_a_whole_prefix_match()
     test_number_event_handler_ignores_other_number_entities()
+    test_discovery_none_without_zappi()
+    test_discovery_zappi_record()
+    test_discovery_automatic_follows_automatic_zappi()
+    test_discovery_cloud_alias_never_reported()
+    test_discovery_round_trip()
+    test_discovery_serial_readable_without_hub()
+    test_discovery_refreshed_on_non_poll_cycle()
 
     print("=" * 70)
     return False

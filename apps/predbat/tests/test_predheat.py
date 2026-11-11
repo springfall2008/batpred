@@ -396,3 +396,141 @@ def test_predheat_pr5767_regressions(my_predbat):
             my_predbat.args["predheat"] = original_args
 
     return failed
+
+
+def test_predheat_volume_temp(my_predbat):
+    """Check sensor, numeric and fallback volume temperature initialisation."""
+    failed = False
+    sensor = "sensor.predheat_test_flow_temp"
+    missing = object()
+
+    old_args = my_predbat.args.get("predheat", missing)
+    old_enable = my_predbat.config_index["predheat_enable"].get("value")
+    old_next = my_predbat.config_index["next_volume_temp"].get("value")
+    old_sensor = my_predbat.ha_interface.dummy_items.get(sensor, missing)
+
+    histories = {
+        "external_temperature": ({0: 7.5}, 7),
+        "internal_temperature": ({0: 19.9}, 7),
+        "target_temperature": ({0: 20.0}, 7),
+        "heating_energy": ({}, 0),
+    }
+
+    cases = [
+        ("HA sensor", {"volume_temp": sensor}, 24.598, 39.7),
+        ("numeric value", {"volume_temp": 35.0}, 24.598, 35.0),
+        ("persisted fallback", {}, 24.598, 24.598),
+        ("internal fallback", {}, None, 19.9),
+    ]
+
+    try:
+        # next_volume_temp is only accessible when Predheat is enabled.
+        my_predbat.config_index["predheat_enable"]["value"] = True
+        my_predbat.ha_interface.dummy_items[sensor] = "39.7"
+
+        for label, options, persisted, expected in cases:
+            print("Test: volume_temp {}".format(label))
+
+            my_predbat.args["predheat"] = {
+                "mode": "pump",
+                "forecast_days": 2,
+                "days_previous": [7],
+                **options,
+            }
+            my_predbat.config_index["next_volume_temp"]["value"] = persisted
+
+            predheat = PredHeat(my_predbat)
+            predheat.reset()
+
+            predheat.minute_data_entity = lambda now, key, **kwargs: histories[key]
+            predheat.get_weather_data = lambda now: None
+            predheat.today_cost = lambda history: 0
+
+            initial_temps = []
+
+            def simulate(volume_temp, heating_active, save="best", last_predict_minute=None):
+                initial_temps.append(volume_temp)
+                return volume_temp, {}
+
+            predheat.run_simulation = simulate
+            predheat.update_pred(scheduled=False)
+
+            if len(initial_temps) != 2 or any(abs(float(temp) - expected) > 0.001 for temp in initial_temps):
+                print("  ERROR: {} expected {}, got {}".format(label, expected, initial_temps))
+                failed = True
+
+    finally:
+        if old_args is missing:
+            my_predbat.args.pop("predheat", None)
+        else:
+            my_predbat.args["predheat"] = old_args
+
+        my_predbat.config_index["predheat_enable"]["value"] = old_enable
+        my_predbat.config_index["next_volume_temp"]["value"] = old_next
+
+        if old_sensor is missing:
+            my_predbat.ha_interface.dummy_items.pop(sensor, None)
+        else:
+            my_predbat.ha_interface.dummy_items[sensor] = old_sensor
+
+    return failed
+
+
+def test_predheat_optional_energy_history(my_predbat):
+    """Missing heating-energy history must not disable thermostat schedule history."""
+    failed = False
+    original_args = my_predbat.args.get("predheat")
+    try:
+        my_predbat.args["predheat"] = {"mode": "gas", "forecast_days": 2, "days_previous": [7]}
+        predheat = PredHeat(my_predbat)
+        predheat.reset()
+
+        # The target schedule has seven days of history; gas energy is unavailable.
+        histories = {
+            "external_temperature": ({0: 10.0}, 7),
+            "internal_temperature": ({0: 20.0}, 7),
+            "target_temperature": ({0: 21.0, 7 * 24 * 60: 21.0}, 7),
+            "heating_energy": ({}, 0),
+        }
+        predheat.minute_data_entity = lambda now, key, **kwargs: histories[key]
+        predheat.get_weather_data = lambda now: None
+        predheat.today_cost = lambda history: 0
+        predicted_targets = []
+
+        def simulate(volume_temp, heating_active, save="best", last_predict_minute=None):
+            """Record the replayed setpoint and pass volume temperature through both simulation passes."""
+            predicted_targets.append(predheat.get_historical(predheat.target_temperature, 0, default=20.0))
+            return volume_temp, {}
+
+        predheat.run_simulation = simulate
+
+        print("Test: missing heating-energy history preserves scheduled target history")
+        predheat.update_pred(scheduled=False)
+        if predheat.minute_data_age != 7 or predicted_targets != [21.0, 21.0]:
+            print("  ERROR: expected seven days and 21 C targets; got age {} targets {}".format(predheat.minute_data_age, predicted_targets))
+            failed = True
+
+        print("Test: shorter energy and temperature histories do not limit target history")
+        histories["heating_energy"] = ({0: 1.0}, 3)
+        histories["external_temperature"] = ({0: 10.0}, 2)
+        histories["internal_temperature"] = ({0: 20.0}, 1)
+        predicted_targets.clear()
+        predheat.update_pred(scheduled=False)
+        if predheat.minute_data_age != 7 or predicted_targets != [21.0, 21.0]:
+            print("  ERROR: expected seven days and 21 C targets; got age {} targets {}".format(predheat.minute_data_age, predicted_targets))
+            failed = True
+
+        print("Test: absent thermostat history still produces zero history age")
+        histories["heating_energy"] = ({}, 0)
+        histories["target_temperature"] = ({}, 0)
+        predheat.update_pred(scheduled=False)
+        if predheat.minute_data_age != 0:
+            print("  ERROR: expected zero days, got {}".format(predheat.minute_data_age))
+            failed = True
+    finally:
+        if original_args is None:
+            my_predbat.args.pop("predheat", None)
+        else:
+            my_predbat.args["predheat"] = original_args
+
+    return failed

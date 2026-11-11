@@ -21,6 +21,7 @@ happens here.
 
 import aiohttp
 import asyncio
+import functools
 import ipaddress
 import json
 import os
@@ -32,6 +33,7 @@ from urllib.parse import urljoin, urlparse
 
 from ruamel.yaml import YAML
 
+from component_base import new_http_session
 from utils import ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, find_redacted_secret_overwrite, is_secret_key, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value
 
 DOCS_SITE_ROOT = "https://springfall2008.github.io/batpred/"
@@ -226,7 +228,7 @@ def _prefer_sections(scored):
     return [entry for entry in scored if "#" in entry["section"] or entry["section"].split("#")[0] not in matched_pages]
 
 
-async def read_docs(storage, section, offset=0, max_chars=DOCS_READ_MAX_CHARS):
+async def read_docs(storage, section, offset=0, max_chars=DOCS_READ_MAX_CHARS, session_factory=None):
     """Return one documentation section's text, from the same cached index search_docs uses.
 
     Served entirely from the cache: the index carries every page's text, so reading a section
@@ -240,7 +242,7 @@ async def read_docs(storage, section, offset=0, max_chars=DOCS_READ_MAX_CHARS):
     """
     payload = None
     if storage:
-        payload = await storage.fetch_cached("chat", "docs_index", _fetch_docs_index, fresh_minutes=DOCS_CACHE_MINUTES, stale_minutes=DOCS_CACHE_MINUTES + 60, format="json")
+        payload = await storage.fetch_cached("chat", "docs_index", functools.partial(_fetch_docs_index, session_factory), fresh_minutes=DOCS_CACHE_MINUTES, stale_minutes=DOCS_CACHE_MINUTES + 60, format="json")
     if not isinstance(payload, dict) or not payload.get("docs"):
         return {"success": False, "error": "Documentation index unavailable", "data": None}
 
@@ -286,21 +288,21 @@ async def read_docs(storage, section, offset=0, max_chars=DOCS_READ_MAX_CHARS):
     return {"success": True, "error": None, "data": data, "description": description}
 
 
-async def _fetch_docs_index():
-    """Download the published MkDocs search index."""
+async def _fetch_docs_index(session_factory=None):
+    """Download the published MkDocs search index; session_factory is the owning component's http_session."""
     timeout = aiohttp.ClientTimeout(total=30)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    async with (session_factory or new_http_session)(timeout=timeout) as session:
         async with session.get(DOCS_INDEX_URL) as response:
             if response.status != 200:
                 return None
             return json.loads(await response.text())
 
 
-async def search_docs(storage, query, max_results=5):
+async def search_docs(storage, query, max_results=5, session_factory=None):
     """Search the Predbat documentation, using a once-a-day cached copy of the search index."""
     payload = None
     if storage:
-        payload = await storage.fetch_cached("chat", "docs_index", _fetch_docs_index, fresh_minutes=DOCS_CACHE_MINUTES, stale_minutes=DOCS_CACHE_MINUTES + 60, format="json")
+        payload = await storage.fetch_cached("chat", "docs_index", functools.partial(_fetch_docs_index, session_factory), fresh_minutes=DOCS_CACHE_MINUTES, stale_minutes=DOCS_CACHE_MINUTES + 60, format="json")
     if not isinstance(payload, dict) or not payload.get("docs"):
         return {"success": False, "error": "Documentation index unavailable", "data": None}
     return {"success": True, "error": None, "data": score_documents(payload.get("docs"), query, max_results=max_results), "description": "Predbat documentation pages matching the query"}
@@ -568,13 +570,13 @@ def html_to_text(html):
     return "\n".join(line for line in lines if line)
 
 
-async def fetch_url(url, allowlist=None, resolver=None):
+async def fetch_url(url, allowlist=None, resolver=None, session_factory=None):
     """Fetch an allowlisted page as text, re-validating every redirect hop."""
     allowlist = list(allowlist or DEFAULT_FETCH_ALLOWLIST)
     target = url
     timeout = aiohttp.ClientTimeout(total=FETCH_TIMEOUT_SECONDS)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with (session_factory or new_http_session)(timeout=timeout) as session:
             for hop in range(FETCH_MAX_REDIRECTS + 1):
                 validate_fetch_target(target, allowlist, resolver=resolver)
                 async with session.get(target, allow_redirects=False) as response:

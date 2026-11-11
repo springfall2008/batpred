@@ -29,6 +29,7 @@ class TestFetch(Fetch):
         self.plan_interval_minutes = 30
         self.max_days_previous = MAX_DAYS_PREVIOUS
         self.now_utc = NOW_UTC
+        self.local_tz = timezone.utc
         self.history = history
         self.args = args or {}
         self.history_requests = []
