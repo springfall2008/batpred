@@ -641,6 +641,12 @@ python3 growatt.py --key <access token> --serial SPH123456
 
 `--config` reads the `growatt_` settings, `user_id`, `supabase_url` and `supabase_key` from an apps.yaml, resolving `!secret` as Predbat does, and any option given alongside it overrides the file. The access token can also come from the `GROWATT_KEY` environment variable. An expired token can only be refreshed through Predbat.com, which needs the token hash, the instance's user id and the Supabase URL and key, all present in a Predbat.com-generated apps.yaml. Run `python3 growatt.py --help` for every option.
 
+`--write-test charge`, `export`, `hold` or `all` then tests control on the real inverter. It first reads what the inverter holds (`enable_control` and the slot table) and saves it to a `growatt_snapshot_<serial>_<time>.json` file. It then, for each test in turn, writes a slot starting now, reads it back, watches the battery for `--minutes` (default 3) and puts the saved slot table back. Charge and export run at `--power` watts (default 1000) and hold uses a 0% charge slot. At the end `enable_control` goes back to what it was. The restore also runs if the test fails or is interrupted. If the process is killed outright, `--restore <snapshot file>` writes the saved settings back. Make sure no running Predbat instance is controlling the inverter during a write test, as it would overwrite the test slots.
+
+```bash
+python3 growatt.py --config /path/to/apps.yaml --write-test all
+```
+
 Before enabling control for a first tester:
 
 1. Start with `growatt_control_enable: false` and confirm the five power-flow values and their signs against the Growatt app. Predbat should show battery power negative while charging and positive while discharging, and grid power negative while importing
