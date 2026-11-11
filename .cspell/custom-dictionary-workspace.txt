@@ -476,6 +476,7 @@ nattribute
 nbytes
 ncalls
 ncol
+nearbyint
 nearr
 nemotron
 NESO

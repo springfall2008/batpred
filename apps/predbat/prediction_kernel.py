@@ -32,7 +32,7 @@ from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPOR
 from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 10
+KERNEL_ABI_VERSION = 11
 KERNEL_PARITY_REVISION = 19
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
@@ -922,26 +922,34 @@ def kernel_result_tuple(pred, result, predict_soc):
     """Assemble the 17-field Prediction.run_prediction() result tuple from a PkResult.
 
     Shared by the single-scenario and batch paths - mirrors prediction.py:626-628, 1266-1284.
+
+    The ten scalar fields arrive already rounded to 4dp (the kernel's round4_fast, ABI 11), so they
+    are copied as they are. round(x, 4) on each was most of what converting a result cost - about
+    1.5us of the 1.7us per simulation, paid on the calling thread for every job in a batch. The kernel
+    rounds the scaled value rather than the exact binary one, so a field can sit one unit in the 4th
+    decimal place away from what round(x, 4) gives; test_kernel_parity allows for exactly that.
     """
     car_charging_soc_next = pred.car_charging_soc_next[:]
     if result.car_soc_next_valid:
+        # One read of the array field: each result.car_soc_next builds a fresh ctypes view
+        car_soc_next = result.car_soc_next
         for car_n in range(pred.num_cars):
-            car_charging_soc_next[car_n] = result.car_soc_next[car_n]
+            car_charging_soc_next[car_n] = car_soc_next[car_n]
 
     iboost_next = result.iboost_next if pred.iboost_enable else pred.iboost_next
 
     return (
-        round(result.final_metric, 4),
-        round(result.import_kwh_battery, 4),
-        round(result.import_kwh_house, 4),
-        round(result.export_kwh, 4),
-        round(result.soc_min, 4),
-        round(result.final_soc, 4),
+        result.final_metric,
+        result.import_kwh_battery,
+        result.import_kwh_house,
+        result.export_kwh,
+        result.soc_min,
+        result.final_soc,
         result.soc_min_minute,
-        round(result.battery_cycle, 4),
-        round(result.metric_keep, 4),
-        round(result.final_iboost, 4),
-        round(result.final_carbon_g, 4),
+        result.battery_cycle,
+        result.metric_keep,
+        result.final_iboost,
+        result.final_carbon_g,
         predict_soc,
         car_charging_soc_next,
         iboost_next,
