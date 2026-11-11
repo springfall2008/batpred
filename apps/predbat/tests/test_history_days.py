@@ -592,11 +592,14 @@ def _test_yesterday_view_late_standing(my_predbat, failed):
         if len(billed) < 40 or bad:
             print("ERROR: {} every billed row should match, got {} billed, mismatches {}".format(local_now, len(billed), bad[:6]))
             failed = True
-        # Each row costs at most 0.4 kWh at 36.28p; the row starting at a midnight inside yesterday or today adds the 55.52p standing charge
-        # After the clocks go forward the view starts an hour before yesterday's midnight, in the day before; those rows aren't checked
-        first = boundaries[0] if boundaries and 0 not in boundaries and boundaries[0] < 24 * 60 - 120 else 0
+        # Each row costs at most 0.4 kWh at 36.28p; the row starting at a midnight inside yesterday or today adds the 55.52p standing charge.
+        # After the clocks go forward the view starts an hour before yesterday's midnight, so its first rows are the day before's last hour
+        if not cost_array:
+            print("ERROR: {} the Cost column's running array was not captured".format(local_now))
+            failed = True
+            continue
         wrong = []
-        for minute in range(first, max(cost_array) - 30 + 1, 30):
+        for minute in range(0, max(cost_array) - 30 + 1, 30):
             change = cost_array[minute + 30] - cost_array[minute]
             low, high = (55.0, 71.0) if minute in boundaries else (0.0, 15.0)
             if not low <= change <= high:
@@ -604,6 +607,32 @@ def _test_yesterday_view_late_standing(my_predbat, failed):
         if wrong:
             print("ERROR: {} the Cost column should carry the standing charge only in the rows starting at midnight, got {}".format(local_now, wrong[:6]))
             failed = True
+    return failed
+
+
+def _test_today_cost_standing_at_reset(my_predbat, failed):
+    """cost_today carries the day's standing charge from the run at the midnight reset itself, not from the next run."""
+    print("history_days: today_cost includes the standing charge at midnight")
+    from tests.test_today_cost_car_clamp import RATE_FLAT, _setup_flat
+    from tests.test_iog_cap_cost_today import _incrementing
+
+    fields = ("num_cars", "octopus_slots", "minutes_now", "metric_standing_charge", "carbon_enable", "soc_kwh_history", "rate_max_base", "rate_import", "rate_export")
+    saved = {field: getattr(my_predbat, field, None) for field in fields}
+    try:
+        for minutes_now, kwh in ((0, 0.0), (30, 0.3)):
+            _setup_flat(my_predbat, minutes_now)
+            my_predbat.num_cars = 0
+            my_predbat.metric_standing_charge = 55.52
+            house = {minute: 0.01 for minute in range(minutes_now)}
+            import_today = _incrementing(minutes_now, house)
+            cost, _ = my_predbat.today_cost(import_today, {}, None, import_today, save=False)
+            expected = 55.52 + kwh * RATE_FLAT
+            if abs(cost - expected) > 0.01:
+                print("ERROR: at minute {} today_cost should be {:.2f}p with the standing charge, got {}".format(minutes_now, expected, cost))
+                failed = True
+    finally:
+        for field, value in saved.items():
+            setattr(my_predbat, field, value)
     return failed
 
 
@@ -919,6 +948,7 @@ def run_history_days_tests(my_predbat):
     failed = _test_cumulative_array_late_standing(my_predbat, failed)
     failed = _test_older_day_late_standing(my_predbat, failed)
     failed = _test_yesterday_view_late_standing(my_predbat, failed)
+    failed = _test_today_cost_standing_at_reset(my_predbat, failed)
     failed = _test_clock_change_older_days(my_predbat, failed)
     failed = _test_clock_change_yesterday_view(my_predbat, failed)
     failed = _test_import_only_when_export_not_read(my_predbat, failed)

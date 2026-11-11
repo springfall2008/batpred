@@ -2353,12 +2353,14 @@ def _test_clock_change_reads_yesterday_final_value(my_predbat, failed):
     # A History cost row and what it reads on the view's axis (the read is 4 minutes into the row). Autumn: the axis starts at
     # 00:00 UTC on the 24th, so row 1379 is 22:59 UTC and reads 23:03, after the 23:00 UTC midnight reset (10.0; shifted by the
     # correction it would read 22:03, 500.0). Spring: the axis starts at 23:00 UTC on the 26th, so row 1379 is 21:59 UTC on
-    # the 27th and reads 22:03 (500.0; shifted it would read 23:03, 900.0)
-    axis_checks = [(1379, 10.0), (1379, 500.0)]
+    # the 27th and reads 22:03 (500.0; shifted it would read 23:03, 900.0). The spring view's first hour is the 26th's last, and
+    # with no history before 12:00 on the 27th the 26th reads 500.0 too: its total is carried across the 27th's midnight at row
+    # 60, so every later spring row reads 500.0 more
+    axis_checks = [(1379, 10.0), (1379, 1000.0)]
     # And where yesterday's total starts being added (cost_today resets at local midnight, row 1440 + the change): autumn row
     # 1380 is 23:00 UTC, local midnight, and is pinned to yesterday's total 1087.25 (today's running total is 0 at its midnight);
     # spring row 1440 is still yesterday (23:00 UTC on the 27th, reading 900.0 with nothing added) and row 1500 is local midnight (910.0)
-    midnight_checks = [[(1380, 1087.25)], [(1440, 900.0), (1500, 910.0)]]
+    midnight_checks = [[(1380, 1087.25)], [(1440, 1400.0), (1500, 1410.0)]]
     try:
         for (label, wall_now, points, expected, wrong), (axis_row, axis_value), midnight_rows in zip(cases, axis_checks, midnight_checks):
             now_utc_base = _setup_base(my_predbat)

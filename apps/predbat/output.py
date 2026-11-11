@@ -2426,11 +2426,10 @@ class Output:
         # (whose history reads line up with the rate tables), but the change away from it: an hour earlier after the autumn
         # change, later after the spring one. Starting at 0 dropped today's first hour or counted yesterday's last (GH#5760)
         day_start_minute = self.clock_change_minutes_today()
+        # Add in standing charge, from the run at the reset itself too, so cost_today never reads 0 at midnight
+        if self.minutes_now >= day_start_minute:
+            day_cost += self.metric_standing_charge
         for minute in range(day_start_minute, self.minutes_now):
-            # Add in standing charge
-            if minute == day_start_minute:
-                day_cost += self.metric_standing_charge
-
             minute_back = self.minutes_now - minute - 1
             energy = 0
             car_energy = 0
@@ -3744,27 +3743,13 @@ class Output:
         if carbon_today_data:
             carbon_data, _ = minute_data(carbon_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
             carbon_yesterday = carbon_data.get(minutes_back, 0.0)
-        cost_yesterday_array = {}
-        day_start_row = end_record + self.clock_change_minutes_today()
-        # cost_today is published as 0 at midnight and only takes in the day's standing charge with Predbat's next full
-        # update, so each day's total is pinned to 0 at its midnight, as history_cumulative_array() does: the standing charge
-        # then always shows in the row that starts there, however soon after midnight that update lands
-        midnight_rows = set(self.history_day_boundaries(self.midnight_utc - timedelta(days=1), end_record + self.minutes_now))
-        for minute in range(0, end_record + self.minutes_now):
-            if minute in midnight_rows:
-                cost_yesterday_array[minute] = cost_yesterday if minute >= day_start_row else 0.0
-                continue
-            cost_value = cost_data.get(minutes_back_axis + 24 * 60 - minute - 5, 0.0)  # -5 gives 4 minutes into new data to allow for reset
-            # After midnight (minute >= end_record), add the final cost from yesterday to make
-            # the cost cumulative across the midnight boundary. Without this adjustment, the
-            # cost_today sensor reset would cause incorrect negative deltas in the plan display
-            # (e.g., -376p instead of the actual slot cost like +26p) because metric_change
-            # is calculated as metric_end - metric_start in publish_html_plan. On a clock-change
-            # day local midnight - where cost_today resets - sits the change away from row
-            # end_record on this axis (an hour earlier in autumn, later in spring)
-            if minute >= day_start_row:
-                cost_value += cost_yesterday
-            cost_yesterday_array[minute] = cost_value
+        # The Cost column's running total, carried across each local midnight where cost_today resets so that
+        # metric_end - metric_start in publish_html_plan never goes negative there (e.g. -376p instead of +26p).
+        # On the day after a clock change a midnight sits an hour off a multiple of 1440 on this axis, and the view
+        # can hold one of the day before's last hour, so the midnights are found from real instants
+        view_minutes = end_record + self.minutes_now
+        midnight_rows = self.history_day_boundaries(self.midnight_utc - timedelta(days=1), view_minutes)
+        cost_yesterday_array = self.history_cumulative_array(cost_data, self.minutes_now + 24 * 60, view_minutes - 1, midnight_rows)
 
         # Get battery level yesterday - prefer the already-fetched in-memory history, fall back to HA query
         battery_data = self.soc_kwh_history
@@ -4383,11 +4368,12 @@ class Output:
         """Turn a per-day running total that resets at local midnight (keyed by minutes ago) into one running total from the view's minute 0.
 
         Read 4 minutes into each minute's data, and at each midnight in boundaries carry the day's final value
-        across the reset, as calculate_yesterday() does for cost_yesterday_array.
+        across the reset. Used for both the older days and the yesterday + today view's Cost column.
 
-        At a midnight the new day's total is taken as 0 rather than read: cost_today is published as 0 at the reset and
-        only takes in the day's standing charge with Predbat's next full update, often more than 4 minutes later. Pinning it
-        to 0 puts the standing charge in the row that starts at midnight however late that update lands.
+        At a midnight the new day's total is taken as 0 rather than read. Before today_cost() added the standing charge
+        on the run at the reset itself, cost_today was published as 0 there and took in the charge with the next full
+        update, often more than 4 minutes later, and the recorder still holds those days. Pinning it to 0 puts the standing
+        charge in the row that starts at midnight either way, as long as it is recorded within that first row.
         """
         array = {}
         carry = 0.0
