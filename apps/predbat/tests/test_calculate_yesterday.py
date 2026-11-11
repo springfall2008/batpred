@@ -2325,6 +2325,100 @@ def _test_carbon_yesterday(my_predbat, failed):
     return failed
 
 
+def _test_clock_change_reads_yesterday_final_value(my_predbat, failed):
+    """GH#5760: on a clock-change day cost_yesterday is read at yesterday's last minute, not an hour off it.
+
+    minute_data() keys history by real elapsed time while minutes_now counts wall-clock minutes, so the two differ by the
+    change. Autumn: the lookup used to land an hour into today and publish today's early cost as yesterday's. Spring: it
+    landed an hour before yesterday ended and dropped yesterday's last write. now_utc, midnight_utc and minutes_now are
+    built as update_time() builds them, from a Europe/London clock.
+    """
+    print("calculate_yesterday: Test - cost_yesterday read at yesterday's final minute on a clock-change day (GH#5760)")
+    london = pytz.timezone("Europe/London")
+    local_tz_before = my_predbat.local_tz
+    my_predbat.local_tz = london
+    entity_id = my_predbat.prefix + ".cost_yesterday"
+
+    def _stamp(when_utc):
+        """Format a UTC time as Home Assistant history stamps it."""
+        return when_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+    cases = [
+        # (label, wall-clock now in London, [(UTC time, cost_today value)], expected yesterday, the value the wall-clock lookup read)
+        # Autumn 2026: clocks go back at 02:00 BST. Yesterday ended 1087.25 at 23:59 BST (22:59 UTC); at 00:59 BST today read 47.47
+        ("autumn", datetime(2026, 10, 25, 2, 0), [(datetime(2026, 10, 24, 12, 0), 500.0), (datetime(2026, 10, 24, 22, 59), 1087.25), (datetime(2026, 10, 24, 23, 0), 10.0), (datetime(2026, 10, 24, 23, 59), 47.47)], 1087.25, 47.47),
+        # Spring 2027: clocks go forward at 01:00 GMT. Yesterday's last write was 910.0 at 23:30 GMT; at 22:59 GMT it read 900.0
+        ("spring", datetime(2027, 3, 28, 3, 0), [(datetime(2027, 3, 27, 12, 0), 500.0), (datetime(2027, 3, 27, 22, 59), 900.0), (datetime(2027, 3, 27, 23, 30), 910.0), (datetime(2027, 3, 28, 0, 0), 5.0)], 910.0, 900.0),
+    ]
+    # A History cost row and what it reads on the view's axis (the read is 4 minutes into the row). Autumn: the axis starts at
+    # 00:00 UTC on the 24th, so row 1379 is 22:59 UTC and reads 23:03, after the 23:00 UTC midnight reset (10.0; shifted by the
+    # correction it would read 22:03, 500.0). Spring: the axis starts at 23:00 UTC on the 26th, so row 1379 is 21:59 UTC on
+    # the 27th and reads 22:03 (500.0; shifted it would read 23:03, 900.0)
+    axis_checks = [(1379, 10.0), (1379, 500.0)]
+    # And where yesterday's total starts being added (cost_today resets at local midnight, row 1440 + the change): autumn row
+    # 1380 is 23:00 UTC, local midnight, and reads 10.0 + 1087.25; spring row 1440 is still yesterday (23:00 UTC on the 27th,
+    # reading 900.0 with nothing added) and row 1500 is local midnight (reading 5.0 + 910.0)
+    midnight_checks = [[(1380, 1097.25)], [(1440, 900.0), (1500, 915.0)]]
+    try:
+        for (label, wall_now, points, expected, wrong), (axis_row, axis_value), midnight_rows in zip(cases, axis_checks, midnight_checks):
+            now_utc_base = _setup_base(my_predbat)
+            now_local = london.normalize(london.localize(wall_now))
+            my_predbat.now_utc = now_local
+            my_predbat.midnight_utc = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            my_predbat.minutes_now = int((now_local - my_predbat.midnight_utc).total_seconds() / 60)
+            history = [[{"state": str(value), "last_updated": _stamp(when), "attributes": {"p/kWh": "0.0"}} for when, value in points]]
+            base_history = _make_history_mock(my_predbat, now_local)
+
+            def _get_history_wrapper(entity_id, days=30, required=True, tracked=True, history=history, base_history=base_history):
+                """Return the canned history for the entity under test."""
+                if entity_id == my_predbat.prefix + ".cost_today":
+                    return history
+                return base_history(entity_id, days=days, required=required, tracked=tracked)
+
+            captured_load, original_run_pred = _apply_mocks(my_predbat, now_local)
+            my_predbat.get_history_wrapper = _get_history_wrapper
+            replayed = {}
+            my_predbat.replay_history_day = lambda **kw: (replayed.update(kw), ("", {}))[1]
+            my_predbat.calculate_yesterday()
+            my_predbat.__dict__.pop("replay_history_day", None)
+            state = my_predbat.get_state_wrapper(entity_id)
+            # The History view's cost array stays on its own wall-clock axis (row m is midnight_utc - 1 day + m), aligned with the
+            # load, rates and status rows: only the yesterday total takes the clock-change correction
+            cost_array = replayed.get("cost_array", {})
+            if cost_array.get(axis_row) != axis_value:
+                print("ERROR: {} clock change: History cost row {} should read {} (on the view's own axis), got {}".format(label, axis_row, axis_value, cost_array.get(axis_row)))
+                failed = True
+            if state != expected:
+                print("ERROR: {} clock change: cost_yesterday should be {} (yesterday's final value), got {}{}".format(label, expected, state, " - the wall-clock lookup's value" if state == wrong else ""))
+                failed = True
+            for row, row_value in midnight_rows:
+                if cost_array.get(row) != row_value:
+                    print("ERROR: {} clock change: History cost row {} should read {} (yesterday's total added from local midnight's row), got {}".format(label, row, row_value, cost_array.get(row)))
+                    failed = True
+            _restore_methods(my_predbat, original_run_pred)
+            my_predbat.savings_last_updated = None
+            my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+            my_predbat.now_utc = now_utc_base
+
+        # No clock change since midnight: no correction
+        _setup_base(my_predbat)
+        my_predbat.now_utc = london.localize(datetime(2026, 10, 26, 2, 0))
+        if my_predbat.clock_change_minutes_today() != 0:
+            print("ERROR: clock_change_minutes_today should be 0 on a day without a change, got {}".format(my_predbat.clock_change_minutes_today()))
+            failed = True
+        for wall, expected_change in ((datetime(2026, 10, 25, 2, 0), -60), (datetime(2026, 10, 25, 0, 30), 0), (datetime(2027, 3, 28, 3, 0), 60), (datetime(2027, 3, 28, 0, 30), 0)):
+            my_predbat.now_utc = london.normalize(london.localize(wall))
+            if my_predbat.clock_change_minutes_today() != expected_change:
+                print("ERROR: clock_change_minutes_today at {} should be {}, got {}".format(my_predbat.now_utc, expected_change, my_predbat.clock_change_minutes_today()))
+                failed = True
+
+    finally:
+        my_predbat.local_tz = local_tz_before
+        my_predbat.__dict__.pop("replay_history_day", None)
+    _setup_base(my_predbat)
+    return failed
+
+
 def _test_yesterday_slot_is_exporting(my_predbat, failed):
     """Test: yesterday_slot_is_exporting() recognises Cross-charging as export activity.
 
@@ -2629,6 +2723,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_soc_kw_h0_fallback(my_predbat, failed)
     failed = _test_missing_cost_today_history(my_predbat, failed)
     failed = _test_carbon_yesterday(my_predbat, failed)
+    failed = _test_clock_change_reads_yesterday_final_value(my_predbat, failed)
     failed = _test_yesterday_slot_is_exporting(my_predbat, failed)
     failed = _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed)
     failed = _test_slot_status_read_at_the_right_minute(my_predbat, failed)

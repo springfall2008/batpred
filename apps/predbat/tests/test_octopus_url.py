@@ -421,7 +421,7 @@ async def test_async_get_day_night_rates(my_predbat):
         failed = True
     else:
         # Verify alternating pattern: night, day, night, day...
-        # Night rate: 00:30-07:30, Day rate: 07:30-00:30 (next day)
+        # Unknown tariff code, so the GO window: night 00:30-05:30 local, day 05:30-00:30 (next day)
         alternates_correctly = True
         for i in range(0, len(result), 2):
             night_entry = result[i]
@@ -461,6 +461,7 @@ def _test_get_saving_session_data(my_predbat):
     - Test 4: Mix of available and joined events
     - Test 5: Expired available events (should be filtered out)
     - Test 6: Active event (currently running)
+    - Test 6b: Active joined Weekend Happy Hour leaves the sensor off; a typed TURN_DOWN still sets it on
     - Test 7: Events with all data fields (rewards, codes, IDs)
     """
     print("**** Running get_saving_session_data tests ****")
@@ -610,6 +611,34 @@ def _test_get_saving_session_data(my_predbat):
         failed = True
     else:
         print("PASS: Active event correctly detected and sensor set to 'on'")
+
+    # Test 6b: An active joined Weekend Happy Hour is free electricity, not a saving session (issue #5615) -
+    # the planner prices it as a free slot, so the saving session sensor must stay off. The same active
+    # event typed as TURN_DOWN must still assert it.
+    print("\n*** Test 6b: Active joined Weekend Happy Hour does not assert the saving session sensor ***")
+    for event_type_name, expected_state in [("WEEKEND_HAPPY_HOUR", "off"), ("TURN_DOWN", "on")]:
+        api.saving_sessions = {
+            "account": {
+                "hasJoinedCampaign": True,
+                "joinedEvents": [{"eventId": "typed_event", "startAt": active_start_str, "endAt": active_end_str, "rewardGivenInOctoPoints": None}],
+            },
+            "events": [{"id": "typed_event", "code": "TYPED", "startAt": active_start_str, "endAt": active_end_str, "rewardPerKwhInOctoPoints": 0, "eventType": event_type_name}],
+        }
+        dashboard_calls = []
+        api.dashboard_item = mock_dashboard_item
+
+        with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+            available, joined = api.get_saving_session_data()
+
+        sensor_call = [c for c in dashboard_calls if "saving_session" in c["entity"] and "join" not in c["entity"]]
+        if len(sensor_call) != 1 or sensor_call[0]["state"] != expected_state:
+            print("ERROR: Expected saving_session sensor '{}' for active joined {} event, got: {}".format(expected_state, event_type_name, sensor_call))
+            failed = True
+        elif len(joined) != 1 or joined[0]["event_type"] != event_type_name:
+            print("ERROR: Expected the joined {} event to still be published in joined_events, got: {}".format(event_type_name, joined))
+            failed = True
+        else:
+            print("PASS: Active joined {} event sets saving_session sensor to '{}'".format(event_type_name, expected_state))
 
     # Test 7: Events with all data fields
     print("\n*** Test 7: Events with all data fields (rewards, codes, IDs) ***")
@@ -1229,14 +1258,19 @@ async def test_async_find_tariffs(my_predbat):
 
     # Test 11: Export meter gets linked later - tariff keys stay stable, reconfigure only fires when export first appears
     print("\nTest 11: Unmetered export becomes metered without a second reconfigure")
+    # automatic_config runs for real (wrapped to count calls), with run()'s first-cycle configure after the first fetch, so
+    # the reconfigure guard is exercised exactly as in production
+    args_before_reconfigure_tests = dict(my_predbat.args)
     api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
     api.tariffs = {}
-    api.automatic_config = Mock()
+    api.automatic_config = Mock(side_effect=api.automatic_config)
     api.refresh_discovery = Mock()
 
     with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
         api.account_data = {"account": {"electricityAgreements": [{"meterPoint": import_meterpoint}], "gasAgreements": []}}
         await api.async_find_tariffs()
+        api.automatic_config(api.tariffs)  # run()'s first-cycle configure
+        api.automatic_config.reset_mock()
         api.account_data = {"account": {"electricityAgreements": [{"meterPoint": unmetered_export_meterpoint()}, {"meterPoint": import_meterpoint}], "gasAgreements": []}}
         result_unmetered = await api.async_find_tariffs()
         reconfigure_after_unmetered = api.automatic_config.call_count
@@ -1261,6 +1295,51 @@ async def test_async_find_tariffs(my_predbat):
         failed = True
     else:
         print("PASS: Export tariff keys stable across meter linking, single reconfigure")
+
+    # Test 12: a failed first account fetch must not leave the rates unwired (GH#5994). The first-cycle configure runs with no
+    # tariffs; when a later fetch finds them, automatic_config() must run again. A healthy boot, where the first fetch already
+    # found the tariffs before the first-cycle configure, must still configure only once.
+    print("\nTest 12: Tariffs found after a failed first fetch are wired; a healthy boot configures once")
+    for key in ("metric_octopus_import", "metric_standing_charge"):
+        my_predbat.args.pop(key, None)
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
+    api.refresh_discovery = Mock()
+    api.tariffs = {}
+    api.account_data = {}
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        await api.async_find_tariffs()  # the failed first fetch: no account data
+        api.automatic_config(api.tariffs)  # run()'s first-cycle configure, with no tariffs
+        unwired_after_failed_boot = my_predbat.args.get("metric_octopus_import")
+        api.account_data = {"account": {"electricityAgreements": [{"meterPoint": import_meterpoint}], "gasAgreements": []}}
+        await api.async_find_tariffs()  # a later fetch succeeds
+    wired = my_predbat.args.get("metric_octopus_import")
+    if unwired_after_failed_boot is not None:
+        print("ERROR: Expected no import rates wired after a failed first fetch, got {}".format(unwired_after_failed_boot))
+        failed = True
+    elif not wired or "import_rates" not in str(wired):
+        print("ERROR: Expected the import rates wired once the tariffs were found after a failed first fetch, got {}".format(wired))
+        failed = True
+    else:
+        print("PASS: Tariffs found after a failed first fetch are wired")
+
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
+    api.refresh_discovery = Mock()
+    api.tariffs = {}
+    api.account_data = {"account": {"electricityAgreements": [{"meterPoint": import_meterpoint}], "gasAgreements": []}}
+    real_automatic_config = api.automatic_config
+    api.automatic_config = Mock(side_effect=real_automatic_config)
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        await api.async_find_tariffs()  # the healthy first fetch, before the first-cycle configure
+        api.automatic_config(api.tariffs)  # run()'s first-cycle configure
+        await api.async_find_tariffs()  # a later fetch with the same tariffs
+    if api.automatic_config.call_count != 1:
+        print("ERROR: Expected a healthy boot to configure once, got {}".format(api.automatic_config.call_count))
+        failed = True
+    else:
+        print("PASS: Healthy boot configures once")
+    # automatic_config() set args on the shared instance; put them back as they were
+    my_predbat.args.clear()
+    my_predbat.args.update(args_before_reconfigure_tests)
 
     if not failed:
         print("\n**** All async_find_tariffs tests PASSED ****")

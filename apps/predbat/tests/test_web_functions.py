@@ -690,3 +690,55 @@ def run_web_dark_mode_preference_tests(my_predbat):
 
     print("**** Web dark mode preference tests completed ****")
     return failed
+
+
+def get_css_rule(css, selector):
+    """Return the declarations of the first CSS rule whose selector is exactly selector, as a property -> value dict."""
+    start = css.find("\n" + selector + " {")
+    if start < 0:
+        return None
+    body_start = css.find("{", start) + 1
+    body_end = css.find("}", body_start)
+    declarations = {}
+    for declaration in css[body_start:body_end].split(";"):
+        if ":" in declaration:
+            name, value = declaration.split(":", 1)
+            declarations[name.strip()] = value.strip()
+    return declarations
+
+
+def run_web_internals_css_tests(my_predbat):
+    """Unit tests that the Internals Browser thread rows stay inside their box on narrow windows (issue #5967)."""
+    failed = 0
+    print("**** Running web internals CSS tests ****")
+
+    from web_helper import get_internals_css
+
+    css = get_internals_css()
+
+    print("Test: the thread header row wraps rather than overflowing its border")
+    header = get_css_rule(css, ".thread-header")
+    if header is None or header.get("display") != "flex" or header.get("flex-wrap") != "wrap":
+        print("  ERROR: expected .thread-header to be a wrapping flex row, got {}".format(header))
+        failed += 1
+
+    for selector in (".thread-name", ".thread-id", ".thread-status"):
+        print("Test: {} can shrink below its content width on a narrow window".format(selector))
+        rule = get_css_rule(css, selector)
+        if rule is None:
+            print("  ERROR: no {} rule found".format(selector))
+            failed += 1
+            continue
+        flex = rule.get("flex", "").split()
+        if len(flex) >= 2 and flex[1] == "0":
+            print("  ERROR: {} has flex-shrink 0 ('flex: {}'), so it cannot compress and pushes the row past its border".format(selector, rule.get("flex")))
+            failed += 1
+        if rule.get("min-width") != "0":
+            print("  ERROR: {} needs min-width: 0 so a flex item can shrink below its text width, got {}".format(selector, rule.get("min-width")))
+            failed += 1
+        if rule.get("overflow-wrap") != "anywhere":
+            print("  ERROR: {} needs overflow-wrap: anywhere so long names/IDs break instead of spilling out, got {}".format(selector, rule.get("overflow-wrap")))
+            failed += 1
+
+    print("**** Web internals CSS tests completed ****")
+    return failed

@@ -1,12 +1,15 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+ABCDEFGHJKLMNP
 acks
 activepower
 adata
 adbase
 afci
+afewyards
 agentic
+agilepredict
 AIO
 AIO's
 aiofiles
@@ -17,9 +20,11 @@ Alertfeed
 allclose
 alphaess
 am2
+anker
 annualform
 Anson
 antiphase
+antireflux
 apexcharts
 apikey
 appdaemon
@@ -33,6 +38,7 @@ armhf
 armv
 ASHP
 asn
+asname
 astimezone
 asyncio
 atfork
@@ -43,6 +49,8 @@ autoflake
 automations
 autopep
 autoupdate
+ax1
+axisbelow
 axvline
 axvspan
 Backfeed
@@ -72,6 +80,7 @@ byok
 cadata
 calcsize
 calib
+callees
 Cantarell
 cbat
 CDLL
@@ -90,6 +99,7 @@ chargelater
 chargelimit
 chargepower
 CHECKCODE
+chg
 Chrg
 citem
 cloudfront
@@ -110,6 +120,7 @@ coro
 corruptleg
 corruptplans
 cprofile
+CREAT
 creds
 crosscharge
 ctrdis
@@ -169,6 +180,7 @@ docstrings
 dschg
 dstamp
 dstart
+dtu
 dtype
 dwindow
 eauth
@@ -177,6 +189,9 @@ ECONNRESET
 ecosmart
 Eddi
 eddis
+edfenergy
+edfgb
+edgecolor
 efgh
 elif
 elinter
@@ -206,15 +221,19 @@ enphaseenergy
 Enpower
 entityfilter
 entrez
+eonnext
 epod
 epvtoday
 errno
 ESSAPI
+etime
 ETIMEDOUT
+eto
 etoday
 etok
 euids
 EVAC
+evc
 EVDC
 evergen
 evilspringfall
@@ -223,6 +242,7 @@ exog
 expmsg
 exportlimit
 exportvalue
+facecolor
 fdpwr
 fdsoc
 feedin
@@ -231,6 +251,7 @@ figsize
 finaliser
 Fingerbot
 firstparty
+flextras
 fline
 FLOMASTA
 fontsize
@@ -242,6 +263,7 @@ formmethod
 foxcloud
 foxess
 foxesscloud
+frameon
 freephase
 fromisoformat
 fronius
@@ -255,9 +277,12 @@ generationmix
 generationpower
 geserial
 geseriale
+getaddrinfo
 getaffinity
 getall
 getattr
+getframe
+getmembers
 getrusage
 Ginlong
 githubusercontent
@@ -266,6 +291,7 @@ giv
 GivEnergy
 givtcp
 gmtime
+gndean
 gnueabihf
 GOELEC
 goldens
@@ -273,6 +299,7 @@ gridcharge
 gridcode
 gridconsumption
 gridconsumptionpower
+gridspec
 Groq
 growatt
 growattsph
@@ -315,6 +342,8 @@ iess
 iflux
 importlimit
 inday
+Indevolt
+indra
 inteless
 INTELLI
 intelligentdevice
@@ -325,6 +354,7 @@ inva
 invb
 invbatpower
 invname
+iot
 IPPROTO
 isinstance
 isoformat
@@ -367,9 +397,11 @@ LIFEPO
 linebreak
 linestyle
 Liskov
+lmt
 loadml
 loadmlpower
 loadspower
+localdomain
 localfolder
 locationless
 lockstep
@@ -379,6 +411,8 @@ lookback
 lpignore
 lstrip
 luxpower
+luxpowertek
+luxpython
 malloc
 mallopt
 markdownlint
@@ -388,6 +422,7 @@ maxrss
 maxsoc
 mbat
 mbuhansen
+mdi
 mdlrc
 measurand
 measurands
@@ -400,6 +435,8 @@ metricmid
 microinverters
 middlebox
 middleboxes
+middot
+milli
 minb
 minmax
 minsoc
@@ -422,6 +459,7 @@ monokai
 Mosquitto
 mousedown
 mpan
+mpans
 mppt
 mprn
 mpxn
@@ -437,6 +475,8 @@ nanstd
 nattribute
 nbytes
 ncalls
+ncol
+nearbyint
 nearr
 nemotron
 NESO
@@ -447,6 +487,7 @@ nocharge
 NODETAIL
 nodischarge
 nohup
+NONAME
 noopener
 nord
 nordpool
@@ -461,6 +502,7 @@ OCPP
 octo
 octoplus
 octopoints
+oegb
 OFFPEAK
 Ofgem
 Ohme
@@ -491,6 +533,8 @@ parseable
 pbat
 pbgw
 pcharging
+pcpu
+pcsenmap
 pdata
 pdetails
 pendings
@@ -503,6 +547,7 @@ pitem
 pkwh
 plenticore
 pload
+plugncharge
 pmeter
 poinv
 popv
@@ -539,6 +584,7 @@ PVONLY
 pvpower
 pvwatts
 pwindow
+pwr
 pyjwt
 pylint
 pymyenergi
@@ -556,6 +602,7 @@ reactivepower
 readback
 readbacks
 reasoncodes
+rebooked
 recp
 redownload
 Referer
@@ -568,6 +615,7 @@ remainings
 remotecontrol
 renderable
 replayer
+repr
 resetmidnight
 resultid
 resultmid
@@ -604,6 +652,7 @@ setpoints
 setstate
 SFMB
 sg05lp1
+sharex
 SIGALRM
 sigcloud
 sigen
@@ -635,6 +684,7 @@ solaxmodbus
 Solcast
 soliscloud
 solisx
+solix
 sourcery
 Southwell
 sparkline
@@ -659,6 +709,7 @@ substep
 sunspec
 sunsynk
 supabase
+suptitle
 suspendedev
 suspendedevse
 synkctl
@@ -708,8 +759,10 @@ tunables
 twinx
 typecode
 typecodes
+tzdata
 tzfile
 tzpath
+tzset
 unasserted
 uncalibrated
 uncompilable
@@ -738,8 +791,10 @@ untriaged
 urandom
 urlsafe
 uscapacity
+usegmt
 useid
 userinterface
+utcoffset
 Vallery
 varh
 venv
@@ -757,10 +812,14 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+workstream
+workstreams
 worktree
 writeonly
 wrongsha
+WRONLY
 wwxxabcdefyyzz
+x1
 xaxis
 xaxistooltip
 xlabel
@@ -774,9 +833,12 @@ yaxis
 yaxistooltip
 yday
 ylabel
+ylim
 YOURSERIAL
+yticks
 yuanzhi
 zappi
 zappis
 zcat
 zigbee
+zoneinfo

@@ -20,7 +20,7 @@ HAHistory for automatic entity history tracking and pruning.
 import os
 from datetime import timedelta, datetime, timezone
 import asyncio
-from aiohttp import ClientSession, WSMsgType
+from aiohttp import WSMsgType
 import array
 import bisect
 import json
@@ -35,6 +35,16 @@ from component_base import ComponentBase
 # Maximum days of history fetched per request. Long windows are split so only one chunk's
 # response body, decoded string and parsed objects are resident at a time.
 HISTORY_CHUNK_DAYS = 3
+
+# The 2-minute refresh of a tracked entity reads from its last record or from its last check less
+# this overlap, whichever is later, so a quiet entity is not re-read from a change days ago. The
+# overlap catches a record that reached the database a little after the moment it is stamped; one
+# that arrives later than that is stamped before every refresh window and is not seen until a
+# restart: the cost of not re-reading the whole window.
+HISTORY_REFRESH_OVERLAP_SECONDS = 15 * 60
+# A tracked entity whose history read came back empty (a read that worked, not one that failed)
+# is cached as empty and asked again only this often
+HISTORY_EMPTY_RECHECK_SECONDS = 30 * 60
 
 
 class RunThread(threading.Thread):
@@ -73,7 +83,7 @@ class EntityHistory:
     oldest to newest so the epoch array stays sorted.
     """
 
-    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions"]
+    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions", "anchored"]
 
     def __init__(self):
         """
@@ -84,6 +94,8 @@ class EntityHistory:
         self.state_exceptions = {}
         self.shared_attributes = None
         self.attribute_exceptions = {}
+        # True while the first record is one prune() re-stamped at its cutoff rather than a real change
+        self.anchored = False
 
     def __len__(self):
         """
@@ -188,16 +200,39 @@ class EntityHistory:
 
     def prune(self, cutoff_epoch):
         """
-        Drop all records older than the given cutoff epoch time
+        Drop all records older than the given cutoff epoch time.
+
+        The last record before the cutoff holds the state in force at the cutoff, so unless a record
+        lands exactly on the cutoff it is kept and re-stamped at the cutoff, as Home Assistant stamps
+        the first record of a history window. Dropping it would leave a rarely-changing sensor with
+        no history before its next change (#5456).
         """
         index = bisect.bisect_left(self.epochs, cutoff_epoch)
-        if index > 0:
-            self.epochs = self.epochs[index:]
-            self.states = self.states[index:]
-            if self.state_exceptions:
-                self.state_exceptions = {epoch: value for epoch, value in self.state_exceptions.items() if epoch >= cutoff_epoch}
-            if self.attribute_exceptions:
-                self.attribute_exceptions = {epoch: value for epoch, value in self.attribute_exceptions.items() if epoch >= cutoff_epoch}
+        if index == 0:
+            return
+        anchor_epoch = None
+        if index == len(self.epochs) or self.epochs[index] != cutoff_epoch:
+            index -= 1
+            anchor_epoch = self.epochs[index]
+        self.epochs = self.epochs[index:]
+        self.states = self.states[index:]
+        self.anchored = anchor_epoch is not None
+        if self.anchored:
+            self.epochs[0] = cutoff_epoch
+        if self.state_exceptions:
+            self.state_exceptions = self._prune_exceptions(self.state_exceptions, cutoff_epoch, anchor_epoch)
+        if self.attribute_exceptions:
+            self.attribute_exceptions = self._prune_exceptions(self.attribute_exceptions, cutoff_epoch, anchor_epoch)
+
+    @staticmethod
+    def _prune_exceptions(exceptions, cutoff_epoch, anchor_epoch):
+        """
+        Return the exceptions at or after the cutoff, with the kept anchor's (if any) moved to the cutoff
+        """
+        pruned = {epoch: value for epoch, value in exceptions.items() if epoch >= cutoff_epoch}
+        if anchor_epoch in exceptions:
+            pruned[cutoff_epoch] = exceptions[anchor_epoch]
+        return pruned
 
 
 class HAHistory(ComponentBase):
@@ -208,6 +243,8 @@ class HAHistory(ComponentBase):
     def initialize(self):
         self.history_entities = {}
         self.history_data = {}
+        # Epoch time each tracked entity's history was last read successfully, up to which it is known
+        self.history_checked = {}
         self.history_lock = threading.Lock()
 
     def add_entity(self, entity_id, days):
@@ -223,12 +260,16 @@ class HAHistory(ComponentBase):
     def get_history(self, entity_id, days=30, tracked=True):
         """
         Get history data for an entity
+
+        An entity found to have no history is a cache hit too, answered [[]], until a recheck finds some.
+        A failed read (None from the interface) is not cached, so it is tried again.
         """
         result = None
 
         with self.history_lock:
             store = self.history_data.get(entity_id, None)
-            if store and self.history_entities.get(entity_id, 0) >= days:
+            cached = bool(store) or (store is not None and entity_id in self.history_checked)
+            if cached and self.history_entities.get(entity_id, 0) >= days:
                 # Materialise fresh record dicts from the compact store (replaces the previous
                 # deepcopy) - callers can reassign record["state"]/["attributes"] without
                 # corrupting the cache, but must not mutate a returned attributes dict in place
@@ -243,11 +284,12 @@ class HAHistory(ComponentBase):
             if tracked:
                 self.add_entity(entity_id, days)
                 days = self.history_entities[entity_id]
-            history_data = ha_interface.get_history(entity_id, datetime.now(self.local_tz), days=days)
+            now = datetime.now(self.local_tz)
+            history_data = ha_interface.get_history(entity_id, now, days=days)
             if history_data and len(history_data) > 0:
                 history_data = history_data[0]
                 if tracked:
-                    self.update_entity(entity_id, history_data)
+                    self.update_entity(entity_id, history_data, checked_time=now)
                 # The store keeps its own compact copy of the data, so the fetched records
                 # can be handed to the caller directly
                 result = [history_data]
@@ -264,11 +306,36 @@ class HAHistory(ComponentBase):
                 cutoff_epoch = (now - timedelta(days=max_days)).timestamp()
                 self.history_data[entity_id].prune(cutoff_epoch)
 
-    def update_entity(self, entity_id, new_history_data):
+    def update_entity(self, entity_id, new_history_data, checked_time=None, window_start=None):
         """
         Update history data for an entity
+
+        checked_time is the end of the window new_history_data was read for, recorded as the time the
+        entity was last checked. Pass it only for a read that worked: a failed read (None) must not get
+        here. A read that found nothing for an entity with no stored history caches it as empty.
+
+        window_start is the start of a refresh window. Records stamped at or before it are dropped: Home
+        Assistant opens every window with the state in effect at its start, stamped at the start, which
+        would otherwise be stored again on every refresh, and anything real there was in the previous read.
         """
+        if new_history_data and window_start is not None:
+            floor_epoch = window_start.timestamp()
+            kept = []
+            for entry in new_history_data:
+                try:
+                    if str2time(entry.get("last_updated")).timestamp() <= floor_epoch:
+                        continue
+                except (ValueError, TypeError, AttributeError):
+                    pass
+                kept.append(entry)
+            new_history_data = kept
+
         if not new_history_data:
+            if checked_time is not None:
+                with self.history_lock:
+                    if not self.history_data.get(entity_id, None):
+                        self.history_data[entity_id] = EntityHistory()
+                    self.history_checked[entity_id] = checked_time.timestamp()
             return
 
         FILTER_ATTRIBUTES = ["friendly_name", "unit_of_measurement", "icon", "device_class", "results", "state_class", "entity_id"]
@@ -314,12 +381,19 @@ class HAHistory(ComponentBase):
 
                 if older_entries:
                     # Rebuild the store with the older entries merged in (rare, only happens
-                    # when more days of history are requested than previously cached)
-                    combined = older_entries + store.to_records()
+                    # when more days of history are requested than previously cached). A re-stamped
+                    # prune anchor is dropped: the older entries already hold the state in force at the
+                    # cutoff, and the anchor would contradict them if the cache had missed a change
+                    stored_records = store.to_records()
+                    if store.anchored:
+                        stored_records = stored_records[1:]
+                    combined = older_entries + stored_records
                     combined.sort(key=lambda x: str2time(x.get("last_updated")))
                     self.history_data[entity_id] = EntityHistory.from_records(combined)
             else:
                 self.history_data[entity_id] = EntityHistory.from_records(new_history_data)
+            if checked_time is not None:
+                self.history_checked[entity_id] = checked_time.timestamp()
 
         # Update last success timestamp
         self.update_success_timestamp()
@@ -339,17 +413,33 @@ class HAHistory(ComponentBase):
             for entity_id in list(self.history_entities.keys()):
                 # self.log("HAHistory: Updating history for {}".format(entity_id))
                 store = self.history_data.get(entity_id, None)
-                last_updated_time = datetime.fromtimestamp(store.epochs[-1], timezone.utc) if store and len(store) > 0 else None
-                if last_updated_time:
-                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=last_updated_time)
+                checked_epoch = self.history_checked.get(entity_id, None) if store is not None else None
+                if store:
+                    # Read from the last record, or from the last check less the overlap if that is later.
+                    # A failed read leaves the check time where it was, so the next refresh covers the gap
+                    start_epoch = store.epochs[-1]
+                    if checked_epoch is not None:
+                        start_epoch = max(start_epoch, checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS)
+                    from_time = datetime.fromtimestamp(start_epoch, timezone.utc)
+                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=from_time)
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
-                        self.update_entity(entity_id, history_data)
+                        self.update_entity(entity_id, history_data, checked_time=now, window_start=from_time)
+                elif checked_epoch is not None:
+                    # Cached as empty: ask again only every HISTORY_EMPTY_RECHECK_SECONDS, from the last check
+                    # less the overlap
+                    if now.timestamp() - checked_epoch < HISTORY_EMPTY_RECHECK_SECONDS:
+                        continue
+                    from_time = datetime.fromtimestamp(checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS, timezone.utc)
+                    history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id], from_time=from_time)
+                    if history_data and len(history_data) > 0:
+                        history_data = history_data[0]
+                        self.update_entity(entity_id, history_data, checked_time=now, window_start=from_time)
                 else:
                     history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id])
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
-                        self.update_entity(entity_id, history_data)
+                        self.update_entity(entity_id, history_data, checked_time=now)
 
         if first or (seconds % (60 * 60) == 0):
             # Prune history data every hour
@@ -559,7 +649,7 @@ class HAInterface(ComponentBase):
 
             url = "{}/api/websocket".format(self.ha_url)
             self.log("Info: Start socket for url {}".format(url))
-            async with ClientSession() as session:
+            async with self.http_session() as session:
                 try:
                     async with session.ws_connect(url) as websocket:
                         await websocket.send_json({"type": "auth", "access_token": self.ha_key})
@@ -946,7 +1036,7 @@ class HAInterface(ComponentBase):
         self.db_mirror_list[sensor.lower()] = True
 
         if (self.db_primary or force_db) and self.db_enable:
-            return self.db_manager.get_history_db(sensor, now, days=days)
+            return self.db_manager.get_history_db(sensor, now, days=days, from_time=from_time)
 
         if from_time:
             start = from_time

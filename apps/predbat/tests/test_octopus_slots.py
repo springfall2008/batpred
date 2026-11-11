@@ -260,6 +260,134 @@ def run_charger_schedule_reprice_tests(my_predbat, slot, slot_iog):
     return failed
 
 
+def run_boost_slot_tests(my_predbat, now_utc, time_format):
+    """
+    A BOOST or bump-charge dispatch is billed at the tariff, not the off-peak rate
+    (dispatch_billed_off_peak() returns False for both, #6048): load_octopus_slots()
+    splits it wherever the import rate changes, like a charger schedule, and marks it
+    tariff_rate so reprice_charger_schedule_slots() keeps it in step when rates refresh.
+    Before the fix the whole slot was priced at the rate its start minute landed on,
+    so a boost begun in a free or off-peak band kept a 0.00p car rate past the boundary.
+    """
+    failed = False
+    minutes_now = my_predbat.minutes_now
+    save_rate_import = my_predbat.rate_import.copy()
+    save_io_adjusted = my_predbat.io_adjusted
+
+    # A two band tariff under a two hour slot: 0.00p for the first 55 minutes, 28.38p after
+    for minute in range(minutes_now, minutes_now + 240):
+        my_predbat.rate_import[minute] = 0.0 if minute < minutes_now + 55 else 28.38
+    start = now_utc
+    end = now_utc + timedelta(minutes=120)
+
+    def boost_slot(source):
+        """A raw two hour BOOST-style dispatch starting now."""
+        return [{"start": start.strftime(time_format), "end": end.strftime(time_format), "energy": -12.0, "source": source, "location": "AT_HOME"}]
+
+    expected = [
+        {"start": minutes_now, "end": minutes_now + 55, "kwh": 5.5, "average": 0.0, "cost": 0.0, "soc": 0.0, "octopus": True, "tariff_rate": True},
+        {"start": minutes_now + 55, "end": minutes_now + 120, "kwh": 6.5, "average": 28.38, "cost": 184.47, "soc": 0.0, "octopus": True, "tariff_rate": True},
+    ]
+    failed |= run_load_octopus_slot_test("boost_split_by_rate", my_predbat, boost_slot("BOOST"), expected, False, 0.0, 0.0, 1.0)
+    failed |= run_load_octopus_slot_test("bump_charge_split_by_rate", my_predbat, boost_slot("bump-charge"), expected, False, 0.0, 0.0, 1.0)
+
+    # The car pays the house rate in every part of the slot, so the prediction adds no premium for it
+    for minute in range(minutes_now, minutes_now + 120, 5):
+        car_rate = in_car_slot(minute, 1, [expected])[1][0]
+        if car_rate != my_predbat.rate_import[minute]:
+            print("ERROR: BOOST car rate at minute {} should be the tariff rate {} got {}".format(minute, my_predbat.rate_import[minute], car_rate))
+            failed = True
+
+    # The same slot from Octopus Intelligent (smart-charge) is still one slot at the dispatch rate
+    slot_iog = [{"start": start.strftime(time_format), "end": end.strftime(time_format), "energy": -12.0, "source": "smart-charge", "location": "AT_HOME"}]
+    expected_iog = [{"start": minutes_now, "end": minutes_now + 120, "kwh": 12.0, "average": 4, "cost": 48.0, "soc": 0.0, "octopus": True}]
+    failed |= run_load_octopus_slot_test("boost_vs_smart_charge", my_predbat, slot_iog, expected_iog, False, 0.0, 0.0, 1.0)
+
+    # A BOOST that stays inside one rate band is still one slot, marked tariff_rate
+    for minute in range(minutes_now, minutes_now + 240):
+        my_predbat.rate_import[minute] = 28.38
+    expected_flat = [{"start": minutes_now, "end": minutes_now + 120, "kwh": 12.0, "average": 28.38, "cost": 340.56, "soc": 0.0, "octopus": True, "tariff_rate": True}]
+    failed |= run_load_octopus_slot_test("boost_single_band", my_predbat, boost_slot("BOOST"), expected_flat, False, 0.0, 0.0, 1.0)
+    for minute in range(minutes_now, minutes_now + 240):
+        my_predbat.rate_import[minute] = 0.0 if minute < minutes_now + 55 else 28.38
+
+    # rate_add_io_slots: a BOOST changes no rate and marks nothing as a dispatch, planned or completed
+    my_predbat.io_adjusted = {}
+    rates_before = my_predbat.rate_import.copy()
+    rates = my_predbat.rate_add_io_slots(0, my_predbat.rate_import.copy(), boost_slot("BOOST"))
+    if rates != rates_before:
+        changed = sorted(minute for minute in rates if rates[minute] != rates_before.get(minute))
+        print("ERROR: BOOST slots should not change import rates, changed minutes {}".format(changed[:10]))
+        failed = True
+    if my_predbat.io_adjusted:
+        print("ERROR: BOOST slots should not be marked io_adjusted, got {}".format(sorted(my_predbat.io_adjusted)[:10]))
+        failed = True
+
+    failed |= run_boost_reprice_tests(my_predbat, boost_slot("BOOST"), slot_iog)
+
+    my_predbat.rate_import = save_rate_import
+    my_predbat.io_adjusted = save_io_adjusted
+    return failed
+
+
+def run_boost_reprice_tests(my_predbat, slot, slot_iog):
+    """
+    A BOOST slot built before the rates exist is re-priced once they arrive, like a
+    charger schedule, without touching an Intelligent dispatch priced at the dispatch rate.
+    """
+    failed = False
+    minutes_now = my_predbat.minutes_now
+    save_slots = my_predbat.car_charging_slots
+    save_soc = my_predbat.car_charging_soc[0]
+    save_limit = my_predbat.car_charging_limit[0]
+    current_rates = my_predbat.rate_import.copy()
+    my_predbat.car_charging_soc[0] = 10.0
+    my_predbat.car_charging_limit[0] = 100.0
+    my_predbat.car_charging_loss = 1.0
+
+    def check(name, expected):
+        """Compare car 0's slots with what is expected."""
+        result = my_predbat.car_charging_slots[0]
+        if json.dumps(result) != json.dumps(expected):
+            print("ERROR: reprice BOOST {}: slots should be:\n{}\ngot:\n{}".format(name, expected, result))
+            return True
+        return False
+
+    def tariff_slot(start, end, kwh, average, soc, **extra):
+        """One expected BOOST slot, starting and ending relative to now."""
+        expected = {"start": minutes_now + start, "end": minutes_now + end, "kwh": kwh, "average": average, "cost": dp2(average * kwh), "soc": soc, "octopus": True, "tariff_rate": True}
+        expected.update(extra)
+        return expected
+
+    # The first cycle after a restart: no rates yet, so the slot is built unpriced as one piece...
+    print("**** Running Test: reprice BOOST ****")
+    my_predbat.rate_import = {}
+    my_predbat.car_charging_slots = [my_predbat.load_octopus_slots(0, slot, False)]
+    failed |= check("built with no rates", [tariff_slot(0, 120, 12.0, 4, 22.0)])
+    # ...and is split and priced on the tariff as soon as the rates exist, the car filling up across the parts
+    my_predbat.rate_import = current_rates.copy()
+    my_predbat.reprice_charger_schedule_slots()
+    priced = [tariff_slot(0, 55, 5.5, 0.0, 15.5), tariff_slot(55, 120, 6.5, 28.38, 22.0)]
+    failed |= check("priced once rates exist", priced)
+    # Nothing moves when it is priced again on the same rates
+    my_predbat.reprice_charger_schedule_slots()
+    failed |= check("priced twice", priced)
+
+    # An Intelligent dispatch is priced at the dispatch rate and is not touched
+    my_predbat.car_charging_slots = [my_predbat.load_octopus_slots(0, slot_iog, False)]
+    expected_iog = [dict(slot_dict) for slot_dict in my_predbat.car_charging_slots[0]]
+    my_predbat.reprice_charger_schedule_slots()
+    failed |= check("Intelligent dispatch", expected_iog)
+    if len(expected_iog) != 1 or expected_iog[0]["average"] != 4 or "tariff_rate" in expected_iog[0]:
+        print("ERROR: reprice: Intelligent dispatch should be one unmarked slot at the low rate, got {}".format(expected_iog))
+        failed = True
+
+    my_predbat.car_charging_slots = save_slots
+    my_predbat.car_charging_soc[0] = save_soc
+    my_predbat.car_charging_limit[0] = save_limit
+    return failed
+
+
 def run_short_dispatch_slot_tests(my_predbat, midnight_utc, time_format):
     """
     load_octopus_slots() prices a dispatch shorter than OCTOPUS_SLOT_MIN_MINUTES at the tariff, not the
@@ -326,6 +454,18 @@ def run_short_dispatch_slot_tests(my_predbat, midnight_utc, time_format):
 
 
 def run_load_octopus_slots_tests(my_predbat):
+    """
+    Run the load octopus slots cases, putting octopus_slots back afterwards: the cases set it to a single
+    car's flat slot list, and the daily cap now reads every car's entry in it (#5215).
+    """
+    saved_octopus_slots = my_predbat.octopus_slots
+    try:
+        return run_load_octopus_slots_cases(my_predbat)
+    finally:
+        my_predbat.octopus_slots = saved_octopus_slots
+
+
+def run_load_octopus_slots_cases(my_predbat):
     """
     Test for load octopus slots
 
@@ -506,6 +646,7 @@ def run_load_octopus_slots_tests(my_predbat):
     failed |= run_load_octopus_slot_test("zero_kwh_future", my_predbat, slot_future_zero, [], False, 0.0, 0.0, 1.0)
 
     failed |= run_charger_schedule_slot_tests(my_predbat, now_utc, TIME_FORMAT)
+    failed |= run_boost_slot_tests(my_predbat, now_utc, TIME_FORMAT)
 
     # --- containment overlap: completed dispatch inside a longer planned dispatch (#4497) ---
     # The HA Octopus Energy integration's completed_dispatches are merged ahead of
