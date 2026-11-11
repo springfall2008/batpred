@@ -22,6 +22,8 @@ from aiohttp import web as aiohttp_web
 from aiohttp.test_utils import make_mocked_request
 
 from components import Components
+from tests.test_components import LoggingMockBase
+from tests.test_validate_config import _run as _run_validate
 from tests.test_web_if import _free_port
 from web import WebInterface
 
@@ -214,6 +216,86 @@ def test_web_auth_server(my_predbat):
     return failed
 
 
+def test_web_enable(my_predbat):
+    """web_enable: false leaves the web component out entirely, and anything else keeps it on."""
+    failed = False
+    print("**** Testing web_enable ****")
+
+    original_components = my_predbat.components
+    saved_args = my_predbat.args.copy()
+    try:
+        # Through the real get_arg: unset, empty (YAML null) and true all keep the web interface
+        for name, value in (("unset", "unset"), ("empty", None), ("true", True), ("false", False)):
+            my_predbat.args.pop("web_enable", None)
+            if value != "unset":
+                my_predbat.args["web_enable"] = value
+            comps = Components(my_predbat)
+            comps.initialize(only="web", phase=0)
+            built = comps.get_component("web") is not None
+            if built != (value is not False):
+                print("ERROR: web_enable {} should {}build the web component".format(name, "" if value is not False else "not "))
+                failed = True
+            if comps.load_error("web"):
+                print("ERROR: web_enable {} should not record a load error, got {}".format(name, comps.load_error("web")))
+                failed = True
+
+        # Off means no server at all: start() has nothing to run and the port stays closed
+        web_port = _free_port()
+        my_predbat.args["web_enable"] = False
+        my_predbat.args["web_port"] = web_port
+        comps = Components(my_predbat)
+        my_predbat.components = comps
+        comps.initialize(only="web", phase=0)
+        if not comps.start(only="web"):
+            print("ERROR: start() should not report a failure for a disabled web interface")
+            failed = True
+        try:
+            requests.get("http://127.0.0.1:{}/dash".format(web_port), timeout=2)
+            print("ERROR: nothing should be listening on the web port when web_enable is false")
+            failed = True
+        except requests.exceptions.ConnectionError:
+            pass
+
+        # A deliberate off switch is logged as such, not as missing configuration, even with other web keys left set
+        base = LoggingMockBase(web_enable=False, web_port=5070, web_username="admin")
+        Components(base).initialize(only="web", phase=0)
+        if any(message.startswith("Warn: Skipping") for message in base.log_messages):
+            print("ERROR: web_enable false should not warn about missing configuration, got {}".format(base.log_messages))
+            failed = True
+        if not any(message == "Info: Web Interface interface disabled by web_enable: false in apps.yaml" for message in base.log_messages):
+            print("ERROR: web_enable false should log that the web interface is disabled, got {}".format(base.log_messages))
+            failed = True
+
+        # The on-by-default resolution must not leak into the off-by-default required_true switches
+        base = LoggingMockBase()
+        comps = Components(base)
+        comps.initialize(only="db", phase=0)
+        if comps.get_component("db") is not None:
+            print("ERROR: db_enable has no default, so an unset db_enable must leave the database off")
+            failed = True
+    finally:
+        # If the switch was ignored a real server is running; stop it so a failure cannot hang the suite
+        if my_predbat.components is not original_components and my_predbat.components.get_component("web") is not None:
+            my_predbat.create_task(my_predbat.components.stop("web"))
+            time.sleep(0.1)
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.components = original_components
+
+    return failed
+
+
+def test_web_auth_schema(my_predbat):
+    """APPS_SCHEMA accepts the forms WebInterface accepts, so a working login is not reported as a config error."""
+    print("**** Testing web login apps.yaml schema ****")
+    # An unquoted all-digit username or password arrives from YAML as an int, which initialize() stringifies
+    _run_validate(my_predbat, {"web_username": 1234, "web_password": 123456, "web_enable": False}, expect_clean=["web_username", "web_password", "web_enable"])
+    _run_validate(my_predbat, {"web_username": "admin", "web_password": "swordfish", "web_enable": True}, expect_clean=["web_username", "web_password", "web_enable"])
+    # Still a real check: a mapping (a mis-indented block under the key) is neither a string nor an integer
+    _run_validate(my_predbat, {"web_password": {"value": "swordfish"}}, expect_errors=["web_password"])
+    return False
+
+
 def run_web_auth_tests(my_predbat):
     """Run all the web login tests, returning True if any failed."""
-    return test_web_auth_middleware(my_predbat) or test_web_auth_server(my_predbat)
+    return test_web_auth_middleware(my_predbat) or test_web_auth_server(my_predbat) or test_web_enable(my_predbat) or test_web_auth_schema(my_predbat)

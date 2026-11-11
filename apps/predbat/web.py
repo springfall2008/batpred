@@ -490,7 +490,7 @@ class WebInterface(ComponentBase):
     endpoints. Supports plugin endpoint registration.
     """
 
-    def initialize(self, web_port, web_username=None, web_password=None):
+    def initialize(self, web_port, web_username=None, web_password=None, web_enable=True):
         self.default_page = "./dash"
         self.web_port = web_port
         self.default_log = "warnings"

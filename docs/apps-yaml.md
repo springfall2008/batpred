@@ -431,6 +431,16 @@ Docker users can change the web port for the Predbat web interface by setting **
   web_port: 5052
 ```
 
+If you do not use the web interface you can turn it off entirely by setting **web_enable** to `false`. Predbat then does not start the web server or open its port, so nothing on your network can reach it.
+
+```yaml
+  web_enable: false
+```
+
+- The default is `true`, and leaving it out keeps the web interface on.
+- With the web interface off the Predbat app's **Open Web UI** button and its Home Assistant sidebar panel stop working, as they open this same web interface. Remove the setting (or set it back to `true`) and restart Predbat to turn it on again.
+- The MCP server (`mcp_enable`) is separate and is not affected.
+
 To stop accidental changes to your settings from the web interface (for example from other devices on your network) you can set a username and password with **web_username** and **web_password**.
 It is best to keep the password in `secrets.yaml`:
 
