@@ -2224,6 +2224,56 @@ def test_rewire_respects_automatic_zappi_off():
     print("  ✓ Re-wiring and the offline warning are skipped with automatic_zappi off")
 
 
+FIRST_EDDI_ENERGY = "sensor.predbat_myenergi_eddi_11112222_session_energy"
+
+
+def test_rewire_wires_an_eddi_added_later():
+    """An Eddi that appears after start-up is wired into iboost_energy_today on that poll, leaving the car inputs as they were."""
+    component = _zappi_liveness_component()
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    _poll_at(component, 1000.0, [zappi], first=True)
+    assert "iboost_energy_today" not in component.base.args, component.base.args
+    _poll_at(component, 1060.0, [zappi, normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)])
+    assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_87654321_session_energy", component.base.args
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert any("re-wiring" in message for message in component.log_messages), component.log_messages
+    print("  ✓ An Eddi added after start-up is wired without a restart")
+
+
+def test_rewire_keeps_the_eddi_through_a_missed_reply():
+    """The cloud transport skips a device whose status call fails; if that lands on the poll a Zappi re-wire fires,
+    iboost_energy_today must stay on the first Eddi rather than move to the second for good."""
+    component = _zappi_liveness_component()
+    grace = component.zappi_offline_grace
+    alive = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    dead = normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)
+    live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    first_eddi = normalise_direct_device(dict(MOCK_DIRECT_EDDI, sno=11112222), DEVICE_KIND_EDDI)
+    second_eddi = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+
+    _poll_at(component, 0.0, [alive, live, first_eddi, second_eddi], first=True)
+    assert component.base.args["iboost_energy_today"] == FIRST_EDDI_ENERGY, component.base.args
+    _poll_at(component, 60.0, [dead, live, first_eddi, second_eddi])
+    # The Zappi's grace (from its last online reading at 0) runs out on the very poll the first Eddi's status call
+    # fails; the Eddi was last seen at 60, so it is still well inside its own carry-over
+    _poll_at(component, grace + 30, [dead, live, second_eddi])
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert component.base.args["iboost_energy_today"] == FIRST_EDDI_ENERGY, component.base.args["iboost_energy_today"]
+    print("  ✓ A re-wire on a poll that missed the first Eddi keeps iboost_energy_today on it")
+
+
+def test_rewire_respects_automatic_eddi_off():
+    """With automatic_eddi off an Eddi appearing is not a reason to re-wire or claim iboost_energy_today."""
+    component = _zappi_liveness_component()
+    component.automatic_eddi = False
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    _poll_at(component, 1000.0, [zappi], first=True)
+    _poll_at(component, 1060.0, [zappi, normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)])
+    assert "iboost_energy_today" not in component.base.args, component.base.args
+    assert not any("re-wiring" in message for message in component.log_messages), component.log_messages
+    print("  ✓ Re-wiring for an Eddi is skipped with automatic_eddi off")
+
+
 def test_controls_queue_rather_than_call():
     """Switch and number events queue for the run loop instead of calling inline."""
     component = _make_component()
@@ -3144,6 +3194,9 @@ def test_myenergi(my_predbat=None):
     test_run_keeps_a_zappi_missing_from_one_poll()
     test_zappi_offline_grace_is_eight_hours()
     test_rewire_respects_automatic_zappi_off()
+    test_rewire_wires_an_eddi_added_later()
+    test_rewire_keeps_the_eddi_through_a_missed_reply()
+    test_rewire_respects_automatic_eddi_off()
     test_automatic_config_ignores_unsupported_kinds()
     test_templates_accept_the_connected_zappi_plug_states()
     test_controls_queue_rather_than_call()
