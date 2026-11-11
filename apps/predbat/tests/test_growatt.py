@@ -21,7 +21,17 @@ import pytz
 
 from components import COMPONENT_LIST
 from config import APPS_SCHEMA, INVERTER_DEF
-from growatt import GrowattAPI, merge_growatt_cli_args, test_growatt_api as growatt_cli_run
+from growatt import (
+    GrowattAPI,
+    build_cli_test_slots,
+    growatt_write_test,
+    judge_cli_window,
+    load_cli_snapshot,
+    merge_growatt_cli_args,
+    restore_growatt_snapshot,
+    save_cli_snapshot,
+    test_growatt_api as growatt_cli_run,
+)
 from growatt_const import (
     GROWATT_BASE_URL,
     GROWATT_ENDPOINTS,
@@ -730,6 +740,190 @@ def test_growatt_cli_failures_are_explained():
     assert "device list call failed" in output.getvalue()
 
 
+class FakeGrowattDevice:
+    """A Growatt inverter behind the OpenAPI, for the write-test driver.
+
+    Holds enable_control and a 16-entry slot table (unused entries 00:00-00:00, as a live SPH
+    reads), records every request, and reports battery power from the table: a slot's
+    percentage of a 5000 W rating, Growatt's sign (positive = charging), or a 250 W discharge
+    with no slot. hold_works=False makes a 0% slot behave like no slot at all.
+    """
+
+    UNUSED = {"percentage": 0, "startTime": "00:00", "endTime": "00:00"}
+
+    def __init__(self, enable=0, hold_works=True, fail_reads=False, raise_on_sample=None):
+        """Start with the given enable_control value and an empty 16-slot table."""
+        self.enable = enable
+        self.table = [dict(self.UNUSED) for _ in range(16)]
+        self.hold_works = hold_works
+        self.fail_reads = fail_reads
+        self.raise_on_sample = raise_on_sample
+        self.samples = 0
+        self.requests = []
+
+    async def post(self, endpoint_key, body=None):
+        """Answer one OpenAPI request the way the device would."""
+        body = body or {}
+        self.requests.append((endpoint_key, body.get("setType"), body.get("value")))
+        if endpoint_key == "dispatch":
+            if body["setType"] == GROWATT_SET_ENABLE_CONTROL:
+                self.enable = body["value"]
+            else:
+                active = [slot for slot in body["value"] if slot["startTime"] != slot["endTime"]]
+                self.table = [dict(slot) for slot in active] + [dict(self.UNUSED) for _ in range(16 - len(active))]
+            return 0, None
+        if endpoint_key == "read_dispatch":
+            if self.fail_reads:
+                return 18, None
+            return 0, (self.enable if body["setType"] == GROWATT_SET_ENABLE_CONTROL else [dict(slot) for slot in self.table])
+        if endpoint_key == "device_data":
+            self.samples += 1
+            if self.raise_on_sample == self.samples:
+                raise RuntimeError("connection dropped")
+            active = [slot for slot in self.table if slot["startTime"] != slot["endTime"]]
+            percentage = active[0]["percentage"] if active else None
+            if percentage is None or (percentage == 0 and not self.hold_works):
+                bat_power = -250.0
+            else:
+                bat_power = percentage / 100.0 * 5000
+            return 0, {"soc": 60, "batPower": bat_power, "meterPower": 0, "ppv": 0, "payLoadPower": 300, "utcTime": "t{}".format(self.samples)}
+        return -1, None
+
+    def writes(self):
+        """Return the (setType, value) of every dispatch write, in order."""
+        return [(set_type, value) for endpoint, set_type, value in self.requests if endpoint == "dispatch"]
+
+
+def _write_test(device, scenarios, tmp_dir, confirm=None):
+    """Run growatt_write_test() against a fake device with sleeps skipped, returning (result, client)."""
+    client, sn = _ready_client()
+    client._post = device.post
+    with patch("growatt.asyncio.sleep", new=AsyncMock()), contextlib.redirect_stdout(io.StringIO()) as output:
+        result = run_async_local(growatt_write_test(client, sn, scenarios, 1000, 2, confirm or (lambda prompt: True), tmp_dir, settle_seconds=0))
+    client.cli_output = output.getvalue()
+    return result, client
+
+
+def test_growatt_cli_test_slots():
+    """Each scenario writes one slot from this UTC minute, cut at 23:59, and none at all near midnight."""
+    now = datetime(2026, 11, 11, 20, 47, 33, tzinfo=pytz.utc)
+    assert build_cli_test_slots("charge", now, 3, 20) == [{"startTime": "20:47", "endTime": "20:52", "percentage": 20}]
+    assert build_cli_test_slots("export", now, 3, 20) == [{"startTime": "20:47", "endTime": "20:52", "percentage": -20}]
+    assert build_cli_test_slots("hold", now, 3, 20) == [{"startTime": "20:47", "endTime": "20:52", "percentage": 0}]
+    late = datetime(2026, 11, 11, 23, 50, tzinfo=pytz.utc)
+    assert build_cli_test_slots("charge", late, 10, 20) == [{"startTime": "23:50", "endTime": "23:59", "percentage": 20}]
+    assert build_cli_test_slots("charge", datetime(2026, 11, 11, 23, 57, tzinfo=pytz.utc), 3, 20) is None
+
+
+def test_growatt_cli_judge_window():
+    """Settled readings decide each verdict; earlier ones are ignored."""
+    assert judge_cli_window("charge", [(0, 300), (60, -900), (120, -950)])[0] == "PASS"
+    assert judge_cli_window("charge", [(60, -900), (120, 20)])[0] == "FAIL"
+    assert judge_cli_window("export", [(60, 950)])[0] == "PASS"
+    assert judge_cli_window("export", [(60, -50)])[0] == "FAIL"
+    assert judge_cli_window("hold", [(0, 250), (60, 30), (120, -40)])[0] == "PASS"
+    assert judge_cli_window("hold", [(60, 250)])[0] == "FAIL"
+    assert judge_cli_window("hold", [(0, 0), (30, 0)])[0] == "INCONCLUSIVE"
+
+
+def test_growatt_cli_write_test_restores_each_time():
+    """All three tests run, each is cleared back to the saved table, and enable_control ends as it started."""
+    import tempfile
+
+    device = FakeGrowattDevice(enable=0)
+    original = [dict(slot) for slot in device.table]
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        result, client = _write_test(device, ["charge", "export", "hold"], tmp_dir)
+        snapshots = os.listdir(tmp_dir)
+        assert len(snapshots) == 1
+        assert load_cli_snapshot(os.path.join(tmp_dir, snapshots[0])) == ("SPH123", 0, original)
+    assert result, client.cli_output
+    writes = device.writes()
+    assert writes[0] == (GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_ON)
+    percentages = [value[0]["percentage"] for set_type, value in writes if set_type == GROWATT_SET_TIME_SLOTS and value and value[0]["startTime"] != value[0]["endTime"]]
+    # 1000 W of a 5000 W rating is 20%
+    assert percentages == [20, -20, 0]
+    # Every test is followed by a restore of the table exactly as read, placeholders included
+    restores = [value for set_type, value in writes if set_type == GROWATT_SET_TIME_SLOTS and value == original]
+    assert len(restores) == 3
+    assert writes[-1] == (GROWATT_SET_ENABLE_CONTROL, 0)
+    assert device.table == original and device.enable == 0
+    assert "PASSED" in client.cli_output
+
+
+def test_growatt_cli_write_test_failed_hold_still_restores():
+    """A 0% slot that does not hold fails the hold test, and the device is still put back."""
+    import tempfile
+
+    device = FakeGrowattDevice(enable=1, hold_works=False)
+    original = [dict(slot) for slot in device.table]
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        result, client = _write_test(device, ["hold"], tmp_dir)
+    assert not result
+    assert "FAIL: battery not within" in client.cli_output
+    assert device.table == original and device.enable == 1
+    # enable_control was already on, so it is never written
+    assert all(set_type != GROWATT_SET_ENABLE_CONTROL for set_type, _ in device.writes())
+
+
+def test_growatt_cli_write_test_restores_after_an_exception():
+    """An exception between a write and its restore still restores the table and enable_control."""
+    import tempfile
+
+    device = FakeGrowattDevice(enable=0, raise_on_sample=2)
+    original = [dict(slot) for slot in device.table]
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        try:
+            _write_test(device, ["charge", "export"], tmp_dir)
+            raised = False
+        except RuntimeError:
+            raised = True
+    assert raised
+    assert device.table == original and device.enable == 0
+
+
+def test_growatt_cli_write_test_refuses_without_a_baseline():
+    """When the current settings cannot be read there is nothing to restore, so nothing is written."""
+    import tempfile
+
+    device = FakeGrowattDevice(fail_reads=True)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        result, client = _write_test(device, ["charge"], tmp_dir)
+        assert os.listdir(tmp_dir) == []
+    assert not result
+    assert device.writes() == []
+    # Declining the prompt writes nothing either
+    device = FakeGrowattDevice()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        result, _ = _write_test(device, ["charge"], tmp_dir, confirm=lambda prompt: False)
+    assert result
+    assert device.writes() == []
+
+
+def test_growatt_cli_restore_snapshot():
+    """A saved snapshot is written back by --restore; a file that is not one is refused."""
+    import tempfile
+
+    device = FakeGrowattDevice(enable=1)
+    saved = [{"percentage": 50, "startTime": "01:00", "endTime": "03:00"}] + [dict(FakeGrowattDevice.UNUSED) for _ in range(15)]
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = save_cli_snapshot(tmp_dir, "SPH123", 0, saved)
+        client, _ = _ready_client()
+        client._post = device.post
+        with patch("growatt.asyncio.sleep", new=AsyncMock()), contextlib.redirect_stdout(io.StringIO()):
+            assert run_async_local(restore_growatt_snapshot(client, path))
+        assert device.table == saved and device.enable == 0
+        bad = os.path.join(tmp_dir, "bad.json")
+        with open(bad, "w") as handle:
+            json.dump({"something": "else"}, handle)
+        try:
+            load_cli_snapshot(bad)
+            refused = False
+        except ValueError:
+            refused = True
+        assert refused
+
+
 def run_growatt_tests(my_predbat):
     """Run the Growatt component tests in Predbat's custom test harness."""
     failed = False
@@ -765,6 +959,13 @@ def run_growatt_tests(my_predbat):
         ("cli_merge_args", test_growatt_cli_merge_args),
         ("cli_single_cycle", test_growatt_cli_single_cycle),
         ("cli_failures", test_growatt_cli_failures_are_explained),
+        ("cli_test_slots", test_growatt_cli_test_slots),
+        ("cli_judge_window", test_growatt_cli_judge_window),
+        ("cli_write_test_restores", test_growatt_cli_write_test_restores_each_time),
+        ("cli_write_test_failed_hold", test_growatt_cli_write_test_failed_hold_still_restores),
+        ("cli_write_test_exception", test_growatt_cli_write_test_restores_after_an_exception),
+        ("cli_write_test_no_baseline", test_growatt_cli_write_test_refuses_without_a_baseline),
+        ("cli_restore_snapshot", test_growatt_cli_restore_snapshot),
     ]
     for name, test in tests:
         try:
