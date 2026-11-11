@@ -3619,9 +3619,9 @@ class Output:
         return self.plan_interval_minutes + RUN_EVERY + self.calculate_plan_every
 
     def history_day_refresh_minutes(self):
-        """The longest an older History day should go between rebuilds: calculate_history_days() rebuilds them on the first full re-plan of
-        each local day, which can land a slot, a run and a re-plan interval later than the day before, so the web page's stale warning on one
-        means the daily rebuild has stopped."""
+        """The longest an older History day should go between rebuilds: calculate_history_days() rebuilds them at least once a local
+        day, on a re-plan that can land a slot, a run and a re-plan interval later than the day before, so the web page's stale
+        warning on one means the daily rebuild has stopped."""
         return HISTORY_DAY_MINUTES + self.history_refresh_minutes()
 
     def calculate_yesterday(self):
@@ -3904,6 +3904,7 @@ class Output:
             cost_array=cost_yesterday_array,
             status_data=predbat_status_data,
             prediction=self.prediction,
+            refresh_minutes=self.history_refresh_minutes(),
         )
         self.forecast_minutes = end_record
 
@@ -4135,7 +4136,7 @@ class Output:
         # Update timestamp
         self.savings_last_updated = self.now_utc
 
-    def replay_history_day(self, view_minutes, status_offset, pv_step, load_step, soc_array, cost_array, status_data, prediction):
+    def replay_history_day(self, view_minutes, status_offset, pv_step, load_step, soc_array, cost_array, status_data, prediction, refresh_minutes):
         """
         Render a past day for the History view from what was recorded rather than simulated.
 
@@ -4143,6 +4144,7 @@ class Output:
         charge and export windows rebuilt from the recorded predbat.status history. view_minutes is how
         many minutes the view covers from its midnight, and status_offset is how many minutes before now
         the view's minute 0 was, which is how status_data (keyed by minutes ago) lines up with it.
+        refresh_minutes is how long the view may go before it is rebuilt, for the web page's stale warning.
 
         Must be called with the plan state already wound back to the day being shown (minutes_now 0,
         midnight_utc and the rates for that day), as calculate_yesterday() does. The charge/export
@@ -4306,7 +4308,7 @@ class Output:
             car_hold_minutes=car_hold_minutes,
             status_warnings=status_warnings,
         )
-        plan_json["refresh_minutes"] = self.history_refresh_minutes()
+        plan_json["refresh_minutes"] = refresh_minutes
 
         self.charge_limit_best = previous_charge_limit_best
         self.charge_window_best = previous_charge_window_best
@@ -4639,6 +4641,8 @@ class Output:
                     cost_array=cost_array,
                     status_data=status_data,
                     prediction=None,
+                    # Rebuilt once a day rather than once a slot, as the rolling History view is
+                    refresh_minutes=self.history_day_refresh_minutes(),
                 )
                 # The renderer adds minutes to a fixed-offset midnight; label each row in the local time it really was
                 if hasattr(self.local_tz, "normalize"):
@@ -4651,8 +4655,6 @@ class Output:
                 if billing:
                     self.minutes_now = minutes_now
                     self.attach_history_billing(plan_json, billing, view_midnight, view_minutes, status_offset, cost_data, import_cost_data, events)
-                # Rebuilt once a day rather than once a slot, as the rolling History view is (replay_history_day() set that)
-                plan_json["refresh_minutes"] = self.history_day_refresh_minutes()
                 days[day.isoformat()] = plan_json
         finally:
             for name in HISTORY_DAY_FAKED_STATE:

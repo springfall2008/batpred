@@ -57,6 +57,10 @@ def test_plan_staleness_js(my_predbat):
     if "This History day has not been rebuilt for over " not in check:
         print("  ERROR: the warning on an older History day should say its daily rebuild has stopped, in hours")
         failed = True
+    # Worded from the data's own limit, not the view: a day still carrying a per-slot limit (built before an upgrade) said "over 0 hours"
+    if "limitMinutes >= 24 * 60" not in check or "historyDay" in check:
+        print("  ERROR: the stale warning should pick hours or minutes from the data's limit, not from which view is showing")
+        failed = True
     if "checkStaleness(null);" not in function_source(renderer_js, "function refreshPlan()"):
         print("  ERROR: refreshPlan should clear the warning when the current view has no data")
         failed = True

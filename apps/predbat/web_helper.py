@@ -8245,8 +8245,9 @@ def get_plan_renderer_js():
         const limitMinutes = data.refresh_minutes ? Math.max(data.refresh_minutes + 5, 15) : (STALE_MINUTES_DEFAULT[currentView] || 15);
         const ageMs = new Date() - new Date(data.timestamp);
         if (ageMs > limitMinutes * 60000) {
-            // An older History day is rebuilt once a day, so its warning is in hours and says what has stopped
-            staleWarning.textContent = currentView === 'yesterday' && historyDay
+            // Data rebuilt once a day (an older History day) is judged in hours, and the warning says what has stopped.
+            // Worded from the data's own limit, so a day still carrying a per-slot one reads in minutes like any other view
+            staleWarning.textContent = limitMinutes >= 24 * 60
                 ? '\u26a0\ufe0f This History day has not been rebuilt for over ' + Math.floor(limitMinutes / 60) + ' hours'
                 : '\u26a0\ufe0f Plan data is stale (last updated over ' + limitMinutes + ' minutes ago)';
             staleWarning.style.display = 'block';
