@@ -1547,13 +1547,14 @@ def test_saving_session_events():
         "junk",
     ]
     events = saving_session_events(joined, 8, 0.0)
-    if [(event["id"], event["pence_per_kwh"], event["octopoints_per_kwh"], event["rewarded_octopoints"], event["rewarded_known"], event["on_export"]) for event in events] != [(8342, 18.625, 149.0, 392.0, True, True)]:
+    if [(event["id"], event["pence_per_kwh"], event["octopoints_per_kwh"], event["rewarded_octopoints"], event["award_expected"], event["on_export"]) for event in events] != [(8342, 18.625, 149.0, 392.0, True, True)]:
         print("ERROR: only the priced turn-down session should be kept, at 149 points / 8 = 18.625p, got {}".format(events))
         return True
     # With octopus_saving_session_rate set, an event that reports no reward is priced at it, as the planner does
     defaulted = saving_session_events(joined, 8, 50.0)
-    if [(event["id"], event["pence_per_kwh"], event["octopoints_per_kwh"]) for event in defaulted] != [(8342, 18.625, 149.0), (2, 50.0, 400.0)]:
-        print("ERROR: an event with no reward should take the default rate, got {}".format(defaulted))
+    # ... and, reporting no points rate, isn't waiting for an award, though its rewarded_octopoints is null like a pending one's
+    if [(event["id"], event["pence_per_kwh"], event["octopoints_per_kwh"], event["award_expected"]) for event in defaulted] != [(8342, 18.625, 149.0, True), (2, 50.0, 400.0, False)]:
+        print("ERROR: an event with no reward should take the default rate and expect no award, got {}".format(defaulted))
         return True
     return False
 
@@ -1601,11 +1602,12 @@ def test_attach_saving():
     if part["billing_summary"].get("saving_points") != 372 or part["billing_summary"].get("saving_awarded") is not None or part["billing_summary"].get("saving_awarded_pending") != 0:
         print("ERROR: a session only partly compared should show its points so far and no award, got {}".format(part["billing_summary"]))
         return True
-    # A feed that doesn't report awards at all leaves nothing pending
-    unreported = [dict(event, rewarded_known=False) for event in sessions]
-    quiet = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, unreported)
-    if quiet["billing_summary"].get("saving_awarded_pending") != 0:
-        print("ERROR: a feed without awards shouldn't show one pending, got {}".format(quiet["billing_summary"]))
+    # A session reporting no points rate (priced at octopus_saving_session_rate, here the same 18.625p) lists rewarded_octopoints as
+    # null like a pending one, but no award is coming, so it isn't counted as pending (issue #3079's flexibility-API shape)
+    defaulted = saving_session_events([_saving_event(1020, 1080, points=None)], 8, 18.625)
+    quiet = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, defaulted)
+    if quiet["billing_summary"].get("saving_awarded_pending") != 0 or quiet["billing_summary"].get("saving_awarded") is not None or quiet["billing_summary"].get("diff") != 0.0:
+        print("ERROR: a session with no points rate shouldn't show an award pending, got {}".format(quiet["billing_summary"]))
         return True
     # With an export tariff that pays nothing Predbat doesn't add the session to its export rate, so nothing is put back on export
     unpaid_cost = {1020: -2.5 * 15.0, 1050: -2.5 * 15.0, 1080: 30.0}

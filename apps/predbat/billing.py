@@ -694,10 +694,13 @@ def saving_session_rate(octopoints_per_kwh, octopoints_per_penny, default_rate_p
 def saving_session_events(joined_events, octopoints_per_penny, default_rate_pence, on_export=True):
     """The joined Octopus saving sessions (the octopus_saving_session sensor's joined_events) as Predbat priced them, for the History view.
 
-    Each is {start, end, pence_per_kwh, octopoints_per_kwh, on_export, rewarded_octopoints, rewarded_known, id}, with the rate
+    Each is {start, end, pence_per_kwh, octopoints_per_kwh, on_export, rewarded_octopoints, award_expected, id}, with the rate
     saving_session_rate() gives, as fetch_octopus_sessions() prices it for the planner. on_export says whether Predbat adds it to
-    the export rate too, which it only does with an export tariff that pays (rate_export_max above 0). rewarded_known says the
-    feed reports awards at all, so a session without one yet is waiting for it. A Weekend Happy Hour is free import, not a saving
+    the export rate too, which it only does with an export tariff that pays (rate_export_max above 0). award_expected says
+    Octopus is going to post Octopoints for it, so a session without them yet is waiting for them: true when the session reports
+    its Octopoints per kWh. Feeds list rewarded_octopoints as null both before an award and for sessions that never get one (a
+    session reporting no points rate, priced at octopus_saving_session_rate), so that null alone can't say an award is coming.
+    A Weekend Happy Hour is free import, not a saving
     session, and an event Predbat priced at nothing added nothing, so both are left out, as are events that can't be read.
     """
     events = []
@@ -718,7 +721,7 @@ def saving_session_events(joined_events, octopoints_per_penny, default_rate_penc
                     "octopoints_per_kwh": points if points is not None else pence * per_penny,
                     "on_export": bool(on_export),
                     "rewarded_octopoints": _to_float(event.get("rewarded_octopoints")),
-                    "rewarded_known": "rewarded_octopoints" in event,
+                    "award_expected": points is not None,
                     "id": event.get("id"),
                 }
             )
@@ -726,7 +729,7 @@ def saving_session_events(joined_events, octopoints_per_penny, default_rate_penc
 
 
 def parse_saving_events(saving_events):
-    """saving_session_events() entries as (start, end, pence_per_kwh, octopoints_per_kwh, on_export, rewarded_octopoints, rewarded_known, id); unreadable ones are dropped."""
+    """saving_session_events() entries as (start, end, pence_per_kwh, octopoints_per_kwh, on_export, rewarded_octopoints, award_expected, id); unreadable ones are dropped."""
     spans = []
     for event in saving_events or []:
         if not isinstance(event, dict):
@@ -736,7 +739,7 @@ def parse_saving_events(saving_events):
         pence = _to_float(event.get("pence_per_kwh"))
         points = _to_float(event.get("octopoints_per_kwh"))
         if start and end and start < end and pence is not None and points is not None:
-            spans.append((start, end, pence, points, event.get("on_export", True) is not False, _to_float(event.get("rewarded_octopoints")), bool(event.get("rewarded_known", True)), event.get("id") or event.get("start")))
+            spans.append((start, end, pence, points, event.get("on_export", True) is not False, _to_float(event.get("rewarded_octopoints")), bool(event.get("award_expected", True)), event.get("id") or event.get("start")))
     return spans
 
 
@@ -978,7 +981,7 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         "saving_points": round(saving_points_total),
         "saving_value": _pounds(saving_total),
         "saving_awarded": None if not awarded else round(sum(awarded)),
-        "saving_awarded_pending": sum(1 for _, _, _, _, _, rewarded, known, _ in whole_sessions if known and rewarded is None),
+        "saving_awarded_pending": sum(1 for _, _, _, _, _, rewarded, expected, _ in whole_sessions if expected and rewarded is None),
         "credits_pending": sum(1 for entry in credited.values() if entry["event"].get("credit") is None),
         "standing_predbat": _pounds(totals["standing_predbat"]),
         "standing_billed": _pounds(totals["standing_billed"]),
