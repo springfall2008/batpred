@@ -1110,6 +1110,23 @@ class Output:
         sentence_clean = "<ul>\n" + sentence_clean + "</ul>\n"
         return sentence_clean
 
+    def car_charging_now_sentence(self):
+        """
+        The plan-details line about the car right now (GH#3017)
+
+        A car that reports charging (car_charging_now) is charging, and so is a car the plan charges in the current slot -
+        unless every car planned now has a car_charging_now reading of not charging (not plugged in yet, or the charger
+        not started), when the charge is described as planned rather than happening. Without a reading (no sensor, or
+        unknown/unavailable) there is no evidence against the plan, so its word stands.
+        """
+        charging_now = any(self.car_charging_now_active(car_n) for car_n in range(self.num_cars))
+        planned_cars = [car_n for car_n in range(min(self.num_cars, len(self.car_charging_slots))) if self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + PREDICT_STEP, car_n=car_n) > 0]
+        if not charging_now and not planned_cars:
+            return ""
+        if not charging_now and all(car_n < len(self.car_charging_now_state) and self.car_charging_now_state[car_n] is False for car_n in planned_cars):
+            return "- Your car is planned to charge now.\n"
+        return "- Your car is currently charging.\n"
+
     def short_textual_plan(self, soc_min, soc_min_minute, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True):
         """
         The short textual plan gives a summary in text format of the current plan
@@ -1199,9 +1216,7 @@ class Output:
             else:
                 sentence += "- You will reach a minimum of {}% battery in {}.\n".format(soc_min_percent, self.duration_string(soc_min_minute - self.minutes_now))
 
-        car_charging_kwh = self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + 5)
-        if car_charging_kwh > 0:
-            sentence += "- Your car is currently charging.\n"
+        sentence += self.car_charging_now_sentence()
 
         charge_window_n_next = self.get_next_charge_window(self.minutes_now)
         export_window_n_next = self.get_next_export_window(self.minutes_now)
