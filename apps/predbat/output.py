@@ -45,6 +45,7 @@ from utils import (
     dp1,
     dp2,
     dp3,
+    net_settlement_value,
     calc_percent_limit,
     minute_data,
     minute_data_state,
@@ -56,6 +57,7 @@ from utils import (
     pack_export_limit,
     export_limit_from_stored,
 )
+from utils import NetSettlementSeed
 from prediction import Prediction
 from billing import attach_billing, billing_entity_id, parse_axle_events, BILLING_DAYS, BILLING_EVENT_LABELS, BILLING_SLOT_FORMAT
 
@@ -2324,6 +2326,19 @@ class Output:
         carbon_g = 0
         curr = self.currency_symbols[1]
 
+        # Net settlement (metric_net_settlement_window_minutes): the day's import and export are priced
+        # gross in the loop below and then corrected per wall-clock window to the netted bill.
+        # day_cost_import/day_cost_export stay gross, like the kWh totals.
+        net_window = self.metric_net_settlement_window_minutes
+        net_window_id = -1
+        net_import_kwh = 0.0
+        net_import_cost = 0.0
+        net_export_kwh = 0.0
+        net_export_credit = 0.0
+        net_settled = 0.0
+        net_adjust_applied = 0.0
+        day_net_adjust = 0.0
+
         hour_cost = 0
         hour_cost_import = 0
         hour_cost_export = 0
@@ -2468,6 +2483,26 @@ class Output:
                 day_cost_nosc -= self.rate_export.get(minute, 0) * energy_export
                 day_cost_export -= self.rate_export.get(minute, 0) * energy_export
 
+            if net_window > 0:
+                window_id = minute // net_window
+                if window_id != net_window_id:
+                    net_window_id = window_id
+                    net_import_kwh = 0.0
+                    net_import_cost = 0.0
+                    net_export_kwh = 0.0
+                    net_export_credit = 0.0
+                    net_adjust_applied = 0.0
+                net_import_kwh += energy
+                net_import_cost += self.rate_import.get(minute, 0) * energy
+                net_export_kwh += energy_export
+                net_export_credit += self.rate_export.get(minute, 0) * energy_export
+                net_settled = net_settlement_value(net_import_kwh, net_import_cost, net_export_kwh, net_export_credit)
+                net_adjust = net_settled - (net_import_cost - net_export_credit)
+                day_cost += net_adjust - net_adjust_applied
+                day_cost_nosc += net_adjust - net_adjust_applied
+                day_net_adjust += net_adjust - net_adjust_applied
+                net_adjust_applied = net_adjust
+
             if self.carbon_enable:
                 carbon_g += self.carbon_history.get(minute_back, 0) * energy
                 carbon_g -= self.carbon_history.get(minute_back, 0) * energy_export
@@ -2480,6 +2515,18 @@ class Output:
                 day_cost_time_import[stamp] = dp2(day_cost_import)
                 day_cost_time_export[stamp] = dp2(day_cost_export)
                 day_carbon_time[stamp] = dp2(carbon_g)
+
+        # Hand the current window's metered totals to the prediction (see Prediction.run_prediction)
+        self.net_settlement_seed = None
+        if net_window > 0 and net_window_id == self.minutes_now // net_window:
+            self.net_settlement_seed = NetSettlementSeed(
+                window=net_window_id,
+                import_kwh=net_import_kwh,
+                import_cost=net_import_cost,
+                export_kwh=net_export_kwh,
+                export_credit=net_export_credit,
+                applied=net_settled,
+            )
 
         day_pkwh = self.rate_import.get(0, 0)
         day_car_pkwh = self.rate_import.get(0, 0)
@@ -2534,6 +2581,7 @@ class Output:
                     "cost_import": dp2(day_cost_import),
                     "cost_export": dp2(day_cost_export),
                     "cost_car": dp2(day_cost_car),
+                    "cost_net_settlement_adjust": dp2(day_net_adjust),
                     "carbon": dp2(carbon_g / 1000.0),
                 },
             )
@@ -3801,6 +3849,7 @@ class Output:
         midnight_utc = self.midnight_utc
         forecast_minutes = self.forecast_minutes
         cost_today_sofar = self.cost_today_sofar
+        net_settlement_seed = self.net_settlement_seed
         import_today_now = self.import_today_now
         export_today_now = self.export_today_now
         pv_today_now = self.pv_today_now
@@ -3823,6 +3872,7 @@ class Output:
         # Fake to yesterday state
         self.minutes_now = 0
         self.cost_today_sofar = 0
+        self.net_settlement_seed = None
         self.import_today_now = 0
         self.export_today_now = 0
         self.carbon_today_sofar = 0
@@ -4105,6 +4155,7 @@ class Output:
         self.midnight_utc = midnight_utc
         self.forecast_minutes = forecast_minutes
         self.cost_today_sofar = cost_today_sofar
+        self.net_settlement_seed = net_settlement_seed
         self.import_today_now = import_today_now
         self.export_today_now = export_today_now
         self.carbon_today_sofar = carbon_today_sofar
