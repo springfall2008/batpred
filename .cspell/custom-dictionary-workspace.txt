@@ -311,6 +311,7 @@ hadashboard
 hahistory
 hainterface
 halfhourly
+haléř
 hanchu
 hanchuess
 hanres

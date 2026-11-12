@@ -2735,9 +2735,15 @@ SOLAX_SOLIS_MODES_FB00 = {
     "Feed-in priority": 96,
 }
 
+# Units of the CONFIG_ITEMS input_numbers that hold an amount of money in the minor currency unit.
+# Their min/max are multiplied by apps.yaml currency_scale so a currency with a much smaller minor
+# unit than the penny (e.g. CZK haléř, ~29 to 1p) can still set a meaningful threshold (#6155, #3683).
+CURRENCY_UNITS = ("p", "p/kWh", "p/kg")
+
 # Apps.yaml validation schema
 APPS_SCHEMA = {
     "currency_symbols": {"type": "string|string_list"},
+    "currency_scale": {"type": "float"},
     "db_enable": {"type": "boolean"},
     "db_days": {"type": "integer"},
     "db_mirror_ha": {"type": "boolean"},

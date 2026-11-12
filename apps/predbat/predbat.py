@@ -344,6 +344,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.fatal_error = False
         self.components = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
+        self.apply_currency_scale()
         self.comparison = None
         self.predheat = None
         self.predbat_mode = "Monitor"

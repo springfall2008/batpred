@@ -314,6 +314,24 @@ Sets your symbol to use for your main currency e.g. £, € or $ and for 1/100th
     - 'p'
 ```
 
+### currency_scale
+
+Optional, default 1. Predbat plans in your minor currency unit (pence, cents, øre, haléř...), and the ranges of its money settings,
+such as **input_number.predbat_metric_min_improvement_export**, were chosen in pence.
+If your minor unit is worth much less than a penny the top of those ranges can be too small to be a useful threshold,
+e.g. the 50 limit on the metric_min_improvement settings is only 0.50 CZK.
+
+Set `currency_scale` to roughly how many of your minor units make one penny, and the minimum and maximum of every setting measured in your minor unit
+(the `p`, `p/kWh` and `p/kg` settings) is multiplied by it when Predbat starts, e.g. for Czech koruna (about 29 haléř to the penny):
+
+```yaml
+  currency_scale: 29
+```
+
+Only the ranges change. The defaults and the values you have already set stay as they are, so you still need to raise the thresholds yourself
+to what suits you - multiplying the defaults by the same factor is a good starting point.
+Values below 1 are ignored, as they would narrow the ranges and cut back settings you have already made.
+
 ### template
 
 Initially set to `true`, this is used to stop Predbat from operating until you have finished configuring your `apps.yaml`.
