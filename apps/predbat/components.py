@@ -545,6 +545,10 @@ COMPONENT_LIST = {
             "inverter_limit": {"required": False, "config": "hanchu_inverter_limit"},
             "api_delay": {"required": False, "default": 1.0, "config": "hanchu_api_delay"},
             "min_write_interval": {"required": False, "default": 60, "config": "hanchu_min_write_interval"},
+            # Seconds a press of the write button waits for Predbat to finish committing a change
+            # before the schedule is sent, so a half-applied schedule never reaches the inverter
+            # (batpred#6074). 0 writes on every press, as before.
+            "write_debounce": {"required": False, "default": 10.0, "config": "hanchu_write_debounce"},
             # Logs every API request and response. Off by default: on, it writes thousands of long
             # lines a day per device. For a tester proving what hanchu_const.py marks INFERRED.
             "api_debug": {"required": False, "default": True, "config": "hanchu_api_debug"},
@@ -552,6 +556,35 @@ COMPONENT_LIST = {
         # Gate activation on having an account. Without this the component would start for every
         # instance, since all individual args are optional.
         "required_or": ["account"],
+        "phase": 1,
+        "can_restart": True,
+    },
+    "growatt": {
+        "class": "growatt.GrowattAPI",
+        "name": "Growatt OpenAPI",
+        "inverter": True,
+        "event_filter": "predbat_growatt_",
+        "args": {
+            # Predbat.com injects the OAuth access token into growatt_key. The refresh token
+            # remains server-side and OAuthMixin asks the oauth-refresh edge function for a
+            # replacement when this token is close to expiry.
+            "key": {"required": False, "secret": True, "config": "growatt_key"},
+            "auth_method": {"required": False, "default": "oauth", "config": "growatt_auth_method"},
+            "token_expires_at": {"required": False, "config": "growatt_token_expires_at"},
+            "token_hash": {"required": False, "secret": True, "config": "growatt_token_hash"},
+            "inverter_sn": {"required": False, "config": "growatt_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "growatt_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "growatt_automatic_ignore_pv"},
+            "control_enable": {"required": False, "default": True, "config": "growatt_control_enable"},
+            "base_url": {"required": False, "default": "https://opencloud.growatt.com/prod-api", "config": "growatt_base_url"},
+            "battery_rate_max": {"required": False, "config": "growatt_battery_rate_max"},
+            "api_delay": {"required": False, "default": 0.2, "config": "growatt_api_delay"},
+            # Growatt documents one deviceDispatch call per five seconds per device.
+            "min_write_interval": {"required": False, "default": 5, "config": "growatt_min_write_interval"},
+        },
+        # token_hash alone is enough for OAuthMixin to obtain the current token from the
+        # SaaS refresh endpoint after a restart whose embedded access token has expired.
+        "required_or": ["key", "token_hash"],
         "phase": 1,
         "can_restart": True,
     },
@@ -726,6 +759,20 @@ COMPONENT_LIST = {
         # Each export/charge command starts on the first run inside the window, and carries a
         # duration to the window's end, so an unaligned loop starts every window up to a minute late.
         "align_minute": True,
+    },
+    "dummy_inverter": {
+        "class": "dummy_inverter.DummyInverter",
+        "name": "Dummy Inverter",
+        "inverter": True,
+        "event_filter": "predbat_dummy_",
+        # A simulated inverter and battery for demos and log replay, enabled by a dummy_inverter apps.yaml block.
+        # Defaults for every setting in the block live in dummy_inverter.py beside the model that uses them.
+        "args": {
+            "config": {"required": True, "config": "dummy_inverter"},
+            "automatic": {"required": False, "config": "dummy_inverter_automatic", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
     },
     "teslemetry": {
         "class": "teslemetry.TeslemetryAPI",

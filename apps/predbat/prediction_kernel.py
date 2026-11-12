@@ -29,10 +29,10 @@ import sys
 import weakref
 
 from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPORT_POWER
-from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
+from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 10
+KERNEL_ABI_VERSION = 11
 KERNEL_PARITY_REVISION = 19
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
@@ -459,6 +459,39 @@ _EXPORT_LIMIT_STRUCT_USABLE = _EXPORT_LIMIT_STRUCT.size == ctypes.sizeof(PkExpor
     struct.calcsize("@ii0d"),
 )
 
+
+# One PkBatchJob, packed the same way: a batch fills tens of thousands of jobs per plan, and setting
+# its seventeen fields one at a time through ctypes cost about four times as much as packing the
+# record with struct and copying the whole batch into the job array at once. The format is derived
+# from PkBatchJob._fields_ rather than written out, so a field added to the struct changes it too -
+# and the positional pack in run_prediction_kernel_batch then fails loudly on the argument count
+# instead of packing the wrong fields.
+#
+# A pointer field is packed as the buffer's address (ctypes.addressof, 0 for None), which is exactly
+# what assigning the buffer to the field stores. What assigning also does is keep the buffer alive
+# through the job array's _objects; a packed job does not, so run_prediction_kernel_batch holds every
+# buffer it points at in its own locals until pk_run_batch returns.
+#
+# The layout is checked rather than trusted, on the same terms as the export limits above: the size
+# and every field offset are compared with what struct computes from the same format, and a mismatch
+# falls back to filling the fields one by one.
+def _batch_job_format_code(ctype):
+    """Return the struct format code for one PkBatchJob field type (P for a pointer, i for an int32)"""
+    if ctype is ctypes.c_int32:
+        return "i"
+    if issubclass(ctype, ctypes._Pointer):
+        return "P"
+    raise TypeError("PkBatchJob field type {} has no struct packing code".format(ctype))
+
+
+_BATCH_JOB_CODES = [_batch_job_format_code(ctype) for _, ctype in PkBatchJob._fields_]
+_BATCH_JOB_STRUCT = struct.Struct("@" + "".join(_BATCH_JOB_CODES))
+_BATCH_JOB_STRUCT_USABLE = (
+    struct.calcsize("@i") == ctypes.sizeof(ctypes.c_int32)
+    and _BATCH_JOB_STRUCT.size == ctypes.sizeof(PkBatchJob)
+    and [getattr(PkBatchJob, name).offset for name, _ in PkBatchJob._fields_] == [struct.calcsize("@" + "".join(_BATCH_JOB_CODES[:index]) + "0" + code) for index, code in enumerate(_BATCH_JOB_CODES)]
+)
+
 # Contents-keyed cache of marshalled export-limit buffers for the single-run path
 # (run_prediction_kernel). The batch path caches by list identity, which never hits here because
 # every prediction is handed a fresh list; a search fans out thousands of simulations over the same
@@ -470,12 +503,9 @@ _EXPORT_LIMIT_BUFFER_CACHE_MAX = 512
 
 
 def _build_export_limit_array(export_limits):
-    """Pack one export-limit list into a PkExportLimit array (see export_limit_array).
+    """Pack one export-limit list of (mode, target, power) tuples into a PkExportLimit array.
 
-    export_limits is documented as already-tuple-shaped by the time it reaches this function - the
-    normalisation, if any is needed, happens in export_limit_array before the cache key is built
-    below, not here, because an unnormalised legacy element (a list or a dict) is unhashable and
-    would break tuple(export_limits) itself, not just this packing loop.
+    The entries must already be tuples - see export_limit_array for where stored forms are converted.
     """
     buffer = PkExportLimit * len(export_limits)
     if not _EXPORT_LIMIT_STRUCT_USABLE:
@@ -504,19 +534,14 @@ def export_limit_array(export_limits):
     The result is cached on the tuple contents: the kernel only ever reads the buffer, and a
     fan-out re-marshals the same few plans thousands of times.
 
-    export_limits is documented as already-tuple-shaped, and both the packing loop in
-    _build_export_limit_array and the cache key below trust that - but an unnormalised legacy
-    element (a bare packed float, a malformed short sequence, or a stored mapping) would otherwise
-    either unpack wrong in the packer or, if it is a list or dict, make tuple(export_limits) itself
-    unhashable and raise before the packer is even reached, rather than falling back to idle as
-    every other entry point into this encoding does (GitHub Copilot review, PR #5047).
-    export_limit_from_stored is the general decoder - it also validates a 3-element sequence's
-    fields rather than trusting it, unlike the narrower unpack_export_limit. The isinstance check is
-    one pass per call, not per element normalised, so a plan already in tuple form - every plan once
-    it has been through a real cycle - pays nothing beyond the check itself.
+    export_limits must already be (mode, target, power) tuples. Stored and legacy forms (a bare
+    packed float, a list from a YAML or JSON round trip, or a mapping) are converted where a plan
+    enters Predbat - restoring a saved plan or loading a debug dump (export_limits_from_stored) -
+    and the planner only builds tuples (pack_export_limit). Checking every entry again here cost a
+    full pass over the plan on every call, thousands of times per optimisation, so it is not
+    repeated. Anything else fails loudly rather than being packed wrong: a list or mapping entry
+    makes the cache key unhashable, and a bare float cannot be unpacked into three fields.
     """
-    if not all(isinstance(limit, tuple) for limit in export_limits):
-        export_limits = [export_limit_from_stored(limit) for limit in export_limits]
     key = tuple(export_limits)
     buffer = _EXPORT_LIMIT_BUFFER_CACHE.get(key)
     if buffer is None:
@@ -899,26 +924,34 @@ def kernel_result_tuple(pred, result, predict_soc):
     """Assemble the 17-field Prediction.run_prediction() result tuple from a PkResult.
 
     Shared by the single-scenario and batch paths - mirrors prediction.py:626-628, 1266-1284.
+
+    The ten scalar fields arrive already rounded to 4dp (the kernel's round4_fast, ABI 11), so they
+    are copied as they are. round(x, 4) on each was most of what converting a result cost - about
+    1.5us of the 1.7us per simulation, paid on the calling thread for every job in a batch. The kernel
+    rounds the scaled value rather than the exact binary one, so a field can sit one unit in the 4th
+    decimal place away from what round(x, 4) gives; test_kernel_parity allows for exactly that.
     """
     car_charging_soc_next = pred.car_charging_soc_next[:]
     if result.car_soc_next_valid:
+        # One read of the array field: each result.car_soc_next builds a fresh ctypes view
+        car_soc_next = result.car_soc_next
         for car_n in range(pred.num_cars):
-            car_charging_soc_next[car_n] = result.car_soc_next[car_n]
+            car_charging_soc_next[car_n] = car_soc_next[car_n]
 
     iboost_next = result.iboost_next if pred.iboost_enable else pred.iboost_next
 
     return (
-        round(result.final_metric, 4),
-        round(result.import_kwh_battery, 4),
-        round(result.import_kwh_house, 4),
-        round(result.export_kwh, 4),
-        round(result.soc_min, 4),
-        round(result.final_soc, 4),
+        result.final_metric,
+        result.import_kwh_battery,
+        result.import_kwh_house,
+        result.export_kwh,
+        result.soc_min,
+        result.final_soc,
         result.soc_min_minute,
-        round(result.battery_cycle, 4),
-        round(result.metric_keep, 4),
-        round(result.final_iboost, 4),
-        round(result.final_carbon_g, 4),
+        result.battery_cycle,
+        result.metric_keep,
+        result.final_iboost,
+        result.final_carbon_g,
         predict_soc,
         car_charging_soc_next,
         iboost_next,
@@ -973,18 +1006,25 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     caller_jobs = jobs
     jobs = [caller_jobs[index] for index in order]
     n_jobs = len(jobs)
-    job_array = (PkBatchJob * n_jobs)()
+    # Packed jobs are copied into the job array after the loop; the per-field fallback fills it in place
+    pack_jobs = _BATCH_JOB_STRUCT_USABLE
+    job_array = None if pack_jobs else (PkBatchJob * n_jobs)()
+    packed_jobs = []
+    pack_job = _BATCH_JOB_STRUCT.pack
+    addressof = ctypes.addressof
     result_array = (PkBatchResult * n_jobs)()
-    # Every ctypes buffer behind a pointer field has to outlive the call. ctypes' own keepalive already
-    # covers this (b_base walks up to job_array._objects), so this list is belt-and-braces: the limit
-    # arrays are held explicitly here rather than relying on ctypes' container keepalive.
+    # Every ctypes buffer behind a pointer field has to outlive the call. A packed job holds only the
+    # buffer's address, so ctypes' container keepalive (job_array._objects) does not cover it: the
+    # locals of this function do. The window arrays live in window_cache, the charge and export limit
+    # buffers in their caches and this list, the window-end SoC buffers in export_end_buffers, and a
+    # floor either here or on its job (a twin's floor is that twin's export_end_buffers entry).
     buffers = []
     # The charge fan-outs reuse the same window lists across every job, so their start/end arrays are
     # marshalled once per distinct list instead of once per job - which is most of what those batches
-    # save. Export windows share this memo only when all_n is truthy; otherwise _prepare_export builds
-    # a fresh one per job. Keyed on identity, with the list retained so an id() cannot be recycled
-    # mid-batch. This relies on no caller mutating a window list between enqueue and flush (see
-    # prediction_batch.py).
+    # save. An export trial that moves a window's start builds its own list, which the trial's PV
+    # scenarios share (PredictionBatch.shared_trial), so it is marshalled once per trial. Keyed on
+    # identity, with the list retained so an id() cannot be recycled mid-batch. This relies on no
+    # caller mutating a window list between enqueue and flush (see prediction_batch.py).
     window_cache = {}
 
     def window_arrays(windows):
@@ -1004,6 +1044,18 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     export_end_buffers = []
     export_end_by_job = {}
 
+    # The scenarios of one trial share its charge limit list (PredictionBatch.shared_trial), and an export
+    # fan-out shares one across every trial, so the buffer is memoised on the same terms as the two above
+    charge_limit_cache = {}
+
+    def charge_limit_array(charge_limit):
+        """Marshal a charge limit list into a double buffer, reusing an earlier job's where possible"""
+        entry = charge_limit_cache.get(id(charge_limit))
+        if entry is None:
+            entry = (double_array(charge_limit), charge_limit)
+            charge_limit_cache[id(charge_limit)] = entry
+        return entry[0]
+
     def limit_arrays(export_limits):
         """Marshal an export limit list into its PkExportLimit buffer, reusing an earlier job's where possible"""
         entry = limits_cache.get(id(export_limits))
@@ -1015,39 +1067,69 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     for index, job in enumerate(jobs):
         charge_start, charge_end, _ = window_arrays(job.charge_window)
         export_start, export_end, _ = window_arrays(job.export_window)
-        charge_limit = double_array(job.charge_limit)
+        charge_limit = charge_limit_array(job.charge_limit)
         export_limits_buffer, _ = limit_arrays(job.export_limits)
         buffers.append((charge_limit, export_limits_buffer))
 
-        pk_job = job_array[index]
-        pk_job.charge_limit = charge_limit
-        pk_job.charge_start = charge_start
-        pk_job.charge_end = charge_end
-        pk_job.export_limits = export_limits_buffer
-        pk_job.export_start = export_start
-        pk_job.export_end = export_end
-        pk_job.soc_out = None
         export_end_buffer = (ctypes.c_double * len(job.export_window))() if (job.want_export_end_soc or job.need_export_end_soc) and job.export_window else None
-        pk_job.export_end_soc_out = export_end_buffer
         export_end_buffers.append(export_end_buffer)
         export_end_by_job[id(job)] = export_end_buffer
         floor_buffer = None
-        pk_job.phase = 0
+        phase = 0
         if job.floor_twin is not None:
             floor_buffer = export_end_by_job.get(id(job.floor_twin))
-            pk_job.phase = 1
+            phase = 1
         elif job.export_floor_soc is not None and len(job.export_floor_soc) == len(job.export_window):
             # A memo entry is either a ctypes buffer kept from an earlier twin or a list from the direct path
             floor_buffer = job.export_floor_soc if isinstance(job.export_floor_soc, ctypes.Array) else double_array(job.export_floor_soc)
             buffers.append(floor_buffer)
-        pk_job.export_floor_soc = floor_buffer
-        pk_job.n_charge = len(job.charge_window)
-        pk_job.n_export = len(job.export_window)
-        pk_job.pv_scenario = int(job.pv_scenario)
-        pk_job.end_record = job.end_record
-        pk_job.step = PREDICT_STEP  # the caller's step is ignored - see run_prediction_kernel
-        pk_job.soc_range_start_step = job.soc_range_start_step
-        pk_job.soc_range_end_step = job.soc_range_end_step
+
+        # The caller's step is ignored - see run_prediction_kernel. Field order is PkBatchJob._fields_;
+        # soc_out is always NULL because batched jobs never materialise the SoC series.
+        if pack_jobs:
+            packed_jobs.append(
+                pack_job(
+                    addressof(charge_limit),
+                    addressof(charge_start),
+                    addressof(charge_end),
+                    addressof(export_limits_buffer),
+                    addressof(export_start),
+                    addressof(export_end),
+                    0,
+                    addressof(export_end_buffer) if export_end_buffer is not None else 0,
+                    addressof(floor_buffer) if floor_buffer is not None else 0,
+                    len(job.charge_window),
+                    len(job.export_window),
+                    int(job.pv_scenario),
+                    job.end_record,
+                    PREDICT_STEP,
+                    job.soc_range_start_step,
+                    job.soc_range_end_step,
+                    phase,
+                )
+            )
+        else:
+            pk_job = job_array[index]
+            pk_job.charge_limit = charge_limit
+            pk_job.charge_start = charge_start
+            pk_job.charge_end = charge_end
+            pk_job.export_limits = export_limits_buffer
+            pk_job.export_start = export_start
+            pk_job.export_end = export_end
+            pk_job.soc_out = None
+            pk_job.export_end_soc_out = export_end_buffer
+            pk_job.export_floor_soc = floor_buffer
+            pk_job.n_charge = len(job.charge_window)
+            pk_job.n_export = len(job.export_window)
+            pk_job.pv_scenario = int(job.pv_scenario)
+            pk_job.end_record = job.end_record
+            pk_job.step = PREDICT_STEP
+            pk_job.soc_range_start_step = job.soc_range_start_step
+            pk_job.soc_range_end_step = job.soc_range_end_step
+            pk_job.phase = phase
+
+    if pack_jobs:
+        job_array = (PkBatchJob * n_jobs).from_buffer_copy(b"".join(packed_jobs))
 
     return_code = lib.pk_run_batch(pred.kernel_handle, job_array, n_jobs, result_array, max(int(n_threads), 1))
     if return_code != 0:

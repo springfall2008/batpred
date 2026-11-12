@@ -60,6 +60,7 @@ from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
 from tests.test_clock_change_day import test_clock_change_day
+from tests.test_car_charging_sentence import test_car_charging_sentence
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
@@ -106,6 +107,9 @@ from tests.test_alert_feed import test_alert_feed
 from tests.test_solax import run_solax_tests
 from tests.test_sigenergy import run_sigenergy_tests
 from tests.test_single_debug import run_single_debug
+from tests.replay_forward import replay_forward, summarise, chart_replay, soc_rms_error, parse_override, capture_log, write_replay_json
+from tests.test_replay_forward import run_replay_forward_tests
+from tests.test_dummy_inverter import run_dummy_inverter_tests
 from tests.test_saving_session import (
     test_saving_session,
     test_saving_session_null_octopoints,
@@ -122,6 +126,7 @@ from tests.test_saving_session import (
     test_saving_session_min_octopoints_threshold,
     test_saving_session_entity_regex_power_rename,
     test_templates_ship_octopus_free_session,
+    test_templates_do_not_watch_octopus_saving_session,
     test_saving_session_select_entity_join_defers_notify,
     test_saving_session_zero_octopoints_joined_is_free_slot,
 )
@@ -182,6 +187,9 @@ from tests.test_web_annual import (
     test_web_annual_validation_error_preserves_input,
 )
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests, run_clone_windows_tests, run_window_cache_tests
+from tests.test_trial_memo import run_trial_memo_tests
+from tests.test_batch_job_packing import run_batch_job_packing_tests
+from tests.test_kernel_rounding import run_kernel_rounding_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_export_encoding import run_export_encoding_tests
@@ -197,6 +205,7 @@ from tests.test_minute_data import test_minute_data, test_minute_data_load, test
 from tests.test_minute_data_import_export import test_minute_data_import_export
 from tests.test_faq_recorder_config import test_faq_recorder_config
 from tests.test_docs_marketplace import test_docs_marketplace
+from tests.test_docs_time_window import test_docs_time_window
 from tests.test_docs_solax_mode8 import test_docs_solax_mode8
 from tests.test_plan_card_soc_symbols import test_plan_card_soc_symbols
 from tests.test_minute_data_state import test_minute_data_state
@@ -276,6 +285,7 @@ from tests.test_hanchu_api import run_hanchu_api_tests
 from tests.test_hanchu_control import run_hanchu_control_tests
 from tests.test_hanchu_publish import run_hanchu_publish_tests
 from tests.test_hanchu_cli import run_hanchu_cli_tests
+from tests.test_growatt import run_growatt_tests
 from tests.test_alphaess_api import run_alphaess_api_tests
 from tests.test_alphaess_config import run_alphaess_config_tests
 from tests.test_alphaess_publish import run_alphaess_publish_tests
@@ -326,6 +336,7 @@ from tests.test_plan_scenario_summary import run_test_plan_scenario_summary
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
 from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
+from tests.test_fetch_no_load_source import test_fetch_no_load_source
 from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests, run_random_scenario_reapply_tests
 from tests import network_guard
@@ -341,6 +352,7 @@ from tests.test_ohme import test_ohme
 from tests.test_givtcp_component import test_givtcp_component
 from tests.test_debug_yaml_scope import run_debug_yaml_scope_tests
 from tests.test_log_replay_inputs import run_log_replay_inputs_tests
+from tests.test_replay_roundtrip import run_replay_roundtrip_tests, run_replay_roundtrip_day_tests
 from tests.test_memory_release import run_memory_release_tests
 from tests.test_inverter_write_poll import run_inverter_write_poll_tests
 from tests.test_givtcp_rest import run_givtcp_rest_tests
@@ -481,6 +493,34 @@ def run_window_cache_tests_isolated(my_predbat):
     return run_window_cache_tests(create_predbat())
 
 
+def run_trial_memo_tests_isolated(my_predbat):
+    """Run the trial memo tests against a freshly created instance.
+
+    my_predbat is unused for the reason run_window_cache_tests_isolated gives: the group ends by
+    replaying full plans from debug dumps with the memo validator on, which needs complete and
+    deterministic planning state rather than whatever earlier tests left on the shared instance.
+    """
+    return run_trial_memo_tests(create_predbat())
+
+
+def run_batch_job_packing_tests_isolated(my_predbat):
+    """Run the batch job packing tests against a freshly created instance.
+
+    my_predbat is unused for the same reason as run_trial_memo_tests_isolated: the group replays full
+    plans from debug dumps, which needs complete and deterministic planning state.
+    """
+    return run_batch_job_packing_tests(create_predbat())
+
+
+def run_kernel_rounding_tests_isolated(my_predbat):
+    """Run the kernel result rounding tests against a freshly created instance.
+
+    my_predbat is unused for the same reason as run_trial_memo_tests_isolated: the group replays full
+    plans from debug dumps, which needs complete and deterministic planning state.
+    """
+    return run_kernel_rounding_tests(create_predbat())
+
+
 def create_predbat():
     my_predbat = PredBat()
     my_predbat.states = {}
@@ -549,6 +589,7 @@ def main():
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
         ("car_plan_windows", test_car_plan_windows, "parse_car_plan_windows year anchoring: New Year either side, long windows, leap day", False),
+        ("car_charging_sentence", test_car_charging_sentence, "Plan details say the car is charging only when it reports charging (GH#3017)", False),
         ("hass_watcher", test_hass_watcher, "Standalone-mode file watcher tests (#4397/#4396)", False),
         ("hass_timer", test_hass_timer, "Standalone-mode scheduler keeps its pace across clock changes (#5770)", False),
         ("new_install_detection", test_new_install_detection, "New-install misdetection tests (Bug B, #4397/#4396, #3259, #3306)", False),
@@ -562,6 +603,7 @@ def main():
         ("minute_data_import_export", test_minute_data_import_export, "Minute data import/export tests", False),
         ("faq_recorder_config", test_faq_recorder_config, "FAQ recorder filter example matches the entities Predbat reads history for", False),
         ("docs_marketplace", test_docs_marketplace, "Docs and templates cover the Marketplace wherever they give HACS install steps", False),
+        ("docs_time_window", test_docs_time_window, "Script-controlled templates leave window times to Predbat's placeholders and the docs warn about the 00:00:00 charge and discharge disable", False),
         ("docs_solax_mode8", test_docs_solax_mode8, "Solax Mode 8 docs and template name the sensors the Mode 8 trigger needs enabled", False),
         ("plan_card_soc_symbols", test_plan_card_soc_symbols, "Plan card SoC symbol legend explains every symbol the plan shows on the SoC % cell", False),
         ("minute_data_no_smoothing_backwards", test_minute_data_no_smoothing_backwards, "Minute data no-smoothing backwards tests", False),
@@ -702,6 +744,7 @@ def main():
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
         ("fetch_pv_mid_cycle", test_fetch_pv_mid_cycle, "PV forecasts not empty part way through fetch_sensor_data (#4317)", False),
+        ("fetch_no_load_source", test_fetch_no_load_source, "No load source raises LoadSourceMissing with the right status (#5092)", False),
         ("set_rate_thresholds", run_set_rate_thresholds_tests, "Rate threshold saving-session exclusion tests (GH#5050)", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
         ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
@@ -725,6 +768,7 @@ def main():
         ("saving_session_min_octopoints_threshold", test_saving_session_min_octopoints_threshold, "Saving session configurable minimum octopoints threshold test (issue #4595)", False),
         ("saving_session_entity_regex_power_rename", test_saving_session_entity_regex_power_rename, "Saving/free session entity regex Power Down/Up rename test (issue #4548 point 2)", False),
         ("templates_octopus_free_session", test_templates_ship_octopus_free_session, "apps.yaml templates ship octopus_free_session alongside octopus_saving_session (issue #5912)", False),
+        ("templates_no_saving_session_watch", test_templates_do_not_watch_octopus_saving_session, "apps.yaml templates and docs do not watch octopus_saving_session or car_charging_soc (issue #6106)", False),
         ("saving_session_select_entity_join_defers_notify", test_saving_session_select_entity_join_defers_notify, "Select-entity join defers the joined notification test (issue #4593)", False),
         ("saving_session_zero_octopoints_free_slot", test_saving_session_zero_octopoints_joined_is_free_slot, "Joined zero octopoints session becomes a free import slot test (issue #4851)", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
@@ -759,6 +803,7 @@ def main():
         ("hanchu_control", run_hanchu_control_tests, "Hanchu control-logic tests", False),
         ("hanchu_publish", run_hanchu_publish_tests, "Hanchu publish/config tests", False),
         ("hanchu_cli", run_hanchu_cli_tests, "Hanchu command-line harness helper tests", False),
+        ("growatt", run_growatt_tests, "Growatt OpenAPI component tests", False),
         ("enphase_api", run_enphase_api_tests, "Enphase API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),
@@ -778,6 +823,9 @@ def main():
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
         ("clone_windows", run_clone_windows_tests, "Clone windows tests", False),
         ("window_cache", run_window_cache_tests_isolated, "Window bounds cache tests", False),
+        ("trial_memo", run_trial_memo_tests_isolated, "Batch trial memo: PV scenarios of one trial share its prepared inputs", False),
+        ("batch_job_packing", run_batch_job_packing_tests_isolated, "Kernel batch jobs packed with struct match the per-field fill", False),
+        ("kernel_rounding", run_kernel_rounding_tests_isolated, "Kernel returns its scalar results already rounded to 4dp", False),
         ("hit_charge_cache", run_hit_charge_cache_tests, "Hit charge window cache tests", False),
         ("window_selection", run_window_selection_tests, "Window selection picker tests", False),
         ("kernel_static_cache", run_kernel_static_cache_tests, "Kernel static context cache tests", False),
@@ -847,6 +895,10 @@ def main():
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),
         ("debug_yaml_scope", run_debug_yaml_scope_tests, "create_debug_yaml() reachability/scope tests", False),
+        ("dummy_inverter", run_dummy_inverter_tests, "Simulated inverter and battery component (model physics, controls, automatic config)", False),
+        ("replay_forward", run_replay_forward_tests, "Forward replay of a log from a debug yaml (log parsing, history shifting, window comparison)", False),
+        ("replay_roundtrip", run_replay_roundtrip_tests, "Round trip: an hour of the main loop against the dummy inverter, then a replay of its log must match line for line", False),
+        ("replay_roundtrip_day", run_replay_roundtrip_day_tests, "Round trip: a recorded day of real load and PV through midnight, then a replay of its log must match line for line", True),
         ("log_replay_inputs", run_log_replay_inputs_tests, "Replay-input log lines (forecasts, rates, plan state, cars, inverter)", False),
         ("memory_release", run_memory_release_tests, "glibc malloc_trim()/arena cap helper tests", False),
         ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
@@ -967,6 +1019,12 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
+    parser.add_argument("--replay_log", action="store", help="With --debug_file: replay this Predbat log forwards from the debug yaml and compare each re-plan's export windows with the log's")
+    parser.add_argument("--replay_until", action="store", help="With --replay_log: stop the replay at the first HH:MM after the yaml (the next day if that time has passed)")
+    parser.add_argument("--replay_simulate", action="store_true", help="With --replay_log: simulate the battery under the replayed plan from actual PV and load, instead of taking SoC from the log")
+    parser.add_argument("--override", action="append", help="With --debug_file: override a setting after restoring the yaml, as name=value (repeatable), for what-if replays")
+    parser.add_argument("--replay_chart", action="store", help="With --replay_log: also write a PNG chart of SoC and the live vs replayed export plan to this file")
+    parser.add_argument("--replay_json", action="store", help="With --replay_log: also write the comparison as JSON to this file - a summary, then one record per run with the plans and prediction metrics that differ and the first differing plan line")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
     parser.add_argument("--compare", action="store_true", help="Run compare")
@@ -1058,8 +1116,36 @@ def main():
         )
         sys.exit(0)
 
+    overrides = dict(parse_override(text) for text in (args.override or []))
+    if args.debug_file and args.replay_log:
+        replay_lines = []
+        if args.replay_json:
+            capture_log(my_predbat, replay_lines)
+        rows = replay_forward(my_predbat, args.debug_file, args.replay_log, until=args.replay_until, simulate=args.replay_simulate, overrides=overrides)
+        if args.replay_json:
+            with open(args.replay_log, errors="replace") as handle:
+                live_lines = handle.readlines()
+            meta = {"debug_file": args.debug_file, "log_file": args.replay_log, "mode": "simulated" if args.replay_simulate else "exact", "until": args.replay_until, "overrides": overrides or {}}
+            write_replay_json(args.replay_json, rows, live_lines, replay_lines, meta)
+            print("Wrote replay JSON to {}".format(args.replay_json))
+        if args.replay_chart:
+            chart_replay(rows, args.replay_chart, title="Replay of {} from {}".format(os.path.basename(args.replay_log), os.path.basename(args.debug_file)))
+            print("Wrote replay chart to {}".format(args.replay_chart))
+        for after in (False, True):
+            if after and not any(row.get("after_version_change") for row in rows):
+                break
+            label = " after the version change" if after else ""
+            replanned, identical, same_start = summarise(rows, after_version_change=after)
+            print("Replay: adopted plans{} - of {} re-plans, {} identical to the log and {} with the same first export window start".format(label, replanned, identical, same_start))
+            replanned, identical, same_start = summarise(rows, logged="logged_candidate", replayed="replayed_candidate", after_version_change=after)
+            print("Replay: candidate plans{} - of {} re-plans, {} identical to the log and {} with the same first export window start".format(label, replanned, identical, same_start))
+        rms = soc_rms_error(rows)
+        if rms is not None:
+            print("Replay: simulated SoC differs from the logged SoC by {:.2f}% RMS over {} runs".format(rms, len(rows)))
+        sys.exit(0)
+
     if args.debug_file:
-        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo)
+        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo, overrides=overrides)
         sys.exit(0)
 
     # Collect tests to run based on arguments

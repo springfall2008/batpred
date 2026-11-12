@@ -36,7 +36,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.7.9"
+THIS_VERSION = "v9.7.10"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
@@ -107,7 +107,7 @@ from components import Components, COMPONENT_LIST
 from execute import Execute
 from marginal import Marginal
 from plan import Plan
-from fetch import Fetch
+from fetch import Fetch, LoadSourceMissing
 from output import Output
 from userinterface import UserInterface
 from compare import Compare
@@ -1398,8 +1398,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
         Refresh input data and recompute the plan if required, without executing it.
 
-        Returns None when a pre-condition fails (template configuration, inverter data
-        unavailable or import rates all zero) - the error will already have been recorded.
+        Returns None when a pre-condition fails (template configuration, no load source configured
+        yet, inverter data unavailable or import rates all zero) - the error will already have been recorded.
         Otherwise returns a plan artifact summary dict with keys recomputed, plan_valid,
         plan_version and plan_last_updated. Passing scheduled=False forces a recompute.
 
@@ -1434,7 +1434,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         self.expose_config("active", True)
         self.fetch_config_options()
-        sensor_force_replan = self.fetch_sensor_data()
+        try:
+            sensor_force_replan = self.fetch_sensor_data()
+        except LoadSourceMissing:
+            # Already logged and recorded; often a component that has not set load_today yet, so try again next cycle (#5092)
+            return None
 
         # Check if any sensor changes require a replan
         if sensor_force_replan:
