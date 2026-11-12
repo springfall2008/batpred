@@ -497,6 +497,8 @@ class Inverter:
         # None until written (and in Monitor mode, where nothing is)
         self.requested_charge_w = None
         self.requested_discharge_w = None
+        # Whether execute_plan() held this inverter at its reserve with a zero discharge rate last cycle (reserve_via_discharge_rate)
+        self.reserve_hold_active = False
         self.battery_voltage = None
         self.pv_power = 0
         self.load_power = 0
@@ -590,6 +592,10 @@ class Inverter:
         # True when no reserve between 80 and 100 is honoured (a Powerwall, GH#6046), so above 80% a hold that must not
         # discharge at all can only ask for 100. Defaults False so an inverter type has to opt in.
         self.inv_reserve_full_only_above_80 = INVERTER_DEF[self.inverter_type].get("reserve_full_only_above_80", False)
+        # True when an inverter with no reserve register can hold the reserve with a zero discharge rate, which
+        # stops discharge but still lets PV charge the battery (Sigenergy, #5358). Defaults False so an inverter
+        # type has to opt in.
+        self.inv_reserve_via_discharge_rate = INVERTER_DEF[self.inverter_type].get("reserve_via_discharge_rate", False)
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
         self.inv_charge_time_entity_is_option = INVERTER_DEF[self.inverter_type]["charge_time_entity_is_option"]
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]

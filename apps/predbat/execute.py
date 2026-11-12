@@ -36,6 +36,8 @@ from const import (
     RUN_STATE_HOLD_FOR_IBOOST,
     RUN_STATE_READ_ONLY,
     RUN_STATE_CALIBRATION,
+    RESERVE_HOLD_MARGIN_PERCENT,
+    RESERVE_HOLD_HYSTERESIS_PERCENT,
 )
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
 from predbat_metrics import metrics
@@ -1128,6 +1130,21 @@ class Execute:
                             status = RUN_STATE_HOLD_FOR_IBOOST
                         else:
                             status_hold_iboost = ", " + RUN_STATE_HOLD_FOR_IBOOST
+
+            # An inverter with no reserve register only has the reserve in the plan: in Demand its own
+            # self-consumption carries on serving the house from the battery down to the device's cut-off
+            # (#5358). Where the type says a zero discharge rate stops discharge but still lets PV charge,
+            # hold the plan's floor with it. Not while charging or force exporting, where the rate is
+            # already decided, nor in Monitor or Control SoC only (reset_rates is False there). Once held, the
+            # SoC has to rise a further RESERVE_HOLD_HYSTERESIS_PERCENT before the hold lets go; that state is
+            # kept while a car or iBoost hold has claimed the rate, so it isn't lost when they end.
+            hold_limit_percent = inverter.reserve_percent + RESERVE_HOLD_MARGIN_PERCENT + (RESERVE_HOLD_HYSTERESIS_PERCENT if inverter.reserve_hold_active else 0)
+            inverter.reserve_hold_active = (
+                reset_rates and inverter.inv_reserve_via_discharge_rate and status_per_inverter.get(inverter.id) not in [RUN_STATE_CHARGING, RUN_STATE_EXPORTING] and inverter.reserve_percent > 0 and inverter.soc_percent <= hold_limit_percent
+            )
+            if inverter.reserve_hold_active and discharge_rate is None:
+                discharge_rate = 0
+                self.log("Inverter {} SoC {}% is close to the {}% reserve, disabling battery discharge as the inverter has no reserve setting".format(inverter.id, inverter.soc_percent, inverter.reserve_percent))
 
             # Reset pause mode; rates are resolved once by the apply pass after the loop
             if resetPause:
