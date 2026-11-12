@@ -77,6 +77,12 @@ CLOUD_ARRAY_MARGIN = 1.2
 # the HA integrations). Treated as "unknown", not as a real 9999 kWp array.
 PV_ARRAY_KWP_UNKNOWN = 9999
 RUN_EVERY = 5
+
+# Lowest rate (in the currency's 1/100 unit per kWh, e.g. p or c) a manual SoC target is penalised at:
+# the import rate below a manual_soc or alert floor, and the export rate above a manual_soc_max
+# ceiling. The keep penalty is weighted by the minute's own rate, so without this a target in a free
+# (0) slot cost nothing to miss and one at a negative rate rewarded missing it (#5162).
+KEEP_TARGET_MIN_RATE = 1.0
 # Forecast scenarios simulated by the planner.
 # PV_SCENARIO_PV10 must remain 1 so it stays interchangeable with the legacy pv10 boolean.
 PV_SCENARIO_NOMINAL = 0
