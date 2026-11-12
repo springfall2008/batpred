@@ -1147,9 +1147,11 @@ class HanchuAPI(ComponentBase):
         # overwrite=False: these four are the daily energy totals whose recorder HISTORY Predbat
         # reads (the load model and the day's cost), so a sensor the user named in apps.yaml wins and
         # keeps its history - set_arg_auto still fills the key in when they named nothing. Claimed
-        # per key, as GivTCP does. The case that needs it: an EV charger wired outside the Hanchu
-        # grid meter, so Hanchu's own import_today misses the car and the user points the key at
-        # their smart meter instead.
+        # per key, as GivTCP does. The case that needs it: a load wired outside the Hanchu grid
+        # meter that the user wants in the day's import, measured by their smart meter instead.
+        # Not an EV charger: with switch.predbat_car_energy_reported_load off, today_cost() already
+        # adds the car from car_charging_energy, so a smart meter import_today would count it twice
+        # (batpred#6149).
         for leaf in ("load_today", "import_today", "export_today", "pv_today"):
             if leaf == "pv_today" and self.automatic_ignore_pv:
                 continue
