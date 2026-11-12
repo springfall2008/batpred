@@ -1382,6 +1382,172 @@ def test_attach_credits_straddle():
     return False
 
 
+def test_parse_axle_events():
+    """Axle events are read in the sensor's time format, and ones without a time, direction or price are dropped."""
+    from billing import parse_axle_events
+
+    events = parse_axle_events(
+        [
+            {"start_time": "2026-11-02T17:00:00+0000", "end_time": "2026-11-02T18:00:00+0000", "import_export": "export", "pence_per_kwh": 100},
+            {"start_time": "2026-11-03T02:00:00Z", "end_time": "2026-11-03T03:00:00Z", "import_export": "import", "pence_per_kwh": "20"},
+            {"start_time": "2026-11-04T17:00:00+0000", "end_time": "2026-11-04T16:00:00+0000", "import_export": "export", "pence_per_kwh": 100},
+            {"start_time": "2026-11-04T17:00:00", "end_time": "2026-11-04T18:00:00", "import_export": "export", "pence_per_kwh": 100},
+            {"start_time": "2026-11-05T17:00:00+0000", "end_time": "2026-11-05T18:00:00+0000", "import_export": None, "pence_per_kwh": 100},
+            {"start_time": "2026-11-06T17:00:00+0000", "end_time": "2026-11-06T18:00:00+0000", "import_export": "export", "pence_per_kwh": None},
+            {"start_time": "2026-11-07T12:00:00+0000", "end_time": "2026-11-07T12:30:00+0000", "import_export": "export", "pence_per_kwh": 0},
+            {"start_time": "bad", "end_time": "2026-11-06T18:00:00+0000", "import_export": "export", "pence_per_kwh": 100},
+            "not an event",
+        ]
+    )
+    expected = [
+        (datetime(2026, 11, 2, 17, 0, tzinfo=timezone.utc), datetime(2026, 11, 2, 18, 0, tzinfo=timezone.utc), "export", 100.0),
+        (datetime(2026, 11, 3, 2, 0, tzinfo=timezone.utc), datetime(2026, 11, 3, 3, 0, tzinfo=timezone.utc), "import", 20.0),
+        (datetime(2026, 11, 7, 12, 0, tzinfo=timezone.utc), datetime(2026, 11, 7, 12, 30, tzinfo=timezone.utc), "export", 0.0),
+    ]
+    if events != expected:
+        print("ERROR: expected the export, import and zero-priced events only, got {}".format(events))
+        return True
+    if parse_axle_events(None) != []:
+        print("ERROR: no Axle events should parse to none")
+        return True
+    return False
+
+
+def _axle_event(start_minute, end_minute, direction="export", pence=100):
+    """An Axle event as the axle_session sensor holds it, by minutes after the view's midnight."""
+    return {
+        "start_time": (VIEW_MIDNIGHT + timedelta(minutes=start_minute)).strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "end_time": (VIEW_MIDNIGHT + timedelta(minutes=end_minute)).strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "import_export": direction,
+        "pence_per_kwh": pence,
+    }
+
+
+def test_attach_axle():
+    """Rows inside an Axle event carry an estimate of the Axle payment Predbat priced in, and the summary's diff is after it."""
+    from billing import attach_billing
+
+    # A real export event: 2.56 kWh exported in each half-hour at Agile Outgoing 32.92p and 33.30p plus Axle's 100p, then a plain row
+    minutes = [1020, 1050, 1080]
+    imports = {_key(1020): _slot(0.0, 0.0), _key(1050): _slot(0.0, 0.0), _key(1080): _slot(1.0, 30.0)}
+    exports = {_key(1020): _slot(2.56, 2.56 * 32.92), _key(1050): _slot(2.56, 2.56 * 33.30), _key(1080): _slot(0.0, 0.0)}
+    billing = dict(_billing_attrs(imports, exports, legs={"import": True, "export": True}))
+    predbat_cost = {1020: -2.56 * 132.92, 1050: -2.56 * 133.30, 1080: 30.0}
+    import_kwh = {1020: 0.0, 1050: 0.0, 1080: 1.0}
+    export_kwh = {1020: 2.56, 1050: 2.56, 1080: 0.0}
+    plan = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, [_axle_event(1020, 1080)])
+    summary = plan["billing_summary"]
+    if [row.get("billing_axle") for row in plan["rows"]] != [2.56, 2.56, None]:
+        print("ERROR: each event row should carry its 2.56 kWh at 100p, got {}".format([row.get("billing_axle") for row in plan["rows"]]))
+        return True
+    if summary.get("axle") != 5.12 or summary.get("diff") != 0.0 or summary.get("predbat_cost") != -6.52 or summary.get("axle_slots") != 2:
+        print("ERROR: the Axle payment should close the gap between the bill and Predbat's cost, got {}".format(summary))
+        return True
+    if [row.get("billing_diff") for row in plan["rows"]] != [0.0, 0.0, 0.0]:
+        print("ERROR: each Axle row's Diff should be after its estimate, got {}".format([row.get("billing_diff") for row in plan["rows"]]))
+        return True
+    # A row waiting for its export bill isn't counted, so it isn't flagged either
+    waiting = attach_billing(
+        _plan(minutes), dict(billing, slots={"import": imports, "export": {key: slot for key, slot in exports.items() if key != _key(1050)}}), VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, [_axle_event(1020, 1080)]
+    )
+    if [row.get("billing_axle") for row in waiting["rows"]] != [2.56, None, None] or waiting["billing_summary"].get("axle") != 2.56:
+        print("ERROR: a row waiting for its export should carry no estimate, got {}".format([row.get("billing_axle") for row in waiting["rows"]]))
+        return True
+    # Managed mode makes every row an Axle row: billing at the wrong rates must still be caught by the plausibility check
+    managed = _plan(minutes)
+    for row in managed["rows"]:
+        row["import_rate"] = 110.0
+    managed_billing = dict(billing, slots={"import": {key: _slot(1.0, 90.0) for key in imports}, "export": exports})
+    hidden = attach_billing(managed, managed_billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, [_axle_event(1020, 1110)])
+    if "billing_summary" in hidden or hidden["rows"][0].get("billed") is not None:
+        print("ERROR: billing at three times Predbat's rate less the Axle premium should be hidden, got {}".format(hidden.get("billing_summary")))
+        return True
+    # Without the event the same day shows the Axle payment as an overspend
+    plain = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh)
+    if plain["billing_summary"].get("axle") != 0.0 or plain["billing_summary"].get("diff") != 5.12 or plain["rows"][0].get("billing_axle") is not None:
+        print("ERROR: without Axle events nothing should be estimated, got {}".format(plain["billing_summary"]))
+        return True
+    # Import during an export event: Predbat priced it 100p/kWh higher for planning, which the bill doesn't charge and Axle doesn't pay
+    phantom_imports = dict(imports, **{_key(1020): _slot(0.5, 15.0)})
+    phantom_cost = {**predbat_cost, 1020: 0.5 * 130.0 - 2.56 * 132.92}
+    phantom = attach_billing(_plan(minutes), dict(billing, slots={"import": phantom_imports, "export": exports}), VIEW_MIDNIGHT, 30, phantom_cost, 55.52, {}, False, {**import_kwh, 1020: 0.5}, export_kwh, [_axle_event(1020, 1080)])
+    if phantom["rows"][0].get("billing_axle") != 2.06 or phantom["billing_summary"].get("diff") != 0.0:
+        print("ERROR: the export event's import premium should be given back, got {} {}".format(phantom["rows"][0].get("billing_axle"), phantom["billing_summary"]))
+        return True
+    # An event covering half a row counts half its price; an import event pays its price on the import
+    half = attach_billing(_plan([1020]), billing, VIEW_MIDNIGHT, 30, {1020: -2.56 * 82.92}, 55.52, {}, False, import_kwh, export_kwh, [_axle_event(1035, 1050)])
+    if half["rows"][0].get("billing_axle") != 1.28 or half["billing_summary"].get("diff") != 0.0:
+        print("ERROR: an event over half the row should count half its price, got {}".format(half["billing_summary"]))
+        return True
+    night = {_key(120): _slot(4.0, 4.0 * 20.0)}
+    imported = attach_billing(_plan([120]), _billing_attrs(night), VIEW_MIDNIGHT, 30, {120: 4.0 * 5.0}, 55.52, {}, True, {120: 4.0}, None, [_axle_event(120, 180, "import", 15)])
+    if imported["rows"][0].get("billing_axle") != 0.6 or imported["billing_summary"].get("diff") != 0.0:
+        print("ERROR: an import event should be paid on the import, got {}".format(imported["billing_summary"]))
+        return True
+    # An Axle row's import rate carries the premium, so it mustn't make the day's rates look implausible and hide the billing
+    rated = _plan(minutes)
+    for row, rate in zip(rated["rows"], (130.0, 130.0, 30.0)):
+        row["import_rate"] = rate
+    rated_billing = dict(billing, slots={"import": dict(imports, **{_key(1020): _slot(1.0, 30.0), _key(1050): _slot(1.0, 30.0)}), "export": exports})
+    priced = attach_billing(rated, rated_billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, [_axle_event(1020, 1080)])
+    if "billing_summary" not in priced:
+        print("ERROR: an Axle row's import rate should be left out of the plausibility check")
+        return True
+    # A managed price curve can go negative: Predbat took 5p/kWh off both rates, so the estimate is negative too
+    negative_cost = {1020: 1.0 * 25.0 - 2.56 * 27.92}
+    negative_billing = dict(billing, slots={"import": {_key(1020): _slot(1.0, 30.0)}, "export": exports})
+    negative = attach_billing(_plan([1020]), negative_billing, VIEW_MIDNIGHT, 30, negative_cost, 55.52, {}, False, {1020: 1.0}, export_kwh, [_axle_event(1020, 1050, pence=-5)])
+    if negative["rows"][0].get("billing_axle") != -0.08 or negative["billing_summary"].get("diff") != 0.0:
+        print("ERROR: a negative Axle price should give a negative estimate, got {} {}".format(negative["rows"][0].get("billing_axle"), negative["billing_summary"]))
+        return True
+    # An event starting mid-row: the row's import_rate (read at its first minute) has no premium, so none is taken off for the check
+    late = _plan([1020])
+    late["rows"][0]["import_rate"] = 30.0
+    late_billing = dict(billing, slots={"import": {_key(1020): _slot(1.0, 30.0)}, "export": exports})
+    late_plan = attach_billing(late, late_billing, VIEW_MIDNIGHT, 30, {1020: 30.0 - 2.56 * 60.92}, 55.52, {}, False, {1020: 1.0}, export_kwh, [_axle_event(1035, 1050, pence=56)])
+    if "billing_summary" not in late_plan:
+        print("ERROR: an event starting mid-row shouldn't take its premium off the row's start rate for the plausibility check")
+        return True
+    # The estimate explains the difference the "(Axle)" event label warns of, so the label is dropped from estimated rows
+    labelled = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {minute: "axle" for minute in range(1020, 1110)}, False, import_kwh, export_kwh, [_axle_event(1020, 1080)])
+    if labelled["rows"][0].get("billing_event") is not None:
+        print("ERROR: an estimated Axle row shouldn't keep its event label, got {}".format(labelled["rows"][0].get("billing_event")))
+        return True
+    # Without Predbat's recorded kWh there is nothing to estimate from, so the row isn't flagged
+    unmetered = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, None, None, [_axle_event(1020, 1080)])
+    if unmetered["rows"][0].get("billing_axle") is not None or unmetered["billing_summary"].get("axle") != 0.0:
+        print("ERROR: without recorded kWh no Axle estimate should be made, got {}".format(unmetered["billing_summary"]))
+        return True
+    return False
+
+
+def test_plan_renderer_js_parses():
+    """The plan renderer's JavaScript, billing columns and summary included, parses: one bad escape stops every plan view rendering."""
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+    from web_helper import get_plan_renderer_js
+
+    node = shutil.which("node")
+    if not node:
+        print("Skipping the renderer syntax check: node is not installed")
+        return False
+    html = get_plan_renderer_js()
+    scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as handle:
+        handle.write("\n".join(scripts) if scripts else html)
+        path = handle.name
+    try:
+        result = subprocess.run([node, "--check", path], capture_output=True, text=True, timeout=60)
+    finally:
+        os.unlink(path)
+    if result.returncode != 0:
+        print("ERROR: the plan renderer's JavaScript doesn't parse: {}".format(result.stderr.strip()))
+        return True
+    return False
+
+
 def test_history_billing_mark():
     """The History views' rebuild mark changes when a credit event appears, its credit posts or its amount moves, with the same slots."""
     from output import Output
@@ -1400,6 +1566,30 @@ def test_history_billing_mark():
         return True
     if Output.history_billing_mark({}) is not None or Output.history_billing_mark(None) is not None:
         print("ERROR: no billing should give no mark")
+        return True
+    return False
+
+
+def test_history_billing_mark_axle():
+    """The History views rebuild when an Axle event appears or changes."""
+    from output import Output
+
+    billing = _billing_attrs({_key(480): _slot(1.0, 30.0), _key(1050): _slot(1.0, 30.0)})
+    base = Output.history_billing_mark(billing)
+    with_event = Output.history_billing_mark(dict(billing, axle_events=[_axle_event(1020, 1080)]))
+    repriced = Output.history_billing_mark(dict(billing, axle_events=[_axle_event(1020, 1080, pence=80)]))
+    if base == with_event or with_event == repriced:
+        print("ERROR: the billing mark should change with the Axle events, got {} {} {}".format(base, with_event, repriced))
+        return True
+    # Events outside the billed half-hours (a managed curve's future prices, or ones older than the bill) don't rebuild anything
+    outside = Output.history_billing_mark(dict(billing, axle_events=[_axle_event(1020, 1080), _axle_event(1200, 1230), _axle_event(-60, -30)]))
+    if outside != with_event:
+        print("ERROR: Axle events outside the billed half-hours shouldn't change the mark, got {} {}".format(outside, with_event))
+        return True
+    # A slot key that can't be read must not stop the per-cycle mark
+    odd = dict(billing, slots={"import": dict(billing["slots"]["import"], **{"not a key": _slot(1.0, 30.0)})}, axle_events=[_axle_event(1020, 1080)])
+    if Output.history_billing_mark(odd) is None:
+        print("ERROR: an unreadable slot key should still give a mark")
         return True
     return False
 
@@ -1489,6 +1679,10 @@ def run_billing_tests(my_predbat):
         test_attach_credits,
         test_attach_credits_straddle,
         test_history_billing_mark,
+        test_parse_axle_events,
+        test_attach_axle,
+        test_history_billing_mark_axle,
+        test_plan_renderer_js_parses,
         test_octopus_billing_credit_events,
     ):
         print("billing: {}".format(test.__name__))

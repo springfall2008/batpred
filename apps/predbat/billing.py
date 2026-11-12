@@ -26,6 +26,8 @@ import traceback
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from utils import str2time
+
 BILLING_DAYS = 7
 BILLING_REFRESH_MINUTES = 180
 # With plan_random_delay set (Predbat.com runs many accounts behind one address), the first read after a start is held
@@ -645,7 +647,67 @@ def _row_event(events, slot_minute, plan_interval_minutes):
     return None
 
 
-def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes, predbat_slot_cost, standing_pence, events, import_only, predbat_import_kwh, predbat_export_kwh):
+def _parse_event_time(value):
+    """An Axle event's start or end time string as an aware datetime, or None when it can't be read."""
+    if not isinstance(value, str):
+        return None
+    try:
+        # As load_axle_slot() reads them, so the same events are found here
+        return str2time(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_axle_events(axle_events):
+    """The Axle VPP events (the axle_session sensor's current and past events) as (start, end, import_export, pence_per_kwh) tuples.
+
+    Events that can't be read, or have no price or direction, are dropped; a zero price is kept, as load_axle_slot() keeps it.
+    """
+    parsed = []
+    for event in axle_events or []:
+        if not isinstance(event, dict):
+            continue
+        start = _parse_event_time(event.get("start_time"))
+        end = _parse_event_time(event.get("end_time"))
+        direction = event.get("import_export")
+        pence = _to_float(event.get("pence_per_kwh"))
+        if start and end and start < end and direction in ("import", "export") and pence is not None:
+            parsed.append((start, end, direction, pence))
+    return parsed
+
+
+def _row_axle(axle_events, row_start, row_end):
+    """The Axle premiums Predbat priced into one row: (export event pence/kWh, import event pence/kWh), each weighted by how much of the row the event covers, or None when no event overlaps it.
+
+    A premium can be negative (a managed price curve can go below zero) or the two can cancel, so being inside an event is not judged by the premiums' sign.
+    The premium is spread over the row's kWh by time, which is exact for events on the half-hour boundaries the rows use.
+    """
+    export_premium = 0.0
+    import_premium = 0.0
+    inside = False
+    row_seconds = (row_end - row_start).total_seconds()
+    for start, end, direction, pence in axle_events:
+        overlap = (min(end, row_end) - max(start, row_start)).total_seconds()
+        if overlap <= 0:
+            continue
+        inside = True
+        if direction == "export":
+            export_premium += pence * overlap / row_seconds
+        else:
+            import_premium += pence * overlap / row_seconds
+    return (export_premium, import_premium) if inside else None
+
+
+def _row_axle_at_start(axle_events, row_start):
+    """The Axle premium Predbat added to the import rate at a row's first minute, where the row's import_rate is read: an export event's pence/kWh less an import event's."""
+    premium = 0.0
+    for start, end, direction, pence in axle_events:
+        if start <= row_start < end:
+            premium += pence if direction == "export" else -pence
+    return premium
+
+
+def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes, predbat_slot_cost, standing_pence, events, import_only, predbat_import_kwh, predbat_export_kwh, axle_events=None):
     """Add the billed cost, Diff and a day summary to a History view's plan JSON, in place.
 
     billing is the sensor.predbat_billing attributes dict. predbat_slot_cost maps each row's slot_minute
@@ -662,6 +724,10 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     A row inside one of billing's credit_events (an event billed at the full rate and refunded later as a credit) is
     flagged billing_credit "credited" or "pending" (no credit posted yet), and the summary's diff takes off the credits
     of the events in its fully billed rows.
+    A fully billed row inside one of axle_events (Axle VPP events, paid by Axle and not on the bill) is flagged billing_axle with an
+    estimate of what Predbat priced in for Axle there, and its Diff and the summary's diff are after those estimates: Predbat
+    adds an export event's pence/kWh to both its export and import rates (the import part is a planning cost, not a charge) and
+    takes an import event's off its import rate, while the bill carries the supplier's rates alone.
     Billing whose rates don't match Predbat's is not shown at all. The summary is only added when at least
     one row is fully billed. Returns plan_json; it is left untouched only when billing holds no import half-hours at
     all or rows can't be matched to half-hours - a view with nothing billed in it still gets the (empty) fields.
@@ -681,14 +747,19 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         for key in _event_slot_keys(credit_event):
             credit_slots[key] = credit_event
     credited = {}
+    axle = parse_axle_events(axle_events)
     day_half_hours = {}
     updates = []
     totals = {"predbat": 0.0, "billed": 0.0, "standing_predbat": 0.0, "standing_billed": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "predbat_import_kwh": 0.0, "predbat_export_kwh": 0.0, "rate_cost": 0.0, "rate_kwh": 0.0, "predbat_rate_cost": 0.0}
+    axle_total = 0.0
     for row in plan_json.get("rows") or []:
         slot_minute = row.get("slot_minute")
         if slot_minute is None:
             continue
         keys = _row_slot_keys(view_midnight_utc, slot_minute, plan_interval_minutes)
+        row_start = view_midnight_utc + timedelta(minutes=slot_minute)
+        premiums = _row_axle(axle, row_start, row_start + timedelta(minutes=plan_interval_minutes))
+        axle_row = premiums is not None
         billed_pence = None
         buckets = None
         full = False
@@ -703,10 +774,12 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
                 billed_pence += imports[key]["cost"] - (row_exports[key]["cost"] if key in row_exports else 0.0)
                 if row.get("import_rate") is not None and key not in credit_slots:
                     # The plausibility check is on the import bill alone, so a row waiting for its export still counts. A credited
-                    # event's half-hours are left out: they are billed at the full rate where Predbat priced them free
+                    # event's half-hours are left out: they are billed at the full rate where Predbat priced them free. An Axle row's
+                    # import rate is checked without the Axle premium Predbat added to it, which the bill doesn't carry
+                    import_rate = row["import_rate"] - (_row_axle_at_start(axle, row_start) if axle_row else 0.0)
                     totals["rate_cost"] += imports[key]["cost"]
                     totals["rate_kwh"] += imports[key]["kwh"]
-                    totals["predbat_rate_cost"] += imports[key]["kwh"] * row["import_rate"]
+                    totals["predbat_rate_cost"] += imports[key]["kwh"] * import_rate
                 if full:
                     totals["standing_billed"] += imports[key]["standing"]
                     # Predbat's daily standing charge, counted for the billed half-hours only, so a part-billed day compares like with like,
@@ -727,14 +800,25 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         if full and predbat_pence is not None and abs(predbat_pence) < 0.005 and predbat_import_kwh is not None and abs(predbat_import_kwh.get(slot_minute, 0.0)) < 0.001:
             if sum(imports[key]["kwh"] for key in keys) > BILLING_UNRECORDED_KWH:
                 predbat_pence = None
+        row_import_kwh = (predbat_import_kwh or {}).get(slot_minute, 0.0)
+        row_export_kwh = (predbat_export_kwh or {}).get(slot_minute, 0.0)
         diff = None
+        axle_pence = None
         if full and predbat_pence is not None:
-            diff = _pounds(billed_pence - predbat_pence)
+            if axle_row and predbat_import_kwh is not None:
+                # Axle pays the event's pence/kWh on what Predbat recorded crossing the meter in the event's direction; the export
+                # event's premium on import is Predbat's planning cost, not a charge, so it is given back. Without Predbat's recorded
+                # kWh there is nothing to estimate from, so the row isn't flagged
+                export_premium, import_premium = premiums
+                axle_pence = export_premium * (row_export_kwh - row_import_kwh) + import_premium * row_import_kwh
+                axle_total += axle_pence
+            # A row's Diff is after its Axle estimate, as the summary's is
+            diff = _pounds(billed_pence - (axle_pence or 0.0) - predbat_pence)
             totals["predbat"] += predbat_pence
             totals["billed"] += billed_pence
         if full:
-            totals["predbat_import_kwh"] += (predbat_import_kwh or {}).get(slot_minute, 0.0)
-            totals["predbat_export_kwh"] += (predbat_export_kwh or {}).get(slot_minute, 0.0)
+            totals["predbat_import_kwh"] += row_import_kwh
+            totals["predbat_export_kwh"] += row_export_kwh
         # A row longer than a half-hour can hold parts of two adjacent events, so each half-hour is credited to its own event
         row_credit_events = [credit_slots[key] for key in keys if key in credit_slots]
         if full:
@@ -749,21 +833,23 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         credit_state = None
         if row_credit_events and billed_pence is not None:
             credit_state = "pending" if any(credit_event.get("credit") is None for credit_event in row_credit_events) else "credited"
-        updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes), full, pending_export, credit_state))
+        updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes), full, pending_export, credit_state, axle_pence))
     if not updates:
         return plan_json
     plausible = True
     if totals["rate_kwh"] > 0.5 and totals["predbat_rate_cost"] > 0:
         ratio = totals["rate_cost"] / totals["predbat_rate_cost"]
         plausible = BILLING_PLAUSIBLE_RATE_RATIO[0] <= ratio <= BILLING_PLAUSIBLE_RATE_RATIO[1]
-    for row, billed, buckets, diff, event, full, pending_export, credit_state in updates:
+    for row, billed, buckets, diff, event, full, pending_export, credit_state, axle_pence in updates:
         # Billing that doesn't match the rates leaves the columns empty rather than showing a wrong figure
         row["billed"] = billed if plausible else None
         row["billed_buckets"] = buckets if plausible else None
         row["billing_diff"] = diff if plausible else None
         row["billing_pending_export"] = pending_export and plausible
-        row["billing_event"] = event
+        # An Axle row's estimate explains the difference its event label would warn of
+        row["billing_event"] = None if axle_pence is not None and plausible else event
         row["billing_credit"] = credit_state if plausible else None
+        row["billing_axle"] = _pounds(axle_pence) if plausible and axle_pence is not None else None
     if not plausible or not any(update[5] for update in updates):
         return plan_json
     last_billed = max(index for index, update in enumerate(updates) if update[5])
@@ -779,8 +865,11 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         "predbat_cost": _pounds(totals["predbat"]),
         "billed_cost": _pounds(totals["billed"]),
         # Credits paid back later for events billed at the full rate count against the bill
-        "diff": _pounds(totals["billed"] - credits - totals["predbat"]),
+        # ... and Axle pays its events separately
+        "diff": _pounds(totals["billed"] - credits - axle_total - totals["predbat"]),
         "credits": _pounds(credits),
+        "axle": _pounds(axle_total),
+        "axle_slots": sum(1 for update in updates if update[8] is not None),
         "credits_pending": sum(1 for entry in credited.values() if entry["event"].get("credit") is None),
         "standing_predbat": _pounds(totals["standing_predbat"]),
         "standing_billed": _pounds(totals["standing_billed"]),

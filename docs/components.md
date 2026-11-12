@@ -29,6 +29,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [DEYE Cloud API (deye)](#deye-cloud-api-deye)
     - [Sunsynk Cloud API (sunsynk)](#sunsynk-cloud-api-sunsynk)
     - [AlphaESS Cloud API (alphaess)](#alphaess-cloud-api-alphaess)
+    - [Growatt OpenAPI (growatt)](#growatt-openapi-growatt)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
     - [Temperature API (temperature)](#temperature-api-temperature)
@@ -785,7 +786,7 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 #### What it does (axle)
 
 Connects to Axle Energy's Virtual Power Plant (VPP) [UK] service to receive and track demand response events.
-When Axle schedules export events, this component will track them and store the history for up to 7 days.
+When Axle schedules export events, this component will track them and store the history for up to 9 days.
 The component publishes a binary sensor that turns on when an event is currently active.
 
 If configured in Predbat's `apps.yaml` Predbat will control your inverter to export in response to the Axle event and adjusts the export energy rate to account for the extra payment from Axle.
@@ -803,7 +804,7 @@ Select control my battery for 'Events Only'.
 #### Important notes (axle)
 
 - Polls the Axle API every 10 minutes for updates
-- Stores event history for up to 7 days
+- Stores event history for up to 9 days
 - Events are added to history as soon as they start (become active)
 - Binary sensor (default name `binary_sensor.predbat_axle_event`) is `on` when an event is currently active, `off` otherwise
 - Current event details and event history are available as sensor attributes ('event_current' and 'event_history')
@@ -838,7 +839,7 @@ The binary sensor `binary_sensor.predbat_axle_event` provides the following attr
     - `import_export`: Event type ("import" or "export")
     - `updated_at`: Last update timestamp
     - `pence_per_kwh`: Payment rate for this event
-- `event_history`: List of past events (up to 7 days) with the same fields as above
+- `event_history`: List of past events (up to 9 days) with the same fields as above
 
 ---
 
@@ -1032,7 +1033,8 @@ Predbat supports both of myenergi's APIs:
     - `car_charging_now` — every Zappi's power sensor, one entry per car, so a car counts as charging (or boosting) while its Zappi draws 200W or more. Predbat uses it to hold the house battery while the car charges and to check that Octopus Intelligent dispatches are really charging the car. If you have set `car_charging_now` yourself in `apps.yaml`, Predbat keeps yours
     - `iboost_energy_today` — the first Eddi's session energy (first by serial number). This feeds the iboost model, and it is also subtracted from your historical house load whenever `switch.predbat_iboost_energy_subtract` is on (the default), which happens whether or not iboost itself is enabled
 - If you have an Eddi but charge your car with a different make of charger, set `myenergi_automatic_zappi` to `false`. It gates only the Zappi half, so `iboost_energy_today` is still wired from your Eddi while your Zappi contributes no car inputs and does not compete with the charger you actually use. The mirror case — a Zappi owner whose hot water diversion is handled elsewhere — is `myenergi_automatic_eddi: false`, which wires the Zappis but not `iboost_energy_today`. Turning `myenergi_automatic` off instead drops both halves
-- Auto-configuration runs once, after the first poll that returns devices. A Zappi or Eddi added later is published as entities but is not wired into those keys until Predbat restarts
+- Only Zappis that are online get a car. A Zappi that has died or been removed but is still listed on your myenergi account is left out, with a `Zappi ... is offline` warning in the log, so it cannot take car 0 from the Zappi you actually use. On the hub serial and API key connection, a Zappi counts as offline when it reports no plug state. On the OAuth connection, myenergi's own online flag decides
+- Auto-configuration runs after the first poll that returns devices, and again whenever the set of online Zappis or the Eddi used for `iboost_energy_today` changes, so a Zappi that dies, comes back or is added, or an Eddi added later, re-wires without a restart. A Zappi that was online keeps its car for 8 hours after it stops reporting, so a Wi-Fi dropout or a myenergi outage does not renumber your cars, and gets it back as soon as it reports again. When each Zappi was last online is saved, so a restart during a dropout does not cost it its car either. A Zappi or Eddi that briefly drops out of myenergi's replies is likewise kept, with its last reading, for up to 8 hours, so one missed reply cannot move `iboost_energy_today` to a different Eddi
 - If you set `car_charging_planned` yourself in `apps.yaml`, Predbat logs a note and auto-discovery still wins — remove your entry to silence it
 - Predbat's shipped `car_charging_planned_response` list covers the plug states a Zappi reports when the car is connected, including `ev ready to charge`. If you maintain your own list, add that value or Predbat will treat a car that is plugged in and waiting as not planned to charge
 - Boosting a Zappi is only accepted by myenergi while it is in Eco or Eco+ mode
@@ -1105,7 +1107,7 @@ With Zappi control on, Predbat drives your Zappi from the car charging plan it h
 
 Inside a planned charging window Predbat puts the Zappi in **Fast**, and outside one it puts it in **Stopped**. Fast is used because the window was chosen for its electricity rate rather than for sunshine — Eco or Eco+ would only charge from surplus, and the car would not get what the plan assumed.
 
-Each Zappi follows its own car. Zappis are matched to cars in serial number order, the same order `car_charging_energy` and `car_charging_planned` are wired in, so your first Zappi follows car 0's plan, your second follows car 1's, and so on.
+Each Zappi follows its own car. Online Zappis are matched to cars in serial number order, the same order `car_charging_energy` and `car_charging_planned` are wired in, so your first online Zappi follows car 0's plan, your second follows car 1's, and so on. An offline Zappi is skipped, as described under "Important notes (myenergi)" above.
 
 Predbat re-checks the Zappi every minute. If the mode is changed in the myenergi app while Predbat is in control, it is put back — otherwise control would drift away silently.
 
@@ -1767,6 +1769,56 @@ A schedule is committed in stages (window, then enable, then target SoC), so a s
 | `min_write_interval` | Integer | No | 300 | `alphaess_min_write_interval` | Minimum spacing, in seconds, between writes to the same inverter and direction |
 
 See [AlphaESS Cloud setup](inverter-setup.md#alphaess-cloud) for the full walkthrough, including how to run the standalone diagnostics CLI and how to bind or unbind a system.
+
+---
+
+### Growatt OpenAPI (growatt)
+
+**Can be restarted:** Yes
+
+#### What it does (growatt)
+
+Connects to Growatt's public OAuth OpenAPI, discovers the inverter authorised during Predbat.com setup, publishes battery, grid, PV, load and daily-energy sensors, and writes UTC charge/discharge time slots. No local dongle or Modbus connection is required.
+
+#### When to enable (growatt)
+
+- The customer has connected a Growatt account through the Predbat.com OAuth setup
+- The selected inverter reports a battery through `getDeviceInfo`
+- Cloud control is acceptable for this installation
+
+#### Important notes (growatt)
+
+- **EXPERIMENTAL:** the request shapes follow Growatt's published OpenAPI, but the component has not yet been proven on project-owned hardware. API requests and responses are logged with credentials redacted while it beds in
+- Growatt accepts charge/discharge power as a percentage of the reported battery rating. Predbat converts its watt targets before dispatch
+- Growatt documents schedule times in UTC. Predbat converts its local `HH:MM:SS` controls to UTC and splits a window at UTC midnight rather than relying on undocumented wrap-around behaviour
+- The public dispatch API has **no writable SoC target or reserve field**. Predbat keeps the charge target and export floor locally. When its telemetry, which Growatt updates about every five minutes, sees the charge target reached, the charge slot stays in place at 0% power so the battery holds (full power resumes if the charge level falls more than 1% below the target); when it sees the export floor reached, the export slot is removed. This is software enforcement and can react up to one telemetry interval (about five minutes) late. The inverter's own `dischargeCutOffSOC` remains the hard local minimum and is never lowered by Predbat
+- No reserve is claimed, so Predbat's reserve functions (Set Reserve Enable and the reserve-based holds) are off for this inverter: outside a slot the inverter's own self-consumption runs to its local minimum
+- The slot table last written and whether Predbat holds OpenAPI control are saved across restarts. The device's own table is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots`, and a table that differs from Predbat's plan is rewritten
+- While `switch.predbat_set_read_only` is on, or `growatt_control_enable` is false, Predbat releases OpenAPI control (`enable_control` 0) so the inverter follows its own settings
+- If telemetry stops updating for more than twelve minutes - two missed uploads - (device offline, or Growatt repeating the same sample), Predbat can no longer enforce those SoC limits, so it withholds both slots until fresh telemetry returns
+- Freeze Charge and Freeze Export are not advertised as capabilities. A zero percentage only applies inside a configured slot and cannot hold the battery in ordinary self-consumption
+- Device dispatch is limited to one request per five seconds per device. Predbat changes only a differing slot table and enforces that interval
+- `getDeviceData`'s endpoint page says one request per minute, while the rate-limit appendix says one per ten seconds. Predbat polls at the stricter one-minute interval, although a live SPH's datalogger uploads a new sample only about every five minutes
+- The API reports the inverter and battery ratings, but not the site's grid export cap. Set `export_limit` manually when the DNO limit is below the inverter rating
+
+#### Configuration Options (growatt)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `key` | String | No | - | `growatt_key` | OAuth access token injected by Predbat.com |
+| `auth_method` | String | No | `oauth` | `growatt_auth_method` | Authentication mode, currently `oauth` |
+| `token_expires_at` | String | No | - | `growatt_token_expires_at` | OAuth token expiry injected by Predbat.com |
+| `token_hash` | String | No | - | `growatt_token_hash` | OAuth refresh dedup handle injected by Predbat.com |
+| `inverter_sn` | String/List | No | All authorised | `growatt_inverter_sn` | Restrict discovery to the inverter selected during setup |
+| `automatic` | Boolean | No | false | `growatt_automatic` | Automatically configure Predbat's monitoring and control entities |
+| `automatic_ignore_pv` | Boolean | No | false | `growatt_automatic_ignore_pv` | Keep an existing `pv_power` configuration when automatic setup is enabled |
+| `control_enable` | Boolean | No | true | `growatt_control_enable` | Permit time-slot dispatch. Set false for monitoring only |
+| `base_url` | String | No | `https://opencloud.growatt.com/prod-api` | `growatt_base_url` | OpenAPI base URL for the Growatt application registration. Must include the `/prod-api` path, not just the host; a trailing slash is ignored |
+| `battery_rate_max` | Float | No | Reported rating | `growatt_battery_rate_max` | Optional battery charge/discharge rating override in W |
+| `api_delay` | Float | No | 0.2 | `growatt_api_delay` | Courtesy pause between calls for different devices |
+| `min_write_interval` | Integer | No | 5 | `growatt_min_write_interval` | Minimum seconds between dispatch writes for one inverter, never below Growatt's five-second limit |
+
+For a read-only check from the command line, `python3 growatt.py --config apps.yaml` (run from `apps/predbat`) runs one cycle with automatic configuration on and prints what it found. See [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi) for the command-line options, setup and field-testing notes.
 
 ---
 

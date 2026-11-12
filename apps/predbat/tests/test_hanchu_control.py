@@ -871,6 +871,77 @@ def test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target():
     assert not failed, "test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target"
 
 
+def test_hanchu_hold_charging_above_the_target_leaves_the_slot_out():
+    """A charge window whose target is more than 1% below the SoC, with discharge allowed, writes no charge slot (batpred#5955).
+
+    Predbat's Hold charging keeps the window armed and leaves the discharge rate set, because the plan has
+    the battery cover the house until it is within 1% of the target (prediction.py). HARDWARE (batpred#5955):
+    this firmware will not discharge at all inside an armed charge slot, even above DTU_AC_CHG_SOC_LMT, so the
+    battery sat at 84% against a 68% target. Leaving the slot out lets it run the house down; once it is within
+    1% the slot goes back in and holds there, with the plan's target still in the grid-charge limit.
+    """
+    failed = False
+    client = ready()
+    client.set_mock_clock(12 * 60 + 35)
+    window = {"enable": True, "soc": 68, "power": 3000, "start": "12:30:00", "end": "14:00:00"}
+
+    # 84% against 68%: no charge slot, the discharge rate untouched and the plan's target still written.
+    client.device_values[SN] = {"soc": 84.0}
+    payload = client.build_write_payload(SN, schedule(charge=window))
+    if enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END):
+        print(f"ERROR: at 84% with a 68% target no charge slot should be written: {enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END)}")
+        failed = True
+    if payload.get(HANCHU_KEY_DISCHARGE_POWER) != 5000:
+        print(f"ERROR: the battery should be free to discharge at the plan's 5000 W: {payload.get(HANCHU_KEY_DISCHARGE_POWER)}")
+        failed = True
+    if payload.get(HANCHU_KEY_GRID_CHARGE_SOC) != 68:
+        print(f"ERROR: the plan's 68% target should stay in the grid-charge limit for when the slot returns: {payload.get(HANCHU_KEY_GRID_CHARGE_SOC)}")
+        failed = True
+
+    # Within 1% of the target the slot is back and holds, as before.
+    for soc in (69.0, 68.0):
+        client.device_values[SN] = {"soc": soc}
+        payload = client.build_write_payload(SN, schedule(charge=window))
+        if enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END) != {1: (12 * 3600 + 1800, 14 * 3600)}:
+            print(f"ERROR: at {soc}% the window should be armed to hold at the target: {enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END)}")
+            failed = True
+
+    # A zero discharge rate is Predbat asking for a hold - set_discharge_during_charge off, or a car or iBoost
+    # hold - so the slot stays and holds at the current SoC exactly as before.
+    client.device_values[SN] = {"soc": 84.0}
+    payload = client.build_write_payload(SN, schedule(charge=window, export={"power": 0}))
+    if enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END) != {1: (12 * 3600 + 1800, 14 * 3600)} or payload.get(HANCHU_KEY_CHARGE_POWER) != 0:
+        print(f"ERROR: a zero discharge rate is a hold, so the window should stay armed at zero charge power: {payload}")
+        failed = True
+
+    # A target below the 20% the device accepts is judged against the 20% actually written, so the slot
+    # returns at 21% and holds there rather than coming back at 11% and charging from the grid to 20%.
+    low = dict(window, soc=10)
+    for soc, armed in ((22.0, False), (21.0, True)):
+        client.device_values[SN] = {"soc": soc}
+        payload = client.build_write_payload(SN, schedule(charge=low))
+        if bool(enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END)) != armed:
+            print(f"ERROR: with a 10% target (written as 20%) at {soc}% the window should be {'armed' if armed else 'left out'}: {payload}")
+            failed = True
+
+    # Before the window starts nothing changes: the slot is written for later.
+    client.set_mock_clock(11 * 60)
+    client.device_values[SN] = {"soc": 84.0}
+    payload = client.build_write_payload(SN, schedule(charge=window))
+    if enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END) != {1: (12 * 3600 + 1800, 14 * 3600)}:
+        print(f"ERROR: a window that has not started yet should still be written: {enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END)}")
+        failed = True
+
+    # With no SoC reading yet nothing can be judged, so the window is written as planned.
+    client.set_mock_clock(12 * 60 + 35)
+    client.device_values[SN] = {}
+    payload = client.build_write_payload(SN, schedule(charge=window))
+    if enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END) != {1: (12 * 3600 + 1800, 14 * 3600)}:
+        print(f"ERROR: with no SoC the window should be written as planned: {enabled_slots(payload, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END)}")
+        failed = True
+    assert not failed, "test_hanchu_hold_charging_above_the_target_leaves_the_slot_out"
+
+
 def test_hanchu_freeze_export_passes_the_zero_charge_rate_through_without_a_slot():
     """A zero charge rate with no window running adds no slot: the battery must stay free to cover the house.
 
@@ -1493,6 +1564,7 @@ def run_hanchu_control_tests(my_predbat):
         ("overlap", test_hanchu_overlapping_windows_keep_only_one),
         ("hold_slot", test_hanchu_hold_opens_a_charge_slot_at_zero_power),
         ("hold_in_window", test_hanchu_hold_inside_a_charge_window_stops_charging_only_at_the_target),
+        ("hold_above_target", test_hanchu_hold_charging_above_the_target_leaves_the_slot_out),
         ("freeze_export_no_slot", test_hanchu_freeze_export_passes_the_zero_charge_rate_through_without_a_slot),
         ("no_rate_signal", test_hanchu_no_rate_signal_adds_no_slot),
         ("event_loop_handover", test_hanchu_write_button_from_another_loop_writes_on_the_component_loop),

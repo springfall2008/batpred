@@ -57,7 +57,7 @@ from utils import (
     export_limit_from_stored,
 )
 from prediction import Prediction
-from billing import attach_billing, billing_entity_id, BILLING_DAYS, BILLING_EVENT_LABELS
+from billing import attach_billing, billing_entity_id, parse_axle_events, BILLING_DAYS, BILLING_EVENT_LABELS, BILLING_SLOT_FORMAT
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
 # rendered client-side (web_helper.py) by substituting {placeholder} names against the row's
@@ -4311,14 +4311,23 @@ class Output:
             "complete_until": self.get_state_wrapper(entity_id=entity, attribute="complete_until", default=None),
             "supplier": self.get_state_wrapper(entity_id=entity, attribute="supplier", default=None),
             "credit_events": self.get_state_wrapper(entity_id=entity, attribute="credit_events", default=None) or [],
+            # Axle VPP events, current and past, which Axle pays separately from the bill
+            "axle_events": list(self.axle_sessions or []),
         }
 
     @staticmethod
     def history_billing_mark(billing):
-        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, or a credited event or its credit changes; None without billing."""
+        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a credited event or its credit changes, or an Axle event changes; None without billing."""
         slots = (billing or {}).get("slots") or {}
         mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] for leg in ("import", "export")]
         mark.append([[event.get("start"), event.get("credit")] for event in (billing or {}).get("credit_events") or []])
+        # Only Axle events over the billed half-hours: a managed price curve adds future ones every few minutes and an old one ages out every
+        # half-hour, neither of which changes a billed row
+        # (compared as slot keys, which sort as UTC times, so a key that can't be read changes nothing)
+        keys = sorted(set(slots.get("import") or {}) | set(slots.get("export") or {}))
+        if keys:
+            spans = [(start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), direction, pence) for start, end, direction, pence in parse_axle_events((billing or {}).get("axle_events"))]
+            mark.append([list(span) for span in spans if span[0] <= keys[-1] and span[1] > keys[0]])
         return mark if mark[0][0] else None
 
     def history_minute_data(self, suffix, days):
@@ -4528,6 +4537,7 @@ class Output:
             import_only,
             import_kwh,
             None if import_only else export_kwh,
+            billing.get("axle_events"),
         )
 
     def local_midnight_utc(self, day):

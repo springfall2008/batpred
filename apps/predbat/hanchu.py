@@ -138,6 +138,11 @@ from hanchu_const import (
     window_is_empty,
 )
 
+# How far above a running charge window's target the SoC must be before the window is left out so the
+# battery can cover the house - the same 1% the plan uses before it holds at a charge target (prediction.py,
+# set_discharge_during_charge). See _discharging_to_target().
+HANCHU_HOLD_DISCHARGE_MARGIN = 1.0
+
 # The behaviour a HanchuCloud inverter has, stated for the discovery record's capabilities. A
 # literal, never read back from INVERTER_DEF: the record has to rebuild the row on its own, or the
 # completeness test proves nothing.
@@ -1142,9 +1147,11 @@ class HanchuAPI(ComponentBase):
         # overwrite=False: these four are the daily energy totals whose recorder HISTORY Predbat
         # reads (the load model and the day's cost), so a sensor the user named in apps.yaml wins and
         # keeps its history - set_arg_auto still fills the key in when they named nothing. Claimed
-        # per key, as GivTCP does. The case that needs it: an EV charger wired outside the Hanchu
-        # grid meter, so Hanchu's own import_today misses the car and the user points the key at
-        # their smart meter instead.
+        # per key, as GivTCP does. The case that needs it: a load wired outside the Hanchu grid
+        # meter that the user wants in the day's import, measured by their smart meter instead.
+        # Not an EV charger: with switch.predbat_car_energy_reported_load off, today_cost() already
+        # adds the car from car_charging_energy, so a smart meter import_today would count it twice
+        # (batpred#6149).
         for leaf in ("load_today", "import_today", "export_today", "pv_today"):
             if leaf == "pv_today" and self.automatic_ignore_pv:
                 continue
@@ -1693,12 +1700,19 @@ class HanchuAPI(ComponentBase):
         Every one of the three charge and three discharge slots is written, and any the plan does
         not use is set to 00:00-00:00 - see HANCHU_SLOT_DISABLED. User-defined mode runs all six,
         so a slot left over from the Hanchu app would otherwise fight the plan.
+
+        A running charge window whose target is already more than 1% below the SoC, with discharge
+        allowed, is left out of the slot table so the battery can cover the house down to the target -
+        see _discharging_to_target().
         """
         ranges = self.ranges_for(sn)
         charge, export = self._resolve_overlap(sn, schedule.get("charge", {}), schedule.get("export", {}))
         payload = {}
-        signal, extra_direction = self._rate_signal(sn, charge, export)
         soc = self.device_values.get(sn, {}).get("soc")
+        if self._discharging_to_target(sn, charge, export, soc, ranges):
+            # Only the slot goes: the target stays, so the grid-charge limit still carries it when the slot returns.
+            charge = dict(charge, enable=False)
+        signal, extra_direction = self._rate_signal(sn, charge, export)
 
         pairs = {"charge": self._slot_pairs(sn, "charge", charge), "export": self._slot_pairs(sn, "export", export)}
         if extra_direction:
@@ -1746,6 +1760,31 @@ class HanchuAPI(ComponentBase):
         if self.work_mode_control and (charge.get("enable") or export.get("enable") or signal):
             payload[HANCHU_KEY_WORK_MODE] = self.slot_work_mode(sn)
         return payload
+
+    def _discharging_to_target(self, sn, charge, export, soc, ranges):
+        """Return whether a running charge window should be left out so the battery can discharge to its target.
+
+        Above the target, Predbat's Hold charging keeps the window armed and leaves the discharge rate
+        set, because the plan has the battery cover the house until it is within 1% of the target and
+        then hold there. HARDWARE (batpred#5955): this firmware will not discharge at all inside an armed
+        charge slot, even above DTU_AC_CHG_SOC_LMT - it held 84% against a 68% target at 0 W until the
+        slot was overridden by hand - so the armed slot froze the battery instead. Leaving the slot out
+        until the SoC is within 1% lets it discharge; the reconcile loop rebuilds this payload every tick,
+        so the slot comes back as the SoC reaches the target and then holds there as before.
+
+        Only when discharge is allowed: a zero discharge rate is how Predbat asks this inverter for a hold
+        (set_discharge_during_charge off, a car or iBoost hold, freeze charge - see _rate_signal()), and that
+        keeps the slot. The target compared is the one actually written, after the device's 20% floor, so a
+        plan target below 20% brings the slot back at 21% rather than at 11%, where it would charge from
+        the grid to 20%. A running export window owns the battery, and with no SoC reading nothing can be
+        judged, so both leave the window as planned.
+        """
+        if soc is None or not self._window_active_now(charge) or self._window_active_now(export):
+            return False
+        if self._as_float(export.get("power"), 0) <= 0:
+            return False
+        written_target, _ = clamp_range(HANCHU_KEY_GRID_CHARGE_SOC, charge.get("soc", 0), ranges)
+        return self._as_float(soc, 0) > self._as_float(written_target, 0) + HANCHU_HOLD_DISCHARGE_MARGIN
 
     def _hold_grid_target(self, sn, target, soc, ranges):
         """Return the grid-charge limit to write during a hold: the charge target, but never above the current SoC.
