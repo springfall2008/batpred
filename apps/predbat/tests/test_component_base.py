@@ -1596,6 +1596,7 @@ CONSTRUCTION_ALLOWED = {
     # separate annual_cli.py process, so these fetches never run inside a component.
     "annual_http": "annual tool fetch helper, runs in the annual_cli.py process",
     "annual_load": "annual tool fetch helper, runs in the annual_cli.py process",
+    "http_sync": "the synchronous HTTP helper: it uses new_http_session() once component_base is loaded, and builds its own session only before that (download.py repairing an install)",
 }
 
 

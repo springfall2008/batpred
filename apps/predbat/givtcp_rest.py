@@ -29,7 +29,7 @@ already have to handle for the write path.
 
 import time
 
-import requests
+from http_sync import http_get, http_post
 
 from const import INVERTER_MAX_RETRY_REST, INVERTER_REST_TIMEOUT
 from utils import dp2, dp3, dp4, time_string_to_stamp
@@ -528,7 +528,7 @@ class GivTCPRest:
         Send REST Command
         """
         try:
-            r = requests.post(url, json=json, timeout=INVERTER_REST_TIMEOUT)
+            r = http_post(url, json=json, timeout=INVERTER_REST_TIMEOUT)
         except Exception as e:
             self.base.log("Warn: GivTCP: Inverter {} REST POST {} failed: {}".format(self.inverter.id, url, e))
             return None
@@ -541,7 +541,7 @@ class GivTCPRest:
         r = None
 
         try:
-            r = requests.get(url, timeout=INVERTER_REST_TIMEOUT)
+            r = http_get(url, timeout=INVERTER_REST_TIMEOUT)
         except Exception as e:
             self.base.log("Error: GivTCP: Exception raised {}".format(e))
 

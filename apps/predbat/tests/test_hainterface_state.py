@@ -258,7 +258,7 @@ def test_hainterface_update_state_with_api(my_predbat=None):
 
     mock_response_data = {"state": "50", "attributes": {"unit": "kWh"}, "entity_id": "sensor.battery"}
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, mock_response_data)
 
         ha_interface.update_state("sensor.battery")
@@ -337,7 +337,7 @@ def test_hainterface_update_states_bulk(my_predbat=None):
         {"entity_id": "sensor.solar", "state": "100", "attributes": {"unit": "W"}},
     ]
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, mock_response_data)
 
         ha_interface.update_states()
@@ -412,7 +412,7 @@ def test_hainterface_set_state_basic(my_predbat=None):
     ha_interface.db_mirror_ha = False
     ha_interface.state_data = {}
 
-    with patch("ha.requests.post") as mock_post, patch("ha.requests.get") as mock_get:
+    with patch("ha.http_post") as mock_post, patch("ha.http_get") as mock_get:
         mock_post.return_value = create_mock_requests_response(200, {})
         mock_get.return_value = create_mock_requests_response(200, {"state": "75", "attributes": {"unit": "kWh"}, "entity_id": "sensor.battery"})
 
@@ -451,7 +451,7 @@ def test_hainterface_set_state_db_mirror(my_predbat=None):
     # Add entity to db_mirror_list so it will be mirrored
     ha_interface.db_mirror_list["sensor.battery"] = True
 
-    with patch("ha.requests.post") as mock_post, patch("ha.requests.get") as mock_get:
+    with patch("ha.http_post") as mock_post, patch("ha.http_get") as mock_get:
         mock_post.return_value = create_mock_requests_response(200, {})
         mock_get.return_value = create_mock_requests_response(200, {"state": "80", "attributes": {"unit": "kWh"}})
 
@@ -495,7 +495,7 @@ def test_hainterface_set_state_db_primary(my_predbat=None):
     ha_interface.db_manager = mock_db
     ha_interface.state_data = {}
 
-    with patch("ha.requests.post") as mock_post:
+    with patch("ha.http_post") as mock_post:
         ha_interface.set_state("sensor.battery", "90", {})
 
         # Verify NO API call
@@ -538,7 +538,7 @@ def test_hainterface_db_mirror_list_tracking(my_predbat=None):
 
     # Test update_state adds to list
     ha_interface.db_mirror_list = {}
-    with patch("ha.requests.get"):
+    with patch("ha.http_get"):
         ha_interface.update_state("sensor.solar")
     if "sensor.solar" not in ha_interface.db_mirror_list:
         print("ERROR: update_state should add to db_mirror_list")
@@ -550,7 +550,7 @@ def test_hainterface_db_mirror_list_tracking(my_predbat=None):
     ha_interface.db_mirror_list = {}
     mock_db = MockDatabaseManager()
     ha_interface.db_manager = mock_db
-    with patch("ha.requests.post") as mock_post, patch("ha.requests.get") as mock_get:
+    with patch("ha.http_post") as mock_post, patch("ha.http_get") as mock_get:
         mock_post.return_value = create_mock_requests_response(200, {})
         mock_get.return_value = create_mock_requests_response(200, {"state": "100", "attributes": {}})
         ha_interface.set_state("sensor.grid", "100", {})

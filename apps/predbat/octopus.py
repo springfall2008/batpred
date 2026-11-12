@@ -15,7 +15,7 @@ semantics for multi-pod deployments.
 
 import asyncio
 import math
-import requests
+from http_sync import http_get, HttpError, HttpJSONDecodeError
 import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
@@ -3362,9 +3362,9 @@ class Octopus:
         Download octopus free session data directly from a URL, no caching.
         """
         try:
-            r = requests.get(url, timeout=120)
-        except requests.exceptions.RequestException as e:
-            # RequestException covers ReadTimeout as well as ConnectionError - a read timeout is not a ConnectionError (#5743)
+            r = http_get(url, timeout=120)
+        except HttpError as e:
+            # HttpError covers HttpTimeout as well as HttpConnectionError - a read timeout is not a connection error (#5743)
             self.log("Warn: Octopus: Unable to download Octopus data from URL {} ({})".format(url, type(e).__name__))
             self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
             return None
@@ -3625,9 +3625,9 @@ class Octopus:
             if self.debug_enable:
                 self.log("Download {}".format(url))
             try:
-                r = requests.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
-            except requests.exceptions.RequestException as e:
-                # RequestException covers ReadTimeout as well as ConnectionError - a read timeout is not a ConnectionError (#5743)
+                r = http_get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
+            except HttpError as e:
+                # HttpError covers HttpTimeout as well as HttpConnectionError - a read timeout is not a connection error (#5743)
                 self.log("Warn: Octopus: Unable to download Octopus data from URL {} ({})".format(url, type(e).__name__))
                 self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
                 return {}
@@ -3637,7 +3637,7 @@ class Octopus:
                 return {}
             try:
                 data = r.json()
-            except requests.exceptions.JSONDecodeError:
+            except HttpJSONDecodeError:
                 self.failures_total += 1
                 self.log("Warn: Octopus: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
                 self.record_status("Warn: Octopus: Error downloading Octopus data from cloud", debug=url, had_errors=True)
