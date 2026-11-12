@@ -4333,7 +4333,7 @@ class Output:
 
     @staticmethod
     def history_billing_mark(billing):
-        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a credited event or its credit changes, or an Axle event or saving session changes; None without billing."""
+        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a credited event or its credit changes, or an Axle event or saving session changes (its points rate, award, or whether an award is expected included); None without billing."""
         slots = (billing or {}).get("slots") or {}
         mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] for leg in ("import", "export")]
         mark.append([[event.get("start"), event.get("credit")] for event in (billing or {}).get("credit_events") or []])
@@ -4344,11 +4344,9 @@ class Output:
         if keys:
             spans = [(start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), direction, pence) for start, end, direction, pence in parse_axle_events((billing or {}).get("axle_events"))]
             mark.append([list(span) for span in spans if span[0] <= keys[-1] and span[1] > keys[0]])
-            # ... and the saving sessions over them, an award being posted, or becoming expected or not, included
-            sessions = [
-                (start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), pence, on_export, rewarded, expected)
-                for start, end, pence, _, on_export, rewarded, expected, _ in parse_saving_events((billing or {}).get("saving_events"))
-            ]
+            # ... and the saving sessions over them, with every field attach_billing() reads (its points rate, an award being posted, or
+            # becoming expected or not, included)
+            sessions = [(start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)) + tuple(rest) for start, end, *rest in parse_saving_events((billing or {}).get("saving_events"))]
             mark.append([list(span) for span in sessions if span[0] <= keys[-1] and span[1] > keys[0]])
         return mark if mark[0][0] else None
 

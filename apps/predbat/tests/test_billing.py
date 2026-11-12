@@ -1660,7 +1660,7 @@ def test_attach_saving():
 
 
 def test_history_billing_mark_saving():
-    """The History views rebuild when a saving session over the billed half-hours appears or Octopus awards its points."""
+    """The History views rebuild when a saving session over the billed half-hours appears, its points rate changes, Octopus awards its points, or an award stops being expected."""
     from billing import saving_session_events
     from output import Output
 
@@ -1676,6 +1676,11 @@ def test_history_billing_mark_saving():
     quiet = Output.history_billing_mark(dict(billing, saving_events=saving_session_events([unreported], 8, 0.0)))
     if quiet == pending:
         print("ERROR: the mark should change when a session's award stops being expected, got {}".format(quiet))
+        return True
+    # A session with no points rate keeps its default pence when octopus_saving_session_octopoints_per_penny changes, but not its points
+    defaulted = [_saving_event(1020, 1080, points=None)]
+    if Output.history_billing_mark(dict(billing, saving_events=saving_session_events(defaulted, 8, 25.0))) == Output.history_billing_mark(dict(billing, saving_events=saving_session_events(defaulted, 10, 25.0))):
+        print("ERROR: the mark should change with a session's points rate")
         return True
     later = Output.history_billing_mark(dict(billing, saving_events=saving_session_events([_saving_event(1020, 1080), _saving_event(1200, 1260, event_id=9)], 8, 0.0)))
     if later != pending:
