@@ -953,9 +953,7 @@ class HAInterface(ComponentBase):
         """
         if not isinstance(attributes, dict):
             return attributes
-        cache = getattr(self, "shared_attribute_lists", None)
-        if cache is None:
-            cache = self.shared_attribute_lists = {}
+        cache = self.shared_attribute_lists
         shared_attributes = None
         for name, value in attributes.items():
             if not isinstance(value, list) or len(value) < SHARED_LIST_MIN_LENGTH or not all(isinstance(entry, str) for entry in value):
