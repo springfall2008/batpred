@@ -69,7 +69,10 @@ def _check_js(failed):
         ("plan_data refresh keeps the day events", "window.historyDayEvents = data.history_day_events" in js),
         ("saving session rows are marked with their points", "billing_saving" in table and "&sect;" in table),
         ("saving session rows say what their points are worth", "billing_saving_value" in table and "worth about" in table),
-        ("saving session tile says what the points are worth", "worth(summary.saving_value)" in _function_source(js, "renderBillingSummary") and "worth(summary.saving_awarded_value)" in _function_source(js, "renderBillingSummary")),
+        (
+            "saving session tile says what the points are worth",
+            "worth(summary.saving_points_valued ? summary.saving_value : null)" in _function_source(js, "renderBillingSummary") and "worth(summary.saving_awarded_value)" in _function_source(js, "renderBillingSummary"),
+        ),
         (
             "saving session tile is in points and left out of the Difference",
             "saving_points" in _function_source(js, "renderBillingSummary")

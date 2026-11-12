@@ -802,7 +802,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     A fully billed row inside one of saving_events (saving_session_events(): joined Octopus saving sessions, rewarded in Octopoints
     rather than money) is flagged billing_saving with the Octopoints Predbat priced in there. Predbat adds the session's pence/kWh to both
     rates, so that value is put back on Predbat's cost, which the row's Diff and the summary then compare at the tariff's rates alone;
-    the points are reported apart, with what Octopus has awarded for the sessions once it posts it.
+    the points are reported apart, with what Octopus has awarded for the sessions once it posts it, and each with roughly what it
+    is worth at that price (billing_saving_value, saving_value and saving_awarded_value; saving_points_valued is false, and the
+    row and award values None, when the prices come to no points to value).
     Billing whose rates don't match Predbat's is not shown at all. The summary is only added when at least
     one row is fully billed. Returns plan_json; it is left untouched only when billing holds no import half-hours at
     all or rows can't be matched to half-hours - a view with nothing billed in it still gets the (empty) fields.
@@ -828,6 +830,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     saving_import = [(start, end, pence) for start, end, pence, _, _, _, _, _ in saving]
     saving_export = [(start, end, pence) for start, end, pence, _, on_export, _, _, _ in saving if on_export]
     saving_import_points = [(start, end, points) for start, end, _, points, _, _, _, _ in saving]
+    # Points can be given a money value only when the sessions' prices come to some (not with octopus_saving_session_octopoints_per_penny
+    # 0, which leaves every session priced at the default rate with none, and drops the rest)
+    points_valued = all(points > 0 for _, _, _, points, _, _, _, _ in saving)
     saving_export_points = [(start, end, points) for start, end, _, points, on_export, _, _, _ in saving if on_export]
     # Each session's seconds inside rows whose figures were compared, so its award is only set against a whole session
     saving_covered = {}
@@ -954,7 +959,7 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         row["billing_axle"] = _pounds(axle_pence) if plausible and axle_pence is not None else None
         row["billing_saving"] = round(saving_row_points) if plausible and saving_row_points is not None else None
         # ... and what those points are roughly worth, at the price Predbat gave them
-        row["billing_saving_value"] = _pounds(saving_row_value) if plausible and saving_row_value is not None else None
+        row["billing_saving_value"] = _pounds(saving_row_value) if plausible and saving_row_value is not None and points_valued else None
     if not plausible or not any(update[5] for update in updates):
         return plan_json
     last_billed = max(index for index, update in enumerate(updates) if update[5])
@@ -968,9 +973,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     # Octopus awards a session as a whole, so only sessions whose every minute is in the compared rows are set against the estimate
     whole_sessions = [span for span in saving if saving_covered.get(span[7], 0.0) >= (span[1] - span[0]).total_seconds() - 1]
     awarded = [span[5] for span in whole_sessions if span[5] is not None]
-    # What the awarded points are roughly worth, each session's at the pence per point Predbat priced it at (a session whose price
-    # gives no points, octopus_saving_session_octopoints_per_penny being 0, can't be valued and is left out)
-    awarded_value = sum(span[5] * span[2] / span[3] for span in whole_sessions if span[5] is not None and span[3] > 0)
+    # What the awarded points are roughly worth, each session's at the pence per point Predbat priced it at. With
+    # octopus_saving_session_octopoints_per_penny 0 a price gives no points, so none can be valued
+    awarded_value = None if not awarded or not points_valued else _pounds(sum(span[5] * span[2] / span[3] for span in whole_sessions if span[5] is not None))
     billed_until = (view_midnight_utc + timedelta(minutes=updates[last_billed][0]["slot_minute"] + plan_interval_minutes)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)
     plan_json["billing_summary"] = {
         "predbat_cost": _pounds(totals["predbat"]),
@@ -987,7 +992,8 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         "saving_points": round(saving_points_total),
         "saving_value": _pounds(saving_total),
         "saving_awarded": None if not awarded else round(sum(awarded)),
-        "saving_awarded_value": None if not awarded else _pounds(awarded_value),
+        "saving_awarded_value": awarded_value,
+        "saving_points_valued": points_valued,
         "saving_awarded_pending": sum(1 for _, _, _, _, _, rewarded, expected, _ in whole_sessions if expected and rewarded is None),
         "credits_pending": sum(1 for entry in credited.values() if entry["event"].get("credit") is None),
         "standing_predbat": _pounds(totals["standing_predbat"]),

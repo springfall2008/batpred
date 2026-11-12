@@ -1607,8 +1607,15 @@ def test_attach_saving():
     # A session that gives no points (octopus_saving_session_octopoints_per_penny 0, priced at the default rate) can't be valued
     unvalued = saving_session_events([_saving_event(1020, 1080, points=None, rewarded=392)], 0, 18.625)
     zero = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, unvalued)
-    if zero["billing_summary"].get("saving_awarded") != 392 or zero["billing_summary"].get("saving_awarded_value") != 0.0:
-        print("ERROR: an award with no points rate to value it by should show with no value, got {}".format(zero["billing_summary"]))
+    zero_summary = zero["billing_summary"]
+    if zero_summary.get("saving_awarded") != 392 or zero_summary.get("saving_awarded_value") is not None or zero_summary.get("saving_points_valued") is not False:
+        print("ERROR: an award with no points rate to value it by should show with no value, got {}".format(zero_summary))
+        return True
+    if [row.get("billing_saving_value") for row in zero["rows"]] != [None, None, None]:
+        print("ERROR: rows whose price came to no points shouldn't give them a value, got {}".format([row.get("billing_saving_value") for row in zero["rows"]]))
+        return True
+    if summary.get("saving_points_valued") is not True:
+        print("ERROR: points priced at 8 a penny should be valued, got {}".format(summary))
         return True
     # An award of nothing is still an award, shown as 0 rather than as nothing posted
     nothing = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1080, rewarded=0)], 8, 0.0))

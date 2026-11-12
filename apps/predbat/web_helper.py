@@ -8236,7 +8236,7 @@ def get_plan_renderer_js():
             const worth = value => (value === null || value === undefined) ? '' : `, about ${money(value)}`;
             const hasAward = summary.saving_awarded !== null && summary.saving_awarded !== undefined;
             const awarded = hasAward ? ` (${summary.saving_awarded} awarded${worth(summary.saving_awarded_value)}${summary.saving_awarded_pending > 0 ? ', more to come' : ''})` : (summary.saving_awarded_pending > 0 ? ' (not awarded yet)' : '');
-            html += tile('Saving session (est.)&sect;', `${summary.saving_points} pts${worth(summary.saving_value)}${awarded}`);
+            html += tile('Saving session (est.)&sect;', `${summary.saving_points} pts${worth(summary.saving_points_valued ? summary.saving_value : null)}${awarded}`);
         }
         html += tile('Difference', (summary.diff > 0 ? '+' : '') + money(summary.diff), `color: ${diffColor};`);
         html += tile('Import kWh', kwh(summary.import_kwh));
