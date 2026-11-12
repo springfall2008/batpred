@@ -893,6 +893,7 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         diff = None
         axle_pence = None
         saving_row_points = None
+        saving_row_value = None
         if full and predbat_pence is not None:
             if axle_row and predbat_import_kwh is not None:
                 # Axle pays the event's pence/kWh on what Predbat recorded crossing the meter in the event's direction; the export
@@ -908,6 +909,7 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
                 predbat_pence += saving_value
                 saving_total += saving_value
                 saving_points_total += saving_row_points
+                saving_row_value = saving_value
                 for start, end, _, _, _, _, _, event_id in saving:
                     overlap = (min(end, row_end) - max(start, row_start)).total_seconds()
                     if overlap > 0:
@@ -933,14 +935,14 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         credit_state = None
         if row_credit_events and billed_pence is not None:
             credit_state = "pending" if any(credit_event.get("credit") is None for credit_event in row_credit_events) else "credited"
-        updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes), full, pending_export, credit_state, axle_pence, saving_row_points))
+        updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes), full, pending_export, credit_state, axle_pence, saving_row_points, saving_row_value))
     if not updates:
         return plan_json
     plausible = True
     if totals["rate_kwh"] > 0.5 and totals["predbat_rate_cost"] > 0:
         ratio = totals["rate_cost"] / totals["predbat_rate_cost"]
         plausible = BILLING_PLAUSIBLE_RATE_RATIO[0] <= ratio <= BILLING_PLAUSIBLE_RATE_RATIO[1]
-    for row, billed, buckets, diff, event, full, pending_export, credit_state, axle_pence, saving_row_points in updates:
+    for row, billed, buckets, diff, event, full, pending_export, credit_state, axle_pence, saving_row_points, saving_row_value in updates:
         # Billing that doesn't match the rates leaves the columns empty rather than showing a wrong figure
         row["billed"] = billed if plausible else None
         row["billed_buckets"] = buckets if plausible else None
@@ -951,6 +953,8 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         row["billing_credit"] = credit_state if plausible else None
         row["billing_axle"] = _pounds(axle_pence) if plausible and axle_pence is not None else None
         row["billing_saving"] = round(saving_row_points) if plausible and saving_row_points is not None else None
+        # ... and what those points are roughly worth, at the price Predbat gave them
+        row["billing_saving_value"] = _pounds(saving_row_value) if plausible and saving_row_value is not None else None
     if not plausible or not any(update[5] for update in updates):
         return plan_json
     last_billed = max(index for index, update in enumerate(updates) if update[5])
@@ -964,6 +968,9 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     # Octopus awards a session as a whole, so only sessions whose every minute is in the compared rows are set against the estimate
     whole_sessions = [span for span in saving if saving_covered.get(span[7], 0.0) >= (span[1] - span[0]).total_seconds() - 1]
     awarded = [span[5] for span in whole_sessions if span[5] is not None]
+    # What the awarded points are roughly worth, each session's at the pence per point Predbat priced it at (a session whose price
+    # gives no points, octopus_saving_session_octopoints_per_penny being 0, can't be valued and is left out)
+    awarded_value = sum(span[5] * span[2] / span[3] for span in whole_sessions if span[5] is not None and span[3] > 0)
     billed_until = (view_midnight_utc + timedelta(minutes=updates[last_billed][0]["slot_minute"] + plan_interval_minutes)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)
     plan_json["billing_summary"] = {
         "predbat_cost": _pounds(totals["predbat"]),
@@ -980,6 +987,7 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         "saving_points": round(saving_points_total),
         "saving_value": _pounds(saving_total),
         "saving_awarded": None if not awarded else round(sum(awarded)),
+        "saving_awarded_value": None if not awarded else _pounds(awarded_value),
         "saving_awarded_pending": sum(1 for _, _, _, _, _, rewarded, expected, _ in whole_sessions if expected and rewarded is None),
         "credits_pending": sum(1 for entry in credited.values() if entry["event"].get("credit") is None),
         "standing_predbat": _pounds(totals["standing_predbat"]),

@@ -7449,8 +7449,9 @@ def get_plan_renderer_js():
                         billedStr += `<span title="${escapeAttr('Axle VPP event: Predbat priced in the event price, which isn\\'t on the bill; ' + Math.round(row.billing_axle * 100) + minor + ' estimated from Predbat\\'s recorded kWh, taken off the Diff and shown in the Axle (est.) total')}">&dagger;</span>`;
                     }
                     if (row.billing_saving !== null && row.billing_saving !== undefined) {
-                        // Rewarded in Octopoints, not money: Predbat's price for the session is left out of its cost, and estimated here in points
-                        billedStr += `<span title="${escapeAttr('Octopus saving session: rewarded in Octopoints, not money, so the price Predbat gave the session is left out of its cost and the Diff; about ' + row.billing_saving + ' points estimated from Predbat\\'s recorded kWh, counted in the Saving session (est.) total')}">&sect;</span>`;
+                        // Rewarded in Octopoints, not money: Predbat's price for the session is left out of its cost, and estimated here in points, with roughly what they're worth
+                        const savingWorth = (row.billing_saving_value !== null && row.billing_saving_value !== undefined) ? ' (worth about ' + Math.round(row.billing_saving_value * 100) + minor + ')' : '';
+                        billedStr += `<span title="${escapeAttr('Octopus saving session: rewarded in Octopoints, not money, so the price Predbat gave the session is left out of its cost and the Diff; about ' + row.billing_saving + ' points' + savingWorth + ' estimated from Predbat\\'s recorded kWh, counted in the Saving session (est.) total')}">&sect;</span>`;
                     }
                     if (row.billing_event) {
                         billedStr += ` <span style="font-size: 11px;" title="${escapeAttr(row.billing_event + ' in this slot: the bill may not show it the way Predbat priced it')}">(${row.billing_event})</span>`;
@@ -8231,10 +8232,11 @@ def get_plan_renderer_js():
             html += tile('Axle (est.)&dagger;', money(-summary.axle));
         }
         if (summary.saving_slots > 0) {
-            // Not money, so shown in points and left out of the Difference
+            // Not money, so shown in points, each with roughly what it's worth at the price Predbat gave it, and left out of the Difference
+            const worth = value => (value === null || value === undefined) ? '' : `, about ${money(value)}`;
             const hasAward = summary.saving_awarded !== null && summary.saving_awarded !== undefined;
-            const awarded = hasAward ? ` (${summary.saving_awarded} awarded${summary.saving_awarded_pending > 0 ? ', more to come' : ''})` : (summary.saving_awarded_pending > 0 ? ' (not awarded yet)' : '');
-            html += tile('Saving session (est.)&sect;', `${summary.saving_points} pts${awarded}`);
+            const awarded = hasAward ? ` (${summary.saving_awarded} awarded${worth(summary.saving_awarded_value)}${summary.saving_awarded_pending > 0 ? ', more to come' : ''})` : (summary.saving_awarded_pending > 0 ? ' (not awarded yet)' : '');
+            html += tile('Saving session (est.)&sect;', `${summary.saving_points} pts${worth(summary.saving_value)}${awarded}`);
         }
         html += tile('Difference', (summary.diff > 0 ? '+' : '') + money(summary.diff), `color: ${diffColor};`);
         html += tile('Import kWh', kwh(summary.import_kwh));
