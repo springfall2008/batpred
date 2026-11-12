@@ -696,12 +696,11 @@ def saving_session_events(joined_events, octopoints_per_penny, default_rate_penc
 
     Each is {start, end, pence_per_kwh, octopoints_per_kwh, on_export, rewarded_octopoints, award_expected, id}, with the rate
     saving_session_rate() gives, as fetch_octopus_sessions() prices it for the planner. on_export says whether Predbat adds it to
-    the export rate too, which it only does with an export tariff that pays (rate_export_max above 0). award_expected says
-    Octopus is going to post Octopoints for it, so a session without them yet is waiting for them: true when the session reports
-    its Octopoints per kWh. Feeds list rewarded_octopoints as null both before an award and for sessions that never get one (a
-    session reporting no points rate, priced at octopus_saving_session_rate), so that null alone can't say an award is coming.
-    A Weekend Happy Hour is free import, not a saving
-    session, and an event Predbat priced at nothing added nothing, so both are left out, as are events that can't be read.
+    the export rate too, which it only does with an export tariff that pays (rate_export_max above 0). award_expected says the
+    feed reports this session's award, listing rewarded_octopoints (null until Octopus posts it), so a session without one yet
+    is waiting for it; a feed that can't report awards, such as Octopus's flexibility API, leaves the key out. Whether the session
+    reports a points rate says nothing about this: sessions with none are awarded too. A Weekend Happy Hour is free import, not a
+    saving session, and an event Predbat priced at nothing added nothing, so both are left out, as are events that can't be read.
     """
     events = []
     per_penny = _to_float(octopoints_per_penny) or 0.0
@@ -721,7 +720,7 @@ def saving_session_events(joined_events, octopoints_per_penny, default_rate_penc
                     "octopoints_per_kwh": points if points is not None else pence * per_penny,
                     "on_export": bool(on_export),
                     "rewarded_octopoints": _to_float(event.get("rewarded_octopoints")),
-                    "award_expected": points is not None,
+                    "award_expected": "rewarded_octopoints" in event,
                     "id": event.get("id"),
                 }
             )

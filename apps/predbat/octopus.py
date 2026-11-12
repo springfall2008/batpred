@@ -1628,17 +1628,18 @@ class OctopusAPI(ComponentBase):
             if reward is None:
                 reward = default_octopoints  # Inject default when API doesn't provide reward
             if start and end:
-                return_joined_events.append(
-                    {
-                        "start": start,
-                        "end": end,
-                        "octopoints_per_kwh": reward,
-                        "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None),
-                        "id": event_id,
-                        "code": event_code.get(event_id, None),
-                        "event_type": event.get("eventType", None) or event_type.get(event_id, None),
-                    }
-                )
+                joined_event = {
+                    "start": start,
+                    "end": end,
+                    "octopoints_per_kwh": reward,
+                    "id": event_id,
+                    "code": event_code.get(event_id, None),
+                    "event_type": event.get("eventType", None) or event_type.get(event_id, None),
+                }
+                # Only a feed that reports awards lists one, null until Octopus posts it (the History view counts those as pending)
+                if "rewardGivenInOctoPoints" in event:
+                    joined_event["rewarded_octopoints"] = event.get("rewardGivenInOctoPoints")
+                return_joined_events.append(joined_event)
 
         saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-usd", "joined_events": return_joined_events, "available_events": return_available_events}
 
@@ -2047,6 +2048,8 @@ class OctopusAPI(ComponentBase):
 
         # Map to existing internal format
         # New API doesn't distinguish available vs joined — treat all as joined
+        # ... and doesn't report the Octopoints awarded, so rewardGivenInOctoPoints is left out rather than null: null says an award
+        # is still to come, which this feed can never post
         result = {"events": [], "account": {"hasJoinedCampaign": len(saving_events) > 0, "joinedEvents": []}}  # No "available" events (no separate list in new API)
         for event in saving_events:
             result["account"]["joinedEvents"].append(
@@ -2054,7 +2057,6 @@ class OctopusAPI(ComponentBase):
                     "eventId": event.get("code"),
                     "startAt": event.get("startAt"),
                     "endAt": event.get("endAt"),
-                    "rewardGivenInOctoPoints": None,
                 }
             )
 
