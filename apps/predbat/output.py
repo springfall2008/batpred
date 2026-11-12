@@ -4344,10 +4344,10 @@ class Output:
         if keys:
             spans = [(start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), direction, pence) for start, end, direction, pence in parse_axle_events((billing or {}).get("axle_events"))]
             mark.append([list(span) for span in spans if span[0] <= keys[-1] and span[1] > keys[0]])
-            # ... and the saving sessions over them, an award being posted included
+            # ... and the saving sessions over them, an award being posted, or becoming expected or not, included
             sessions = [
-                (start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), pence, on_export, rewarded)
-                for start, end, pence, _, on_export, rewarded, _, _ in parse_saving_events((billing or {}).get("saving_events"))
+                (start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), pence, on_export, rewarded, expected)
+                for start, end, pence, _, on_export, rewarded, expected, _ in parse_saving_events((billing or {}).get("saving_events"))
             ]
             mark.append([list(span) for span in sessions if span[0] <= keys[-1] and span[1] > keys[0]])
         return mark if mark[0][0] else None

@@ -1671,6 +1671,12 @@ def test_history_billing_mark_saving():
     if len({repr(mark) for mark in (base, pending, awarded)}) != 3:
         print("ERROR: the mark should change with a session and with its award, got {} {} {}".format(base, pending, awarded))
         return True
+    # A feed that stops reporting awards (the flexibility API leaves rewarded_octopoints out) changes it too, though the award is still None
+    unreported = {key: value for key, value in _saving_event(1020, 1080).items() if key != "rewarded_octopoints"}
+    quiet = Output.history_billing_mark(dict(billing, saving_events=saving_session_events([unreported], 8, 0.0)))
+    if quiet == pending:
+        print("ERROR: the mark should change when a session's award stops being expected, got {}".format(quiet))
+        return True
     later = Output.history_billing_mark(dict(billing, saving_events=saving_session_events([_saving_event(1020, 1080), _saving_event(1200, 1260, event_id=9)], 8, 0.0)))
     if later != pending:
         print("ERROR: a session after the billed half-hours shouldn't change the mark, got {} {}".format(later, pending))
