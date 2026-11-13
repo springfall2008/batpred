@@ -29,7 +29,7 @@ already have to handle for the write path.
 
 import time
 
-import requests
+from http_sync import http_get, http_post
 
 from const import INVERTER_MAX_RETRY_REST, INVERTER_REST_TIMEOUT
 from utils import dp2, dp3, dp4, time_string_to_stamp
@@ -415,6 +415,22 @@ class GivTCPRest:
         value = self.inverter_details().get("Invertor_Max_Inv_Rate", None)
         return float(value) if value is not None else None
 
+    def export_limit(self):
+        """
+        The inverter's grid export limit in W, or None if GivTCP does not report one.
+
+        GivTCP publishes holding register 26 (grid_port_max_power_output) as Export_Limit in the
+        inverter detail block. It is absent on GivTCP v2 and on three-phase models, whose limit
+        lives in a different register GivTCP does not read. A 0 is a real zero-export limit, not
+        a missing reading - the gateway reads the same register the same way - so it is returned
+        as 0 rather than treated as falsy.
+        """
+        value = self.inverter_details().get("Export_Limit", None)
+        try:
+            return float(value) if value is not None else None
+        except (ValueError, TypeError):
+            return None
+
     def in_calibration(self):
         """
         Whether the battery is currently being calibrated, during which Predbat cannot function.
@@ -512,7 +528,7 @@ class GivTCPRest:
         Send REST Command
         """
         try:
-            r = requests.post(url, json=json, timeout=INVERTER_REST_TIMEOUT)
+            r = http_post(url, json=json, timeout=INVERTER_REST_TIMEOUT)
         except Exception as e:
             self.base.log("Warn: GivTCP: Inverter {} REST POST {} failed: {}".format(self.inverter.id, url, e))
             return None
@@ -525,7 +541,7 @@ class GivTCPRest:
         r = None
 
         try:
-            r = requests.get(url, timeout=INVERTER_REST_TIMEOUT)
+            r = http_get(url, timeout=INVERTER_REST_TIMEOUT)
         except Exception as e:
             self.base.log("Error: GivTCP: Exception raised {}".format(e))
 

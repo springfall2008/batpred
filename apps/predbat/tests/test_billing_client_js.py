@@ -59,6 +59,7 @@ def _check_js(failed):
             "summary strip function",
             "function renderBillingSummary(" in js and "billing_summary" in _function_source(js, "renderBillingSummary") and "billed to" in _function_source(js, "renderBillingSummary") and "missing_slots" in _function_source(js, "renderBillingSummary"),
         ),
+        ("summary strip footnotes the standing charge", "Standing charge&Dagger;" in _function_source(js, "renderBillingSummary") and "standing charge in the midnight slot" in _function_source(js, "renderBillingSummary")),
         ("summary strip says import only", "import only" in _function_source(js, "renderBillingSummary")),
         ("row waiting for its export is marked", "billing_pending_export" in table and "export not billed yet" in table),
         ("summary strip counts rows waiting for export", "export_pending_slots" in _function_source(js, "renderBillingSummary")),

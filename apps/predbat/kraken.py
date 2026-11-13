@@ -446,7 +446,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         try:
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.post(url, json={"query": query}, headers=headers) as response:
                     if response.status != 200:
                         # Include the response body — Kraken returns GraphQL validation errors
@@ -1019,7 +1019,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         pages = 0
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 while url and pages < 3:
                     async with session.get(url, auth=auth, headers=headers) as response:
                         if response.status != 200:
@@ -1193,7 +1193,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         http_error_status = None
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url) as response:
                     if response.status != 200:
                         http_error_status = response.status
@@ -1754,7 +1754,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         try:
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url, headers=headers) as response:
                     status = response.status
                     body = await response.json(content_type=None) if status == 200 else await response.text()

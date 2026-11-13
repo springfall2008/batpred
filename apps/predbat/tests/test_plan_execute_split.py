@@ -14,6 +14,8 @@ from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from fetch import LoadSourceMissing
+
 # Gives each recompute of the fake calculate_plan a plan no earlier one had
 _plan_marker = itertools.count(1)
 
@@ -354,7 +356,7 @@ def _scenario_plan_once_unscheduled_forces(my_predbat):
 
 
 def _scenario_plan_once_failures(my_predbat):
-    """plan_once returns None on inverter-fetch failure, zero rates and template configuration."""
+    """plan_once returns None on inverter-fetch failure, zero rates, template configuration and no load source."""
     failed = 0
     my_predbat.plan_valid = True
     my_predbat.plan_last_updated = my_predbat.now_utc
@@ -380,6 +382,19 @@ def _scenario_plan_once_failures(my_predbat):
         artifact = my_predbat.plan_once(scheduled=True)
     my_predbat.args.pop("template", None)
     failed = _check(failed, artifact is None, "plan_once template: returns None")
+
+    # #5092: no load source yet (often a component that has not set load_today) skips the cycle without raising
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        mocks["fetch_sensor_data"].side_effect = LoadSourceMissing("load_today or load_forecast is not set")
+        try:
+            artifact = my_predbat.plan_once(scheduled=True)
+            raised = None
+        except Exception as e:
+            artifact, raised = None, e
+    failed = _check(failed, raised is None, "plan_once no load source: does not raise (got {!r})".format(raised))
+    failed = _check(failed, artifact is None, "plan_once no load source: returns None")
+    failed = _check(failed, mocks["fetch_inverter_data"].call_count == 0 and mocks["calculate_plan"].call_count == 0, "plan_once no load source: nothing planned")
     return failed
 
 

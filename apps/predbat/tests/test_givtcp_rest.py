@@ -18,6 +18,11 @@ from givtcp_rest import GivTCPRest, InverterRestState
 from const import INVERTER_MAX_RETRY_REST
 
 
+def _transport(fake):
+    """The (http_get, http_post) pair that routes givtcp_rest's HTTP calls to a fake with get/post methods."""
+    return fake.get, getattr(fake, "post", None)
+
+
 class _RestBase:
     """Minimal Predbat stand-in: collects log lines and status records."""
 
@@ -35,7 +40,7 @@ class _RestBase:
 
 
 class _Response:
-    """Stand-in for the requests.Response a POST returns; only its truthiness is used."""
+    """Stand-in for the response a POST returns; only its truthiness is used."""
 
     status_code = 200
 
@@ -339,22 +344,22 @@ def test_transport_failures_are_contained(my_predbat=None):
     client = GivTCPRest(base, state)
 
     class _BoomSession:
-        """Stands in for requests, refusing every call the way an unreachable host does."""
+        """Stands in for the HTTP helper, refusing every call the way an unreachable host does."""
 
         @staticmethod
         def post(url, json=None, timeout=None):
-            """Raise as requests does when the host is unreachable."""
+            """Raise as the helper does when the host is unreachable."""
             raise OSError("connection refused")
 
         @staticmethod
         def get(url, timeout=None):
-            """Raise as requests does when the host is unreachable."""
+            """Raise as the helper does when the host is unreachable."""
             raise OSError("connection refused")
 
     import givtcp_rest
 
-    original = givtcp_rest.requests
-    givtcp_rest.requests = _BoomSession
+    original = (givtcp_rest.http_get, givtcp_rest.http_post)
+    givtcp_rest.http_get, givtcp_rest.http_post = _transport(_BoomSession)
     try:
         if client.post_command("http://givtcp:6345/setChargeRate", json={"chargeRate": 1}) is not None:
             print("ERROR: post_command returned a response when the POST raised")
@@ -363,7 +368,7 @@ def test_transport_failures_are_contained(my_predbat=None):
             print("ERROR: get_data returned data when the GET raised")
             failed = True
     finally:
-        givtcp_rest.requests = original
+        givtcp_rest.http_get, givtcp_rest.http_post = original
 
     if not any("failed" in message or "Exception" in message for message in base.logs):
         print("ERROR: transport failures were not logged, got {}".format(base.logs))
@@ -586,7 +591,7 @@ def test_transport_success_paths(my_predbat=None):
     """
     post_command returns the response and get_data decodes JSON only on a 200.
 
-    These are the real requests calls, which every other test replaces with an injected transport -
+    These are the real HTTP helper calls, which every other test replaces with an injected transport -
     so without this the only exercised path through them is the exception handler.
     """
     failed = False
@@ -598,7 +603,7 @@ def test_transport_success_paths(my_predbat=None):
     client = GivTCPRest(base, state)
 
     class _Fake:
-        """Stands in for the requests module, returning a scripted status code."""
+        """Stands in for the HTTP helper, returning a scripted status code."""
 
         def __init__(self, status_code):
             self.status_code = status_code
@@ -617,9 +622,9 @@ def test_transport_success_paths(my_predbat=None):
 
     import givtcp_rest
 
-    original = givtcp_rest.requests
+    original = (givtcp_rest.http_get, givtcp_rest.http_post)
     try:
-        givtcp_rest.requests = _Fake(200)
+        givtcp_rest.http_get, givtcp_rest.http_post = _transport(_Fake(200))
         response = client.post_command("http://givtcp:6345/setChargeRate", json={"chargeRate": 1})
         if response is None or response.status_code != 200:
             print("ERROR: post_command did not return the response on success")
@@ -629,12 +634,12 @@ def test_transport_success_paths(my_predbat=None):
             failed = True
 
         # A non-200 is not data, however well-formed its body
-        givtcp_rest.requests = _Fake(503)
+        givtcp_rest.http_get, givtcp_rest.http_post = _transport(_Fake(503))
         if client.get_data("http://givtcp:6345/readData") is not None:
             print("ERROR: get_data returned a body from a non-200 response")
             failed = True
     finally:
-        givtcp_rest.requests = original
+        givtcp_rest.http_get, givtcp_rest.http_post = original
 
     if not failed:
         print("PASS: the real transport returns responses and rejects non-200")
@@ -653,11 +658,11 @@ def test_get_data_rejects_a_200_that_is_not_json(my_predbat=None):
     print("**** Testing a 200 response whose body is not a JSON object ****")
 
     import json
-    import requests
+    from http_sync import HttpJSONDecodeError
     import givtcp_rest
 
     class _Body:
-        """Stands in for the requests module, answering 200 with a fixed body."""
+        """Stands in for the HTTP helper, answering 200 with a fixed body."""
 
         status_code = 200
 
@@ -669,18 +674,18 @@ def test_get_data_rejects_a_200_that_is_not_json(my_predbat=None):
             return self
 
         def json(self):
-            """Decode the body as requests does, raising its own JSONDecodeError on bad input."""
+            """Decode the body as the helper's response does, raising HttpJSONDecodeError on bad input."""
             try:
                 return json.loads(self.text)
             except ValueError as e:
-                raise requests.exceptions.JSONDecodeError(e.msg, e.doc, e.pos)
+                raise HttpJSONDecodeError(str(e))
 
-    original = givtcp_rest.requests
+    original = (givtcp_rest.http_get, givtcp_rest.http_post)
     try:
         for text, expect_log in [("", "not JSON"), ("<html>502 Bad Gateway</html>", "502 Bad Gateway"), ("503", "not an object")]:
             base = _RestBase()
             client = GivTCPRest(base, InverterRestState(id=0, rest_api="http://givtcp:6345"))
-            givtcp_rest.requests = _Body(text)
+            givtcp_rest.http_get, givtcp_rest.http_post = _transport(_Body(text))
             try:
                 result = client.get_data("http://givtcp:6345/readData")
             except (ValueError, TypeError) as e:
@@ -694,7 +699,7 @@ def test_get_data_rejects_a_200_that_is_not_json(my_predbat=None):
                 print("ERROR: get_data did not log {!r} for body {!r}: {}".format(expect_log, text, base.logs))
                 failed = True
     finally:
-        givtcp_rest.requests = original
+        givtcp_rest.http_get, givtcp_rest.http_post = original
 
     if not failed:
         print("PASS: a 200 that is not a JSON object is a failed read")

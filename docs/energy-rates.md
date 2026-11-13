@@ -154,6 +154,8 @@ Predbat can automatically join you to Octopus saving sessions - now called Power
 
 Note: **You must have signed up to both the Octopus Octoplus and then the Saving Session/Power Down schemes to benefit from these events**
 
+Note 2: **You should not opt in for Axle short notice events alongside Octopus Saving Session/Power Down schemes as NESO rules only allow you to have a single DFS provider**
+
 For Predbat to automatically manage Octopus saving sessions the following additional configuration item in `apps.yaml` is used.
 Like the electricity rates, this is set in the `apps.yaml` template to a regular expression that should auto-discover the Octopus Energy integration.
 
@@ -183,7 +185,7 @@ available sessions on your behalf.
 
 If an available saving session overlaps an Axle VPP session (any overlap in time), Predbat will **not** auto-join the saving session, as the two events cannot both be honoured for the same period. The Axle session takes priority.
 
-When auto-join is On, and there are no overlapping events, Predbat will join a saving session as soon as the event appears. In some cases this may not be desirable, for example when signed up to Axle short notice events, where a saving session could be announced before a conflicting Axle event. In such cases Predbat would have already joined the saving session, leading to potentially overlapping events. To resolve this, **octopus_saving_auto_join_lead_hours** can be configured to set how soon Predbat is allowed to join a saving session (default 0 = join immediately). Setting a value of e.g. "3" would mean Predbat will wait until 3 hours before the start of the saving session event before attempting to join, giving the opportunity for short notice events from Axle or other sources to be announced and considered first.
+When auto-join is On, and there are no overlapping events, Predbat will join a saving session as soon as the event appears. In some cases this may not be desirable, to resolve this, **octopus_saving_auto_join_lead_hours** can be configured to set how soon Predbat is allowed to join a saving session (default 0 = join immediately). Setting a value of e.g. "3" would mean Predbat will wait until 3 hours before the start of the saving session event before attempting to join.
 
 Predbat will also **not** auto-join a session whose reward rate doesn't exceed the **octopus_saving_session_min_octopoints_per_kwh** configuration item in `apps.yaml` (default 0 octopoints/kWh - joins any session with a positive reward). Raise this if you want to also skip low-value sessions you don't consider worth the disruption. The default of 0 additionally works around the Octopus Energy integration currently reporting some non-joinable events (national Power Up/free electricity slots) inside the same data set at 0 p/kWh - see [#4593](https://github.com/springfall2008/batpred/issues/4593).
 

@@ -1,11 +1,12 @@
 """Measured provider provenance and real optional MQTT publisher regressions."""
 
 import asyncio
+import contextlib
 import copy
 import datetime
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from gecloud import GECloudDirect
 from live_display import gecloud_readings, live_display_payload, selected_serials, source_identity, validated_binding
@@ -101,6 +102,16 @@ def test_raw_capture_does_not_inherit_old_fields():
     assert component.live_display_samples["inv001"] is None
 
 
+@contextlib.contextmanager
+def clock_at(gw, now):
+    """Give the gateway a clock reading now on its wall clock and, on a different scale, its monotonic clock for the block, then take it away."""
+    gw.base.component_clock = SimpleNamespace(time=lambda: now, monotonic=lambda: now - NOW + 5000.0, sleep=asyncio.sleep)
+    try:
+        yield
+    finally:
+        del gw.base.component_clock
+
+
 def published_gateway(enabled=True, parked=True):
     """Use the actual publisher with its existing isolated state reader fixture."""
     gw = _PublisherFixture()._make_gateway()
@@ -130,7 +141,7 @@ def test_server_binding_validation_and_metadata_publisher():
     gw._loop = None
     gw._last_live_binding = None
     gw._last_live_binding_publish = 0
-    with patch("gateway.time.time", return_value=NOW):
+    with clock_at(gw, NOW):
         asyncio.run(gw._publish_display_binding())
         asyncio.run(gw._publish_display_binding())
         assert gw._mqtt_client.publish.await_count == 1
@@ -140,7 +151,7 @@ def test_server_binding_validation_and_metadata_publisher():
     assert topic == "predbat/devices/" + DEVICE + "/config"
     assert json.loads(data) == {"live_display": binding}
     assert gw._mqtt_client.publish.await_args.kwargs == {"qos": 1, "retain": False}
-    with patch("gateway.time.time", return_value=NOW + 61):
+    with clock_at(gw, NOW + 61):
         asyncio.run(gw._publish_display_binding())
         assert gw._mqtt_client.publish.await_count == 3
     gw.gateway_live_display = False
@@ -160,7 +171,7 @@ def test_invalid_binding_fails_closed_and_failed_publish_retries():
     """An unbound feed is unavailable and failed metadata sends are not deduplicated."""
     gw = published_gateway()
     gw.gateway_live_display_binding = None
-    with patch("gateway.time.time", return_value=NOW):
+    with clock_at(gw, NOW):
         asyncio.run(gw._publish_predbat_data())
     assert not json.loads(gw._published[0][1])["live_display"]["available"]
     gw._mqtt_connected = True
@@ -183,11 +194,11 @@ def test_real_publisher_is_opt_in_parked_bounded_and_heartbeats():
         asyncio.run(gw._publish_predbat_data())
         assert "live_display" not in json.loads(gw._published[0][1])
     gw = published_gateway()
-    with patch("gateway.time.time", return_value=NOW):
+    with clock_at(gw, NOW):
         asyncio.run(gw._publish_predbat_data())
         asyncio.run(gw._publish_predbat_data())
         assert len(gw._published) == 1
-    with patch("gateway.time.time", return_value=NOW + 61):
+    with clock_at(gw, NOW + 61):
         asyncio.run(gw._publish_predbat_data())
     assert len(gw._published) == 2
     topic, data, retain = gw._published[0]
@@ -220,7 +231,7 @@ def test_status_strings_fit_the_firmware_buffers_in_bytes():
         return real(entity_id, default, attribute)
 
     gw.get_state_wrapper = states
-    with patch("gateway.time.time", return_value=NOW):
+    with clock_at(gw, NOW):
         asyncio.run(gw._publish_predbat_data())
     payload = json.loads(gw._published[0][1])
     assert len(payload["predbat_status"].encode("utf-8")) <= 31
@@ -242,7 +253,7 @@ def test_unsent_predbat_data_is_not_deduplicated():
         return True
 
     gw._publish_raw = raw
-    with patch("gateway.time.time", return_value=NOW):
+    with clock_at(gw, NOW):
         asyncio.run(gw._publish_predbat_data())
         assert gw._last_predbat_data is None and not sent
         connected[0] = True
@@ -260,10 +271,10 @@ def test_oversized_packet_warns_at_most_every_15_minutes():
         return sum("exceeds 1400-byte limit" in str(c.args[0]) for c in gw.log.call_args_list if c.args)
 
     for offset in (0, 60, 120):
-        with patch("gateway.time.time", return_value=NOW + offset):
+        with clock_at(gw, NOW + offset):
             asyncio.run(gw._publish_predbat_data())
     assert not gw._published and warnings() == 1
-    with patch("gateway.time.time", return_value=NOW + 15 * 60):
+    with clock_at(gw, NOW + 15 * 60):
         asyncio.run(gw._publish_predbat_data())
     assert warnings() == 2
 
@@ -296,7 +307,7 @@ def write_wire_fixture(path, backend_path=None):
     gw._loop = None
     gw._last_live_binding = None
     gw._last_live_binding_publish = 0
-    with patch("gateway.time.time", return_value=NOW):
+    with clock_at(gw, NOW):
         asyncio.run(gw._publish_display_binding(force=True))
         asyncio.run(gw._publish_predbat_data())
     topic, data, _ = gw._published[0]

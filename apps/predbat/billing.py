@@ -23,8 +23,10 @@ figure is worse than none.
 import asyncio
 import random
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+
+from utils import str2time
 
 BILLING_DAYS = 7
 BILLING_REFRESH_MINUTES = 180
@@ -92,6 +94,36 @@ BILLING_UNRECORDED_KWH = 0.05
 # How far a half-hour's bucket kWh may stray from its metered kWh before it is not trusted.
 BUCKET_KWH_TOLERANCE = 0.01
 
+# Some events are billed at the full rate in the half-hours and refunded afterwards as an account credit: Octopus
+# bills a Weekend Happy Hour's import at the normal rate and posts a "Weekend Happy Hour" credit a day or two later
+# (verified live 10 Nov 2026). The credit says when it was posted, not which event it pays for.
+BILLING_CREDITS_QUERY = """query {{
+  account(accountNumber: "{account_id}") {{
+    transactions(first: 50) {{
+      edges {{
+        node {{
+          __typename
+          id
+          postedDate
+          createdAt
+          title
+          amounts {{ gross }}
+        }}
+      }}
+    }}
+  }}
+}}"""
+# Credit titles (lower case, matched as a substring) that pay back an event's billed import
+BILLING_CREDIT_TITLES = ("happy hour",)
+# Credits are kept this long, so one posted a few days after its event is still there to match
+BILLING_CREDIT_DAYS = BILLING_DAYS * 2
+# A credit is only matched to an event that started at most this many days before it was posted (Octopus posts
+# them a day or two after), so an older event's credit can't be pinned on a recent one
+BILLING_CREDIT_LAG_DAYS = 4
+# A credit is only matched to an event whose billed import it is within this ratio of, so a credit that pays
+# for an event outside the billing window isn't pinned on a different one
+BILLING_CREDIT_RATIO = (0.5, 2.0)
+
 
 def billing_entity_id(prefix):
     """The billing sensor's entity id for a Predbat prefix: sensor.predbat_billing by default."""
@@ -108,7 +140,7 @@ def _to_float(value):
         return None
 
 
-def _slot_key(stamp):
+def billing_slot_key(stamp):
     """Turn an API timestamp into the cache's UTC slot key, or None when it can't be parsed."""
     try:
         when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
@@ -169,7 +201,7 @@ def parse_measurements(response_data):
     for prop in ((response_data.get("account") or {}).get("properties")) or []:
         for edge in ((prop.get("measurements") or {}).get("edges")) or []:
             node = (edge or {}).get("node") or {}
-            key = _slot_key(node.get("startAt"))
+            key = billing_slot_key(node.get("startAt"))
             slot = _parse_node(node) if key else None
             if slot is not None:
                 slots[key] = slot
@@ -238,6 +270,85 @@ def _sum_buckets(slots):
     return totals
 
 
+def parse_credits(response_data, now_utc):
+    """Parse a transactions response into the event credits posted in the last BILLING_CREDIT_DAYS, newest last.
+
+    Each is {"id", "posted" (YYYY-MM-DD), "created", "title", "amount" (pence)}. Returns None for a failed read
+    (response_data None or no transactions in it) so the caller keeps what it had.
+    """
+    if response_data is None:
+        return None
+    transactions = (response_data.get("account") or {}).get("transactions")
+    if not isinstance(transactions, dict):
+        return None
+    oldest = (now_utc - timedelta(days=BILLING_CREDIT_DAYS)).date().isoformat()
+    credits = []
+    for edge in transactions.get("edges") or []:
+        node = (edge or {}).get("node") or {}
+        title = str(node.get("title") or "")
+        amount = _to_float((node.get("amounts") or {}).get("gross"))
+        posted = str(node.get("postedDate") or "")
+        if node.get("__typename") != "Credit" or amount is None or amount <= 0 or not posted or posted < oldest:
+            continue
+        if not any(match in title.lower() for match in BILLING_CREDIT_TITLES):
+            continue
+        credits.append({"id": str(node.get("id")), "posted": posted, "created": str(node.get("createdAt") or ""), "title": title, "amount": amount})
+    return sorted(credits, key=lambda credit: (credit["posted"], credit["created"], credit["id"]))
+
+
+def _event_slot_keys(event):
+    """The half-hour slot keys an event covers, from its start (rounded down to a half-hour) up to its end; [] when it can't be read."""
+    try:
+        start = datetime.strptime(event["start"], BILLING_SLOT_FORMAT).replace(tzinfo=timezone.utc)
+        end = datetime.strptime(event["end"], BILLING_SLOT_FORMAT).replace(tzinfo=timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        return []
+    start = start.replace(minute=(start.minute // 30) * 30, second=0)
+    keys = []
+    while start < end:
+        keys.append(start.strftime(BILLING_SLOT_FORMAT))
+        start += timedelta(minutes=30)
+    return keys
+
+
+def match_credits(credits, events, import_slots, tz):
+    """Pair each credit with the event it pays for; returns the events as dicts with their billed import and credit.
+
+    events are {"start", "end"} UTC slot keys. A credit doesn't say which event it pays for, so each one, oldest
+    first, goes to the event not yet paid whose billed import is closest to it, among those that started on the
+    day it was posted or up to BILLING_CREDIT_LAG_DAYS before, and whose billed import it is within BILLING_CREDIT_RATIO of. An event whose
+    half-hours aren't all billed has no billed figure and takes no credit. Each returned event is
+    {"start", "end", "billed" (pence or None), "credit" (pence or None), "posted" (YYYY-MM-DD or None)}.
+    """
+    import_slots = import_slots or {}
+    matched = []
+    for event in sorted(events or [], key=lambda item: item.get("start") or ""):
+        keys = _event_slot_keys(event)
+        if not keys:
+            continue
+        billed = round(sum(import_slots[key]["cost"] for key in keys), 4) if all(key in import_slots for key in keys) else None
+        day = datetime.strptime(keys[0], BILLING_SLOT_FORMAT).replace(tzinfo=timezone.utc).astimezone(tz).date().isoformat()
+        matched.append({"start": event["start"], "end": event["end"], "billed": billed, "credit": None, "posted": None, "day": day})
+    for credit in credits or []:
+        best = None
+        try:
+            earliest = (date.fromisoformat(credit["posted"]) - timedelta(days=BILLING_CREDIT_LAG_DAYS)).isoformat()
+        except ValueError:
+            continue
+        for event in matched:
+            if event["credit"] is not None or not event["billed"] or event["day"] > credit["posted"] or event["day"] < earliest:
+                continue
+            ratio = credit["amount"] / event["billed"]
+            if not BILLING_CREDIT_RATIO[0] <= ratio <= BILLING_CREDIT_RATIO[1]:
+                continue
+            if best is None or abs(event["billed"] - credit["amount"]) < abs(best["billed"] - credit["amount"]):
+                best = event
+        if best is not None:
+            best["credit"] = credit["amount"]
+            best["posted"] = credit["posted"]
+    return matched
+
+
 def _day_summary(cache, legs, day, tz):
     """Summarise one local day's billing, or None when it has no import billing at all."""
     keys = [start.strftime(BILLING_SLOT_FORMAT) for start in day_slot_starts(day, tz)]
@@ -262,18 +373,26 @@ def _day_summary(cache, legs, day, tz):
     }
 
 
-def build_billing_sensor(cache, legs, supplier, now_utc, tz):
+def build_billing_sensor(cache, legs, supplier, now_utc, tz, credits=None, credit_events=None):
     """Build the sensor.predbat_billing state and attributes from the cache.
 
     The state is the most recent complete day's net energy cost in pence (import less export,
     standing charge excluded), or None when no day is complete. legs records which directions are
-    being read: True read fine, False the last read failed, None not configured.
+    being read: True read fine, False the last read failed, None not configured. credit_events are the
+    events (UTC slot keys) whose import is refunded later as one of credits; they are published with the
+    credit matched to each (match_credits()), and each day's matched credits are totalled in its summary.
+    The state is the bill itself, before any credit.
     """
     cache = cache or {}
+    events = match_credits(credits, credit_events, cache.get("import"), tz) if credit_events else []
     days = {}
     for day in _window_days(now_utc, tz):
         summary = _day_summary(cache, legs, day, tz)
         if summary:
+            day_events = [event for event in events if event["day"] == day.isoformat()]
+            if day_events:
+                summary["credits"] = round(sum(event["credit"] or 0.0 for event in day_events), 4)
+                summary["credits_pending"] = sum(1 for event in day_events if event["credit"] is None)
             days[day.isoformat()] = summary
     state = None
     for name in sorted(days, reverse=True):
@@ -290,6 +409,9 @@ def build_billing_sensor(cache, legs, supplier, now_utc, tz):
         "slots": {leg: dict(cache.get(leg) or {}) for leg in BILLING_LEGS if cache.get(leg)},
         "days": days,
     }
+    if events:
+        oldest = min(days) if days else None
+        attributes["credit_events"] = [{key: event[key] for key in ("start", "end", "billed", "credit", "posted")} for event in events if oldest and event["day"] >= oldest]
     return state, attributes
 
 
@@ -326,6 +448,11 @@ class BillingReader:
         self.first_read_after = None
         # The background read started by read() while random_delay is on, so a second one isn't started over it
         self.task = None
+        # Event credits read from the account (parse_credits()), and the account to read them from, or None not to
+        self.credits = []
+        self.credits_account = None
+        # Set by the owner: the events ({"start", "end"} UTC slot keys) whose import is refunded as a credit
+        self.credit_events = []
 
     async def load(self):
         """Restore the cache, legs and last fetch time from storage, if any were saved."""
@@ -335,6 +462,7 @@ class BillingReader:
             return
         self.cache = data.get("slots") or {}
         self.legs = data.get("legs") or self.legs
+        self.credits = data.get("credits") or []
         self.mpans = data.get("mpans")
         settled = data.get("settled") or {}
         self.settled = {leg: list(settled.get(leg) or []) for leg in BILLING_LEGS}
@@ -352,7 +480,7 @@ class BillingReader:
         storage = self.owner.storage
         if not storage:
             return
-        blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "settled": self.settled, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
+        blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "settled": self.settled, "credits": self.credits, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
         await storage.save(self.storage_app, self.storage_name, blob, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=BILLING_DAYS * 2))
 
     def running(self):
@@ -413,7 +541,8 @@ class BillingReader:
         query_fn(query, context) returns the GraphQL data, or None for a failed read; a failed read
         marks the leg False and leaves what was cached alone. A day read once it is BILLING_SETTLE_DAYS old
         is settled and not read again, however much of it arrived. With pace_seconds, each query after the
-        first waits a random 0 to pace_seconds first. Returns True when new slots arrived.
+        first waits a random 0 to pace_seconds first. With credits_account set, the account's event credits are
+        read too (one query; a failed read keeps the ones already read). Returns True when new slots or credits arrived.
         """
         tz = _zone(self.owner.local_tz)
         changed = False
@@ -462,13 +591,20 @@ class BillingReader:
             if not ok:
                 self.owner.log("Warn: Billing: could not read the {} billing for MPAN ...{}, keeping what was already read".format(leg, str(mpan)[-4:]))
         self.cache = merge_slots(self.cache, "import", {}, now_utc, tz)
+        if self.credits_account:
+            credits = parse_credits(await query_fn(BILLING_CREDITS_QUERY.format(account_id=self.credits_account), "billing-credits"), now_utc)
+            if credits is None:
+                self.owner.log("Warn: Billing: could not read the account's credits, keeping what was already read")
+            else:
+                changed = changed or credits != self.credits
+                self.credits = credits
         self.fetched_at = now_utc
         await self.save()
         return changed
 
     def sensor(self, supplier, now_utc):
         """Return (state, attributes) for sensor.predbat_billing from the cache."""
-        return build_billing_sensor(self.cache, self.legs, supplier, now_utc, _zone(self.owner.local_tz))
+        return build_billing_sensor(self.cache, self.legs, supplier, now_utc, _zone(self.owner.local_tz), self.credits, self.credit_events)
 
     def publish(self, supplier, now_utc, app):
         """Publish sensor.predbat_billing, unless there is no import billing to show yet."""
@@ -511,7 +647,67 @@ def _row_event(events, slot_minute, plan_interval_minutes):
     return None
 
 
-def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes, predbat_slot_cost, standing_pence, events, import_only, predbat_import_kwh, predbat_export_kwh):
+def _parse_event_time(value):
+    """An Axle event's start or end time string as an aware datetime, or None when it can't be read."""
+    if not isinstance(value, str):
+        return None
+    try:
+        # As load_axle_slot() reads them, so the same events are found here
+        return str2time(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_axle_events(axle_events):
+    """The Axle VPP events (the axle_session sensor's current and past events) as (start, end, import_export, pence_per_kwh) tuples.
+
+    Events that can't be read, or have no price or direction, are dropped; a zero price is kept, as load_axle_slot() keeps it.
+    """
+    parsed = []
+    for event in axle_events or []:
+        if not isinstance(event, dict):
+            continue
+        start = _parse_event_time(event.get("start_time"))
+        end = _parse_event_time(event.get("end_time"))
+        direction = event.get("import_export")
+        pence = _to_float(event.get("pence_per_kwh"))
+        if start and end and start < end and direction in ("import", "export") and pence is not None:
+            parsed.append((start, end, direction, pence))
+    return parsed
+
+
+def _row_axle(axle_events, row_start, row_end):
+    """The Axle premiums Predbat priced into one row: (export event pence/kWh, import event pence/kWh), each weighted by how much of the row the event covers, or None when no event overlaps it.
+
+    A premium can be negative (a managed price curve can go below zero) or the two can cancel, so being inside an event is not judged by the premiums' sign.
+    The premium is spread over the row's kWh by time, which is exact for events on the half-hour boundaries the rows use.
+    """
+    export_premium = 0.0
+    import_premium = 0.0
+    inside = False
+    row_seconds = (row_end - row_start).total_seconds()
+    for start, end, direction, pence in axle_events:
+        overlap = (min(end, row_end) - max(start, row_start)).total_seconds()
+        if overlap <= 0:
+            continue
+        inside = True
+        if direction == "export":
+            export_premium += pence * overlap / row_seconds
+        else:
+            import_premium += pence * overlap / row_seconds
+    return (export_premium, import_premium) if inside else None
+
+
+def _row_axle_at_start(axle_events, row_start):
+    """The Axle premium Predbat added to the import rate at a row's first minute, where the row's import_rate is read: an export event's pence/kWh less an import event's."""
+    premium = 0.0
+    for start, end, direction, pence in axle_events:
+        if start <= row_start < end:
+            premium += pence if direction == "export" else -pence
+    return premium
+
+
+def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes, predbat_slot_cost, standing_pence, events, import_only, predbat_import_kwh, predbat_export_kwh, axle_events=None):
     """Add the billed cost, Diff and a day summary to a History view's plan JSON, in place.
 
     billing is the sensor.predbat_billing attributes dict. predbat_slot_cost maps each row's slot_minute
@@ -525,6 +721,13 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     - a row whose import is billed but whose export hasn't been published yet shows the import charge,
       flagged billing_pending_export, with no Diff, and is left out of the summary - no net figure is claimed;
     - any other row shows no billing.
+    A row inside one of billing's credit_events (an event billed at the full rate and refunded later as a credit) is
+    flagged billing_credit "credited" or "pending" (no credit posted yet), and the summary's diff takes off the credits
+    of the events in its fully billed rows.
+    A fully billed row inside one of axle_events (Axle VPP events, paid by Axle and not on the bill) is flagged billing_axle with an
+    estimate of what Predbat priced in for Axle there, and its Diff and the summary's diff are after those estimates: Predbat
+    adds an export event's pence/kWh to both its export and import rates (the import part is a planning cost, not a charge) and
+    takes an import event's off its import rate, while the bill carries the supplier's rates alone.
     Billing whose rates don't match Predbat's is not shown at all. The summary is only added when at least
     one row is fully billed. Returns plan_json; it is left untouched only when billing holds no import half-hours at
     all or rows can't be matched to half-hours - a view with nothing billed in it still gets the (empty) fields.
@@ -538,14 +741,25 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     # An export meter whose billing hasn't arrived (or failed to read) means no net bill for that row yet
     export_required = not import_only and ((billing.get("legs") or {}).get("export") is not None)
     events = events or {}
+    # Each half-hour of an event that is refunded as a credit, mapped to its event
+    credit_slots = {}
+    for credit_event in billing.get("credit_events") or []:
+        for key in _event_slot_keys(credit_event):
+            credit_slots[key] = credit_event
+    credited = {}
+    axle = parse_axle_events(axle_events)
     day_half_hours = {}
     updates = []
     totals = {"predbat": 0.0, "billed": 0.0, "standing_predbat": 0.0, "standing_billed": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "predbat_import_kwh": 0.0, "predbat_export_kwh": 0.0, "rate_cost": 0.0, "rate_kwh": 0.0, "predbat_rate_cost": 0.0}
+    axle_total = 0.0
     for row in plan_json.get("rows") or []:
         slot_minute = row.get("slot_minute")
         if slot_minute is None:
             continue
         keys = _row_slot_keys(view_midnight_utc, slot_minute, plan_interval_minutes)
+        row_start = view_midnight_utc + timedelta(minutes=slot_minute)
+        premiums = _row_axle(axle, row_start, row_start + timedelta(minutes=plan_interval_minutes))
+        axle_row = premiums is not None
         billed_pence = None
         buckets = None
         full = False
@@ -558,11 +772,14 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
             buckets = {}
             for key in keys:
                 billed_pence += imports[key]["cost"] - (row_exports[key]["cost"] if key in row_exports else 0.0)
-                if row.get("import_rate") is not None:
-                    # The plausibility check is on the import bill alone, so a row waiting for its export still counts
+                if row.get("import_rate") is not None and key not in credit_slots:
+                    # The plausibility check is on the import bill alone, so a row waiting for its export still counts. A credited
+                    # event's half-hours are left out: they are billed at the full rate where Predbat priced them free. An Axle row's
+                    # import rate is checked without the Axle premium Predbat added to it, which the bill doesn't carry
+                    import_rate = row["import_rate"] - (_row_axle_at_start(axle, row_start) if axle_row else 0.0)
                     totals["rate_cost"] += imports[key]["cost"]
                     totals["rate_kwh"] += imports[key]["kwh"]
-                    totals["predbat_rate_cost"] += imports[key]["kwh"] * row["import_rate"]
+                    totals["predbat_rate_cost"] += imports[key]["kwh"] * import_rate
                 if full:
                     totals["standing_billed"] += imports[key]["standing"]
                     # Predbat's daily standing charge, counted for the billed half-hours only, so a part-billed day compares like with like,
@@ -583,38 +800,77 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         if full and predbat_pence is not None and abs(predbat_pence) < 0.005 and predbat_import_kwh is not None and abs(predbat_import_kwh.get(slot_minute, 0.0)) < 0.001:
             if sum(imports[key]["kwh"] for key in keys) > BILLING_UNRECORDED_KWH:
                 predbat_pence = None
+        row_import_kwh = (predbat_import_kwh or {}).get(slot_minute, 0.0)
+        row_export_kwh = (predbat_export_kwh or {}).get(slot_minute, 0.0)
         diff = None
+        axle_pence = None
         if full and predbat_pence is not None:
-            diff = _pounds(billed_pence - predbat_pence)
+            if axle_row and predbat_import_kwh is not None:
+                # Axle pays the event's pence/kWh on what Predbat recorded crossing the meter in the event's direction; the export
+                # event's premium on import is Predbat's planning cost, not a charge, so it is given back. Without Predbat's recorded
+                # kWh there is nothing to estimate from, so the row isn't flagged
+                export_premium, import_premium = premiums
+                axle_pence = export_premium * (row_export_kwh - row_import_kwh) + import_premium * row_import_kwh
+                axle_total += axle_pence
+            # A row's Diff is after its Axle estimate, as the summary's is
+            diff = _pounds(billed_pence - (axle_pence or 0.0) - predbat_pence)
             totals["predbat"] += predbat_pence
             totals["billed"] += billed_pence
         if full:
-            totals["predbat_import_kwh"] += (predbat_import_kwh or {}).get(slot_minute, 0.0)
-            totals["predbat_export_kwh"] += (predbat_export_kwh or {}).get(slot_minute, 0.0)
-        updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes), full, pending_export))
+            totals["predbat_import_kwh"] += row_import_kwh
+            totals["predbat_export_kwh"] += row_export_kwh
+        # A row longer than a half-hour can hold parts of two adjacent events, so each half-hour is credited to its own event
+        row_credit_events = [credit_slots[key] for key in keys if key in credit_slots]
+        if full:
+            for key in keys:
+                credit_event = credit_slots.get(key)
+                if credit_event is not None:
+                    # Each event once, by its start, with the share of its billed import that went into the totals above, so
+                    # its credit is only taken off the bill it pays for
+                    entry = credited.setdefault(credit_event["start"], {"event": credit_event, "counted": 0.0})
+                    if predbat_pence is not None:
+                        entry["counted"] += imports[key]["cost"]
+        credit_state = None
+        if row_credit_events and billed_pence is not None:
+            credit_state = "pending" if any(credit_event.get("credit") is None for credit_event in row_credit_events) else "credited"
+        updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes), full, pending_export, credit_state, axle_pence))
     if not updates:
         return plan_json
     plausible = True
     if totals["rate_kwh"] > 0.5 and totals["predbat_rate_cost"] > 0:
         ratio = totals["rate_cost"] / totals["predbat_rate_cost"]
         plausible = BILLING_PLAUSIBLE_RATE_RATIO[0] <= ratio <= BILLING_PLAUSIBLE_RATE_RATIO[1]
-    for row, billed, buckets, diff, event, full, pending_export in updates:
+    for row, billed, buckets, diff, event, full, pending_export, credit_state, axle_pence in updates:
         # Billing that doesn't match the rates leaves the columns empty rather than showing a wrong figure
         row["billed"] = billed if plausible else None
         row["billed_buckets"] = buckets if plausible else None
         row["billing_diff"] = diff if plausible else None
         row["billing_pending_export"] = pending_export and plausible
-        row["billing_event"] = event
+        # An Axle row's estimate explains the difference its event label would warn of
+        row["billing_event"] = None if axle_pence is not None and plausible else event
+        row["billing_credit"] = credit_state if plausible else None
+        row["billing_axle"] = _pounds(axle_pence) if plausible and axle_pence is not None else None
     if not plausible or not any(update[5] for update in updates):
         return plan_json
     last_billed = max(index for index, update in enumerate(updates) if update[5])
     # Rows showing nothing before the last fully billed one; rows waiting for their export show their import and are counted apart
     missing_slots = sum(1 for update in updates[:last_billed] if not update[5] and not update[6])
+    credits = 0.0
+    for entry in credited.values():
+        credit = entry["event"].get("credit") or 0.0
+        event_billed = entry["event"].get("billed") or 0.0
+        credits += credit * min(1.0, entry["counted"] / event_billed) if event_billed > 0 else 0.0
     billed_until = (view_midnight_utc + timedelta(minutes=updates[last_billed][0]["slot_minute"] + plan_interval_minutes)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)
     plan_json["billing_summary"] = {
         "predbat_cost": _pounds(totals["predbat"]),
         "billed_cost": _pounds(totals["billed"]),
-        "diff": _pounds(totals["billed"] - totals["predbat"]),
+        # Credits paid back later for events billed at the full rate count against the bill
+        # ... and Axle pays its events separately
+        "diff": _pounds(totals["billed"] - credits - axle_total - totals["predbat"]),
+        "credits": _pounds(credits),
+        "axle": _pounds(axle_total),
+        "axle_slots": sum(1 for update in updates if update[8] is not None),
+        "credits_pending": sum(1 for entry in credited.values() if entry["event"].get("credit") is None),
         "standing_predbat": _pounds(totals["standing_predbat"]),
         "standing_billed": _pounds(totals["standing_billed"]),
         "import_kwh": [None if predbat_import_kwh is None else round(totals["predbat_import_kwh"], 2), round(totals["import_kwh"], 2)],

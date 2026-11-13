@@ -24,8 +24,7 @@ RUN_URL = "https://github.com/springfall2008/batpred/actions/runs/1"
 
 # Stands in for `gh api`: reads state from $FAKE_STATE, applies writes, and pipes the
 # response through jq when --jq is given, as gh does
-FAKE_GH = textwrap.dedent(
-    '''\
+FAKE_GH = textwrap.dedent('''\
     #!/usr/bin/env python3
     """Fake gh api for the owner gate tests."""
     import json, os, subprocess, sys
@@ -88,8 +87,7 @@ FAKE_GH = textwrap.dedent(
         sys.stdout.write(subprocess.run(["jq", "-r", jq], input=text, capture_output=True, text=True, check=True).stdout)
     else:
         print(text)
-    '''
-)
+    ''')
 
 
 def make_pr(auto_merge_by=None, labels=(), reviews=(), head="sha1"):
