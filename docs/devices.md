@@ -57,6 +57,7 @@ The [Octopus Energy integration](https://github.com/BottlecapDave/HomeAssistant-
 
 ```yaml
   octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_intelligent_smart_control: 're:(switch.octopus_energy([0-9a-z_]+|)_intelligent_smart_charge)'
   octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
 ```
@@ -144,6 +145,8 @@ then selecting your Device from the drop down menu. Then click on 'Go to YAML mo
 
 Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
 
+Also comment out **octopus_intelligent_smart_control** in `apps.yaml`, otherwise the Ohme slots are ignored whenever Octopus Smart Control is off.
+
 **Using Ohme car charging plans on other tariff e.g. Agile**
 
 ```yaml
@@ -177,6 +180,8 @@ If you are on the Octopus Intelligent GO tariff the integration can be used to m
 ```
 
 Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
+
+Also comment out **octopus_intelligent_smart_control** in `apps.yaml`, otherwise the Ohme slots are ignored whenever Octopus Smart Control is off.
 
 **Using Ohme car charging plans on other tariff e.g. Agile**
 
