@@ -42,6 +42,7 @@ Same as `/issue-triage` step 2 (including files on a source ticket this one was 
 - If the `mcp__shared-memory__*` tools are available, `search` for `issue:<number>` and the symptom. The original triage may have left a memory of what it established.
 - Re-check `git log`/`git blame` on the relevant area — the fix may have landed on `main` since the original triage.
 - If the new information points at a test module, run it via `tools/triage_test.sh <name> <scratch>/test.log` (never the full suite).
+- If the new information is a debug yaml taken earlier than the log (often the reply to a request for one), replay the log forwards with `tools/triage_replay.py`, exactly as in `/issue-triage` step 5's "Replay the log forwards".
 
 ## 4. Decide whether the assessment changes
 
