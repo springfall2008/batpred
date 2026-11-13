@@ -15,7 +15,7 @@ semantics for multi-pod deployments.
 
 import asyncio
 import math
-import requests
+from http_sync import http_get, HttpError, HttpJSONDecodeError
 import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
@@ -56,7 +56,7 @@ from utils import (
     strptime_aware,
 )
 from component_base import ComponentBase, new_http_session
-from billing import BillingReader
+from billing import BillingReader, billing_slot_key
 from mock_base import MockBase as SharedMockBase
 import aiohttp
 import hashlib
@@ -800,6 +800,8 @@ class OctopusAPI(ComponentBase):
         self.device_fetched_at = None
         self.sensor_updated_at = None
         self.automatic = automatic
+        # The tariff keys automatic_config() last ran with; None until it has run (GH#5994)
+        self.automatic_config_tariff_keys = None
         self.commands = []
         self.mpan = None
         self.tou_samples = None
@@ -905,9 +907,12 @@ class OctopusAPI(ComponentBase):
             if await self.async_get_account(self.account_id):
                 self.tariff_fetched_at = datetime.now()
 
+        tariffs_changed = False
         if tariff_due or first:
             # Rebuild tariff structure from account_data (no API call, needed after cache load)
+            tariff_keys_before = set(self.tariffs)
             await self.async_find_tariffs()
+            tariffs_changed = set(self.tariffs) != tariff_keys_before
 
         if device_due:
             # 10-minute API refresh for saving sessions
@@ -915,8 +920,10 @@ class OctopusAPI(ComponentBase):
             self.get_saving_session_data()
             self.device_fetched_at = datetime.now()
 
-        if device_due or first:
-            # Download rate data into tariff structure (uses storage cache, needed after cache load)
+        if device_due or first or tariffs_changed:
+            # Download rate data into tariff structure (uses storage cache, needed after cache load). Also on a cycle that
+            # found new tariffs, so their rates are there as soon as they are wired - e.g. the first successful account fetch
+            # after a failed one at startup, which would otherwise wait for the next device refresh (GH#5994)
             await self.fetch_tariffs(self.tariffs)
 
         if sensor_due:
@@ -998,6 +1005,9 @@ class OctopusAPI(ComponentBase):
             return
         now_utc = datetime.now(timezone.utc)
         self.billing.random_delay = self.get_arg("plan_random_delay", 0) > 0
+        # Weekend Happy Hours are billed at the full rate and refunded later as an account credit
+        self.billing.credits_account = self.account_id
+        self.billing.credit_events = self.billing_credit_events()
         # The first run only publishes what was cached, keeping a restart free of API calls; the read follows a cycle later
         if not first and self.billing.due(now_utc):
             export_mpan = (self.tariffs.get("export") or {}).get("mpan")
@@ -1005,6 +1015,22 @@ class OctopusAPI(ComponentBase):
             await self.billing.read(self.async_graphql_query, mpans, now_utc, "octopus", app="octopus")
         elif first:
             self.billing.publish("octopus", now_utc, app="octopus")
+
+    def billing_credit_events(self):
+        """The joined Weekend Happy Hours, as {"start", "end"} UTC slot keys, whose billed import Octopus refunds later as a credit.
+
+        A joined event's own eventType is used, falling back to the events list's, as get_saving_session_data() does.
+        """
+        event_type = {event.get("id"): event.get("eventType") for event in (self.saving_sessions or {}).get("events", []) or [] if event}
+        spans = []
+        for event in ((self.saving_sessions or {}).get("account", {}) or {}).get("joinedEvents", []) or []:
+            if not event or (event.get("eventType") or event_type.get(event.get("eventId"))) != "WEEKEND_HAPPY_HOUR":
+                continue
+            start = billing_slot_key(event.get("startAt"))
+            end = billing_slot_key(event.get("endAt"))
+            if start and end and start < end:
+                spans.append({"start": start, "end": end})
+        return spans
 
     async def final(self):
         """
@@ -1122,7 +1148,6 @@ class OctopusAPI(ComponentBase):
             return self.tariffs
 
         now = datetime.now()
-        old_tariff_keys = set(self.tariffs.keys())
 
         tariffs = {}
         gas = self.account_data.get("account", {}).get("gasAgreements", [])
@@ -1216,10 +1241,16 @@ class OctopusAPI(ComponentBase):
                     tariffs["gas"]["standing"] = self.tariffs.get("gas", {}).get("standing", None)
         self.tariffs = tariffs
 
-        # Re-run automatic config if tariff structure changed (e.g. export agreement became active)
+        # Re-run automatic config if the tariff structure has changed (e.g. an export agreement became active) since
+        # automatic_config() last ran. Comparing with the tariffs it was given, not the previous fetch, also wires the rates
+        # when the first account fetch failed: the first-cycle configure then ran with no tariffs, and the later empty ->
+        # populated change must still reconfigure, or every plan fails with "Import rates are all zero" until a restart
+        # (GH#5994). Until it has run at all - on a healthy boot the first fetch comes before run()'s first-cycle configure -
+        # there is nothing to compare with, and that configure follows anyway.
         new_tariff_keys = set(self.tariffs.keys())
-        if old_tariff_keys and new_tariff_keys != old_tariff_keys and self.automatic:
-            self.log("OctopusAPI: Tariff structure changed from {} to {}, reconfiguring".format(old_tariff_keys, new_tariff_keys))
+        configured_keys = self.automatic_config_tariff_keys
+        if self.automatic and configured_keys is not None and new_tariff_keys != configured_keys:
+            self.log("OctopusAPI: Tariff structure changed from {} to {}, reconfiguring".format(configured_keys, new_tariff_keys))
             self.automatic_config(self.tariffs)
             self.refresh_discovery()
 
@@ -1673,6 +1704,7 @@ class OctopusAPI(ComponentBase):
         Automatic configuration of entities
         """
         self.log("OctopusAPI: Automatic configuration of entities")
+        self.automatic_config_tariff_keys = set(tariffs)
         self.set_arg("octopus_saving_session", self.get_entity_name("binary_sensor", "saving_session"))
         self.set_arg("octopus_saving_session_join", self.get_entity_name("select", "saving_session_join"))
         self.set_arg("octopus_free_electricity", self.get_entity_name("sensor", "free_electricity"))
@@ -3330,9 +3362,9 @@ class Octopus:
         Download octopus free session data directly from a URL, no caching.
         """
         try:
-            r = requests.get(url, timeout=120)
-        except requests.exceptions.RequestException as e:
-            # RequestException covers ReadTimeout as well as ConnectionError - a read timeout is not a ConnectionError (#5743)
+            r = http_get(url, timeout=120)
+        except HttpError as e:
+            # HttpError covers HttpTimeout as well as HttpConnectionError - a read timeout is not a connection error (#5743)
             self.log("Warn: Octopus: Unable to download Octopus data from URL {} ({})".format(url, type(e).__name__))
             self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
             return None
@@ -3593,9 +3625,9 @@ class Octopus:
             if self.debug_enable:
                 self.log("Download {}".format(url))
             try:
-                r = requests.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
-            except requests.exceptions.RequestException as e:
-                # RequestException covers ReadTimeout as well as ConnectionError - a read timeout is not a ConnectionError (#5743)
+                r = http_get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
+            except HttpError as e:
+                # HttpError covers HttpTimeout as well as HttpConnectionError - a read timeout is not a connection error (#5743)
                 self.log("Warn: Octopus: Unable to download Octopus data from URL {} ({})".format(url, type(e).__name__))
                 self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
                 return {}
@@ -3605,7 +3637,7 @@ class Octopus:
                 return {}
             try:
                 data = r.json()
-            except requests.exceptions.JSONDecodeError:
+            except HttpJSONDecodeError:
                 self.failures_total += 1
                 self.log("Warn: Octopus: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
                 self.record_status("Warn: Octopus: Error downloading Octopus data from cloud", debug=url, had_errors=True)

@@ -291,17 +291,17 @@ def create_mock_requests_response(status_code=200, json_data=None, json_error=Fa
         Mock Response object or exception
     """
     if timeout:
-        import requests
+        from http_sync import HttpJSONDecodeError, HttpTimeout
 
-        raise requests.Timeout("Mocked timeout")
+        raise HttpTimeout("Mocked timeout")
 
     mock_response = Mock()
     mock_response.status_code = status_code
 
     if json_error:
-        import requests
+        from http_sync import HttpJSONDecodeError, HttpTimeout
 
-        mock_response.json.side_effect = requests.exceptions.JSONDecodeError("Mock error", "", 0)
+        mock_response.json.side_effect = HttpJSONDecodeError("Mock error")
     elif json_data is not None:
         mock_response.json.return_value = json_data
     else:
@@ -385,7 +385,7 @@ def create_ha_interface(mock_base, ha_url="http://test", ha_key=None, db_enable=
     # Now call initialize with proper parameters
     if skip_app_check and ha_key:
         # Mock the API calls in initialize()
-        with patch("ha.requests.get") as mock_get:
+        with patch("ha.http_get") as mock_get:
             # Mock services check to return valid data
             mock_get.return_value = create_mock_requests_response(200, [{"domain": "test"}])
             ha_interface.initialize(ha_url, ha_key, db_enable, db_mirror_ha, db_primary)

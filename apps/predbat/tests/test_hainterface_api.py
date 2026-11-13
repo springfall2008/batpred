@@ -10,7 +10,7 @@ Tests for HAInterface API-related methods:
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
-import requests
+from http_sync import HttpConnectionError, HttpError, HttpJSONDecodeError, HttpTimeout
 
 from tests.test_hainterface_common import MockBase, MockDatabaseManager, create_ha_interface, create_mock_requests_response, make_fake_time
 from ha import HAInterface, HA_OUTAGE_LIMIT_SECONDS, HA_RETRY_SECONDS, HA_RETRY_MAX_SECONDS
@@ -24,14 +24,14 @@ def test_hainterface_api_call_get(my_predbat=None):
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, {"result": "success"})
 
         result = ha_interface.api_call("/api/states", post=False)
 
         # Verify GET called correctly
         if not mock_get.called:
-            print("ERROR: requests.get should be called")
+            print("ERROR: http_get should be called")
             failed += 1
         else:
             call_args = mock_get.call_args
@@ -62,14 +62,14 @@ def test_hainterface_api_call_post(my_predbat=None):
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
 
-    with patch("ha.requests.post") as mock_post:
+    with patch("ha.http_post") as mock_post:
         mock_post.return_value = create_mock_requests_response(200, {"status": "ok"})
 
         result = ha_interface.api_call("/api/services/test/action", data_in={"entity_id": "test.entity"}, post=True)
 
         # Verify POST called correctly
         if not mock_post.called:
-            print("ERROR: requests.post should be called")
+            print("ERROR: http_post should be called")
             failed += 1
         else:
             call_args = mock_post.call_args
@@ -120,7 +120,7 @@ def test_hainterface_api_call_supervisor(my_predbat=None):
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
 
     # Mock SUPERVISOR_TOKEN environment variable
-    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get:
+    with patch("ha.os.environ.get") as mock_env, patch("ha.http_get") as mock_get:
         mock_env.return_value = "supervisor_token"
         mock_get.return_value = create_mock_requests_response(200, {"supervisor": "data"})
 
@@ -128,7 +128,7 @@ def test_hainterface_api_call_supervisor(my_predbat=None):
 
         # Verify supervisor URL used
         if not mock_get.called:
-            print("ERROR: requests.get should be called")
+            print("ERROR: http_get should be called")
             failed += 1
         else:
             call_args = mock_get.call_args
@@ -152,10 +152,10 @@ def test_hainterface_api_call_json_decode_error(my_predbat=None):
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         # Mock response that raises JSONDecodeError
         mock_response = MagicMock()
-        mock_response.json.side_effect = requests.exceptions.JSONDecodeError("msg", "doc", 0)
+        mock_response.json.side_effect = HttpJSONDecodeError("msg")
         mock_get.return_value = mock_response
 
         result = ha_interface.api_call("/api/states")
@@ -185,8 +185,8 @@ def test_hainterface_api_call_timeout(my_predbat=None):
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
 
-    with patch("ha.requests.get") as mock_get:
-        mock_get.side_effect = requests.Timeout("Connection timeout")
+    with patch("ha.http_get") as mock_get:
+        mock_get.side_effect = HttpTimeout("Connection timeout")
 
         result = ha_interface.api_call("/api/states")
 
@@ -215,8 +215,8 @@ def test_hainterface_api_call_read_timeout(my_predbat=None):
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
 
-    with patch("ha.requests.get") as mock_get:
-        mock_get.side_effect = requests.exceptions.ReadTimeout("Read timeout")
+    with patch("ha.http_get") as mock_get:
+        mock_get.side_effect = HttpTimeout("Read timeout")
 
         result = ha_interface.api_call("/api/states")
 
@@ -256,9 +256,9 @@ def test_hainterface_api_call_silent_mode(my_predbat=None):
 
     ha_interface.log = tracked_log
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_response = MagicMock()
-        mock_response.json.side_effect = requests.exceptions.JSONDecodeError("msg", "doc", 0)
+        mock_response.json.side_effect = HttpJSONDecodeError("msg")
         mock_get.return_value = mock_response
 
         # Call with silent=True
@@ -285,8 +285,8 @@ def test_hainterface_api_call_outage_tolerated(my_predbat=None):
     ha_interface.fatal_error_occurred = lambda: fatal_called.__setitem__(0, True)
 
     clock = [1000.0]
-    with patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time(clock)):
-        mock_get.side_effect = requests.Timeout("Connection timeout")
+    with patch("ha.http_get") as mock_get, patch("ha.time", make_fake_time(clock)):
+        mock_get.side_effect = HttpTimeout("Connection timeout")
 
         # Far more failures than the old limit of 10, all within a few seconds (an HA restart)
         for _ in range(50):
@@ -331,8 +331,8 @@ def test_hainterface_api_call_outage_cleared(my_predbat=None):
     ha_interface.fatal_error_occurred = lambda: fatal_called.__setitem__(0, True)
 
     clock = [1000.0]
-    with patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time(clock)):
-        mock_get.side_effect = requests.Timeout("Connection timeout")
+    with patch("ha.http_get") as mock_get, patch("ha.time", make_fake_time(clock)):
+        mock_get.side_effect = HttpTimeout("Connection timeout")
         ha_interface.api_call("/api/states")
         if ha_interface.outage.since != 1000.0:
             print(f"ERROR: outage should start at 1000.0, got {ha_interface.outage.since}")
@@ -350,7 +350,7 @@ def test_hainterface_api_call_outage_cleared(my_predbat=None):
 
         # A later failure starts a new outage, so a long gap since the first one does not count
         clock[0] = 1000.0 + 2 * HA_OUTAGE_LIMIT_SECONDS
-        mock_get.side_effect = requests.Timeout("Connection timeout")
+        mock_get.side_effect = HttpTimeout("Connection timeout")
         ha_interface.api_call("/api/states")
         if fatal_called[0]:
             print("ERROR: a new outage should not inherit the earlier one's start time")
@@ -369,9 +369,9 @@ def test_hainterface_api_call_supervisor_failure_not_outage(my_predbat=None):
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
 
-    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get:
+    with patch("ha.os.environ.get") as mock_env, patch("ha.http_get") as mock_get:
         mock_env.return_value = "test_supervisor_token"
-        mock_get.side_effect = requests.exceptions.ConnectionError("no supervisor")
+        mock_get.side_effect = HttpConnectionError("no supervisor")
         ha_interface.api_call("/addons/self/info", core=False, silent=True)
 
     if ha_interface.outage.since is not None:
@@ -391,13 +391,13 @@ def test_hainterface_initialize_retries_until_ready(my_predbat=None):
     mock_base = MockBase()
     sleeps = []
 
-    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time([1000.0], sleeps)):
+    with patch("ha.os.environ.get") as mock_env, patch("ha.http_get") as mock_get, patch("ha.time", make_fake_time([1000.0], sleeps)):
         mock_env.return_value = "test_supervisor_token"
         mock_get.side_effect = [
-            requests.exceptions.ConnectionError("supervisor down"),  # app info
+            HttpConnectionError("supervisor down"),  # app info
             create_mock_requests_response(502, json_error=True),  # /api/services: HTML 502 page, not JSON
             create_mock_requests_response(503, {"message": "Service Unavailable"}),  # a gateway's JSON error body is not Home Assistant being ready
-            requests.Timeout("still starting"),
+            HttpTimeout("still starting"),
             create_mock_requests_response(200, [{"domain": "homeassistant"}]),
         ]
 
@@ -451,9 +451,9 @@ def test_hainterface_initialize_gives_up_after_limit(my_predbat=None):
     mock_base = MockBase()
     clock = [1000.0]
 
-    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time(clock)):
+    with patch("ha.os.environ.get") as mock_env, patch("ha.http_get") as mock_get, patch("ha.time", make_fake_time(clock)):
         mock_env.return_value = "test_supervisor_token"
-        mock_get.side_effect = requests.exceptions.ConnectionError("down")
+        mock_get.side_effect = HttpConnectionError("down")
 
         ha_interface = object.__new__(HAInterface)
         ha_interface.base = mock_base
@@ -490,18 +490,18 @@ def test_hainterface_initialize_gives_up_after_limit(my_predbat=None):
 
 
 def test_hainterface_api_call_request_exception_is_outage(my_predbat=None):
-    """Test api_call() treats other requests failures seen while HA goes down (e.g. a reset mid-body) as an outage, not a crash"""
+    """Test api_call() treats a connection lost part way through the body while HA goes down as an outage, not a crash"""
     print("\n=== Testing HAInterface api_call() request exception ===")
     failed = 0
 
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
 
-    with patch("ha.requests.get") as mock_get:
-        mock_get.side_effect = requests.exceptions.ChunkedEncodingError("Connection reset by peer")
+    with patch("ha.http_get") as mock_get:
+        mock_get.side_effect = HttpConnectionError("ClientPayloadError: Response payload is not completed")
         try:
             result = ha_interface.api_call("/api/states")
-        except requests.exceptions.RequestException:
+        except HttpError:
             print("ERROR: the exception should not escape api_call()")
             return failed + 1
 
@@ -522,7 +522,7 @@ def test_hainterface_api_call_auth_rejected(my_predbat=None):
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_get.return_value = create_mock_requests_response(401, json_error=True)
         result = ha_interface.api_call("/api/states")
 
@@ -538,7 +538,7 @@ def test_hainterface_api_call_auth_rejected(my_predbat=None):
     else:
         print("✓ rejected key flagged and logged")
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, {"ok": True})
         ha_interface.api_call("/api/states")
     if ha_interface.auth_rejected:
@@ -558,7 +558,7 @@ def test_hainterface_initialize_auth_rejected_fails_fast(my_predbat=None):
     mock_base = MockBase()
     sleeps = []
 
-    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time([1000.0], sleeps)):
+    with patch("ha.os.environ.get") as mock_env, patch("ha.http_get") as mock_get, patch("ha.time", make_fake_time([1000.0], sleeps)):
         mock_env.return_value = None  # no Supervisor
         mock_get.return_value = create_mock_requests_response(401, json_error=True)
 
@@ -600,8 +600,8 @@ def test_hainterface_api_call_outage_gap_starts_new_outage(my_predbat=None):
     ha_interface.fatal_error_occurred = lambda: fatal_called.__setitem__(0, True)
 
     clock = [1000.0]
-    with patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time(clock)):
-        mock_get.side_effect = requests.Timeout("Connection timeout")
+    with patch("ha.http_get") as mock_get, patch("ha.time", make_fake_time(clock)):
+        mock_get.side_effect = HttpTimeout("Connection timeout")
         ha_interface.api_call("/api/states")
 
         # Nothing calls Home Assistant for 20 minutes, then one more transient failure
@@ -637,8 +637,8 @@ def test_hainterface_api_call_auth_rejected_ends_outage(my_predbat=None):
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
 
-    with patch("ha.requests.get") as mock_get:
-        mock_get.side_effect = requests.Timeout("Connection timeout")
+    with patch("ha.http_get") as mock_get:
+        mock_get.side_effect = HttpTimeout("Connection timeout")
         ha_interface.api_call("/api/states")
         if ha_interface.outage.since is None:
             print("ERROR: outage should have started")
@@ -667,7 +667,7 @@ def test_hainterface_api_call_auth_rejected_repeatedly_is_fatal(my_predbat=None)
     fatal_called = [False]
     ha_interface.fatal_error_occurred = lambda: fatal_called.__setitem__(0, True)
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_get.return_value = create_mock_requests_response(401, {"message": "Unauthorized"})
         for _ in range(9):
             ha_interface.api_call("/api/states")
@@ -700,16 +700,17 @@ def test_hainterface_api_call_config_error_not_outage(my_predbat=None):
     failed = 0
 
     cases = [
-        ("get", requests.exceptions.InvalidHeader("Invalid leading whitespace, reserved character(s), or return character(s) in header value")),
-        ("get", requests.exceptions.TooManyRedirects("Exceeded 30 redirects.")),
-        ("post", requests.exceptions.InvalidJSONError("Out of range float values are not JSON compliant")),
+        # What http_sync raises for each: a newline in ha_key, a redirect loop, a body json cannot encode
+        ("get", HttpError("ValueError: Forbidden control character detected in headers. Potential header injection attack.")),
+        ("get", HttpError("TooManyRedirects: 0, message='', url='http://test/api/states/sensor.test'")),
+        ("post", HttpError("TypeError: Object of type set is not JSON serializable")),
     ]
     for method, error in cases:
-        name = type(error).__name__
+        name = str(error).split(":")[0]
         for track_outage in (True, False):
             mock_base = MockBase()
             ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
-            with patch("ha.requests." + method) as mock_call:
+            with patch("ha.http_" + method) as mock_call:
                 mock_call.side_effect = error
                 raised = False
                 result = "not set"
@@ -741,9 +742,9 @@ def test_hainterface_initialize_config_error_fails_fast(my_predbat=None):
     mock_base = MockBase()
     sleeps = []
 
-    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time([1000.0], sleeps)):
+    with patch("ha.os.environ.get") as mock_env, patch("ha.http_get") as mock_get, patch("ha.time", make_fake_time([1000.0], sleeps)):
         mock_env.return_value = None  # no supervisor, so the only call is /api/services
-        mock_get.side_effect = requests.exceptions.MissingSchema("Invalid URL 'test:8123/api/services': No scheme supplied")
+        mock_get.side_effect = HttpError("NonHttpUrlClientError: test:8123/api/services")
 
         ha_interface = object.__new__(HAInterface)
         ha_interface.base = mock_base
@@ -760,7 +761,7 @@ def test_hainterface_initialize_config_error_fails_fast(my_predbat=None):
         raised = None
         try:
             ha_interface.initialize("test:8123", "test_key", False, False, False)
-        except ValueError as e:
+        except (ValueError, HttpError) as e:
             raised = e
 
     if raised is None or sleeps:
@@ -770,8 +771,8 @@ def test_hainterface_initialize_config_error_fails_fast(my_predbat=None):
         print("✓ failed immediately")
 
     # The real error, not the generic ValueError for an unreachable Home Assistant, so the start-up log names it
-    if not isinstance(raised, requests.exceptions.MissingSchema) or "No scheme supplied" not in str(raised):
-        print(f"ERROR: expected the MissingSchema error to propagate, got {raised!r}")
+    if not isinstance(raised, HttpError) or "NonHttpUrlClientError" not in str(raised):
+        print(f"ERROR: expected the invalid URL error to propagate, got {raised!r}")
         failed += 1
     else:
         print("✓ the configuration error itself is raised")
@@ -789,7 +790,7 @@ def test_hainterface_api_call_gateway_status_is_outage(my_predbat=None):
     clock = [1000.0]
 
     with patch("ha.time", make_fake_time(clock)):
-        with patch("ha.requests.get") as mock_get:
+        with patch("ha.http_get") as mock_get:
             mock_get.return_value = create_mock_requests_response(503, {"message": "Service Unavailable"})
             result = ha_interface.api_call("/api/states")
 
@@ -801,7 +802,7 @@ def test_hainterface_api_call_gateway_status_is_outage(my_predbat=None):
 
         # A further 503 a minute later continues the same outage rather than ending it or starting a new one
         clock[0] += 60
-        with patch("ha.requests.get") as mock_get:
+        with patch("ha.http_get") as mock_get:
             mock_get.return_value = create_mock_requests_response(503, {"message": "Service Unavailable"})
             ha_interface.api_call("/api/states")
         if ha_interface.outage.since != 1000.0:
@@ -812,7 +813,7 @@ def test_hainterface_api_call_gateway_status_is_outage(my_predbat=None):
 
         # Cloudflare's origin-unreachable statuses are the same thing, JSON body or not
         clock[0] += 60
-        with patch("ha.requests.get") as mock_get:
+        with patch("ha.http_get") as mock_get:
             mock_get.return_value = create_mock_requests_response(530, {"message": "Origin unreachable"})
             result = ha_interface.api_call("/api/states")
         if result is not None or ha_interface.outage.since != 1000.0:
@@ -822,7 +823,7 @@ def test_hainterface_api_call_gateway_status_is_outage(my_predbat=None):
             print("✓ a JSON 530 continues the outage")
 
         # Only a real reply clears it
-        with patch("ha.requests.get") as mock_get:
+        with patch("ha.http_get") as mock_get:
             mock_get.return_value = create_mock_requests_response(200, {"ok": True})
             ha_interface.api_call("/api/states")
         if ha_interface.outage.since is not None:
@@ -842,7 +843,7 @@ def test_hainterface_initialize_app_check(my_predbat=None):
     mock_base = MockBase()
 
     # Mock both app info and services calls in initialize()
-    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get:
+    with patch("ha.os.environ.get") as mock_env, patch("ha.http_get") as mock_get:
         mock_env.return_value = "test_supervisor_token"  # Mock SUPERVISOR_TOKEN
         mock_get.side_effect = [
             create_mock_requests_response(200, {"data": {"slug": "predbat_app"}}),  # app info
@@ -881,12 +882,12 @@ def test_hainterface_initialize_no_app(my_predbat=None):
 
     mock_base = MockBase()
 
-    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get:
+    with patch("ha.os.environ.get") as mock_env, patch("ha.http_get") as mock_get:
         # Mock supervisor token
         mock_env.return_value = "test_supervisor_token"
         # Mock app call returns None (supervisor timeout), services call success
         mock_get.side_effect = [
-            requests.Timeout("Supervisor timeout"),  # app info fails with timeout
+            HttpTimeout("Supervisor timeout"),  # app info fails with timeout
             create_mock_requests_response(200, [{"domain": "homeassistant"}]),  # services succeeds
         ]
 
@@ -935,7 +936,7 @@ def test_hainterface_get_history_basic(my_predbat=None):
         for i in range(10)
     ]
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         # HA API returns a list containing the history array
         mock_get.return_value = create_mock_requests_response(200, [history_data])
 
@@ -997,8 +998,8 @@ def test_hainterface_get_history_api_error(my_predbat=None):
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
 
-    with patch("ha.requests.get") as mock_get:
-        mock_get.side_effect = requests.Timeout("Connection timeout")
+    with patch("ha.http_get") as mock_get:
+        mock_get.side_effect = HttpTimeout("Connection timeout")
 
         result = ha_interface.get_history("sensor.battery", datetime.now(), days=1)
 
@@ -1023,7 +1024,7 @@ def test_hainterface_get_history_from_time(my_predbat=None):
     now = datetime.now()
     from_time = now - timedelta(hours=2)
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, [[]])
 
         ha_interface.get_history("sensor.battery", now, from_time=from_time)

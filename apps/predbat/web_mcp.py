@@ -53,7 +53,6 @@ from agent_tools import (  # noqa: F401
     MCP_STATE_SAMPLE_ENTRIES,
 )
 
-
 """
 Example usage in VSCode with OAuth
 	"servers": {

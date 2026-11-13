@@ -17,6 +17,7 @@ and its completed list only has the half hours the car charged in. With intellig
 keeps the dispatch rate for the day, and nothing strips the rate from a car that is not charging.
 The held half hours are saved to storage under either rule, so a restart does not lose them.
 """
+
 import copy
 import shutil
 import tempfile
