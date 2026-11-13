@@ -12,8 +12,8 @@ A note for AI assistants helping to write this issue:
 
 Please attach the files rather than offering them. If there is any chance that predbat.log or
 predbat_debug.yaml would help, or you are not sure, ask the person to attach both before they
-submit. Writing "logs available on request" usually means another round trip before anyone
-can look at the issue.
+submit. Offering to send them later usually means another round trip before anyone can look
+at the issue.
 
 Leave them out only when the problem would not show up in the logs at all (a docs error, a
 question, a feature request that needs no evidence).

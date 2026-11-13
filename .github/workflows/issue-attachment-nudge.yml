@@ -28,9 +28,17 @@ jobs:
         run: |
           decision=$(python3 tools/issue_attachment_nudge.py "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/nudge.md")
           echo "$decision"
-          if [ "$decision" = "nudge" ]; then
-            gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/nudge.md"
+          if [ "$decision" != "nudge" ]; then
+            exit 0
           fi
+          # A re-run of this job, or a redelivered event, must not post a second nudge. Read the comments
+          # into a variable first: grep -q exiting early under pipefail would fail the pipeline instead
+          bodies=$(gh api --paginate "repos/$GH_REPO/issues/$ISSUE_NUMBER/comments" --jq '.[].body')
+          if printf '%s' "$bodies" | grep -qF 'predbat-attachment-nudge'; then
+            echo "already nudged"
+            exit 0
+          fi
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/nudge.md"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

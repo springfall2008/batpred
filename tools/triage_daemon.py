@@ -1759,6 +1759,10 @@ def wake_waiting_issue(issue):
 # unrelated, the check asks its author to file their own issue and records the post as
 # unrelated, so later reviews leave it out. A related post gets no reply.
 ME_TOO_DISCLOSURE_MARKER = "automated me-too check"
+# Opens the comment .github/workflows/issue-attachment-nudge.yml posts on a new issue that offers
+# its log files rather than attaching them. It comes from github-actions, so without this it
+# looks like a long me-too post from a third party (tools/issue_attachment_nudge.py MARKER).
+ATTACHMENT_NUDGE_MARKER = "predbat-attachment-nudge"
 # The maintainers' own comments are never "me too" reports.
 MAINTAINER_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # A comment shorter than this, once quoted lines are dropped, with no attachment, is a +1 or
@@ -1775,8 +1779,8 @@ ME_TOO_WATERMARK_MARGIN_SECONDS = 600
 
 
 def is_bot_comment(comment):
-    """Return True if a comment was posted by one of the bot's own flows, judged by its disclosure line."""
-    return has_disclosure(comment.get("body"), (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER, ME_TOO_DISCLOSURE_MARKER))
+    """Return True if a comment was posted by one of the bot's own flows or the attachment nudge, judged by its disclosure line."""
+    return has_disclosure(comment.get("body"), (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER, ME_TOO_DISCLOSURE_MARKER, ATTACHMENT_NUDGE_MARKER))
 
 
 def looks_like_a_report(body):

@@ -39,7 +39,7 @@ repos:
     name: triage daemon unit tests
     language: python
     entry: python tools/test_triage_daemon.py
-    files: ^tools/(triage_daemon\.py|test_triage_daemon\.py)$
+    files: ^tools/(triage_daemon\.py|test_triage_daemon\.py|issue_attachment_nudge\.py)$
     pass_filenames: false
   - id: owner-gate-tests
     name: owner gate workflow tests

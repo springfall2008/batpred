@@ -544,6 +544,7 @@ percnt
 peterhaban
 pgrid
 photovoltaics
+pipefail
 pitem
 pkwh
 plenticore

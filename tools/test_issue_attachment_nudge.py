@@ -26,7 +26,7 @@ OLD_FILE_LINK = "https://github.com/springfall2008/batpred/files/1234567/predbat
 IMAGE_LINK = "https://github.com/user-attachments/assets/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b"
 LOG_LINES = "\n".join(
     [
-        "2026-11-12 18:00:01.123456: Info: Plan updated",
+        "2026-11-12 18:00:01.123456: Plan updated",
         "2026-11-12 18:00:02.123456: Warn: Inverter 0 did not accept the charge rate",
         "2026-11-12 18:00:03.123456: Error: Failed to write register",
     ]
@@ -66,9 +66,42 @@ class TestDecide(unittest.TestCase):
             "Log files available upon request",
             "On request I can send the debug file",
             "I could upload the predbat log",
+            "I can provide the predbat.log and predbat_debug.yaml if needed.",
+            "I can provide predbat.log",
+            "Let me know if you need the predbat.log",
+            "Happy to attach the predbat_debug.yaml and predbat.log",
+            "I'm happy to provide the predbat_debug.yaml",
+            "Can supply predbat_debug.yaml on request",
+            "predbat_debug.yaml.txt can be provided if needed",
+            "I can provide the full predbat.log, the debug yaml and screenshots of the plan if needed.",
+            "Logs are available if you need them",
+            "Debug yaml and logs available - just ask",
+            "I would be happy to provide the predbat.log",
         ]:
             with self.subTest(body=body):
                 self.assert_nudge(body, nudge.REASON_OFFER)
+
+    def test_non_offers_are_not_nudged(self):
+        """Sentences that name the files without offering them, or that say they can't be had."""
+        for body in [
+            "I am not able to provide logs as Predbat crashed",
+            "I can't attach the debug yaml, the download link does nothing.",
+            "Previously I could attach the debug yaml, but now the download link fails",
+            "The inverter will send the logs to the cloud every 5 minutes.",
+            "my profile can be provided if needed",
+            "The catalog was provided when needed",
+            "I can upload screenshots of the files tab",
+            "I turned on debug mode and will share screenshots.",
+            "When will Predbat download the debug file? It is only uploaded if requested.",
+        ]:
+            with self.subTest(body=body):
+                self.assert_skip(body)
+
+    def test_feature_requests_are_not_nudged(self):
+        """A feature request needs no evidence, even one that mentions the debug file."""
+        self.assert_skip(FEATURE_TEMPLATE + "\nThe debug file could be provided on request via an HA service.")
+        result, why = nudge.decide({"title": "Feature request: send logs on request", "body": "The debug yaml could be shared on request.", "user": {"type": "User"}})
+        self.assertFalse(result, why)
 
     def test_offer_in_filled_bug_template_is_nudged(self):
         """An offer typed into the bug template's Log file section."""
@@ -97,6 +130,14 @@ class TestDecide(unittest.TestCase):
         """The templates' own text, including the HTML note to AI assistants, must not trigger a nudge."""
         self.assert_skip(BUG_TEMPLATE)
         self.assert_skip(FEATURE_TEMPLATE)
+
+    def test_template_note_without_its_comment_delimiters(self):
+        """A body that pastes the AI-assistant note as plain text must not read as an offer."""
+        self.assert_skip(BUG_TEMPLATE.replace("<!--", "").replace("-->", ""))
+
+    def test_unclosed_html_comment_is_ignored(self):
+        """An unclosed comment runs to the end of the body, as GitHub renders it."""
+        self.assert_skip("The plan looks odd.\n<!-- logs available on request")
 
     def test_html_comment_is_ignored(self):
         """An offer inside an HTML comment is template guidance, not the reporter."""
@@ -148,6 +189,7 @@ class TestMain(unittest.TestCase):
         self.assertTrue(comment.startswith(nudge.MARKER))
         self.assertIn(nudge.REASON_OFFER, comment)
         self.assertIn("predbat_debug.yaml.txt", comment)
+        self.assertIn(nudge.ASK[nudge.REASON_OFFER], comment)
 
     def test_skip_writes_nothing(self):
         """A skip prints the reason and writes no comment."""
