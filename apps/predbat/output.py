@@ -236,6 +236,8 @@ def dominant_slot_status(minute_counts, precedence):
 
 # How long after building no older days the History view tries again
 HISTORY_DAYS_RETRY_MINUTES = 180
+# The longest local day, at a clock change: older History days are rebuilt once in each
+HISTORY_DAY_MINUTES = 25 * 60
 # The event entities whose recorded on/off history marks the History view's rows, and the event tag each records
 HISTORY_EVENT_ENTITIES = (("octopus_saving_session", "saving"), ("octopus_free_electricity", "free"), ("axle_session", "axle"))
 # The rate tags that are a user's override: a manual rate (manual) or an apps.yaml rates_import/export_override (user, increment)
@@ -3615,6 +3617,12 @@ class Output:
         """The longest the plan history should go between rebuilds: a slot, the run it waits, and up to one re-plan interval."""
         return self.plan_interval_minutes + RUN_EVERY + self.calculate_plan_every
 
+    def history_day_refresh_minutes(self):
+        """The longest an older History day should go between rebuilds: calculate_history_days() rebuilds them at least once a local
+        day, on a re-plan that can land a slot, a run and a re-plan interval later than the day before, so the web page's stale
+        warning on one means the daily rebuild has stopped."""
+        return HISTORY_DAY_MINUTES + self.history_refresh_minutes()
+
     def calculate_yesterday(self):
         """
         Calculate the base plan for yesterday
@@ -3888,6 +3896,7 @@ class Output:
             cost_array=cost_yesterday_array,
             status_data=predbat_status_data,
             prediction=self.prediction,
+            refresh_minutes=self.history_refresh_minutes(),
         )
         self.forecast_minutes = end_record
 
@@ -4119,7 +4128,7 @@ class Output:
         # Update timestamp
         self.savings_last_updated = self.now_utc
 
-    def replay_history_day(self, view_minutes, status_offset, pv_step, load_step, soc_array, cost_array, status_data, prediction):
+    def replay_history_day(self, view_minutes, status_offset, pv_step, load_step, soc_array, cost_array, status_data, prediction, refresh_minutes):
         """
         Render a past day for the History view from what was recorded rather than simulated.
 
@@ -4127,6 +4136,7 @@ class Output:
         charge and export windows rebuilt from the recorded predbat.status history. view_minutes is how
         many minutes the view covers from its midnight, and status_offset is how many minutes before now
         the view's minute 0 was, which is how status_data (keyed by minutes ago) lines up with it.
+        refresh_minutes is how long the view may go before it is rebuilt, for the web page's stale warning.
 
         Must be called with the plan state already wound back to the day being shown (minutes_now 0,
         midnight_utc and the rates for that day), as calculate_yesterday() does. The charge/export
@@ -4290,7 +4300,7 @@ class Output:
             car_hold_minutes=car_hold_minutes,
             status_warnings=status_warnings,
         )
-        plan_json["refresh_minutes"] = self.history_refresh_minutes()
+        plan_json["refresh_minutes"] = refresh_minutes
 
         self.charge_limit_best = previous_charge_limit_best
         self.charge_window_best = previous_charge_window_best
@@ -4641,6 +4651,8 @@ class Output:
                     cost_array=cost_array,
                     status_data=status_data,
                     prediction=None,
+                    # Rebuilt once a day rather than once a slot, as the rolling History view is
+                    refresh_minutes=self.history_day_refresh_minutes(),
                 )
                 # The renderer adds minutes to a fixed-offset midnight; label each row in the local time it really was
                 if hasattr(self.local_tz, "normalize"):

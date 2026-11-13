@@ -8120,8 +8120,8 @@ def get_plan_renderer_js():
             return;
         }
 
-        // Check for stale data - an older History day is a fixed record, never stale
-        checkStaleness(currentView === 'yesterday' && historyDay ? null : data);
+        // Check for stale data - an older History day's data carries its own (daily) refresh_minutes, so the poll judges it the same way
+        checkStaleness(data);
 
         // Render table
         const editable = (currentView === 'plan');
@@ -8140,7 +8140,7 @@ def get_plan_renderer_js():
 
     // How old a view's data may get before it is reported stale, when the data does not say. Each dataset
     // carries refresh_minutes, the longest Predbat should take to republish it (the plan once per re-plan,
-    // the history views once per completed plan slot), and is stale a run (5 minutes) after that.
+    // the history views once per completed plan slot, an older History day once a day), and is stale a run (5 minutes) after that.
     const STALE_MINUTES_DEFAULT = {plan: 15, yesterday: 60, baseline: 60};
 
     // The data the current view shows
@@ -8254,7 +8254,11 @@ def get_plan_renderer_js():
         const limitMinutes = data.refresh_minutes ? Math.max(data.refresh_minutes + 5, 15) : (STALE_MINUTES_DEFAULT[currentView] || 15);
         const ageMs = new Date() - new Date(data.timestamp);
         if (ageMs > limitMinutes * 60000) {
-            staleWarning.textContent = '\u26a0\ufe0f Plan data is stale (last updated over ' + limitMinutes + ' minutes ago)';
+            // Data rebuilt once a day (an older History day) is judged in hours, and the warning says what has stopped.
+            // Worded from the data's own limit, so a day still carrying a per-slot one reads in minutes like any other view
+            staleWarning.textContent = limitMinutes >= 24 * 60
+                ? '\u26a0\ufe0f This History day has not been rebuilt for over ' + Math.floor(limitMinutes / 60) + ' hours'
+                : '\u26a0\ufe0f Plan data is stale (last updated over ' + limitMinutes + ' minutes ago)';
             staleWarning.style.display = 'block';
         } else {
             staleWarning.style.display = 'none';
