@@ -246,6 +246,64 @@ def test_hainterface_update_state_item_db_mirror_no_offset(my_predbat=None):
     return failed
 
 
+def test_hainterface_update_state_item_shares_long_lists(my_predbat=None):
+    """
+    Entities whose attributes carry the same long string list (GivTCP's 1440-entry time-slot
+    'options') share one stored copy instead of one decoded copy each, without aliasing the
+    caller's list or changing the caller's attributes dict.
+    """
+    print("\n=== Testing HAInterface update_state_item() shares identical long lists ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key=None, db_enable=False, db_mirror_ha=False, db_primary=False)
+
+    times = ["{:02d}:{:02d}:00".format(hour, minute) for hour in range(24) for minute in range(60)]
+    attrs_a = {"options": list(times), "friendly_name": "Slot A"}
+    attrs_b = {"options": list(times), "friendly_name": "Slot B"}
+    caller_list_a = attrs_a["options"]
+    short = {"options": ["on", "off"], "friendly_name": "Short"}
+    nested = {"results": [{"minute": minute} for minute in range(200)]}
+
+    ha_interface.update_state_item({"state": "00:00:00", "attributes": attrs_a}, "select.slot_a", nodb=True)
+    ha_interface.update_state_item({"state": "00:30:00", "attributes": attrs_b}, "select.slot_b", nodb=True)
+    ha_interface.update_state_item({"state": "on", "attributes": short}, "select.short", nodb=True)
+    ha_interface.update_state_item({"state": "1", "attributes": nested}, "sensor.nested", nodb=True)
+
+    stored_a = ha_interface.state_data["select.slot_a"]["attributes"]
+    stored_b = ha_interface.state_data["select.slot_b"]["attributes"]
+
+    if stored_a["options"] is not stored_b["options"]:
+        print("ERROR: identical long option lists should share one stored list")
+        failed += 1
+    if stored_a["options"] != times or stored_b["options"] != times:
+        print("ERROR: shared option list content changed")
+        failed += 1
+    if stored_a["friendly_name"] != "Slot A" or stored_b["friendly_name"] != "Slot B":
+        print("ERROR: other attributes should be kept per entity, got {} / {}".format(stored_a.get("friendly_name"), stored_b.get("friendly_name")))
+        failed += 1
+    if attrs_a["options"] is not caller_list_a:
+        print("ERROR: the caller's attributes dict should not be modified")
+        failed += 1
+    caller_list_a.append("extra")
+    if "extra" in stored_a["options"]:
+        print("ERROR: the stored list should not alias the caller's list")
+        failed += 1
+    if ha_interface.get_state("select.slot_b", attribute="options") != times:
+        print("ERROR: get_state should return the shared options")
+        failed += 1
+    if ha_interface.state_data["select.short"]["attributes"]["options"] != ["on", "off"]:
+        print("ERROR: short lists should be stored unchanged")
+        failed += 1
+    if ha_interface.state_data["sensor.nested"]["attributes"]["results"] != nested["results"]:
+        print("ERROR: non-string lists should be stored unchanged")
+        failed += 1
+
+    if not failed:
+        print("✓ Identical long lists stored once, caller data untouched")
+    return failed
+
+
 def test_hainterface_update_state_with_api(my_predbat=None):
     """Test update_state() fetches from API"""
     print("\n=== Testing HAInterface update_state() with API ===")
@@ -582,6 +640,7 @@ def run_hainterface_state_tests(my_predbat):
     failed += test_hainterface_update_state_item_basic(my_predbat)
     failed += test_hainterface_update_state_item_db_mirror(my_predbat)
     failed += test_hainterface_update_state_item_db_mirror_no_offset(my_predbat)
+    failed += test_hainterface_update_state_item_shares_long_lists(my_predbat)
 
     # update_state tests
     failed += test_hainterface_update_state_with_api(my_predbat)
