@@ -25,16 +25,21 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 COVERAGE_DIR = REPO_ROOT / "coverage"
 
-# Every Predbat log line starts with a local wall-clock timestamp; the yaml's now_utc is local time too
-# (despite the name), so the two compare as plain "YYYY-MM-DD HH:MM:SS" strings.
+# A log line's leading timestamp is the host clock, which need not be Predbat's timezone, so it is only shown,
+# never compared with the yaml. A run's own marker carries Predbat's now_utc and minutes_now - the clock the yaml's
+# now_utc and minutes_now are on - and replay_forward() picks runs by those (RUN_RE is its pattern).
 TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
-YAML_NOW_RE = re.compile(r"^now_utc: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
-RUN_MARK = "PredBat - update at"
+RUN_RE = re.compile(r"PredBat - update at (\S+ \S+) with clock skew .*minutes now (\d+)")
+# An older dump can carry a YAML anchor on the value ("now_utc: &id002 2024-12-13 08:00:00+00:00") when
+# plan_last_updated was the same datetime object (coverage/cases/predbat_debug_agile1.yaml)
+YAML_NOW_RE = re.compile(r"^now_utc: (?:&\S+ )?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+YAML_MINUTES_RE = re.compile(r"^minutes_now: (?:&\S+ )?(\d+)")
 REPLAY_INPUT_MARK = "Replay input:"
 VERSION_RE = re.compile(r"version (v[\d.]+) currently running")
 
@@ -44,21 +49,39 @@ DIGEST_RUN_LIMIT = 8
 PLAN_NAMES = ("adopted", "candidate", "charge")
 
 
-def yaml_time(path):
-    """Return the yaml's now_utc as "YYYY-MM-DD HH:MM:SS", or None if it has none."""
+def yaml_clock(path):
+    """Return the yaml's {"now": "YYYY-MM-DD HH:MM:SS", "minutes_now": int} from now_utc and minutes_now, or None
+    if it has no now_utc. minutes_now falls back to now_utc's time of day."""
+    now = minutes_now = None
     with open(path, errors="replace") as handle:
         for line in handle:
             match = YAML_NOW_RE.match(line)
             if match:
-                return match.group(1)
-    return None
+                now = match.group(1)
+            match = YAML_MINUTES_RE.match(line)
+            if match:
+                minutes_now = int(match.group(1))
+            if now and minutes_now is not None:
+                break
+    if now is None:
+        return None
+    if minutes_now is None:
+        minutes_now = int(now[11:13]) * 60 + int(now[14:16])
+    return {"now": now, "minutes_now": minutes_now}
+
+
+def run_minute(run_now, run_minutes_now, yaml_now):
+    """A run's minute counted from the yaml day's midnight, as replay_forward() places it."""
+    return (date.fromisoformat(run_now[:10]) - date.fromisoformat(yaml_now[:10])).days * 24 * 60 + run_minutes_now
 
 
 def log_facts(path, after=None):
-    """Scan a log once: its first and last timestamps, how many Predbat runs start after `after`, how many
-    "Replay input:" lines it has, the Predbat version running when `after` was reached, and every version
-    reported after it, in order seen."""
-    facts = {"first": None, "last": None, "runs_after": 0, "replay_inputs": 0, "version_at": None, "versions_after": []}
+    """Scan a log once: its first and last timestamps, how many Predbat runs start after the yaml clock `after`
+    (a yaml_clock() result) by replay_forward()'s rule, whether the log's first run is already after it, and -
+    counting from the first run after it - how many "Replay input:" lines there are, the Predbat version running
+    before that point, and every version reported from it on, in order seen."""
+    facts = {"first": None, "last": None, "runs_after": 0, "starts_after": None, "replay_inputs": 0, "version_at": None, "versions_after": []}
+    past = after is None
     with open(path, errors="replace") as handle:
         for line in handle:
             match = TIMESTAMP_RE.match(line)
@@ -68,18 +91,31 @@ def log_facts(path, after=None):
             if facts["first"] is None:
                 facts["first"] = stamp
             facts["last"] = stamp
-            later = after is None or stamp > after
-            if RUN_MARK in line and later:
-                facts["runs_after"] += 1
-            if REPLAY_INPUT_MARK in line:
+            run = RUN_RE.search(line)
+            if run:
+                later = after is None or run_minute(run.group(1), int(run.group(2)), after["now"]) > after["minutes_now"]
+                if facts["starts_after"] is None:
+                    facts["starts_after"] = later
+                if later:
+                    facts["runs_after"] += 1
+                    past = True
+            if REPLAY_INPUT_MARK in line and past:
                 facts["replay_inputs"] += 1
             version = VERSION_RE.search(line)
             if version:
-                if not later:
+                if not past:
                     facts["version_at"] = version.group(1)
                 elif version.group(1) not in facts["versions_after"]:
                     facts["versions_after"].append(version.group(1))
     return facts
+
+
+def version_changes(facts):
+    """True when the log reports a different Predbat version after the yaml than at it. With no version known at
+    the yaml, only two or more distinct versions after it count as a change."""
+    if facts["version_at"]:
+        return any(version != facts["version_at"] for version in facts["versions_after"])
+    return len(facts["versions_after"]) >= 2
 
 
 def combine_logs(paths, out_dir):
@@ -213,13 +249,13 @@ def main(argv=None):
     out_dir = Path(args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    taken = yaml_time(yaml_path)
-    if taken is None:
+    clock = yaml_clock(yaml_path)
+    if clock is None:
         print("{} has no now_utc line - is it a predbat_debug.yaml?".format(yaml_path), file=sys.stderr)
         return 2
     log_path = combine_logs(log_paths, out_dir)
-    facts = log_facts(log_path, after=taken)
-    print("yaml taken at {}; log covers {} .. {}".format(taken, facts["first"], facts["last"]))
+    facts = log_facts(log_path, after=clock)
+    print("yaml taken at {} (minutes now {}); log covers {} .. {}".format(clock["now"], clock["minutes_now"], facts["first"], facts["last"]))
     print(
         "Predbat runs in the log after the yaml: {}; 'Replay input:' lines: {}; version at the yaml: {}; versions reported after it: {}".format(
             facts["runs_after"], facts["replay_inputs"], facts["version_at"] or "unknown", ", ".join(facts["versions_after"]) or "none"
@@ -232,20 +268,22 @@ def main(argv=None):
             "or use a plain debug-file replay of this yaml instead."
         )
         return 3
-    if facts["first"] and facts["first"] > taken:
+    if facts["starts_after"]:
         print("Note: the log starts after the yaml was taken, so the replay's day counters start from the yaml, not the log.")
     if facts["replay_inputs"] == 0:
-        print("Note: no 'Replay input:' lines (a Predbat from before they were added), so the forecasts come from the yaml - expect approximate plans, not a match.")
-    if any(version != facts["version_at"] for version in facts["versions_after"]):
+        print("Note: no 'Replay input:' lines after the yaml (a Predbat from before they were added), so the forecasts come from the yaml - expect approximate plans, not a match.")
+    if version_changes(facts):
         print("Note: the version changes within the log; plans after the change are counted separately.")
 
     cmd = build_command(yaml_path, log_path, out_dir, until=args.until, simulate=args.simulate, overrides=args.override)
     output = out_dir / "replay_out.log"
     replay_log = COVERAGE_DIR / "predbat.log"
-    # The replay writes its own plan trace here; clear the last run's so a failed replay cannot pass it off as its own
+    # The replay writes its own plan trace here and its JSON into --out; clear the last run's copies of both, so a
+    # failed replay (a what-if into the same --out) cannot pass either off as its own
     replay_log.unlink(missing_ok=True)
     json_path = out_dir / "replay.json"
     json_path.unlink(missing_ok=True)
+    (out_dir / "replay_predbat.log").unlink(missing_ok=True)
     with open(output, "w") as handle:
         status = subprocess.run(cmd, cwd=COVERAGE_DIR, stdout=handle, stderr=subprocess.STDOUT, check=False).returncode
     if replay_log.is_file():

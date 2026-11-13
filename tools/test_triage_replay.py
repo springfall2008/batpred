@@ -25,9 +25,13 @@ def log_line(stamp, text):
     return "{}.123456: {}\n".format(stamp, text)
 
 
-def run_line(stamp):
-    """The line that opens a Predbat run."""
-    return log_line(stamp, "--------------- PredBat - update at {}+00:00 with clock skew 0 minutes, minutes now 0".format(stamp))
+def run_line(stamp, host_stamp=None):
+    """The line that opens a Predbat run at Predbat's time `stamp`, written at host time `host_stamp` (default the same)."""
+    minutes_now = int(stamp[11:13]) * 60 + int(stamp[14:16])
+    return log_line(host_stamp or stamp, "--------------- PredBat - update at {}+00:00 with clock skew 0 minutes, minutes now {}".format(stamp, minutes_now))
+
+
+CLOCK = {"now": "2026-11-10 20:05:00", "minutes_now": 1205}
 
 
 def version_line(stamp, version):
@@ -84,16 +88,25 @@ class TriageReplayTestCase(unittest.TestCase):
         return path
 
 
-class YamlTimeTests(TriageReplayTestCase):
-    """yaml_time() reads now_utc, not now_utc_real or midnight_utc."""
+class YamlClockTests(TriageReplayTestCase):
+    """yaml_clock() reads now_utc and minutes_now, not now_utc_real or midnight_utc."""
 
-    def test_reads_now_utc(self):
-        """The wall-clock part of now_utc, without the offset."""
-        self.assertEqual(triage_replay.yaml_time(self.write("d.yaml", YAML_TEXT)), "2026-11-10 20:05:00")
+    def test_reads_now_utc_and_minutes_now(self):
+        """The wall-clock part of now_utc, without the offset, and minutes_now."""
+        self.assertEqual(triage_replay.yaml_clock(self.write("d.yaml", YAML_TEXT)), CLOCK)
+
+    def test_reads_an_anchored_now_utc(self):
+        """An older dump anchors now_utc when plan_last_updated aliases it (coverage/cases/predbat_debug_agile1.yaml)."""
+        text = "minutes_now: 480\nnow_utc: &id002 2024-12-13 08:00:00+00:00\nplan_last_updated: *id002\n"
+        self.assertEqual(triage_replay.yaml_clock(self.write("d.yaml", text)), {"now": "2024-12-13 08:00:00", "minutes_now": 480})
+
+    def test_minutes_now_falls_back_to_now_utc(self):
+        """Without a minutes_now line, now_utc's time of day stands in."""
+        self.assertEqual(triage_replay.yaml_clock(self.write("d.yaml", "now_utc: 2026-11-10 20:05:00+00:00\n"))["minutes_now"], 1205)
 
     def test_none_without_now_utc(self):
         """A file that is not a debug yaml gives None."""
-        self.assertIsNone(triage_replay.yaml_time(self.write("d.yaml", "foo: 1\n")))
+        self.assertIsNone(triage_replay.yaml_clock(self.write("d.yaml", "foo: 1\n")))
 
 
 class LogFactsTests(TriageReplayTestCase):
@@ -102,22 +115,56 @@ class LogFactsTests(TriageReplayTestCase):
     def test_counts_only_runs_after_the_yaml(self):
         """A run at the yaml's own minute is not after it; lines without a timestamp are skipped."""
         log = self.write("p.log", run_line("2026-11-10 20:00:00") + run_line("2026-11-10 20:05:00") + "Traceback (most recent call last):\n" + run_line("2026-11-10 20:10:00"))
-        facts = triage_replay.log_facts(log, after="2026-11-10 20:05:00")
+        facts = triage_replay.log_facts(log, after=CLOCK)
         self.assertEqual(facts["runs_after"], 1)
+        self.assertFalse(facts["starts_after"])
         self.assertEqual(facts["first"], "2026-11-10 20:00:00")
         self.assertEqual(facts["last"], "2026-11-10 20:10:00")
 
+    def test_counts_runs_on_the_predbat_clock_not_the_host_clock(self):
+        """A host clock an hour ahead of Predbat's timezone does not hide the runs after the yaml."""
+        log = self.write("p.log", run_line("2026-11-10 20:00:00", "2026-11-10 21:00:00") + run_line("2026-11-10 20:10:00", "2026-11-10 21:10:00"))
+        self.assertEqual(triage_replay.log_facts(log, after={"now": "2026-11-10 20:05:00", "minutes_now": 1205})["runs_after"], 1)
+        behind = self.write("q.log", run_line("2026-11-10 20:00:00", "2026-11-10 19:00:00") + run_line("2026-11-10 20:10:00", "2026-11-10 19:10:00"))
+        self.assertEqual(triage_replay.log_facts(behind, after=CLOCK)["runs_after"], 1)
+
+    def test_counts_runs_on_later_days(self):
+        """A run the next day is after the yaml even though its minutes_now is smaller."""
+        log = self.write("p.log", run_line("2026-11-11 00:05:00"))
+        facts = triage_replay.log_facts(log, after=CLOCK)
+        self.assertEqual(facts["runs_after"], 1)
+        self.assertTrue(facts["starts_after"])
+
     def test_version_at_the_yaml_and_after(self):
         """An upgrade before the yaml is the yaml's version, not a change within the replay (GH#6110's log)."""
-        log = self.write("p.log", version_line("2026-11-10 10:00:00", "v9.7.8") + version_line("2026-11-10 19:00:00", "v9.7.9") + version_line("2026-11-10 21:00:00", "v9.7.9"))
-        facts = triage_replay.log_facts(log, after="2026-11-10 20:05:00")
+        log = self.write("p.log", version_line("2026-11-10 10:00:00", "v9.7.8") + version_line("2026-11-10 19:00:00", "v9.7.9") + run_line("2026-11-10 20:10:00") + version_line("2026-11-10 21:00:00", "v9.7.9"))
+        facts = triage_replay.log_facts(log, after=CLOCK)
         self.assertEqual(facts["version_at"], "v9.7.9")
         self.assertEqual(facts["versions_after"], ["v9.7.9"])
+        self.assertFalse(triage_replay.version_changes(facts))
 
-    def test_counts_replay_input_lines(self):
-        """Replay input lines are what make the replay exact."""
-        log = self.write("p.log", log_line("2026-11-10 20:00:00", "Replay input: state soc_kw 1.0") + log_line("2026-11-10 20:00:01", "other"))
-        self.assertEqual(triage_replay.log_facts(log)["replay_inputs"], 1)
+    def test_counts_replay_input_lines_after_the_yaml_only(self):
+        """Replay input lines are what make the replay exact; ones before the yaml are no use to it."""
+        line = "Replay input: state soc_kw 1.0"
+        log = self.write("p.log", run_line("2026-11-10 20:00:00") + log_line("2026-11-10 20:00:01", line) + run_line("2026-11-10 20:10:00") + log_line("2026-11-10 20:10:01", line) + log_line("2026-11-10 20:10:02", "other"))
+        self.assertEqual(triage_replay.log_facts(log, after=CLOCK)["replay_inputs"], 1)
+        self.assertEqual(triage_replay.log_facts(log)["replay_inputs"], 2)
+
+
+class VersionChangesTests(unittest.TestCase):
+    """version_changes() reports a change only when the log shows one."""
+
+    def test_one_version_with_none_known_at_the_yaml_is_no_change(self):
+        """A log that starts after the yaml has no version at it; one version after it is not a change."""
+        self.assertFalse(triage_replay.version_changes({"version_at": None, "versions_after": ["v9.7.9"]}))
+
+    def test_two_versions_after_the_yaml_are_a_change(self):
+        """Two distinct versions after the yaml are a change even with none known at it."""
+        self.assertTrue(triage_replay.version_changes({"version_at": None, "versions_after": ["v9.7.9", "v9.8.0"]}))
+
+    def test_a_different_version_after_the_yaml_is_a_change(self):
+        """An upgrade after the yaml is a change."""
+        self.assertTrue(triage_replay.version_changes({"version_at": "v9.7.9", "versions_after": ["v9.8.0"]}))
 
 
 class CombineLogsTests(TriageReplayTestCase):
@@ -240,6 +287,20 @@ class MainTests(TriageReplayTestCase):
         with patch.object(triage_replay.subprocess, "run", return_value=unittest.mock.Mock(returncode=1)), patch.object(triage_replay, "COVERAGE_DIR", self.dir), patch("builtins.print"):
             status = triage_replay.main(["--yaml", str(yaml_path), "--log", str(log), "--out", str(self.dir / "out")])
         self.assertEqual(status, 1)
+
+    def test_failed_replay_clears_the_previous_runs_outputs(self):
+        """A what-if into the same --out that fails leaves neither the last run's JSON nor its plan trace behind."""
+        yaml_path = self.write("d.yaml", YAML_TEXT)
+        log = self.write("p.log", run_line("2026-11-10 20:10:00"))
+        out = self.dir / "out"
+        out.mkdir()
+        (out / "replay.json").write_text(json.dumps(SAMPLE_JSON))
+        (out / "replay_predbat.log").write_text("previous run's plan trace\n")
+        with patch.object(triage_replay.subprocess, "run", return_value=unittest.mock.Mock(returncode=1)), patch.object(triage_replay, "COVERAGE_DIR", self.dir), patch("builtins.print"):
+            status = triage_replay.main(["--yaml", str(yaml_path), "--log", str(log), "--out", str(out)])
+        self.assertEqual(status, 1)
+        self.assertFalse((out / "replay.json").exists())
+        self.assertFalse((out / "replay_predbat.log").exists())
 
 
 if __name__ == "__main__":
