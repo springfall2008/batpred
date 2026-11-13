@@ -169,7 +169,7 @@ def _new_session(**kwargs):
     return aiohttp.ClientSession(**kwargs)
 
 
-async def async_http_request(method, url, headers=None, params=None, json=None, data=None, timeout=None, stream=False, max_bytes=None):  # pylint: disable=redefined-outer-name
+async def async_http_request(method, url, headers=None, params=None, json=None, data=None, timeout=None, stream=False, max_bytes=None, session_factory=None):  # pylint: disable=redefined-outer-name
     """
     Make one HTTP request and return an HttpResponse with the body received.
 
@@ -183,13 +183,15 @@ async def async_http_request(method, url, headers=None, params=None, json=None, 
                    iter_content() and released with close().
     :param max_bytes: With stream, stop receiving soon after this many bytes, so an oversized body
                       is neither downloaded in full nor mistaken for a complete one.
+    :param session_factory: Called like aiohttp.ClientSession to make the session for this request;
+                            a component passes its http_session. Default is the process-wide one.
     """
     client_timeout = aiohttp.ClientTimeout(total=None, connect=timeout, sock_read=timeout)
     if params:
         params = {key: value for key, value in params.items() if value is not None}
     body_file = None
     try:
-        async with _new_session(timeout=client_timeout, trust_env=True) as session:
+        async with (session_factory or _new_session)(timeout=client_timeout, trust_env=True) as session:
             async with session.request(method, url, headers=headers, params=params or None, json=json, data=data) as response:
                 status_code = response.status
                 response_headers = response.headers.copy()

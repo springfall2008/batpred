@@ -17,7 +17,8 @@ other vendor already uses. Predbat's Inverter class never talks REST directly;
 automatic_config() points its normal entity-based apps.yaml args at the
 entities this component creates.
 
-Reuses givtcp_rest.py's GivTCPRest unchanged as the actual REST client -
+Uses givtcp_rest.py's GivTCPRest as the actual REST client, awaiting its
+coroutines on this component's event loop and supplying its HTTP sessions -
 this component's own job is purely the publish/subscribe/auto-config glue
 (dashboard_item calls, select/number/switch event handlers, automatic_config),
 matching the pattern already used by fox.py, ohme.py, solax.py etc.
@@ -32,7 +33,6 @@ GivTCPRest itself is still the REST client underneath - it is this component
 that owns it now rather than Inverter.
 """
 
-import asyncio
 import re
 
 from component_base import ComponentBase
@@ -464,7 +464,7 @@ class GivTCPComponent(ComponentBase):
         self.rest = []
         for n, url in enumerate(rest_urls):
             state = InverterRestState(id=n, rest_api=url)
-            self.rest.append(GivTCPRest(self.base, state))
+            self.rest.append(GivTCPRest(self.base, state, http_session=self.http_session))
         self.automatic_config_done = False
         # givtcp_rest is the key that enables this component, but its length says nothing about how
         # many inverters exist - the shipped apps.yaml pairs num_inverters: 1 with a two-entry list,
@@ -501,10 +501,6 @@ class GivTCPComponent(ComponentBase):
         # each re-run of automatic_config() does not repeat the note
         self.export_limit_mismatch_noted = set()
 
-    async def _run_blocking(self, func, *args):
-        """Run one of GivTCPRest's blocking (http_get/http_post + time.sleep) calls off the event loop."""
-        return await asyncio.get_event_loop().run_in_executor(None, func, *args)
-
     async def run(self, seconds, first):
         # Captured before the poll block so the pass that performs initial discovery does not also
         # immediately re-probe. Only worth doing while something is still unaccounted for.
@@ -518,7 +514,7 @@ class GivTCPComponent(ComponentBase):
             answered = []
             for n in poll:
                 rest = self.rest[n]
-                data = await self._run_blocking(rest.read_data)
+                data = await rest.read_data()
                 if data:
                     rest.inverter.rest_data = data
                     answered.append(n)
@@ -604,7 +600,7 @@ class GivTCPComponent(ComponentBase):
             # A single cheap GET, unlike startup discovery: read_data()'s 20s/40s retry ladder is
             # there for a GivTCP that might merely be booting, and spending ~100s on a placeholder
             # URL that will never answer would outlast the poll interval this runs on.
-            data = await self._run_blocking(rest.read_data, "readData", False)
+            data = await rest.read_data("readData", False)
             if not data:
                 continue
             rest.inverter.rest_data = data
@@ -1274,7 +1270,7 @@ class GivTCPComponent(ComponentBase):
         window = self._window_for_write(rest, entity_id, control, "charge_start_time", "Charge_start_time_slot_1", "Charge_end_time_slot_1", value)
         if window is None:
             return
-        await self._run_blocking(rest.set_charge_slot1, window[0], window[1])
+        await rest.set_charge_slot1(window[0], window[1])
 
     async def _set_discharge_slot(self, entity_id, value):
         n, control = self._parse_entity(entity_id)
@@ -1282,7 +1278,7 @@ class GivTCPComponent(ComponentBase):
         window = self._window_for_write(rest, entity_id, control, "discharge_start_time", "Discharge_start_time_slot_1", "Discharge_end_time_slot_1", value)
         if window is None:
             return
-        await self._run_blocking(rest.set_discharge_slot1, window[0], window[1])
+        await rest.set_discharge_slot1(window[0], window[1])
 
     async def _set_pause_slot(self, entity_id, value):
         n, control = self._parse_entity(entity_id)
@@ -1290,7 +1286,7 @@ class GivTCPComponent(ComponentBase):
         window = self._window_for_write(rest, entity_id, control, "pause_start_time", "Battery_pause_start_time_slot", "Battery_pause_end_time_slot", value)
         if window is None:
             return
-        await self._run_blocking(rest.set_pause_slot, window[0], window[1])
+        await rest.set_pause_slot(window[0], window[1])
 
     async def _handle_write(self, entity_id, value, is_switch=False, is_number=False):
         """
@@ -1315,13 +1311,13 @@ class GivTCPComponent(ComponentBase):
             if method_name in ("_set_charge_slot", "_set_discharge_slot", "_set_pause_slot"):
                 await getattr(self, method_name)(entity_id, value)
             elif is_switch:
-                await self._run_blocking(getattr(rest, method_name), value == "on")
+                await getattr(rest, method_name)(value == "on")
             elif is_number:
-                await self._run_blocking(getattr(rest, method_name), value)
+                await getattr(rest, method_name)(value)
             else:
                 # Plain select (inverter_mode, pause_mode) - the chosen option is the value the
                 # write method takes, unlike the slot selects which need both ends of the window
-                await self._run_blocking(getattr(rest, method_name), value)
+                await getattr(rest, method_name)(value)
             await self.publish_data()
         except Exception as e:
             # A failed write must not propagate into the shared HA event dispatch, which would stop

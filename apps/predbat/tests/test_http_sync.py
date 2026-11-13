@@ -252,6 +252,23 @@ def test_http_sync(my_predbat=None):
         component_base.set_http_session_factory(original_factory)
         server.stop()
 
+    # A caller's own factory (a component passes its http_session) is used in place of the process-wide one
+    own = []
+
+    def own_factory(**kwargs):
+        """Record the session request and build the real session."""
+        own.append(kwargs)
+        import aiohttp
+
+        return aiohttp.ClientSession(**kwargs)
+
+    server = LocalServer().start()
+    try:
+        r = asyncio.run(http_sync.async_http_request("GET", server.url("/json"), params={"own": "yes"}, timeout=10, session_factory=own_factory))
+        failed |= _check("session comes from the caller's factory", r.status_code == 200 and r.json()["query"] == {"own": "yes"} and len(own) == 1, "built {}".format(len(own)))
+    finally:
+        server.stop()
+
     return failed
 
 
