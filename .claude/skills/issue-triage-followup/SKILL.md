@@ -64,6 +64,8 @@ Check the comment history first: if the most recent comment is already a bot com
 
 Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated follow-up triage review (a maintainer will review before any action is taken), followed by: what was new since the last review, whether the classification/priority/root-cause changed and why (or confirmation nothing changed), the one-line bug statement from step 4 whenever one is restated, newly written, or retracted there — restated as-is if the new evidence didn't bear on it — and any further information request.
 
+If this review concludes the problem is already fixed in a later release than the reporter's, or the reporter is behind by a minor version or more without saying why, put that near the top as `/issue-triage` step 9 and step 1c describe, with the bold "We believe this is fixed in vX.Y.Z" line first.
+
 Do **not** touch the `BOT_TRIAGED` or `BOT_REVIEW` labels — the daemon manages both.
 
 If the `mcp__shared-memory__*` tools are available and this review changed what is known, `update` the issue's existing memory (found by `issue:<number>`) rather than storing a second one. If none exists, `store` one as `/issue-triage` step 9 describes. The public-safety rules in CLAUDE.md's "Shared team memory" apply.
