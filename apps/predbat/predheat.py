@@ -21,7 +21,7 @@ requirements and costs for heat pump systems.
 
 from datetime import datetime, timedelta, timezone
 import pytz
-from utils import str2time, dp2, dp3, minute_data, minutes_since_midnight, next_aligned_run
+from utils import str2time, dp2, dp3, minute_data, minutes_since_midnight, next_aligned_run, clock_change_minutes
 
 from const import TIME_FORMAT
 
@@ -128,6 +128,8 @@ class PredHeat:
         self.delta_correction = DELTA_CORRECTION.copy()
         self.weather_compensation = {}
         self.weather_compensation_enabled = False
+        # Plan-axis minute of the real start of today: 0 except on a clock-change day (GH#5760), set by update_pred()
+        self.day_start_minute = 0
         self.hysteresis_on = abs(self.get_arg("hysteresis", 0.5, domain="predheat"))
         self.hysteresis_off = abs(self.get_arg("hysteresis_off", 0.1, domain="predheat"))
 
@@ -523,14 +525,15 @@ class PredHeat:
             self.log("Predheat: No import data for today")
             return 0
 
-        for minute in range(0, self.minutes_now):
+        # From the real start of the day, which on a clock-change day is not minute 0 of this plan-aligned loop (GH#5760)
+        for minute in range(self.day_start_minute, self.minutes_now):
             minute_back = self.minutes_now - minute - 1
             energy = 0
             energy = self.get_from_incrementing(import_today, minute_back)
             day_energy += energy
 
             if self.rate_import:
-                day_cost += self.rate_import[minute] * energy
+                day_cost += self.rate_import.get(minute, 0) * energy
 
             if (minute % 10) == 0:
                 minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
@@ -569,6 +572,9 @@ class PredHeat:
         # Measured against now_utc like the rest of Predbat, rather than a second naive clock
         # taken from the host's timezone - see update_time() in predbat.py, which shares this helper.
         self.minutes_now = minutes_since_midnight(now_utc, self.midnight_utc)
+        # On a clock-change day midnight_utc (now's clock set to 00:00) is not the real start of the day, which sits this
+        # many minutes from it; history keyed by real minutes back from now has to be read back to there (GH#5760)
+        self.day_start_minute = clock_change_minutes(now_utc, local_tz)
         self.metric_future_rate_offset_import = 0
 
         self.log("Predheat: update at {}".format(now_utc))
@@ -591,7 +597,7 @@ class PredHeat:
             history_ages.append(age_energy)
         self.minute_data_age = min(history_ages)
 
-        self.heat_energy_today = self.heating_energy.get(0, 0) - self.heating_energy.get(self.minutes_now, 0)
+        self.heat_energy_today = self.heating_energy.get(0, 0) - self.heating_energy.get(self.minutes_now - self.day_start_minute, 0)
 
         self.mode = self.get_arg("mode", "pump", domain="predheat")
         self.flow_temp = self.get_arg("flow_temp", 40.0, domain="predheat")

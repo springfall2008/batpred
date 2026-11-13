@@ -608,6 +608,18 @@ class MockConfigProvider:
         return self.config.get(key, default)
 
 
+def prime_flat_prediction(my_predbat):
+    """Give my_predbat zero PV and zero load for the whole forecast, and a Prediction built from them."""
+    step = 5
+    pv_step = {minute: 0.0 for minute in range(0, my_predbat.forecast_minutes, step)}
+    load_step = {minute: 0.0 for minute in range(0, my_predbat.forecast_minutes, step)}
+    my_predbat.load_minutes_step = load_step
+    my_predbat.load_minutes_step10 = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.pv_forecast_minute10_step = pv_step
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+
+
 def reset_rates(my_predbat, ir, xr):
     my_predbat.combine_charge_slots = True
     for minute in range(my_predbat.forecast_minutes + my_predbat.minutes_now):

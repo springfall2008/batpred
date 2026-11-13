@@ -15,7 +15,7 @@ import os
 import pytz
 from datetime import datetime, timedelta
 from utils import calc_percent_limit, is_entity_id
-from tests.test_infra import TestHAInterface
+from tests.test_infra import TestHAInterface, run_async
 from predbat import PredBat
 from inverter import Inverter, within_fuzzy
 from givtcp_rest import GivTCPRest
@@ -345,7 +345,22 @@ def _rest_client(inv, dummy_rest=None):
     """
     if dummy_rest is None:
         return GivTCPRest(inv.base, inv)
-    return GivTCPRest(inv.base, inv, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
+
+    async def post_command(url, json):
+        """The client's POST coroutine, answered by the dummy."""
+        return dummy_rest.dummy_rest_postCommand(url, json)
+
+    async def get_data(url):
+        """The client's GET coroutine, answered by the dummy."""
+        return dummy_rest.dummy_rest_getData(url)
+
+    async def sleep(seconds):
+        """Take the client's waits between retries on the inverter's sleep(), which these tests replace and count."""
+        inv.sleep(seconds)
+
+    client = GivTCPRest(inv.base, inv, rest_postCommand=post_command, rest_getData=get_data)
+    client.sleep = sleep
+    return client
 
 
 def dummy_sleep(seconds):
@@ -1893,7 +1908,7 @@ def test_rest_enable_charge_target(test_name, ha, inv, dummy_rest, enable, expec
     else:
         dummy_rest.rest_data = {"Control": {"Enable_Charge_Target": "enable" if enable else "disable"}}
 
-    _rest_client(inv, dummy_rest).enable_charge_target(enable)
+    run_async(_rest_client(inv, dummy_rest).enable_charge_target(enable))
 
     rest_commands = dummy_rest.get_commands()
     if json.dumps(expect_commands) != json.dumps(rest_commands):
@@ -3537,7 +3552,7 @@ def test_discharge_target_read_back(test_name, ha, inv, dummy_rest):
         dummy_rest.get_commands()
         del errors[:]
 
-        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
+        if not run_async(_rest_client(inv, dummy_rest).set_discharge_target(20)):
             print("ERROR: {}: string read back of the export target should count as success".format(test_name))
             failed = True
         if target_errors():
@@ -3648,7 +3663,7 @@ def test_discharge_target_settle_delay(test_name, ha, inv, dummy_rest):
         dummy_rest.queue_rest_data(settled)
         dummy_rest.get_commands()
 
-        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
+        if not run_async(_rest_client(inv, dummy_rest).set_discharge_target(20)):
             print("ERROR: {}: write should be recognised as successful once the stale cache catches up".format(test_name))
             failed = True
 
@@ -3707,7 +3722,7 @@ def test_discharge_target_control_signal(test_name, ha, inv, dummy_rest):
         dummy_rest.queue_rest_data(settled_control)
         dummy_rest.get_commands()
 
-        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
+        if not run_async(_rest_client(inv, dummy_rest).set_discharge_target(20)):
             print("ERROR: {}: write should be recognised as successful from Control.Discharge_Target_SOC_1 alone".format(test_name))
             failed = True
 
@@ -4939,7 +4954,7 @@ def test_charge_window_stuck_enable_presses_button_once(test_name, ha, inv, my_p
                 ha.dummy_items.pop(key, None)
             else:
                 ha.dummy_items[key] = value
-        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+        inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending = saved_fields
 
     return failed
 
@@ -5083,7 +5098,7 @@ def test_charge_window_unmapped_minute_entity_commits_once(test_name, ha, inv, m
                 ha.dummy_items.pop(key, None)
             else:
                 ha.dummy_items[key] = value
-        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+        inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending = saved_fields
 
     return failed
 
@@ -5453,7 +5468,7 @@ def _save_inverter_fields(inv):
 
 def _restore_inverter_fields(inv, saved):
     """Put back what _save_inverter_fields() copied"""
-    (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.reserve_percent, inv.last_committed, inv.commit_pending) = saved
+    inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.reserve_percent, inv.last_committed, inv.commit_pending = saved
 
 
 def _setup_hm_charge_window(ha, inv, start, end):

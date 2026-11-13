@@ -13,6 +13,7 @@ The prune trials use a stubbed run_prediction_metric so each test controls exact
 simulation reports for every candidate plan shape, keeping the tests about the prune logic
 (criterion, baseline update, guards) rather than the simulator.
 """
+
 from tests.test_infra import reset_inverter
 from const import EXPORT_MODE_IDLE
 from utils import export_mode_of, export_target_of, export_limit_sort_key

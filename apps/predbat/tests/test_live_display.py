@@ -138,7 +138,7 @@ def test_server_binding_validation_and_metadata_publisher():
         assert validated_binding(bad, DEVICE, "INV001", True) == {"enabled": False}
     gw._mqtt_connected = True
     gw._mqtt_client = SimpleNamespace(publish=AsyncMock())
-    gw._loop = None
+    gw.component_loop = None
     gw._last_live_binding = None
     gw._last_live_binding_publish = 0
     with clock_at(gw, NOW):
@@ -176,7 +176,7 @@ def test_invalid_binding_fails_closed_and_failed_publish_retries():
     assert not json.loads(gw._published[0][1])["live_display"]["available"]
     gw._mqtt_connected = True
     gw._mqtt_client = SimpleNamespace(publish=AsyncMock(side_effect=RuntimeError("synthetic failure")))
-    gw._loop = None
+    gw.component_loop = None
     gw._last_live_binding = None
     gw._last_live_binding_publish = 0
     asyncio.run(gw._publish_display_binding())
@@ -304,7 +304,7 @@ def write_wire_fixture(path, backend_path=None):
     sample["consumption"] = 99
     gw._mqtt_connected = True
     gw._mqtt_client = SimpleNamespace(publish=AsyncMock())
-    gw._loop = None
+    gw.component_loop = None
     gw._last_live_binding = None
     gw._last_live_binding_publish = 0
     with clock_at(gw, NOW):

@@ -473,4 +473,3 @@ pred_bat:
   # This is useful for things like the Octopus Intelligent Slot sensor so that the plan updates as soon as you plug in
   # Only uncomment the items you actually have set up above in apps.yaml, of course you can add your own as well
   #watch_list:
-  #  - '+[car_charging_soc]'

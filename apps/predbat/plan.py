@@ -206,6 +206,35 @@ def select_window_candidates(entries, price_selected, allow_freeze, accept=None)
     return chosen
 
 
+def distinct_slot_trials(slot_choices, candidate_counts):
+    """
+    Slot counts worth trying for one side of the levels search, each with the freeze options it is new for.
+
+    candidate_counts maps each freeze option to the number of windows select_window_candidates made
+    available under it. A slot count selects the first min(max_slots, count) of those, so once a slot
+    count reaches the candidate count every larger one picks the same windows again. With a handful of
+    candidates and a slot length list that runs up to 48, most of the list is that repeat.
+
+    Returns [(max_slots, [freeze, ...]), ...] in slot_choices order, keeping for each freeze option only
+    the first slot count that reaches each effective count. A slot count that is a repeat under every
+    freeze option is dropped. Order matters as much as membership: the search breaks ties on the first
+    trial it sees and records that trial's slot counts to centre the fine pass on, so the survivors are
+    exactly the trials the full sweep would have run, in the order it would have run them.
+    """
+    seen = {freeze: set() for freeze in candidate_counts}
+    trials = []
+    for max_slots in slot_choices:
+        freeze_options = []
+        for freeze, count in candidate_counts.items():
+            effective = min(max_slots, count)
+            if effective not in seen[freeze]:
+                seen[freeze].add(effective)
+                freeze_options.append(freeze)
+        if freeze_options:
+            trials.append((max_slots, freeze_options))
+    return trials
+
+
 MASK_64 = (1 << 64) - 1
 
 
@@ -1332,12 +1361,25 @@ class Plan:
             charge_selection_cache = {}
             export_selection_cache = {}
 
-            def charge_selection_for(max_slots, allow_freeze, loop_price=loop_price):
-                """Charge windows this price threshold selects, capped at max_slots"""
+            def charge_candidates_for(allow_freeze, loop_price=loop_price):
+                """Every charge window this price threshold makes available, uncapped"""
                 candidates = charge_candidates.get(allow_freeze)
                 if candidates is None:
                     candidates = select_window_candidates(price_set_charge, lambda price: loop_price >= price, allow_freeze)
                     charge_candidates[allow_freeze] = candidates
+                return candidates
+
+            def export_candidates_for(allow_freeze, loop_price=loop_price):
+                """Every export window this price threshold makes available, uncapped"""
+                candidates = export_candidates.get(allow_freeze)
+                if candidates is None:
+                    candidates = select_window_candidates(price_set_export, lambda price: loop_price < price, allow_freeze, accept=export_window_allowed)
+                    export_candidates[allow_freeze] = candidates
+                return candidates
+
+            def charge_selection_for(max_slots, allow_freeze):
+                """Charge windows this price threshold selects, capped at max_slots"""
+                candidates = charge_candidates_for(allow_freeze)
                 count = min(max_slots, len(candidates))
                 entry = charge_selection_cache.get((count, allow_freeze))
                 if entry is None:
@@ -1346,12 +1388,9 @@ class Plan:
                     charge_selection_cache[(count, allow_freeze)] = entry
                 return entry
 
-            def export_selection_for(max_slots, allow_freeze, loop_price=loop_price):
+            def export_selection_for(max_slots, allow_freeze):
                 """Export windows this price threshold selects, capped at max_slots"""
-                candidates = export_candidates.get(allow_freeze)
-                if candidates is None:
-                    candidates = select_window_candidates(price_set_export, lambda price: loop_price < price, allow_freeze, accept=export_window_allowed)
-                    export_candidates[allow_freeze] = candidates
+                candidates = export_candidates_for(allow_freeze)
                 count = min(max_slots, len(candidates))
                 entry = export_selection_cache.get((count, allow_freeze))
                 if entry is None:
@@ -1382,10 +1421,18 @@ class Plan:
                     charge_freeze_options = [True, False] if (self.set_charge_freeze and not coarse) else [False]
                 export_freeze_options = [True, False] if (self.set_export_freeze and not coarse) else [False]
 
-                for max_charge_slots in charge_slot_choices:
-                    for max_export_slots in export_slot_choices:
-                        for try_charge_freeze in charge_freeze_options:
-                            for try_export_freeze in export_freeze_options:
+                # Sweep only the slot counts that select a set of windows not already selected by an
+                # earlier one. The rest would rebuild the same scenario and be turned away by tried_list
+                # below, having already paid for the selection, the export-on-charge pruning and the
+                # hash: on a typical dump that was several hundred thousand trials for a few hundred
+                # distinct plans. Each side is filtered on its own because the sweep is their product.
+                charge_trials = distinct_slot_trials(charge_slot_choices, {freeze: len(charge_candidates_for(freeze)) for freeze in charge_freeze_options})
+                export_trials = distinct_slot_trials(export_slot_choices, {freeze: len(export_candidates_for(freeze)) for freeze in export_freeze_options})
+
+                for max_charge_slots, charge_freeze_trials in charge_trials:
+                    for max_export_slots, export_freeze_trials in export_trials:
+                        for try_charge_freeze in charge_freeze_trials:
+                            for try_export_freeze in export_freeze_trials:
                                 # all_n is copied into pred_item below and charge_mods is only ever read,
                                 # so both cached objects can be shared between trials as they stand. The
                                 # export pair can be pruned just below, so it is copied on write.
@@ -1474,7 +1521,7 @@ class Plan:
                     cost90 = None
                     final_iboost90 = 0.0
                     if handle90 is not None:
-                        (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = handle90.get()
+                        cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = handle90.get()
 
                     metric, battery_value = self.compute_metric(
                         end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
@@ -1799,6 +1846,8 @@ class Plan:
         # recorded for it here rather than simulated a second time. Plan.run_prediction overwrites
         # self.predict_soc, car_charging_soc_next, iboost_next and iboost_running* on every call, and
         # every consumer reads the nominal run's, so those are put back after the other scenarios.
+        # That makes the pv10 and pv90 SoC series write-only, so those two runs ask for none
+        # (series=False): producing it is the larger part of what a single kernel run costs.
         (
             cost,
             import_kwh_battery,
@@ -1829,13 +1878,14 @@ class Plan:
                 key = prediction_cache_key(charge_limit_best, charge_window_best, export_limits_best, export_window_best, PV_SCENARIO_NOMINAL, end_record, PREDICT_STEP)
                 self.prediction.prediction_cache_export_end[key] = export_end_soc_from_series(self.predict_soc, export_window_best, self.minutes_now, export_limits_best)
             if self.pv_metric90_weight > 0:
-                (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = self.run_prediction(
+                cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = self.run_prediction(
                     charge_limit_best,
                     charge_window_best,
                     export_window_best,
                     export_limits_best,
                     PV_SCENARIO_PV90,
                     end_record=end_record,
+                    series=False,
                 )
             (
                 cost10,
@@ -1856,6 +1906,7 @@ class Plan:
                 export_limits_best,
                 True,
                 end_record=end_record,
+                series=False,
             )
             self.predict_soc, self.car_charging_soc_next, self.iboost_next, self.iboost_running, self.iboost_running_solar, self.iboost_running_full = nominal_state
         if nominal_only:
@@ -1863,6 +1914,43 @@ class Plan:
             cost10 = cost
             soc10 = soc
             final_iboost10 = final_iboost
+        metric, battery_value = self.compute_metric(
+            self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
+        )
+        return metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh_battery + import_kwh_house, export_kwh
+
+    def launch_run_prediction_metric(self, charge_limit, charge_window, export_window, export_limits, end_record):
+        """
+        Queue the scenarios one plan metric needs and return their handles for get_run_prediction_metric
+
+        The batched counterpart of run_prediction_metric, for a pass that prices many independent
+        trials: queue them all, then read the metrics back. The whole queue then runs as one kernel
+        batch across the configured threads, or on the Python engine when the kernel is not in use,
+        and no trial pays for the per-step SoC series that run_prediction_metric produces and a
+        metric never reads. It returns the same metric, to the last digit.
+
+        Nothing runs here. The usual batch rule applies: nothing passed in may be mutated until the
+        handles have been read, so give each trial its own limit lists.
+        """
+        handle = self.launch_run_prediction_single(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, end_record=end_record)
+        handle10 = self.launch_run_prediction_single(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, end_record=end_record)
+        handle90 = self.launch_run_prediction_single(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV90, end_record=end_record) if self.pv_metric90_weight > 0 else None
+        return handle, handle10, handle90
+
+    def get_run_prediction_metric(self, handles):
+        """
+        Return what run_prediction_metric returns, for a trial queued with launch_run_prediction_metric
+
+        The first call after a round of queueing runs every queued trial.
+        """
+        handle, handle10, handle90 = handles
+        cost, import_kwh_battery, import_kwh_house, export_kwh, _, soc, _, battery_cycle, metric_keep, final_iboost, final_carbon_g = handle.get()
+        cost10, _, _, _, _, soc10, _, _, _, final_iboost10, _ = handle10.get()
+        soc90 = None
+        cost90 = None
+        final_iboost90 = 0.0
+        if handle90 is not None:
+            cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = handle90.get()
         metric, battery_value = self.compute_metric(
             self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
         )
@@ -2976,13 +3064,13 @@ class Plan:
                 try_charge_limit[window_n] = try_soc
 
             # Simulate with medium PV
-            (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g) = resultmid[try_soc]
-            (cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10) = result10[try_soc]
+            cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = resultmid[try_soc]
+            cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10 = result10[try_soc]
             soc90 = None
             cost90 = None
             final_iboost90 = 0.0
             if try_soc in result90:
-                (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = result90[try_soc]
+                cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = result90[try_soc]
 
             # Compute the metric from simulation results
             metric, battery_value = self.compute_metric(
@@ -3304,7 +3392,7 @@ class Plan:
             cost90 = None
             final_iboost90 = 0.0
             if hanres90 is not None:
-                (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = hanres90
+                cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _ = hanres90
 
             # Compute the metric from simulation results
             metric, battery_value = self.compute_metric(
@@ -4718,6 +4806,11 @@ class Plan:
 
         Only strictly improving swaps are kept so the pass converges monotonically and can
         never make the plan worse.
+
+        A target's partners are priced as one batch rather than one at a time. A swap that is not
+        kept is undone, so every partner of a target is tried against the same plan and none
+        depends on another; the results are then read in partner order and the first that passes is
+        kept, which is the swap a one-at-a-time search would have stopped at.
         """
         curr = self.currency_symbols[1]
 
@@ -4734,9 +4827,7 @@ class Plan:
         swapped = True
         first = True
         while swapped:
-            selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, selected_export = self.run_prediction_metric(
-                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
-            )
+            selected_metric, _, selected_cost, _, _, _, _, _ = self.get_run_prediction_metric(self.launch_run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, self.end_record))
             if first:
                 self.log("Swap charge optimisation started metric {}{}, cost {}{}, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, min_improvement_swap, curr))
             swapped = False
@@ -4755,7 +4846,9 @@ class Plan:
                 if not self.allow_this_charge_window(window_n_target):
                     continue
 
-                # Try swapping the charge limit with an earlier window on the same day
+                # Try swapping the charge limit with an earlier window on the same day. Every partner
+                # is queued first, each on its own copy of the limits, so they run as one batch.
+                trials = []
                 for window_n in range(max(window_n_target - 32, 0), window_n_target, 1):
                     window_start = self.charge_window_best[window_n]["start"]
                     charge_limit = self.charge_limit_best[window_n]
@@ -4772,13 +4865,14 @@ class Plan:
                     if not self.allow_this_charge_window(window_n):
                         continue
 
-                    # Perform the swap and evaluate the resulting plan
-                    self.charge_limit_best[window_n] = charge_limit_target
-                    self.charge_limit_best[window_n_target] = charge_limit
+                    try_charge_limit = self.charge_limit_best.copy()
+                    try_charge_limit[window_n] = charge_limit_target
+                    try_charge_limit[window_n_target] = charge_limit
+                    trials.append((window_n, charge_limit, self.launch_run_prediction_metric(try_charge_limit, self.charge_window_best, self.export_window_best, self.export_limits_best, self.end_record)))
 
-                    best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
-                        self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
-                    )
+                # Read the results in partner order and keep the first swap that passes
+                for window_n, charge_limit, handles in trials:
+                    best_metric, _, best_cost, _, _, _, _, _ = self.get_run_prediction_metric(handles)
 
                     if self.debug_enable:
                         self.log(
@@ -4792,15 +4886,13 @@ class Plan:
                                     window_n, charge_limit, window_n_target, charge_limit_target, dp2(best_metric), curr, dp2(selected_metric), curr, dp2(best_cost), curr
                                 )
                             )
+                        self.charge_limit_best[window_n] = charge_limit_target
+                        self.charge_limit_best[window_n_target] = charge_limit
                         selected_metric = best_metric
                         selected_cost = best_cost
                         swapped = True
                         swapped_target[window_n_target] = True
                         break
-                    else:
-                        # Revert the change
-                        self.charge_limit_best[window_n] = charge_limit
-                        self.charge_limit_best[window_n_target] = charge_limit_target
 
             self.log("Swap charge optimisation finished metric {}{}, cost {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr))
 
@@ -5536,9 +5628,12 @@ class Plan:
                 else:
                     self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
 
-    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP):
+    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, series=True):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
+
+        With series=False the per-step SoC series is not produced and self.predict_soc is left as an
+        empty dict, so only pass it when the caller restores or never reads self.predict_soc.
         """
 
         # Call the prediction model
@@ -5561,7 +5656,7 @@ class Plan:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = pred.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save, step)
+        ) = pred.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save, step, series=series)
         self.predict_soc = predict_soc
         self.car_charging_soc_next = car_charging_soc_next
         self.iboost_next = iboost_next
@@ -6498,13 +6593,13 @@ class Plan:
         plan = self.sort_window_by_time(plan)
         return plan
 
-    def car_charge_slot_kwh(self, minute_start, minute_end):
+    def car_charge_slot_kwh(self, minute_start, minute_end, car_n=None):
         """
-        Work out car charging amount in KWh for given self.plan_interval_minutes-minute slot
+        Work out car charging amount in KWh for given self.plan_interval_minutes-minute slot, for all cars or just car_n
         """
         car_charging_kwh = 0.0
         if self.num_cars > 0:
-            for car_n in range(self.num_cars):
+            for car_n in range(self.num_cars) if car_n is None else [car_n]:
                 for window in self.car_charging_slots[car_n]:
                     start = window["start"]
                     end = window["end"]
