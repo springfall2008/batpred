@@ -1501,7 +1501,7 @@ async def test_edf_freephase_dynamic_url(my_predbat):
     my_predbat.now_utc = my_predbat.midnight_utc
     test_url = "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates"
 
-    with patch("requests.get") as mock_get:
+    with patch("octopus.http_get") as mock_get:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -1552,7 +1552,7 @@ async def test_edf_freephase_dynamic_url(my_predbat):
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
 
-    with patch("requests.get") as mock_get:
+    with patch("octopus.http_get") as mock_get:
         # First page
         mock_response_page1 = Mock()
         mock_response_page1.status_code = 200

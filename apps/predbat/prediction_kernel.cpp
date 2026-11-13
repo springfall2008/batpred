@@ -77,9 +77,13 @@
 // only credit off metric_keep.
 // Parity 19: in PV10, a dispatch minute of a confirmed run (io_credit set) is no longer assumed gone: the
 // dispatch is kept and the non-car import pays PK_RUN_EVERY minutes of each half hour at the worst-case rate.
-#define PK_PARITY_REVISION 19
+// Parity 20: below a manual_soc or alert floor the keep penalty's import rate, and above a manual_soc_max
+// ceiling its export rate, is at least PK_KEEP_TARGET_MIN_RATE, so a target in a free or negative-price
+// slot still costs something to miss (#5162).
+#define PK_PARITY_REVISION 20
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
+#define PK_KEEP_TARGET_MIN_RATE 1.0 // const.py KEEP_TARGET_MIN_RATE
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
 #define PK_EXPORT_MODE_FREEZE 1 // const.py EXPORT_MODE_FREEZE
 #define PK_EXPORT_MODE_IDLE 2   // const.py EXPORT_MODE_IDLE
@@ -1451,13 +1455,16 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
         // Metric keep - prediction.py:1100-1102
         if (best_soc_keep > 0 && soc <= best_soc_keep) {
-            metric_keep += (best_soc_keep - soc) * import_rate * keep_minute_scaling * step / 60.0;
+            // A manual or alert floor still costs something to miss at a free or negative rate (#5162)
+            const double keep_rate = (alert_keep > 0) ? std::max(import_rate, PK_KEEP_TARGET_MIN_RATE) : import_rate;
+            metric_keep += (best_soc_keep - soc) * keep_rate * keep_minute_scaling * step / 60.0;
         }
 
         // Metric keep max - pretend the excess above the ceiling should have been exported instead
         // of held - mirrors prediction.py's best_soc_max block right after the floor.
         if (best_soc_max >= 0 && soc >= best_soc_max) {
-            metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0;
+            // Likewise a ceiling still costs something to break at a free or negative export rate (#5162)
+            metric_keep += (soc - best_soc_max) * std::max(export_rate, PK_KEEP_TARGET_MIN_RATE) * keep_minute_scaling * step / 60.0;
         }
 
         // Import/export accounting - prediction.py:1104-1143

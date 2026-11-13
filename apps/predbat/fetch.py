@@ -52,6 +52,10 @@ import ast
 import copy
 import math
 
+# Days of battery temperature history to fetch: predict_battery_temperature() looks back at most
+# 24 hours plus one step, so a longer window is only held in memory (about 3 MB at 22 days)
+BATTERY_TEMPERATURE_HISTORY_DAYS = 2
+
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
     "car_charging_planned",
@@ -1678,12 +1682,7 @@ class Fetch:
 
         # Battery temperature
         if "battery_temperature_history" in self.args:
-            self.battery_temperature_history = self.minute_data_import_export(self.max_days_previous, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
-            data = []
-            for minute in range(0, 24 * 60, 5):
-                data.append({minute: self.battery_temperature_history.get(minute, 0)})
-            self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
-            self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
+            self.fetch_battery_temperature()
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = self.load_car_energy(self.now_utc)
@@ -2833,6 +2832,17 @@ class Fetch:
             pv_forecast_minute90 = dict(pv_forecast_minute)
 
         return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90
+
+    def fetch_battery_temperature(self):
+        """
+        Fetch the battery temperature history and predict the temperature forward from it.
+
+        Only BATTERY_TEMPERATURE_HISTORY_DAYS are fetched, not max_days_previous: the prediction looks
+        back at most 24 hours plus one step, so a longer per-minute window is only held in memory.
+        """
+        self.battery_temperature_history = self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
+        self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
+        self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
 
     def predict_battery_temperature(self, battery_temperature_history, step):
         """

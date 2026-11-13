@@ -76,7 +76,7 @@ def test_octopus_free(my_predbat):
     temp_dir = tempfile.mkdtemp()
     original_config_root = getattr(my_predbat, "config_root", None)
     try:
-        with patch("octopus.requests.get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
+        with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
             body = my_predbat.download_octopus_free_func(_URL)
         if mock_get.call_count != 1:
             print("FAIL: Expected 1 HTTP call when covering free-session timeout, got {}".format(mock_get.call_count))
@@ -91,12 +91,12 @@ def test_octopus_free(my_predbat):
             print("PASS: Free-session direct download uses the configured timeout")
 
         # A ReadTimeout is not a ConnectionError, so it must be caught as a RequestException rather than abort the plan cycle (#5743)
-        import requests
+        from http_sync import HttpTimeout
 
         _reset_free_cache(my_predbat)
         my_predbat.components = None
         try:
-            with patch("octopus.requests.get", side_effect=requests.exceptions.ReadTimeout("Read timed out. (read timeout=120)")):
+            with patch("octopus.http_get", side_effect=HttpTimeout("Read timed out. (read timeout=120)")):
                 body = my_predbat.download_octopus_free_func(_URL)
                 sessions = my_predbat.download_octopus_free(_URL)
             if body is not None:
@@ -107,14 +107,14 @@ def test_octopus_free(my_predbat):
                 failed = True
             else:
                 print("PASS: Free-session ReadTimeout handled without raising")
-        except requests.exceptions.ReadTimeout:
+        except HttpTimeout:
             print("FAIL: ReadTimeout escaped download_octopus_free (#5743)")
             failed = True
 
         # --- Test 1: no storage (components=None) — no exception, returns sessions ---
         _reset_free_cache(my_predbat)
         my_predbat.components = None
-        with patch("octopus.requests.get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
+        with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
             sessions = my_predbat.download_octopus_free(_URL)
         if mock_get.call_count != 1:
             print("FAIL: Expected 1 HTTP call without storage, got {}".format(mock_get.call_count))
@@ -128,7 +128,7 @@ def test_octopus_free(my_predbat):
         # --- Test 2: fresh download is persisted to storage ---
         storage = _attach_storage(my_predbat, temp_dir)
         _reset_free_cache(my_predbat)
-        with patch("octopus.requests.get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
+        with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
             sessions = my_predbat.download_octopus_free(_URL)
         if mock_get.call_count != 1:
             print("FAIL: Expected 1 HTTP call on fresh download, got {}".format(mock_get.call_count))
@@ -146,7 +146,7 @@ def test_octopus_free(my_predbat):
             print("PASS: Cache persisted to storage")
 
         # --- Test 3: in-memory cache hit — no HTTP call ---
-        with patch("octopus.requests.get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
+        with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
             sessions2 = my_predbat.download_octopus_free(_URL)
         if mock_get.call_count != 0:
             print("FAIL: Expected 0 HTTP calls for in-memory cache hit, got {}".format(mock_get.call_count))
@@ -159,7 +159,7 @@ def test_octopus_free(my_predbat):
 
         # --- Test 4: cache restored from storage on simulated restart — no HTTP call ---
         _reset_free_cache(my_predbat)
-        with patch("octopus.requests.get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
+        with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
             sessions3 = my_predbat.download_octopus_free(_URL)
         if mock_get.call_count != 0:
             print("FAIL: Expected 0 HTTP calls after storage restore, got {}".format(mock_get.call_count))
@@ -175,7 +175,7 @@ def test_octopus_free(my_predbat):
         old_midnight = my_predbat.midnight_utc - timedelta(days=1)
         stale = {_URL: {"stamp": datetime.now(), "midnight_utc": old_midnight, "data": sessions}}
         run_async(storage.save("octopus_free", "url_cache", stale, format="yaml", expiry=None))
-        with patch("octopus.requests.get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
+        with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
             my_predbat.download_octopus_free(_URL)
         if mock_get.call_count != 1:
             print("FAIL: Expected 1 HTTP call for stale midnight, got {}".format(mock_get.call_count))
@@ -188,7 +188,7 @@ def test_octopus_free(my_predbat):
         old_stamp = datetime.now() - timedelta(hours=1)
         expired = {_URL: {"stamp": old_stamp, "midnight_utc": my_predbat.midnight_utc, "data": sessions}}
         run_async(storage.save("octopus_free", "url_cache", expired, format="yaml", expiry=None))
-        with patch("octopus.requests.get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
+        with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
             my_predbat.download_octopus_free(_URL)
         if mock_get.call_count != 1:
             print("FAIL: Expected 1 HTTP call for expired stamp, got {}".format(mock_get.call_count))
@@ -199,9 +199,9 @@ def test_octopus_free(my_predbat):
         # --- Test 7: multiple URLs are all saved and restored together ---
         _reset_free_cache(my_predbat)
         _attach_storage(my_predbat, temp_dir)
-        with patch("octopus.requests.get", return_value=_mock_http_response(_JSON_BODY)):
+        with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)):
             my_predbat.download_octopus_free(_URL)
-        with patch("octopus.requests.get", return_value=_mock_http_response(_JSON_BODY)):
+        with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)):
             my_predbat.download_octopus_free(_URL2)
         saved_multi = run_async(storage.load("octopus_free", "url_cache"))
         if not saved_multi or _URL not in saved_multi or _URL2 not in saved_multi:
@@ -210,7 +210,7 @@ def test_octopus_free(my_predbat):
         else:
             print("PASS: Multiple URLs persisted together in one storage entry")
         _reset_free_cache(my_predbat)
-        with patch("octopus.requests.get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
+        with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
             my_predbat.download_octopus_free(_URL)
             my_predbat.download_octopus_free(_URL2)
         if mock_get.call_count != 0:

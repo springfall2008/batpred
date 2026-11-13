@@ -20,8 +20,10 @@ endpoints. Includes 50+ HTTP routes for monitoring and control.
 
 from aiohttp import web
 import asyncio
+import base64
 import os
 import os.path
+import secrets
 import sys
 import re
 from datetime import datetime, timedelta, timezone
@@ -459,6 +461,27 @@ def subtract_series(base, subtract, max_gap_seconds=300):
     return result
 
 
+# Pages that can change settings or expose configuration, which ask for the web login when web_username and
+# web_password are set (GH#6103): the WhatIf, Chat, Settings and Advanced menus plus their data/download endpoints.
+# Every write (POST etc.) is protected as well, whatever its path, so the data-viewing pages stay open.
+WEB_AUTH_PROTECTED_PREFIXES = (
+    "/annual",
+    "/chat",
+    "/apps",
+    "/config",
+    "/component",
+    "/discovery",
+    "/browse",
+    "/internals",
+    "/api/internals",
+    "/kraken_key",
+    "/download",
+    "/debug_",
+)
+# POST /api/login only hands a token to a reverse proxy as a cookie and checks nothing, so it needs no login
+WEB_AUTH_EXEMPT_PATHS = ("/api/login",)
+
+
 class WebInterface(ComponentBase):
     """Built-in web dashboard server using aiohttp.
 
@@ -467,16 +490,58 @@ class WebInterface(ComponentBase):
     endpoints. Supports plugin endpoint registration.
     """
 
-    def initialize(self, web_port):
+    def initialize(self, web_port, web_username=None, web_password=None, web_enable=True):
         self.default_page = "./dash"
         self.web_port = web_port
         self.default_log = "warnings"
+
+        # Optional HTTP Basic login for the pages that change settings (GH#6103). YAML can hand us an int
+        # for an all-digit password, so both are stringified; an empty value counts as not set.
+        self.web_username = str(web_username) if web_username not in (None, "") else ""
+        self.web_password = str(web_password) if web_password not in (None, "") else ""
 
         # Plugin registration system
         self.registered_endpoints = []
 
         self.annual_page = AnnualPage(self)
         self.chat_page = WebChat(self)
+
+    def web_auth_enabled(self):
+        """Return True when a web username or password is configured, so the login gate is active."""
+        return bool(self.web_username or self.web_password)
+
+    def web_auth_required(self, request):
+        """Return True if this request must carry the web login: any write, or a read of a settings/advanced page."""
+        if request.path in WEB_AUTH_EXEMPT_PATHS:
+            return False
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            return True
+        return request.path.startswith(WEB_AUTH_PROTECTED_PREFIXES)
+
+    def web_auth_valid(self, request):
+        """Check the request's HTTP Basic credentials against web_username and web_password in constant time."""
+        if not (self.web_username and self.web_password):
+            # Half configured: fail closed rather than quietly leaving the pages open
+            return False
+        header = request.headers.get("Authorization", "")
+        scheme, _, encoded = header.partition(" ")
+        if scheme.lower() != "basic":
+            return False
+        try:
+            username, _, password = base64.b64decode(encoded.strip(), validate=True).decode("utf-8").partition(":")
+        except (ValueError, UnicodeDecodeError):
+            return False
+        # Evaluate both comparisons so a wrong username takes as long to reject as a wrong password
+        username_ok = secrets.compare_digest(username.encode(), self.web_username.encode())
+        password_ok = secrets.compare_digest(password.encode(), self.web_password.encode())
+        return username_ok and password_ok
+
+    @web.middleware
+    async def auth_middleware(self, request, handler):
+        """Ask for the web login on protected requests, and pass everything else straight through."""
+        if self.web_auth_enabled() and self.web_auth_required(request) and not self.web_auth_valid(request):
+            return web.Response(status=401, text="Login required", headers={"WWW-Authenticate": 'Basic realm="Predbat", charset="UTF-8"'})
+        return await handler(request)
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -640,7 +705,12 @@ class WebInterface(ComponentBase):
 
     async def start(self):
         # Start the web server
-        app = web.Application()
+        if self.web_auth_enabled():
+            app = web.Application(middlewares=[self.auth_middleware])
+            if not (self.web_username and self.web_password):
+                self.log("Warn: web_username and web_password must both be set, until then the Web Interface refuses every protected request")
+        else:
+            app = web.Application()
         app.router.add_get("/", self.html_default)
         app.router.add_get("/plan", self.html_plan)
         app.router.add_get("/log", self.html_log)

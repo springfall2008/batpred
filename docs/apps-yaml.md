@@ -314,6 +314,24 @@ Sets your symbol to use for your main currency e.g. £, € or $ and for 1/100th
     - 'p'
 ```
 
+### currency_scale
+
+Optional, default 1. Predbat plans in your minor currency unit (pence, cents, øre, haléř...), and the ranges of its money settings,
+such as **input_number.predbat_metric_min_improvement_export**, were chosen in pence.
+If your minor unit is worth much less than a penny the top of those ranges can be too small to be a useful threshold,
+e.g. the 50 limit on the metric_min_improvement settings is only 0.50 CZK.
+
+Set `currency_scale` to roughly how many of your minor units make one penny, and the minimum and maximum of every setting measured in your minor unit
+(the `p`, `p/kWh` and `p/kg` settings) is multiplied by it when Predbat starts, e.g. for Czech koruna (about 29 haléř to the penny):
+
+```yaml
+  currency_scale: 29
+```
+
+Only the ranges change. The defaults and the values you have already set stay as they are, so you still need to raise the thresholds yourself
+to what suits you - multiplying the defaults by the same factor is a good starting point.
+Values below 1 are ignored, as they would narrow the ranges and cut back settings you have already made.
+
 ### template
 
 Initially set to `true`, this is used to stop Predbat from operating until you have finished configuring your `apps.yaml`.
@@ -430,6 +448,36 @@ Docker users can change the web port for the Predbat web interface by setting **
 ```yaml
   web_port: 5052
 ```
+
+If you do not use the web interface you can turn it off entirely by setting **web_enable** to `false`. Predbat then does not start the web server or open its port, so nothing on your network can reach it.
+
+```yaml
+  web_enable: false
+```
+
+- The default is `true`, and leaving it out keeps the web interface on.
+- With the web interface off the Predbat app's **Open Web UI** button and its Home Assistant sidebar panel stop working, as they open this same web interface. Remove the setting (or set it back to `true`) and restart Predbat to turn it on again.
+- The MCP server (`mcp_enable`) is separate and is not affected.
+
+To stop accidental changes to your settings from the web interface (for example from other devices on your network) you can set a username and password with **web_username** and **web_password**.
+It is best to keep the password in `secrets.yaml`:
+
+```yaml
+  web_username: admin
+  web_password: !secret web_password
+```
+
+When both are set the browser asks for a login before it will open the WhatIf, Chat, Settings (Apps, Config, Components, Editor) and Advanced (Discovery, Browse, Internals, Kraken API Key) pages, the debug and download pages, or save any change (plan and rate overrides, restarts and so on).
+The views that only show data (Dash, Metrics, Plan, Charts, Entities, Compare and Log) can still be opened without a login.
+There is a single login with no different levels of access.
+
+- The login is HTTP Basic authentication, which is not encrypted, so on a network you do not trust put the web interface behind an HTTPS reverse proxy.
+- The login stops unauthenticated access, such as other devices on your network or a vulnerability scanner. Once you have logged in your browser re-sends the credentials automatically, so a malicious web page you visit in the same browser could still submit a change (cross-site request forgery). Only a proxy with token-based authentication, or not exposing the web interface at all, closes that.
+- If only one of the two is set then every protected page is refused until you set the other.
+- Leave both unset (the default) for no login, which is what you need when using Predbat through Home Assistant ingress or behind your own authentication proxy.
+- The `/api/ping`, `/api/status`, `/api/state` (read), `/api/log`, `/api/entities` and `/metrics` data endpoints are not protected, nor is the `/images` route.
+- The `/api/login` request, used to set a session cookie when Predbat is behind a reverse proxy, is also not protected. It does not change any setting.
+- Pages added by plugins are only protected for changes (POST), not for viewing.
 
 ### notify_devices
 
@@ -1158,6 +1206,53 @@ When **alphaess_automatic** is set to `true`, Predbat will discover every batter
 
 See [AlphaESS Cloud setup](inverter-setup.md#alphaess-cloud) for the diagnostics CLI walkthrough.
 
+### Growatt Cloud OpenAPI
+
+Predbat.com completes Growatt's OAuth flow and injects the short-lived access token, its expiry, the refresh handle, regional API base and the customer's selected inverter serial. The normal SaaS configuration is therefore generated for the instance rather than copied into a user's `apps.yaml`:
+
+```yaml
+  growatt_key: !secret growatt_key
+  growatt_auth_method: oauth
+  growatt_token_expires_at: '2026-10-20T23:00:00Z'
+  growatt_token_hash: !secret growatt_token_hash
+  growatt_inverter_sn: SPH123456
+  growatt_base_url: https://opencloud.growatt.com/prod-api
+  growatt_automatic: true
+  growatt_control_enable: true
+```
+
+The token and token hash are credentials and must stay in `secrets.yaml` on a self-hosted installation. A raw access token without the Predbat.com refresh route will stop working when it expires.
+
+Configuration keys:
+
+- `growatt_key`, `growatt_token_expires_at`, `growatt_token_hash` and `growatt_auth_method`: the OAuth state supplied by Predbat.com
+- `growatt_inverter_sn`: one serial or a list of serials authorised for this token
+- `growatt_base_url`: the OpenAPI base URL for the Growatt application registration, default `https://opencloud.growatt.com/prod-api`. It must include the `/prod-api` path, not just the host, because the endpoint paths (such as `/oauth2/getDeviceInfo`) are appended to it. A trailing slash is ignored
+- `growatt_automatic`: automatically bind all monitoring and schedule entities (recommended)
+- `growatt_automatic_ignore_pv`: preserve a manually configured `pv_power` source
+- `growatt_control_enable`: allow dispatch writes, default `true`; set false for monitoring only
+- `growatt_battery_rate_max`: optional W override when the reported battery rating is wrong or absent
+- `growatt_api_delay`: delay between different-device calls, default `0.2` seconds
+- `growatt_min_write_interval`: dispatch pacing, default and minimum `5` seconds
+
+Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from telemetry, which Growatt updates about every five minutes. When the charge target is reached the charge slot stays in place at 0% power, so the battery holds until the window ends (full power resumes if the charge level falls more than 1% below the target); when the export floor is reached the export slot is removed. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval (about five minutes) of overshoot and confirm the behaviour on the target model before relying on it.
+
+Growatt has no reserve Predbat can hold the battery with, so the reserve functions (`switch.predbat_set_reserve_enable` and the reserve-based holds) are turned off for this inverter. Outside a slot the inverter runs its own self-consumption down to its local minimum.
+
+The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat hands control back to the inverter's own settings.
+
+The API times are UTC. Predbat converts the local planned windows on every apply, including the current daylight-saving offset, and splits a window that crosses UTC midnight.
+
+The OpenAPI does not report the site's grid export cap. Set `export_limit` manually if the DNO cap is below the inverter's nominal rating.
+
+See [Components - Growatt OpenAPI](components.md#growatt-openapi-growatt) and [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi).
+
+### Fox Cloud API
+
+Predbat can talk to Fox ESS inverters directly through the Fox Cloud API, configured with `fox_key` and the other `fox_` settings in `apps.yaml`.
+These include `fox_poll_seconds`, which sets how often the live data such as battery SoC is fetched (default `300`).
+See [Components - Fox ESS API](components.md#fox-ess-api-fox) for the full list of settings and what each one does.
+
 ### num_inverters
 
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
@@ -1177,6 +1272,7 @@ inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should 
   GE: GivEnergy via GivTCP
   GEC: GivEnergy Cloud integration
   GEE: GivEnergy EMC
+  GrowattCloud: Growatt public OpenAPI integration (EXPERIMENTAL)
   GS: Ginlong Solis
   HU: Huawei Solar
   SA: Solar Assistant

@@ -10,17 +10,17 @@
 
 from datetime import datetime, timezone
 
-from tests.test_infra import reset_rates, reset_inverter
-from prediction import Prediction
+from tests.test_infra import reset_rates, reset_inverter, prime_flat_prediction
+from tests.test_kernel_parity import kernel_available
 
 IMPORT_RATE = 10.0
 EXPORT_RATE = 5.0
 
 
-def _keep_metric_for_ceiling(my_predbat, ceiling_percent):
-    """Run an hour of prediction with the given manual_soc_max ceiling and return the keep metric."""
+def _keep_metric_for_ceiling(my_predbat, ceiling_percent, export_rate=EXPORT_RATE, prediction_kernel=False):
+    """Run an hour of prediction with the given manual_soc_max ceiling and flat export rate on the chosen engine, and return the keep metric."""
     reset_inverter(my_predbat)
-    reset_rates(my_predbat, IMPORT_RATE, EXPORT_RATE)
+    reset_rates(my_predbat, IMPORT_RATE, export_rate)
     my_predbat.soc_max = 10.0
     my_predbat.soc_kw = 8.0
     my_predbat.reserve = 0.0
@@ -28,9 +28,9 @@ def _keep_metric_for_ceiling(my_predbat, ceiling_percent):
     my_predbat.best_soc_keep = 0.0
     my_predbat.best_soc_keep_weight = 1.0
     my_predbat.debug_enable = False
-    # Pin the Python engine so this exercises the source, not whatever prebuilt binary is present;
+    # The Python engine unless asked: this exercises the source, not whatever prebuilt binary is present;
     # kernel_parity covers the C++ mirror agreeing with it
-    my_predbat.prediction_kernel_enable = False
+    my_predbat.prediction_kernel_enable = prediction_kernel
 
     my_predbat.all_active_keep = {}
     if ceiling_percent is None:
@@ -38,14 +38,9 @@ def _keep_metric_for_ceiling(my_predbat, ceiling_percent):
     else:
         my_predbat.all_active_keep_max = {minute: ceiling_percent for minute in range(my_predbat.minutes_now, my_predbat.minutes_now + 120)}
 
-    step = 5
-    pv_step = {minute: 0.0 for minute in range(0, my_predbat.forecast_minutes, step)}
-    load_step = {minute: 0.0 for minute in range(0, my_predbat.forecast_minutes, step)}
-    my_predbat.load_minutes_step = load_step
-    my_predbat.load_minutes_step10 = load_step
-    my_predbat.pv_forecast_minute_step = pv_step
-    my_predbat.pv_forecast_minute10_step = pv_step
-    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+    prime_flat_prediction(my_predbat)
+    if prediction_kernel and not getattr(my_predbat.prediction, "kernel_handle", 0):
+        raise RuntimeError("expected the C++ prediction kernel but it is not loaded")
 
     result = my_predbat.run_prediction([], [], [], [], False, end_record=60)
     return result[8]
@@ -167,6 +162,27 @@ def run_test_manual_soc_max(my_predbat):
         failed = True
     else:
         print("PASS: T5 0% ceiling penalised ({}) above the 50% ceiling ({}), none without a ceiling".format(zero_ceiling_keep, half_ceiling_keep))
+
+    # Test 6: like the floor, a ceiling still costs something to break when the export rate is free or
+    # negative (#5162) - an import-only user has a 0p export rate, so without the minimum the ceiling did nothing
+    print("Test 6: A ceiling is penalised at a 0p or negative export rate")
+    engines = [False]
+    if kernel_available()[0]:
+        engines.append(True)
+    for prediction_kernel in engines:
+        engine = "C++ kernel" if prediction_kernel else "Python"
+        half_ceiling_normal = _keep_metric_for_ceiling(my_predbat, 50.0, prediction_kernel=prediction_kernel)
+        half_ceiling_free = _keep_metric_for_ceiling(my_predbat, 50.0, export_rate=0.0, prediction_kernel=prediction_kernel)
+        half_ceiling_negative = _keep_metric_for_ceiling(my_predbat, 50.0, export_rate=-5.0, prediction_kernel=prediction_kernel)
+        if abs(half_ceiling_free * EXPORT_RATE - half_ceiling_normal) > 0.01:
+            print("ERROR: T6 {} Expected the 0p ceiling penalty ({}) at the 1p minimum, 1/{} of the {}p one ({})".format(engine, half_ceiling_free, EXPORT_RATE, EXPORT_RATE, half_ceiling_normal))
+            failed = True
+        elif abs(half_ceiling_negative - half_ceiling_free) > 0.001:
+            print("ERROR: T6 {} Expected the -5p ceiling penalty ({}) to equal the 0p one ({}), both at the 1p minimum".format(engine, half_ceiling_negative, half_ceiling_free))
+            failed = True
+        else:
+            print("PASS: T6 {} ceiling penalised at 0p ({}) and -5p ({})".format(engine, half_ceiling_free, half_ceiling_negative))
+    my_predbat.prediction_kernel_enable = False
 
     # Clean up
     my_predbat.alert_active_keep = {}

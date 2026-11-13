@@ -149,6 +149,7 @@ from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_web_apps_edit import run_web_apps_edit_tests, run_web_apps_filter_tests
 from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol, test_pv_chart_forecast_history_is_uncalibrated
+from tests.test_currency_scale import run_currency_scale_tests
 from tests.test_web_debug_history_routes import test_web_debug_history_routes
 from tests.test_agent_tools import run_agent_tools_tests
 from tests.test_chat_store import run_chat_store_tests
@@ -157,6 +158,7 @@ from tests.test_chat import run_chat_tests
 from tests.test_web_chat import run_web_chat_tests
 from tests.test_web_mcp import run_web_mcp_tests
 from tests.test_web_mcp_auth import run_web_mcp_auth_tests
+from tests.test_web_auth import run_web_auth_tests
 from tests.test_debug_history_client_js import test_debug_history_client_js
 from tests.test_plan_staleness_js import test_plan_staleness_js
 from tests.test_plan_totals_js import test_plan_totals_js
@@ -285,6 +287,7 @@ from tests.test_hanchu_api import run_hanchu_api_tests
 from tests.test_hanchu_control import run_hanchu_control_tests
 from tests.test_hanchu_publish import run_hanchu_publish_tests
 from tests.test_hanchu_cli import run_hanchu_cli_tests
+from tests.test_growatt import run_growatt_tests
 from tests.test_alphaess_api import run_alphaess_api_tests
 from tests.test_alphaess_config import run_alphaess_config_tests
 from tests.test_alphaess_publish import run_alphaess_publish_tests
@@ -371,6 +374,8 @@ from tests.test_load_ml_rollout import run_load_ml_rollout_tests
 from tests.test_ml_memory import run_ml_memory_tests
 from tests.test_ml_training_perf import run_ml_training_perf_tests
 from tests.test_temperature import test_temperature
+from tests.test_http_sync import run_http_sync_tests
+from tests.test_battery_temperature_fetch import test_battery_temperature_fetch
 from tests.test_oauth_mixin import run_oauth_mixin_tests
 from tests.test_fox_oauth import run_fox_oauth_tests
 from tests.test_band_rate_text import test_band_rate_text
@@ -685,6 +690,7 @@ def main():
         ("web_apps_edit", run_web_apps_edit_tests, "Apps.yaml editor add/delete tests (issue #4714)", False),
         ("web_apps_filter", run_web_apps_filter_tests, "Apps.yaml page filter box tests (issue #5210)", False),
         ("web_chart_currency", test_rates_chart_series_names_use_currency_symbol, "Rates chart series names follow currency_symbols tests", False),
+        ("currency_scale", run_currency_scale_tests, "apps.yaml currency_scale widens money setting ranges tests (#6155)", False),
         ("web_chart_pv_forecast", test_pv_chart_forecast_history_is_uncalibrated, "PV chart plots the uncalibrated forecast history tests", False),
         ("web_debug_history_routes", test_web_debug_history_routes, "Debug-history web routes tests (#4438 review items 4, 6, 21)", False),
         ("agent_tools", run_agent_tools_tests, "Shared agent tool layer and schema projection tests", False),
@@ -693,6 +699,7 @@ def main():
         ("chat", run_chat_tests, "Chat agent component, snapshot and event buffer tests", False),
         ("web_chat", run_web_chat_tests, "Chat tab route, SSE framing and markdown escaping tests", False),
         ("web_mcp", run_web_mcp_tests, "MCP get_log and apps.yaml redaction tests (issue #4768)", False),
+        ("web_auth", run_web_auth_tests, "Web interface optional username/password login tests (issue #6103)", False),
         ("web_mcp_auth", run_web_mcp_auth_tests, "MCP OAuth registration, signing key, default secret and scope tests (issue #5847)", False),
         ("debug_history_client_js", test_debug_history_client_js, "Debug-history client-side JS structure tests (#4438 review item 22)", False),
         ("plan_staleness_js", test_plan_staleness_js, "Plan page stale-data warning JS: per-view data and refresh interval", False),
@@ -802,6 +809,7 @@ def main():
         ("hanchu_control", run_hanchu_control_tests, "Hanchu control-logic tests", False),
         ("hanchu_publish", run_hanchu_publish_tests, "Hanchu publish/config tests", False),
         ("hanchu_cli", run_hanchu_cli_tests, "Hanchu command-line harness helper tests", False),
+        ("growatt", run_growatt_tests, "Growatt OpenAPI component tests", False),
         ("enphase_api", run_enphase_api_tests, "Enphase API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),
@@ -917,6 +925,8 @@ def main():
         # Solis Cloud API unit tests
         ("solis", run_solis_tests, "Solis Cloud API tests (V1/V2 time window writes, change detection)", False),
         # External Temperature API tests
+        ("http_sync", run_http_sync_tests, "Synchronous aiohttp HTTP helper (replaces requests) and no-requests guard", False),
+        ("battery_temperature_fetch", test_battery_temperature_fetch, "Battery temperature history fetched for the prediction window only", False),
         ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("band_rate_text", test_band_rate_text, "Band rate text tests (flat rate, Cosy, Flux import/export)", False),
         ("rate_text_scan", test_rate_text_scan, "Rate text scan tests (multi-band min/max range grouping)", False),

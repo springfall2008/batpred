@@ -18,7 +18,7 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import KEEP_TARGET_MIN_RATE, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
 from utils import (
     remove_intersecting_windows,
@@ -1422,11 +1422,14 @@ class Prediction(PredictionBatch):
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if best_soc_keep > 0 and soc <= best_soc_keep:
-                metric_keep += (best_soc_keep - soc) * import_rate * keep_minute_scaling * step / 60.0
+                # A manual or alert floor still costs something to miss at a free or negative rate (#5162)
+                keep_rate = max(import_rate, KEEP_TARGET_MIN_RATE) if alert_keep > 0 else import_rate
+                metric_keep += (best_soc_keep - soc) * keep_rate * keep_minute_scaling * step / 60.0
 
             # Metric keep max - pretend the excess above the ceiling should have been exported instead of held
             if best_soc_max >= 0 and soc >= best_soc_max:
-                metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0
+                # Likewise a ceiling still costs something to break at a free or negative export rate (#5162)
+                metric_keep += (soc - best_soc_max) * max(export_rate, KEEP_TARGET_MIN_RATE) * keep_minute_scaling * step / 60.0
 
             if diff > 0:
                 # Import
