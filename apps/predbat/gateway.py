@@ -94,6 +94,11 @@ _STAGED_EXPIRY_SECONDS = 600
 _COMMIT_ATTEMPTS = 3
 _COMMIT_POLL_SECONDS = 0.5
 
+# How long a publish made from another event loop waits for the gateway's own loop to send it
+# (seconds). An MQTT publish is handed to the client almost at once, so this only matters when that
+# loop is stuck or gone: the caller is Predbat's control thread, which must not be held there.
+_PUBLISH_HANDOVER_SECONDS = 30
+
 
 def _split_same_day_plan_entries(entries):
     """Split native EMS windows into same-day pieces on the plan's absolute timeline.
@@ -470,13 +475,6 @@ class GatewayMQTT(ComponentBase):
         self._mqtt_client = None
         self._mqtt_task = None
         self._mqtt_connected = False
-        # Event loop that owns self._mqtt_client (captured in run()). Control writes
-        # arrive via ha.py::run_async(), which runs on its own throwaway loop on the
-        # calling thread — publishing directly from there would bind the aiomqtt
-        # publish-confirmation Future to the wrong loop and stall for the client's
-        # ~10s default timeout instead of completing near-instantly. _publish_raw()
-        # dispatches onto this loop when called from elsewhere.
-        self._loop = None
         self._gateway_online = False
         self._last_telemetry_time = 0  # monotonic time (see monotonic()) of the last status with an inverter in it, 0 until one arrives
         self._last_ev_status = None  # the last /status that carried EV chargers, for EVC control
@@ -905,9 +903,6 @@ class GatewayMQTT(ComponentBase):
             return False
 
         if first:
-            # Capture the loop that will own the MQTT client/listener task, so
-            # cross-loop callers (ha.py::run_async()) can dispatch onto it later.
-            self._loop = asyncio.get_running_loop()
             await self._load_discovery()
             # Start MQTT listener as a background task
             self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
@@ -3316,13 +3311,11 @@ class GatewayMQTT(ComponentBase):
         if len(topic.encode()) + len(payload) + 16 > 1400:
             return
         try:
-            if self._loop is not None and self._loop is not asyncio.get_running_loop():
-                future = asyncio.run_coroutine_threadsafe(self._mqtt_client.publish(topic, payload, qos=1, retain=False), self._loop)
-                await asyncio.wrap_future(future)
-            else:
-                await self._mqtt_client.publish(topic, payload, qos=1, retain=False)
+            sent = await self._publish_on_component_loop(topic, payload, retain=False)
         except Exception as error:
             self.log(f"Warn: GatewayMQTT: Display binding publish failed: {error}")
+            return
+        if not sent:
             return
         self._last_live_binding = preference
         self._last_live_binding_publish = self.monotonic()
@@ -3330,14 +3323,7 @@ class GatewayMQTT(ComponentBase):
     async def _publish_raw(self, topic, payload, retain=False):
         """Publish raw bytes to an MQTT topic.
 
-        Must run the actual client.publish() on the event loop that owns
-        self._mqtt_client (self._loop). Callers reached via ha.py::run_async()
-        (i.e. every control write issued from the synchronous engine thread)
-        run on a different, throwaway loop — publishing directly from there
-        binds aiomqtt's publish-confirmation Future to the wrong loop and
-        stalls for the client's ~10s default timeout instead of completing
-        near-instantly. When we're already on the owning loop (e.g. internal
-        periodic publishes from run()/housekeeping), publish directly.
+        The publish runs on the gateway's own loop; see _publish_on_component_loop().
 
         Args:
             topic: MQTT topic string.
@@ -3346,7 +3332,8 @@ class GatewayMQTT(ComponentBase):
 
         Returns:
             True when the message was handed to the client, False when it was
-            blocked (display mode) or dropped (not connected).
+            blocked (display mode), dropped (not connected), or handed to the
+            gateway's loop and not sent within _PUBLISH_HANDOVER_SECONDS.
         """
         if self.gateway_display_only and (not self.gateway_display_enabled or topic != f"{self._topic_base}/predbat_data"):
             self.log(f"Warn: GatewayMQTT: Display mode blocked publish to {topic}")
@@ -3354,15 +3341,30 @@ class GatewayMQTT(ComponentBase):
         if not (self._mqtt_client and self._mqtt_connected):
             return False
 
-        if self._loop is not None and self._loop is not asyncio.get_running_loop():
-            future = asyncio.run_coroutine_threadsafe(
-                self._mqtt_client.publish(topic, payload, qos=1, retain=retain),
-                self._loop,
-            )
-            await asyncio.wrap_future(future)
-        else:
-            await self._mqtt_client.publish(topic, payload, qos=1, retain=retain)
-        return True
+        return await self._publish_on_component_loop(topic, payload, retain=retain)
+
+    async def _publish_on_component_loop(self, topic, payload, retain=False):
+        """Publish on the event loop that owns self._mqtt_client, returning True once it is sent.
+
+        Callers reached via ha.py::run_async() (every control write issued from the
+        synchronous engine thread) run on a different, throwaway loop. Publishing
+        directly from there binds aiomqtt's publish-confirmation Future to the wrong
+        loop and stalls for the client's ~10s default timeout instead of completing
+        near-instantly, so ComponentBase.on_component_loop() hands the publish over.
+        On the owning loop (periodic publishes from run()) it is sent in place.
+
+        Returns False when the handed-over publish was not sent within
+        _PUBLISH_HANDOVER_SECONDS, or the gateway's loop stopped first. A publish
+        that raises still raises here.
+        """
+        client = self._mqtt_client
+
+        async def publish():
+            """Send the message, reporting it as sent."""
+            await client.publish(topic, payload, qos=1, retain=retain)
+            return True
+
+        return await self.on_component_loop(publish(), timeout=_PUBLISH_HANDOVER_SECONDS, what="GatewayMQTT publish to {}".format(topic))
 
     def _update_display_health(self):
         """Report optional display connectivity separately from the component loop's health."""
@@ -3654,10 +3656,11 @@ class GatewayMQTT(ComponentBase):
         commit runs on the gateway's own loop. With no loop running (tests), or one that has
         closed with the component, it runs inline, where a stopped connection fails it at once.
         """
-        if self._loop is None or self._loop.is_closed():
+        loop = self.component_loop
+        if loop is None or loop.is_closed():
             await self._commit_staged(serial)
-        elif self._loop is not asyncio.get_running_loop():
-            asyncio.run_coroutine_threadsafe(self._commit_staged(serial), self._loop)
+        elif loop is not asyncio.get_running_loop():
+            asyncio.run_coroutine_threadsafe(self._commit_staged(serial), loop)
         else:
             task = asyncio.ensure_future(self._commit_staged(serial))
             self._commit_tasks.add(task)

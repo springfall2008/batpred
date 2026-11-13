@@ -7474,7 +7474,7 @@ class TestRateAnchors(unittest.TestCase):
 
 class TestPublishRawLoopSafety:
     """_publish_raw() must run the actual client.publish() on the event loop that
-    owns the aiomqtt Client (self._loop), even when invoked from a different loop —
+    owns the aiomqtt Client (self.component_loop), even when invoked from a different loop —
     otherwise the publish confirmation Future is bound to the wrong loop and stalls
     for aiomqtt's ~10s default timeout instead of completing near-instantly. This is
     what happens today when a control write reaches GatewayMQTT via
@@ -7484,7 +7484,7 @@ class TestPublishRawLoopSafety:
 
     def test_publish_dispatches_to_owning_loop_when_called_cross_loop(self):
         """A cross-loop _publish_raw() call must execute client.publish() on the
-        thread that owns self._loop, not on the calling thread."""
+        thread that owns self.component_loop, not on the calling thread."""
         import asyncio
         import threading
         from gateway import GatewayMQTT
@@ -7504,7 +7504,7 @@ class TestPublishRawLoopSafety:
         owner_loop = asyncio.new_event_loop()
         owner_thread = threading.Thread(target=owner_loop.run_forever, daemon=True)
         owner_thread.start()
-        gw._loop = owner_loop
+        gw.component_loop = owner_loop
 
         try:
             # Call _publish_raw from a DIFFERENT, freshly-created loop on THIS
@@ -7516,6 +7516,107 @@ class TestPublishRawLoopSafety:
             assert not owner_thread.is_alive(), "owner MQTT loop thread did not stop"
             owner_loop.close()
         assert observed.get("thread_ident") == owner_thread.ident, "client.publish() ran on the wrong thread/loop"
+
+    def test_cross_loop_publish_does_not_hang_on_a_stuck_or_stopped_loop(self):
+        """A cross-loop _publish_raw() waits a bounded time and reports failure, rather than holding
+        Predbat's control thread on a loop that will never run the publish."""
+        import asyncio
+        import threading
+        import time
+        from unittest.mock import patch
+        from gateway import GatewayMQTT
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw._mqtt_connected = True
+        gw.gateway_display_only = False
+        logs = []
+        gw.log = logs.append
+        published = []
+
+        class SlowClient:
+            async def publish(self, topic, payload, qos=0, retain=False):
+                await asyncio.sleep(0.5)
+                published.append(topic)
+
+        gw._mqtt_client = SlowClient()
+        owner_loop = asyncio.new_event_loop()
+        owner_thread = threading.Thread(target=owner_loop.run_forever, daemon=True)
+        owner_thread.start()
+        gw.component_loop = owner_loop
+        try:
+            # Slower than the caller will wait: False, logged, and the publish is not cancelled
+            with patch("gateway._PUBLISH_HANDOVER_SECONDS", 0.05):
+                started = time.time()
+                result = asyncio.run(gw._publish_raw("predbat/devices/test/command", b"payload"))
+                waited = time.time() - started
+            assert result is False, f"a publish that outlasts the wait must report False, got {result}"
+            assert waited < 0.4, f"the caller must stop waiting at the timeout, waited {waited:.2f}s"
+            assert any("still running" in message for message in logs), f"giving up must be logged: {logs}"
+            for _ in range(100):
+                if published:
+                    break
+                time.sleep(0.01)
+            assert published == ["predbat/devices/test/command"], "giving up the wait must not cancel the publish"
+
+            # A loop that stops under a waiting caller is noticed, not sat out for the full timeout
+            release = threading.Event()
+
+            def busy_then_stop():
+                """Hold the loop until the publish is queued behind this, then stop it first."""
+                release.wait(5)
+                owner_loop.stop()
+
+            owner_loop.call_soon_threadsafe(busy_then_stop)
+            threading.Timer(0.2, release.set).start()
+            started = time.time()
+            result = asyncio.run(gw._publish_raw("predbat/devices/test/command", b"payload"))
+            waited = time.time() - started
+            assert result is False, f"a publish the stopped loop never ran must report False, got {result}"
+            assert waited < 5, f"the caller must stop waiting once the loop has stopped, waited {waited:.1f}s"
+        finally:
+            if owner_loop.is_running():
+                owner_loop.call_soon_threadsafe(owner_loop.stop)
+            owner_thread.join(timeout=2)
+            owner_loop.close()
+
+    def test_cross_loop_display_binding_not_recorded_when_the_publish_is_abandoned(self):
+        """A display-binding publish the caller gave up waiting for is not recorded as sent, so the
+        next refresh sends it again instead of suppressing it as a duplicate for 60 seconds."""
+        import asyncio
+        import threading
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from gateway import GatewayMQTT
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw._mqtt_connected = True
+        gw.log = lambda message: None
+        gw._live_display_binding = lambda: {"enabled": False}
+        gw.gateway_display_visibility = None
+        gw.gateway_device_id = "pbgw_000000000000"
+        gw.gateway_display_only = True
+        gw._topic_base = "predbat/devices/pbgw_000000000000"
+        gw._last_live_binding = None
+        gw._last_live_binding_publish = 0
+        gw.wall_time = lambda: 1_800_000_000
+        gw.monotonic = lambda: 100.0
+
+        async def slow_publish(topic, payload, qos=0, retain=False):
+            await asyncio.sleep(0.3)
+
+        gw._mqtt_client = SimpleNamespace(publish=slow_publish)
+        owner_loop = asyncio.new_event_loop()
+        owner_thread = threading.Thread(target=owner_loop.run_forever, daemon=True)
+        owner_thread.start()
+        gw.component_loop = owner_loop
+        try:
+            with patch("gateway._PUBLISH_HANDOVER_SECONDS", 0.05):
+                asyncio.run(gw._publish_display_binding())
+            assert gw._last_live_binding is None and gw._last_live_binding_publish == 0, "an abandoned publish must not be recorded as sent"
+        finally:
+            owner_loop.call_soon_threadsafe(owner_loop.stop)
+            owner_thread.join(timeout=2)
+            owner_loop.close()
 
 
 def test_ev_soc_battery_size_through_get_arg(my_predbat):
