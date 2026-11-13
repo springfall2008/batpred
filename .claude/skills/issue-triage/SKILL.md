@@ -16,6 +16,17 @@ Fetch it with `gh issue view <number> --json title,body,labels,comments`. Note a
 
 Comments from people other than the reporter ("me too" posts) are evidence by default, but don't assume they are the same problem. If one is clearly a different problem (see `/issue-me-too` step 3 for the bar), leave it out of your analysis. Record it in your comment on its own line as `Looks unrelated to this issue: <comment-url>`, and ask its author to open their own issue.
 
+### Version check — on every path
+
+Do this before the gates below: it applies to every comment you post, including a 1a/1b gate exit and a duplicate close.
+
+- Find the reporter's version in the issue template's **Predbat version** field. If their `predbat.log` arrives later (step 2) and shows a different version, the log wins: redo this check with it.
+- Find the latest release with `gh release view --repo springfall2008/batpred --json tagName --jq .tagName`, and the releases in between with `gh release list --repo springfall2008/batpred --limit 50`.
+- They are **out of date** if they are behind by a minor version or more (v9.3.5 against v9.7.10), or by five or more releases within one minor version (v9.7.0 against v9.7.10). Releases come often, so a small patch gap (v9.7.8 against v9.7.10) doesn't count.
+- If they are out of date and haven't said why, the comment includes an update suggestion near the top (the order is in step 9), for example: "You're on v9.3.5; the latest is v9.7.10, and there have been many fixes since. Please update first, since this may already be fixed." It doesn't replace the investigation, and the gates still apply. On a 1b exit, ask for the update and the files together: files captured on the latest version are the most useful.
+- If they gave a reason for staying on an older version (a known regression, a pinned Docker image, a platform that can't update), respect it: mention the gap once, without pressing.
+- If the template field is blank and there is no log yet, say nothing about versions until you have one.
+
 ## 1a. Split gate — one problem per ticket
 
 From the issue text alone, decide whether it reports more than one distinct problem, e.g. a plan that looks wrong *and* an inverter entity that won't update, or two unrelated errors. Several symptoms of one problem, like a wrong plan and the unexpected export it leads to, are one problem. Only take this path when the problems are clearly separate, meaning each could be fixed without touching the other. If unsure, treat it as one problem.
@@ -52,14 +63,6 @@ If the needed evidence is missing, **stop here** and take the short path instead
 
 If the evidence is already attached, or the issue doesn't need any, carry on with step 2.
 
-## 1c. Version check — suggest an update early
-
-Find the reporter's Predbat version: the issue template's **Predbat version** field, or the first lines of their `predbat.log` once you have it (step 2). The log wins if they disagree. Find the latest release with `gh release view --repo springfall2008/batpred --json tagName --jq .tagName`.
-
-If the reporter is behind by a minor version or more (e.g. v9.3.5 against v9.7.10; a patch-only gap such as v9.7.8 against v9.7.10 doesn't count) and hasn't said why they are on an older version, the update suggestion goes **near the top** of the comment (step 9), straight after the disclosure, classification and bug line. Don't leave it for the closing paragraph. Something like: "You're on v9.3.5; the latest is v9.7.10, and there have been many fixes since. Please update first, since this may already be fixed." Carry on with the triage as normal: the suggestion doesn't replace the investigation, and the evidence gate (1b) still applies.
-
-If they gave a reason for staying on an older version (a known regression, a pinned Docker image, a platform that can't update), respect it: mention the gap once, without pressing.
-
 ## 2. Fetch attachments
 
 If the body links a log file, a `predbat_debug.yaml`, or a zip of either, download it into the scratch directory rather than pulling it through WebFetch — a `predbat.log` is routinely tens of MB, well past what WebFetch will return.
@@ -90,7 +93,7 @@ If you classify as `bug`, write a one-line statement of the bug in your own word
 
 Search existing issues (`gh issue list --search ...`, both open and closed) for the same symptom.
 
-- High confidence match: label `duplicate`, comment linking the original issue (including the step 3 one-line bug statement, if you wrote one), and close this one.
+- High confidence match: label `duplicate`, comment linking the original issue (including the step 3 one-line bug statement, if you wrote one), and close this one. If the original was fixed in a release later than the reporter's, the closing comment leads with the bold "believed fixed" line from step 9, as it is the most common way an issue turns out to be already fixed.
 - Low confidence: mention "possibly related to #N" in your triage comment; don't close.
 
 Then look for **similar** issues and PRs as well, whether or not they are duplicates: search both open and closed ones for the symptom, the integration and the component it touches (`gh issue list --state all --search ...` and `gh pr list --state all --search ...`). Read the findings in the best matches — what was diagnosed, what was fixed, and what was ruled out — before forming a hypothesis, and link the relevant ones in your triage comment as "related to #N". An issue that shares a symptom or a trigger is not necessarily the same problem: only call it a duplicate when the cause matches, not just the symptom, and treat a past finding as a lead to confirm against current main, not as a conclusion.
@@ -144,13 +147,24 @@ Skip priority for pure questions and feature requests.
 
 Check existing comments first — if one from you is already there, stop; don't post again.
 
-Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by: classification, priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
+Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by (in the order given under "Order of the comment's opening lines" below): classification, priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
 
-If you reached step 3 and classified as `bug`, lead with the one-line bug statement immediately after the classification. Gates 1a/1b apply a type label without ever reaching step 3, so there's nothing to include if you took one of those paths.
+If you reached step 3 and classified as `bug`, put the one-line bug statement immediately after the classification. Gates 1a/1b apply a type label without ever reaching step 3, so there's nothing to include if you took one of those paths.
 
-**If you concluded the problem is already fixed in a later release than the reporter's**, say so in bold as the first line after the disclosure: "**We believe this is fixed in vX.Y.Z** (PR #N). You're on vA.B.C; please update to the latest, vL, and comment here if it still happens." That outcome is the one thing the reporter needs to act on, so it must not be buried under the analysis, which follows below it for the maintainer. Name the first release that contains the fix, found with `git tag --contains <merge-commit> --sort=v:refname | head -1`. If you can't run that, give the range you could establish from the release notes (e.g. "between v9.6.0 and v9.6.5") and say it is a range.
+**Order of the comment's opening lines.** Every comment starts the same way, so the reporter finds what they need to do first:
 
-If the reporter is on an old version but the problem is not known to be fixed, the update suggestion from step 1c still goes near the top.
+1. The disclosure line.
+2. **Believed fixed in a later release** (only if your investigation concluded that): a bold line such as "**We believe this is fixed in v9.4.3** (PR #5635). You're on v9.3.5; please update to the latest, v9.7.10, and comment here if it still happens." Use the actual numbers. It is the one thing the reporter needs to act on, so it must not be buried under the analysis.
+3. The classification and priority, then the one-line bug statement if you classified as `bug`.
+4. The update suggestion from the version check in step 1, if the reporter is out of date and line 2 didn't already ask them to update.
+5. Everything else: what you investigated and found, the root cause, any information request.
+
+To fill in line 2:
+
+- **Find the commit on main that fixed it.** For a PR use `gh pr view <N> --json mergeCommit --jq .mergeCommit.oid`. Don't use a commit from the PR branch, which a squash merge never puts on main. For a fix committed straight to main, take the commit from `git log`, and leave out "(PR #N)".
+- **Find the first release containing it** with `git tag --contains <commit> --list 'v[0-9]*' --sort=v:refname | head -1`. The `--list` filter matters: the repo has non-release tags such as `backup/...` that would otherwise sort first.
+- **If that prints nothing**, the fix is on main but not yet released. Say "**We believe this is fixed on main**, expected in the next release", and don't ask them to update to a version that doesn't have it.
+- **If you couldn't run the commands**, give the range you could establish from the release notes, for example "between v9.6.0 and v9.6.5", and say that it is a range.
 
 After posting, apply the `BOT_TRIAGED` label via `gh issue edit <number> --add-label BOT_TRIAGED` — every triage run gets this label, including a duplicate-close, regardless of classification. It marks the issue as triaged for the separate PR-creation flow (see `.claude/skills/issue-pr/SKILL.md`).
 
