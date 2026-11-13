@@ -403,6 +403,9 @@ This alternative plan is only kept if it does not increase the overall plan metr
 
 ## Battery margins and metrics options
 
+The money thresholds below are in your minor currency unit, with defaults and ranges chosen in pence.
+If your minor unit is worth much less than a penny, set [currency_scale](apps-yaml.md#currency_scale) in `apps.yaml` to widen their ranges.
+
 **input_number.predbat_best_soc_keep** is the battery level in kWh that Predbat will try to keep the battery above in the plan.
 This is a soft constraint: for each hour the planned SoC spends below it, the plan is charged the shortfall in kWh times the import rate at that time, scaled by **input_number.predbat_best_soc_keep_weight**. The plan only goes below it when doing so saves more than that.
 It is an absolute level, not an amount above your reserve, so a value at or below your battery's reserve level (in kWh) has no effect.
