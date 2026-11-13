@@ -253,18 +253,58 @@ def test_number_event_charge_rate(my_predbat=None):
 
 def test_client_calls_run_on_the_event_loop(my_predbat=None):
     """
-    The component awaits its REST clients on its own event loop, on sessions it supplies.
+    The component awaits its REST clients on its own event loop, on one session it owns.
 
     The clients used to block (an HTTP call plus time.sleep), so every read and write was parked on
     an executor thread, each of which then ran an event loop of its own for the one request. Now
-    they are coroutines: a write must run in the thread that dispatched the event, and the clients
-    must take their sessions from the component so a host's session factory covers them.
+    they are coroutines, and the session they share belongs to the loop run() ticks on. A write
+    event is awaited from whatever loop pressed it, so it is handed over to the component's loop
+    (ComponentBase.on_component_loop) - which also keeps a write's read-back and a poll from
+    replacing rest_data under each other from two threads.
     """
+    import asyncio
     import threading
+    import time
 
     base, component = _make_component(rest_urls=["http://givtcp:6345", "http://givtcp2:6345"])
-    for rest in component.rest:
-        assert rest.http_session == component.http_session, "Each client must make its requests on the component's sessions"
+
+    # One session, made through the component's factory, shared by every client and reused
+    made = []
+
+    class _Session:
+        """Stands in for an aiohttp session: open until closed."""
+
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            """Mark the session closed."""
+            self.closed = True
+
+    def factory(**kwargs):
+        """Stands in for the host's session factory."""
+        made.append(_Session())
+        return made[-1]
+
+    base.http_session_factory = factory
+
+    async def sessions():
+        """Ask each client for its session twice, on one loop."""
+        return [rest.http_session() for rest in component.rest] + [rest.http_session() for rest in component.rest]
+
+    got = run_async(sessions())
+    assert len(made) == 1 and all(session is made[0] for session in got), f"Every client must share one session from the component's factory, made {len(made)}"
+
+    # A closed session is replaced rather than reused, and final() closes the open one
+    made[0].closed = True
+    assert run_async(sessions())[0] is made[1], "A closed session must be replaced"
+    run_async(component.final())
+    assert made[1].closed, "final() must close the component's session"
+
+    # A session made on one loop is never used on another: aiohttp sessions belong to their loop
+    first = asyncio.run(sessions())[0]
+    second = asyncio.run(sessions())[0]
+    assert first is not second, "A session made on a loop that has gone must not be reused on another"
 
     threads = []
 
@@ -286,7 +326,34 @@ def test_client_calls_run_on_the_event_loop(my_predbat=None):
 
     assert len(threads) == 3, f"Expected two polls and one write, got {len(threads)}"
     assert set(threads) == {threading.get_ident()}, "Client calls must run on the event loop's own thread, not an executor"
-    print("PASS: client calls are awaited on the event loop with the component's sessions")
+
+    # With the component running on a loop of its own, a write pressed from another loop runs there
+    loop = asyncio.new_event_loop()
+    worker = threading.Thread(target=loop.run_forever, daemon=True)
+    worker.start()
+    while not loop.is_running():
+        time.sleep(0.01)
+    try:
+        component.component_loop = loop
+        threads.clear()
+        published = []
+        publish_data = component.publish_data
+
+        async def publish_and_note():
+            """Publish as usual, noting the thread."""
+            published.append(threading.get_ident())
+            await publish_data()
+
+        component.publish_data = publish_and_note
+        asyncio.run(component.number_event("number.predbat_givtcp_0_charge_rate", 1600))
+        assert threads == [worker.ident], f"A write from another loop must run on the component's loop thread, ran on {threads}"
+        assert published == [worker.ident], "The republish after a write must run on the component's loop too"
+        assert base.entities["number.predbat_givtcp_0_charge_rate"]["state"] is not None, "The entity must be republished before the event returns"
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        worker.join(5)
+        loop.close()
+    print("PASS: client calls are awaited on the component's event loop with its one session")
     return 0
 
 

@@ -169,7 +169,33 @@ def _new_session(**kwargs):
     return aiohttp.ClientSession(**kwargs)
 
 
-async def async_http_request(method, url, headers=None, params=None, json=None, data=None, timeout=None, stream=False, max_bytes=None, session_factory=None):  # pylint: disable=redefined-outer-name
+async def _request_on(session, method, url, stream, max_bytes, **kwargs):
+    """Make one request on an open session and return an HttpResponse with the body received."""
+    body_file = None
+    try:
+        async with session.request(method, url, **kwargs) as response:
+            status_code = response.status
+            response_headers = response.headers.copy()
+            final_url = str(response.url)
+            charset = response.charset
+            if not stream:
+                return HttpResponse(status_code, response_headers, final_url, content=await response.read(), charset=charset)
+            body_file = tempfile.SpooledTemporaryFile(max_size=STREAM_SPOOL_BYTES)
+            received = 0
+            async for chunk in response.content.iter_chunked(STREAM_READ_BYTES):
+                body_file.write(chunk)
+                received += len(chunk)
+                if max_bytes is not None and received > max_bytes:
+                    break
+            result = HttpResponse(status_code, response_headers, final_url, charset=charset, body_file=body_file)
+            body_file = None
+            return result
+    finally:
+        if body_file is not None:
+            body_file.close()
+
+
+async def async_http_request(method, url, headers=None, params=None, json=None, data=None, timeout=None, stream=False, max_bytes=None, session=None):  # pylint: disable=redefined-outer-name
     """
     Make one HTTP request and return an HttpResponse with the body received.
 
@@ -183,41 +209,25 @@ async def async_http_request(method, url, headers=None, params=None, json=None, 
                    iter_content() and released with close().
     :param max_bytes: With stream, stop receiving soon after this many bytes, so an oversized body
                       is neither downloaded in full nor mistaken for a complete one.
-    :param session_factory: Called like aiohttp.ClientSession to make the session for this request;
-                            a component passes its http_session. Default is the process-wide one.
+    :param session: An open aiohttp session to make the request on, which stays open and belongs
+                    to the caller: a component that makes many requests passes its own. It must be
+                    used on the event loop it was made on. Default is a new session per request.
     """
     client_timeout = aiohttp.ClientTimeout(total=None, connect=timeout, sock_read=timeout)
     if params:
         params = {key: value for key, value in params.items() if value is not None}
-    body_file = None
+    request = {"headers": headers, "params": params or None, "json": json, "data": data}
     try:
-        async with (session_factory or _new_session)(timeout=client_timeout, trust_env=True) as session:
-            async with session.request(method, url, headers=headers, params=params or None, json=json, data=data) as response:
-                status_code = response.status
-                response_headers = response.headers.copy()
-                final_url = str(response.url)
-                charset = response.charset
-                if not stream:
-                    return HttpResponse(status_code, response_headers, final_url, content=await response.read(), charset=charset)
-                body_file = tempfile.SpooledTemporaryFile(max_size=STREAM_SPOOL_BYTES)
-                received = 0
-                async for chunk in response.content.iter_chunked(STREAM_READ_BYTES):
-                    body_file.write(chunk)
-                    received += len(chunk)
-                    if max_bytes is not None and received > max_bytes:
-                        break
-                result = HttpResponse(status_code, response_headers, final_url, charset=charset, body_file=body_file)
-                body_file = None
-                return result
+        if session is not None:
+            return await _request_on(session, method, url, stream, max_bytes, timeout=client_timeout, **request)
+        async with _new_session(timeout=client_timeout, trust_env=True) as own_session:
+            return await _request_on(own_session, method, url, stream, max_bytes, **request)
     except asyncio.TimeoutError as exc:
         raise HttpTimeout("Timeout from {} ({})".format(url, type(exc).__name__)) from exc
     except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError) as exc:
         raise HttpConnectionError("{}: {}".format(type(exc).__name__, exc)) from exc
     except (aiohttp.ClientError, ValueError, TypeError) as exc:
         raise HttpError("{}: {}".format(type(exc).__name__, exc)) from exc
-    finally:
-        if body_file is not None:
-            body_file.close()
 
 
 async def _capture(coro):

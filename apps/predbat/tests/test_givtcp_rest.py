@@ -22,7 +22,7 @@ from const import INVERTER_MAX_RETRY_REST, INVERTER_REST_TIMEOUT
 def _transport(fake):
     """An async_http_request stand-in that routes givtcp_rest's HTTP calls to a fake with get/post methods."""
 
-    async def request(method, url, session_factory=None, **kwargs):
+    async def request(method, url, session=None, **kwargs):
         """Call the fake's get() or post(), as the helper would make the request."""
         return getattr(fake, method.lower())(url, **kwargs)
 
@@ -718,10 +718,10 @@ def test_get_data_rejects_a_200_that_is_not_json(my_predbat=None):
 
 def test_requests_use_the_owners_session_and_waits_yield(my_predbat=None):
     """
-    The client makes its requests on sessions from the factory it was given, and waits without blocking.
+    The client makes its requests on the session its owner supplies, and waits without blocking.
 
-    GivTCPComponent hands over its own http_session, so a host or test that replaces the
-    component's sessions sees these requests too. The waits between retries run on the component's
+    GivTCPComponent supplies one long-lived session of its own, so a host or test that replaces
+    the component's sessions sees these requests too, and each one reuses the connection. The waits between retries run on the component's
     event loop, so they must be asyncio sleeps: a blocking one would stall every other component
     sharing that loop for up to 40 seconds.
     """
@@ -731,9 +731,13 @@ def test_requests_use_the_owners_session_and_waits_yield(my_predbat=None):
     import asyncio
     import givtcp_rest
 
-    def factory(**kwargs):
-        """Stands in for GivTCPComponent.http_session."""
-        return None
+    shared = object()
+    asked = []
+
+    def supply():
+        """Stands in for GivTCPComponent's shared session, asked for afresh on every request."""
+        asked.append(1)
+        return shared
 
     seen = []
 
@@ -753,7 +757,7 @@ def test_requests_use_the_owners_session_and_waits_yield(my_predbat=None):
         return _Fake()
 
     base = _RestBase()
-    client = GivTCPRest(base, InverterRestState(id=0, rest_api="http://givtcp:6345"), http_session=factory)
+    client = GivTCPRest(base, InverterRestState(id=0, rest_api="http://givtcp:6345"), http_session=supply)
     original = givtcp_rest.async_http_request
     givtcp_rest.async_http_request = request
     try:
@@ -765,12 +769,28 @@ def test_requests_use_the_owners_session_and_waits_yield(my_predbat=None):
         print("ERROR: expected one GET and one POST through the helper, got {}".format(seen))
         failed = True
     for method, url, kwargs in seen:
-        if kwargs.get("session_factory") is not factory:
-            print("ERROR: {} {} did not use the owner's session factory: {}".format(method, url, kwargs))
+        if kwargs.get("session") is not shared:
+            print("ERROR: {} {} did not use the owner's session: {}".format(method, url, kwargs))
             failed = True
         if kwargs.get("timeout") != INVERTER_REST_TIMEOUT:
             print("ERROR: {} {} had timeout {}, expected {}".format(method, url, kwargs.get("timeout"), INVERTER_REST_TIMEOUT))
             failed = True
+
+    if len(asked) != 2:
+        print("ERROR: the owner was asked for its session {} times, expected once per request".format(len(asked)))
+        failed = True
+
+    # With no owner (a client built on its own) the helper is left to make its own session
+    seen.clear()
+    lone = GivTCPRest(base, InverterRestState(id=0, rest_api="http://givtcp:6345"))
+    givtcp_rest.async_http_request = request
+    try:
+        run_async(lone.get_data("http://givtcp:6345/readData"))
+    finally:
+        givtcp_rest.async_http_request = original
+    if len(seen) != 1 or seen[0][2].get("session") is not None:
+        print("ERROR: a client with no owner passed a session: {}".format(seen))
+        failed = True
 
     waited = []
 

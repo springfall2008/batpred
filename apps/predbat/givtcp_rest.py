@@ -27,8 +27,9 @@ read yet, mirroring the "REST configured but no data this cycle" case callers
 already have to handle for the write path.
 
 Everything that talks to GivTCP (read_data, run_all and the writes) is a coroutine: requests go
-through aiohttp and the waits between retries are asyncio sleeps, so the owning component awaits
-them on its own event loop instead of parking each call on an executor thread.
+through aiohttp, on the owning component's session, and the waits between retries are asyncio
+sleeps, so the component awaits them on its own event loop instead of parking each call on an
+executor thread.
 """
 
 import asyncio
@@ -73,8 +74,9 @@ class GivTCPRest:
             while verifying writes
         rest_postCommand: Optional override for the low-level POST coroutine (used by tests)
         rest_getData: Optional override for the low-level GET coroutine (used by tests)
-        http_session: Optional factory for the aiohttp sessions requests are made on, normally
-            the owning component's http_session; the process-wide one is used when not given
+        http_session: Optional callable returning the open aiohttp session to make each request
+            on - the owning component's one long-lived session. A session is made per request
+            when not given
     """
 
     def __init__(self, base, inverter, rest_postCommand=None, rest_getData=None, http_session=None):
@@ -89,6 +91,10 @@ class GivTCPRest:
     async def sleep(self, seconds):
         """Wait between retries without blocking the event loop."""
         await asyncio.sleep(seconds)
+
+    def session(self):
+        """The owner's open session for the next request, or None to have one made for it."""
+        return self.http_session() if self.http_session else None
 
     @property
     def givtcp_version(self):
@@ -536,7 +542,7 @@ class GivTCPRest:
         Send REST Command
         """
         try:
-            r = await async_http_request("POST", url, json=json, timeout=INVERTER_REST_TIMEOUT, session_factory=self.http_session)
+            r = await async_http_request("POST", url, json=json, timeout=INVERTER_REST_TIMEOUT, session=self.session())
         except Exception as e:
             self.base.log("Warn: GivTCP: Inverter {} REST POST {} failed: {}".format(self.inverter.id, url, e))
             return None
@@ -549,7 +555,7 @@ class GivTCPRest:
         r = None
 
         try:
-            r = await async_http_request("GET", url, timeout=INVERTER_REST_TIMEOUT, session_factory=self.http_session)
+            r = await async_http_request("GET", url, timeout=INVERTER_REST_TIMEOUT, session=self.session())
         except Exception as e:
             self.base.log("Error: GivTCP: Exception raised {}".format(e))
 

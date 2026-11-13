@@ -41,6 +41,10 @@ ALIGN_MINUTE_OFFSET_SECONDS = 1
 # seconds however often the flag is checked.
 API_START_POLL_SECONDS = 0.1
 
+# on_component_loop(): how often a caller waiting on a hand-over checks that the component's loop
+# is still running, so a component stopped under it is noticed within about this many seconds.
+COMPONENT_LOOP_HANDOVER_POLL = 1
+
 # Factory new_http_session() calls in place of aiohttp.ClientSession, or None for the default.
 # Set it with set_http_session_factory().
 _http_session_factory = None
@@ -185,6 +189,8 @@ class ComponentBase(ABC):
         self.component_name = self.__class__.__name__
         # Overridden from the registry entry's "align_minute" by Components.initialize(); see start().
         self.align_minute = False
+        # The event loop start() is running on, or None before it has started; see on_component_loop().
+        self.component_loop = None
         self.initialize(**kwargs)
 
     @abstractmethod
@@ -533,6 +539,7 @@ class ComponentBase(ABC):
         past every wall-clock minute boundary, skipping any boundary a slow run() overran, and its
         run() is passed seconds in whole-minute steps so interval checks inside it keep their period.
         """
+        self.component_loop = asyncio.get_running_loop()
         seconds = 0
         first = True
         next_retry = 0  # When to next attempt self.run() during startup backoff
@@ -614,6 +621,50 @@ class ComponentBase(ABC):
 
         self.api_started = False
         self.log(f"{self.__class__.__name__}: Stopped")
+
+    async def on_component_loop(self, coro, timeout, what="work", poll=COMPONENT_LOOP_HANDOVER_POLL):
+        """Await coro on the component's own event loop, handing it over when called from another one.
+
+        A component's start() runs on a thread and event loop of its own, but its entity events
+        (select_event, number_event, switch_event) are awaited from whichever loop pressed them:
+        Predbat's plan thread, Home Assistant's socket loop or the web interface. Anything bound to
+        the component's loop - an aiohttp session, a lock, a task - only works there, so a handler
+        that touches one wraps its work in this.
+
+        Runs coro in place when already on the component's loop, or when that loop is not running
+        (not started yet, or stopped). A handed-over coroutine is waited for for at most timeout
+        seconds and its result or exception is returned to the caller; it is shielded, so giving up
+        the wait returns False and leaves it running.
+
+        Stopping or restarting the component ends that loop under a waiting caller, two ways. Its
+        asyncio.run() cancels the coroutine in flight, which is logged and returns False here rather
+        than escaping as a CancelledError - a cancellation of the caller itself is still re-raised.
+        Or the loop stops before the coroutine starts, which would then never run, so the wait is
+        taken in steps of poll seconds and abandoned as soon as the loop is no longer running.
+
+        :param what: Names the work in the log lines above, for example "GivTCP write".
+        """
+        loop = getattr(self, "component_loop", None)
+        if loop is None or loop is asyncio.get_running_loop() or loop.is_closed() or not loop.is_running():
+            return await coro
+        future = asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, loop))
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.log("Warn: {} is still running on the component's loop after {}s; Predbat will stop waiting for it".format(what, timeout))
+                return False
+            try:
+                return await asyncio.wait_for(asyncio.shield(future), timeout=min(poll, remaining))
+            except asyncio.TimeoutError:
+                if loop.is_closed() or not loop.is_running():
+                    self.log("Info: the component's loop stopped before {} ran".format(what))
+                    return False
+            except asyncio.CancelledError:
+                if not future.cancelled():
+                    raise
+                self.log("Info: {} was cancelled on the component's loop as the component stopped".format(what))
+                return False
 
     @staticmethod
     def next_aligned_run_time(now):
