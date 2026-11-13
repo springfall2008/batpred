@@ -654,9 +654,7 @@ pred_bat:
   #  - '{octopus_intelligent_slot}'
   #  - '{octopus_ready_time}'
   #  - '{octopus_charge_limit}'
-  #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
-  #  - '+[car_charging_soc]'
 
   # Redact additional values from predbat.log and debug dumps that Predbat cannot otherwise
   # recognise as sensitive (an MPAN or similar identifier surfaced by a third-party HA

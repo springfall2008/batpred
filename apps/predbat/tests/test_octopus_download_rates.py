@@ -262,7 +262,7 @@ def test_octopus_download_rates(my_predbat):
 
     test_url = "https://api.oegb-kraken.energy/test-func"
 
-    # Mock requests.get
+    # Mock http_get
     mock_response = Mock()
     mock_response.status_code = 200
     mock_response.json.return_value = {
@@ -273,8 +273,8 @@ def test_octopus_download_rates(my_predbat):
         "next": None
     }
 
-    import requests
-    with patch('requests.get', return_value=mock_response):
+    from http_sync import HttpConnectionError, HttpJSONDecodeError, HttpTimeout
+    with patch('octopus.http_get', return_value=mock_response):
         result = my_predbat.download_octopus_rates_func(test_url)
 
     # minute_data expands to every minute in the range, so check key points
@@ -310,7 +310,7 @@ def test_octopus_download_rates(my_predbat):
         "next": None
     }
 
-    with patch('requests.get', side_effect=[mock_response_1, mock_response_2]):
+    with patch('octopus.http_get', side_effect=[mock_response_1, mock_response_2]):
         result = my_predbat.download_octopus_rates_func(test_url)
 
     # Check that both pages were fetched and combined
@@ -326,7 +326,7 @@ def test_octopus_download_rates(my_predbat):
     my_predbat.failures_total = 0
     test_url = "https://api.oegb-kraken.energy/test-connection-error"
 
-    with patch('requests.get', side_effect=requests.exceptions.ConnectionError()):
+    with patch('octopus.http_get', side_effect=HttpConnectionError()):
         result = my_predbat.download_octopus_rates_func(test_url)
 
     if result != {}:
@@ -344,7 +344,7 @@ def test_octopus_download_rates(my_predbat):
     mock_response = Mock()
     mock_response.status_code = 404
 
-    with patch('requests.get', return_value=mock_response):
+    with patch('octopus.http_get', return_value=mock_response):
         result = my_predbat.download_octopus_rates_func(test_url)
 
     if result != {}:
@@ -361,9 +361,9 @@ def test_octopus_download_rates(my_predbat):
 
     mock_response = Mock()
     mock_response.status_code = 200
-    mock_response.json.side_effect = requests.exceptions.JSONDecodeError("Invalid JSON", "", 0)
+    mock_response.json.side_effect = HttpJSONDecodeError("Invalid JSON")
 
-    with patch('requests.get', return_value=mock_response):
+    with patch('octopus.http_get', return_value=mock_response):
         result = my_predbat.download_octopus_rates_func(test_url)
 
     if result != {}:
@@ -385,7 +385,7 @@ def test_octopus_download_rates(my_predbat):
     mock_response.status_code = 200
     mock_response.json.return_value = {"data": "some data"}  # Missing 'results' key
 
-    with patch('requests.get', return_value=mock_response):
+    with patch('octopus.http_get', return_value=mock_response):
         result = my_predbat.download_octopus_rates_func(test_url)
 
     if result != {}:
@@ -399,14 +399,14 @@ def test_octopus_download_rates(my_predbat):
     print("\nTest 15: download_octopus_rates_func - ReadTimeout")
     test_url = "https://api.octopus.energy/test-read-timeout"
     try:
-        with patch('requests.get', side_effect=requests.exceptions.ReadTimeout("Read timed out. (read timeout=20)")):
+        with patch('octopus.http_get', side_effect=HttpTimeout("Read timed out. (read timeout=20)")):
             result = my_predbat.download_octopus_rates_func(test_url)
         if result != {}:
             print(f"✗ Test 15 failed - Expected empty dict, got {result}")
             failed = True
         else:
             print("✓ Test 15 passed - ReadTimeout handled correctly")
-    except requests.exceptions.ReadTimeout:
+    except HttpTimeout:
         print("✗ Test 15 failed - ReadTimeout escaped download_octopus_rates_func")
         failed = True
 
@@ -422,7 +422,7 @@ def test_octopus_download_rates(my_predbat):
         }
     }
     try:
-        with patch('requests.get', side_effect=requests.exceptions.ReadTimeout("Read timed out. (read timeout=20)")) as mock_get:
+        with patch('octopus.http_get', side_effect=HttpTimeout("Read timed out. (read timeout=20)")) as mock_get:
             result = my_predbat.download_octopus_rates(test_url)
         if result != stale_cached_data:
             print(f"✗ Test 16 failed - Expected stale cached data {stale_cached_data}, got {result}")
@@ -432,7 +432,7 @@ def test_octopus_download_rates(my_predbat):
             failed = True
         else:
             print("✓ Test 16 passed - ReadTimeout retried then fell back to stale cache")
-    except requests.exceptions.ReadTimeout:
+    except HttpTimeout:
         print("✗ Test 16 failed - ReadTimeout escaped download_octopus_rates")
         failed = True
 

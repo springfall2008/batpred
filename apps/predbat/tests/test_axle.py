@@ -909,7 +909,7 @@ def _test_axle_history_loading(my_predbat=None):
 
 
 def _test_axle_history_cleanup(my_predbat=None):
-    """Test cleanup of events older than 7 days"""
+    """Test cleanup of events older than AXLE_HISTORY_DAYS"""
     print("Test: Axle API history cleanup")
 
     axle = MockAxleAPI()
@@ -935,9 +935,19 @@ def _test_axle_history_cleanup(my_predbat=None):
     # Run cleanup
     axle.cleanup_event_history()
 
-    # Should only keep events within 7 days
-    assert len(axle.event_history) == 1, "Should remove events older than 7 days"
+    # Should only keep events within AXLE_HISTORY_DAYS (9) days
+    assert len(axle.event_history) == 1, "Should remove events older than 9 days"
     assert axle.event_history[0]["import_export"] == "export"
+
+    # An event 8.5 days old is kept: the History view's billing comparison reaches back 7 whole local days
+    week_old_event = {
+        "start_time": "2025-12-12T03:00:00+0000",
+        "end_time": "2025-12-12T05:00:00+0000",
+        "import_export": "export",
+    }
+    axle.event_history = [week_old_event]
+    axle.cleanup_event_history()
+    assert len(axle.event_history) == 1, "Should keep an event 8.5 days old for the History view's oldest billed day"
 
     print("  ✓ History cleanup removes old events correctly")
     return False

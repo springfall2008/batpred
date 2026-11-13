@@ -1271,14 +1271,19 @@ async def test_async_find_tariffs(my_predbat):
 
     # Test 11: Export meter gets linked later - tariff keys stay stable, reconfigure only fires when export first appears
     print("\nTest 11: Unmetered export becomes metered without a second reconfigure")
+    # automatic_config runs for real (wrapped to count calls), with run()'s first-cycle configure after the first fetch, so
+    # the reconfigure guard is exercised exactly as in production
+    args_before_reconfigure_tests = dict(my_predbat.args)
     api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
     api.tariffs = {}
-    api.automatic_config = Mock()
+    api.automatic_config = Mock(side_effect=api.automatic_config)
     api.refresh_discovery = Mock()
 
     with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
         api.account_data = {"account": {"electricityAgreements": [{"meterPoint": import_meterpoint}], "gasAgreements": []}}
         await api.async_find_tariffs()
+        api.automatic_config(api.tariffs)  # run()'s first-cycle configure
+        api.automatic_config.reset_mock()
         api.account_data = {"account": {"electricityAgreements": [{"meterPoint": unmetered_export_meterpoint()}, {"meterPoint": import_meterpoint}], "gasAgreements": []}}
         result_unmetered = await api.async_find_tariffs()
         reconfigure_after_unmetered = api.automatic_config.call_count
@@ -1303,6 +1308,51 @@ async def test_async_find_tariffs(my_predbat):
         failed = True
     else:
         print("PASS: Export tariff keys stable across meter linking, single reconfigure")
+
+    # Test 12: a failed first account fetch must not leave the rates unwired (GH#5994). The first-cycle configure runs with no
+    # tariffs; when a later fetch finds them, automatic_config() must run again. A healthy boot, where the first fetch already
+    # found the tariffs before the first-cycle configure, must still configure only once.
+    print("\nTest 12: Tariffs found after a failed first fetch are wired; a healthy boot configures once")
+    for key in ("metric_octopus_import", "metric_standing_charge"):
+        my_predbat.args.pop(key, None)
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
+    api.refresh_discovery = Mock()
+    api.tariffs = {}
+    api.account_data = {}
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        await api.async_find_tariffs()  # the failed first fetch: no account data
+        api.automatic_config(api.tariffs)  # run()'s first-cycle configure, with no tariffs
+        unwired_after_failed_boot = my_predbat.args.get("metric_octopus_import")
+        api.account_data = {"account": {"electricityAgreements": [{"meterPoint": import_meterpoint}], "gasAgreements": []}}
+        await api.async_find_tariffs()  # a later fetch succeeds
+    wired = my_predbat.args.get("metric_octopus_import")
+    if unwired_after_failed_boot is not None:
+        print("ERROR: Expected no import rates wired after a failed first fetch, got {}".format(unwired_after_failed_boot))
+        failed = True
+    elif not wired or "import_rates" not in str(wired):
+        print("ERROR: Expected the import rates wired once the tariffs were found after a failed first fetch, got {}".format(wired))
+        failed = True
+    else:
+        print("PASS: Tariffs found after a failed first fetch are wired")
+
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
+    api.refresh_discovery = Mock()
+    api.tariffs = {}
+    api.account_data = {"account": {"electricityAgreements": [{"meterPoint": import_meterpoint}], "gasAgreements": []}}
+    real_automatic_config = api.automatic_config
+    api.automatic_config = Mock(side_effect=real_automatic_config)
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        await api.async_find_tariffs()  # the healthy first fetch, before the first-cycle configure
+        api.automatic_config(api.tariffs)  # run()'s first-cycle configure
+        await api.async_find_tariffs()  # a later fetch with the same tariffs
+    if api.automatic_config.call_count != 1:
+        print("ERROR: Expected a healthy boot to configure once, got {}".format(api.automatic_config.call_count))
+        failed = True
+    else:
+        print("PASS: Healthy boot configures once")
+    # automatic_config() set args on the shared instance; put them back as they were
+    my_predbat.args.clear()
+    my_predbat.args.update(args_before_reconfigure_tests)
 
     if not failed:
         print("\n**** All async_find_tariffs tests PASSED ****")
@@ -1464,7 +1514,7 @@ async def test_edf_freephase_dynamic_url(my_predbat):
     my_predbat.now_utc = my_predbat.midnight_utc
     test_url = "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates"
 
-    with patch("requests.get") as mock_get:
+    with patch("octopus.http_get") as mock_get:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -1515,7 +1565,7 @@ async def test_edf_freephase_dynamic_url(my_predbat):
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
 
-    with patch("requests.get") as mock_get:
+    with patch("octopus.http_get") as mock_get:
         # First page
         mock_response_page1 = Mock()
         mock_response_page1.status_code = 200

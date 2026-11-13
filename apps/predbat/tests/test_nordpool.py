@@ -79,7 +79,7 @@ def run_nordpool_test(my_predbat):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.text = json.dumps({"multiAreaEntries": []})
-    with patch("futurerate.requests.get", return_value=mock_response) as mock_get:
+    with patch("futurerate.http_get", return_value=mock_response) as mock_get:
         FutureRate(my_predbat).download_futurerate_data_func("https://example.com/nordpool")
     if mock_get.call_count != 1:
         print("ERROR: Expected 1 Nord Pool HTTP call for timeout coverage, got {}".format(mock_get.call_count))

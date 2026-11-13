@@ -29,7 +29,7 @@ def test_hainterface_initialize_ha_only(my_predbat=None):
     ha_interface.api_started = False
     ha_interface.api_stop = False
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, [{"domain": "test"}])
         ha_interface.initialize("http://test", "test_key", False, False, False)
 
@@ -123,7 +123,7 @@ def test_hainterface_initialize_api_check_failed(my_predbat=None):
     ha_interface.api_started = False
     ha_interface.api_stop = False
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         # First call (app check) returns None, second call (services check) returns None
         mock_get.return_value = create_mock_requests_response(500, None)
 
@@ -156,7 +156,7 @@ def test_hainterface_initialize_db_mirror(my_predbat=None):
     ha_interface.api_started = False
     ha_interface.api_stop = False
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, [{"domain": "test"}])
         ha_interface.initialize("http://test", "test_key", True, True, False)
 
@@ -315,7 +315,7 @@ def test_hainterface_get_slug(my_predbat=None):
     ha_interface.api_started = False
     ha_interface.api_stop = False
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         # Mock app info response
         def mock_get_side_effect(url, *args, **kwargs):
             # HA changed terminology from 'addons' to 'apps' in HA 2026.2 but retained the old service calls for transition

@@ -42,6 +42,7 @@ from const import (
     OCTOPUS_LEGACY_API_HOST,
 )
 import copy
+import pytz
 import hashlib
 import json
 import time as time_module
@@ -2033,6 +2034,54 @@ def window2minutes(start, end, minutes_now):
     start = time_string_to_stamp(start)
     end = time_string_to_stamp(end)
     return compute_window_minutes(start, end, minutes_now)
+
+
+def start_of_local_day(day, local_tz):
+    """
+    The first instant of local date day in local_tz, as an aware datetime
+
+    Usually 00:00. Where the clocks go back across midnight, so 00:00 happens twice, it is the first 00:00; where they go
+    forward at midnight, so 00:00 never happens, it is the instant the day really starts (pytz's standard-time reading of
+    00:00 is that instant). zoneinfo's default fold=0 gives the same answers.
+    """
+    naive = datetime(day.year, day.month, day.day)
+    if not hasattr(local_tz, "localize"):
+        return naive.replace(tzinfo=local_tz)
+    try:
+        return local_tz.localize(naive, is_dst=None)
+    except pytz.exceptions.AmbiguousTimeError:
+        return local_tz.localize(naive, is_dst=True)
+    except pytz.exceptions.NonExistentTimeError:
+        return local_tz.localize(naive, is_dst=False)
+
+
+def clock_change_minutes(now, local_tz):
+    """
+    How far the clocks have moved since the start of today in local_tz: 60 after a spring change, -60 after an autumn one,
+    otherwise 0
+
+    Predbat's midnight_utc is now with the clock set to 00:00, so it carries now's UTC offset; on a clock-change day that
+    instant is this many minutes away from the real start of the day, and minutes_now (minutes since midnight_utc) is this
+    many minutes more than the real time elapsed since the day began. History from minute_data(backwards=True) is keyed by
+    real minutes back from now, so "since local midnight" reads of it use minutes_now - clock_change_minutes(...) (GH#5760).
+    """
+    now_local = now.astimezone(local_tz)
+    day_start = start_of_local_day(now_local.date(), local_tz)
+    return int((now_local.utcoffset() - day_start.utcoffset()).total_seconds() // 60)
+
+
+def local_day_end_minute(now, local_tz):
+    """
+    Where the end of today in local_tz falls, in minutes from Predbat's midnight_utc (now with the clock set to 00:00)
+
+    1440 on most days. On a clock-change day it is the real length of the day measured from midnight_utc: before an
+    autumn change (midnight_utc still on summer time) the day has an extra hour to run, so 1500; before a spring change,
+    1380; once the change has happened midnight_utc moves with it and it is 1440 again (GH#5760).
+    """
+    now_local = now.astimezone(local_tz)
+    midnight = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = start_of_local_day(now_local.date() + timedelta(days=1), local_tz)
+    return int((day_end - midnight).total_seconds() // 60)
 
 
 def minutes_since_midnight(now, midnight):
