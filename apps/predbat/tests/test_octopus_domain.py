@@ -159,7 +159,7 @@ def test_octopus_domain(my_predbat):
         page_urls.append(url)
         return FakeResponse(url)
 
-    with patch("octopus.requests.get", side_effect=fake_get):
+    with patch("octopus.http_get", side_effect=fake_get):
         my_predbat.download_octopus_rates_func(NEW_AGILE_URL)
     if page_urls != [NEW_AGILE_URL, NEW_AGILE_URL + "?page=2"]:
         print("  ERROR: expected both pages from the new host, got {}".format(page_urls))
