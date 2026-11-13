@@ -252,6 +252,39 @@ def test_http_sync(my_predbat=None):
         component_base.set_http_session_factory(original_factory)
         server.stop()
 
+    # A caller's own open session is used for the request and left open for the next one
+    server = LocalServer().start()
+    try:
+
+        async def on_own_session():
+            """Make two requests on one caller-owned session, and one that times out."""
+            import aiohttp
+
+            built = []
+            original = http_sync._new_session
+            http_sync._new_session = lambda **kwargs: built.append(kwargs)
+            try:
+                async with aiohttp.ClientSession() as session:
+                    first = await http_sync.async_http_request("GET", server.url("/json"), params={"own": "1"}, timeout=10, session=session)
+                    open_after_first = not session.closed
+                    second = await http_sync.async_http_request("POST", server.url("/echo"), json={"own": 2}, timeout=10, session=session)
+                    try:
+                        await http_sync.async_http_request("GET", server.url("/slow"), timeout=0.2, session=session)
+                        slow = None
+                    except HttpError as exc:
+                        slow = exc
+                    return first, open_after_first, second, slow, not session.closed, built
+            finally:
+                http_sync._new_session = original
+
+        first, open_after_first, second, slow, open_at_end, built = asyncio.run(on_own_session())
+        failed |= _check("request made on the caller's session", first.status_code == 200 and first.json()["query"] == {"own": "1"} and second.ok and "own" in second.json()["body"], "{} {}".format(first, second))
+        failed |= _check("caller's session is left open", open_after_first and open_at_end)
+        failed |= _check("no session of its own is made", not built, "built {}".format(len(built)))
+        failed |= _check("timeout applies per request on a caller's session", isinstance(slow, HttpTimeout), repr(slow))
+    finally:
+        server.stop()
+
     return failed
 
 

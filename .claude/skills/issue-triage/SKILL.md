@@ -67,7 +67,7 @@ sed -n '<start>,<end>p' <scratch>/predbat.log     # context around an interestin
 
 The log gives you error/traceback context; the debug yaml gives you the reporter's actual configuration (grep it for the specific keys you care about if it is large). The reporter's Predbat version is usually in the first few lines of the log — quote the version you actually confirmed, not the one in the issue template.
 
-A `predbat_debug.yaml` can also be replayed against current main to reproduce their plan and list every setting they have changed from default — see [tools/debug-journal.md](../../../tools/debug-journal.md).
+A `predbat_debug.yaml` can also be replayed against current main to reproduce their plan and list every setting they have changed from default — see [tools/debug-journal.md](../../../tools/debug-journal.md). With a `predbat.log` as well, the log can be replayed forwards from the yaml, run by run — see "Replay the log forwards" in step 5.
 
 ## 3. Classify the type
 
@@ -106,6 +106,21 @@ Then look for **similar** issues and PRs as well, whether or not they are duplic
   It prints the exit status and the last 30 lines; grep the log file for anything more. Use the wrapper rather than composing your own `cd coverage && ./run_all ... > log` — a `cd` combined with an output redirect is refused outright in this session's permission mode, which is why the wrapper exists.
 
   Skip this step if there's no clean mapping — never run the full suite. A test only settles questions about code behaviour; it can't settle what real hardware did, so don't run one to look thorough.
+
+- **Replay the log forwards** when the report is about the plan (it charged or exported when it should not have, kept a bad plan, or kept changing it) and both a `predbat.log` and a `predbat_debug.yaml` are attached. From the repo root:
+
+  ```bash
+  python3 tools/triage_replay.py --yaml <scratch>/predbat_debug.yaml --log <scratch>/predbat.log --out <scratch>/replay
+  ```
+
+  It restores the yaml, then steps through every Predbat run the log records *after* the yaml was taken, re-plans where the live system did, and compares each re-plan with the live one. Pass `--log` once per log file when the log was rotated (in any order; they are joined oldest first). It prints a digest; the full comparison is `<scratch>/replay/replay.json`, and the replay's own plan trace is `replay_predbat.log` beside it — grep that, as you would the reporter's log. Use the wrapper, not `./run_all` directly, for the same reason as `tools/triage_test.sh`.
+
+    - **Check there is something to replay.** The wrapper prints when the yaml was taken and how many runs follow it, and exits 3 when none do. That is the common case: reporters take the yaml when they file the issue, at the end of the log. If the period in question is earlier, ask for a debug snapshot from its start (the Debug column of the Plan → History view; snapshots are taken about every 3 hours and kept about 45 hours) instead of reasoning from the end-of-log yaml.
+    - **It replays the plan, not what was done with it.** A hold, the mode the inverter was put in, or a write that did not take is not replayed; read the log for those, and don't run the replay to look thorough.
+    - **Read the digest, not the headline.** "adopted export windows identical N of N" compares export windows only, so on a house that planned no exports it says nothing. What counts is the runs whose charge plan differs, the runs whose predicted cost or SoC differs, and each cluster's first differing plan-trace line.
+    - **Work out what a difference means before quoting it.** If load, PV or SoC differ, the replay's inputs went wrong (a log without `Replay input:` lines, a restart, a car plugged in mid-run), so don't build on it. If the inputs match and the first difference is an optimiser line, then current main, or a setting, decides differently. Compare the metrics: plans within a few pence of each other are a near-tie, not a fix or a regression, so quote the gap. A log from an older Predbat than main is expected to differ; say which version it was.
+    - **What-ifs**, once the plain replay matches the live plans: `--override name=value` (repeatable) changes a setting after the yaml is loaded — change one at a time; `--simulate` steps the battery itself under the replayed plan instead of taking SoC from the log, which is what you want after a local code edit; `--until HH:MM` stops early.
+    - Say in the triage comment what you replayed and what it showed, for example "replaying your log forwards from the 21:40 yaml on main reproduced your inputs; 9 runs choose a different overnight charge, each within 1p of the live plan".
 
 - Form a root-cause hypothesis with a `file:line` pointer if the investigation supports one. It's fine to say the cause needs maintainer review if it doesn't.
 - You may edit files locally to test a hypothesis (e.g. a temporary debug print, a tweaked test fixture) — this clone is hard-reset and cleaned before the next run, so nothing here persists. Never `git commit` or `git push`.

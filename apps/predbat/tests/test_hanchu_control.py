@@ -1017,7 +1017,7 @@ def test_hanchu_write_button_from_another_loop_writes_on_the_component_loop():
     client.apply_schedule = recording_apply
     owner, thread = _start_owner_loop()
     try:
-        client._loop = owner
+        client.component_loop = owner
         # From the plan thread's throwaway loop: handed over to the component's loop.
         run_async_local(client._handle_control_event(button, "turn_on"))
         if seen != [owner]:
@@ -1060,7 +1060,7 @@ def test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout():
     client.apply_schedule = slow_apply
     owner, thread = _start_owner_loop()
     try:
-        client._loop = owner
+        client.component_loop = owner
         with patch("hanchu.HANCHU_LOOP_HANDOVER_TIMEOUT", 0.05):
             started = time.time()
             run_async_local(client._handle_control_event(button, "turn_on"))
@@ -1106,7 +1106,7 @@ def test_hanchu_handed_over_write_cancelled_by_a_stopping_component_is_logged():
     client.apply_schedule = endless_apply
     owner, thread = _start_owner_loop()
     try:
-        client._loop = owner
+        client.component_loop = owner
         threading.Thread(target=cancel_owner_tasks, daemon=True).start()
         result = run_async_local(client._handle_control_event(button, "turn_on"))
         if result is not None:
@@ -1151,7 +1151,7 @@ def test_hanchu_handed_over_write_stops_waiting_when_the_component_loop_stops():
     owner.call_soon_threadsafe(busy_then_stop)
     threading.Timer(0.2, release.set).start()
     try:
-        client._loop = owner
+        client.component_loop = owner
         with patch("hanchu.HANCHU_LOOP_HANDOVER_TIMEOUT", 30):
             started = time.time()
             run_async_local(client._handle_control_event(button, "turn_on"))
@@ -1162,7 +1162,7 @@ def test_hanchu_handed_over_write_stops_waiting_when_the_component_loop_stops():
         if ran:
             print("ERROR: the write should not have run on a stopped loop")
             failed = True
-        if not logged(client, "component's loop stopped before the write ran"):
+        if not logged(client, "component's loop stopped before Hanchu write ran"):
             print(f"ERROR: giving up should be logged: {client.log_messages}")
             failed = True
     finally:
@@ -1170,6 +1170,21 @@ def test_hanchu_handed_over_write_stops_waiting_when_the_component_loop_stops():
         if not owner.is_closed():
             owner.close()
     assert not failed, "test_hanchu_handed_over_write_stops_waiting_when_the_component_loop_stops"
+
+
+def test_hanchu_uses_the_shared_component_loop_hand_over():
+    """Hanchu hands writes over with ComponentBase.on_component_loop rather than a copy of its own.
+
+    The hand-over started here and was lifted into ComponentBase so GivTCP and Gateway could share
+    it; keeping a second copy would let the two drift apart on the timeout and stopped-loop handling.
+    """
+    from hanchu import HanchuAPI
+    from component_base import ComponentBase
+
+    assert "_on_component_loop" not in vars(HanchuAPI), "HanchuAPI should use ComponentBase.on_component_loop, not its own copy"
+    assert HanchuAPI.on_component_loop is ComponentBase.on_component_loop, "HanchuAPI must not override the shared hand-over"
+    client = MockHanchu(account="", password="")
+    assert not hasattr(client, "_loop"), "the component's loop is recorded once, as component_loop"
 
 
 def test_hanchu_run_records_the_component_loop():
@@ -1183,8 +1198,8 @@ def test_hanchu_run_records_the_component_loop():
         return asyncio.get_running_loop()
 
     loop = run_async_local(tick())
-    if client._loop is not loop:
-        print(f"ERROR: run() should record its own loop: {client._loop} != {loop}")
+    if client.component_loop is not loop:
+        print(f"ERROR: run() should record its own loop: {client.component_loop} != {loop}")
         failed = True
     assert not failed, "test_hanchu_run_records_the_component_loop"
 
@@ -1380,7 +1395,7 @@ def test_hanchu_write_button_debounce_sends_only_the_settled_hold():
         client.apply_schedule = _recording_apply(client, sent)
         owner, thread = _start_owner_loop()
         try:
-            client._loop = owner
+            client.component_loop = owner
             _commit_a_hold_starting(client, gap=gap if debounce else 0.0)
             if debounce:
                 # Still inside the debounce the discharge rate restarted.
@@ -1426,7 +1441,7 @@ def test_hanchu_schedule_change_without_a_pending_write_does_not_start_one():
     client.apply_schedule = _recording_apply(client, sent)
     owner, thread = _start_owner_loop()
     try:
-        client._loop = owner
+        client.component_loop = owner
         run_async_local(client._handle_control_event(client._control_name("number", SN, "battery_schedule_export_power"), 0))
         if client._write_pending(SN):
             print("ERROR: a schedule change alone should not start a debounced write")
@@ -1454,7 +1469,7 @@ def test_hanchu_reconcile_waits_for_a_pending_debounced_write():
     client.apply_schedule = _recording_apply(client, sent)
     owner, thread = _start_owner_loop()
     try:
-        client._loop = owner
+        client.component_loop = owner
         client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 100, "power": 4000, "start": "08:00:00", "end": "16:00:00"})
         run_async_local(client._handle_control_event(button, "turn_on"))
         if not client._write_pending(SN):
@@ -1492,7 +1507,7 @@ def test_hanchu_stopping_cancels_a_pending_debounced_write():
     client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "04:00:00"})
     owner, thread = _start_owner_loop()
     try:
-        client._loop = owner
+        client.component_loop = owner
         run_async_local(client._handle_control_event(button, "turn_on"))
 
         async def stop():
@@ -1570,6 +1585,7 @@ def run_hanchu_control_tests(my_predbat):
         ("event_loop_handover", test_hanchu_write_button_from_another_loop_writes_on_the_component_loop),
         ("event_loop_handover_timeout", test_hanchu_handed_over_write_gives_up_waiting_after_the_timeout),
         ("run_records_loop", test_hanchu_run_records_the_component_loop),
+        ("shared_hand_over", test_hanchu_uses_the_shared_component_loop_hand_over),
         ("event_loop_handover_cancelled", test_hanchu_handed_over_write_cancelled_by_a_stopping_component_is_logged),
         ("event_loop_handover_stopped", test_hanchu_handed_over_write_stops_waiting_when_the_component_loop_stops),
         ("hold_without_room", test_hanchu_hold_with_no_room_for_a_slot_keeps_the_charge_rate),

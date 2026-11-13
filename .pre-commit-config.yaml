@@ -41,6 +41,12 @@ repos:
     entry: python tools/test_triage_daemon.py
     files: ^tools/(triage_daemon\.py|test_triage_daemon\.py)$
     pass_filenames: false
+  - id: triage-replay-tests
+    name: triage replay wrapper unit tests
+    language: python
+    entry: python tools/test_triage_replay.py
+    files: ^tools/(triage_replay\.py|test_triage_replay\.py)$
+    pass_filenames: false
   - id: owner-gate-tests
     name: owner gate workflow tests
     language: python

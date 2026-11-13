@@ -56,7 +56,7 @@ from utils import (
     strptime_aware,
 )
 from component_base import ComponentBase, new_http_session
-from billing import BillingReader, billing_slot_key
+from billing import BillingReader, billing_slot_key, saving_session_rate
 from mock_base import MockBase as SharedMockBase
 import aiohttp
 import hashlib
@@ -1628,17 +1628,18 @@ class OctopusAPI(ComponentBase):
             if reward is None:
                 reward = default_octopoints  # Inject default when API doesn't provide reward
             if start and end:
-                return_joined_events.append(
-                    {
-                        "start": start,
-                        "end": end,
-                        "octopoints_per_kwh": reward,
-                        "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None),
-                        "id": event_id,
-                        "code": event_code.get(event_id, None),
-                        "event_type": event.get("eventType", None) or event_type.get(event_id, None),
-                    }
-                )
+                joined_event = {
+                    "start": start,
+                    "end": end,
+                    "octopoints_per_kwh": reward,
+                    "id": event_id,
+                    "code": event_code.get(event_id, None),
+                    "event_type": event.get("eventType", None) or event_type.get(event_id, None),
+                }
+                # Only a feed that reports awards lists one, null until Octopus posts it (the History view counts those as pending)
+                if "rewardGivenInOctoPoints" in event:
+                    joined_event["rewarded_octopoints"] = event.get("rewardGivenInOctoPoints")
+                return_joined_events.append(joined_event)
 
         # Icons remain hard-coded as currency-gbp and have not been auto-generated as per #5683 as the Octopus
         # integration is only used by UK customers so the extra complexity of passing the icon through to this
@@ -2050,6 +2051,8 @@ class OctopusAPI(ComponentBase):
 
         # Map to existing internal format
         # New API doesn't distinguish available vs joined — treat all as joined
+        # ... and doesn't report the Octopoints awarded, so rewardGivenInOctoPoints is left out rather than null: null says an award
+        # is still to come, which this feed can never post
         result = {"events": [], "account": {"hasJoinedCampaign": len(saving_events) > 0, "joinedEvents": []}}  # No "available" events (no separate list in new API)
         for event in saving_events:
             result["account"]["joinedEvents"].append(
@@ -2057,7 +2060,6 @@ class OctopusAPI(ComponentBase):
                     "eventId": event.get("code"),
                     "startAt": event.get("startAt"),
                     "endAt": event.get("endAt"),
-                    "rewardGivenInOctoPoints": None,
                 }
             )
 
@@ -5530,6 +5532,8 @@ class Octopus:
 
         # Octopus saving session
         octopus_saving_slots = []
+        if "octopus_saving_session" not in self.args:
+            self.octopus_saving_joined_events = []
         if "octopus_saving_session" in self.args:
             saving_rate = 200  # Default rate if not reported
             octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per penny
@@ -5557,6 +5561,10 @@ class Octopus:
                         entity_id = fallback_entity_id
                         joined_events = fallback_joined_events
                         available_events = fallback_available_events
+                # Every joined session the sensor lists, past ones included, for the History view's billing comparison: published in one
+                # assignment, and kept while the entity has no attributes (unavailable after a restart) rather than emptied
+                if joined_events is not _ATTRIBUTE_UNSET:
+                    self.octopus_saving_joined_events = list(joined_events or [])
                 joined_events = [] if joined_events is _ATTRIBUTE_UNSET else joined_events
                 available_events = [] if available_events is _ATTRIBUTE_UNSET else available_events
 
@@ -5654,11 +5662,11 @@ class Octopus:
                 for event in joined_events:
                     start = event.get("start", None)
                     end = event.get("end", None)
-                    octopoints_kwh = event.get("octopoints_per_kwh", None)
-                    if octopoints_kwh is not None:
-                        saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
-                    elif default_rate_pence > 0:
-                        saving_rate = default_rate_pence  # Use configured default rate
+                    # The session's Octopoints per kWh over octopoints_per_penny, or the configured default rate when it reports none;
+                    # shared with the History view's billing comparison, so both price a session the same way
+                    event_rate = saving_session_rate(event.get("octopoints_per_kwh", None), octopoints_per_penny, default_rate_pence)
+                    if event_rate is not None:
+                        saving_rate = event_rate
 
                     # Octopus publishes Power Up and Power Down events through the same savingSessions
                     # feed and distinguishes them with eventType (#4548 point 5/7):
@@ -5689,7 +5697,7 @@ class Octopus:
                         continue
 
                     # Skip events with no rate info unless default is configured
-                    if start and end and (octopoints_kwh is not None or default_rate_pence > 0) and saving_rate > 0:
+                    if start and end and event_rate is not None:
                         # Save the saving slot?
                         try:
                             start_time = str2time(start)
