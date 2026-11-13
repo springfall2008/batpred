@@ -20,6 +20,7 @@ cancelled slot), io_confirmed_credit_update() marks the run with a small score-o
 largest for the current half hour and tapering after it, so a tie goes to the energy already in hand. Cost
 is never touched, so a genuinely cheaper slot still wins.
 """
+
 import copy
 from datetime import timedelta
 

@@ -7439,6 +7439,15 @@ def get_plan_renderer_js():
                             billedStr += ` <span style="font-size: 11px;" title="Import only: the export for this slot hasn't been billed yet, so there is no Diff">(import, export not billed yet)</span>`;
                         }
                     }
+                    if (row.billing_credit) {
+                        // Billed at the full rate here and refunded later as an account credit, counted in the day's Credits
+                        const creditTitle = row.billing_credit === 'pending' ? 'Weekend Happy Hour: billed at the full rate, refunded later as an account credit (not posted yet)' : 'Weekend Happy Hour: billed at the full rate and refunded as an account credit, shown in the Credits total';
+                        billedStr += `<span title="${escapeAttr(creditTitle)}">*</span>`;
+                    }
+                    if (row.billing_axle !== null && row.billing_axle !== undefined) {
+                        // Paid by Axle, not on the bill: an estimate from Predbat's own kWh, counted in the day's Axle total
+                        billedStr += `<span title="${escapeAttr('Axle VPP event: Predbat priced in the event price, which isn\\'t on the bill; ' + Math.round(row.billing_axle * 100) + minor + ' estimated from Predbat\\'s recorded kWh, taken off the Diff and shown in the Axle (est.) total')}">&dagger;</span>`;
+                    }
                     if (row.billing_event) {
                         billedStr += ` <span style="font-size: 11px;" title="${escapeAttr(row.billing_event + ' in this slot: the bill may not show it the way Predbat priced it')}">(${row.billing_event})</span>`;
                     }
@@ -8111,8 +8120,8 @@ def get_plan_renderer_js():
             return;
         }
 
-        // Check for stale data - an older History day is a fixed record, never stale
-        checkStaleness(currentView === 'yesterday' && historyDay ? null : data);
+        // Check for stale data - an older History day's data carries its own (daily) refresh_minutes, so the poll judges it the same way
+        checkStaleness(data);
 
         // Render table
         const editable = (currentView === 'plan');
@@ -8131,7 +8140,7 @@ def get_plan_renderer_js():
 
     // How old a view's data may get before it is reported stale, when the data does not say. Each dataset
     // carries refresh_minutes, the longest Predbat should take to republish it (the plan once per re-plan,
-    // the history views once per completed plan slot), and is stale a run (5 minutes) after that.
+    // the history views once per completed plan slot, an older History day once a day), and is stale a run (5 minutes) after that.
     const STALE_MINUTES_DEFAULT = {plan: 15, yesterday: 60, baseline: 60};
 
     // The data the current view shows
@@ -8211,13 +8220,22 @@ def get_plan_renderer_js():
         let html = '<div class="billing-summary" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px;">';
         html += tile('Predbat cost', money(summary.predbat_cost));
         html += tile(`Billed (${escapeAttr(supplier)})`, money(summary.billed_cost));
+        if (summary.credits > 0 || summary.credits_pending > 0) {
+            html += tile('Credits*', summary.credits > 0 ? money(-summary.credits) : 'pending');
+        }
+        if (summary.axle_slots > 0) {
+            html += tile('Axle (est.)&dagger;', money(-summary.axle));
+        }
         html += tile('Difference', (summary.diff > 0 ? '+' : '') + money(summary.diff), `color: ${diffColor};`);
         html += tile('Import kWh', kwh(summary.import_kwh));
         html += tile('Export kWh', kwh(summary.export_kwh));
-        html += tile('Standing charge', `${money(summary.standing_predbat)} vs ${money(summary.standing_billed)}`);
+        html += tile('Standing charge&Dagger;', `${money(summary.standing_predbat)} vs ${money(summary.standing_billed)}`);
         html += '</div>';
         const pending = summary.export_pending_slots > 0 ? `${summary.export_pending_slots} slot${summary.export_pending_slots === 1 ? '' : 's'} billed for import only (export not billed yet), left out of these totals` : '';
-        const notes = [complete, pending, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
+        const standing = '&Dagger; Cost includes the day\\'s standing charge in the midnight slot, as on the other plan views, while the bill spreads it over every half hour; the Predbat cost, Billed, Diff and Difference leave it out and it is compared here instead';
+        const credits = (summary.credits > 0 || summary.credits_pending > 0) ? `* Weekend Happy Hour import is billed at the full rate and refunded as a credit${summary.credits_pending > 0 ? ` (${summary.credits_pending} not posted yet)` : ''}; the Difference is after credits` : '';
+        const axle = summary.axle_slots > 0 ? '&dagger; Axle VPP event slots: Predbat priced in the event price, which Axle pays separately and isn\\'t on the bill (on import during an export event it is only a planning cost); estimated from Predbat\\'s recorded kWh, and the Diff and Difference are after it' : '';
+        const notes = [complete, pending, credits, axle, standing, summary.import_only ? 'import only: no export billing is read, so the bill is compared with Predbat\\'s import cost' : '', 'slots not yet billed are left out'].filter(Boolean);
         html += `<p style="font-size: 12px; margin: 0 0 8px 0; opacity: 0.8;">${notes.join(' &middot; ')}</p>`;
         return html;
     }
@@ -8236,7 +8254,11 @@ def get_plan_renderer_js():
         const limitMinutes = data.refresh_minutes ? Math.max(data.refresh_minutes + 5, 15) : (STALE_MINUTES_DEFAULT[currentView] || 15);
         const ageMs = new Date() - new Date(data.timestamp);
         if (ageMs > limitMinutes * 60000) {
-            staleWarning.textContent = '\u26A0\uFE0F Plan data is stale (last updated over ' + limitMinutes + ' minutes ago)';
+            // Data rebuilt once a day (an older History day) is judged in hours, and the warning says what has stopped.
+            // Worded from the data's own limit, so a day still carrying a per-slot one reads in minutes like any other view
+            staleWarning.textContent = limitMinutes >= 24 * 60
+                ? '\u26a0\ufe0f This History day has not been rebuilt for over ' + Math.floor(limitMinutes / 60) + ' hours'
+                : '\u26a0\ufe0f Plan data is stale (last updated over ' + limitMinutes + ' minutes ago)';
             staleWarning.style.display = 'block';
         } else {
             staleWarning.style.display = 'none';

@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta, timezone
-import requests
+from http_sync import http_get, HttpJSONDecodeError
 from ha import run_async
 from download import DEFAULT_PREDBAT_REPOSITORY, MAX_PREDBAT_BRANCH_OPTIONS, resolve_predbat_repository, is_valid_predbat_branch, predbat_branch_option
 from utils import dp1
@@ -122,7 +122,7 @@ class GitHub:
 
         stale_data = (cached_entry.get("data") or []) if cached_entry else []
         try:
-            r = requests.get(url, timeout=10)
+            r = http_get(url, timeout=10)
         except Exception:
             self.log("Warn: Unable to load data from GitHub URL: {}".format(url))
             return stale_data
@@ -133,7 +133,7 @@ class GitHub:
 
         try:
             pdata = r.json()
-        except requests.exceptions.JSONDecodeError:
+        except HttpJSONDecodeError:
             self.log("Warn: Unable to decode data from GitHub URL: {}".format(url))
             return stale_data
 

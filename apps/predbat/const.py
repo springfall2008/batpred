@@ -42,6 +42,11 @@ DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
 # How long a half hour an Octopus Intelligent planned dispatch ran in keeps the dispatch rate after it ends,
 # while waiting for Octopus to list it as a completed dispatch - seen to take 15 to 60 minutes (GH#5520)
 OCTOPUS_DISPATCH_HOLD_MINUTES = 90
+# For this many minutes into the half hour after a held one, a car seen charging is taken for the tail of
+# the charge before it rather than an unlisted smart charge: car_charging_now can lag a car that stopped at the boundary while
+# Octopus still reports the smart charge in progress (GH#5884). One cycle, so a car that really charges on is held
+# at the next one
+OCTOPUS_DISPATCH_TAIL_MINUTES = 5
 # The same hold under the window billing rule (E.ON Next Drive Smart, GH#5521): the supplier bills every half hour a
 # planned dispatch was in force off-peak and never lists the ones the car did not charge in, so the hold is the
 # record - kept for a day, so today's cost and the hours either side of midnight are priced from it
@@ -72,6 +77,12 @@ CLOUD_ARRAY_MARGIN = 1.2
 # the HA integrations). Treated as "unknown", not as a real 9999 kWp array.
 PV_ARRAY_KWP_UNKNOWN = 9999
 RUN_EVERY = 5
+
+# Lowest rate (in the currency's 1/100 unit per kWh, e.g. p or c) a manual SoC target is penalised at:
+# the import rate below a manual_soc or alert floor, and the export rate above a manual_soc_max
+# ceiling. The keep penalty is weighted by the minute's own rate, so without this a target in a free
+# (0) slot cost nothing to miss and one at a negative rate rewarded missing it (#5162).
+KEEP_TARGET_MIN_RATE = 1.0
 # Forecast scenarios simulated by the planner.
 # PV_SCENARIO_PV10 must remain 1 so it stays interchangeable with the legacy pv10 boolean.
 PV_SCENARIO_NOMINAL = 0

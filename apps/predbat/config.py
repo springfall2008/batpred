@@ -2457,6 +2457,44 @@ INVERTER_DEF = {
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
     },
+    "GrowattCloud": {
+        "name": "GrowattCloud",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "output_charge_control": "power",
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        # Growatt's public dispatch API has no writable SoC fields. The charge target is
+        # nevertheless a real component control: growatt.py observes it and drops the charge
+        # slot to 0% power (a hold) when telemetry reaches the target.
+        "has_target_soc": True,
+        # No reserve is claimed. Outside a slot the inverter runs its own self-consumption down
+        # to its local dischargeCutOffSOC, so a reserve Predbat raised to hold the battery
+        # (set_reserve_enable / set_reserve_hold) would never be honoured. Without it Predbat
+        # turns those functions off and plans against the battery's real behaviour.
+        "has_reserve_soc": False,
+        "has_timed_pause": False,
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_ge_eco_toggle": False,
+        "time_button_press": True,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        # The dispatch endpoint is limited to one request per five seconds per device.
+        "write_and_poll_sleep": 5,
+        "has_time_window": False,
+        # A zero percentage applies only inside a time slot and cannot hold the battery in
+        # ordinary self-consumption, so neither generic freeze capability is claimed.
+        "support_charge_freeze": False,
+        "support_discharge_freeze": False,
+        "has_idle_time": False,
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
+    },
     "SunsynkCloud": {
         "name": "SunsynkCloud",
         "has_rest_api": False,
@@ -2618,6 +2656,35 @@ INVERTER_DEF = {
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": False,
     },
+    "DUMMY": {
+        "name": "Dummy (simulated)",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "output_charge_control": "power",
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        "has_target_soc": True,
+        "has_reserve_soc": True,
+        "has_timed_pause": False,
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_ge_eco_toggle": False,
+        "time_button_press": False,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "support_feedin_first": False,
+        "has_idle_time": False,
+        "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": False,
+    },
     "GWMQTT": {
         "name": "ESP32 Gateway MQTT",
         "has_rest_api": False,
@@ -2702,9 +2769,15 @@ SOLAX_SOLIS_MODES_FB00 = {
     "Feed-in priority": 96,
 }
 
+# Units of the CONFIG_ITEMS input_numbers that hold an amount of money in the minor currency unit.
+# Their min/max are multiplied by apps.yaml currency_scale so a currency with a much smaller minor
+# unit than the penny (e.g. CZK haléř, ~29 to 1p) can still set a meaningful threshold (#6155, #3683).
+CURRENCY_UNITS = ("p", "p/kWh", "p/kg")
+
 # Apps.yaml validation schema
 APPS_SCHEMA = {
     "currency_symbols": {"type": "string|string_list"},
+    "currency_scale": {"type": "float"},
     "db_enable": {"type": "boolean"},
     "db_days": {"type": "integer"},
     "db_mirror_ha": {"type": "boolean"},
@@ -2715,7 +2788,11 @@ APPS_SCHEMA = {
     "ha_url": {"type": "string", "empty": False},
     "ha_key": {"type": "string", "empty": False},
     "load_filter_threshold": {"type": "integer"},
+    "web_enable": {"type": "boolean"},
     "web_port": {"type": "integer"},
+    # WebInterface stringifies these, so an unquoted all-digit login (an int in YAML) is valid
+    "web_username": {"type": "string|integer"},
+    "web_password": {"type": "string|integer"},
     # The chat agent's LLM endpoint. Named chat_api_* rather than openrouter_* because the
     # endpoint no longer has to be OpenRouter: any OpenAI-compatible API works, including a local
     # Ollama. The openrouter_* names are still accepted so an existing apps.yaml keeps working.
@@ -2915,6 +2992,7 @@ APPS_SCHEMA = {
     "fox_auth_method": {"type": "string", "empty": False},
     "fox_token_expires_at": {"type": "string", "empty": False},
     "fox_token_hash": {"type": "string", "empty": False},
+    "fox_poll_seconds": {"type": "integer", "zero": False},
     "deye_key": {"type": "string", "empty": False},
     "deye_app_id": {"type": "string", "empty": False},
     "deye_app_secret": {"type": "string", "empty": False},
@@ -2952,7 +3030,20 @@ APPS_SCHEMA = {
     "hanchu_inverter_limit": {"type": "float"},
     "hanchu_api_delay": {"type": "float"},
     "hanchu_min_write_interval": {"type": "integer"},
+    "hanchu_write_debounce": {"type": "float"},
     "hanchu_api_debug": {"type": "boolean"},
+    "growatt_key": {"type": "string", "empty": False},
+    "growatt_auth_method": {"type": "string", "empty": False},
+    "growatt_token_expires_at": {"type": "string", "empty": False},
+    "growatt_token_hash": {"type": "string", "empty": False},
+    "growatt_inverter_sn": {"type": "string|string_list", "empty": False},
+    "growatt_automatic": {"type": "boolean"},
+    "growatt_automatic_ignore_pv": {"type": "boolean"},
+    "growatt_control_enable": {"type": "boolean"},
+    "growatt_base_url": {"type": "string", "empty": False},
+    "growatt_battery_rate_max": {"type": "float"},
+    "growatt_api_delay": {"type": "float"},
+    "growatt_min_write_interval": {"type": "integer"},
     "alphaess_app_id": {"type": "string", "empty": False},
     "alphaess_app_secret": {"type": "string", "empty": False},
     "alphaess_inverter_sn": {"type": "string|string_list", "empty": False},
