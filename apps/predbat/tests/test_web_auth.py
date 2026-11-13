@@ -17,15 +17,20 @@ import shutil
 import tempfile
 import time
 
-import requests
 from aiohttp import web as aiohttp_web
 from aiohttp.test_utils import make_mocked_request
 
 from components import Components
+from http_sync import HttpConnectionError, http_get, http_request
 from tests.test_components import LoggingMockBase
 from tests.test_validate_config import _run as _run_validate
 from tests.test_web_if import _free_port
 from web import WebInterface
+
+
+def _basic_auth(username, password):
+    """The Authorization header for an HTTP Basic login."""
+    return {"Authorization": "Basic " + base64.b64encode("{}:{}".format(username, password).encode()).decode()}
 
 
 def _basic(username, password):
@@ -180,23 +185,23 @@ def test_web_auth_server(my_predbat):
         my_predbat.components.start("db")
         my_predbat.components.start("web")
 
-        res = requests.get(base_url + "/dash")
+        res = http_get(base_url + "/dash", timeout=10)
         if res.status_code != 200:
             print("ERROR: /dash should be open, got {}".format(res.status_code))
             failed = True
 
         for method, path in [("GET", "/apps"), ("GET", "/apps_editor"), ("GET", "/annual"), ("GET", "/config"), ("POST", "/restart")]:
-            res = requests.request(method, base_url + path)
+            res = http_request(method, base_url + path, timeout=10)
             if res.status_code != 401 or not res.headers.get("WWW-Authenticate", "").startswith("Basic"):
                 print("ERROR: {} {} should ask for a login, got {}".format(method, path, res.status_code))
                 failed = True
 
-        res = requests.get(base_url + "/apps", auth=("admin", "wrong"))
+        res = http_get(base_url + "/apps", headers=_basic_auth("admin", "wrong"), timeout=10)
         if res.status_code != 401:
             print("ERROR: /apps should refuse a wrong password, got {}".format(res.status_code))
             failed = True
 
-        res = requests.get(base_url + "/apps", auth=("admin", "swordfish"))
+        res = http_get(base_url + "/apps", headers=_basic_auth("admin", "swordfish"), timeout=10)
         if res.status_code != 200:
             print("ERROR: /apps should open with the right login, got {}".format(res.status_code))
             failed = True
@@ -250,10 +255,10 @@ def test_web_enable(my_predbat):
             print("ERROR: start() should not report a failure for a disabled web interface")
             failed = True
         try:
-            requests.get("http://127.0.0.1:{}/dash".format(web_port), timeout=2)
+            http_get("http://127.0.0.1:{}/dash".format(web_port), timeout=2)
             print("ERROR: nothing should be listening on the web port when web_enable is false")
             failed = True
-        except requests.exceptions.ConnectionError:
+        except HttpConnectionError:
             pass
 
         # A deliberate off switch is logged as such, not as missing configuration, even with other web keys left set
