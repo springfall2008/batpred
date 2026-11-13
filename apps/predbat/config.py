@@ -2449,8 +2449,9 @@ INVERTER_DEF = {
         "has_ge_eco_toggle": False,
         "time_button_press": True,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
-        # The dispatch endpoint is limited to one request per five seconds per device.
-        "write_and_poll_sleep": 5,
+        # The dispatch endpoint is limited to one request per five seconds per device; 6 leaves a
+        # second of margin (GROWATT_DISPATCH_INTERVAL).
+        "write_and_poll_sleep": 6,
         "has_time_window": False,
         # A zero percentage applies only inside a time slot and cannot hold the battery in
         # ordinary self-consumption, so neither generic freeze capability is claimed.

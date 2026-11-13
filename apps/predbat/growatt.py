@@ -22,6 +22,15 @@ inverter's own self-consumption runs to its local minimum, which Predbat cannot 
 The slot table last written, and whether Predbat holds OpenAPI control, are saved through the
 Storage component so a restart neither forgets slots it left on the device nor a release it
 still owes. The device's own table is read back every GROWATT_TTL_READBACK minutes.
+
+Writes are often answered with an error yet applied, and reads often fail while the device is
+busy, so a write is judged by reading it back, and one whose read-back fails is treated as
+unknown: the next attempt reads first. A table that could not be confirmed is retried with a
+back-off (GROWATT_WRITE_BACKOFF_MAX), skipped as soon as the planned table changes.
+
+Exporting depends on the site: a live SPH accepted an export slot and an export command, but
+only covered the house load and never exported, while a charge slot charged as set - consistent
+with an export limit set on the inverter, which the public API does not report.
 """
 
 # cspell:ignore echarge edischarge
@@ -29,6 +38,7 @@ still owes. The device's own table is read back every GROWATT_TTL_READBACK minut
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -45,21 +55,28 @@ from growatt_const import (
     GROWATT_RETURN_CODES,
     GROWATT_CODE_OK,
     GROWATT_CODE_TOKEN_INVALID,
+    GROWATT_CODE_TOO_MANY_REQUESTS,
+    GROWATT_RATE_LIMIT_WAIT_MAX,
     GROWATT_TIMEOUT,
     GROWATT_RETRIES,
     GROWATT_WRITE_ATTEMPTS,
     GROWATT_READ_ATTEMPTS,
     GROWATT_RETRY_BACKOFF,
+    GROWATT_WRITE_CONFIRMED,
+    GROWATT_WRITE_MISMATCH,
+    GROWATT_WRITE_UNKNOWN,
+    GROWATT_WRITE_BACKOFF_MAX,
     GROWATT_TTL_STATIC,
     GROWATT_TTL_LIVE,
     GROWATT_TELEMETRY_STALE,
     GROWATT_HOLD_HYSTERESIS,
     GROWATT_DISPATCH_INTERVAL,
     GROWATT_TTL_READBACK,
+    GROWATT_RELEASE_RETRY,
+    GROWATT_LOOP_HANDOVER_TIMEOUT,
     GROWATT_SET_TIME_SLOTS,
     GROWATT_SET_ENABLE_CONTROL,
     GROWATT_CONTROL_ON,
-    GROWATT_CONTROL_OFF,
     GROWATT_STORAGE_MODULE,
     GROWATT_CACHE_CONTROL,
     GROWATT_CAPABILITIES,
@@ -137,6 +154,16 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         # rather than trusting that the device still has it.
         self.control_enabled = set()
         self.control_claimed = set()
+        # A slot table written but not confirmed because its read-back failed: the next attempt
+        # reads before it writes again.
+        self.unverified_slots = {}
+        # Consecutive slot tables that could not be confirmed, the table they were for, and the
+        # monotonic time before which that same table is not tried again.
+        self.write_failures = {}
+        self.failed_slots = {}
+        self.write_retry_at = {}
+        # The outcome of the last write_verified(): GROWATT_WRITE_CONFIRMED, _MISMATCH or _UNKNOWN
+        self.last_write_outcome = None
         self._state_restored = False
         self._tier_refreshed = {}
         self._write_lock = asyncio.Lock()
@@ -175,8 +202,22 @@ class GrowattAPI(ComponentBase, OAuthMixin):
     def describe_code(self, code):
         return GROWATT_RETURN_CODES.get(code, "Unknown Growatt response code {}".format(code))
 
-    async def _request(self, endpoint_key, body=None, _retry_after_refresh=False):
-        """POST one OAuth request and return (code, data)."""
+    @staticmethod
+    def rate_limit_wait(message):
+        """Seconds to wait after a 105 answer: the "retry after Nms" it gives, capped at GROWATT_RATE_LIMIT_WAIT_MAX.
+
+        A live answer read "Endpoint rate limited for clientId=... deviceSn=..., retry after 3551ms".
+        Without a parsable wait, one dispatch interval is used.
+        """
+        match = re.search(r"retry after\s+(\d+)\s*ms", str(message or ""), re.IGNORECASE)
+        seconds = int(match.group(1)) / 1000.0 + 0.5 if match else float(GROWATT_DISPATCH_INTERVAL)
+        return min(float(GROWATT_RATE_LIMIT_WAIT_MAX), seconds)
+
+    async def _request(self, endpoint_key, body=None, _retry_after_refresh=False, _rate_limited=False):
+        """POST one OAuth request and return (code, data).
+
+        A TOO_MANY_REQUEST (105) answer is retried once after the wait it gives; a second 105 is returned.
+        """
         if not _retry_after_refresh and not await self.check_and_refresh_oauth_token():
             self.last_api_error = "OAuth token refresh failed"
             return -1, None
@@ -221,6 +262,15 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                             if code == GROWATT_CODE_TOKEN_INVALID and not _retry_after_refresh:
                                 if await self.handle_oauth_401():
                                     return await self._request(endpoint_key, body=body, _retry_after_refresh=True)
+                            if code == GROWATT_CODE_TOO_MANY_REQUESTS and not _rate_limited:
+                                # Refused before it reached the device, so sending it again is
+                                # safe - under a new requestId, which Growatt requires per request
+                                wait = self.rate_limit_wait(message)
+                                self.log("Info: Growatt {} rate limited, retrying once in {:.1f}s".format(path, wait))
+                                await self._sleep(wait)
+                                if isinstance(body, dict) and "requestId" in body:
+                                    body = dict(body, requestId=self.request_id())
+                                return await self._request(endpoint_key, body=body, _retry_after_refresh=_retry_after_refresh, _rate_limited=True)
                             self.last_api_error = message or self.describe_code(code)
                             self.log("Warn: Growatt {} failed: {} ({})".format(path, self.last_api_error, code))
                             return code, result.get("data")
@@ -559,7 +609,11 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 if sn not in self.control_active:
                     self.control_active.add(sn)
                     await self.save_state()
-                await self.apply_schedule(sn)
+                # Predbat presses the write button from its plan thread through ha.py's run_async(),
+                # on a throwaway loop of its own; apply_schedule() takes _write_lock, which belongs to
+                # the loop run() ticks on, so a press while run() held it failed with "is bound to a
+                # different event loop". Hand the write over to the component's loop.
+                await self.on_component_loop(self.apply_schedule(sn), timeout=GROWATT_LOOP_HANDOVER_TIMEOUT, what="Growatt write")
             return
         self.update_local_schedule(sn, entity_id, value)
         await self.publish_schedule_settings_ha(sn)
@@ -707,8 +761,11 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         The read-back decides, not the write's own answer: Growatt's docs say to reconcile a
         timed-out write with readDeviceDispatch, and a live SPH answered PARAMETER_SETTING_FAILED
         to a table it did apply. matches(data) says whether a read shows the write took effect.
-        Returns True once a read-back matches.
+        Returns True once a read-back matches. last_write_outcome records how it ended:
+        GROWATT_WRITE_CONFIRMED, GROWATT_WRITE_MISMATCH when the last read-back showed something
+        else, or GROWATT_WRITE_UNKNOWN when it could not be read - the write may well have applied.
         """
+        self.last_write_outcome = GROWATT_WRITE_UNKNOWN
         for attempt in range(attempts):
             if attempt:
                 await self._sleep(GROWATT_RETRY_BACKOFF * attempt)
@@ -717,8 +774,54 @@ class GrowattAPI(ComponentBase, OAuthMixin):
             if ok and matches(data):
                 if not wrote:
                     self.log("Info: Growatt {} {} answered {}, but the read-back shows it applied".format(sn, set_type, self.last_api_error or "a failure"))
+                self.last_write_outcome = GROWATT_WRITE_CONFIRMED
                 return True
+            self.last_write_outcome = GROWATT_WRITE_MISMATCH if ok else GROWATT_WRITE_UNKNOWN
             self.log("Warn: Growatt {} {} attempt {} of {} not confirmed by read-back ({})".format(sn, set_type, attempt + 1, attempts, "read failed" if not ok else "device holds {}".format(json.dumps(data, default=str)[:300])))
+        return False
+
+    def _write_backoff_minutes(self, sn):
+        """Minutes to wait before retrying the same unconfirmed table: 1, 2, 4, 8, then GROWATT_WRITE_BACKOFF_MAX."""
+        failures = self.write_failures.get(sn, 0)
+        if failures <= 0:
+            return 0
+        return min(GROWATT_WRITE_BACKOFF_MAX, 2 ** (failures - 1))
+
+    def _note_write_failure(self, sn, slots):
+        """Count an unconfirmed table and schedule its retry."""
+        self.write_failures[sn] = self.write_failures.get(sn, 0) + 1
+        self.failed_slots[sn] = list(slots)
+        minutes = self._write_backoff_minutes(sn)
+        self.write_retry_at[sn] = time.monotonic() + minutes * 60
+        return minutes
+
+    def _clear_write_failure(self, sn):
+        self.write_failures.pop(sn, None)
+        self.failed_slots.pop(sn, None)
+        self.write_retry_at.pop(sn, None)
+
+    def _write_backing_off(self, sn, slots):
+        """Return True while the same table that last failed is waiting out its back-off; a changed table never waits."""
+        if sn not in self.write_retry_at or self.failed_slots.get(sn) != list(slots):
+            return False
+        return time.monotonic() < self.write_retry_at[sn]
+
+    async def _confirm_unverified(self, sn, slots):
+        """Read back a table written earlier whose read-back failed, returning True when the device holds it.
+
+        Called with _write_lock held, before writing the same table again: the earlier write has
+        often applied, and a read is cheaper than a write that then needs confirming too.
+        """
+        ok, data = await self.read_dispatch_retry(sn, GROWATT_SET_TIME_SLOTS)
+        if not ok:
+            return False
+        held = parse_dispatch_slots(data)
+        if held is None:
+            return False
+        self.readback_slots[sn] = held
+        if held == slots:
+            self.log("Info: Growatt {} holds the {} slot(s) written earlier, confirmed by read-back".format(sn, len(slots)))
+            return True
         return False
 
     async def write_slots_verified(self, sn, slots):
@@ -736,6 +839,11 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         The write is skipped only when the table matches the one the device is known to hold.
         A serial with no known table - a first run with nothing saved - is always written, so
         slots an earlier run left on the device are cleared even when Predbat now wants none.
+
+        A table that could not be confirmed is retried after a back-off that doubles with each
+        consecutive failure (see _write_backoff_minutes), unless the planned table has changed or
+        force is set. When the last write's read-back failed, the retry reads first and writes
+        only if the device does not already hold the table.
         """
         if not self.control_enable or self._is_read_only():
             return False
@@ -745,26 +853,48 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         slots = self.build_time_slots(sn, schedule)
         if not force and sn in self.applied_slots and normalize_slots(self.applied_slots[sn]) == slots:
             return True
+        if not force and self._write_backing_off(sn, slots):
+            return False
 
         async with self._write_lock:
             wait = self._pacing_wait(sn)
             if wait > 0:
                 self.log("Info: Growatt {} schedule update deferred for {:.1f}s by the documented dispatch rate limit".format(sn, wait))
                 return False
-            if sn not in self.control_enabled:
-                if not await self.set_control_verified(sn, GROWATT_CONTROL_ON):
-                    self.log("Warn: Growatt {} could not confirm enable_control 1, retrying next run".format(sn))
-                    return False
-                self.control_enabled.add(sn)
-                self.control_claimed.add(sn)
-            ok = await self.write_slots_verified(sn, slots)
+            if self.unverified_slots.get(sn) == slots and await self._confirm_unverified(sn, slots):
+                ok = True
+            else:
+                if sn not in self.control_enabled:
+                    if not await self.set_control_verified(sn, GROWATT_CONTROL_ON):
+                        minutes = self._note_write_failure(sn, slots)
+                        self.log("Warn: Growatt {} could not confirm enable_control 1 ({}), retrying in {} minute(s)".format(sn, self.last_api_error or self.last_write_outcome, minutes))
+                        return False
+                    self.control_enabled.add(sn)
+                    self.control_claimed.add(sn)
+                ok = await self.write_slots_verified(sn, slots)
             if ok:
                 self.applied_slots[sn] = list(slots)
+                self.unverified_slots.pop(sn, None)
+                self._clear_write_failure(sn)
                 self.log("Info: Growatt wrote {} UTC charge/discharge slot(s) for {}, confirmed by read-back".format(len(slots), sn))
             else:
-                # What the device holds is now unknown, so the next apply writes the table in full
+                # What the device holds is now unknown, so the known table is dropped
                 self.applied_slots.pop(sn, None)
-                self.log("Warn: Growatt {} slot table could not be confirmed after {} attempts, retrying next run".format(sn, GROWATT_WRITE_ATTEMPTS))
+                outcome = self.last_write_outcome
+                if outcome == GROWATT_WRITE_UNKNOWN:
+                    # The write may well have applied: the retry reads before writing again
+                    self.unverified_slots[sn] = list(slots)
+                else:
+                    # The device answered with a different table, so it may have dropped
+                    # enable_control as well: the retry sends that again before the table
+                    self.unverified_slots.pop(sn, None)
+                    self.control_enabled.discard(sn)
+                minutes = self._note_write_failure(sn, slots)
+                self.log(
+                    "Warn: Growatt {} slot table not confirmed after {} attempts ({}: {}), retrying in {} minute(s)".format(
+                        sn, GROWATT_WRITE_ATTEMPTS, outcome, "read-back failed, it may have applied" if outcome == GROWATT_WRITE_UNKNOWN else "the device holds a different table", minutes
+                    )
+                )
         await self.save_state()
         return ok
 
@@ -799,23 +929,30 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         """Hand the battery schedule back to the inverter's own settings.
 
         Called while Predbat is read-only, or growatt_control_enable is off, for a device it
-        still holds OpenAPI control of. Paced like any dispatch, and retried each run until
-        Growatt accepts it. What the device holds afterwards is unknown, so the known table is
-        dropped and the next enable writes the full table.
+        still holds OpenAPI control of. The release clears the slot table, confirmed by read-back:
+        enable_control 0 is not sent, as a live SPH refused slot commands while it was 0 and
+        reverted to 1 by itself within minutes, so it neither releases nor stays released. With no
+        slots the inverter follows its own settings. Paced like any dispatch; a release that cannot
+        be confirmed is retried after GROWATT_RELEASE_RETRY minutes rather than every run.
         """
         if sn not in self.control_claimed:
             return True
+        if not self.tier_expired("release:{}".format(sn), GROWATT_RELEASE_RETRY):
+            return False
         async with self._write_lock:
             if self._pacing_wait(sn) > 0:
                 return False
-            ok = await self.set_control_verified(sn, GROWATT_CONTROL_OFF)
+            ok = await self.write_slots_verified(sn, [])
         if not ok:
-            self.log("Warn: Growatt {} could not confirm the release of OpenAPI control ({}), retrying next run".format(sn, self.last_api_error))
+            self.mark_refreshed("release:{}".format(sn))
+            self.log("Warn: Growatt {} could not confirm its slot table was cleared to release control ({}), retrying in {} minutes".format(sn, self.last_write_outcome, GROWATT_RELEASE_RETRY))
             return False
         self.control_claimed.discard(sn)
         self.control_enabled.discard(sn)
-        self.applied_slots.pop(sn, None)
-        self.log("Info: Growatt {} OpenAPI control released, the inverter now follows its own settings".format(sn))
+        self.applied_slots[sn] = []
+        self.unverified_slots.pop(sn, None)
+        self._clear_write_failure(sn)
+        self.log("Info: Growatt {} slot table cleared, OpenAPI control released; the inverter now follows its own settings".format(sn))
         await self.save_state()
         return True
 
@@ -925,6 +1062,8 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         return None
 
     async def run(self, seconds, first):
+        # ComponentBase.start() records this already; the CLI harness calls run() directly
+        self.component_loop = asyncio.get_running_loop()
         if not await self.check_and_refresh_oauth_token():
             return False
         if not self.access_token:

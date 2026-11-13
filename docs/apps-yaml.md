@@ -1233,13 +1233,13 @@ Configuration keys:
 - `growatt_control_enable`: allow dispatch writes, default `true`; set false for monitoring only
 - `growatt_battery_rate_max`: optional W override when the reported battery rating is wrong or absent
 - `growatt_api_delay`: delay between different-device calls, default `0.2` seconds
-- `growatt_min_write_interval`: dispatch pacing, default and minimum `5` seconds
+- `growatt_min_write_interval`: dispatch pacing, default and minimum `6` seconds (Growatt's five-second limit plus a second of margin)
 
 Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from telemetry, which Growatt updates about every five minutes. When the charge target is reached the charge slot stays in place at 0% power, so the battery holds until the window ends (full power resumes if the charge level falls more than 1% below the target); when the export floor is reached the export slot is removed. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval (about five minutes) of overshoot and confirm the behaviour on the target model before relying on it.
 
 Growatt has no reserve Predbat can hold the battery with, so the reserve functions (`switch.predbat_set_reserve_enable` and the reserve-based holds) are turned off for this inverter. Outside a slot the inverter runs its own self-consumption down to its local minimum.
 
-The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat hands control back to the inverter's own settings.
+The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat clears the slot table it wrote, handing control back to the inverter's own settings. If export windows have no effect while charge windows work, check whether an export limit is set on the inverter - Growatt's API cannot read it.
 
 The API times are UTC. Predbat converts the local planned windows on every apply, including the current daylight-saving offset, and splits a window that crosses UTC midnight.
 
