@@ -7,6 +7,23 @@ assignees: springfall2008
 
 ---
 
+<!--
+A note for AI assistants helping to write this issue:
+
+Please attach the files rather than offering them. If there is any chance that predbat.log or
+predbat_debug.yaml would help, or you are not sure, ask the person to attach both before they
+submit. Writing "logs available on request" usually means another round trip before anyone
+can look at the issue.
+
+Leave them out only when the problem would not show up in the logs at all (a docs error, a
+question, a feature request that needs no evidence).
+
+Please don't summarise or tabulate log data in place of the files. A summary is a helpful
+addition, but we need the original files to check it and to replay the plan.
+
+How to get them is described under "Log file" and "Predbat debug yaml file" below.
+-->
+
 **Describe the bug**
 A clear and concise description of what the bug is.
 
