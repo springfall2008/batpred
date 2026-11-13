@@ -106,6 +106,21 @@ def test_storage(my_predbat=None):
         # 12. age() returns None for a missing file
         assert run_async(storage.age("mod", "nonexistent_age")) is None, "age() should return None for missing file"
 
+        # 13. rename() moves data and sidecar, keeping the created time and expiry, and leaves nothing under the old name
+        rename_expiry = datetime.now(timezone.utc) + timedelta(days=7)
+        assert run_async(storage.save("mod", "rename_old", {"r": 1}, format="json", expiry=rename_expiry)) is True
+        with open(storage._meta_path("mod", "rename_old")) as f:
+            old_meta = json.load(f)
+        assert run_async(storage.rename("mod", "rename_old", "rename_new")) is True, "rename() should report a successful move"
+        assert run_async(storage.load("mod", "rename_new")) == {"r": 1}, "renamed entry should load under its new name"
+        with open(storage._meta_path("mod", "rename_new")) as f:
+            new_meta = json.load(f)
+        assert new_meta == old_meta, "rename() should keep the sidecar (created/expiry) unchanged: {} vs {}".format(old_meta, new_meta)
+        assert not os.path.exists(storage._meta_path("mod", "rename_old")), "old sidecar should be gone after rename()"
+        assert not os.path.exists(storage._data_path("mod", "rename_old", "json")), "old data file should be gone after rename()"
+        assert run_async(storage.rename("mod", "rename_missing", "rename_other")) is False, "rename() of a missing entry should return False"
+        assert run_async(storage.rename("mod", "x" * 300, "rename_other")) is False, "rename() of an over-long name should return False, not raise"
+
         # fetch_cached: miss → calls fetch_fn once, stores, returns
         calls = {"n": 0}
 

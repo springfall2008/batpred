@@ -112,6 +112,19 @@ class StorageBase(ABC):
         """Delete all expired cached files."""
         pass
 
+    async def rename(self, module, old_filename, new_filename):
+        """Move an entry to a new filename, keeping its data, created time and expiry. Default no-op.
+
+        Args:
+            module: The calling module name
+            old_filename: Current logical filename identifier
+            new_filename: Logical filename identifier to move it to
+
+        Returns:
+            True if an entry was moved, False otherwise (including "not supported by this backend")
+        """
+        return False
+
     async def save_debug_copy(self, filename, text):
         """Write a plain-text mirror of already-serialised text for a human to find on disk.
 
@@ -453,6 +466,58 @@ class StorageLocalFiles(StorageBase):
 
             self.log("Storage: Cleaned up expired cache file {} (module={})".format(stem, module))
 
+    async def rename(self, module, old_filename, new_filename):
+        """Move an entry's data file and metadata sidecar to a new filename.
+
+        The sidecar moves unchanged, so the entry keeps its created time (and so its age) and
+        its expiry. Any existing entry under new_filename is replaced.
+
+        Args:
+            module: The calling module name
+            old_filename: Current logical filename identifier
+            new_filename: Logical filename identifier to move it to
+
+        Returns:
+            True if the entry was moved, False if there was nothing to move or the move failed
+        """
+        old_meta_path = self._meta_path(module, old_filename)
+        if not os.path.exists(old_meta_path):
+            return False
+
+        try:
+            async with aiofiles.open(old_meta_path, "r") as f:
+                meta_text = await f.read()
+            meta = json.loads(meta_text)
+        except (IOError, json.JSONDecodeError) as e:
+            self.log("Storage: Warn: Failed to read metadata {}: {}".format(old_meta_path, e))
+            return False
+
+        fmt = meta.get("format", "yaml")
+        if fmt not in STORAGE_FORMATS:
+            fmt = "yaml"
+        old_data_path = self._data_path(module, old_filename, fmt)
+        new_data_path = self._data_path(module, new_filename, fmt)
+        new_meta_path = self._meta_path(module, new_filename)
+        if not os.path.exists(old_data_path):
+            return False
+
+        try:
+            os.replace(old_data_path, new_data_path)
+        except OSError as e:
+            self.log("Storage: Warn: Failed to move {} to {}: {}".format(old_data_path, new_data_path, e))
+            return False
+        try:
+            os.replace(old_meta_path, new_meta_path)
+        except OSError as e:
+            self.log("Storage: Warn: Failed to move {} to {}: {}".format(old_meta_path, new_meta_path, e))
+            # Put the data file back so the old entry stays whole rather than leaving an orphan
+            try:
+                os.replace(new_data_path, old_data_path)
+            except OSError:
+                pass
+            return False
+        return True
+
     async def save_debug_copy(self, filename, text):
         """Write a plain-text mirror of already-serialised text into config_root/debug/.
 
@@ -573,6 +638,19 @@ class StorageComponent(ComponentBase):
             Cached or freshly fetched data, or None if nothing could be obtained
         """
         return await self.backend.fetch_cached(module, filename, fetch_fn, fresh_minutes=fresh_minutes, stale_minutes=stale_minutes, format=format)
+
+    async def rename(self, module, old_filename, new_filename):
+        """Move an entry to a new filename via the storage backend, keeping its age and expiry.
+
+        Args:
+            module: The calling module name
+            old_filename: Current logical filename identifier
+            new_filename: Logical filename identifier to move it to
+
+        Returns:
+            True if an entry was moved, False otherwise
+        """
+        return await self.backend.rename(module, old_filename, new_filename)
 
     async def save_debug_copy(self, filename, text):
         """Write a plain-text debug-directory mirror via the storage backend.
