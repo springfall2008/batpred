@@ -1515,6 +1515,27 @@ def test_component_base_override_on_mock_base(my_predbat):
     return False
 
 
+def test_component_base_import_skips_unittest_mock(my_predbat):
+    """
+    Importing Predbat must not load unittest.mock: it costs about 6 MB of idle memory on every
+    install, and _base_override() only needs it when a test has already imported it.
+    """
+    print("\n*** Test: importing Predbat does not load unittest.mock ***")
+    import os
+    import subprocess
+
+    import component_base
+
+    source_dir = os.path.dirname(os.path.abspath(component_base.__file__))
+    code = "import sys; sys.path.insert(0, {!r}); import predbat; print('MOCK_LOADED' if 'unittest.mock' in sys.modules else 'MOCK_ABSENT')".format(source_dir)
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, cwd=source_dir)
+    if "MOCK_ABSENT" not in result.stdout:
+        print("ERROR: unittest.mock was loaded by importing predbat (rc {}): {}".format(result.returncode, (result.stdout + result.stderr)[-800:]))
+        return True
+    print("PASS: predbat imports without unittest.mock")
+    return False
+
+
 def test_component_base_write_methods(my_predbat):
     """
     @writes only marks a method: it returns the same function, which behaves exactly as before.
@@ -1805,6 +1826,7 @@ def test_component_base_all(my_predbat):
         ("clock_unrelated", test_component_base_ignores_unrelated_clock_attribute, "a base with its own unrelated clock attribute is ignored and real time is used"),
         ("clock_isolated", test_component_base_clock_isolated_per_instance, "two instances' clocks are separate"),
         ("override_on_mock_base", test_component_base_override_on_mock_base, "an explicitly set override on a mock base is used, a made-up one is ignored"),
+        ("import_skips_unittest_mock", test_component_base_import_skips_unittest_mock, "importing predbat does not load unittest.mock"),
         ("write_methods", test_component_base_write_methods, "@writes marks a method and write_methods lists exactly the marked ones"),
         ("write_methods_components", test_component_base_write_methods_components, "component writer methods are listed and readers are not"),
         ("no_direct_clients", test_component_base_no_direct_client_construction, "components and their clients build HTTP sessions and MQTT clients only through the factories"),
