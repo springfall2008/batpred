@@ -38,6 +38,7 @@ from growatt_const import (
     GROWATT_BASE_URL,
     GROWATT_ENDPOINTS,
     GROWATT_SET_ENABLE_CONTROL,
+    GROWATT_SET_EXPORT_LIMIT,
     GROWATT_SET_TIME_SLOTS,
     GROWATT_CONTROL_ON,
     GROWATT_UNUSED_SLOT,
@@ -48,8 +49,10 @@ from growatt_const import (
     GROWATT_WRITE_MISMATCH,
     GROWATT_WRITE_UNKNOWN,
     dispatch_slot_payload,
+    export_limit_watts,
     local_window_to_utc_slots,
     parse_dispatch_slots,
+    parse_export_limit,
 )
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_infra import run_async as run_async_local
@@ -105,8 +108,9 @@ class MockGrowatt(GrowattAPI):
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         return self.state.get(entity_id, default)
 
-    def set_arg_auto(self, arg, value):
+    def set_arg_auto(self, arg, value, overwrite=True):
         self.base.args[arg] = value
+        self.overwrite_flags = dict(getattr(self, "overwrite_flags", {}), **{arg: overwrite})
 
     def update_success_timestamp(self):
         return None
@@ -1406,6 +1410,95 @@ def test_growatt_control_event_runs_on_the_component_loop():
     assert len(ran_on) == 1
 
 
+def test_growatt_export_limit_parsing():
+    """The live answer, its JSON-string form, and anything else as unknown; only an enabled 0..100% is a limit."""
+    assert parse_export_limit({"percentage": 0, "exportLimitEnabled": 1}) == (True, 0.0)
+    assert parse_export_limit(json.dumps({"percentage": 20, "exportLimitEnabled": 0})) == (False, 20.0)
+    for unknown in (None, "", "not json", [], {"percentage": 0}, {"exportLimitEnabled": 1}, {"percentage": "x", "exportLimitEnabled": 1}):
+        assert parse_export_limit(unknown) is None, unknown
+    assert export_limit_watts(True, 0, 3600) == 0
+    assert export_limit_watts(True, 50, 3600) == 1800
+    assert export_limit_watts(False, 50, 3600) is None
+    assert export_limit_watts(True, -20, 3600) is None
+    assert export_limit_watts(True, 50, 0) is None
+
+
+def _export_limit_client(answer, automatic=True):
+    """A ready client whose device answers export_limit reads with answer (None: the read fails)."""
+    client, sn = _ready_client(automatic=automatic)
+
+    async def read_dispatch(serial, set_type):
+        """Answer the export limit read."""
+        assert set_type == GROWATT_SET_EXPORT_LIMIT
+        return (answer is not None), answer
+
+    client.read_dispatch = read_dispatch
+    return client, sn
+
+
+def test_growatt_zero_export_limit_is_published_and_bound():
+    """A live SPH's zero export limit becomes a 0 W sensor, bound to export_limit without overriding apps.yaml."""
+    client, sn = _export_limit_client({"percentage": 0, "exportLimitEnabled": 1})
+    assert run_async_local(client.refresh_export_limit(sn))
+    assert client.export_limit_w(sn) == 0
+    assert any("export limit is enabled at 0% (0 W)" in message and "none at all" in message for message in client.log_messages)
+    run_async_local(client.publish_data())
+    sensor = client.published["sensor.predbat_growatt_sph123_export_limit"]
+    assert sensor["state"] == 0
+    assert sensor["attributes"]["unit_of_measurement"] == "W"
+    run_async_local(client.automatic_config())
+    assert client.base.args["export_limit"] == ["sensor.predbat_growatt_sph123_export_limit"]
+    assert client.overwrite_flags["export_limit"] is False
+    # The discovery record carries exactly what automatic_config() bound, export_limit included
+    records = validated_inverters(client.build_discovery())
+    captured = capture_automatic_config(client)
+    assert records[0]["entities"]["export_limit"]["entity_id"] == "sensor.predbat_growatt_sph123_export_limit"
+    assert_record_agrees(records[0], captured)
+    assert_record_binds_nothing_extra(records[0], captured)
+
+
+def test_growatt_partial_export_limit_scales_nominal_power():
+    """An enabled limit of 25% on a 6000 W inverter is 1500 W."""
+    client, sn = _export_limit_client({"percentage": 25, "exportLimitEnabled": 1})
+    assert run_async_local(client.refresh_export_limit(sn))
+    assert client.export_limit_w(sn) == 1500
+
+
+def test_growatt_disabled_or_unknown_export_limit_is_not_bound():
+    """A disabled limit, or one that could not be read, binds nothing and publishes no sensor; a failed read is retried sooner."""
+    client, sn = _export_limit_client({"percentage": 0, "exportLimitEnabled": 0})
+    assert run_async_local(client.refresh_export_limit(sn))
+    assert client.export_limit_w(sn) is None
+    assert any("export limit is disabled" in message for message in client.log_messages)
+    run_async_local(client.publish_data())
+    run_async_local(client.automatic_config())
+    assert "sensor.predbat_growatt_sph123_export_limit" not in client.published
+    assert "export_limit" not in client.base.args
+    assert "export_limit" not in validated_inverters(client.build_discovery())[0]["entities"]
+    # Known, so the next read is hours away
+    assert not client._export_limit_due(sn)
+
+    client, sn = _export_limit_client(None)
+    assert not run_async_local(client.refresh_export_limit(sn))
+    assert sn not in client.export_limit_setting
+    # Unknown: retried after GROWATT_TTL_EXPORT_LIMIT_RETRY minutes, not hours
+    client._tier_refreshed["export_limit:{}".format(sn)] = time.time() - 11 * 60
+    assert client._export_limit_due(sn)
+
+
+def test_growatt_export_limit_read_after_automatic_config_is_bound_then():
+    """An export limit first read after automatic configuration is bound on a later run."""
+    client, sn = _export_limit_client({"percentage": 0, "exportLimitEnabled": 1})
+    run_async_local(client.automatic_config())
+    assert "export_limit" not in client.base.args
+    client.refresh_discovery = MagicMock()
+    now = time.time()
+    client._tier_refreshed = {"static": now, "live": now, "readback:{}".format(sn): now}
+    assert run_async_local(client.run(60, False))
+    assert client.base.args["export_limit"] == ["sensor.predbat_growatt_sph123_export_limit"]
+    assert any("auto-configured export_limit" in message for message in client.log_messages)
+
+
 def run_growatt_tests(my_predbat):
     """Run the Growatt component tests in Predbat's custom test harness."""
     failed = False
@@ -1450,6 +1543,11 @@ def run_growatt_tests(my_predbat):
         ("rate_limit_wait", test_growatt_rate_limit_wait_parsing),
         ("rate_limit_retry", test_growatt_rate_limited_request_is_retried_once_with_a_new_request_id),
         ("control_event_component_loop", test_growatt_control_event_runs_on_the_component_loop),
+        ("export_limit_parsing", test_growatt_export_limit_parsing),
+        ("zero_export_limit_bound", test_growatt_zero_export_limit_is_published_and_bound),
+        ("partial_export_limit", test_growatt_partial_export_limit_scales_nominal_power),
+        ("export_limit_not_bound", test_growatt_disabled_or_unknown_export_limit_is_not_bound),
+        ("export_limit_late_bind", test_growatt_export_limit_read_after_automatic_config_is_bound_then),
         ("zero_capacity_soc_max", test_growatt_zero_capacity_leaves_soc_max_unset),
         ("cli_merge_args", test_growatt_cli_merge_args),
         ("cli_single_cycle", test_growatt_cli_single_cycle),

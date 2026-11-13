@@ -1239,11 +1239,11 @@ Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its 
 
 Growatt has no reserve Predbat can hold the battery with, so the reserve functions (`switch.predbat_set_reserve_enable` and the reserve-based holds) are turned off for this inverter. Outside a slot the inverter runs its own self-consumption down to its local minimum.
 
-The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat clears the slot table it wrote, handing control back to the inverter's own settings. If export windows have no effect while charge windows work, check whether an export limit is set on the inverter: one with its export limit enabled at 0% only ever covers the house load.
+The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat clears the slot table it wrote, handing control back to the inverter's own settings. An inverter with its export limit enabled at 0% only ever covers the house load; Predbat reads that limit and stops planning exports (see below).
 
 The API times are UTC. Predbat converts the local planned windows on every apply, including the current daylight-saving offset, and splits a window that crosses UTC midnight.
 
-The OpenAPI does not report the site's grid export cap. Set `export_limit` manually if the DNO cap is below the inverter's nominal rating.
+Predbat reads the inverter's own export limit (`readDeviceDispatch` `export_limit`) every eight hours and publishes it as `sensor.predbat_growatt_<serial>_export_limit` in W. Growatt gives it as a percentage; Predbat takes that as a percentage of the inverter's rated output (`nominalPower`). With `growatt_automatic` on, Predbat's `export_limit` is bound to that sensor, so an inverter set to zero export gets no export windows planned. An `export_limit` you set in `apps.yaml` still wins - set it if the DNO cap is below the inverter's limit. A disabled limit leaves Predbat's own default in place.
 
 See [Components - Growatt OpenAPI](components.md#growatt-openapi-growatt) and [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi).
 

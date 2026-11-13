@@ -98,6 +98,14 @@ GROWATT_LOOP_HANDOVER_TIMEOUT = 120
 
 GROWATT_SET_TIME_SLOTS = "time_slot_charge_discharge"
 GROWATT_SET_ENABLE_CONTROL = "enable_control"
+# The inverter's own export limit, read (never written) through readDeviceDispatch: a live SPH
+# answered {"percentage": 0, "exportLimitEnabled": 1} - zero export - and its export slots then
+# only ever covered the house load. Growatt documents percentage from -100 to 100, positive for
+# export limiting and negative for "forward-flow control"; Predbat uses 0..100 only.
+GROWATT_SET_EXPORT_LIMIT = "export_limit"
+# Minutes between reads of the export limit once one has been read, and while none has yet
+GROWATT_TTL_EXPORT_LIMIT = 8 * 60
+GROWATT_TTL_EXPORT_LIMIT_RETRY = 10
 # enable_control values: 1 hands the battery schedule to the OpenAPI, 0 hands it back to the
 # inverter's own settings. A live SPH 3600TL acted on a slot only with 1: a charge slot charged
 # the battery from the grid at the slot's power, and stopped when the slot ended. With 0 it
@@ -269,3 +277,36 @@ def parse_dispatch_slots(data, _depth=0):
                 if found is not None and (key == "value" or found):
                     return found
     return None
+
+
+def parse_export_limit(data):
+    """Read readDeviceDispatch's export_limit answer as (enabled, percentage), or None when it is not understood.
+
+    A live SPH answered {"percentage": 0, "exportLimitEnabled": 1}. The answer is also accepted
+    encoded as a JSON string, as parse_dispatch_slots() allows for the slot table.
+    """
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except ValueError:
+            return None
+    if not isinstance(data, dict) or "exportLimitEnabled" not in data or "percentage" not in data:
+        return None
+    try:
+        enabled = int(data["exportLimitEnabled"]) == 1
+        percent = float(data["percentage"])
+    except (TypeError, ValueError):
+        return None
+    return enabled, percent
+
+
+def export_limit_watts(enabled, percent, nominal_w):
+    """Return the export limit in W an export_limit setting means, or None for no usable limit.
+
+    Only an enabled limit of 0..100% of a known nominal power is a limit; a disabled one, a negative
+    percentage (forward-flow control, whose meaning Growatt does not document) or an unknown rating
+    leaves Predbat's own export_limit in place.
+    """
+    if not enabled or percent < 0 or percent > 100 or not nominal_w or nominal_w <= 0:
+        return None
+    return int(round(nominal_w * percent / 100.0))
