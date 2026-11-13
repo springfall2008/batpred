@@ -83,6 +83,9 @@ template:
         {{ state_attr('weather.openweathermap', 'temperature') }}
 ```
 
+Earlier versions of this page gave this sensor `unit_of_measurement: 'c'`, which Predheat reads as °C. If your Home Assistant uses °F, the weather entity's
+temperature is in °F, so remove that line from your template to have it read in Home Assistant's unit instead.
+
 Set **internal_temperature** to point to one or more internal temperature sensors, if you have a heating thermostat then ideally link it to this or to a sensor at least in a similar area of the house.
 
 The **weather** configuration points to the Open Weather Map sensor by default so should work as-is.

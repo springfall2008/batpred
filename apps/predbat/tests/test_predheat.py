@@ -723,6 +723,19 @@ def test_predheat_temperature_units(my_predbat):
             print("ERROR: temperatures should be published in °F when the internal sensor is in °F, keeping a heating-off 0")
             failed = True
 
+        # A missing value (None, e.g. heating off as #6134 marks it) is published as-is in either display unit, not converted
+        for display_unit in ("°F", "°C"):
+            predheat.display_unit = display_unit
+            try:
+                got = (predheat.display_temperature(None), predheat.display_series({"t": None, "u": 20.0}, zero_is_off=True))
+            except TypeError as error:
+                got = error
+            expected = (None, {"t": None, "u": 68.0 if display_unit == "°F" else 20.0})
+            if got != expected:
+                print("ERROR: a None temperature should pass through in {}, expected {} got {}".format(display_unit, expected, got))
+                failed = True
+        predheat.display_unit = "°F"
+
         # Through a real run, every published temperature is labelled and converted together
         predheat = _make_simulation(my_predbat, DAILY_PERIODS)
         predheat.display_unit = "°F"
