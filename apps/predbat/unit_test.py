@@ -102,7 +102,7 @@ from tests.test_export_threshold_per_step import run_export_threshold_per_step_t
 from tests.test_export_gate_nominal import run_export_gate_nominal_tests
 from tests.test_optimise_export_copy import run_optimise_export_copy_tests
 from tests.test_energydataservice import run_energydataservice_tests
-from tests.test_iboost import run_iboost_smart_tests
+from tests.test_iboost import run_iboost_smart_tests, run_iboost_forecast_tests
 from tests.test_alert_feed import test_alert_feed
 from tests.test_solax import run_solax_tests
 from tests.test_sigenergy import run_sigenergy_tests
@@ -824,6 +824,7 @@ def main():
         ("solax", run_solax_tests, "SolaX API tests", False),
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
+        ("iboost_forecast", run_iboost_forecast_tests, "iBoost demand forecast tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
         ("battery_accuracy", run_battery_accuracy_tests, "Battery prediction accuracy recording tests", False),
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),

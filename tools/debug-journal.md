@@ -639,11 +639,11 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 
 ### iBoost (`plan.py`)
 
-- The modes are not exclusive, despite the docs: `iboost_smart` builds a plan whatever `iboost_solar` says, with no PV input, booking cheap slots up to `iboost_max_energy`, so solar diverts little (GH#5454, open). `iboost_rate_threshold` goes down to -10.
-- The plan is rates-only and always rate-gated, and its horizon is `forecast_hours` (default 48 h), not 24 h: `iboost_rate_threshold`/`_export` and the gas checks apply per slot with `iboost_smart` Off too, the non-smart fill starts now and stops at the day's `iboost_max_energy` budget, and the budget is per 24 h — so nothing targets a later slot and up to 2x the day budget can be planned. With an `iboost_energy_today` feedback sensor the `predbat_iboost_today` input follows the sensor, so "resets at midnight" only holds without feedback. (GH#5922, GH#5923, verified 2026-11-10)
+- The modes are not exclusive, despite the docs: `iboost_smart` builds a plan whatever `iboost_solar` says, with no PV input, booking cheap slots up to `iboost_max_energy` (with an `iboost_forecast`, only the demand shortfall plus optional fills), so solar diverts little (GH#5454, open). `iboost_rate_threshold` goes down to -10.
+- Without an `iboost_forecast` (PR #4756), the plan is rates-only and always rate-gated, and its horizon is `forecast_hours` (default 48 h), not 24 h: `iboost_rate_threshold`/`_export` and the gas checks apply per slot with `iboost_smart` Off too, the non-smart fill starts now and stops at the day's `iboost_max_energy` budget, and the budget is per 24 h — so nothing targets a later slot and up to 2x the day budget can be planned. With an `iboost_energy_today` feedback sensor the `predbat_iboost_today` input follows the sensor, so "resets at midnight" only holds without feedback. (GH#5922, GH#5923, verified 2026-11-10)
 - myenergi devices have a component-level boost switch (`switch.<prefix>_boost` → `send_boost`/`cancel_boost`; Eddi takes minutes, Zappi kWh), but no plan path commands it — a manual diverter boost exists without waiting for the "force iBoost slots" enhancement. (GH#5923, verified 2026-11-10)
-- Test trap: the smart tests use a flat rate and cannot expose averaging or priority bugs. As of Aug 2026 the duplicate-slot guard never fires (unverified since).
-- Tests: `./run_all --test iboost_smart`
+- The duplicate-slot guard tested a stale variable and never fired, so overlapping windows double-booked slots; PR #4756 keys it on the grid cell and skips only the booked cell, which moved the `iboost_smart2`/`iboost_smart3` goldens. Overlap and priority cases need non-flat rates (`set_rate_profile` in `test_iboost.py`).
+- Tests: `./run_all --test iboost_smart --test iboost_forecast`
 
 ### Component auto-config gate (`components.py`)
 
@@ -958,7 +958,7 @@ What a report or log shows, and where to start. Where a symptom belongs to one i
 ### Reviewing PRs
 
 - **A clean auto-merge can still be a semantic conflict.** Run the full `run_pre_commit` (PR #4645).
-- **Check base staleness first.** The fix may already be on main, and resolving a test conflict can delete main's test (PR #4756).
+- **Check base staleness first.** The fix may already be on main, and resolving a test conflict can delete main's test (an early revision of PR #4756).
 - **Stacked-PR squashes.** A `(#M)` squash suffix on PR N's head commit means its diff spans both PRs (PR #4186). A stacked PR — one whose base is another PR's branch — also shows state MERGED the moment the squash lands on that base branch, with a `mergeCommit` oid nowhere in main's history and nothing on the default branch; check `git merge-base --is-ancestor <mergeCommit> origin/main` before trusting "merged", and review the consuming PR's diff as the whole stack. (PRs #5591/#5363, 2026-11-10)
 - **A review's `commit_id` (REST `commit.oid`) is the head at submission and never updates.** To judge whether an approval covers the current head, compare it to the PR's head: REST `/pulls/<n>/reviews` (fields `user.login`/`state`/`commit_id`) suffices without GraphQL, for which some triage permission modes deny `gh api graphql`. A later CHANGES_REQUESTED/DISMISSED by the same author supersedes an earlier APPROVED, so filter `state == "APPROVED"` with `commit.oid == headRefOid`; bot reviews post as state COMMENTED and satisfy no approval gate. (PR #5942, 2026-11-02)
 - **Fork PRs can carry pasted truncation banners.** Grep the head tree for `truncated output` and `Total output lines`, confirming with `grep`, not Read, which adds its own banners (PR #5766).
