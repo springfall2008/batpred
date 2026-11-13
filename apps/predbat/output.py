@@ -37,6 +37,7 @@ from const import (
     COMPONENT_ERROR_STATUS_SUFFIX,
     RUN_STATE_NAMES,
     STATUS_STATE_MAX_LENGTH,
+    EXPORT_STATUS_NONE,
 )
 from utils import (
     local_day_end_minute,
@@ -3484,15 +3485,18 @@ class Output:
         else:
             return None
 
-    def set_charge_export_status(self, isCharging, isExporting, isDemand):
+    def set_charge_export_status(self, isCharging, isExporting, isDemand, export_status=EXPORT_STATUS_NONE):
         """
         Reports status on charging/exporting to binary sensor
+
+        :param export_status: which kind of export is running (EXPORT_STATUS_TARGET/FREEZE/NONE), published
+            as the export_status attribute so the UI can tell active export from freeze export (#5125)
         """
         self.dashboard_item("binary_sensor." + self.prefix + "_charging", state="on" if isCharging else "off", attributes={"friendly_name": "Predbat is charging", "icon": "mdi:battery-arrow-up"})
         self.dashboard_item(
             "binary_sensor." + self.prefix + "_exporting",
             state="on" if isExporting else "off",
-            attributes={"friendly_name": "Predbat is force exporting", "icon": "mdi:battery-arrow-down"},
+            attributes={"friendly_name": "Predbat is force exporting", "icon": "mdi:battery-arrow-down", "export_status": export_status if isExporting else EXPORT_STATUS_NONE},
         )
         self.dashboard_item("binary_sensor." + self.prefix + "_demand", state="on" if isDemand else "off", attributes={"friendly_name": "Predbat is in demand mode", "icon": "mdi:battery-arrow-up"})
 
