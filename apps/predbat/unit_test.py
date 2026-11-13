@@ -158,6 +158,7 @@ from tests.test_chat import run_chat_tests
 from tests.test_web_chat import run_web_chat_tests
 from tests.test_web_mcp import run_web_mcp_tests
 from tests.test_web_mcp_auth import run_web_mcp_auth_tests
+from tests.test_jwt_hs256 import run_jwt_hs256_tests
 from tests.test_web_auth import run_web_auth_tests
 from tests.test_debug_history_client_js import test_debug_history_client_js
 from tests.test_plan_staleness_js import test_plan_staleness_js
@@ -701,6 +702,7 @@ def main():
         ("web_mcp", run_web_mcp_tests, "MCP get_log and apps.yaml redaction tests (issue #4768)", False),
         ("web_auth", run_web_auth_tests, "Web interface optional username/password login tests (issue #6103)", False),
         ("web_mcp_auth", run_web_mcp_auth_tests, "MCP OAuth registration, signing key, default secret and scope tests (issue #5847)", False),
+        ("jwt_hs256", run_jwt_hs256_tests, "Standard-library HS256 JWT signer: PyJWT-compatible tokens, rejections, and MCP not loading PyJWT", False),
         ("debug_history_client_js", test_debug_history_client_js, "Debug-history client-side JS structure tests (#4438 review item 22)", False),
         ("plan_staleness_js", test_plan_staleness_js, "Plan page stale-data warning JS: per-view data and refresh interval", False),
         ("plan_totals_js", test_plan_totals_js, "Plan card summary row total cost 2dp formatting JS (#5785)", False),

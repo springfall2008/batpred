@@ -22,7 +22,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 from datetime import datetime, timedelta, timezone
 
-import jwt as pyjwt
+import jwt_hs256
 from agent_tools import TOOL_DEFS
 from web_mcp import PredbatMCPServer, MCPServerWrapper, MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE
 
@@ -137,7 +137,7 @@ def test_mcp_signing_key(my_predbat):
     server = make_server(my_predbat)
     old_key = hashlib.sha256("jwt_signing_key_{}".format(TEST_SECRET).encode()).hexdigest()
     now = datetime.now(timezone.utc)
-    forged = pyjwt.encode({"sub": "x", "client_id": "x", "aud": "http://localhost:8199", "scope": "mcp:read mcp:write mcp:control", "type": "access", "iat": now, "exp": now + timedelta(days=1)}, old_key, algorithm="HS256")
+    forged = jwt_hs256.encode({"sub": "x", "client_id": "x", "aud": "http://localhost:8199", "scope": "mcp:read mcp:write mcp:control", "type": "access", "iat": now, "exp": now + timedelta(days=1)}, old_key)
     if server.verify_access_token(forged):
         print("  ERROR: a token signed with the key derived from mcp_secret was accepted")
         failed = True
