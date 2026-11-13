@@ -77,6 +77,12 @@ class TestDecide(unittest.TestCase):
             "Logs are available if you need them",
             "Debug yaml and logs available - just ask",
             "I would be happy to provide the predbat.log",
+            "Happy to provide logs, don't hesitate to ask.",
+            "Let me know if you need the predbat.log - I don't mind.",
+            "Can provide logs.",
+            "Logs can be supplied.",
+            "Logs are available, please ask",
+            "I\u2019m happy to provide the predbat.log",
         ]:
             with self.subTest(body=body):
                 self.assert_nudge(body, nudge.REASON_OFFER)
@@ -93,6 +99,8 @@ class TestDecide(unittest.TestCase):
             "I can upload screenshots of the files tab",
             "I turned on debug mode and will share screenshots.",
             "When will Predbat download the debug file? It is only uploaded if requested.",
+            "I can\u2019t provide logs because Predbat crashed on startup",
+            "If you need more info I can log in and share my screen",
         ]:
             with self.subTest(body=body):
                 self.assert_skip(body)
@@ -102,6 +110,15 @@ class TestDecide(unittest.TestCase):
         self.assert_skip(FEATURE_TEMPLATE + "\nThe debug file could be provided on request via an HA service.")
         result, why = nudge.decide({"title": "Feature request: send logs on request", "body": "The debug yaml could be shared on request.", "user": {"type": "User"}})
         self.assertFalse(result, why)
+
+    def test_title_starting_feature_is_not_a_feature_request(self):
+        """A bug report about a named feature is still a bug report."""
+        result, why = nudge.decide({"title": "Feature X broken after update", "body": "Logs available on request.", "user": {"type": "User"}})
+        self.assertTrue(result, why)
+
+    def test_comment_inside_code_fence_is_kept(self):
+        """GitHub shows "<!--" inside a code fence as text, so it must not hide the offer after it."""
+        self.assert_nudge("```\n<td><!-- slot\n```\nLogs available on request.")
 
     def test_offer_in_filled_bug_template_is_nudged(self):
         """An offer typed into the bug template's Log file section."""
@@ -190,6 +207,11 @@ class TestMain(unittest.TestCase):
         self.assertIn(nudge.REASON_OFFER, comment)
         self.assertIn("predbat_debug.yaml.txt", comment)
         self.assertIn(nudge.ASK[nudge.REASON_OFFER], comment)
+
+    def test_marker_option_prints_the_marker(self):
+        """The workflow takes the marker from the script, so there is one copy of it."""
+        result = subprocess.run([sys.executable, "-I", str(TOOLS / "issue_attachment_nudge.py"), "--marker"], capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.strip(), nudge.MARKER)
 
     def test_skip_writes_nothing(self):
         """A skip prints the reason and writes no comment."""

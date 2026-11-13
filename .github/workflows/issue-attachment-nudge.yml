@@ -31,10 +31,11 @@ jobs:
           if [ "$decision" != "nudge" ]; then
             exit 0
           fi
-          # A re-run of this job, or a redelivered event, must not post a second nudge. Read the comments
-          # into a variable first: grep -q exiting early under pipefail would fail the pipeline instead
+          # A re-run of this job, or a redelivered event, must not post a second nudge. The marker comes
+          # from the script so there is one copy of it; a here-string avoids a pipe into grep -q
+          marker=$(python3 tools/issue_attachment_nudge.py --marker)
           bodies=$(gh api --paginate "repos/$GH_REPO/issues/$ISSUE_NUMBER/comments" --jq '.[].body')
-          if printf '%s' "$bodies" | grep -qF 'predbat-attachment-nudge'; then
+          if grep -qF -- "$marker" <<<"$bodies"; then
             echo "already nudged"
             exit 0
           fi
