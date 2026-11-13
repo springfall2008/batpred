@@ -2754,7 +2754,11 @@ APPS_SCHEMA = {
     "ha_url": {"type": "string", "empty": False},
     "ha_key": {"type": "string", "empty": False},
     "load_filter_threshold": {"type": "integer"},
+    "web_enable": {"type": "boolean"},
     "web_port": {"type": "integer"},
+    # WebInterface stringifies these, so an unquoted all-digit login (an int in YAML) is valid
+    "web_username": {"type": "string|integer"},
+    "web_password": {"type": "string|integer"},
     # The chat agent's LLM endpoint. Named chat_api_* rather than openrouter_* because the
     # endpoint no longer has to be OpenRouter: any OpenAI-compatible API works, including a local
     # Ollama. The openrouter_* names are still accepted so an existing apps.yaml keeps working.

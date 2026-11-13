@@ -25,6 +25,8 @@ Another option is to include a link on your dashboard using an entities card:
 
 If you are not using the Predbat app then you may be able to access the Web Interface directly on port 5052 (e.g. with a Docker Container or native on your Linux/MAC).  The port number can be changed by setting [web_port in apps.yaml](apps-yaml.md#web-interface).
 
+You can optionally require a login for the pages that change settings by setting `web_username` and `web_password` in apps.yaml, see [Web interface in apps.yaml](apps-yaml.md#web-interface). If you do not use the web interface at all you can turn it off with `web_enable: false`.
+
 **Note:** The Predbat web interface will not work with the AppDaemon or the Predbat-appdaemon installation methods.
 
 ## Web Interface Views

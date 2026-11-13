@@ -449,6 +449,36 @@ Docker users can change the web port for the Predbat web interface by setting **
   web_port: 5052
 ```
 
+If you do not use the web interface you can turn it off entirely by setting **web_enable** to `false`. Predbat then does not start the web server or open its port, so nothing on your network can reach it.
+
+```yaml
+  web_enable: false
+```
+
+- The default is `true`, and leaving it out keeps the web interface on.
+- With the web interface off the Predbat app's **Open Web UI** button and its Home Assistant sidebar panel stop working, as they open this same web interface. Remove the setting (or set it back to `true`) and restart Predbat to turn it on again.
+- The MCP server (`mcp_enable`) is separate and is not affected.
+
+To stop accidental changes to your settings from the web interface (for example from other devices on your network) you can set a username and password with **web_username** and **web_password**.
+It is best to keep the password in `secrets.yaml`:
+
+```yaml
+  web_username: admin
+  web_password: !secret web_password
+```
+
+When both are set the browser asks for a login before it will open the WhatIf, Chat, Settings (Apps, Config, Components, Editor) and Advanced (Discovery, Browse, Internals, Kraken API Key) pages, the debug and download pages, or save any change (plan and rate overrides, restarts and so on).
+The views that only show data (Dash, Metrics, Plan, Charts, Entities, Compare and Log) can still be opened without a login.
+There is a single login with no different levels of access.
+
+- The login is HTTP Basic authentication, which is not encrypted, so on a network you do not trust put the web interface behind an HTTPS reverse proxy.
+- The login stops unauthenticated access, such as other devices on your network or a vulnerability scanner. Once you have logged in your browser re-sends the credentials automatically, so a malicious web page you visit in the same browser could still submit a change (cross-site request forgery). Only a proxy with token-based authentication, or not exposing the web interface at all, closes that.
+- If only one of the two is set then every protected page is refused until you set the other.
+- Leave both unset (the default) for no login, which is what you need when using Predbat through Home Assistant ingress or behind your own authentication proxy.
+- The `/api/ping`, `/api/status`, `/api/state` (read), `/api/log`, `/api/entities` and `/metrics` data endpoints are not protected, nor is the `/images` route.
+- The `/api/login` request, used to set a session cookie when Predbat is behind a reverse proxy, is also not protected. It does not change any setting.
+- Pages added by plugins are only protected for changes (POST), not for viewing.
+
 ### notify_devices
 
 A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
