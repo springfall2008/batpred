@@ -20,12 +20,12 @@ from this class.
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from unittest.mock import NonCallableMock
 
 from utils import clock_change_minutes, minutes_since_midnight
 import aiohttp
 import asyncio
 import math
+import sys
 import time
 import traceback
 
@@ -92,9 +92,15 @@ def _base_override(component, name):
     explicitly set on it counts; one it made up on the fly does not. A real base is read with a
     normal lookup, so a class attribute or property works. A plain function rather than a method
     so that test doubles borrowing ComponentBase.http_session without inheriting still work.
+
+    unittest.mock is looked up in sys.modules rather than imported: a mock base can only exist once
+    a test has imported it, and importing it in production costs about 6 MB of idle memory.
     """
     base = getattr(component, "base", None)
-    if base is None or (isinstance(base, NonCallableMock) and name not in vars(base)):
+    if base is None:
+        return None
+    mock_module = sys.modules.get("unittest.mock")
+    if mock_module is not None and isinstance(base, mock_module.NonCallableMock) and name not in vars(base):
         return None
     return getattr(base, name, None)
 
