@@ -502,7 +502,7 @@ class GivTCPComponent(ComponentBase):
         self.export_limit_mismatch_noted = set()
 
     async def _run_blocking(self, func, *args):
-        """Run one of GivTCPRest's blocking (requests + time.sleep) calls off the event loop."""
+        """Run one of GivTCPRest's blocking (http_get/http_post + time.sleep) calls off the event loop."""
         return await asyncio.get_event_loop().run_in_executor(None, func, *args)
 
     async def run(self, seconds, first):

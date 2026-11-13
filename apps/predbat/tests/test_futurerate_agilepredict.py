@@ -171,7 +171,7 @@ def _test_download_failure_does_not_flag_errors(my_predbat):
     statuses = []
     base.record_status = lambda message, debug=None, had_errors=False: statuses.append(had_errors)
     future = FutureRate(base)
-    with patch("futurerate.requests.get", side_effect=Exception("boom")):
+    with patch("futurerate.http_get", side_effect=Exception("boom")):
         data = future.download_agilepredict_data_func(AGILEPREDICT_DEFAULT_URL + "G/")
     if data is not None or any(statuses):
         print("ERROR: failure should give None without had_errors, got {} {}".format(data, statuses))
