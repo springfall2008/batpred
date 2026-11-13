@@ -897,10 +897,6 @@ def test_component_base_on_component_loop(my_predbat):
     assert component.component_loop is None, "a component that has not started has no loop"
     assert asyncio.run(component.on_component_loop(where(1), timeout=5)) == (1, threading.get_ident()), "with no component loop the coroutine runs in place"
 
-    # A component built without __init__ (some tests do) has no attribute at all, and still runs in place
-    bare = TestComponent.__new__(TestComponent)
-    assert asyncio.run(bare.on_component_loop(where(2), timeout=5)) == (2, threading.get_ident()), "a component built without __init__ runs in place"
-
     worker = _LoopThread()
     try:
         component.component_loop = worker.loop

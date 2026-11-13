@@ -472,10 +472,9 @@ class GivTCPComponent(ComponentBase):
         for n, url in enumerate(rest_urls):
             state = InverterRestState(id=n, rest_api=url)
             self.rest.append(GivTCPRest(self.base, state, http_session=self.rest_session))
-        # The one HTTP session every client's requests are made on, and the event loop it was made
-        # on: an aiohttp session only works on its own loop. See rest_session().
+        # The one HTTP session every client's requests are made on while the component is running.
+        # Only ever made and used on the component's own loop; see rest_session().
         self.session = None
-        self.session_loop = None
         self.automatic_config_done = False
         # givtcp_rest is the key that enables this component, but its length says nothing about how
         # many inverters exist - the shipped apps.yaml pairs num_inverters: 1 with a two-entry list,
@@ -513,23 +512,26 @@ class GivTCPComponent(ComponentBase):
         self.export_limit_mismatch_noted = set()
 
     def rest_session(self):
-        """Return the open HTTP session for the running event loop, opening one if there is none.
+        """Return the component's open HTTP session, opening one if there is none, or None off its loop.
 
         Called by the REST clients for every request, so GivTCP's connection is reused from one
-        poll or write to the next. The session is replaced when it is closed, and when the running
-        loop is not the one it was made on: run() ticks on the component's loop and write events
-        are handed over to it, but a call made while the component is stopped runs wherever it was
-        awaited, and a restart moves the component to a new loop.
+        poll or write to the next. run() ticks on the component's loop and write events are handed
+        over to it, so that is where every request is made while the component is running.
+
+        A call made before the component has started, or after it has stopped, runs on whatever
+        loop awaited it. An aiohttp session belongs to the loop it was made on, and one made on a
+        caller's passing loop could never be closed, so there the answer is None and the client has
+        a session made for that one request instead.
         """
-        loop = asyncio.get_running_loop()
-        if self.session is None or self.session_loop is not loop or getattr(self.session, "closed", True) is not False:
+        if asyncio.get_running_loop() is not self.component_loop:
+            return None
+        if self.session is None or getattr(self.session, "closed", True) is not False:
             self.session = self.http_session(trust_env=True)
-            self.session_loop = loop
         return self.session
 
     async def final(self):
         """Close the HTTP session as the component stops."""
-        session, self.session, self.session_loop = self.session, None, None
+        session, self.session = self.session, None
         if session is not None and getattr(session, "closed", True) is False:
             try:
                 await session.close()

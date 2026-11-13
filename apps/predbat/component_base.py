@@ -644,7 +644,7 @@ class ComponentBase(ABC):
 
         :param what: Names the work in the log lines above, for example "GivTCP write".
         """
-        loop = getattr(self, "component_loop", None)
+        loop = self.component_loop
         if loop is None or loop is asyncio.get_running_loop() or loop.is_closed() or not loop.is_running():
             return await coro
         future = asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, loop))

@@ -288,9 +288,25 @@ def test_client_calls_run_on_the_event_loop(my_predbat=None):
 
     base.http_session_factory = factory
 
-    async def sessions():
-        """Ask each client for its session twice, on one loop."""
+    async def sessions(on_component_loop=True):
+        """Ask each client for its session twice, on one loop that is or is not the component's."""
+        component.component_loop = asyncio.get_running_loop() if on_component_loop else None
         return [rest.http_session() for rest in component.rest] + [rest.http_session() for rest in component.rest]
+
+    async def sessions_as_is():
+        """Ask each client for its session without changing which loop is the component's."""
+        return [rest.http_session() for rest in component.rest]
+
+    # Off the component's loop (not started, or stopped) there is no shared session: an aiohttp
+    # session belongs to the loop it was made on, and one made on a caller's passing loop could
+    # never be closed. The client then has the helper make a session for the one request.
+    assert asyncio.run(sessions(on_component_loop=False)) == [None] * 4 and not made, f"No shared session may be made off the component's loop, made {len(made)}"
+    other = asyncio.new_event_loop()
+    try:
+        component.component_loop = other
+        assert asyncio.run(sessions_as_is()) == [None, None] and not made, "A caller on another loop must not get or make the shared session"
+    finally:
+        other.close()
 
     got = run_async(sessions())
     assert len(made) == 1 and all(session is made[0] for session in got), f"Every client must share one session from the component's factory, made {len(made)}"
@@ -299,12 +315,9 @@ def test_client_calls_run_on_the_event_loop(my_predbat=None):
     made[0].closed = True
     assert run_async(sessions())[0] is made[1], "A closed session must be replaced"
     run_async(component.final())
-    assert made[1].closed, "final() must close the component's session"
-
-    # A session made on one loop is never used on another: aiohttp sessions belong to their loop
-    first = asyncio.run(sessions())[0]
-    second = asyncio.run(sessions())[0]
-    assert first is not second, "A session made on a loop that has gone must not be reused on another"
+    assert made[1].closed and component.session is None, "final() must close the component's session"
+    assert len(made) == 2, f"Only the component's loop may make sessions, made {len(made)}"
+    component.component_loop = None
 
     threads = []
 
