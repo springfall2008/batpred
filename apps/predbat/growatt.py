@@ -29,8 +29,9 @@ unknown: the next attempt reads first. A table that could not be confirmed is re
 back-off (GROWATT_WRITE_BACKOFF_MAX), skipped as soon as the planned table changes.
 
 Exporting depends on the site: a live SPH accepted an export slot and an export command, but
-only covered the house load and never exported, while a charge slot charged as set - consistent
-with an export limit set on the inverter, which the public API does not report.
+only covered the house load and never exported, while a charge slot charged as set. Its
+export_limit setting (readDeviceDispatch) read {"percentage": 0, "exportLimitEnabled": 1}: zero
+export, set on the inverter.
 """
 
 # cspell:ignore echarge edischarge
