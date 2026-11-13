@@ -87,7 +87,6 @@ from hanchu_const import (
     HANCHU_KEY_DISCHARGE_START,
     HANCHU_KEY_GRID_CHARGE_SOC,
     HANCHU_KEY_WORK_MODE,
-    HANCHU_LOOP_HANDOVER_POLL,
     HANCHU_LOOP_HANDOVER_TIMEOUT,
     HANCHU_MENU_ARRAY_SLOT_TYPES,
     HANCHU_MENU_CODE,
@@ -281,9 +280,6 @@ class HanchuAPI(ComponentBase):
         # One HTTP session for every call, opened on first use and closed by final(). Hanchu's cloud
         # takes 7-45s to answer; a session per request made timeouts and retries far more common.
         self._session = None
-        # The event loop run() ticks on, which the session and write_lock belong to. Control events
-        # can arrive on another loop entirely - see _on_component_loop().
-        self._loop = None
         if not self.control_enable:
             self.log("Info: Hanchu control is disabled (hanchu_control_enable is false); monitoring only")
         if not self.work_mode_control:
@@ -1488,9 +1484,9 @@ class HanchuAPI(ComponentBase):
                 # failed write still means Predbat owns this inverter and the next tick should retry.
                 self.control_active.add(sn)
                 if self._write_debounce_available():
-                    await self._on_component_loop(self._schedule_write(sn))
+                    await self._hand_over_write(self._schedule_write(sn))
                 else:
-                    await self._on_component_loop(self.apply_schedule(sn))
+                    await self._hand_over_write(self.apply_schedule(sn))
             return
         self.update_local_schedule(sn, entity_id, value)
         if self._write_debounce_available():
@@ -1498,7 +1494,7 @@ class HanchuAPI(ComponentBase):
             # press of their own, and the zero discharge rate is what turns a charge slot into a
             # hold. A change while a write is waiting therefore restarts the wait, so it goes out
             # with the rates rather than ahead of them (batpred#6074).
-            await self._on_component_loop(self._restart_pending_write(sn))
+            await self._hand_over_write(self._restart_pending_write(sn))
         await self.publish_schedule_settings_ha(sn)
 
     async def _restart_pending_write(self, sn):
@@ -1515,8 +1511,19 @@ class HanchuAPI(ComponentBase):
         write_lock. Before that loop starts, or after it stops, there is nowhere to park it, so the
         press writes at once exactly as it did before debouncing existed.
         """
-        loop = self._loop
+        loop = self.component_loop
         return bool(self.write_debounce) and loop is not None and not loop.is_closed() and loop.is_running()
+
+    async def _hand_over_write(self, coro):
+        """Await a write on the component's own loop, which the HTTP session and write_lock belong to.
+
+        Predbat presses the write button from its plan thread through ha.py's run_async(), which runs
+        the event on a throwaway loop of its own. Using the session and write_lock from there failed
+        every time with "Timeout context manager should be used inside a task", and each change reached
+        the device only on the next tick, about a minute later. ComponentBase.on_component_loop() hands
+        it over; a write it gives up waiting for is sent when the component next runs.
+        """
+        return await self.on_component_loop(coro, timeout=HANCHU_LOOP_HANDOVER_TIMEOUT, what="Hanchu write")
 
     def _write_pending(self, sn):
         """Return whether a debounced write for sn is still waiting to be sent."""
@@ -1563,47 +1570,6 @@ class HanchuAPI(ComponentBase):
             if not task.done():
                 task.cancel()
         self.write_debounce_tasks.clear()
-
-    async def _on_component_loop(self, coro):
-        """Await coro on the component's own event loop, handing it over when called from another one.
-
-        Predbat presses the write button from its plan thread through ha.py's run_async(), which runs
-        the event on a throwaway loop of its own. The HTTP session and write_lock belong to the loop
-        run() ticks on, so using them from the throwaway loop failed every time with "Timeout context
-        manager should be used inside a task", and each change reached the device only on the next
-        tick, about a minute later. The same hand-over gateway.py's _publish_raw() makes.
-
-        Runs coro in place when already on the component's loop, or when that loop is not running
-        (not started yet, or stopped), as before. A handed-over write is waited for for at most
-        HANCHU_LOOP_HANDOVER_TIMEOUT seconds; it is shielded, so giving up the wait does not cancel it.
-
-        Stopping or restarting the component ends that loop under a waiting caller, two ways. Its
-        asyncio.run() cancels the write in flight, which is logged and returns False here rather than
-        escaping as a CancelledError - a cancellation of the caller itself is still re-raised. Or the
-        loop stops before the handed-over write starts, which would then never run, so the wait is
-        taken in short steps and abandoned as soon as the loop is no longer running.
-        """
-        loop = self._loop
-        if loop is None or loop is asyncio.get_running_loop() or loop.is_closed() or not loop.is_running():
-            return await coro
-        future = asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, loop))
-        deadline = time.monotonic() + HANCHU_LOOP_HANDOVER_TIMEOUT
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self.log("Warn: Hanchu write is still running on the component's loop after {}s; Predbat will stop waiting for it".format(HANCHU_LOOP_HANDOVER_TIMEOUT))
-                return False
-            try:
-                return await asyncio.wait_for(asyncio.shield(future), timeout=min(HANCHU_LOOP_HANDOVER_POLL, remaining))
-            except asyncio.TimeoutError:
-                if loop.is_closed() or not loop.is_running():
-                    self.log("Info: Hanchu component's loop stopped before the write ran; it will be sent when the component next runs")
-                    return False
-            except asyncio.CancelledError:
-                if not future.cancelled():
-                    raise
-                self.log("Info: Hanchu write was cancelled on the component's loop as the component stopped; it will be sent when the component next runs")
-                return False
 
     # ------------------------------------------------------------------
     # Payload building
@@ -2211,7 +2177,8 @@ class HanchuAPI(ComponentBase):
         returns something truthy, so an accidental None would strand the component in the
         ever-growing startup backoff forever even though every later cycle was working.
         """
-        self._loop = asyncio.get_running_loop()
+        # ComponentBase.start() has recorded this already; the CLI harness calls run() directly
+        self.component_loop = asyncio.get_running_loop()
         if first and not self._cache_restored:
             # Guarded on _cache_restored, not just `first`: a deferred startup returns False below
             # and leaves ComponentBase's `first` flag set, so run() is retried with first still

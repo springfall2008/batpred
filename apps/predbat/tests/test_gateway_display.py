@@ -20,6 +20,7 @@ class TestGatewayDisplayOnly:
         gw.prefix = "predbat"
         gw.args = {}
         gw.log = MagicMock()
+        gw.component_loop = None  # set by ComponentBase.__init__, which this skips
         gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.test", gateway_display_only=display)
         gw._mqtt_connected = True
         gw._mqtt_client = SimpleNamespace(publish=AsyncMock())
