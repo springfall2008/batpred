@@ -20,12 +20,12 @@ Comments from people other than the reporter ("me too" posts) are evidence by de
 
 Do this before the gates below: it applies to every comment you post, including a 1a/1b gate exit and a duplicate close.
 
-- Find the reporter's version in the issue template's **Predbat version** field. If their `predbat.log` arrives later (step 2) and shows a different version, the log wins: redo this check with it.
+- Find the reporter's version in the issue template's **Predbat version** field. A value that isn't a Predbat release number ("latest", "9.7", an HA or add-on version, a dev build) counts as blank. If their `predbat.log` arrives later (step 2) and shows a different version, the log wins: redo this check with it.
 - Find the latest release with `gh release view --repo springfall2008/batpred --json tagName --jq .tagName`, and the releases in between with `gh release list --repo springfall2008/batpred --limit 50`.
 - They are **out of date** if they are behind by a minor version or more (v9.3.5 against v9.7.10), or by five or more releases within one minor version (v9.7.0 against v9.7.10). Releases come often, so a small patch gap (v9.7.8 against v9.7.10) doesn't count.
 - If they are out of date and haven't said why, the comment includes an update suggestion near the top (the order is in step 9), for example: "You're on v9.3.5; the latest is v9.7.10, and there have been many fixes since. Please update first, since this may already be fixed." It doesn't replace the investigation, and the gates still apply. On a 1b exit, ask for the update and the files together: files captured on the latest version are the most useful.
 - If they gave a reason for staying on an older version (a known regression, a pinned Docker image, a platform that can't update), respect it: mention the gap once, without pressing.
-- If the template field is blank and there is no log yet, say nothing about versions until you have one.
+- If the version is blank and there is no log yet, don't guess one. Leave out "You're on …" wherever a template below uses it.
 
 ## 1a. Split gate — one problem per ticket
 
@@ -56,7 +56,7 @@ If the needed evidence is missing, **stop here** and take the short path instead
     - **If the incident is over:** the debug snapshot for that time, from the **Debug** column on the plan's **History** view (Predbat web interface → Plan → History), on the nearest row with a link before the problem started (by default a snapshot is kept every 3 hours). With default settings only around the last 48 hours are kept, so ask them to grab it soon. Also ask for a `predbat.log` covering that period, if they still have one.
     - **Screenshots of the plan, as well as the files (not instead of them):** Predbat's plan from its web interface, showing as much of the plan as possible. They are human-readable, which the files are not.
     - **Other evidence, only where it fits the report:** logs from the integration involved (e.g. GivTCP, Solis/Solax/Fox, the Octopus integration, the HA core log), their `apps.yaml` renamed to `apps.txt`, HA history graphs of the relevant entities, and when it happened (date, time, timezone).
-    - **If the reporter offered the files rather than attaching them** ("logs available on request", "happy to provide the debug yaml"), take them up on it in the first line: yes please, triage waits for them. An offer is not evidence.
+    - **If the reporter offered the files rather than attaching them** ("logs available on request", "happy to provide the debug yaml"), take them up on it in the first words of the request for files (step 9's order, line 4): yes please, triage waits for them. An offer is not evidence.
     - **If an automated attachment-nudge comment is already on the issue** (it starts with `<!-- predbat-attachment-nudge -->`, posted by `.github/workflows/issue-attachment-nudge.yml`) and the files have still not arrived (check the current issue body as well as later comments: the reporter may have edited the files into the body), don't repeat its download steps. Say that triage is on hold until the files it asked for are attached, and add only what it does not cover (e.g. an integration's own log).
     - Link the [debug history docs](https://springfall2008.github.io/batpred/customisation/#debug-history) for the snapshot details.
 - Apply `BOT_TRIAGED` as usual (end of step 9). When the reporter next comments, the daemon clears `waiting_for_user` and queues `/issue-triage-followup`, which does the full investigation if the files have arrived.
@@ -93,7 +93,9 @@ If you classify as `bug`, write a one-line statement of the bug in your own word
 
 Search existing issues (`gh issue list --search ...`, both open and closed) for the same symptom.
 
-- High confidence match: label `duplicate`, comment linking the original issue (including the step 3 one-line bug statement, if you wrote one), and close this one. If the original was fixed in a release later than the reporter's, the closing comment leads with the bold "believed fixed" line from step 9, as it is the most common way an issue turns out to be already fixed.
+- High confidence match: label `duplicate`, comment linking the original issue (including the step 3 one-line bug statement, if you wrote one), and close this one. Before closing, compare the release that fixed the original (found as step 9 describes) with the reporter's version:
+  - **The reporter's version already contains the fix:** it is not a confident duplicate. It may be a regression or a different cause, so treat it as low confidence (below) and don't close.
+  - **The fix is in a later release, or on main but unreleased:** put the bold "believed fixed" line from step 9 straight after the disclosure in the closing comment. An issue that turns out to be a duplicate is the most common way it turns out to be already fixed.
 - Low confidence: mention "possibly related to #N" in your triage comment; don't close.
 
 Then look for **similar** issues and PRs as well, whether or not they are duplicates: search both open and closed ones for the symptom, the integration and the component it touches (`gh issue list --state all --search ...` and `gh pr list --state all --search ...`). Read the findings in the best matches — what was diagnosed, what was fixed, and what was ruled out — before forming a hypothesis, and link the relevant ones in your triage comment as "related to #N". An issue that shares a symptom or a trigger is not necessarily the same problem: only call it a duplicate when the cause matches, not just the symptom, and treat a past finding as a lead to confirm against current main, not as a conclusion.
@@ -154,16 +156,19 @@ If you reached step 3 and classified as `bug`, put the one-line bug statement im
 **Order of the comment's opening lines.** Every comment starts the same way, so the reporter finds what they need to do first:
 
 1. The disclosure line.
-2. **Believed fixed in a later release** (only if your investigation concluded that): a bold line such as "**We believe this is fixed in v9.4.3** (PR #5635). You're on v9.3.5; please update to the latest, v9.7.10, and comment here if it still happens." Use the actual numbers. It is the one thing the reporter needs to act on, so it must not be buried under the analysis.
+2. **Believed fixed in a later release** (only if your investigation concluded that): a bold line such as "**We believe this is fixed in v9.4.3** (PR #5635). You're on v9.3.5; please update to the latest, v9.7.10, and comment here if it still happens." Use the actual numbers. If you don't know the reporter's version, write "please make sure you're on v9.4.3 or later" instead of "You're on …". It is the one thing the reporter needs to act on, so it must not be buried under the analysis.
 3. The classification and priority, then the one-line bug statement if you classified as `bug`.
-4. The update suggestion from the version check in step 1, if the reporter is out of date and line 2 didn't already ask them to update.
-5. Everything else: what you investigated and found, the root cause, any information request.
+4. On a 1a/1b gate exit, the "triage is on hold" line and the request for files and splitting, with any acceptance of files the reporter offered as its first words.
+5. The update suggestion from the version check in step 1, if the reporter is out of date and line 2 didn't already ask them to update. On a 1b exit, fold it into the request for files.
+6. Everything else: what you investigated and found, the root cause, any further information request.
 
 To fill in line 2:
 
 - **Find the commit on main that fixed it.** For a PR use `gh pr view <N> --json mergeCommit --jq .mergeCommit.oid`. Don't use a commit from the PR branch, which a squash merge never puts on main. For a fix committed straight to main, take the commit from `git log`, and leave out "(PR #N)".
-- **Find the first release containing it** with `git tag --contains <commit> --list 'v[0-9]*' --sort=v:refname | head -1`. The `--list` filter matters: the repo has non-release tags such as `backup/...` that would otherwise sort first.
-- **If that prints nothing**, the fix is on main but not yet released. Say "**We believe this is fixed on main**, expected in the next release", and don't ask them to update to a version that doesn't have it.
+- **Make sure the lookup can work** before trusting its output: `git cat-file -e <commit>` must succeed (the commit is in this clone) and `git merge-base --is-ancestor <commit> origin/main` must succeed (it is on main). If either fails, treat it as "couldn't run the commands" below.
+- **Find the first release containing it** with `git tag --contains <commit> --sort=v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1`. The filter matters: the repo has non-release tags, such as `backup/...` and `v6.34.1.beta`, that would otherwise come first.
+- **Compare it with the reporter's version.** If they already run that release or later, the fix didn't cover their case: don't write line 2, and investigate it as a possible regression.
+- **If the lookup worked and printed nothing**, the fix is on main but not yet released. Say "**We believe this is fixed on main**, expected in the next release", and don't ask them to update to a version that doesn't have it.
 - **If you couldn't run the commands**, give the range you could establish from the release notes, for example "between v9.6.0 and v9.6.5", and say that it is a range.
 
 After posting, apply the `BOT_TRIAGED` label via `gh issue edit <number> --add-label BOT_TRIAGED` — every triage run gets this label, including a duplicate-close, regardless of classification. It marks the issue as triaged for the separate PR-creation flow (see `.claude/skills/issue-pr/SKILL.md`).
