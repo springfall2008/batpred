@@ -657,6 +657,10 @@ class ComponentBase(ABC):
             try:
                 return await asyncio.wait_for(asyncio.shield(future), timeout=min(poll, remaining))
             except asyncio.TimeoutError:
+                # The work's own TimeoutError is the same class as wait_for's (Python 3.11+): once
+                # the work has finished, that is its result, and it goes to the caller as such
+                if future.done():
+                    return future.result()
                 if loop.is_closed() or not loop.is_running():
                     self.log("Info: the component's loop stopped before {} ran".format(what))
                     return False

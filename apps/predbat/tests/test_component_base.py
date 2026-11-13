@@ -910,6 +910,26 @@ def test_component_base_on_component_loop(my_predbat):
         except ValueError:
             pass
 
+        # The work's own TimeoutError is its exception, not the hand-over's wait running out: it reaches
+        # the caller at once, rather than being retried in a busy loop until the deadline (Python 3.11
+        # made asyncio.TimeoutError the built-in TimeoutError, so the two are the same class)
+        async def times_out():
+            """Fail with a TimeoutError of its own, as a request inside the work might."""
+            raise TimeoutError("the work's own timeout")
+
+        base.log_messages.clear()
+        started = time.monotonic()
+        cpu_started = time.process_time()
+        try:
+            asyncio.run(component.on_component_loop(times_out(), timeout=2, poll=0.5))
+            raise AssertionError("a TimeoutError raised by the work must reach the caller")
+        except TimeoutError as error:
+            assert "the work's own timeout" in str(error), "the caller must get the work's own exception, got {!r}".format(error)
+        waited = time.monotonic() - started
+        assert waited < 0.5, "the work's TimeoutError must be raised at once, not after the wait ran out: {:.2f}s".format(waited)
+        assert time.process_time() - cpu_started < 0.5, "the caller must not spin while the work's exception is pending"
+        assert not any("still running" in msg for msg in base.log_messages), "a finished piece of work must not be reported as still running: {}".format(base.log_messages)
+
         # Already on the component's loop: awaited directly, not posted to itself (which would deadlock)
         value, ident = asyncio.run_coroutine_threadsafe(component.on_component_loop(where(4), timeout=5), worker.loop).result(5)
         assert value == 4 and ident == worker.thread.ident, "on its own loop the coroutine is awaited in place"
