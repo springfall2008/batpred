@@ -1792,7 +1792,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Volume Temperature Next",
         "type": "input_number",
         "min": -20,
-        "max": 40,
+        "max": 100,
         "step": 0.1,
         "unit": "°C",
         "default": 20,
