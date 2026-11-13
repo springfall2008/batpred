@@ -852,6 +852,143 @@ def test_component_base_request_replan(my_predbat):
     return False
 
 
+class _LoopThread:
+    """An event loop running on a thread of its own, standing in for a started component's loop."""
+
+    def __init__(self):
+        """Start the loop and wait until it is running."""
+        import threading
+
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        self.thread.start()
+        while not self.loop.is_running():
+            time.sleep(0.01)
+
+    def stop(self):
+        """Stop the loop and its thread, leaving the loop closed."""
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self.thread.join(5)
+        if not self.loop.is_closed():
+            self.loop.close()
+
+
+def test_component_base_on_component_loop(my_predbat):
+    """
+    on_component_loop() runs a coroutine on the loop the component's start() is running on, however
+    the caller got here. Entity write events are awaited from other event loops, and anything bound
+    to the component's loop (an HTTP session, a lock) only works on that one.
+    """
+    print("\n*** Test: ComponentBase.on_component_loop hands work over to the component's loop ***")
+    import threading
+
+    base = MockBase()
+    component = TestComponent(base)
+
+    async def where(value):
+        """Report the thread this ran on."""
+        return value, threading.get_ident()
+
+    async def boom():
+        """Fail on whichever loop runs this."""
+        raise ValueError("boom")
+
+    # Not started: there is no component loop, so the work runs where it was called
+    assert component.component_loop is None, "a component that has not started has no loop"
+    assert asyncio.run(component.on_component_loop(where(1), timeout=5)) == (1, threading.get_ident()), "with no component loop the coroutine runs in place"
+
+    worker = _LoopThread()
+    try:
+        component.component_loop = worker.loop
+
+        # From another loop: handed over, result returned, exception propagated
+        value, ident = asyncio.run(component.on_component_loop(where(3), timeout=5))
+        assert value == 3 and ident == worker.thread.ident, "the coroutine must run on the component's loop thread, ran on {}".format(ident)
+        try:
+            asyncio.run(component.on_component_loop(boom(), timeout=5))
+            raise AssertionError("an exception on the component's loop must reach the caller")
+        except ValueError:
+            pass
+
+        # The work's own TimeoutError is its exception, not the hand-over's wait running out: it reaches
+        # the caller at once, rather than being retried in a busy loop until the deadline (Python 3.11
+        # made asyncio.TimeoutError the built-in TimeoutError, so the two are the same class)
+        async def times_out():
+            """Fail with a TimeoutError of its own, as a request inside the work might."""
+            raise TimeoutError("the work's own timeout")
+
+        base.log_messages.clear()
+        started = time.monotonic()
+        cpu_started = time.process_time()
+        try:
+            asyncio.run(component.on_component_loop(times_out(), timeout=2, poll=0.5))
+            raise AssertionError("a TimeoutError raised by the work must reach the caller")
+        except TimeoutError as error:
+            assert "the work's own timeout" in str(error), "the caller must get the work's own exception, got {!r}".format(error)
+        waited = time.monotonic() - started
+        assert waited < 0.5, "the work's TimeoutError must be raised at once, not after the wait ran out: {:.2f}s".format(waited)
+        assert time.process_time() - cpu_started < 0.5, "the caller must not spin while the work's exception is pending"
+        assert not any("still running" in msg for msg in base.log_messages), "a finished piece of work must not be reported as still running: {}".format(base.log_messages)
+
+        # Already on the component's loop: awaited directly, not posted to itself (which would deadlock)
+        value, ident = asyncio.run_coroutine_threadsafe(component.on_component_loop(where(4), timeout=5), worker.loop).result(5)
+        assert value == 4 and ident == worker.thread.ident, "on its own loop the coroutine is awaited in place"
+
+        # Slower than the caller will wait: the caller gets False, the work is not cancelled
+        finished = threading.Event()
+
+        async def slow():
+            """Outlast the caller's wait, then record that it still completed."""
+            await asyncio.sleep(0.3)
+            finished.set()
+            return "late"
+
+        base.log_messages.clear()
+        result = asyncio.run(component.on_component_loop(slow(), timeout=0.05, what="GivTCP write"))
+        assert result is False, "a hand-over that outlasts the timeout returns False, got {}".format(result)
+        assert any("GivTCP write" in msg for msg in base.log_messages), "the abandoned wait is logged with what it was, got {}".format(base.log_messages)
+        assert finished.wait(5), "giving up the wait must not cancel the work on the component's loop"
+
+        # The loop stops under a waiting caller: the wait is abandoned rather than sat out
+        async def never():
+            """Wait far longer than the test will."""
+            await asyncio.sleep(60)
+
+        async def stop_under_caller():
+            """Start a hand-over, then stop the component's loop while it is waited for."""
+            waiter = asyncio.ensure_future(component.on_component_loop(never(), timeout=30, poll=0.05))
+            await asyncio.sleep(0.1)
+            worker.loop.call_soon_threadsafe(worker.loop.stop)
+            return await asyncio.wait_for(waiter, timeout=5)
+
+        assert asyncio.run(stop_under_caller()) is False, "a hand-over whose loop stopped returns False"
+    finally:
+        worker.stop()
+
+    # A stopped (closed) loop is not handed to: the work runs in place again
+    assert asyncio.run(component.on_component_loop(where(5), timeout=5)) == (5, threading.get_ident()), "with the component's loop closed the coroutine runs in place"
+
+    # start() records the loop it runs on
+    started = TestComponent(MockBase())
+
+    async def run_briefly():
+        """Run start() until its first tick, then stop it."""
+        task = asyncio.ensure_future(started.start())
+        await asyncio.sleep(0.05)
+        loop = started.component_loop
+        started.api_stop = True
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return loop is asyncio.get_running_loop()
+
+    assert asyncio.run(run_briefly()), "start() must record the loop it is running on as component_loop"
+    print("PASS: on_component_loop runs in place or hands over, and survives timeouts and a stopped loop")
+    return False
+
+
 def test_component_base_http_session_default(my_predbat):
     """
     With no factory installed, http_session() returns a new aiohttp.ClientSession built from the
@@ -1810,6 +1947,7 @@ def test_component_base_all(my_predbat):
         ("discovery_refresh_live_state", test_component_base_refresh_discovery_refiles_when_live_state_behind_inverter_record_grows, "a report built from live state is re-filed when that state grows"),
         ("discovery_entities_filter", test_component_base_discovery_entities_keeps_only_what_exists, "discovery_entities keeps only entities that exist"),
         ("request_replan", test_component_base_request_replan, "request_replan sets update_pending without invalidating the plan"),
+        ("on_component_loop", test_component_base_on_component_loop, "on_component_loop runs work on the component's own event loop from any caller"),
         ("http_session_default", test_component_base_http_session_default, "http_session defaults to a new caller-owned aiohttp.ClientSession"),
         ("http_session_factory", test_component_base_http_session_factory, "an installed HTTP session factory is used, None restores the default"),
         ("http_session_order", test_component_base_http_session_resolution_order, "http_session prefers the base factory, then the global factory, then aiohttp"),
