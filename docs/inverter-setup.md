@@ -2065,6 +2065,9 @@ It publishes all necessary sensor entities itself and can automatically configur
 
 See the [Components - Sigenergy Cloud](components.md#sigenergy-cloud-api-sigenergy) documentation for full configuration options.
 
+*Note:* the reserve hold described for local Sigenergy setups above does not apply to Sigenergy Cloud. On Sigenergy Cloud, a zero discharge rate stops the battery charging as well, so a hold at the reserve would also stop solar from topping the battery up.
+With Sigenergy Cloud, Predbat's **set_reserve_min** is only a floor in the plan, and in Demand the plant can still run the battery down to its own discharge cut-off (see [batpred#5358](https://github.com/springfall2008/batpred/issues/5358)).
+
 ### Obtaining Sigenergy Cloud API credentials
 
 1. Log in to the [Sigenergy Developer Portal](https://developer.sigencloud.com).
