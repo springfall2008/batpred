@@ -48,6 +48,12 @@ repos:
     entry: python tools/test_owner_gate.py
     files: ^(\.github/workflows/owner-gate\.yml|tools/test_owner_gate\.py)$
     pass_filenames: false
+  - id: issue-attachment-nudge-tests
+    name: issue attachment nudge tests
+    language: python
+    entry: python tools/test_issue_attachment_nudge.py
+    files: ^(\.github/workflows/issue-attachment-nudge\.yml|\.github/ISSUE_TEMPLATE/.*|tools/(test_)?issue_attachment_nudge\.py)$
+    pass_filenames: false
 - repo: https://gitlab.com/bmares/check-json5
   rev: v1.0.0
   hooks:

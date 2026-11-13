@@ -1,0 +1,37 @@
+name: issue attachment nudge
+# When a new issue offers its log or debug files ("logs available on request") or pastes log
+# lines instead of attaching them, ask for the files straight away, while the reporter is still
+# at the keyboard, rather than waiting for the triage bot's first pass. The decision and the
+# comment text live in tools/issue_attachment_nudge.py, which tools/test_issue_attachment_nudge.py
+# tests.
+#
+# The issue body is untrusted input. The script reads it from the event file, never from a
+# shell-interpolated expression, and the checkout is main's code, not anything the reporter wrote.
+on:
+  issues:
+    types:
+      - opened
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  nudge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/issue_attachment_nudge.py
+          sparse-checkout-cone-mode: false
+      - name: Ask for the files if they were offered rather than attached
+        run: |
+          decision=$(python3 tools/issue_attachment_nudge.py "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/nudge.md")
+          echo "$decision"
+          if [ "$decision" = "nudge" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/nudge.md"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
