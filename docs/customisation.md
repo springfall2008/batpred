@@ -754,7 +754,8 @@ The forecast planner is controlled by these additional entities:
 - **input_number.predbat_iboost_tank_reserve** Sets the minimum stored energy in kWh to hold in the tank before each draw - default 0.
 
 - **input_number.predbat_iboost_fill_rate_threshold** When set, any slot with an import rate at or below this value (in pence) fills the remaining
-tank headroom regardless of the forecast, e.g. set it to 0 to heat fully on free or negative rates. The default of -99 disables filling.
+tank headroom regardless of the forecast, e.g. set it to 0 to heat fully on free or negative rates. The default of -99 disables filling
+(when **currency_scale** widens the range, lower values are real thresholds).
 The fill threshold replaces **input_number.predbat_iboost_rate_threshold** for these slots, but the export rate threshold and the gas rate
 comparison still apply to them.
 

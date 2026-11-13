@@ -738,6 +738,12 @@ def run_iboost_forecast_tests(my_predbat):
     set_rate_profile(my_predbat, [(780, 810, -2.0)], default_rate=20.0)
     failed |= run_iboost_forecast_plan_test("iboost_plan_fill_independent", my_predbat, {840: 0.5}, capacity=2.0, rate_threshold=-3, fill_rate_threshold=0.0, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": -2.0, "cost": -2.0}])
 
+    # Only the default -99 turns filling off: currency_scale widens the range below -99, so a
+    # lower threshold is a real one and fills the tank on the -200 slot; at -99 only the draw books
+    set_rate_profile(my_predbat, [(780, 810, -200.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_fill_below_default", my_predbat, {840: 0.5}, capacity=2.0, fill_rate_threshold=-150.0, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": -200.0, "cost": -200.0}])
+    failed |= run_iboost_forecast_plan_test("iboost_plan_fill_default_off", my_predbat, {840: 0.5}, capacity=2.0, fill_rate_threshold=-99.0, expect_slots=[{"start": 780, "end": 800, "kwh": 0.5, "average": -200.0, "cost": -100.0}])
+
     # Fill day-cap accounting: the fill at 780 initially exhausts the day cap, but trimming the
     # displaced 2p booking refunds it immediately, so the later 3p fill slot at 960 (after the
     # draw) is still filled instead of being blocked by phantom day-cap usage

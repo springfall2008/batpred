@@ -6702,8 +6702,10 @@ class Plan:
         # re-verified and later planned boosts the fill energy has made redundant are trimmed
         # straight away, so the level stays at or below the capacity everywhere and the day cap
         # seen by later fill slots only counts energy that survives.
+        # Only the default -99 means off: currency_scale widens the range below -99 but leaves
+        # the default alone, so lower values are real thresholds
         fill_threshold = self.iboost_fill_rate_threshold
-        if fill_threshold > -99.0:
+        if fill_threshold != -99.0:
             forecast_extent = self.iboost_forecast_extent if self.iboost_forecast_extent is not None else max(self.iboost_forecast.keys()) + interval
             levels_boosted, levels_after = self.iboost_tank_trajectory(stored_start, capacity, demand, boost)
             day_usage = self.iboost_forecast_day_usage(interval_starts, boost, total_days)
