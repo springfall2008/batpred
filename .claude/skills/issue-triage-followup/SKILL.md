@@ -48,7 +48,7 @@ Same as `/issue-triage` step 2 (including files on a source ticket this one was 
 Compare your updated understanding against the original triage comment's classification, priority, and root-cause pointer:
 
 - If nothing material changed, say so — confirming the original assessment still holds is a legitimate outcome, not a reason to avoid posting.
-- If the classification, priority, or root-cause should change given the new information, update it. You may change or remove a label **you previously applied as the bot** (classification, priority, `waiting_for_user`, and the `duplicate` and `AUTOCLOSE_CANDIDATE` labels of a parked believed-fixed issue). Never remove a label a human added. Check who added it with `gh issue view <number> --json timelineItems` or the issue's label events if unsure.
+- If the classification, priority, or root-cause should change given the new information, update it. You may change or remove a label **you previously applied as the bot** (classification, priority, `waiting_for_user`, and the `duplicate` and `AUTOCLOSE_CANDIDATE` labels of a parked believed-fixed issue). Never remove a label a human added. Treat `duplicate` and `AUTOCLOSE_CANDIDATE` as the bot's only if an earlier bot comment on the issue says it parked the issue or marked it a duplicate. If you can't tell, leave the label and say in your comment that a maintainer should review it.
 - Apply the same duplicate check as `/issue-triage` step 4 if the new information suggests one.
 
 If the bot's most recent prior comment (the one you found in step 1) carries a one-line bug statement (`/issue-triage` step 3), that statement is a standing claim and this review must settle it rather than silently carry it forward or drop it — including when nothing material changed, one of:
@@ -69,7 +69,9 @@ If this review newly concludes that the problem is already fixed, in a later rel
 - **The problem is gone:** leave `AUTOCLOSE_CANDIDATE` on, so the issue closes.
 - **It still happens, on a release that contains the fix:** remove `AUTOCLOSE_CANDIDATE`, and `duplicate` if the bot applied it. Retract the claim as above and investigate it as a possible regression.
 - **It still happens, but they haven't updated yet:** keep the labels, re-apply `waiting_for_user`, and ask them to update and try again.
-- **Their reply doesn't answer the question:** leave the labels on. The parking rule in `/issue-triage` step 9 applies to any new "believed fixed" line this review writes. If the reporter is out of date (the version check in `/issue-triage` step 1), suggest the update near the top only when no earlier bot comment has suggested it, or when their version has changed since and they are still out of date. Otherwise, mention it at most in one line further down. Don't repeat it on every follow-up.
+- **Their reply doesn't answer the question:** leave the labels on.
+
+The parking rule in `/issue-triage` step 9 applies to any new "believed fixed" line this review writes. If the reporter is out of date (the version check in `/issue-triage` step 1), suggest the update near the top only when no earlier bot comment has suggested it, or when their version has changed since and they are still out of date. Otherwise, mention it at most in one line further down. Don't repeat it on every follow-up.
 
 Do **not** touch the `BOT_TRIAGED` or `BOT_REVIEW` labels — the daemon manages both.
 
