@@ -6966,6 +6966,7 @@ class TestEvControl:
         async def fake_publish_raw(topic, payload, **kwargs):
             assert topic == gw.topic_command
             gw.published.append(json.loads(payload.decode()))
+            return True  # sent, as the real _publish_raw() reports it
 
         gw._publish_raw = fake_publish_raw
         return gw
@@ -8415,6 +8416,44 @@ class TestCommandAck:
         self._run(gw.publish_command("set_charge_rate", command_id=42, power_w=100))
         self._run(gw.publish_command("set_charge_rate", power_w=100))
         assert [s["command_id"] for s in sent] == ["PBAT42", "PBAT8"]
+
+    def test_unsent_publish_is_not_reported_as_sent(self):
+        """When _publish_raw() reports the message was not sent (a hand-over to the gateway's loop
+        abandoned after _PUBLISH_HANDOVER_SECONDS), publish_command does not log it as published and
+        _send_ev_command reports failure, so neither caller claims a command went out when it did not."""
+        from types import SimpleNamespace
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw.base = SimpleNamespace(set_read_only=False)
+        gw._mqtt_connected = True
+        gw._mqtt_client = object()
+        gw.gateway_display_only = False
+        gw._command_id = 0
+        gw.topic_command = "predbat/devices/pbgw_test/command"
+        outcome = {"sent": False}
+
+        async def fake_publish_raw(topic, payload, retain=False):
+            return outcome["sent"]
+
+        gw._publish_raw = fake_publish_raw
+
+        def logged(text):
+            return [str(call.args[0]) for call in gw.log.call_args_list if text in str(call.args[0])]
+
+        assert self._run(gw.publish_command("set_charge_rate", power_w=100)) is False, "publish_command must report an unsent command"
+        assert not logged("Published command"), "an unsent command must not be logged as published: {}".format(logged(""))
+        assert logged("was not sent"), "an unsent command must be logged as such: {}".format(logged(""))
+        assert self._run(gw._send_ev_command("cp1", {"action": "RemoteStartTransaction"})) is False, "an unsent EV command must be reported as not sent"
+
+        # And when it is sent, both say so
+        outcome["sent"] = True
+        gw.log.reset_mock()
+        assert self._run(gw.publish_command("set_charge_rate", power_w=100)) is True
+        assert logged("Published command")
+        assert self._run(gw._send_ev_command("cp1", {"action": "RemoteStartTransaction"})) is True
 
 
 class TestIntegratePower:

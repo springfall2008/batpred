@@ -848,11 +848,10 @@ class GatewayMQTT(ComponentBase):
         payload = {"command": "ev", "command_id": "PBAT" + str(self._next_command_id()), "charge_point_id": charge_point_id}
         payload.update(command)
         try:
-            await self._publish_raw(self.topic_command, json.dumps(payload).encode())
+            return await self._publish_raw(self.topic_command, json.dumps(payload).encode())
         except Exception as e:
             self.log(f"Warn: GatewayMQTT: Failed to publish EV command {command.get('action')} for '{charge_point_id}': {e}")
             return False
-        return True
 
     async def _startup_wait(self, ticks, ready):
         """Poll ``ready`` at 0.5 s intervals until it is true or the startup budget is spent.
@@ -3262,6 +3261,11 @@ class GatewayMQTT(ComponentBase):
             command: Command name (set_charge_rate, set_reserve, etc.)
             command_id: Pre-allocated id number (from _next_command_id); allocated here when None.
             **kwargs: Command-specific fields (power_w, target_soc, etc.).
+
+        Returns:
+            True when the command was sent, False when it was not (not connected, display
+            mode, or handed to the gateway's loop and not sent in time). Callers that track the
+            command's ack re-send it when no ack arrives, so most of them need not check this.
         """
         if command_id is None:
             command_id = self._next_command_id()
@@ -3269,11 +3273,14 @@ class GatewayMQTT(ComponentBase):
 
         self.log("Info: GatewayMQTT: publish_command: command={}, payload={}".format(command, cmd_json))
 
-        if self._mqtt_connected:
-            await self._publish_raw(self.topic_command, cmd_json.encode("utf-8"))
-            self.log(f"Info: GatewayMQTT: Published command: {command} payload={cmd_json}")
-        else:
+        if not self._mqtt_connected:
             self.log(f"Warn: GatewayMQTT: Not connected — cannot publish command: {command}")
+            return False
+        if not await self._publish_raw(self.topic_command, cmd_json.encode("utf-8")):
+            self.log(f"Warn: GatewayMQTT: Command {command} was not sent")
+            return False
+        self.log(f"Info: GatewayMQTT: Published command: {command} payload={cmd_json}")
+        return True
 
     def _live_display_binding(self):
         """Validate only the server-issued binding for this selected display role."""
