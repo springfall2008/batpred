@@ -389,6 +389,11 @@ COMPONENT_LIST = {
                 "secret": True,
                 "config": "fox_token_hash",
             },
+            "poll_seconds": {
+                "required": False,
+                "default": 300,
+                "config": "fox_poll_seconds",
+            },
         },
         "phase": 1,
     },

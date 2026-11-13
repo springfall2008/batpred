@@ -1378,6 +1378,19 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
 | `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual `apps.yaml` updates required) |
 | `automatic_ignore_pv` | Boolean | No | false | `fox_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Fox Cloud from overwriting `pv_power` and `pv_today` config. Useful for AC-coupled setups where PV is measured independently and Fox Cloud reports zero/absent PV data |
+| `poll_seconds` | Integer | No | `300` | `fox_poll_seconds` | How often to fetch live (real time) data such as battery SoC and power flows, in seconds, rounded to the nearest whole minute, minimum 60 and maximum 1800. See [Polling interval](#polling-interval-fox) |
+
+#### Polling interval (fox)
+
+Predbat fetches the live data from Fox Cloud every 5 minutes by default. Fox Cloud itself only receives new data from the inverter about every 5 minutes, and the two cycles are not in step, so a reading can be close to 10 minutes old by the time Predbat uses it. On a large battery charging or discharging at high power that can put the reported SoC several percent behind the inverter. Setting `fox_poll_seconds` lower, for example to `120`, picks up each Fox Cloud update sooner:
+
+```yaml
+  fox_poll_seconds: 120
+```
+
+Only the live data follows this setting. Device settings and the scheduler are still read every hour, production totals every 15 minutes, and the device list and details once a day.
+
+Each live poll is one request per inverter, so 2-minute polling raises that from 12 to 30 requests per inverter per hour. Fox Cloud limits how many API calls an account can make, so check your own headroom before going lower, especially with several inverters. Predbat logs its own request rate every minute (`Fox: API usage: ...`) and stops retrying failed requests while that rate is above 60 an hour. Polling faster than once every 5 minutes cannot make the data any fresher than Fox Cloud's own upload interval.
 
 ---
 
