@@ -66,10 +66,10 @@ Post exactly one comment via `gh issue comment <number> --body "..."`, opening w
 
 If this review newly concludes that the problem is already fixed, in a later release than the reporter's or on main but not yet released, the comment carries the bold "believed fixed" line in the place `/issue-triage` step 9 gives, found the way it describes. If an earlier bot comment said "believed fixed" (in vX, or on main) and the reporter now runs a release containing that fix and still has the problem, retract it plainly near the top ("The fix in vX did not cover this") and investigate it as a possible regression. If it said "fixed on main" and the fix has since been released, name the release now. When the reporter of a parked believed-fixed issue replies:
 
-- **The problem is gone:** leave `AUTOCLOSE_CANDIDATE` on, so the issue closes.
+- **The problem is gone:** leave `AUTOCLOSE_CANDIDATE` on and say in your comment that the issue can be closed, so a maintainer or the auto-close sweep closes it.
 - **It still happens, on a release that contains the fix:** remove `AUTOCLOSE_CANDIDATE`, and `duplicate` if the bot applied it. Retract the claim as above and investigate it as a possible regression.
 - **It still happens, but they haven't updated yet:** keep the labels, re-apply `waiting_for_user`, and ask them to update and try again.
-- **Their reply doesn't answer the question:** leave the labels on.
+- **Their reply doesn't answer the question:** leave the labels on, re-apply `waiting_for_user`, and ask again.
 
 The parking rule in `/issue-triage` step 9 applies to any new "believed fixed" line this review writes. If the reporter is out of date (the version check in `/issue-triage` step 1), suggest the update near the top only when no earlier bot comment has suggested it, or when their version has changed since and they are still out of date. Otherwise, mention it at most in one line further down. Don't repeat it on every follow-up.
 
