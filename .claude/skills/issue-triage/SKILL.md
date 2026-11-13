@@ -21,8 +21,8 @@ Comments from people other than the reporter ("me too" posts) are evidence by de
 Do this before the gates below: it applies to every comment you post, including a 1a/1b gate exit and a duplicate close.
 
 - Find the reporter's version in the issue template's **Predbat version** field. A value that isn't a Predbat release number ("latest", "9.7", an HA or add-on version, a dev build) counts as blank. If their `predbat.log` arrives later (step 2) and shows a different version, the log wins: redo this check with it.
-- Find the latest release from the tags, since `gh release` is not available to the bot: `git fetch origin main --tags`, then `git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -20`. The first line is the latest release, and the rest let you count how far behind the reporter is.
-- They are **out of date** if they are behind by a minor version or more (v9.3.5 against v9.7.10), or by five or more releases within one minor version (v9.7.0 against v9.7.10). Releases come often, so a small patch gap (v9.7.8 against v9.7.10) doesn't count.
+- Find the latest release from the tags, since `gh release` is not available to the bot: `git fetch origin main --tags`, then `git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1`. That is the latest release.
+- They are **out of date** if they are two or more minor versions behind (v9.5.x or older against v9.7.10). Releases come so often that a reporter one release behind can already be on the previous minor version, so one minor version (v9.6.5 against v9.7.0) doesn't count.
 - If they are out of date and haven't said why, the comment includes an update suggestion near the top (the order is in step 9), for example: "You're on v9.3.5; the latest is v9.7.10, and there have been many fixes since. Please update first, since this may already be fixed." It doesn't replace the investigation, and the gates still apply. On a 1b exit, ask for the update and the files together: files captured on the latest version are the most useful.
 - If they gave a reason for staying on an older version (a known regression, a pinned Docker image, a platform that can't update), respect it: mention the gap once, without pressing.
 - If the version is blank and there is no log yet, don't guess one. Leave out "You're on …" wherever a template below uses it.
@@ -93,10 +93,10 @@ If you classify as `bug`, write a one-line statement of the bug in your own word
 
 Search existing issues (`gh issue list --search ...`, both open and closed) for the same symptom.
 
-- High confidence match: label `duplicate`, comment linking the original issue (including the step 3 one-line bug statement, if you wrote one), and close this one. Before closing, check the original's fix against the reporter's version as step 9 describes ("Finding the release that fixed it"), using the version from their log if you have it:
-  - **The original is still open and unfixed, or the reporter's version is unknown:** close as usual.
-  - **The reporter's version already contains the fix:** it is not a confident duplicate. It may be a regression or a different cause, so treat it as low confidence (below) and don't close.
-  - **The fix is in a later release, or on main but unreleased:** the closing comment carries the "believed fixed" line, in the order step 9 gives.
+- High confidence match: first check the original's fix against the reporter's version, as step 9 describes under "Finding the release that fixed it". Use the version from their log if you have it.
+    - **The original was closed without a code fix** (still open, not planned, answered as configuration): label `duplicate`, comment linking the original issue (including the step 3 one-line bug statement, if you wrote one), and close this one.
+    - **The reporter's version already contains the fix:** it is not a confident duplicate. It may be a regression or a different cause. Don't apply `duplicate` and don't close; treat it as low confidence (below).
+    - **The fix is in a later release than the reporter's, on main but unreleased, or their version is unknown:** label, link and close as in the first case, and the closing comment carries the "believed fixed" line in the order step 9 gives.
 - Low confidence: mention "possibly related to #N" in your triage comment; don't close.
 
 Then look for **similar** issues and PRs as well, whether or not they are duplicates: search both open and closed ones for the symptom, the integration and the component it touches (`gh issue list --state all --search ...` and `gh pr list --state all --search ...`). Read the findings in the best matches — what was diagnosed, what was fixed, and what was ruled out — before forming a hypothesis, and link the relevant ones in your triage comment as "related to #N". An issue that shares a symptom or a trigger is not necessarily the same problem: only call it a duplicate when the cause matches, not just the symptom, and treat a past finding as a lead to confirm against current main, not as a conclusion.
@@ -152,15 +152,15 @@ Check existing comments first — if one from you is already there, stop; don't 
 
 Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by (in the order given under "Order of the comment's opening lines" below): classification, priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
 
-If you reached step 3 and classified as `bug`, put the one-line bug statement immediately after the classification. Gates 1a/1b apply a type label without ever reaching step 3, so there's nothing to include if you took one of those paths.
+If you reached step 3 and classified as `bug`, the one-line bug statement follows the classification and priority (line 4 of the order below). Gates 1a/1b apply a type label without ever reaching step 3, so there's nothing to include if you took one of those paths.
 
 **Order of the comment's opening lines.** Every comment starts the same way, so the reporter finds what they need to do first:
 
 1. The disclosure line.
-2. **Believed fixed in a later release** (only if your investigation concluded that): a bold line such as "**We believe this is fixed in v9.4.3** (PR #5635). You're on v9.3.5; please update to the latest, v9.7.10, and comment here if it still happens." Use the actual numbers. If you don't know the reporter's version, write "please make sure you're on v9.4.3 or later" instead of "You're on …". It is the one thing the reporter needs to act on, so it must not be buried under the analysis.
+2. **Believed fixed in a later release** (only if your investigation concluded that): a bold line such as "**We believe this is fixed in v9.4.3** (PR #5635). You're on v9.3.5; please update to the latest, v9.7.10, and comment here if it still happens." Use the actual numbers. If you don't know the reporter's version, write "please make sure you're on v9.4.3 or later" instead of "You're on …". It is the one thing the reporter needs to act on, so it must not be buried under the analysis. If the reporter gave a reason for staying on an older version, state the release that has the fix without pressing them to update.
 3. On a 1a exit, the list of problems and the request to split them. On a 1b exit, the "detailed triage is on hold" line and the request for files, with any acceptance of files the reporter offered as its first words. A gate exit's labels go with it, but no classification line.
 4. Otherwise, the classification and priority, then the one-line bug statement if you classified as `bug`.
-5. The update suggestion from the version check in step 1, if the reporter is out of date and line 2 didn't already ask them to update. On a 1b exit, fold it into the request for files.
+5. The update suggestion from the version check in step 1, if the reporter is out of date and line 2 says nothing about versions. If line 2 asks them to update, or says the fix is on main but unreleased, leave this line out. On a 1b exit, fold it into the request for files.
 6. Everything else: what you investigated and found, the root cause, any further information request.
 
 **Finding the release that fixed it** (for line 2, and for the duplicate check in step 4). Use only these commands: the bot cannot run `gh release`.
