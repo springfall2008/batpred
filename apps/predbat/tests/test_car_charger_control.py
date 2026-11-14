@@ -1616,6 +1616,98 @@ def test_force_hold_until_kept_while_hand_back_unconfirmed():
     assert component.base.car_force_hold_until == {}, component.base.car_force_hold_until
 
 
+def test_force_hold_publishes_new_dicts():
+    """The planner's dicts are replaced, never changed in place, so a plan iterating one on another thread never sees it change size."""
+    component = _held_component()
+    component.base.car_force_holdable = {1: "Other"}
+    until_before = component.base.car_force_hold_until
+    holdable_before = component.base.car_force_holdable
+    run_async(component.charger_control_tick(_at(2, 0)))
+    assert component.base.car_force_hold_until == {0: _at(2, 30)}, component.base.car_force_hold_until
+    assert until_before == {}, "the dict the planner had is left as it was, got {}".format(until_before)
+    assert component.base.car_force_holdable == {0: "Fake", 1: "Other"}, component.base.car_force_holdable
+    assert holdable_before == {1: "Other"}, holdable_before
+    # Nothing to change, so nothing is replaced
+    holdable_now = component.base.car_force_holdable
+    run_async(component.charger_control_tick(_at(2, 5)))
+    assert component.base.car_force_holdable is holdable_now
+    held = component.base.car_force_hold_until
+    run_async(component.charger_control_tick(_at(2, 30)))
+    assert component.base.car_force_hold_until == {} and held == {0: _at(2, 30)}, (component.base.car_force_hold_until, held)
+
+
+def test_force_hold_needs_the_base_hold_until():
+    """A base without car_force_hold_until is an error, not a private dict the planner would never read."""
+    component = _held_component()
+    del component.base.car_force_hold_until
+    raised = False
+    try:
+        run_async(component.charger_control_tick(_at(2, 0)))
+    except AttributeError:
+        raised = True
+    assert raised, "a missing car_force_hold_until must fail loudly"
+    assert not hasattr(component.base, "car_force_hold_until")
+
+
+def test_force_hold_on_an_unlisted_charger():
+    """A held charger that leaves the list is not polled for, is warned about once its hand-back is overdue, and is handed back once listed again."""
+    storage = FakeStorage()
+    charger = FakeCharger("a")
+    component = _held_component([charger], storage=storage)
+    run_async(component.charger_control_tick(_at(2, 0)))
+    component.chargers = []
+    component.cancelled = {}
+    assert component.charger_control_force_hold_busy(_at(2, 10)) is False, "nothing can be sent to it, so there is nothing to poll for"
+    run_async(component.charger_control_tick(_at(2, 44)))
+    assert not any(line.startswith("Warn:") for line in component.logs), component.logs
+    assert component.base.car_force_hold_until == {0: _at(2, 30)}, component.base.car_force_hold_until
+    run_async(component.charger_control_tick(_at(2, 45)))
+    warnings = [line for line in component.logs if line.startswith("Warn:")]
+    assert len(warnings) == 1 and "no longer listed" in warnings[0], warnings
+    assert component.base.car_force_hold_until == {}, component.base.car_force_hold_until
+    assert storage.saved[("fake", "control_state")]["force_holds"]["a"]["warned"] is True, storage.saved
+    run_async(component.charger_control_tick(_at(2, 46)))
+    assert len([line for line in component.logs if line.startswith("Warn:")]) == 1, component.logs
+    assert _force_commands(component) == [("a", "force_pause")], component.commands
+    # Listed again: handed back, and forgotten
+    component.chargers = [charger]
+    run_async(component.charger_control_tick(_at(2, 50)))
+    assert _force_commands(component) == [("a", "force_pause"), ("a", "force_resume")], component.commands
+    assert component.charger_control_force_holds == {}
+
+
+def test_force_hold_unlisted_leaves_another_chargers_hold_on_the_car():
+    """An overdue unlisted hold does not clear the planner's hold on its car while a listed charger is holding that car."""
+    component = _held_component([FakeCharger("a")])
+    run_async(component.charger_control_tick(_at(2, 0)))
+    # Charger a is gone and b now serves car 0, with a later slot cancelled
+    component.chargers = [FakeCharger("b")]
+    _cancel(component, 0, [("06-01 02:40:00", "06-01 03:30:00")])
+    run_async(component.charger_control_tick(_at(2, 45)))
+    assert set(component.charger_control_force_holds) == {"a", "b"}, component.charger_control_force_holds
+    assert component.base.car_force_hold_until == {0: _at(3, 30)}, component.base.car_force_hold_until
+    run_async(component.charger_control_tick(_at(2, 50)))
+    assert component.base.car_force_hold_until == {0: _at(3, 30)}, component.base.car_force_hold_until
+
+
+def test_ended_force_hold_survives_a_restart():
+    """A hold the user ended is not started again after a restart mid-slot; an unreadable saved end is skipped."""
+    storage = FakeStorage()
+    component = _held_component(storage=storage)
+    run_async(component.charger_control_tick(_at(2, 0)))
+    run_async(component.charger_control_end_force_hold("a", "the user turned it back on"))
+    assert storage.saved[("fake", "control_state")]["force_hold_ended"] == {"a": _at(2, 30).astimezone(datetime.timezone.utc).isoformat()}, storage.saved
+    restarted = _held_component(storage=storage)
+    run_async(restarted.charger_control_tick(_at(2, 10)))
+    assert restarted.commands == [], restarted.commands
+    assert restarted.charger_control_force_holds == {}
+    # An unreadable saved end is skipped, so the slot can be held as before
+    storage.saved[("fake", "control_state")]["force_hold_ended"] = {"a": "not a time", "b": 7}
+    restarted = _held_component(storage=storage)
+    run_async(restarted.charger_control_tick(_at(2, 10)))
+    assert restarted.commands == [("a", "force_pause")], restarted.commands
+
+
 def run_car_charger_control_tests(my_predbat=None):
     """Run the shared charger control tests. Returns True on failure."""
     print("**** Running car charger control tests ****")
@@ -1705,4 +1797,9 @@ def run_car_charger_control_tests(my_predbat=None):
     test_cancelled_windows_are_merged()
     test_force_hold_pauses_again_when_wanted_mid_hand_back()
     test_force_hold_until_kept_while_hand_back_unconfirmed()
+    test_force_hold_publishes_new_dicts()
+    test_force_hold_needs_the_base_hold_until()
+    test_force_hold_on_an_unlisted_charger()
+    test_force_hold_unlisted_leaves_another_chargers_hold_on_the_car()
+    test_ended_force_hold_survives_a_restart()
     return False

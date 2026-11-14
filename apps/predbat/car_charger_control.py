@@ -13,6 +13,7 @@ once; a component supplies only what is specific to its charger.
 """
 
 from datetime import datetime, timedelta, timezone
+import threading
 
 from component_base import writes
 from utils import parse_car_plan_windows, in_car_plan_window, strptime_aware
@@ -50,6 +51,12 @@ FORCE_HOLD_LEAD_MINUTES = 5
 
 # A hand-back still not confirmed this long after a force hold's end is warned about - it goes on being retried
 FORCE_HOLD_SAFETY_MINUTES = 15
+
+# Serialises the charger components' updates to the base's car_force_hold_until and car_force_holdable. Each update
+# builds a new dict and rebinds it rather than changing the one in place, as the planner iterates them on another
+# thread (plan.py car_cancel_slots()), and a dict changing size under that loop raises; the lock stops two
+# components' copies from each dropping the other's change
+FORCE_HOLD_PUBLISH_LOCK = threading.Lock()
 
 # The strings get_arg() reads as true for a boolean setting
 CONTROL_TRUE_STRINGS = ("on", "true", "yes", "enabled", "enable", "connected")
@@ -204,7 +211,8 @@ class CarChargerControl:
         # returned (None until it first has), "stopped": confirmed stopped, "warned": the overdue warning given}.
         # Saved with the control switch, so a restart still hands back a charger an earlier session held off
         self.charger_control_force_holds = {}
-        # charger key -> the end of a hold the user ended themselves, so it is not started again for the rest of that slot
+        # charger key -> the end of a hold the user ended themselves, so it is not started again for the rest of that slot.
+        # Saved beside the holds, so a restart mid-slot does not start it again
         self.charger_control_force_hold_ended = {}
 
     def charger_control_connected(self, handle):
@@ -465,6 +473,10 @@ class CarChargerControl:
                 # Only while there is one: the whole document is rewritten each save, so leaving it out is no holds,
                 # and the document is unchanged for anyone not using car_charging_cancel_for_export
                 document["force_holds"] = {key: dict(hold) for key, hold in self.charger_control_force_holds.items()}
+            ended = {key: end.isoformat() for key, end in self.charger_control_force_hold_ended.items() if end is not None}
+            if ended:
+                # Likewise only while there is one, so a restart mid-slot keeps the user's "no hold for the rest of this slot"
+                document["force_hold_ended"] = ended
             if await self.storage.save(module, key, document) is False:
                 raise OSError("storage refused the save")
             self.charger_control_save_pending = False
@@ -513,6 +525,7 @@ class CarChargerControl:
                     # charger can tell, so the first cycle sends the plan's command again as it did before
                     self.charger_control_unconfirmed.add(str(charger_key))
         self.charger_control_restore_force_holds(saved.get("force_holds"))
+        self.charger_control_restore_force_hold_ended(saved.get("force_hold_ended"))
         self.charger_control_restore_extra(saved)
         return True
 
@@ -540,6 +553,19 @@ class CarChargerControl:
                 "stopped": bool(hold.get("stopped")),
                 "warned": bool(hold.get("warned")),
             }
+
+    def charger_control_restore_force_hold_ended(self, ended):
+        """Restore the holds the user ended in an earlier session, under any this session has; an unreadable one is skipped.
+
+        Skipping one only means a still-cancelled slot may be held again, as it was before these were saved.
+        """
+        if not isinstance(ended, dict):
+            return
+        for charger_key, end in ended.items():
+            key = str(charger_key)
+            end = self.charger_control_force_hold_end({"end": end})
+            if end is not None and key not in self.charger_control_force_hold_ended:
+                self.charger_control_force_hold_ended[key] = end
 
     def charger_control_refresh_windows(self, now):
         """Read Predbat's planned car charging windows for every car into charger_control_windows.
@@ -938,9 +964,11 @@ class CarChargerControl:
     def charger_control_force_hold_busy(self, now):
         """Is a force hold under way, or due to start soon - for a component to poll its chargers every cycle.
 
-        Never with the switch off and no hold to hand back, so turning the feature off costs no extra calls.
+        Never with the switch off and no hold to hand back, so turning the feature off costs no extra calls. A hold on a
+        charger the component no longer lists does not count: it has no step to poll for until the charger is back.
         """
-        if self.charger_control_force_holds:
+        listed = {key for key, _handle in self.charger_control_chargers()}
+        if any(key in listed for key in self.charger_control_force_holds):
             return True
         if not self.charger_control_force_hold_wanted():
             return False
@@ -954,33 +982,43 @@ class CarChargerControl:
         return False
 
     def charger_control_set_force_hold_until(self, car_n, end):
-        """Tell the planner car car_n is force-held until end, or no longer held when end is None."""
-        hold_until = getattr(self.base, "car_force_hold_until", None)
-        if hold_until is None:
-            hold_until = {}
+        """Tell the planner car car_n is force-held until end, or no longer held when end is None.
+
+        Read without a fallback: PredBat.reset() (and MockBase, for a command-line hold) set the dict up, and one
+        made here instead would be one the planner never reads, leaving a held car unguarded with no error.
+        """
+        with FORCE_HOLD_PUBLISH_LOCK:
+            hold_until = dict(self.base.car_force_hold_until)
+            if end is None:
+                if car_n not in hold_until:
+                    return
+                del hold_until[car_n]
+            else:
+                hold_until[car_n] = end.astimezone(timezone.utc)
             self.base.car_force_hold_until = hold_until
-        if end is None:
-            hold_until.pop(car_n, None)
-        else:
-            hold_until[car_n] = end.astimezone(timezone.utc)
 
     def charger_control_publish_holdable(self, wanted, chargers, car_count):
-        """Tell the planner which cars this component can force-hold off, so it may cancel their slots for an export."""
-        holdable = getattr(self.base, "car_force_holdable", None)
-        if holdable is None:
-            holdable = {}
-            self.base.car_force_holdable = holdable
-        name = self.charger_control_log_name
-        served = set()
-        for car_n, (_key, handle) in enumerate(chargers[:car_count]):
-            served.add(car_n)
-            if wanted and self.charger_control_can_force_hold(handle):
-                holdable[car_n] = name
-            elif holdable.get(car_n) == name:
+        """Tell the planner which cars this component can force-hold off, so it may cancel their slots for an export.
+
+        Unlike car_force_hold_until a base without the dict is tolerated, as every charger component publishes this
+        each tick, switch on or off, so it runs against every component test's own base - most never plan for cars.
+        """
+        with FORCE_HOLD_PUBLISH_LOCK:
+            current = getattr(self.base, "car_force_holdable", None) or {}
+            holdable = dict(current)
+            name = self.charger_control_log_name
+            served = set()
+            for car_n, (_key, handle) in enumerate(chargers[:car_count]):
+                served.add(car_n)
+                if wanted and self.charger_control_can_force_hold(handle):
+                    holdable[car_n] = name
+                elif holdable.get(car_n) == name:
+                    del holdable[car_n]
+            # A car beyond the chargers or num_cars is no longer ours to hold
+            for car_n in [car_n for car_n, owner in holdable.items() if owner == name and car_n not in served]:
                 del holdable[car_n]
-        # A car beyond the chargers or num_cars is no longer ours to hold
-        for car_n in [car_n for car_n, owner in holdable.items() if owner == name and car_n not in served]:
-            del holdable[car_n]
+            if holdable != current:
+                self.base.car_force_holdable = holdable
 
     def charger_control_stopped(self):
         """The component is stopping: tell the planner it can no longer hold any car off, as only its tick would otherwise."""
@@ -994,7 +1032,7 @@ class CarChargerControl:
         the pause has gone out. It extends into a cancelled slot that starts by the time it ends. At its end,
         or as soon as the switch goes off, Predbat goes read only or guest charging goes on, the charger is handed back, and the
         hand-back is repeated until the charger confirms it. A hold beyond the cars - num_cars dropped - is
-        handed back too.
+        handed back too, and one on a charger no longer listed is handed back if it is listed again.
         """
         wanted = self.charger_control_force_hold_wanted()
         chargers = self.charger_control_chargers()
@@ -1002,9 +1040,32 @@ class CarChargerControl:
         self.charger_control_publish_holdable(wanted, chargers, car_count)
         if not wanted and not self.charger_control_force_holds:
             return
+        # Before the steps, so a listed charger's hold on the same car sets the planner's hold back up this tick
+        listed = {key for key, _handle in chargers}
+        for key in [key for key in self.charger_control_force_holds if key not in listed]:
+            await self.charger_control_force_hold_unlisted(key, listed, now)
         steps = [lambda car_n=car_n, key=key, handle=handle: self.charger_control_force_hold_one(car_n, key, handle, now, wanted) for car_n, (key, handle) in enumerate(chargers[:car_count])]
         steps += [lambda key=key, handle=handle: self.charger_control_force_hand_back(key, handle, now) for key, handle in chargers[car_count:] if key in self.charger_control_force_holds]
         await self.charger_control_each(steps)
+
+    async def charger_control_force_hold_unlisted(self, key, listed, now):
+        """A force-held charger the component no longer lists - taken off the account, say - which nothing can be sent to.
+
+        The hold is kept, so the charger is handed back if it is listed again. Once FORCE_HOLD_SAFETY_MINUTES past the
+        hold's end the user is warned, once, and the planner stops hearing the car is held - unless a listed charger
+        is holding the same car.
+        """
+        hold = self.charger_control_force_holds[key]
+        if now < self.charger_control_force_hold_end(hold) + timedelta(minutes=FORCE_HOLD_SAFETY_MINUTES):
+            return
+        if not any(hold_key in listed and other["car"] == hold["car"] for hold_key, other in self.charger_control_force_holds.items()):
+            self.charger_control_set_force_hold_until(hold["car"], None)
+        if not hold["warned"]:
+            hold["warned"] = True
+            self.log(
+                "Warn: {}: {} {} is no longer listed, so it cannot be handed back after its hold for an export - it will be if it is listed again, check it is charging as it should".format(self.charger_control_log_name, self.charger_control_noun, key)
+            )
+            await self.charger_control_save()
 
     async def charger_control_force_hold_one(self, car_n, key, handle, now, wanted):
         """Start, keep or hand back one charger's force hold."""
