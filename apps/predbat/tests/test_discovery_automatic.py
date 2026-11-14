@@ -241,6 +241,26 @@ def test_second_device_leaves_first_alone():
     return 0
 
 
+def test_unreported_source_left_out():
+    """Opting in before any report is silent; a later report with no driven inverter warns once and keeps the slot."""
+    base, registry, coordinator = _setup()
+    coordinator.allow_automatic("gecloud")
+    assert not [line for line in base.log_messages if "reported no inverter" in line], base.log_messages
+    assert base.set_calls == [], base.set_calls
+    coordinator.report("gecloud", _report(["ce1111g111"]))
+    assert coordinator.slot_map == {"gecloud:ce1111g111": 0}, coordinator.slot_map
+    calls = list(base.set_calls)
+    empty = {"automatic": True, "inverters": [_record("pv3333", {"pv_power": _ro("sensor.pv3333_pv_power")}, inverter_type=None)]}
+    coordinator.report("gecloud", empty)
+    coordinator.configure()
+    warning = "Warn: Coordinator: gecloud reported no inverter to configure - keeping its existing slots"
+    assert base.log_messages.count(warning) == 1, base.log_messages
+    assert coordinator.slot_map == {"gecloud:ce1111g111": 0}, coordinator.slot_map
+    assert base.set_calls == calls, base.set_calls[len(calls):]
+    print("PASS: unreported source left out")
+    return 0
+
+
 def test_configure_fills_in_on_second_report():
     """A record that gains a binding later gets exactly that binding written (Review Focus 2)."""
     base, registry, coordinator = _setup()
@@ -615,6 +635,7 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_not_opted_in_is_not_configured()
     failures += test_unchanged_report_writes_nothing()
     failures += test_second_device_leaves_first_alone()
+    failures += test_unreported_source_left_out()
     failures += test_configure_fills_in_on_second_report()
     failures += test_checker_called_only_on_change()
     failures += test_checker_failure_is_logged()

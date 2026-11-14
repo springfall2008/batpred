@@ -415,7 +415,9 @@ class Coordinator:
         with self.lock:
             automatic = dict(self.automatic)
             reports = dict(self.reports)
-        sources = [dict(automatic[name], name=name, records=list(reports.get(name, {}).get("inverters", []))) for name in sorted(automatic)]
+        # A component that opted in but has filed no report yet is left out: build_bindings keeps an absent source's
+        # slots, and would otherwise warn that it reported no inverter before it had reported anything
+        sources = [dict(automatic[name], name=name, records=list(reports[name].get("inverters", []))) for name in sorted(automatic) if name in reports]
 
         bindings, warnings = build_bindings(apps_yaml, args, sources, self.bindings)
         for warning in warnings:
