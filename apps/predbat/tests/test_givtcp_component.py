@@ -8,7 +8,7 @@ apps.yaml entity keys at them via automatic_config().
 
 import json
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from tests.test_infra import run_async
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
@@ -70,7 +70,7 @@ def _make_component(rest_urls="http://givtcp:6345", automatic=True):
     """
     A GivTCPComponent whose REST clients count their retry waits rather than taking them.
 
-    GivTCPRest paces its retry ladders with InverterRestState.sleep(), a blocking time.sleep():
+    GivTCPRest paces its retry ladders with its own sleep(), an asyncio sleep:
     2s between each of the five write-verification attempts, and 20s then 40s between read
     attempts. Those are the right delays against a real inverter that may still be booting, but
     in a test they are dead wall-clock - a single write that never verifies costs the whole
@@ -83,7 +83,7 @@ def _make_component(rest_urls="http://givtcp:6345", automatic=True):
     component = GivTCPComponent(base, rest_urls=rest_urls, automatic=automatic)
     for rest in component.rest:
         rest.inverter.slept = []
-        rest.inverter.sleep = rest.inverter.slept.append
+        rest.sleep = AsyncMock(side_effect=rest.inverter.slept.append)
     return base, component
 
 
@@ -242,12 +242,131 @@ def test_number_event_charge_rate(my_predbat=None):
     """A number_event on charge_rate reaches GivTCPRest.set_charge_rate inline, before returning."""
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob()
-    component.rest[0].set_charge_rate = MagicMock(return_value=True)
+    component.rest[0].set_charge_rate = AsyncMock(return_value=True)
 
     run_async(component.number_event("number.predbat_givtcp_0_charge_rate", 1500))
 
     component.rest[0].set_charge_rate.assert_called_once_with(1500)
     print("PASS: number_event on charge_rate dispatches to GivTCPRest.set_charge_rate")
+    return 0
+
+
+def test_client_calls_run_on_the_event_loop(my_predbat=None):
+    """
+    The component awaits its REST clients on its own event loop, on one session it owns.
+
+    The clients used to block (an HTTP call plus time.sleep), so every read and write was parked on
+    an executor thread, each of which then ran an event loop of its own for the one request. Now
+    they are coroutines, and the session they share belongs to the loop run() ticks on. A write
+    event is awaited from whatever loop pressed it, so it is handed over to the component's loop
+    (ComponentBase.on_component_loop) - which also keeps a write's read-back and a poll from
+    replacing rest_data under each other from two threads.
+    """
+    import asyncio
+    import threading
+    import time
+
+    base, component = _make_component(rest_urls=["http://givtcp:6345", "http://givtcp2:6345"])
+
+    # One session, made through the component's factory, shared by every client and reused
+    made = []
+
+    class _Session:
+        """Stands in for an aiohttp session: open until closed."""
+
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            """Mark the session closed."""
+            self.closed = True
+
+    def factory(**kwargs):
+        """Stands in for the host's session factory."""
+        made.append(_Session())
+        return made[-1]
+
+    base.http_session_factory = factory
+
+    async def sessions(on_component_loop=True):
+        """Ask each client for its session twice, on one loop that is or is not the component's."""
+        component.component_loop = asyncio.get_running_loop() if on_component_loop else None
+        return [rest.http_session() for rest in component.rest] + [rest.http_session() for rest in component.rest]
+
+    async def sessions_as_is():
+        """Ask each client for its session without changing which loop is the component's."""
+        return [rest.http_session() for rest in component.rest]
+
+    # Off the component's loop (not started, or stopped) there is no shared session: an aiohttp
+    # session belongs to the loop it was made on, and one made on a caller's passing loop could
+    # never be closed. The client then has the helper make a session for the one request.
+    assert asyncio.run(sessions(on_component_loop=False)) == [None] * 4 and not made, f"No shared session may be made off the component's loop, made {len(made)}"
+    other = asyncio.new_event_loop()
+    try:
+        component.component_loop = other
+        assert asyncio.run(sessions_as_is()) == [None, None] and not made, "A caller on another loop must not get or make the shared session"
+    finally:
+        other.close()
+
+    got = run_async(sessions())
+    assert len(made) == 1 and all(session is made[0] for session in got), f"Every client must share one session from the component's factory, made {len(made)}"
+
+    # A closed session is replaced rather than reused, and final() closes the open one
+    made[0].closed = True
+    assert run_async(sessions())[0] is made[1], "A closed session must be replaced"
+    run_async(component.final())
+    assert made[1].closed and component.session is None, "final() must close the component's session"
+    assert len(made) == 2, f"Only the component's loop may make sessions, made {len(made)}"
+    component.component_loop = None
+
+    threads = []
+
+    async def read_data(api="readData", retry=True):
+        """Note which thread the poll ran on."""
+        threads.append(threading.get_ident())
+        return _rest_data_blob()
+
+    async def set_charge_rate(rate):
+        """Note which thread the write ran on."""
+        threads.append(threading.get_ident())
+        return True
+
+    component.rest[0].read_data = read_data
+    component.rest[1].read_data = read_data
+    component.rest[0].set_charge_rate = set_charge_rate
+    run_async(component.run(seconds=0, first=True))
+    run_async(component.number_event("number.predbat_givtcp_0_charge_rate", 1500))
+
+    assert len(threads) == 3, f"Expected two polls and one write, got {len(threads)}"
+    assert set(threads) == {threading.get_ident()}, "Client calls must run on the event loop's own thread, not an executor"
+
+    # With the component running on a loop of its own, a write pressed from another loop runs there
+    loop = asyncio.new_event_loop()
+    worker = threading.Thread(target=loop.run_forever, daemon=True)
+    worker.start()
+    while not loop.is_running():
+        time.sleep(0.01)
+    try:
+        component.component_loop = loop
+        threads.clear()
+        published = []
+        publish_data = component.publish_data
+
+        async def publish_and_note():
+            """Publish as usual, noting the thread."""
+            published.append(threading.get_ident())
+            await publish_data()
+
+        component.publish_data = publish_and_note
+        asyncio.run(component.number_event("number.predbat_givtcp_0_charge_rate", 1600))
+        assert threads == [worker.ident], f"A write from another loop must run on the component's loop thread, ran on {threads}"
+        assert published == [worker.ident], "The republish after a write must run on the component's loop too"
+        assert base.entities["number.predbat_givtcp_0_charge_rate"]["state"] is not None, "The entity must be republished before the event returns"
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        worker.join(5)
+        loop.close()
+    print("PASS: client calls are awaited on the component's event loop with its one session")
     return 0
 
 
@@ -261,7 +380,7 @@ def test_write_event_is_applied_inline_not_deferred(my_predbat=None):
     """
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob(charge_rate=1000)
-    component.rest[0].set_charge_rate = MagicMock(return_value=True)
+    component.rest[0].set_charge_rate = AsyncMock(return_value=True)
 
     run_async(component.number_event("number.predbat_givtcp_0_charge_rate", 1500))
 
@@ -276,7 +395,7 @@ def test_switch_event_scheduled_charge_enable(my_predbat=None):
     """A switch turn_on/turn_off maps to enable_charge_schedule(True/False)."""
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob()
-    component.rest[0].enable_charge_schedule = MagicMock(return_value=True)
+    component.rest[0].enable_charge_schedule = AsyncMock(return_value=True)
 
     run_async(component.switch_event("switch.predbat_givtcp_0_scheduled_charge_enable", "turn_on"))
     component.rest[0].enable_charge_schedule.assert_called_once_with(True)
@@ -292,7 +411,7 @@ def test_switch_event_toggle_ignored(my_predbat=None):
     """A 'toggle' service (no on/off semantics for GivTCP) is dropped rather than written."""
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob()
-    component.rest[0].enable_charge_schedule = MagicMock(return_value=True)
+    component.rest[0].enable_charge_schedule = AsyncMock(return_value=True)
     run_async(component.switch_event("switch.predbat_givtcp_0_scheduled_charge_enable", "toggle"))
     assert not component.rest[0].enable_charge_schedule.called, "Expected toggle to be ignored, not written"
     print("PASS: an unsupported switch service is dropped rather than written")
@@ -303,7 +422,7 @@ def test_select_event_charge_start_time_preserves_end(my_predbat=None):
     """Changing charge_start_time writes the new start alongside the existing end time, not a default."""
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob(charge_start="00:30:00", charge_end="04:30:00")
-    component.rest[0].set_charge_slot1 = MagicMock(return_value=True)
+    component.rest[0].set_charge_slot1 = AsyncMock(return_value=True)
 
     run_async(component.select_event("select.predbat_givtcp_0_charge_start_time", "01:00:00"))
 
@@ -316,7 +435,7 @@ def test_select_event_discharge_end_time_preserves_start(my_predbat=None):
     """Changing discharge_end_time writes the existing start alongside the new end time."""
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob(discharge_start="16:00:00", discharge_end="19:00:00")
-    component.rest[0].set_discharge_slot1 = MagicMock(return_value=True)
+    component.rest[0].set_discharge_slot1 = AsyncMock(return_value=True)
 
     run_async(component.select_event("select.predbat_givtcp_0_discharge_end_time", "20:00:00"))
 
@@ -357,8 +476,8 @@ def test_select_event_plain_selects_pass_the_value_through(my_predbat=None):
     """
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob()
-    component.rest[0].set_battery_mode = MagicMock(return_value=True)
-    component.rest[0].set_battery_pause_mode = MagicMock(return_value=True)
+    component.rest[0].set_battery_mode = AsyncMock(return_value=True)
+    component.rest[0].set_battery_pause_mode = AsyncMock(return_value=True)
 
     run_async(component.select_event("select.predbat_givtcp_0_inverter_mode", "Timed Export"))
     component.rest[0].set_battery_mode.assert_called_once_with("Timed Export")
@@ -374,7 +493,7 @@ def test_select_event_pause_start_time_preserves_end(my_predbat=None):
     """Changing pause_start_time writes the new start alongside the existing end, like the charge slot."""
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob(pause_start="00:00:00", pause_end="23:59:00")
-    component.rest[0].set_pause_slot = MagicMock(return_value=True)
+    component.rest[0].set_pause_slot = AsyncMock(return_value=True)
 
     run_async(component.select_event("select.predbat_givtcp_0_pause_start_time", "01:00:00"))
 
@@ -446,11 +565,21 @@ def test_discharge_target_not_published_for_unsupported_models(my_predbat=None):
     return 0
 
 
-def _rest_from_fixture(filename):
-    """A component whose single inverter holds a real captured GivTCP /readData response."""
+# rest_v3.json was captured from a Gen2 Hybrid, which has no working export target register
+# (#5679). Tests that want the fully-featured v3 catalogue relabel it as a model that does.
+SUPPORTED_DISCHARGE_TARGET_TYPE = "Gen3 Hybrid"
+
+
+def _rest_from_fixture(filename, invertor_type=None):
+    """A component whose single inverter holds a real captured GivTCP /readData response, optionally relabelled with another Invertor_Type."""
     base, component = _make_component()
     with open(filename, "r") as handle:
-        component.rest[0].inverter.rest_data = json.load(handle)
+        rest_data = json.load(handle)
+    if invertor_type is not None:
+        for block in rest_data.values():
+            if isinstance(block, dict) and "Invertor_Type" in block:
+                block["Invertor_Type"] = invertor_type
+    component.rest[0].inverter.rest_data = rest_data
     return base, component
 
 
@@ -600,7 +729,7 @@ def test_unknown_inverter_index_write_logged_not_crashed(my_predbat=None):
 def test_run_first_call_polls_and_configures(my_predbat=None):
     """The first run() call reads status, publishes it, and runs automatic_config() exactly once."""
     base, component = _make_component()
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
 
     run_async(component.run(seconds=0, first=True))
 
@@ -622,14 +751,14 @@ def test_run_detects_givtcp_version(my_predbat=None):
     base, component = _make_component()
     data = _rest_data_blob()
     data["Stats"] = {"GivTCP_Version": "3.2.1"}
-    component.rest[0].read_data = MagicMock(return_value=data)
+    component.rest[0].read_data = AsyncMock(return_value=data)
 
     run_async(component.run(seconds=0, first=True))
     assert component.rest[0].rest_v3 is True, "Expected rest_v3 True for a 3.x GivTCP_Version"
 
     data2 = _rest_data_blob()
     data2["Stats"] = {"GivTCP_Version": "2.9.0"}
-    component.rest[0].read_data = MagicMock(return_value=data2)
+    component.rest[0].read_data = AsyncMock(return_value=data2)
     run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
     assert component.rest[0].rest_v3 is False, "Expected rest_v3 False for a 2.x GivTCP_Version"
     print("PASS: run() detects GivTCP's version from Stats.GivTCP_Version")
@@ -645,7 +774,7 @@ def test_write_event_exception_does_not_propagate(my_predbat=None):
     """
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob()
-    component.rest[0].set_charge_rate = MagicMock(side_effect=Exception("boom"))
+    component.rest[0].set_charge_rate = AsyncMock(side_effect=Exception("boom"))
 
     run_async(component.number_event("number.predbat_givtcp_0_charge_rate", 1500))
     print("PASS: an exception during a write is contained, not propagated")
@@ -661,7 +790,7 @@ def test_run_reports_failure_until_data_arrives(my_predbat=None):
     the user's working apps.yaml entity config with unavailable ones.
     """
     base, component = _make_component()
-    component.rest[0].read_data = MagicMock(return_value=None)
+    component.rest[0].read_data = AsyncMock(return_value=None)
 
     result = run_async(component.run(seconds=0, first=True))
     assert result is False, "run() must report failure when nothing could be read"
@@ -669,7 +798,7 @@ def test_run_reports_failure_until_data_arrives(my_predbat=None):
     assert "num_inverters" not in base.args, "apps.yaml keys must be left alone until data is available"
 
     # Once GivTCP responds, the component recovers and configures itself
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
     result = run_async(component.run(seconds=0, first=True))
     assert result is True, "run() should report success once data has been read"
     assert base.args.get("num_inverters") == 1, "Expected automatic_config to run once data arrived"
@@ -724,8 +853,8 @@ def test_automatic_config_counts_discovered_inverters_not_configured_urls(my_pre
     build Inverter(id=1) against a host that does not exist and plan against a phantom battery.
     """
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
-    component.rest[1].read_data = MagicMock(return_value=None)
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = AsyncMock(return_value=None)
 
     result = run_async(component.run(seconds=0, first=True))
     assert result is True, "run() should succeed when at least one endpoint answered"
@@ -746,8 +875,8 @@ def test_automatic_config_keeps_the_live_endpoint_in_its_own_slot(my_predbat=Non
     pinned to the REST endpoint index too, because _parse_entity feeds self.rest[n] on every write.
     """
     base, component = _make_component(rest_urls=["http://dead:6345", "http://givtcp1:6345"])
-    component.rest[0].read_data = MagicMock(return_value=None)
-    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=None)
+    component.rest[1].read_data = AsyncMock(return_value=_rest_data_blob())
 
     run_async(component.run(seconds=0, first=True))
     assert base.args["num_inverters"] == 2, f"Expected num_inverters 2, got {base.args.get('num_inverters')}"
@@ -781,8 +910,8 @@ def test_dead_endpoint_is_not_polled_after_discovery(my_predbat=None):
     test_rediscovery_uses_a_cheap_single_probe.
     """
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://dead:6345"])
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
-    component.rest[1].read_data = MagicMock(return_value=None)
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = AsyncMock(return_value=None)
 
     run_async(component.run(seconds=0, first=True))
     assert component.rest[1].read_data.call_count == 1, "the dead endpoint should be probed once during discovery"
@@ -805,8 +934,8 @@ def test_pause_keys_gated_on_discovered_inverters_only(my_predbat=None):
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://dead:6345"])
     live = _rest_data_blob()
     live["Stats"] = {"GivTCP_Version": "3.2.1"}
-    component.rest[0].read_data = MagicMock(return_value=live)
-    component.rest[1].read_data = MagicMock(return_value=None)
+    component.rest[0].read_data = AsyncMock(return_value=live)
+    component.rest[1].read_data = AsyncMock(return_value=None)
 
     run_async(component.run(seconds=0, first=True))
     assert base.args.get("pause_mode") == ["select.predbat_givtcp_0_pause_mode"], f"Expected pause claimed for the live v3 inverter, got {base.args.get('pause_mode')}"
@@ -822,14 +951,14 @@ def test_rediscovery_picks_up_an_inverter_that_was_down_at_startup(my_predbat=No
     during Predbat startup cost the user that inverter until they restarted Predbat.
     """
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
-    component.rest[1].read_data = MagicMock(return_value=None)
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = AsyncMock(return_value=None)
 
     run_async(component.run(seconds=0, first=True))
     assert base.args["num_inverters"] == 1, f"Expected 1 inverter at startup, got {base.args.get('num_inverters')}"
 
     # the second inverter comes back, and the hourly re-probe finds it
-    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = AsyncMock(return_value=_rest_data_blob())
     run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
 
     assert component.discovered == [0, 1], f"Expected both endpoints discovered, got {component.discovered}"
@@ -852,8 +981,8 @@ def test_rediscovery_keeps_inverter_identity_by_endpoint(my_predbat=None):
     (inverter_limit_charge and the like) then applied to the wrong physical inverter (#5209).
     """
     base, component = _make_component(rest_urls=["http://dead:6345", "http://givtcp1:6345"])
-    component.rest[0].read_data = MagicMock(return_value=None)
-    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=None)
+    component.rest[1].read_data = AsyncMock(return_value=_rest_data_blob())
 
     run_async(component.run(seconds=0, first=True))
     assert component.discovered == [1], f"Expected only endpoint 1 discovered, got {component.discovered}"
@@ -861,7 +990,7 @@ def test_rediscovery_keeps_inverter_identity_by_endpoint(my_predbat=None):
     assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"], f"Expected slot n to be endpoint n at startup, got {base.args.get('charge_rate')}"
     assert base.args["num_inverters"] == 2
 
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
     run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
 
     assert sorted(component.discovered) == [0, 1], f"Expected both endpoints discovered, got {component.discovered}"
@@ -890,9 +1019,9 @@ def test_leading_endpoint_down_does_not_shift_the_fleet(my_predbat=None):
     base.args_from_apps_yaml = dict(apps_yaml)
     base.apps_yaml_override_warned = set()
     base.args.update(apps_yaml)
-    component.rest[0].read_data = MagicMock(return_value=None)
-    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
-    component.rest[2].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=None)
+    component.rest[1].read_data = AsyncMock(return_value=_rest_data_blob())
+    component.rest[2].read_data = AsyncMock(return_value=_rest_data_blob())
 
     run_async(component.run(seconds=0, first=True))
 
@@ -910,7 +1039,7 @@ def test_leading_endpoint_down_does_not_shift_the_fleet(my_predbat=None):
         failed = True
 
     # Endpoint 0 comes back and is adopted on the hourly re-probe - nothing rotates
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
     run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
 
     if base.args.get("charge_rate") != ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate", "number.predbat_givtcp_2_charge_rate"]:
@@ -937,8 +1066,8 @@ def test_gated_claim_is_handed_back_when_a_late_endpoint_lacks_the_capability(my
     base.args_from_apps_yaml = dict(apps_yaml)
     base.apps_yaml_override_warned = set()
     base.args.update(apps_yaml)
-    component.rest[0].read_data = MagicMock(return_value=None)
-    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob(version="3.0.4"))
+    component.rest[0].read_data = AsyncMock(return_value=None)
+    component.rest[1].read_data = AsyncMock(return_value=_rest_data_blob(version="3.0.4"))
 
     run_async(component.run(seconds=0, first=True))
     if base.args.get("pause_mode") != ["select.predbat_givtcp_0_pause_mode", "select.predbat_givtcp_1_pause_mode"]:
@@ -949,7 +1078,7 @@ def test_gated_claim_is_handed_back_when_a_late_endpoint_lacks_the_capability(my
         failed = True
 
     # Endpoint 0 answers on re-probe, but runs GivTCP v2
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob(version="2.4.0"))
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob(version="2.4.0"))
     run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
 
     if sorted(component.discovered) != [0, 1]:
@@ -982,12 +1111,12 @@ def test_gap_and_tail_slots_are_logged_separately(my_predbat=None):
     base.args["num_inverters"] = 3
     messages = []
     component.log = lambda message, quiet=True: messages.append(str(message))
-    component.rest[0].read_data = MagicMock(return_value=None)
-    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=None)
+    component.rest[1].read_data = AsyncMock(return_value=_rest_data_blob())
 
     run_async(component.run(seconds=0, first=True))
 
-    gap =[m for m in messages if m.startswith("Warn: GivTCP: no inverter has answered yet")]
+    gap = [m for m in messages if m.startswith("Warn: GivTCP: no inverter has answered yet")]
     tail = [m for m in messages if "leaving inverter(s)" in m]
     if len(gap) != 1 or "http://dead:6345" not in gap[0] or "inverter(s) 0 keep their own slot" not in gap[0]:
         print("ERROR: expected one warning naming gap slot 0 and its URL, got {}".format(gap))
@@ -1011,13 +1140,13 @@ def test_rediscovery_never_drops_an_inverter_that_stops_answering(my_predbat=Non
     """
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
     for rest in component.rest:
-        rest.read_data = MagicMock(return_value=_rest_data_blob())
+        rest.read_data = AsyncMock(return_value=_rest_data_blob())
 
     run_async(component.run(seconds=0, first=True))
     assert component.discovered == [0, 1] and base.args["num_inverters"] == 2
 
     # inverter 1 goes offline and stays offline across a re-probe boundary
-    component.rest[1].read_data = MagicMock(return_value=None)
+    component.rest[1].read_data = AsyncMock(return_value=None)
     run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
 
     assert component.discovered == [0, 1], f"A discovered inverter must never be dropped, got {component.discovered}"
@@ -1034,8 +1163,8 @@ def test_rediscovery_uses_a_cheap_single_probe(my_predbat=None):
     re-probe of a placeholder URL that will never answer has to cost one GET, not ~100s of sleeps.
     """
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://dead:6345"])
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
-    component.rest[1].read_data = MagicMock(return_value=None)
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = AsyncMock(return_value=None)
 
     run_async(component.run(seconds=0, first=True))
     assert component.rest[1].read_data.call_args == (("readData",), {}) or component.rest[1].read_data.call_args == ((), {}), f"Discovery should use the retrying read, got {component.rest[1].read_data.call_args}"
@@ -1052,7 +1181,7 @@ def test_rediscovery_skipped_once_every_endpoint_is_discovered(my_predbat=None):
     """No re-probe work at all when every configured endpoint is already being managed."""
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
     for rest in component.rest:
-        rest.read_data = MagicMock(return_value=_rest_data_blob())
+        rest.read_data = AsyncMock(return_value=_rest_data_blob())
 
     run_async(component.run(seconds=0, first=True))
     calls = [rest.read_data.call_count for rest in component.rest]
@@ -1086,12 +1215,12 @@ def test_failed_poll_withholds_the_success_timestamp_and_warns(my_predbat=None):
     check (components.py) put the component into error instead.
     """
     base, component = _make_component()
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
     run_async(component.run(seconds=0, first=True))
     healthy_at = component.last_success_timestamp
     assert healthy_at is not None, "a successful poll should record a success timestamp"
 
-    component.rest[0].read_data = MagicMock(return_value=None)
+    component.rest[0].read_data = AsyncMock(return_value=None)
     messages = _capture_logs(component)
     result = run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
 
@@ -1105,14 +1234,14 @@ def test_failed_poll_withholds_the_success_timestamp_and_warns(my_predbat=None):
 def test_success_timestamp_resumes_once_the_poll_recovers(my_predbat=None):
     """Once GivTCP answers again the component reports healthy without needing a restart."""
     base, component = _make_component()
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
     run_async(component.run(seconds=0, first=True))
 
-    component.rest[0].read_data = MagicMock(return_value=None)
+    component.rest[0].read_data = AsyncMock(return_value=None)
     run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
     stalled_at = component.last_success_timestamp
 
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
     run_async(component.run(seconds=GIVTCP_POLL_SECONDS * 2, first=False))
 
     assert component.last_success_timestamp > stalled_at, "the success timestamp should advance again after recovery"
@@ -1129,11 +1258,11 @@ def test_one_failing_inverter_withholds_success_for_the_whole_component(my_predb
     """
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
     for rest in component.rest:
-        rest.read_data = MagicMock(return_value=_rest_data_blob())
+        rest.read_data = AsyncMock(return_value=_rest_data_blob())
     run_async(component.run(seconds=0, first=True))
     healthy_at = component.last_success_timestamp
 
-    component.rest[1].read_data = MagicMock(return_value=None)
+    component.rest[1].read_data = AsyncMock(return_value=None)
     run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
 
     assert component.last_success_timestamp == healthy_at, "one failing inverter must withhold the whole component's success"
@@ -1149,8 +1278,8 @@ def test_an_endpoint_never_discovered_does_not_withhold_success(my_predbat=None)
     holding the component in error for it would make the default config permanently unhealthy.
     """
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://placeholder:6345"])
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
-    component.rest[1].read_data = MagicMock(return_value=None)
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = AsyncMock(return_value=None)
     run_async(component.run(seconds=0, first=True))
     first_success = component.last_success_timestamp
     assert first_success is not None, "discovery of one live inverter should report success"
@@ -1203,7 +1332,7 @@ def test_charge_limit_enable_write_hits_the_enable_register(my_predbat=None):
     """A write to the enable switch calls enable_charge_target, not set_charge_target."""
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob()
-    component.rest[0].enable_charge_target = MagicMock(return_value=True)
+    component.rest[0].enable_charge_target = AsyncMock(return_value=True)
 
     run_async(component.switch_event("switch.predbat_givtcp_0_charge_limit_enable", "turn_on"))
     component.rest[0].enable_charge_target.assert_called_once_with(True)
@@ -1363,12 +1492,12 @@ def test_rate_write_tolerance_uses_the_real_max_rate(my_predbat=None):
     blob = _rest_data_blob(charge_rate=3000)
     blob["Invertor_Details"] = {"Invertor_Max_Bat_Rate": 2600}
     component.rest[0].inverter.rest_data = blob
-    component.rest[0].post_command = MagicMock(return_value=None)
-    component.rest[0].run_all = MagicMock(return_value=blob)
+    component.rest[0].post_command = AsyncMock(return_value=None)
+    component.rest[0].run_all = AsyncMock(return_value=blob)
 
     # asking for 200W while the inverter stays at 3000W is a 2800W miss: inside the old 5000W
     # tolerance, well outside the correct 217W one
-    assert component.rest[0].set_charge_rate(200) is False, "A 2800W miss must not verify as a successful write"
+    assert run_async(component.rest[0].set_charge_rate(200)) is False, "A 2800W miss must not verify as a successful write"
     print("PASS: rate write tolerance is sized from the real max battery rate")
     return 0
 
@@ -1506,8 +1635,8 @@ def test_slot_write_before_any_status_is_refused_not_fabricated(my_predbat=None)
     """
     base, component = _make_component()
     component.rest[0].inverter.rest_data = None
-    component.rest[0].set_charge_slot1 = MagicMock(return_value=True)
-    component.rest[0].set_discharge_slot1 = MagicMock(return_value=True)
+    component.rest[0].set_charge_slot1 = AsyncMock(return_value=True)
+    component.rest[0].set_discharge_slot1 = AsyncMock(return_value=True)
     messages = _capture_logs(component)
 
     run_async(component.select_event("select.predbat_givtcp_0_charge_start_time", "09:00:00"))
@@ -1525,7 +1654,7 @@ def test_slot_write_still_works_once_status_is_known(my_predbat=None):
     """The normal path is unchanged: the other end comes from the last status snapshot."""
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob(charge_start="00:30:00", charge_end="04:30:00")
-    component.rest[0].set_charge_slot1 = MagicMock(return_value=True)
+    component.rest[0].set_charge_slot1 = AsyncMock(return_value=True)
 
     run_async(component.select_event("select.predbat_givtcp_0_charge_start_time", "01:00:00"))
     component.rest[0].set_charge_slot1.assert_called_once_with("01:00:00", "04:30:00")
@@ -1557,8 +1686,8 @@ def test_discharge_target_not_published_on_v2(my_predbat=None):
 
 
 def test_discharge_target_still_published_on_v3(my_predbat=None):
-    """v3 does have the endpoint, so the control is published and claimed as before."""
-    base, component = _rest_from_fixture("cases/rest_v3.json")
+    """v3 does have the endpoint, so the control is published and claimed as before on a model with the register."""
+    base, component = _rest_from_fixture("cases/rest_v3.json", invertor_type=SUPPORTED_DISCHARGE_TARGET_TYPE)
     _set_v3(component.rest[0], True)
     run_async(component.publish_data())
 
@@ -1624,19 +1753,40 @@ def test_unsupported_model_detected_from_invertor_type(my_predbat=None):
     return 0
 
 
-def test_gen2_hybrid_keeps_its_export_target(my_predbat=None):
+def test_gen2_hybrid_suppresses_its_export_target(my_predbat=None):
     """
-    Gen2 Hybrid is deliberately NOT matched on Invertor_Type.
+    Gen2 Hybrid is matched on Invertor_Type (#5679).
 
-    "Hybrid_gen2" was inferred from a firmware archive rather than observed on hardware, and it is
-    still honoured where a GivTCP build reports that exact raw.invertor.model. Extending it to
-    Invertor_Type would newly remove export target control from every Gen2 Hybrid on v3 - the
-    largest group of users - on the strength of that inference.
+    GivTCP 3.6 refuses the per-slot discharge target write on a Gen2 Hybrid, so publishing the
+    control left Predbat rewriting it and warning every export cycle. The explicit Hybrid_gen2 raw
+    model is still honoured as before.
     """
-    assert _publishes_discharge_target(invertor_type="Gen2 Hybrid"), "a Gen2 Hybrid should keep its export target control"
-    # but an explicit raw model saying so is still honoured, exactly as before
+    assert not _publishes_discharge_target(invertor_type="Gen2 Hybrid"), "a Gen2 Hybrid must not publish the export target control"
     assert not _publishes_discharge_target(invertor_type="Gen2 Hybrid", raw_model="Hybrid_gen2"), "an explicit Hybrid_gen2 raw model must still suppress it"
-    print("PASS: Gen2 Hybrid keeps its export target unless the raw model says otherwise")
+    print("PASS: Gen2 Hybrid suppresses its export target")
+    return 0
+
+
+def test_discharge_target_not_claimed_for_unsupported_models(my_predbat=None):
+    """
+    automatic_config() leaves discharge_target_soc alone for a model with no working register (#5679).
+
+    The entity is never published for such a model, so claiming it would bind the setting to an entity
+    that does not exist, and Inverter would log "No current discharge target to read" on every export
+    cycle. Left unclaimed, the discovery record agrees with what automatic_config() bound. Uses the real
+    Gen2 Hybrid capture as recorded.
+    """
+    component, record = _v3_capture_record(invertor_type=None)
+    assert "discharge_target_soc" not in record["entities"], "the Gen2 capture must not list a discharge target entity"
+    captured = capture_automatic_config(component)
+    assert "discharge_target_soc" not in captured, "an unsupported model must not have discharge_target_soc claimed, got {}".format(captured.get("discharge_target_soc"))
+    assert_record_agrees(record, captured, index=0)
+
+    # a model that does have the register is still claimed, as the relabelled capture shows
+    component, record = _v3_capture_record()
+    assert "discharge_target_soc" in record["entities"], "a supported model must list the discharge target entity"
+    assert "discharge_target_soc" in capture_automatic_config(component), "a supported model must have discharge_target_soc claimed"
+    print("PASS: discharge_target_soc is claimed only for models that have the register")
     return 0
 
 
@@ -2611,7 +2761,7 @@ def test_build_discovery_entities_omit_what_v2_never_publishes(my_predbat=None):
 
 def test_build_discovery_entities_include_what_v3_actually_publishes(my_predbat=None):
     """The v3 counterpart of the omission test above: a fleet with full register support does report these."""
-    base, component = _rest_from_fixture("cases/rest_v3.json")
+    base, component = _rest_from_fixture("cases/rest_v3.json", invertor_type=SUPPORTED_DISCHARGE_TARGET_TYPE)
     _mark_discovered(component)
     run_async(component.publish_data())
     entities = component.build_discovery()["inverters"][0]["entities"]
@@ -2652,7 +2802,7 @@ def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
     assert record["hardware_ids"] == {"serial": "EA2303G082"}
     assert record["info"]["model"] == "Gen2 Hybrid"
     assert record["info"]["firmware"] == "D0.913-A0.913"
-    assert record["ratings"] == {"soc_max": 9.52, "battery_rate_max": 3600, "inverter_limit": 3600}
+    assert record["ratings"] == {"soc_max": 9.52, "battery_rate_max": 3600, "inverter_limit": 3600, "export_limit": 6000}
     assert "battery_kwh" not in record["ratings"] and "max_charge_w" not in record["ratings"]
     assert len(record["entities"]) == len(original["entities"])
     for name, descriptor in original["entities"].items():
@@ -2665,9 +2815,9 @@ def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
     return 0
 
 
-def _v3_capture_record():
-    """The real rest_v3.json capture published by a component, and the one validated inverter record build_discovery() makes of it."""
-    base, component = _rest_from_fixture("cases/rest_v3.json")
+def _v3_capture_record(invertor_type=SUPPORTED_DISCHARGE_TARGET_TYPE):
+    """The real rest_v3.json capture (relabelled as invertor_type, or as recorded with None) published by a component, and the one validated inverter record build_discovery() makes of it."""
+    base, component = _rest_from_fixture("cases/rest_v3.json", invertor_type=invertor_type)
     _mark_discovered(component)
     run_async(component.publish_data())
     records = validated_inverters(component.build_discovery())
@@ -2752,7 +2902,7 @@ def test_build_discovery_power_ignore_keeps_the_power_entities(my_predbat=None):
     still describes the device's power sensors; piece 3's coordinator applies the opt-out.
     """
     power_keys = ("battery_power", "pv_power", "grid_power", "load_power", "battery_voltage")
-    base, component = _rest_from_fixture("cases/rest_v3.json")
+    base, component = _rest_from_fixture("cases/rest_v3.json", invertor_type=SUPPORTED_DISCHARGE_TARGET_TYPE)
     base.args["givtcp_rest_power_ignore"] = True
     _mark_discovered(component)
     run_async(component.publish_data())
@@ -2845,7 +2995,7 @@ def test_report_discovery_failure_does_not_degrade_component_health(my_predbat=N
     channel must be visible only in the log, never by changing Predbat's own reported status.
     """
     base, component = _make_component()
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
     component.build_discovery = MagicMock(side_effect=Exception("boom"))
 
     result = run_async(component.run(seconds=0, first=True))
@@ -2881,8 +3031,8 @@ def test_rediscovered_inverter_is_reported_only_once_its_entities_exist(my_predb
     call sidesteps.
     """
     base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
-    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
-    component.rest[1].read_data = MagicMock(return_value=None)
+    component.rest[0].read_data = AsyncMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = AsyncMock(return_value=None)
 
     reports = []
     component.report_discovery = lambda report: reports.append(report)
@@ -2892,7 +3042,7 @@ def test_rediscovered_inverter_is_reported_only_once_its_entities_exist(my_predb
     assert len(component._discovery_report["inverters"]) == 1
 
     # inverter 1 comes back, and the hourly re-probe finds it
-    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = AsyncMock(return_value=_rest_data_blob())
     run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
 
     assert component.discovered == [0, 1], f"Expected both endpoints discovered, got {component.discovered}"
@@ -2928,7 +3078,7 @@ def test_a_partial_first_report_is_replaced_once_the_inverter_fills_it_in(my_pre
     """
     base, component = _make_component(rest_urls=["http://givtcp0:6345"])
     blob = _rest_data_blob()
-    component.rest[0].read_data = MagicMock(return_value=blob)
+    component.rest[0].read_data = AsyncMock(return_value=blob)
 
     reports = []
     component.report_discovery = lambda report: reports.append(report)
@@ -2945,13 +3095,164 @@ def test_a_partial_first_report_is_replaced_once_the_inverter_fills_it_in(my_pre
     # GivTCP now reports the inverter's identity registers
     identified = _rest_data_blob()
     identified["raw"] = {"invertor": {"serial_number": "CE1234G567"}}
-    component.rest[0].read_data = MagicMock(return_value=identified)
+    component.rest[0].read_data = AsyncMock(return_value=identified)
     run_async(component.run(seconds=GIVTCP_POLL_SECONDS * 2, first=False))
 
     assert len(reports) == 2, "the completed report must replace the partial one, not be suppressed by an unchanged index list"
     assert reports[-1]["inverters"][0]["device_id"] == "givtcp:CE1234G567"
     assert reports[-1]["inverters"][0]["hardware_ids"] == {"serial": "CE1234G567"}
     print("PASS: a partial first report is replaced once the inverter reports its serial")
+    return 0
+
+
+def _export_limit_fixture(export_limit=6000):
+    """A component holding the real v3 capture, with its inverter block's Export_Limit set (or removed when None)."""
+    base, component = _rest_from_fixture("cases/rest_v3.json")
+    block = component.rest[0].inverter.rest_data["EA2303G082"]
+    if export_limit is None:
+        block.pop("Export_Limit", None)
+    else:
+        block["Export_Limit"] = export_limit
+    _mark_discovered(component)
+    return base, component
+
+
+def test_export_limit_sensor_is_published(my_predbat=None):
+    """GivTCP's Export_Limit (holding register 26) is published as a power sensor in W."""
+    base, component = _export_limit_fixture(3680)
+    run_async(component.publish_data())
+
+    entity_id = "sensor.predbat_givtcp_0_export_limit"
+    assert entity_id in base.entities, "export_limit sensor was not published"
+    assert base.entities[entity_id]["state"] == 3680, f"expected 3680, got {base.entities[entity_id]['state']}"
+    attrs = base.entities[entity_id]["attributes"]
+    assert attrs.get("unit_of_measurement") == "W", attrs
+    assert attrs.get("device_class") == "power", attrs
+    print("PASS: export_limit sensor is published from GivTCP's Export_Limit")
+    return 0
+
+
+def test_export_limit_zero_is_a_real_zero(my_predbat=None):
+    """
+    An Export_Limit of 0 is a zero-export site, not a missing reading.
+
+    The gateway reads the same register (HR 26) and treats 0 as a real 0 W limit, as GE Cloud does
+    for an enforced zero. Dropping it as falsy would plan exports the inverter refuses to make.
+    """
+    base, component = _export_limit_fixture(0)
+    run_async(component.publish_data())
+    entity_id = "sensor.predbat_givtcp_0_export_limit"
+    assert entity_id in base.entities, "a zero export limit must still be published"
+    assert base.entities[entity_id]["state"] == 0, f"expected 0, got {base.entities[entity_id]['state']}"
+
+    run_async(component.automatic_config())
+    assert base.args.get("export_limit") == [entity_id], f"a zero export limit should still be auto-configured, got {base.args.get('export_limit')}"
+    print("PASS: a zero export limit is published and claimed as a real zero")
+    return 0
+
+
+def test_export_limit_not_published_or_claimed_when_unreported(my_predbat=None):
+    """No Export_Limit in the snapshot (GivTCP v2, three-phase) publishes nothing and leaves export_limit to apps.yaml."""
+    base, component = _export_limit_fixture(None)
+    base.args["export_limit"] = [5000]
+    run_async(component.publish_data())
+    assert "sensor.predbat_givtcp_0_export_limit" not in base.entities, "export_limit must not be published when GivTCP does not report it"
+
+    run_async(component.automatic_config())
+    assert base.args.get("export_limit") == [5000], f"export_limit must be left as configured, got {base.args.get('export_limit')}"
+    print("PASS: an unreported export limit is neither published nor claimed")
+    return 0
+
+
+def test_export_limit_auto_configured_when_apps_yaml_is_silent(my_predbat=None):
+    """With no export_limit in apps.yaml, auto-config points it at the inverter's own sensor."""
+    base, component = _export_limit_fixture(3680)
+    base.args_from_apps_yaml = {}
+    base.apps_yaml_override_warned = set()
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+    assert base.args.get("export_limit") == ["sensor.predbat_givtcp_0_export_limit"], f"got {base.args.get('export_limit')}"
+    print("PASS: export_limit is auto-configured when apps.yaml does not set it")
+    return 0
+
+
+def test_export_limit_apps_yaml_value_wins(my_predbat=None):
+    """
+    An export_limit written in apps.yaml is kept, unlike inverter_limit which auto-discovery overwrites.
+
+    Existing installs carry a hand-typed export_limit from the template; the inverter's reading
+    replaces it only once the user deletes that line. When the two disagree a note says so, naming
+    both figures, so a stale apps.yaml value can be spotted.
+    """
+    base, component = _export_limit_fixture(6000)
+    base.args_from_apps_yaml = {"export_limit": [3600]}
+    base.apps_yaml_override_warned = set()
+    base.args["export_limit"] = [3600]
+    messages = _capture_logs(component)
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    assert base.args.get("export_limit") == [3600], f"the apps.yaml export_limit must be kept, got {base.args.get('export_limit')}"
+    assert "sensor.predbat_givtcp_0_export_limit" in base.entities, "the sensor is still published when apps.yaml wins"
+    notes = [m for m in messages if "export_limit" in m and "3600W" in m and "6000W" in m]
+    assert len(notes) == 1, f"expected one note naming both export limits, got {messages}"
+    assert "remove export_limit" in notes[0], f"with the key claimed, removing the line hands it to the inverter's own sensor: {notes[0]}"
+    print("PASS: the apps.yaml export_limit wins and a mismatch is noted")
+    return 0
+
+
+def test_export_limit_no_mismatch_note_when_values_agree(my_predbat=None):
+    """An apps.yaml export_limit equal to the inverter's own reading is kept without a mismatch note."""
+    base, component = _export_limit_fixture(3600)
+    base.args_from_apps_yaml = {"export_limit": [3600]}
+    base.apps_yaml_override_warned = set()
+    base.args["export_limit"] = [3600]
+    messages = _capture_logs(component)
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    assert base.args.get("export_limit") == [3600]
+    notes = [m for m in messages if "export_limit" in m and "reports" in m]
+    assert not notes, f"no mismatch note expected when the values agree, got {notes}"
+    print("PASS: no mismatch note when apps.yaml agrees with the inverter")
+    return 0
+
+
+def test_export_limit_mismatch_noted_in_a_mixed_fleet(my_predbat=None):
+    """
+    A stale apps.yaml export_limit is still noted when only some inverters report their own limit.
+
+    export_limit is claimed only when every inverter publishes it, so with one inverter that reports
+    6000W and one that reports nothing (GivTCP v2, three-phase) the key stays with apps.yaml. The
+    reporting inverter's figure still shows the hand-typed 3600W is stale, so the note fires for it -
+    but deleting the line would leave both inverters unlimited, not on their own limits, so the
+    advice is to correct the figure rather than to remove it.
+    """
+    base, component = _make_component(rest_urls=["http://a:6345", "http://b:6345"])
+    for n in (0, 1):
+        with open("cases/rest_v3.json", "r") as handle:
+            component.rest[n].inverter.rest_data = json.load(handle)
+    component.rest[0].inverter.rest_data["EA2303G082"]["Export_Limit"] = 6000
+    component.rest[1].inverter.rest_data["EA2303G082"].pop("Export_Limit", None)
+    _mark_discovered(component)
+    base.args_from_apps_yaml = {"export_limit": [3600, 5000]}
+    base.apps_yaml_override_warned = set()
+    base.args["export_limit"] = [3600, 5000]
+    messages = _capture_logs(component)
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    assert base.args.get("export_limit") == [3600, 5000], f"an unclaimed export_limit must be left as configured, got {base.args.get('export_limit')}"
+    notes = [m for m in messages if "export_limit" in m and "reports" in m]
+    assert len(notes) == 1, f"expected one note, for the inverter that reports a limit, got {notes}"
+    assert "3600W" in notes[0] and "6000W" in notes[0] and "inverter 0" in notes[0], notes[0]
+    assert "remove export_limit" not in notes[0], f"removing the line would leave every inverter unlimited, so the note must not advise it: {notes[0]}"
+    assert "6000" in notes[0].split("-", 1)[1], f"the advice should name the figure to set: {notes[0]}"
+
+    run_async(component.automatic_config())
+    notes = [m for m in messages if "export_limit" in m and "reports" in m]
+    assert len(notes) == 1, f"the note must not repeat on the next pass, got {notes}"
+    print("PASS: a stale export_limit is noted in a mixed fleet, with advice that holds there")
     return 0
 
 
@@ -2997,7 +3298,8 @@ def test_givtcp_component(my_predbat=None):
         ("dt_on_v3", test_discharge_target_still_published_on_v3, "discharge target published on v3"),
         ("dt_mixed_fleet", test_discharge_target_needs_v3_on_every_inverter, "discharge target needs v3 everywhere"),
         ("dt_type_match", test_unsupported_model_detected_from_invertor_type, "unsupported model from Invertor_Type"),
-        ("dt_gen2_kept", test_gen2_hybrid_keeps_its_export_target, "Gen2 Hybrid keeps its export target"),
+        ("dt_gen2_suppressed", test_gen2_hybrid_suppresses_its_export_target, "Gen2 Hybrid suppresses its export target"),
+        ("dt_not_claimed", test_discharge_target_not_claimed_for_unsupported_models, "discharge target not claimed for unsupported models"),
         ("dt_raw_model", test_raw_model_matching_is_unchanged, "raw.invertor.model matching unchanged"),
         ("reserve_min_default", test_reserve_entity_min_defaults_to_the_ge_floor, "reserve entity min defaults to 4"),
         ("reserve_min_lower", test_reserve_entity_min_respects_a_lower_battery_min_soc, "lower battery_min_soc respected"),
@@ -3084,7 +3386,16 @@ def test_givtcp_component(my_predbat=None):
         ("discovery_report_failure_contained", test_report_discovery_failure_does_not_degrade_component_health, "a build_discovery failure is contained, not left to degrade health"),
         ("discovery_rediscovery_ordering", test_rediscovered_inverter_is_reported_only_once_its_entities_exist, "rediscovered inverter reported only once its entities exist"),
         ("discovery_partial_replaced", test_a_partial_first_report_is_replaced_once_the_inverter_fills_it_in, "a partial first report is replaced, an unchanged one is not re-filed"),
+        ("export_limit_published", test_export_limit_sensor_is_published, "export_limit sensor published from Export_Limit"),
+        ("export_limit_zero", test_export_limit_zero_is_a_real_zero, "a zero export limit is a real zero"),
+        ("export_limit_unreported", test_export_limit_not_published_or_claimed_when_unreported, "unreported export limit is neither published nor claimed"),
+        ("export_limit_auto", test_export_limit_auto_configured_when_apps_yaml_is_silent, "export_limit auto-configured when apps.yaml is silent"),
+        ("export_limit_user_wins", test_export_limit_apps_yaml_value_wins, "apps.yaml export_limit wins, mismatch noted"),
+        ("export_limit_no_note", test_export_limit_no_mismatch_note_when_values_agree, "no mismatch note when values agree"),
+        ("export_limit_mixed_fleet", test_export_limit_mismatch_noted_in_a_mixed_fleet, "stale export_limit noted in a mixed fleet, advice holds there"),
     ]
+
+    sub_tests.append(("client_on_event_loop", test_client_calls_run_on_the_event_loop, "client calls awaited on the event loop, component sessions"))
 
     passed = 0
     failed = 0

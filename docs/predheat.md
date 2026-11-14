@@ -50,7 +50,7 @@ Then add in the Home Assistant service and connect up your API key to obtain hou
 
 ### Apex Charts install
 
-Use HACS to install Apex Charts: <https://github.com/RomRider/apexcharts-card>
+Install Apex Charts from the [Marketplace](install.md#hacs-and-the-marketplace) (or HACS on Home Assistant 2026.10 or older): <https://github.com/RomRider/apexcharts-card>
 
 There is a template of [example_Predheat charts](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/example_chart_predheat.yaml_template) you can use.
 
@@ -62,6 +62,14 @@ You need to edit your Predbat `apps.yaml` to configure your system.
 
 Copy the following [predheat.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/predheat.yaml) template and append it to the end of Predbat's `apps.yaml`, after your existing inverter/battery configuration.
 
+Predheat works in °C internally. Temperatures that come from Home Assistant entities - the weather forecast, **external_temperature**, **internal_temperature**,
+**target_temperature**, and **flow_temp** or **volume_temp** when they point at a sensor - are converted from each entity's unit (°F or K), so °F sensors
+work and can be mixed with °C ones. An entity with no unit, such as a template sensor or helper without one, is read in Home Assistant's unit as your weather entity reports it.
+Temperatures you type in as numbers (**flow_temp**, **volume_temp**,
+**hysteresis**, **hysteresis_off**, **flow_difference_target**, the **weather_compensation** curve) are in °C, and **heat_loss_degrees** and **heat_loss_watts** are per °C.
+The temperatures Predheat publishes (predheat.internal_temp and so on) are in the unit of your internal temperature sensor, or Home Assistant's if it has none.
+If they change to °F after an update, Home Assistant may report a one-off change of unit for their long-term statistics, which you can fix in Developer Tools > Statistics.
+
 Set the mode (**mode**) to 'gas' or 'pump' depending on if you have a gas boiler or heat pump.
 
 Set the external temperature sensor (**external_temperature**) either to a real sensor or create one from the open weather map by adding this sensor to your `configuration.yaml` file for HA:
@@ -70,11 +78,13 @@ Set the external temperature sensor (**external_temperature**) either to a real 
 template:
   - sensor:
     - name: "external_temperature"
-      unit_of_measurement: 'c'
       state_class: measurement
       state: >
         {{ state_attr('weather.openweathermap', 'temperature') }}
 ```
+
+Earlier versions of this page gave this sensor `unit_of_measurement: 'c'`, which Predheat reads as °C. If your Home Assistant uses °F, the weather entity's
+temperature is in °F, so remove that line from your template to have it read in Home Assistant's unit instead.
 
 Set **internal_temperature** to point to one or more internal temperature sensors, if you have a heating thermostat then ideally link it to this or to a sensor at least in a similar area of the house.
 
@@ -83,6 +93,20 @@ The **weather** configuration points to the Open Weather Map sensor by default s
 Set the **target_temperature** to point to a sensor that indicates what your boiler thermostat is set to, or manually enter the temperature setting here.
 
 Set **smart_thermostat** to True if your thermostat starts the boiler ahead of time for the new target temperature or False for regular options.
+When enabled, Predheat models each rise in the scheduled target temperature over the forecast as a pre-heat: it works out how long the heating takes to reach the new target, using only the heating period the rise belongs to (until the target next falls below the new value), and raises the target that much earlier.
+If the new target is not reached within its heating period the pre-heat starts as early as permitted, which is **smart_thermostat_max_minutes** when set or otherwise the length of that heating period.
+A pre-heat never lowers a higher target that is already scheduled, and never starts before the previous rise.
+
+Set **smart_thermostat_max_minutes** to the longest lead time, in minutes, that Predheat will model before a setpoint rise, which should be the longest early start your thermostat makes.
+It applies to every pre-heat window. When it is not set, or is not a finite number, the pre-heat lead time is not capped.
+Some thermostats only limit how early they pre-heat during the night, in which case set it to cover the longest daytime early start, or leave it unset.
+For example, for a thermostat that starts heating up to 60 minutes early:
+
+```yaml
+  predheat:
+    smart_thermostat: True
+    smart_thermostat_max_minutes: 60
+```
 
 Set **heating_energy** To point to a sensor that indicates the energy consumed by your boiler/heat pump in kWh. If the sensor isn't accurate then use **heating_energy_scaling** to adjust it to the actual energy consumed.
 You can also comment this line out if you don't have a sensor, but no historical cost information will be produced.

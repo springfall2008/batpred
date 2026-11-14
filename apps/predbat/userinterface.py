@@ -19,14 +19,16 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate
 import functools
 import io
 import itertools
 import json
+import math
 import yaml
 import re
 import copy
+import sys
 from const import (
     TIME_FORMAT,
     PREDBAT_MODE_OPTIONS,
@@ -34,16 +36,78 @@ from const import (
     DEBUG_SCHEMA_VERSION,
     MANUAL_RATE_MAX_MINUTES,
     MANUAL_TIME_MAX_MINUTES,
+    REPEAT_FULL_LOG_SECONDS,
 )
-from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
+from config import APPS_SCHEMA, CONFIG_API_OVERRIDE, CURRENCY_UNITS
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
+
 
 # A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
 # most of a replay's wall-clock on it - about 6s for a 5MB dump. CLoader pairs libyaml's C parser
 # with the very same (unsafe) Constructor that yaml.unsafe_load uses, so the Python-object tags
-# these dumps carry still load and the result is identical, roughly 6x faster. PyYAML is not
-# always built with libyaml, so fall back to the pure-Python loader when the C one is absent.
-DEBUG_YAML_LOADER = getattr(yaml, "CLoader", yaml.UnsafeLoader)
+# these dumps carry still load, roughly 6x faster. PyYAML is not always built with libyaml, so
+# fall back to the pure-Python loader when the C one is absent. The one difference from
+# yaml.unsafe_load is the RepeatLogGate constructor added below.
+class DebugYamlLoader(getattr(yaml, "CLoader", yaml.UnsafeLoader)):
+    """The loader read_debug_yaml() replays a debug dump with; see construct_empty_log_gate()."""
+
+
+def construct_empty_log_gate(loader, node):
+    """
+    Load any RepeatLogGate in a debug dump as a new, empty gate, without constructing what was dumped.
+
+    From v9.3.8 until #5569, io_slot_log_gate went into every dump that had logged an Intelligent slot
+    list. Its history is keyed by tuples, which the dump wrote as YAML sequences, and a
+    sequence cannot be a dict key on the way back in ("found unhashable key"), so those dumps would
+    not load at all. A replay has no use for which log lines were already written, and that gate
+    always used REPEAT_FULL_LOG_SECONDS, so nothing under the node is read.
+    """
+    return RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
+
+
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object:utils.RepeatLogGate", construct_empty_log_gate)
+
+
+def construct_numpy_dtype(loader, node):
+    """
+    Build a numpy dtype from a debug dump, handing it its state as the tuple it was dumped from.
+
+    Until numpy values were written as plain numbers, the Load ML forecast put numpy scalars into every
+    dump, and DebugYamlDumper writes a tuple as a list, so each scalar's dtype state was written as one.
+    A fresh dtype refuses a list ("SystemError: bad argument to internal function"), which stopped those
+    dumps loading anywhere.
+    """
+    value = loader.construct_mapping(node, deep=True)
+    dtype = loader.find_python_name("numpy.dtype", node.start_mark)
+    instance = dtype(*value.get("args", []))
+    state = value.get("state")
+    if state is not None:
+        instance.__setstate__(tuple(state))
+    return instance
+
+
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:numpy.dtype", construct_numpy_dtype)
+DEBUG_YAML_LOADER = DebugYamlLoader
+
+# Parsed debug dumps keyed by (path, mtime, size). None, the default, turns the cache off: Predbat replays
+# a dump once, so only the unit tests - which replay the same few dumps dozens of times, at about a second a
+# parse - switch it on. read_debug_yaml() copies everything it takes from the parsed dict, so a cached
+# parse is never changed by a replay.
+DEBUG_YAML_PARSE_CACHE = None
+
+
+def load_debug_yaml_file(filename):
+    """Parse a debug dump with DEBUG_YAML_LOADER, through DEBUG_YAML_PARSE_CACHE when that is switched on."""
+    cache = DEBUG_YAML_PARSE_CACHE
+    if cache is None:
+        with open(filename, "r") as file:
+            return yaml.load(file, Loader=DEBUG_YAML_LOADER)
+    stat = os.stat(filename)
+    key = (os.path.abspath(filename), stat.st_mtime_ns, stat.st_size)
+    if key not in cache:
+        with open(filename, "r") as file:
+            cache[key] = yaml.load(file, Loader=DEBUG_YAML_LOADER)
+    return cache[key]
 
 
 class DebugYamlDumper(yaml.Dumper):
@@ -70,9 +134,31 @@ class DebugYamlDumper(yaml.Dumper):
 
 # An export limit is a (mode, target, power) tuple, and PyYAML tags a tuple as !!python/tuple,
 # which yaml.safe_load refuses - the debug dump is an artefact people attach to bug reports and has
-# to load with plain YAML tooling. Written as an ordinary sequence instead. Nothing else in a dump
-# is a tuple today, and a sequence is what a reader wants from one anyway.
+# to load with plain YAML tooling. Written as an ordinary sequence instead, which is what a reader
+# wants from one anyway. That includes a tuple used as a dict key, and a sequence cannot be a dict
+# key on the way back in ("found unhashable key"), so a tuple-keyed dict must be kept out of the
+# dump - io_slot_log_gate was one (#5569) and is in DEBUG_EXCLUDE_LIST for that reason.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
+
+
+def represent_numpy_as_plain(dumper, value):
+    """
+    Write a numpy scalar or array as the plain number or list it holds, and any other object as PyYAML would.
+
+    PyYAML pickles a numpy scalar through its dtype, whose state is a tuple that the representer above
+    turns into a list, and a fresh dtype refuses a list, so the dump would not load. numpy is looked up
+    rather than imported, as it is only loaded once a component that uses it is, and until then no numpy
+    value can exist.
+    """
+    numpy = sys.modules.get("numpy")
+    if numpy is not None and isinstance(value, (numpy.generic, numpy.ndarray)):
+        return dumper.represent_data(value.tolist())
+    return dumper.represent_object(value)
+
+
+# A numpy float64 subclasses float, but PyYAML only matches an exact type in its plain representers, so
+# every numpy value reaches the object fallback, which this replaces
+DebugYamlDumper.add_multi_representer(object, represent_numpy_as_plain)
 
 
 def dump_debug_yaml(debug, stream):
@@ -98,6 +184,14 @@ class UserInterface:
     PredBat and Home Assistant. Creates entities for switches, input_numbers,
     and selects. Routes HA events to appropriate handlers.
     """
+
+    # Optional host hook consulted by load_previous_value_from_ha before Home Assistant:
+    # callable(entity, attribute) returning the value, or None to fall back to the HA read.
+    previous_value_provider = None
+
+    # Optional host hook consulted by OAuth token refresh instead of the oauth-refresh edge function:
+    # async callable(instance_id, provider, token_hash) returning the edge function's JSON reply, or None for a failed refresh.
+    oauth_refresh_provider = None
 
     def call_notify(self, message):
         """
@@ -134,7 +228,8 @@ class UserInterface:
                 value = None
             index = None
 
-        if index and value is not None:
+        if index and value is not None and not APPS_SCHEMA.get(arg, {}).get("single_value_ok", False):
+            # A single_value_ok item (#5369) may be one value for every entry, so reading it by index is not a mistake
             self.log("Warn: item {} is incorrectly setup, element {} has value {}".format(arg, index, value))
 
         # If we have a list of items get each and add them up or return them as a list
@@ -142,7 +237,8 @@ class UserInterface:
             if combine:
                 final = 0
                 for item in value:
-                    got = self.resolve_arg(arg, item, default=default, indirect=True)
+                    # Convert each entry before summing: one sensor in kW among values in W would otherwise be added as W
+                    got = self.resolve_arg(arg, item, default=default, indirect=True, required_unit=required_unit)
                     try:
                         final += float(got)
                     except (ValueError, TypeError):
@@ -276,10 +372,16 @@ class UserInterface:
                         self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
                         value = None
             elif overrides:
+                # An override with no index of a single_value_ok item (#5369) is one value for every entry, as
+                # the item itself can be, so it applies whichever index is read
+                broadcast = APPS_SCHEMA.get(arg, {}).get("single_value_ok", False)
                 for override in overrides:
                     override_index = override.get("index", 0)
                     if override_index is None:
-                        override_index = 0
+                        if broadcast:
+                            override_index = index
+                        else:
+                            override_index = 0
                     if override_index == index:
                         value = override.get("value", value)
                         self.log("Note: API Overridden arg {} value {}".format(arg, value))
@@ -528,6 +630,43 @@ class UserInterface:
             return value, default
         return None, default
 
+    def apply_currency_scale(self):
+        """
+        Multiply the min/max of every money input_number in CONFIG_ITEMS by apps.yaml currency_scale.
+
+        Every money setting is in the minor currency unit and its range was chosen in pence, so for a
+        currency whose minor unit is worth far less (CZK haléř is ~1/29p) the top of the range is too
+        small to be a meaningful threshold (#6155). Only the range moves: defaults and stored values are
+        left alone, so turning this on never changes a setting by itself. A scale below 1 would narrow the
+        ranges and clamp settings already made, so it is refused. Runs once from reset(), before the
+        entities are created, so the HA input_number and the web /config slider both get the scaled range.
+        """
+        scale = self.args.get("currency_scale", 1)
+        try:
+            scale = float(scale)
+        except (ValueError, TypeError):
+            self.log("Warn: currency_scale {} in apps.yaml is not a number - ignoring it".format(scale))
+            scale = 1.0
+        if not math.isfinite(scale):
+            self.log("Warn: currency_scale {} in apps.yaml is not a finite number - ignoring it".format(scale))
+            scale = 1.0
+        elif scale < 1:
+            self.log("Warn: currency_scale {} in apps.yaml is below 1, which would narrow the ranges of money settings - ignoring it".format(scale))
+            scale = 1.0
+        self.currency_scale = scale
+        if scale == 1:
+            return
+
+        for item in self.CONFIG_ITEMS:
+            if item.get("type") != "input_number" or item.get("unit") not in CURRENCY_UNITS:
+                continue
+            for bound in ("min", "max"):
+                value = round(item[bound] * scale, 4)
+                if value == int(value):
+                    value = int(value)
+                item[bound] = value
+        self.log("Scaled the range of money settings by currency_scale {}".format(scale))
+
     def convert_currency_unit(self, unit):
         """
         Convert a config item unit string (using the default £/p symbols) into the
@@ -623,6 +762,27 @@ class UserInterface:
                             },
                         )
 
+    def expose_config_min(self, name, floor):
+        """
+        Raise the min an input_number config item publishes to a runtime floor, or put back its declared min once the floor drops below it.
+
+        The min goes onto the item itself, so the HA entity's attributes and the web /config slider both
+        follow it, and load_user_config() clamps to it. The value is left alone: raising it is the caller's
+        decision. Republished only when the min actually changes (GH#5995).
+        """
+        item = self.config_index.get(name, None)
+        if not item or item.get("type") != "input_number":
+            return
+        declared_min = item.setdefault("declared_min", item["min"])
+        new_min = min(max(declared_min, floor or 0), item["max"])
+        if isinstance(new_min, float) and new_min == int(new_min):
+            new_min = int(new_min)
+        if new_min == item["min"]:
+            return
+        item["min"] = new_min
+        if item.get("value", None) is not None:
+            self.expose_config(name, item["value"], force_ha=True)
+
     def user_config_item_enabled(self, item):
         """
         Check if user config item is enable
@@ -654,20 +814,20 @@ class UserInterface:
         """
         Update list of current Predbat settings
         """
-        global PREDBAT_SAVE_RESTORE
         self.save_restore_dir = self.config_root + "/predbat_save"
 
         if not os.path.exists(self.save_restore_dir):
             os.mkdir(self.save_restore_dir)
 
-        PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
+        # Build a list local to this engine, so several engines in one process do not share it
+        save_restore_options = ["save current", "restore default"]
         for root, _dirs, files in os.walk(self.save_restore_dir):
             for name in files:
                 filepath = os.path.join(root, name)
                 if filepath.endswith(".yaml") and not name.startswith("."):
-                    PREDBAT_SAVE_RESTORE.append(name)
+                    save_restore_options.append(name)
         item = self.config_index.get("saverestore", None)
-        item["options"] = PREDBAT_SAVE_RESTORE
+        item["options"] = save_restore_options
         self.expose_config("saverestore", None)
 
     async def async_restore_settings_yaml(self, filename):
@@ -786,8 +946,7 @@ class UserInterface:
         """
         debug = {}
         if os.path.exists(filename):
-            with open(filename, "r") as file:
-                debug = yaml.load(file, Loader=DEBUG_YAML_LOADER)
+            debug = load_debug_yaml_file(filename)
         else:
             self.log("Warn: Debug file {} not found".format(filename))
             return
@@ -796,8 +955,15 @@ class UserInterface:
         if schema_version > DEBUG_SCHEMA_VERSION:
             self.log("Warn: Debug file {} was written by a newer Predbat (schema {} > {}) - replaying it may misread fields that have changed shape".format(filename, schema_version, DEBUG_SCHEMA_VERSION))
 
+        derived_saved = {}
         for key in debug:
             if key == "debug_schema_version":
+                continue
+            # A value now derived by a property (manual_all_times) is not restored: the instance copy would be
+            # ignored on reads but still walked by anything iterating __dict__, such as the next debug dump. Its
+            # saved value is checked against the derived one once everything it is derived from has loaded
+            if isinstance(getattr(type(self), key, None), property):
+                derived_saved[key] = debug[key]
                 continue
             if key not in ["CONFIG_ITEMS", "inverters"]:
                 self.__dict__[key] = copy.deepcopy(debug[key])
@@ -830,12 +996,19 @@ class UserInterface:
             self.plan_preclip[3] = export_limits_from_stored(self.plan_preclip[3])
             self.plan_preclip = tuple(self.plan_preclip)
 
+        # A saved value that disagrees with what is derived means the dump's state was out of step when it was
+        # written, or that the dump has been edited since - either way, what replays is not what was planned live
+        for key, saved in derived_saved.items():
+            derived = getattr(self, key)
+            if sorted(saved or []) != sorted(derived or []):
+                self.log("Warn: Debug file {} saved {} as {} but it derives as {} from the rest of the file - the replay uses the derived value".format(filename, key, saved, derived))
+
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)
             if current:
                 # print("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                 if current.get("value", None) != item.get("value", None):
-                    current["value"] = item.get("value", None)
+                    current["value"] = copy.deepcopy(item.get("value", None))
         self.log("Restored debug settings - minutes now {}".format(self.minutes_now))
 
     def create_debug_yaml(self, write_file=True):
@@ -861,6 +1034,9 @@ class UserInterface:
                         debug[key] = mask_secret_args(self.__dict__[key])
                     else:
                         debug[key] = self.__dict__[key]
+        # Derived from the per-type manual time lists rather than stored, so not in __dict__, but still written for
+        # an older Predbat replaying this dump, which reads it rather than deriving it
+        debug["manual_all_times"] = self.manual_all_times
         inverters_debug = []
         for inverter in self.inverters:
             inverter_debug = {}
@@ -968,7 +1144,14 @@ class UserInterface:
     def load_previous_value_from_ha(self, entity, attribute=None):
         """
         Load HA value either from state or from history if there is any
+
+        If previous_value_provider is set it is asked first; a None result falls back to HA.
         """
+        if self.previous_value_provider is not None:
+            provided = self.previous_value_provider(entity, attribute)
+            if provided is not None:
+                return provided
+
         if attribute:
             ha_value = self.get_state_wrapper(entity, attribute=attribute)
             if ha_value is not None and ha_value not in ("unavailable", "unknown"):
@@ -1815,7 +1998,13 @@ class UserInterface:
         self.log("Update event {} {} {}".format(event, data, kwargs))
         if data and data.get("service", "") == "install":
             service_data = data.get("service_data", {})
-            if service_data.get("entity_id", "") == "update.predbat_version":
+            entities = service_data.get("entity_id", [])
+
+            # Can be a string or an array, the HA update card sends an array
+            if isinstance(entities, str):
+                entities = [entities]
+
+            if "update.predbat_version" in entities:
                 latest = self.releases.get("latest", None)
                 if latest:
                     self.log("Requested install of latest Predbat version {}".format(latest))

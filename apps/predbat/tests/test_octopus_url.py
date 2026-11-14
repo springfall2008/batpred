@@ -11,7 +11,8 @@
 import asyncio
 import json
 from datetime import datetime, timezone, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, PropertyMock
+import pytz
 from octopus import OctopusAPI, DATE_TIME_STR_FORMAT
 from const import TIME_FORMAT_OCTOPUS
 from utils import dp4
@@ -211,8 +212,13 @@ async def test_download_octopus_url(my_predbat):
 def _test_async_get_day_night_rates_wrapper(my_predbat):
     """
     Wrapper to run the async test function for day/night rates
+
+    The clock is pinned clear of a DST change: the 8-day schedule is built from the component's own
+    now_utc_exact, so an unpinned run inside a week of the clocks changing sees a different shape.
     """
-    return asyncio.run(test_async_get_day_night_rates(my_predbat))
+    pinned_now = pytz.timezone("Europe/London").localize(datetime(2024, 7, 1, 12, 0, 0))
+    with patch.object(OctopusAPI, "now_utc_exact", new_callable=PropertyMock, return_value=pinned_now):
+        return asyncio.run(test_async_get_day_night_rates(my_predbat))
 
 
 async def test_async_get_day_night_rates(my_predbat):
@@ -234,9 +240,7 @@ async def test_async_get_day_night_rates(my_predbat):
     # Create API instance
     api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
 
-    # Set a fixed current time for predictable testing via my_predbat mock
-    fixed_time = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-    my_predbat.now_utc_exact = fixed_time
+    # The clock is pinned by the wrapper, _test_async_get_day_night_rates_wrapper
 
     # Test 1: Successful fetch with valid day and night rates
     print("\n*** Test 1: Successful fetch with valid day and night rates ***")
@@ -417,7 +421,7 @@ async def test_async_get_day_night_rates(my_predbat):
         failed = True
     else:
         # Verify alternating pattern: night, day, night, day...
-        # Night rate: 00:30-07:30, Day rate: 07:30-00:30 (next day)
+        # Unknown tariff code, so the GO window: night 00:30-05:30 local, day 05:30-00:30 (next day)
         alternates_correctly = True
         for i in range(0, len(result), 2):
             night_entry = result[i]
@@ -457,6 +461,7 @@ def _test_get_saving_session_data(my_predbat):
     - Test 4: Mix of available and joined events
     - Test 5: Expired available events (should be filtered out)
     - Test 6: Active event (currently running)
+    - Test 6b: Active joined Weekend Happy Hour leaves the sensor off; a typed TURN_DOWN still sets it on
     - Test 7: Events with all data fields (rewards, codes, IDs)
     """
     print("**** Running get_saving_session_data tests ****")
@@ -606,6 +611,34 @@ def _test_get_saving_session_data(my_predbat):
         failed = True
     else:
         print("PASS: Active event correctly detected and sensor set to 'on'")
+
+    # Test 6b: An active joined Weekend Happy Hour is free electricity, not a saving session (issue #5615) -
+    # the planner prices it as a free slot, so the saving session sensor must stay off. The same active
+    # event typed as TURN_DOWN must still assert it.
+    print("\n*** Test 6b: Active joined Weekend Happy Hour does not assert the saving session sensor ***")
+    for event_type_name, expected_state in [("WEEKEND_HAPPY_HOUR", "off"), ("TURN_DOWN", "on")]:
+        api.saving_sessions = {
+            "account": {
+                "hasJoinedCampaign": True,
+                "joinedEvents": [{"eventId": "typed_event", "startAt": active_start_str, "endAt": active_end_str, "rewardGivenInOctoPoints": None}],
+            },
+            "events": [{"id": "typed_event", "code": "TYPED", "startAt": active_start_str, "endAt": active_end_str, "rewardPerKwhInOctoPoints": 0, "eventType": event_type_name}],
+        }
+        dashboard_calls = []
+        api.dashboard_item = mock_dashboard_item
+
+        with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+            available, joined = api.get_saving_session_data()
+
+        sensor_call = [c for c in dashboard_calls if "saving_session" in c["entity"] and "join" not in c["entity"]]
+        if len(sensor_call) != 1 or sensor_call[0]["state"] != expected_state:
+            print("ERROR: Expected saving_session sensor '{}' for active joined {} event, got: {}".format(expected_state, event_type_name, sensor_call))
+            failed = True
+        elif len(joined) != 1 or joined[0]["event_type"] != event_type_name:
+            print("ERROR: Expected the joined {} event to still be published in joined_events, got: {}".format(event_type_name, joined))
+            failed = True
+        else:
+            print("PASS: Active joined {} event sets saving_session sensor to '{}'".format(event_type_name, expected_state))
 
     # Test 7: Events with all data fields
     print("\n*** Test 7: Events with all data fields (rewards, codes, IDs) ***")
@@ -1146,6 +1179,168 @@ async def test_async_find_tariffs(my_predbat):
     else:
         print("PASS: Found both import/export tariffs and preserved existing data")
 
+    # GH#5595: an export agreement goes live before Octopus attaches a meter to the export MPAN
+    import_meterpoint = {
+        "mpan": "2324000000001",
+        "meters": [{"activeFrom": "2024-01-01", "activeTo": None, "smartImportElectricityMeter": {"deviceId": "IMPORT-DEVICE"}, "smartExportElectricityMeter": None}],
+        "agreements": [{"validFrom": "2024-01-01T00:00:00+00:00", "validTo": None, "tariff": {"tariffCode": "E-1R-IOG-24-01-01-A", "productCode": "IOG-24-01-01"}}],
+    }
+
+    def unmetered_export_meterpoint(valid_to=None, meters=None):
+        """Build an export meterPoint with an Agile Outgoing agreement and the given meters list."""
+        return {
+            "mpan": "2394000000002",
+            "meters": meters if meters is not None else [],
+            "agreements": [{"validFrom": "2024-03-01T00:00:00+00:00", "validTo": valid_to, "tariff": {"tariffCode": "E-1R-AGILE-OUTGOING-19-05-13-M", "productCode": "AGILE-OUTGOING-19-05-13"}}],
+        }
+
+    # Test 8: Active export agreement on a meterPoint with no meters - export tariff with device ID None
+    print("\nTest 8: Active export agreement with no meter attached")
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
+    api.tariffs = {}
+    api.account_data = {"account": {"electricityAgreements": [{"meterPoint": unmetered_export_meterpoint()}, {"meterPoint": import_meterpoint}], "gasAgreements": []}}
+
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        result = await api.async_find_tariffs()
+
+    if "export" not in result:
+        print("ERROR: Expected 'export' key for unmetered export agreement, got: {}".format(list(result.keys())))
+        failed = True
+    elif result["export"]["tariffCode"] != "E-1R-AGILE-OUTGOING-19-05-13-M":
+        print("ERROR: Expected export tariffCode 'E-1R-AGILE-OUTGOING-19-05-13-M', got: {}".format(result["export"]["tariffCode"]))
+        failed = True
+    elif result["export"]["deviceID"] is not None:
+        print("ERROR: Expected export deviceID None, got: {}".format(result["export"]["deviceID"]))
+        failed = True
+    elif result["export"]["mpan"] != "2394000000002":
+        print("ERROR: Expected export mpan '2394000000002', got: {}".format(result["export"]["mpan"]))
+        failed = True
+    elif result.get("import", {}).get("deviceID") != "IMPORT-DEVICE":
+        print("ERROR: Expected import tariff alongside unmetered export, got: {}".format(result.get("import")))
+        failed = True
+    else:
+        print("PASS: Unmetered export agreement produced an export tariff with device ID None")
+
+    # Test 9: Expired export agreement on a meterPoint with no meters - no export tariff
+    print("\nTest 9: Expired export agreement with no meter attached")
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
+    api.tariffs = {}
+    api.account_data = {"account": {"electricityAgreements": [{"meterPoint": unmetered_export_meterpoint(valid_to="2024-03-10T00:00:00+00:00")}], "gasAgreements": []}}
+
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        result = await api.async_find_tariffs()
+
+    if result != {}:
+        print("ERROR: Expected empty dict for expired unmetered export agreement, got: {}".format(result))
+        failed = True
+    else:
+        print("PASS: Expired unmetered export agreement ignored")
+
+    # Test 10: Import and gas meterPoints with no meters are still skipped
+    print("\nTest 10: Import and gas agreements with no meter attached are skipped")
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
+    api.tariffs = {}
+    api.account_data = {
+        "account": {
+            "electricityAgreements": [{"meterPoint": {"mpan": "2324000000009", "meters": [], "agreements": [{"validFrom": "2024-01-01T00:00:00+00:00", "validTo": None, "tariff": {"tariffCode": "E-1R-AGILE-24-01-01-A", "productCode": "AGILE-24-01-01"}}]}}],
+            "gasAgreements": [{"meterPoint": {"meters": [], "agreements": [{"validFrom": "2024-01-01T00:00:00+00:00", "validTo": None, "tariff": {"tariffCode": "G-1R-VAR-24-01-01-A", "productCode": "VAR-24-01-01"}}]}}],
+        }
+    }
+
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        result = await api.async_find_tariffs()
+
+    if result != {}:
+        print("ERROR: Expected empty dict for unmetered import/gas agreements, got: {}".format(result))
+        failed = True
+    else:
+        print("PASS: Unmetered import and gas agreements skipped")
+
+    # Test 11: Export meter gets linked later - tariff keys stay stable, reconfigure only fires when export first appears
+    print("\nTest 11: Unmetered export becomes metered without a second reconfigure")
+    # automatic_config runs for real (wrapped to count calls), with run()'s first-cycle configure after the first fetch, so
+    # the reconfigure guard is exercised exactly as in production
+    args_before_reconfigure_tests = dict(my_predbat.args)
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
+    api.tariffs = {}
+    api.automatic_config = Mock(side_effect=api.automatic_config)
+    api.refresh_discovery = Mock()
+
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        api.account_data = {"account": {"electricityAgreements": [{"meterPoint": import_meterpoint}], "gasAgreements": []}}
+        await api.async_find_tariffs()
+        api.automatic_config(api.tariffs)  # run()'s first-cycle configure
+        api.automatic_config.reset_mock()
+        api.account_data = {"account": {"electricityAgreements": [{"meterPoint": unmetered_export_meterpoint()}, {"meterPoint": import_meterpoint}], "gasAgreements": []}}
+        result_unmetered = await api.async_find_tariffs()
+        reconfigure_after_unmetered = api.automatic_config.call_count
+        linked_meters = [{"activeFrom": "2024-03-10", "activeTo": None, "smartExportElectricityMeter": {"deviceId": "EXPORT-LINKED"}, "smartImportElectricityMeter": None}]
+        api.account_data = {"account": {"electricityAgreements": [{"meterPoint": unmetered_export_meterpoint(meters=linked_meters)}, {"meterPoint": import_meterpoint}], "gasAgreements": []}}
+        result_linked = await api.async_find_tariffs()
+
+    if set(result_unmetered.keys()) != {"import", "export"}:
+        print("ERROR: Expected import and export keys while export is unmetered, got: {}".format(list(result_unmetered.keys())))
+        failed = True
+    elif reconfigure_after_unmetered != 1:
+        print("ERROR: Expected one reconfigure when the unmetered export first appeared, got {}".format(reconfigure_after_unmetered))
+        failed = True
+    elif set(result_linked.keys()) != {"import", "export"}:
+        print("ERROR: Expected import and export keys after meter linked, got: {}".format(list(result_linked.keys())))
+        failed = True
+    elif result_linked["export"]["deviceID"] != "EXPORT-LINKED":
+        print("ERROR: Expected linked export deviceID 'EXPORT-LINKED', got: {}".format(result_linked["export"]["deviceID"]))
+        failed = True
+    elif api.automatic_config.call_count != 1:
+        print("ERROR: Expected no further reconfigure once the meter linked, got {} total".format(api.automatic_config.call_count))
+        failed = True
+    else:
+        print("PASS: Export tariff keys stable across meter linking, single reconfigure")
+
+    # Test 12: a failed first account fetch must not leave the rates unwired (GH#5994). The first-cycle configure runs with no
+    # tariffs; when a later fetch finds them, automatic_config() must run again. A healthy boot, where the first fetch already
+    # found the tariffs before the first-cycle configure, must still configure only once.
+    print("\nTest 12: Tariffs found after a failed first fetch are wired; a healthy boot configures once")
+    for key in ("metric_octopus_import", "metric_standing_charge"):
+        my_predbat.args.pop(key, None)
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
+    api.refresh_discovery = Mock()
+    api.tariffs = {}
+    api.account_data = {}
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        await api.async_find_tariffs()  # the failed first fetch: no account data
+        api.automatic_config(api.tariffs)  # run()'s first-cycle configure, with no tariffs
+        unwired_after_failed_boot = my_predbat.args.get("metric_octopus_import")
+        api.account_data = {"account": {"electricityAgreements": [{"meterPoint": import_meterpoint}], "gasAgreements": []}}
+        await api.async_find_tariffs()  # a later fetch succeeds
+    wired = my_predbat.args.get("metric_octopus_import")
+    if unwired_after_failed_boot is not None:
+        print("ERROR: Expected no import rates wired after a failed first fetch, got {}".format(unwired_after_failed_boot))
+        failed = True
+    elif not wired or "import_rates" not in str(wired):
+        print("ERROR: Expected the import rates wired once the tariffs were found after a failed first fetch, got {}".format(wired))
+        failed = True
+    else:
+        print("PASS: Tariffs found after a failed first fetch are wired")
+
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
+    api.refresh_discovery = Mock()
+    api.tariffs = {}
+    api.account_data = {"account": {"electricityAgreements": [{"meterPoint": import_meterpoint}], "gasAgreements": []}}
+    real_automatic_config = api.automatic_config
+    api.automatic_config = Mock(side_effect=real_automatic_config)
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        await api.async_find_tariffs()  # the healthy first fetch, before the first-cycle configure
+        api.automatic_config(api.tariffs)  # run()'s first-cycle configure
+        await api.async_find_tariffs()  # a later fetch with the same tariffs
+    if api.automatic_config.call_count != 1:
+        print("ERROR: Expected a healthy boot to configure once, got {}".format(api.automatic_config.call_count))
+        failed = True
+    else:
+        print("PASS: Healthy boot configures once")
+    # automatic_config() set args on the shared instance; put them back as they were
+    my_predbat.args.clear()
+    my_predbat.args.update(args_before_reconfigure_tests)
+
     if not failed:
         print("\n**** All async_find_tariffs tests PASSED ****")
 
@@ -1306,7 +1501,7 @@ async def test_edf_freephase_dynamic_url(my_predbat):
     my_predbat.now_utc = my_predbat.midnight_utc
     test_url = "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates"
 
-    with patch("requests.get") as mock_get:
+    with patch("octopus.http_get") as mock_get:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -1357,7 +1552,7 @@ async def test_edf_freephase_dynamic_url(my_predbat):
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
 
-    with patch("requests.get") as mock_get:
+    with patch("octopus.http_get") as mock_get:
         # First page
         mock_response_page1 = Mock()
         mock_response_page1.status_code = 200

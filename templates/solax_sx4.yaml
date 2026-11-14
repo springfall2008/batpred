@@ -58,6 +58,10 @@ pred_bat:
     charge_discharge_with_rate: True
     target_soc_used_for_discharge: False
 
+  # Don't add charge_start_time, charge_end_time, discharge_start_time or discharge_end_time to this configuration.
+  # Predbat keeps its window times in its own sensor.predbat_SOLAX_0_... entities; pointed at the inverter's time entities
+  # it overwrites them, e.g. writes 00:00:00 to the discharge end time when nothing is exporting (see the Schedule section of apps.yaml docs)
+
   # Set to the maximum rate your inverter can charge your battery at (in Watts)
   battery_rate_max:
     - 6000
@@ -145,6 +149,9 @@ pred_bat:
   # Predbat calls the supplied Solax automation script to set the appropriate inverter controls directly.
   #
   # If you are using Mode 8 control, change the ALL the service calls to 'script.solax_remote_control_mode_8'
+  # Mode 8 control also needs sensor.solax_house_load_alt and sensor.solax_meter_2_measured_power enabled in the Solax Modbus integration,
+  # otherwise the integration cancels each command Predbat sends - re-check them after updating the integration.
+  # The sensor prefix may differ on your system, e.g. sensor.solax_inverter_house_load_alt (see docs/inverter-setup.md)
   charge_start_service:
     - service: script.solax_remote_control
       power: "{power}"
@@ -261,6 +268,28 @@ pred_bat:
   #   - 'latched'
   #   - 'locked'
   #   - 'plugged in'
+
+  # car_charging_plugged can be set to a sensor that says only whether the car is plugged in - staying on after
+  # its charge has finished - matched against car_charging_planned_response. Predbat resets the manual car SoC
+  # (input_number.predbat_car_charging_manual_soc_kwh) to 0 when it reads unplugged, and with car_charging_energy
+  # set it tracks the SoC of a car that has no car_charging_soc sensor. One entry per car - e.g. for a myenergi Zappi:
+  #car_charging_plugged:
+  #  - 're:(sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+
+  # car_charging_now can be set to a sensor that shows the car is charging right now, so that
+  # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
+  # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
+  # in W or kW where 200W or more counts as charging - e.g. for a Wallbox charger:
+  #car_charging_now:
+  #  - sensor.wallbox_portal_charging_power
+
+  # Positive responses for car_charging_now, for an on/off or status sensor. Its state must match one
+  # of these (ignoring case) for Predbat to see the car charging - e.g. 'charging' for a myenergi Zappi plug_status sensor.
+  # car_charging_now_response:
+  #   - 'yes'
+  #   - 'on'
+  #   - 'true'
+  #   - 'charging'
 
   # To make planned car charging more accurate, either using car_charging_planned or Octopus Intelligent
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values

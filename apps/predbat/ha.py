@@ -20,45 +20,37 @@ HAHistory for automatic entity history tracking and pruning.
 import os
 from datetime import timedelta, datetime, timezone
 import asyncio
-from aiohttp import ClientSession, WSMsgType
+from aiohttp import WSMsgType
 import array
 import bisect
 import json
-import requests
 import traceback
 import threading
 import time
-from utils import str2time
+from utils import str2time, strptime_aware
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
+from http_sync import http_get, http_post, HttpJSONDecodeError, HttpTimeout, HttpConnectionError, run_async, RunThread  # noqa: F401 (run_async and RunThread are imported from here by other modules)
 
 # Maximum days of history fetched per request. Long windows are split so only one chunk's
 # response body, decoded string and parsed objects are resident at a time.
 HISTORY_CHUNK_DAYS = 3
+HA_STARTUP_API_RETRY_INTERVAL = 5
+HA_STARTUP_API_RETRY_TIMEOUT = 10 * 60
 
-
-class RunThread(threading.Thread):
-    def __init__(self, coro):
-        self.coro = coro
-        self.result = None
-        super().__init__()
-
-    def run(self):
-        self.result = asyncio.run(self.coro)
-
-
-def run_async(coro):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    if loop and loop.is_running():
-        thread = RunThread(coro)
-        thread.start()
-        thread.join()
-        return thread.result
-    else:
-        return asyncio.run(coro)
+# The 2-minute refresh of a tracked entity reads from its last record or from its last check less
+# this overlap, whichever is later, so a quiet entity is not re-read from a change days ago. The
+# overlap catches a record that reached the database a little after the moment it is stamped; one
+# that arrives later than that is stamped before every refresh window and is not seen until a
+# restart: the cost of not re-reading the whole window.
+HISTORY_REFRESH_OVERLAP_SECONDS = 15 * 60
+# A tracked entity whose history read came back empty (a read that worked, not one that failed)
+# is cached as empty and asked again only this often
+HISTORY_EMPTY_RECHECK_SECONDS = 30 * 60
+# State attributes holding a list of at least this many strings are stored as one shared copy per
+# distinct list (see HAInterface.share_long_lists), and the share cache is reset at this many lists
+SHARED_LIST_MIN_LENGTH = 64
+SHARED_LIST_CACHE_MAX = 256
 
 
 class EntityHistory:
@@ -73,7 +65,7 @@ class EntityHistory:
     oldest to newest so the epoch array stays sorted.
     """
 
-    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions"]
+    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions", "anchored"]
 
     def __init__(self):
         """
@@ -84,6 +76,8 @@ class EntityHistory:
         self.state_exceptions = {}
         self.shared_attributes = None
         self.attribute_exceptions = {}
+        # True while the first record is one prune() re-stamped at its cutoff rather than a real change
+        self.anchored = False
 
     def __len__(self):
         """
@@ -188,16 +182,39 @@ class EntityHistory:
 
     def prune(self, cutoff_epoch):
         """
-        Drop all records older than the given cutoff epoch time
+        Drop all records older than the given cutoff epoch time.
+
+        The last record before the cutoff holds the state in force at the cutoff, so unless a record
+        lands exactly on the cutoff it is kept and re-stamped at the cutoff, as Home Assistant stamps
+        the first record of a history window. Dropping it would leave a rarely-changing sensor with
+        no history before its next change (#5456).
         """
         index = bisect.bisect_left(self.epochs, cutoff_epoch)
-        if index > 0:
-            self.epochs = self.epochs[index:]
-            self.states = self.states[index:]
-            if self.state_exceptions:
-                self.state_exceptions = {epoch: value for epoch, value in self.state_exceptions.items() if epoch >= cutoff_epoch}
-            if self.attribute_exceptions:
-                self.attribute_exceptions = {epoch: value for epoch, value in self.attribute_exceptions.items() if epoch >= cutoff_epoch}
+        if index == 0:
+            return
+        anchor_epoch = None
+        if index == len(self.epochs) or self.epochs[index] != cutoff_epoch:
+            index -= 1
+            anchor_epoch = self.epochs[index]
+        self.epochs = self.epochs[index:]
+        self.states = self.states[index:]
+        self.anchored = anchor_epoch is not None
+        if self.anchored:
+            self.epochs[0] = cutoff_epoch
+        if self.state_exceptions:
+            self.state_exceptions = self._prune_exceptions(self.state_exceptions, cutoff_epoch, anchor_epoch)
+        if self.attribute_exceptions:
+            self.attribute_exceptions = self._prune_exceptions(self.attribute_exceptions, cutoff_epoch, anchor_epoch)
+
+    @staticmethod
+    def _prune_exceptions(exceptions, cutoff_epoch, anchor_epoch):
+        """
+        Return the exceptions at or after the cutoff, with the kept anchor's (if any) moved to the cutoff
+        """
+        pruned = {epoch: value for epoch, value in exceptions.items() if epoch >= cutoff_epoch}
+        if anchor_epoch in exceptions:
+            pruned[cutoff_epoch] = exceptions[anchor_epoch]
+        return pruned
 
 
 class HAHistory(ComponentBase):
@@ -208,6 +225,8 @@ class HAHistory(ComponentBase):
     def initialize(self):
         self.history_entities = {}
         self.history_data = {}
+        # Epoch time each tracked entity's history was last read successfully, up to which it is known
+        self.history_checked = {}
         self.history_lock = threading.Lock()
 
     def add_entity(self, entity_id, days):
@@ -223,12 +242,16 @@ class HAHistory(ComponentBase):
     def get_history(self, entity_id, days=30, tracked=True):
         """
         Get history data for an entity
+
+        An entity found to have no history is a cache hit too, answered [[]], until a recheck finds some.
+        A failed read (None from the interface) is not cached, so it is tried again.
         """
         result = None
 
         with self.history_lock:
             store = self.history_data.get(entity_id, None)
-            if store and self.history_entities.get(entity_id, 0) >= days:
+            cached = bool(store) or (store is not None and entity_id in self.history_checked)
+            if cached and self.history_entities.get(entity_id, 0) >= days:
                 # Materialise fresh record dicts from the compact store (replaces the previous
                 # deepcopy) - callers can reassign record["state"]/["attributes"] without
                 # corrupting the cache, but must not mutate a returned attributes dict in place
@@ -243,11 +266,12 @@ class HAHistory(ComponentBase):
             if tracked:
                 self.add_entity(entity_id, days)
                 days = self.history_entities[entity_id]
-            history_data = ha_interface.get_history(entity_id, datetime.now(self.local_tz), days=days)
+            now = datetime.now(self.local_tz)
+            history_data = ha_interface.get_history(entity_id, now, days=days)
             if history_data and len(history_data) > 0:
                 history_data = history_data[0]
                 if tracked:
-                    self.update_entity(entity_id, history_data)
+                    self.update_entity(entity_id, history_data, checked_time=now)
                 # The store keeps its own compact copy of the data, so the fetched records
                 # can be handed to the caller directly
                 result = [history_data]
@@ -264,11 +288,36 @@ class HAHistory(ComponentBase):
                 cutoff_epoch = (now - timedelta(days=max_days)).timestamp()
                 self.history_data[entity_id].prune(cutoff_epoch)
 
-    def update_entity(self, entity_id, new_history_data):
+    def update_entity(self, entity_id, new_history_data, checked_time=None, window_start=None):
         """
         Update history data for an entity
+
+        checked_time is the end of the window new_history_data was read for, recorded as the time the
+        entity was last checked. Pass it only for a read that worked: a failed read (None) must not get
+        here. A read that found nothing for an entity with no stored history caches it as empty.
+
+        window_start is the start of a refresh window. Records stamped at or before it are dropped: Home
+        Assistant opens every window with the state in effect at its start, stamped at the start, which
+        would otherwise be stored again on every refresh, and anything real there was in the previous read.
         """
+        if new_history_data and window_start is not None:
+            floor_epoch = window_start.timestamp()
+            kept = []
+            for entry in new_history_data:
+                try:
+                    if str2time(entry.get("last_updated")).timestamp() <= floor_epoch:
+                        continue
+                except (ValueError, TypeError, AttributeError):
+                    pass
+                kept.append(entry)
+            new_history_data = kept
+
         if not new_history_data:
+            if checked_time is not None:
+                with self.history_lock:
+                    if not self.history_data.get(entity_id, None):
+                        self.history_data[entity_id] = EntityHistory()
+                    self.history_checked[entity_id] = checked_time.timestamp()
             return
 
         FILTER_ATTRIBUTES = ["friendly_name", "unit_of_measurement", "icon", "device_class", "results", "state_class", "entity_id"]
@@ -314,12 +363,19 @@ class HAHistory(ComponentBase):
 
                 if older_entries:
                     # Rebuild the store with the older entries merged in (rare, only happens
-                    # when more days of history are requested than previously cached)
-                    combined = older_entries + store.to_records()
+                    # when more days of history are requested than previously cached). A re-stamped
+                    # prune anchor is dropped: the older entries already hold the state in force at the
+                    # cutoff, and the anchor would contradict them if the cache had missed a change
+                    stored_records = store.to_records()
+                    if store.anchored:
+                        stored_records = stored_records[1:]
+                    combined = older_entries + stored_records
                     combined.sort(key=lambda x: str2time(x.get("last_updated")))
                     self.history_data[entity_id] = EntityHistory.from_records(combined)
             else:
                 self.history_data[entity_id] = EntityHistory.from_records(new_history_data)
+            if checked_time is not None:
+                self.history_checked[entity_id] = checked_time.timestamp()
 
         # Update last success timestamp
         self.update_success_timestamp()
@@ -339,17 +395,33 @@ class HAHistory(ComponentBase):
             for entity_id in list(self.history_entities.keys()):
                 # self.log("HAHistory: Updating history for {}".format(entity_id))
                 store = self.history_data.get(entity_id, None)
-                last_updated_time = datetime.fromtimestamp(store.epochs[-1], timezone.utc) if store and len(store) > 0 else None
-                if last_updated_time:
-                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=last_updated_time)
+                checked_epoch = self.history_checked.get(entity_id, None) if store is not None else None
+                if store:
+                    # Read from the last record, or from the last check less the overlap if that is later.
+                    # A failed read leaves the check time where it was, so the next refresh covers the gap
+                    start_epoch = store.epochs[-1]
+                    if checked_epoch is not None:
+                        start_epoch = max(start_epoch, checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS)
+                    from_time = datetime.fromtimestamp(start_epoch, timezone.utc)
+                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=from_time)
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
-                        self.update_entity(entity_id, history_data)
+                        self.update_entity(entity_id, history_data, checked_time=now, window_start=from_time)
+                elif checked_epoch is not None:
+                    # Cached as empty: ask again only every HISTORY_EMPTY_RECHECK_SECONDS, from the last check
+                    # less the overlap
+                    if now.timestamp() - checked_epoch < HISTORY_EMPTY_RECHECK_SECONDS:
+                        continue
+                    from_time = datetime.fromtimestamp(checked_epoch - HISTORY_REFRESH_OVERLAP_SECONDS, timezone.utc)
+                    history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id], from_time=from_time)
+                    if history_data and len(history_data) > 0:
+                        history_data = history_data[0]
+                        self.update_entity(entity_id, history_data, checked_time=now, window_start=from_time)
                 else:
                     history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id])
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
-                        self.update_entity(entity_id, history_data)
+                        self.update_entity(entity_id, history_data, checked_time=now)
 
         if first or (seconds % (60 * 60) == 0):
             # Prune history data every hour
@@ -400,9 +472,11 @@ class HAInterface(ComponentBase):
         self.db_cursor = None
         self.websocket_active = False
         self.api_errors = 0
+        self.last_api_status = None
         self.last_success_timestamp = None
 
         self.state_data = {}
+        self.shared_attribute_lists = {}
         self.slug = None
 
         # Websocket command queue infrastructure
@@ -434,11 +508,33 @@ class HAInterface(ComponentBase):
                 self.slug = res["data"]["slug"]
                 self.log("Info: App slug is {}".format(self.slug))
 
-            check = self.api_call("/api/services")
-            if not check:
-                self.log("Warn: Unable to connect directly to Home Assistant at {}, please check your configuration of ha_url/ha_key".format(self.ha_url))
-                self.ha_key = None
-                raise ValueError
+            # Supervisor can start this app before Home Assistant Core is ready. Retry
+            # transient proxy/API failures instead of failing component construction.
+            deadline = time.monotonic() + HA_STARTUP_API_RETRY_TIMEOUT
+            attempts = 0
+            while True:
+                check = self.api_call("/api/services", silent=True)
+                if isinstance(check, list):
+                    break
+
+                status = self.last_api_status
+                if status is not None and 400 <= status < 500 and status not in (408, 429):
+                    self.log("Error: Home Assistant at {} rejected the startup API request with HTTP {}, please check your configuration of ha_url/ha_key".format(self.ha_url, status))
+                    self.ha_key = None
+                    raise ValueError
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.log("Error: Home Assistant API at {} did not become ready within {} seconds, please check your configuration of ha_url/ha_key".format(self.ha_url, HA_STARTUP_API_RETRY_TIMEOUT))
+                    self.ha_key = None
+                    raise ValueError
+
+                attempts += 1
+                if attempts == 1 or attempts % 6 == 0:
+                    self.log("Warn: Home Assistant API at {} is not ready during startup (HTTP {}); retrying".format(self.ha_url, status if status is not None else "unavailable"))
+                # Keep boot-time proxy failures from tripping the runtime fatal-error limit.
+                self.api_errors = 0
+                time.sleep(min(HA_STARTUP_API_RETRY_INTERVAL, remaining))
 
         if self.db_enable:
             # Open the SQL Lite database called predbat.db using the DatabaseManager
@@ -559,7 +655,7 @@ class HAInterface(ComponentBase):
 
             url = "{}/api/websocket".format(self.ha_url)
             self.log("Info: Start socket for url {}".format(url))
-            async with ClientSession() as session:
+            async with self.http_session() as session:
                 try:
                     async with session.ws_connect(url) as websocket:
                         await websocket.send_json({"type": "auth", "access_token": self.ha_key})
@@ -844,12 +940,43 @@ class HAInterface(ComponentBase):
         if item:
             self.update_state_item(item, entity_id)
 
+    def share_long_lists(self, attributes):
+        """
+        Return attributes with each long list of strings replaced by one shared copy.
+
+        GivTCP publishes dozens of time-slot selects whose 'options' are the same 1440 time strings,
+        and every state fetch or event decodes a fresh copy (about 84 KB each). Storing one copy per
+        distinct list keeps the state cache from holding dozens of identical ones.
+
+        The caller's dict and lists are never modified or kept: a new dict is returned when anything
+        is shared, and the shared list is the cache's own copy. A shared list that no longer matches
+        its content (something changed it in place) is replaced rather than handed out.
+        """
+        if not isinstance(attributes, dict):
+            return attributes
+        cache = self.shared_attribute_lists
+        shared_attributes = None
+        for name, value in attributes.items():
+            if not isinstance(value, list) or len(value) < SHARED_LIST_MIN_LENGTH or not all(isinstance(entry, str) for entry in value):
+                continue
+            key = tuple(value)
+            shared = cache.get(key)
+            if shared is None or shared != value:
+                if len(cache) >= SHARED_LIST_CACHE_MAX:
+                    cache.clear()
+                shared = list(key)
+                cache[key] = shared
+            if shared_attributes is None:
+                shared_attributes = dict(attributes)
+            shared_attributes[name] = shared
+        return attributes if shared_attributes is None else shared_attributes
+
     def update_state_item(self, item, entity_id, nodb=False):
         """
         Update state table for item
         """
         entity_id = entity_id.lower()
-        attributes = item.get("attributes", {})
+        attributes = self.share_long_lists(item.get("attributes", {}))
         last_changed = item.get("last_changed", item.get("last_updated", None))
         if "state" in item:
             state = item["state"]
@@ -858,16 +985,16 @@ class HAInterface(ComponentBase):
                 # Instead of appending to a local mirror_updates list, call the database manager to schedule the update
                 if last_changed:
                     try:
-                        last_changed = datetime.strptime(last_changed, TIME_FORMAT_HA_TZ)
+                        last_changed = strptime_aware(last_changed, TIME_FORMAT_HA_TZ)
                     except (ValueError, TypeError):
                         # Try fallback format without microseconds
                         try:
-                            last_changed = datetime.strptime(last_changed, "%Y-%m-%dT%H:%M:%S%z")
+                            last_changed = strptime_aware(last_changed, "%Y-%m-%dT%H:%M:%S%z")
                         except (ValueError, TypeError) as e:
                             self.log("Warn: Failed to parse last_changed time {} for entity {} : {}".format(last_changed, entity_id, e))
-                            last_changed = datetime.now()
+                            last_changed = datetime.now(timezone.utc)
                 else:
-                    last_changed = datetime.now()
+                    last_changed = datetime.now(timezone.utc)
 
                 self.db_manager.set_state_db(entity_id, state, attributes, timestamp=last_changed)
 
@@ -946,7 +1073,7 @@ class HAInterface(ComponentBase):
         self.db_mirror_list[sensor.lower()] = True
 
         if (self.db_primary or force_db) and self.db_enable:
-            return self.db_manager.get_history_db(sensor, now, days=days)
+            return self.db_manager.get_history_db(sensor, now, days=days, from_time=from_time)
 
         if from_time:
             start = from_time
@@ -1134,30 +1261,33 @@ class HAInterface(ComponentBase):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        self.last_api_status = None
         try:
             if post:
                 if data_in:
-                    response = requests.post(url, headers=headers, json=data_in, timeout=TIMEOUT)
+                    response = http_post(url, headers=headers, json=data_in, timeout=TIMEOUT)
                 else:
-                    response = requests.post(url, headers=headers, timeout=TIMEOUT)
+                    response = http_post(url, headers=headers, timeout=TIMEOUT)
             else:
                 if data_in:
-                    response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
+                    response = http_get(url, headers=headers, params=data_in, timeout=TIMEOUT)
                 else:
-                    response = requests.get(url, headers=headers, timeout=TIMEOUT)
+                    response = http_get(url, headers=headers, timeout=TIMEOUT)
+            self.last_api_status = response.status_code
             data = response.json()
             self.api_errors = 0
-        except requests.exceptions.JSONDecodeError:
+        except HttpJSONDecodeError:
             if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
                 self.log("Warn: Failed to decode response {} from {}".format(response, url))
                 self.api_errors += 1
 
             data = None
-        except (requests.Timeout, requests.exceptions.ReadTimeout):
-            self.log("Warn: Timeout from {}".format(url))
+        except HttpTimeout:
+            if not silent:
+                self.log("Warn: Timeout from {}".format(url))
             self.api_errors += 1
             data = None
-        except requests.exceptions.ConnectionError as e:
+        except HttpConnectionError as e:
             if not silent:
                 self.log("Warn: Connection error from {}: {}".format(url, e))
             self.api_errors += 1

@@ -287,6 +287,50 @@ def test_the_marshaller_agrees_with_its_slow_path():
     return failed
 
 
+def test_the_marshaller_rejects_unconverted_limits():
+    """export_limit_array raises on a stored or legacy form instead of packing it wrong.
+
+    The marshaller no longer converts stored forms itself - that happens where a plan enters
+    Predbat - so a plan that skipped the conversion must fail loudly. A bare packed float would
+    otherwise be the dangerous case: it hashes fine as a cache key, so only the packer can catch it.
+    Both packing paths are checked, and a failed call must not leave anything in the cache.
+    """
+    failed = 0
+    import prediction_kernel
+
+    unconverted = {
+        "bare packed floats": [0.0, EXPORT_LIMIT_IDLE],
+        "a list from a YAML round trip": [[EXPORT_MODE_TARGET, 50, 1.0]],
+        "a stored mapping": [{"mode": "target", "target": 50, "power": 1.0}],
+    }
+    for struct_usable in (True, False):
+        prediction_kernel._EXPORT_LIMIT_STRUCT_USABLE = struct_usable
+        try:
+            for name, limits in unconverted.items():
+                cache_size = len(prediction_kernel._EXPORT_LIMIT_BUFFER_CACHE)
+                try:
+                    prediction_kernel.export_limit_array(limits)
+                    print("ERROR: export_limit_array packed {} {} (struct path {}) instead of raising".format(name, limits, struct_usable))
+                    failed += 1
+                except TypeError:
+                    pass
+                if len(prediction_kernel._EXPORT_LIMIT_BUFFER_CACHE) != cache_size:
+                    print("ERROR: a rejected plan of {} left an entry in the export limit buffer cache".format(name))
+                    failed += 1
+        finally:
+            prediction_kernel._EXPORT_LIMIT_STRUCT_USABLE = True
+
+    # The same plan once converted marshals, and matches packing it directly
+    converted = export_limits_from_stored([0.0, EXPORT_LIMIT_IDLE])
+    buffer = prediction_kernel.export_limit_array(converted)
+    direct = prediction_kernel._build_export_limit_array(converted)
+    for index in range(len(converted)):
+        if (buffer[index].mode, buffer[index].target, buffer[index].power) != (direct[index].mode, direct[index].target, direct[index].power):
+            print("ERROR: converted limit {} marshalled differently through the cache".format(converted[index]))
+            failed += 1
+    return failed
+
+
 def test_the_debug_dump_stores_every_export_limit_list(my_predbat):
     """Both the plan's export limits and each inverter's own copy are written in the stored form.
 
@@ -348,6 +392,7 @@ def run_export_encoding_tests(my_predbat=None):
     failed += test_export_limit_dumps_as_plain_yaml()
     failed += test_clipped_high_target_survives_a_save_and_reload()
     failed += test_the_marshaller_agrees_with_its_slow_path()
+    failed += test_the_marshaller_rejects_unconverted_limits()
     if my_predbat is not None:
         failed += test_the_debug_dump_stores_every_export_limit_list(my_predbat)
     if not failed:

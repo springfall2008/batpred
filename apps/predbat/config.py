@@ -141,7 +141,7 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "*",
         "icon": "mdi:multiplication",
-        "default": 0.7,
+        "default": 0.9,
         "enable": "expert_mode",
     },
     {
@@ -726,7 +726,8 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "kWh",
         "icon": "mdi:ev-station",
-        "enable": "car_charging_manual_soc",
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 0",
         "default": 0.0,
         "restore": False,
     },
@@ -747,7 +748,8 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "kWh",
         "icon": "mdi:ev-station",
-        "enable": "car_charging_manual_soc_1",
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 1",
         "default": 0.0,
         "restore": False,
     },
@@ -768,7 +770,8 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "kWh",
         "icon": "mdi:ev-station",
-        "enable": "car_charging_manual_soc_2",
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 2",
         "default": 0.0,
         "restore": False,
     },
@@ -789,7 +792,8 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "kWh",
         "icon": "mdi:ev-station",
-        "enable": "car_charging_manual_soc_3",
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 3",
         "default": 0.0,
         "restore": False,
     },
@@ -810,7 +814,8 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "kWh",
         "icon": "mdi:ev-station",
-        "enable": "car_charging_manual_soc_4",
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 4",
         "default": 0.0,
         "restore": False,
     },
@@ -831,7 +836,8 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "kWh",
         "icon": "mdi:ev-station",
-        "enable": "car_charging_manual_soc_5",
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 5",
         "default": 0.0,
         "restore": False,
     },
@@ -852,7 +858,8 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "kWh",
         "icon": "mdi:ev-station",
-        "enable": "car_charging_manual_soc_6",
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 6",
         "default": 0.0,
         "restore": False,
     },
@@ -873,7 +880,8 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "kWh",
         "icon": "mdi:ev-station",
-        "enable": "car_charging_manual_soc_7",
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 7",
         "default": 0.0,
         "restore": False,
     },
@@ -1784,7 +1792,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Volume Temperature Next",
         "type": "input_number",
         "min": -20,
-        "max": 40,
+        "max": 100,
         "step": 0.1,
         "unit": "°C",
         "default": 20,
@@ -1820,6 +1828,7 @@ CONFIG_API_OVERRIDE = {
     "inverter_limit_charge": True,
     "inverter_limit_charge_dc": True,
     "inverter_limit_discharge": True,
+    "inverter_limit_export": True,
     "rates_import_override": True,
     "rates_export_override": True,
 }
@@ -2205,6 +2214,7 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
+        "reserve_via_discharge_rate": True,
     },
     "FoxESS": {
         "name": "FoxESS",
@@ -2298,6 +2308,11 @@ INVERTER_DEF = {
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
+        # A Powerwall charges from the grid to reach a backup reserve above its SoC, even with grid charging disallowed
+        "reserve_above_soc_charges_from_grid": True,
+        # ...and since firmware 25.18.4 honours no backup reserve between 80 and 100, so above 80% a hold that must
+        # not discharge at all (a car hold) can only ask for 100 (GH#6046)
+        "reserve_full_only_above_80": True,
     },
     "EnphaseCloud": {
         "name": "EnphaseCloud",
@@ -2326,6 +2341,8 @@ INVERTER_DEF = {
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
+        # Holds on the reserve like a Powerwall, so treated the same: a reserve above the SoC may be met from the grid
+        "reserve_above_soc_charges_from_grid": True,
     },
     "DeyeCloud": {
         "name": "DeyeCloud",
@@ -2354,6 +2371,94 @@ INVERTER_DEF = {
         # the battery.
         "support_feedin_first": True,
         "support_discharge_freeze": True,
+        "has_idle_time": False,
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
+    },
+    "HanchuCloud": {
+        "name": "HanchuCloud",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        # CHG_PWR_LMT / DSCHG_PWR_LMT are real watt setpoints, not an "unrestricted" flag, and a
+        # rate of ZERO is how Predbat signals freeze in both directions.
+        "output_charge_control": "power",
+        # Everything goes through the device's timed slot table. The one immediate primitive this
+        # API has (fastChargeDischarge) is duration-based and would lapse behind Predbat's back, so
+        # it is deliberately unused - see hanchu_const.py.
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        # DTU_AC_CHG_SOC_LMT, the grid-charge limit. NOTE it only accepts 20-100 on this hardware, so
+        # a charge target below 20% cannot be expressed at all and is clamped, with a warning, by
+        # the component. CHG_BAT_SOC_LMT also caps solar charging, so it is never written.
+        "has_target_soc": True,
+        # DSCHG_BAT_SOC_LMT, which accepts only 5-45 - the mirror-image limitation.
+        "has_reserve_soc": True,
+        # There is no pause operation anywhere in this API, so Predbat expresses freeze through the
+        # rate entities instead.
+        "has_timed_pause": False,
+        # Anything other than HH:MM:SS makes inverter.py replace the published select entities with
+        # its own dummies and the window never reaches the component. The wire format is seconds
+        # since midnight; the conversion happens at the payload boundary.
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_ge_eco_toggle": False,
+        "time_button_press": True,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": True,
+        # CHG_PWR_LMT only limits charging from the grid, so a zero charge rate leaves solar filling
+        # the battery and Freeze Export cannot be carried out (batpred#5665). "Maximum Charge SOC" could
+        # do it, but only from 50% up and only with a restore the component does not have.
+        "support_discharge_freeze": False,
+        "has_idle_time": False,
+        # Wrap-around behaviour is undocumented for the TCT_/TDT_ slot pairs - as is everything
+        # else about this API - so Predbat splits the window and slot 2 carries the remainder
+        # rather than writing a window whose meaning is unknown.
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
+    },
+    "GrowattCloud": {
+        "name": "GrowattCloud",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "output_charge_control": "power",
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        # Growatt's public dispatch API has no writable SoC fields. The charge target is
+        # nevertheless a real component control: growatt.py observes it and drops the charge
+        # slot to 0% power (a hold) when telemetry reaches the target.
+        "has_target_soc": True,
+        # No reserve is claimed. Outside a slot the inverter runs its own self-consumption down
+        # to its local minimum, which the OpenAPI does not report (dischargeCutOffSOC is the
+        # floor for forced export, not for self-consumption), so a reserve Predbat raised to hold the battery
+        # (set_reserve_enable / set_reserve_hold) would never be honoured. Without it Predbat
+        # turns those functions off and plans against the battery's real behaviour.
+        "has_reserve_soc": False,
+        "has_timed_pause": False,
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_ge_eco_toggle": False,
+        "time_button_press": True,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        # The dispatch endpoint is limited to one request per five seconds per device; 6 leaves a
+        # second of margin (GROWATT_DISPATCH_INTERVAL).
+        "write_and_poll_sleep": 6,
+        "has_time_window": False,
+        # A zero percentage applies only inside a time slot and cannot hold the battery in
+        # ordinary self-consumption, so neither generic freeze capability is claimed.
+        "support_charge_freeze": False,
+        "support_discharge_freeze": False,
         "has_idle_time": False,
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
@@ -2441,7 +2546,7 @@ INVERTER_DEF = {
         "has_timed_pause": False,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
-        "soc_units": "%",
+        "soc_units": "kWh",
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_ge_eco_toggle": False,
@@ -2505,6 +2610,34 @@ INVERTER_DEF = {
         "has_timed_pause": False,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
+        "soc_units": "kWh",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_ge_eco_toggle": False,
+        "time_button_press": False,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "has_idle_time": False,
+        "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": False,
+    },
+    "DUMMY": {
+        "name": "Dummy (simulated)",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "output_charge_control": "power",
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        "has_target_soc": True,
+        "has_reserve_soc": True,
+        "has_timed_pause": False,
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
         "soc_units": "%",
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
@@ -2515,6 +2648,7 @@ INVERTER_DEF = {
         "has_time_window": False,
         "support_charge_freeze": True,
         "support_discharge_freeze": True,
+        "support_feedin_first": False,
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
@@ -2536,7 +2670,9 @@ INVERTER_DEF = {
         "soc_units": "%",
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
-        "time_button_press": False,
+        # Slot times stage in the gateway; pressing schedule_write_button sends the complete
+        # window (and its enable) to the Hub, as on Fox. See gateway.py _commit_side().
+        "time_button_press": True,
         "clock_time_format": "%H:%M:%S",
         # The hub applies register writes one at a time and a single write can take 10-20s (longer
         # under an EMS), so re-sending every couple of seconds only queues more work ahead of the
@@ -2602,9 +2738,15 @@ SOLAX_SOLIS_MODES_FB00 = {
     "Feed-in priority": 96,
 }
 
+# Units of the CONFIG_ITEMS input_numbers that hold an amount of money in the minor currency unit.
+# Their min/max are multiplied by apps.yaml currency_scale so a currency with a much smaller minor
+# unit than the penny (e.g. CZK haléř, ~29 to 1p) can still set a meaningful threshold (#6155, #3683).
+CURRENCY_UNITS = ("p", "p/kWh", "p/kg")
+
 # Apps.yaml validation schema
 APPS_SCHEMA = {
     "currency_symbols": {"type": "string|string_list"},
+    "currency_scale": {"type": "float"},
     "db_enable": {"type": "boolean"},
     "db_days": {"type": "integer"},
     "db_mirror_ha": {"type": "boolean"},
@@ -2615,7 +2757,11 @@ APPS_SCHEMA = {
     "ha_url": {"type": "string", "empty": False},
     "ha_key": {"type": "string", "empty": False},
     "load_filter_threshold": {"type": "integer"},
+    "web_enable": {"type": "boolean"},
     "web_port": {"type": "integer"},
+    # WebInterface stringifies these, so an unquoted all-digit login (an int in YAML) is valid
+    "web_username": {"type": "string|integer"},
+    "web_password": {"type": "string|integer"},
     # The chat agent's LLM endpoint. Named chat_api_* rather than openrouter_* because the
     # endpoint no longer has to be OpenRouter: any OpenAI-compatible API works, including a local
     # Ollama. The openrouter_* names are still accepted so an existing apps.yaml keeps working.
@@ -2667,6 +2813,9 @@ APPS_SCHEMA = {
     "ge_cloud_load_today_ignore": {"type": "boolean"},
     "ge_cloud_automatic_evc": {"type": "boolean"},
     "ge_cloud_evc_control": {"type": "boolean"},
+    "ge_cloud_evc_direct": {"type": "boolean"},
+    "ge_cloud_inverter_control": {"type": "boolean"},
+    "ge_cloud_poll_settings": {"type": "boolean"},
     "ge_cloud_automatic_shared_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_pv": {"type": "boolean"},
@@ -2678,12 +2827,14 @@ APPS_SCHEMA = {
     "charge_rate": {"type": "sensor_list", "sensor_type": "float", "modify": True, "entries": "num_inverters"},
     "discharge_rate": {"type": "sensor_list", "sensor_type": "float", "modify": True, "entries": "num_inverters"},
     "battery_power": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
+    "battery_size_power": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
     "pv_power": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
     "load_power": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
     "soc_kw": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
     "soc_max": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
+    "soc_max_fallback": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
     "reserve": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
-    "inverter_mode": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
+    "inverter_mode": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters", "blank_entries": True},
     "inverter_time": {"type": "sensor_list", "sensor_type": "string", "entries": "num_inverters"},
     "inverter_type": {"type": "string_list", "entries": "num_inverters"},
     "charge_start_time": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
@@ -2712,14 +2863,16 @@ APPS_SCHEMA = {
     "inverter_limit_override": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "battery_rate_max": {"type": "sensor_list", "sensor_type": "float", "modify": False, "zero": False, "entries": "num_inverters"},
     "export_limit": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
-    "inverter_battery_rate_min": {"type": "integer", "zero": False, "entries": "num_inverters"},
-    "inverter_reserve_max": {"type": "integer", "zero": False, "entries": "num_inverters"},
+    "inverter_battery_rate_min": {"type": "integer", "zero": False, "entries": "num_inverters", "single_value_ok": True},
+    "inverter_reserve_max": {"type": "integer", "zero": False, "entries": "num_inverters", "single_value_ok": True},
+    "battery_export_permitted": {"type": "sensor_list", "sensor_type": "boolean", "entries": "num_inverters"},
     "battery_charge_power_curve": {"type": "int_float_dict", "or_auto": True},
     "battery_discharge_power_curve": {"type": "int_float_dict", "or_auto": True},
     "battery_charge_power_curve_default": {"type": "int_float_dict"},
     "battery_discharge_power_curve_default": {"type": "int_float_dict"},
     "clock_skew": {"type": "integer"},
     "predbat_repository": {"type": "string", "empty": True},
+    "predbat_branch": {"type": "string|string_list", "empty": False},
     "solcast_api_key": {"type": "string", "empty": False},
     "solcast_host": {"type": "string", "empty": False},
     "solcast_poll_hours": {"type": "float", "zero": False},
@@ -2736,6 +2889,7 @@ APPS_SCHEMA = {
     "car_charging_power": {"type": "sensor|sensor_list", "sensor_type": "float", "transient_ok": True},
     "num_cars": {"type": "integer", "zero": True},
     "car_charging_planned": {"type": "sensor|sensor_list", "sensor_type": "string|boolean", "entries": "num_cars"},
+    "car_charging_plugged": {"type": "sensor|sensor_list", "sensor_type": "string|boolean", "entries": "num_cars"},
     "car_charging_planned_response": {"type": "string_list"},
     "car_charging_now": {"type": "sensor|sensor_list", "sensor_type": "string|boolean", "entries": "num_cars"},
     "car_charging_now_response": {"type": "string_list"},
@@ -2743,6 +2897,11 @@ APPS_SCHEMA = {
     "car_charging_soc": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_limit": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_exclusive": {"type": "boolean_list", "entries": "num_cars"},
+    # The car's own maximum charge rate in kW, per car: Fetch caps car_charging_rate at it for every
+    # charger integration (car_max_rate_cap()). A list with a number or an entity pointer per car;
+    # a blank entry, 0, or a shorter list means no cap for that car. unknown/unavailable is normal
+    # for a car sensor (the runtime holds the last cap), but an entity that does not exist is an error.
+    "car_charging_max_rate": {"type": "sensor", "sensor_type": "float", "entries": "num_cars", "optional_entries": True, "transient_ok": True, "blank_entries": True},
     "carbon_intensity": {"type": "sensor", "sensor_type": "string"},
     "carbon_postcode": {"type": "string", "empty": False},
     "carbon_automatic": {"type": "boolean"},
@@ -2768,6 +2927,8 @@ APPS_SCHEMA = {
     "solis_control_enable": {"type": "boolean"},
     "solis_cloud_pv_load_ignore": {"type": "boolean"},
     "solis_nominal_voltage": {"type": "float"},
+    "solis_parallel_slaves": {"type": "dict"},
+    "solis_parallel_slot_current_max": {"type": "float"},
     "solis_auth_method": {"type": "string", "empty": False},
     "solis_access_token": {"type": "string", "empty": False},
     "solis_token_expires_at": {"type": "string", "empty": False},
@@ -2789,6 +2950,10 @@ APPS_SCHEMA = {
     "wallbox_automatic": {"type": "boolean"},
     "wallbox_control": {"type": "boolean"},
     "wallbox_poll_seconds": {"type": "integer", "zero": False},
+    "hypervolt_username": {"type": "string", "empty": False},
+    "hypervolt_password": {"type": "string", "empty": False},
+    "hypervolt_automatic": {"type": "boolean"},
+    "hypervolt_control": {"type": "boolean"},
     "fox_key": {"type": "string", "empty": False},
     "fox_automatic": {"type": "boolean"},
     "fox_automatic_ignore_pv": {"type": "boolean"},
@@ -2796,6 +2961,7 @@ APPS_SCHEMA = {
     "fox_auth_method": {"type": "string", "empty": False},
     "fox_token_expires_at": {"type": "string", "empty": False},
     "fox_token_hash": {"type": "string", "empty": False},
+    "fox_poll_seconds": {"type": "integer", "zero": False},
     "deye_key": {"type": "string", "empty": False},
     "deye_app_id": {"type": "string", "empty": False},
     "deye_app_secret": {"type": "string", "empty": False},
@@ -2822,6 +2988,31 @@ APPS_SCHEMA = {
     "sunsynk_automatic_ignore_pv": {"type": "boolean"},
     "sunsynk_control_enable": {"type": "boolean"},
     "sunsynk_battery_nominal_voltage": {"type": "float"},
+    "hanchu_account": {"type": "string", "empty": False},
+    "hanchu_password": {"type": "string", "empty": False},
+    "hanchu_inverter_sn": {"type": "string|string_list", "empty": False},
+    "hanchu_automatic": {"type": "boolean"},
+    "hanchu_automatic_ignore_pv": {"type": "boolean"},
+    "hanchu_control_enable": {"type": "boolean"},
+    "hanchu_work_mode_control": {"type": "boolean"},
+    "hanchu_battery_rate_max": {"type": "float"},
+    "hanchu_inverter_limit": {"type": "float"},
+    "hanchu_api_delay": {"type": "float"},
+    "hanchu_min_write_interval": {"type": "integer"},
+    "hanchu_write_debounce": {"type": "float"},
+    "hanchu_api_debug": {"type": "boolean"},
+    "growatt_key": {"type": "string", "empty": False},
+    "growatt_auth_method": {"type": "string", "empty": False},
+    "growatt_token_expires_at": {"type": "string", "empty": False},
+    "growatt_token_hash": {"type": "string", "empty": False},
+    "growatt_inverter_sn": {"type": "string|string_list", "empty": False},
+    "growatt_automatic": {"type": "boolean"},
+    "growatt_automatic_ignore_pv": {"type": "boolean"},
+    "growatt_control_enable": {"type": "boolean"},
+    "growatt_base_url": {"type": "string", "empty": False},
+    "growatt_battery_rate_max": {"type": "float"},
+    "growatt_api_delay": {"type": "float"},
+    "growatt_min_write_interval": {"type": "integer"},
     "alphaess_app_id": {"type": "string", "empty": False},
     "alphaess_app_secret": {"type": "string", "empty": False},
     "alphaess_inverter_sn": {"type": "string|string_list", "empty": False},
@@ -2837,6 +3028,7 @@ APPS_SCHEMA = {
     "teslemetry_automatic": {"type": "boolean"},
     "teslemetry_tbc_control": {"type": "boolean"},
     "teslemetry_hybrid": {"type": "boolean"},
+    "teslemetry_battery_export": {"type": "boolean"},
     "teslemetry_auth_method": {"type": "string", "empty": False},
     "teslemetry_token_expires_at": {"type": "string", "empty": False},
     "teslemetry_token_hash": {"type": "string", "empty": False},
@@ -2851,6 +3043,7 @@ APPS_SCHEMA = {
     "octopus_charge_limit": {"type": "sensor|sensor_list", "sensor_type": "float", "entries": "num_cars", "optional_entries": True},
     "octopus_slot_low_rate": {"type": "boolean"},
     "octopus_slot_max": {"type": "integer"},
+    "intelligent_dispatch_billing": {"type": "string", "empty": False},
     "octopus_saving_session_octopoints_per_penny": {"type": "integer"},
     "octopus_saving_session_min_octopoints_per_kwh": {"type": "float"},
     "octopus_saving_session_rate": {"type": "float"},
@@ -2883,6 +3076,9 @@ APPS_SCHEMA = {
     "futurerate_adjust_import": {"type": "boolean"},
     "futurerate_adjust_export": {"type": "boolean"},
     "futurerate_adjust_auto": {"type": "boolean"},
+    "futurerate_agilepredict": {"type": "boolean"},
+    "futurerate_agilepredict_region": {"type": "string", "empty": False},
+    "futurerate_agilepredict_url": {"type": "string", "empty": False},
     "futurerate_peak_start": {"type": "string", "empty": False},
     "futurerate_peak_end": {"type": "string", "empty": False},
     "octopus_region": {"type": "string", "empty": False},
@@ -2904,6 +3100,7 @@ APPS_SCHEMA = {
     "open_meteo_forecast_max_age": {"type": "float"},
     "enable_coarse_fine_levels": {"type": "boolean"},
     "load_power_fill_enable": {"type": "boolean"},
+    "load_history_fill_enable": {"type": "boolean"},
     "load_ml_enable": {"type": "boolean"},
     "load_ml_retrain_interval_hours": {"type": "integer", "min": 1, "max": 48},
     "gateway_device_id": {"type": "string", "empty": False},

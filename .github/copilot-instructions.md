@@ -136,7 +136,7 @@ class MyComponent(ComponentBase):
             await asyncio.sleep(interval)
 ```
 
-**Key components**: `WebInterface`, `PredbatMCPServer`, `SolarAPI`, `AlertFeed`, `GECloudDirect`, `CarbonAPI`, `FoxAPI`, `DatabaseManager`, `OctopusAPI`, `OhmeAPI`, `WallboxAPI`, `HAHistory`, `HAInterface`
+**Key components**: `WebInterface`, `PredbatMCPServer`, `SolarAPI`, `AlertFeed`, `GECloudDirect`, `CarbonAPI`, `FoxAPI`, `DatabaseManager`, `OctopusAPI`, `OhmeAPI`, `WallboxAPI`, `HypervoltAPI`, `HAHistory`, `HAInterface`
 
 Components are managed via `Components` class (`apps/predbat/components.py`) and initialized via plugin system (`apps/predbat/plugin_system.py`).
 
@@ -327,6 +327,7 @@ Web interface in `apps/predbat/web.py` runs on port 5052 (configurable via `web_
 - `fox.py` - Fox ESS cloud API  
 - `ohme.py` - Ohme EV charger integration
 - `wallbox.py` - Wallbox EV charger integration
+- `hypervolt.py` - Hypervolt EV charger integration
 - `carbon.py` - Carbon intensity API
 
 ## Common Gotchas
@@ -354,12 +355,17 @@ Docs in `docs/` folder, published to GitHub Pages via `.github/workflows/publish
 
 See `requirements.txt`:
 
-- `aiohttp` - Async HTTP
-- `pytz` - Timezone handling  
-- `requests` - Sync HTTP
+- `aiohttp` - Async HTTP (also `http_sync` for blocking callers)
+- `aiofiles` - Async file access (Storage component)
+- `aiomqtt` - MQTT (Gateway, Enphase, Sigenergy)
+- `numpy` - Load ML predictor
+- `prometheus-client` - Metrics endpoint
+- `protobuf` - Gateway and Enphase message formats
+- `pytz` - Timezone handling
 - `ruamel.yaml` - YAML parsing
-- `pyjwt` - JWT tokens (for APIs)
 - `matplotlib` - Chart generation (testing only)
+
+MCP tokens are signed by the standard-library `jwt_hs256.py`, not PyJWT.
 
 ## License & Copyright
 

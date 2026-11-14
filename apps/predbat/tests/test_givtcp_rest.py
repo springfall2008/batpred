@@ -15,7 +15,18 @@ GivTCP, and an InverterRestState to hold the snapshot - the same stand-in GivTCP
 import copy
 
 from givtcp_rest import GivTCPRest, InverterRestState
-from const import INVERTER_MAX_RETRY_REST
+from tests.test_infra import run_async
+from const import INVERTER_MAX_RETRY_REST, INVERTER_REST_TIMEOUT
+
+
+def _transport(fake):
+    """An async_http_request stand-in that routes givtcp_rest's HTTP calls to a fake with get/post methods."""
+
+    async def request(method, url, session=None, **kwargs):
+        """Call the fake's get() or post(), as the helper would make the request."""
+        return getattr(fake, method.lower())(url, **kwargs)
+
+    return request
 
 
 class _RestBase:
@@ -35,7 +46,7 @@ class _RestBase:
 
 
 class _Response:
-    """Stand-in for the requests.Response a POST returns; only its truthiness is used."""
+    """Stand-in for the response a POST returns; only its truthiness is used."""
 
     status_code = 200
 
@@ -81,12 +92,12 @@ class _Transport:
         self.posts = []
         self.gets = []
 
-    def post(self, url, json=None):
+    async def post(self, url, json=None):
         """Record the POST and report success."""
         self.posts.append((url, json))
         return _Response()
 
-    def get(self, url):
+    async def get(self, url):
         """Serve the next scripted response, repeating the last one once exhausted."""
         self.gets.append(url)
         if len(self.responses) > 1:
@@ -100,9 +111,14 @@ def _client(responses, rest_data=None):
     state = InverterRestState(id=0, rest_api="http://givtcp:6345")
     state.rest_data = copy.deepcopy(rest_data if rest_data is not None else _blob())
     state.slept = []
-    state.sleep = lambda seconds: state.slept.append(seconds)
     transport = _Transport(responses)
     client = GivTCPRest(base, state, rest_postCommand=transport.post, rest_getData=transport.get)
+
+    async def sleep(seconds):
+        """Count the wait instead of taking it."""
+        state.slept.append(seconds)
+
+    client.sleep = sleep
     return base, state, transport, client
 
 
@@ -151,7 +167,7 @@ def test_writes_succeed_when_the_value_reads_back(my_predbat=None):
 
     for name, (call, endpoint, payload, applied, settle) in WRITE_CASES.items():
         base, state, transport, client = _client([_blob(**applied)])
-        result = call(client)
+        result = run_async(call(client))
 
         if result is not True:
             print("ERROR: {} returned {} for a write that landed".format(name, result))
@@ -187,7 +203,7 @@ def test_writes_retry_until_the_value_appears(my_predbat=None):
     for name, (call, endpoint, payload, applied, settle) in WRITE_CASES.items():
         # First read-back still shows the old value, the second shows the write applied
         base, state, transport, client = _client([_blob(), _blob(**applied)])
-        result = call(client)
+        result = run_async(call(client))
 
         if result is not True:
             print("ERROR: {} returned {} for a write that landed on the second look".format(name, result))
@@ -221,7 +237,7 @@ def test_writes_give_up_and_report_after_the_retry_ladder(my_predbat=None):
     for name, (call, endpoint, payload, applied, settle) in WRITE_CASES.items():
         # The read-back never shows the new value
         base, state, transport, client = _client([_blob()])
-        result = call(client)
+        result = run_async(call(client))
 
         if result is not False:
             print("ERROR: {} returned {} for a write that never landed".format(name, result))
@@ -253,7 +269,7 @@ def test_read_data_retries_a_bad_response_then_gives_up(my_predbat=None):
 
     # Succeeds first time
     base, state, transport, client = _client([_blob()])
-    if client.read_data() is None:
+    if run_async(client.read_data()) is None:
         print("ERROR: read_data returned None for a valid response")
         failed = True
     if state.slept:
@@ -262,7 +278,7 @@ def test_read_data_retries_a_bad_response_then_gives_up(my_predbat=None):
 
     # A junk response is retried, and the delays lengthen after the first
     base, state, transport, client = _client([{"nonsense": True}, _blob()])
-    if client.read_data() is None:
+    if run_async(client.read_data()) is None:
         print("ERROR: read_data returned None when the retry succeeded")
         failed = True
     if state.slept != [20]:
@@ -271,7 +287,7 @@ def test_read_data_retries_a_bad_response_then_gives_up(my_predbat=None):
 
     # Never valid: gives up after the ladder and records an error
     base, state, transport, client = _client([{"nonsense": True}])
-    if client.read_data() is not None:
+    if run_async(client.read_data()) is not None:
         print("ERROR: read_data returned data for a response that never had a Control block")
         failed = True
     if state.slept != [20] + [40] * (INVERTER_MAX_RETRY_REST - 1):
@@ -283,7 +299,7 @@ def test_read_data_retries_a_bad_response_then_gives_up(my_predbat=None):
 
     # retry=False takes one attempt only - run_all uses this, inside the write loop
     base, state, transport, client = _client([{"nonsense": True}])
-    if client.read_data(api="runAll", retry=False) is not None:
+    if run_async(client.read_data(api="runAll", retry=False)) is not None:
         print("ERROR: read_data(retry=False) returned data for a junk response")
         failed = True
     if len(transport.gets) != 1 or state.slept:
@@ -307,13 +323,13 @@ def test_run_all_keeps_the_previous_snapshot_when_the_read_fails(my_predbat=None
 
     previous = _blob(control={"Target_SOC": 42})
     base, state, transport, client = _client([{"nonsense": True}])
-    result = client.run_all(previous)
+    result = run_async(client.run_all(previous))
     if result is not previous:
         print("ERROR: run_all returned {} instead of the previous snapshot".format(result))
         failed = True
 
     base, state, transport, client = _client([_blob(control={"Target_SOC": 77})])
-    result = client.run_all(previous)
+    result = run_async(client.run_all(previous))
     if result["Control"]["Target_SOC"] != 77:
         print("ERROR: run_all did not return the fresh snapshot, got Target_SOC {}".format(result["Control"]["Target_SOC"]))
         failed = True
@@ -339,31 +355,31 @@ def test_transport_failures_are_contained(my_predbat=None):
     client = GivTCPRest(base, state)
 
     class _BoomSession:
-        """Stands in for requests, refusing every call the way an unreachable host does."""
+        """Stands in for the HTTP helper, refusing every call the way an unreachable host does."""
 
         @staticmethod
         def post(url, json=None, timeout=None):
-            """Raise as requests does when the host is unreachable."""
+            """Raise as the helper does when the host is unreachable."""
             raise OSError("connection refused")
 
         @staticmethod
         def get(url, timeout=None):
-            """Raise as requests does when the host is unreachable."""
+            """Raise as the helper does when the host is unreachable."""
             raise OSError("connection refused")
 
     import givtcp_rest
 
-    original = givtcp_rest.requests
-    givtcp_rest.requests = _BoomSession
+    original = givtcp_rest.async_http_request
+    givtcp_rest.async_http_request = _transport(_BoomSession)
     try:
-        if client.post_command("http://givtcp:6345/setChargeRate", json={"chargeRate": 1}) is not None:
+        if run_async(client.post_command("http://givtcp:6345/setChargeRate", json={"chargeRate": 1})) is not None:
             print("ERROR: post_command returned a response when the POST raised")
             failed = True
-        if client.get_data("http://givtcp:6345/readData") is not None:
+        if run_async(client.get_data("http://givtcp:6345/readData")) is not None:
             print("ERROR: get_data returned data when the GET raised")
             failed = True
     finally:
-        givtcp_rest.requests = original
+        givtcp_rest.async_http_request = original
 
     if not any("failed" in message or "Exception" in message for message in base.logs):
         print("ERROR: transport failures were not logged, got {}".format(base.logs))
@@ -415,7 +431,7 @@ def test_export_target_prefers_control_over_a_stale_raw(my_predbat=None):
 
     # Control has the new value, raw is still stale - this is the #4517 case
     base, state, transport, client = _client([_blob(control={"Discharge_Target_SOC_1": 20}, raw={"discharge_target_soc_1": 0})])
-    if client.set_discharge_target(20) is not True:
+    if run_async(client.set_discharge_target(20)) is not True:
         print("ERROR: a write confirmed by Control was reported as failed because raw was stale")
         failed = True
     if state.slept != [1]:
@@ -426,19 +442,19 @@ def test_export_target_prefers_control_over_a_stale_raw(my_predbat=None):
     blob = _blob(raw={"discharge_target_soc_1": 20})
     del blob["Control"]["Discharge_Target_SOC_1"]
     base, state, transport, client = _client([blob])
-    if client.set_discharge_target(20) is not True:
+    if run_async(client.set_discharge_target(20)) is not True:
         print("ERROR: a write confirmed by raw.invertor was reported as failed when Control had no key")
         failed = True
 
     # GivTCP reports these as strings; comparing without coercion never matches the int target
     base, state, transport, client = _client([_blob(control={"Discharge_Target_SOC_1": "20"}, raw={"discharge_target_soc_1": "20"})])
-    if client.set_discharge_target(20) is not True:
+    if run_async(client.set_discharge_target(20)) is not True:
         print("ERROR: a string read-back of the target was not coerced and never matched")
         failed = True
 
     # A value that is neither numeric nor present is not mistaken for a match
     base, state, transport, client = _client([_blob(control={"Discharge_Target_SOC_1": "unavailable"}, raw={"discharge_target_soc_1": None})])
-    if client.set_discharge_target(20) is not False:
+    if run_async(client.set_discharge_target(20)) is not False:
         print("ERROR: an unreadable target was treated as a successful write")
         failed = True
 
@@ -570,7 +586,7 @@ def test_reader_edge_cases(my_predbat=None):
 
     # Already at the requested state: no POST at all
     state.rest_data = _blob(control={"Enable_Charge_Target": "enable"})
-    if client.enable_charge_target(True) is not True:
+    if run_async(client.enable_charge_target(True)) is not True:
         print("ERROR: enable_charge_target did not report success when already enabled")
         failed = True
     if transport.posts:
@@ -586,7 +602,7 @@ def test_transport_success_paths(my_predbat=None):
     """
     post_command returns the response and get_data decodes JSON only on a 200.
 
-    These are the real requests calls, which every other test replaces with an injected transport -
+    These are the real HTTP helper calls, which every other test replaces with an injected transport -
     so without this the only exercised path through them is the exception handler.
     """
     failed = False
@@ -598,7 +614,7 @@ def test_transport_success_paths(my_predbat=None):
     client = GivTCPRest(base, state)
 
     class _Fake:
-        """Stands in for the requests module, returning a scripted status code."""
+        """Stands in for the HTTP helper, returning a scripted status code."""
 
         def __init__(self, status_code):
             self.status_code = status_code
@@ -617,27 +633,183 @@ def test_transport_success_paths(my_predbat=None):
 
     import givtcp_rest
 
-    original = givtcp_rest.requests
+    original = givtcp_rest.async_http_request
     try:
-        givtcp_rest.requests = _Fake(200)
-        response = client.post_command("http://givtcp:6345/setChargeRate", json={"chargeRate": 1})
+        givtcp_rest.async_http_request = _transport(_Fake(200))
+        response = run_async(client.post_command("http://givtcp:6345/setChargeRate", json={"chargeRate": 1}))
         if response is None or response.status_code != 200:
             print("ERROR: post_command did not return the response on success")
             failed = True
-        if client.get_data("http://givtcp:6345/readData") != {"Control": {"ok": True}}:
+        if run_async(client.get_data("http://givtcp:6345/readData")) != {"Control": {"ok": True}}:
             print("ERROR: get_data did not decode the JSON of a 200 response")
             failed = True
 
         # A non-200 is not data, however well-formed its body
-        givtcp_rest.requests = _Fake(503)
-        if client.get_data("http://givtcp:6345/readData") is not None:
+        givtcp_rest.async_http_request = _transport(_Fake(503))
+        if run_async(client.get_data("http://givtcp:6345/readData")) is not None:
             print("ERROR: get_data returned a body from a non-200 response")
             failed = True
     finally:
-        givtcp_rest.requests = original
+        givtcp_rest.async_http_request = original
 
     if not failed:
         print("PASS: the real transport returns responses and rejects non-200")
+    return 1 if failed else 0
+
+
+def test_get_data_rejects_a_200_that_is_not_json(my_predbat=None):
+    """
+    A 200 whose body is not a JSON object is a failed read, not an exception (#2828).
+
+    GivTCP can answer 200 with an empty body while it is still starting up, and a proxy can answer
+    with an error page or a bare value. get_data must return None so read_data retries and then
+    falls back, rather than the error escaping GivTCPComponent.run() and cutting the poll short.
+    """
+    failed = False
+    print("**** Testing a 200 response whose body is not a JSON object ****")
+
+    import json
+    from http_sync import HttpJSONDecodeError
+    import givtcp_rest
+
+    class _Body:
+        """Stands in for the HTTP helper, answering 200 with a fixed body."""
+
+        status_code = 200
+
+        def __init__(self, text):
+            self.text = text
+
+        def get(self, url, timeout=None):
+            """Return self as the response object."""
+            return self
+
+        def json(self):
+            """Decode the body as the helper's response does, raising HttpJSONDecodeError on bad input."""
+            try:
+                return json.loads(self.text)
+            except ValueError as e:
+                raise HttpJSONDecodeError(str(e))
+
+    original = givtcp_rest.async_http_request
+    try:
+        for text, expect_log in [("", "not JSON"), ("<html>502 Bad Gateway</html>", "502 Bad Gateway"), ("503", "not an object")]:
+            base = _RestBase()
+            client = GivTCPRest(base, InverterRestState(id=0, rest_api="http://givtcp:6345"))
+            givtcp_rest.async_http_request = _transport(_Body(text))
+            try:
+                result = run_async(client.get_data("http://givtcp:6345/readData"))
+            except (ValueError, TypeError) as e:
+                print("ERROR: get_data raised on body {!r}: {}".format(text, e))
+                failed = True
+                continue
+            if result is not None:
+                print("ERROR: get_data returned {!r} for body {!r}".format(result, text))
+                failed = True
+            if not any(expect_log in line for line in base.logs):
+                print("ERROR: get_data did not log {!r} for body {!r}: {}".format(expect_log, text, base.logs))
+                failed = True
+    finally:
+        givtcp_rest.async_http_request = original
+
+    if not failed:
+        print("PASS: a 200 that is not a JSON object is a failed read")
+    return 1 if failed else 0
+
+def test_requests_use_the_owners_session_and_waits_yield(my_predbat=None):
+    """
+    The client makes its requests on the session its owner supplies, and waits without blocking.
+
+    GivTCPComponent supplies one long-lived session of its own, so a host or test that replaces
+    the component's sessions sees these requests too, and each one reuses the connection. The waits between retries run on the component's
+    event loop, so they must be asyncio sleeps: a blocking one would stall every other component
+    sharing that loop for up to 40 seconds.
+    """
+    failed = False
+    print("**** Testing the client's session hand-off and non-blocking wait ****")
+
+    import asyncio
+    import givtcp_rest
+
+    shared = object()
+    asked = []
+
+    def supply():
+        """Stands in for GivTCPComponent's shared session, asked for afresh on every request."""
+        asked.append(1)
+        return shared
+
+    seen = []
+
+    class _Fake:
+        """Answers every request with a 200 status blob."""
+
+        status_code = 200
+
+        @staticmethod
+        def json():
+            """Decode as a status blob."""
+            return {"Control": {}}
+
+    async def request(method, url, **kwargs):
+        """Record what the client asked the helper for."""
+        seen.append((method, url, kwargs))
+        return _Fake()
+
+    base = _RestBase()
+    client = GivTCPRest(base, InverterRestState(id=0, rest_api="http://givtcp:6345"), http_session=supply)
+    original = givtcp_rest.async_http_request
+    givtcp_rest.async_http_request = request
+    try:
+        run_async(client.get_data("http://givtcp:6345/readData"))
+        run_async(client.post_command("http://givtcp:6345/setChargeRate", json={"chargeRate": 1}))
+    finally:
+        givtcp_rest.async_http_request = original
+    if [method for method, _, _ in seen] != ["GET", "POST"]:
+        print("ERROR: expected one GET and one POST through the helper, got {}".format(seen))
+        failed = True
+    for method, url, kwargs in seen:
+        if kwargs.get("session") is not shared:
+            print("ERROR: {} {} did not use the owner's session: {}".format(method, url, kwargs))
+            failed = True
+        if kwargs.get("timeout") != INVERTER_REST_TIMEOUT:
+            print("ERROR: {} {} had timeout {}, expected {}".format(method, url, kwargs.get("timeout"), INVERTER_REST_TIMEOUT))
+            failed = True
+
+    if len(asked) != 2:
+        print("ERROR: the owner was asked for its session {} times, expected once per request".format(len(asked)))
+        failed = True
+
+    # With no owner (a client built on its own) the helper is left to make its own session
+    seen.clear()
+    lone = GivTCPRest(base, InverterRestState(id=0, rest_api="http://givtcp:6345"))
+    givtcp_rest.async_http_request = request
+    try:
+        run_async(lone.get_data("http://givtcp:6345/readData"))
+    finally:
+        givtcp_rest.async_http_request = original
+    if len(seen) != 1 or seen[0][2].get("session") is not None:
+        print("ERROR: a client with no owner passed a session: {}".format(seen))
+        failed = True
+
+    waited = []
+
+    async def fake_sleep(seconds):
+        """Record the asyncio sleep instead of taking it."""
+        waited.append(seconds)
+
+    original_sleep = asyncio.sleep
+    asyncio.sleep = fake_sleep
+    try:
+        run_async(client.sleep(7))
+    finally:
+        asyncio.sleep = original_sleep
+    if waited != [7]:
+        print("ERROR: sleep(7) made asyncio sleeps {}, expected [7]".format(waited))
+        failed = True
+
+    if not failed:
+        print("PASS: requests use the owner's sessions and waits are asyncio sleeps")
     return 1 if failed else 0
 
 
@@ -655,4 +827,6 @@ def run_givtcp_rest_tests(my_predbat):
     failed += test_readers_return_nothing_without_a_snapshot(my_predbat)
     failed += test_reader_edge_cases(my_predbat)
     failed += test_transport_success_paths(my_predbat)
+    failed += test_get_data_rejects_a_200_that_is_not_json(my_predbat)
+    failed += test_requests_use_the_owners_session_and_waits_yield(my_predbat)
     return failed

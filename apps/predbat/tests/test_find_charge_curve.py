@@ -10,6 +10,7 @@
 
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
+import inverter as inverter_module
 from inverter import Inverter
 from datetime import timedelta
 
@@ -30,7 +31,7 @@ def setup_predbat(my_predbat):
     my_predbat.debug_enable = True  # Enable debug for more info
 
 
-def create_test_history_data(my_predbat, num_days=7, slow=False):
+def create_test_history_data(my_predbat, num_days=7, slow=False, discharge_taper_below=None):
     """
     Create mock history data for testing find_charge_curve
 
@@ -102,7 +103,7 @@ def create_test_history_data(my_predbat, num_days=7, slow=False):
 
             charge_rate = 0  # Max discharge rate
             discharge_rate = 2600  # Max discharge rate in Watts
-            if slow:
+            if slow or (discharge_taper_below is not None and soc < discharge_taper_below):
                 battery_power = 1300  # Positive = discharging
             else:
                 battery_power = 2599  # Positive = discharging
@@ -334,6 +335,61 @@ def test_find_charge_curve_no_data(my_predbat):
     return failed
 
 
+def test_find_charge_curve_names_missing_entity(my_predbat):
+    """
+    The missing history / missing setting warnings name the entity at fault rather than listing every candidate (#4009)
+    """
+    print("*** Running test: find_charge_curve_names_missing_entity ***")
+    failed = False
+
+    inv = Inverter(my_predbat, 0)
+    inv.battery_rate_max_charge = 2600 / 60000  # Watts / MINUTE_WATT
+    inv.battery_rate_max_discharge = 2600 / 60000
+    inv.soc_max = 10.0
+    inv.battery_scaling = 1.0
+    log_messages = []
+    inv.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+
+    setup_predbat(my_predbat)
+
+    # Only battery_power has no history, the other three sensors do
+    create_test_history_data(my_predbat, num_days=2)
+    full_history = my_predbat.ha_interface.get_history
+    my_predbat.ha_interface.get_history = lambda entity_id, now=None, days=30: None if entity_id == "sensor.battery_power" else full_history(entity_id, now=now, days=days)
+
+    for discharge, rate_setting, rate_entity in [(False, "charge_rate", "number.charge_rate"), (True, "discharge_rate", "number.discharge_rate")]:
+        log_messages.clear()
+        if inv.find_charge_curve(discharge=discharge):
+            print("ERROR: Expected no curve when battery_power has no history")
+            failed = True
+        warnings = [msg for msg in log_messages if "missing history" in msg]
+        if len(warnings) != 1 or "battery_power (sensor.battery_power)" not in warnings[0]:
+            print("ERROR: Expected one missing history warning naming battery_power, got {}".format(log_messages))
+            failed = True
+        elif "soc_percent" in warnings[0] or rate_entity in warnings[0] or "predbat.status" in warnings[0]:
+            print("ERROR: Missing history warning should only name the entity without history, got {}".format(warnings[0]))
+            failed = True
+        counts = [msg for msg in log_messages if "history record counts" in msg]
+        if len(counts) != 1 or "battery_power 0" not in counts[0] or "soc_percent 0" in counts[0] or "{} 0".format(rate_setting) in counts[0]:
+            print("ERROR: Expected record counts with only battery_power at 0, got {}".format(counts))
+            failed = True
+
+    # battery_power not configured at all
+    saved_battery_power = my_predbat.args.pop("battery_power")
+    try:
+        log_messages.clear()
+        inv.find_charge_curve(discharge=False)
+        warnings = [msg for msg in log_messages if "settings missing" in msg]
+        if len(warnings) != 1 or "battery_power not set in apps.yaml" not in warnings[0] or "soc_percent" in warnings[0] or "charge_rate" in warnings[0]:
+            print("ERROR: Expected settings missing warning naming only battery_power, got {}".format(log_messages))
+            failed = True
+    finally:
+        my_predbat.args["battery_power"] = saved_battery_power
+        remove_test_history_data(my_predbat)
+
+    return failed
+
+
 def test_find_charge_curve_inverted_battery_power(my_predbat):
     """
     Test find_charge_curve with inverted battery power - smoke test
@@ -486,6 +542,220 @@ def test_find_charge_curve_averages_power_across_period(my_predbat):
     return failed
 
 
+def create_stepped_history_data(my_predbat, num_days=7, start_soc=80, step_percent=1, glitch=False):
+    """
+    Create per-minute history of a full-rate charge from 2am to 6am, raising SoC by
+    step_percent every 10 minutes from start_soc and capping at 98%.
+
+    With glitch set, one minute in the middle of the 88% step on a single day reads 0%.
+    Returns the timestamp of that mid-step minute, so a test can also remove it from the data.
+    """
+    ha = my_predbat.ha_interface
+    base_time = my_predbat.midnight_utc - timedelta(days=num_days)
+
+    history_dict = {"sensor.soc_percent": [], "number.charge_rate": [], "number.discharge_rate": [], "sensor.battery_power": [], "predbat.status": []}
+    ha.dummy_items["sensor.soc_percent"] = 98
+    ha.dummy_items["number.charge_rate"] = 2600
+    ha.dummy_items["number.discharge_rate"] = 2600
+    ha.dummy_items["sensor.battery_power"] = -2600
+    ha.dummy_items["predbat.status"] = "Idle"
+
+    glitch_time = base_time + timedelta(days=3, hours=2, minutes=85)
+    for minutes in range(0, num_days * 24 * 60):
+        timestamp = base_time + timedelta(minutes=minutes)
+        timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S%z")
+        hour = timestamp.hour
+
+        if 2 <= hour < 6:
+            session_minute = (hour - 2) * 60 + timestamp.minute
+            soc = min(98, start_soc + (session_minute // 10) * step_percent)
+            if glitch and timestamp == glitch_time:
+                soc = 0
+            charge_rate = 2600
+            battery_power = -2600
+            status = "Charging"
+        else:
+            soc = start_soc if hour < 2 else 98
+            charge_rate = 0
+            battery_power = 0
+            status = "Idle"
+
+        history_dict["sensor.soc_percent"].append({"state": str(soc), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "%"}})
+        history_dict["number.charge_rate"].append({"state": charge_rate, "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
+        history_dict["number.discharge_rate"].append({"state": 0, "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
+        history_dict["sensor.battery_power"].append({"state": battery_power, "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
+        history_dict["predbat.status"].append({"state": status, "last_updated": timestamp_str, "attributes": {}})
+
+    def mock_get_history(entity_id, now=None, days=30):
+        """
+        Return the generated history for a known entity
+        """
+        if entity_id in history_dict:
+            return [history_dict[entity_id]]
+        return None
+
+    my_predbat.ha_interface.get_history = mock_get_history
+    return glitch_time
+
+
+def create_curve_test_inverter(my_predbat):
+    """
+    Create an inverter with a 2.6kW charge rate and 10kWh battery for the curve tests
+    """
+    inv = Inverter(my_predbat, 0)
+    inv.battery_rate_max_charge = 2600 / 60000
+    inv.battery_rate_max_discharge = 2600 / 60000
+    inv.soc_max = 10.0
+    inv.battery_scaling = 1.0
+    setup_predbat(my_predbat)
+    return inv
+
+
+def check_glitch_free_curve(charge_curve):
+    """
+    Check a curve learned from 1% steps from 80-98% at full rate: points 86-97 at 1.0 and nothing
+    below 85%. Walks only start at 86% and above, and the gap fill after learning adds 85%.
+    Returns True on failure.
+    """
+    if not charge_curve:
+        print("ERROR: No charge curve found")
+        return True
+    print("Charge curve found: {}".format(charge_curve))
+    failed = False
+    below = sorted(soc for soc in charge_curve if soc < 85)
+    if below:
+        print("ERROR: Glitched sample stored below 85%: {}".format(below))
+        failed = True
+    for soc in range(86, 98):
+        if charge_curve.get(soc) != 1.0:
+            print("ERROR: Expected full rate 1.0 at {}%, got {}".format(soc, charge_curve.get(soc)))
+            failed = True
+    return failed
+
+
+def test_find_charge_curve_zero_soc_glitch(my_predbat):
+    """
+    A single 0% SoC reading inside a full-rate charge must not stamp a sample across 1-84% (#5259)
+    """
+    print("*** Running test: find_charge_curve_zero_soc_glitch ***")
+    inv = create_curve_test_inverter(my_predbat)
+    create_stepped_history_data(my_predbat, glitch=True)
+    try:
+        return check_glitch_free_curve(inv.find_charge_curve(discharge=False))
+    finally:
+        remove_test_history_data(my_predbat)
+
+
+def test_find_charge_curve_missing_soc_minute(my_predbat):
+    """
+    A minute missing from the SoC history inside a full-rate charge must not stamp a sample across 1-84% (#5259)
+    """
+    print("*** Running test: find_charge_curve_missing_soc_minute ***")
+    inv = create_curve_test_inverter(my_predbat)
+    gap_time = create_stepped_history_data(my_predbat)
+    gap_minute = int((my_predbat.now_utc - gap_time).total_seconds() / 60)
+    original_minute_data = inverter_module.minute_data
+
+    def minute_data_with_gap(*args, **kwargs):
+        """
+        Drop one mid-charge minute from the SoC series only
+        """
+        data, io_adjusted = original_minute_data(*args, **kwargs)
+        if kwargs.get("required_unit") == "%":
+            data.pop(gap_minute, None)
+        return data, io_adjusted
+
+    inverter_module.minute_data = minute_data_with_gap
+    try:
+        return check_glitch_free_curve(inv.find_charge_curve(discharge=False))
+    finally:
+        inverter_module.minute_data = original_minute_data
+        remove_test_history_data(my_predbat)
+
+
+def test_find_charge_curve_coarse_soc_steps(my_predbat):
+    """
+    Genuine 5% SoC steps must still be learned, including the points below 86% that a walk
+    starting at 88% spans when the next reading is 83%
+    """
+    print("*** Running test: find_charge_curve_coarse_soc_steps ***")
+    inv = create_curve_test_inverter(my_predbat)
+    create_stepped_history_data(my_predbat, start_soc=78, step_percent=5)
+    try:
+        charge_curve = inv.find_charge_curve(discharge=False)
+    finally:
+        remove_test_history_data(my_predbat)
+    if not charge_curve:
+        print("ERROR: No charge curve found from 5% SoC steps")
+        return True
+    print("Charge curve found: {}".format(charge_curve))
+    failed = False
+    for soc in range(84, 98):
+        if charge_curve.get(soc) != 1.0:
+            print("ERROR: Expected full rate 1.0 at {}% from 5% SoC steps, got {}".format(soc, charge_curve.get(soc)))
+            failed = True
+    return failed
+
+
+def test_find_charge_curve_percent_with_battery_scaling(my_predbat):
+    """
+    A soc_percent sensor is already relative to usable capacity, so battery_scaling must not
+    rescale it: the curve has to be learned at the SoC it is applied at (#6183). The slow
+    fixture halves the charge power above 90%, so the taper must start at 91% whatever the
+    scaling. Before the fix, 0.95 learned the taper from 87% and 0.8 learned no curve at all.
+    Returns True on failure.
+    """
+    print("*** Running test: find_charge_curve_percent_with_battery_scaling ***")
+    failed = False
+    for scaling in [0.8, 0.95]:
+        inv = create_curve_test_inverter(my_predbat)
+        inv.battery_scaling = scaling
+        create_test_history_data(my_predbat, num_days=7, slow=True)
+        try:
+            charge_curve = inv.find_charge_curve(discharge=False)
+        finally:
+            remove_test_history_data(my_predbat)
+        if not charge_curve:
+            print("ERROR: No charge curve found with battery_scaling {}".format(scaling))
+            failed = True
+            continue
+        print("Charge curve found with battery_scaling {}: {}".format(scaling, charge_curve))
+        for soc in range(85, 101):
+            expected = 0.5 if soc > 90 else 1.0
+            if charge_curve.get(soc) != expected:
+                print("ERROR: battery_scaling {}: expected {} at {}%, got {}".format(scaling, expected, soc, charge_curve.get(soc)))
+                failed = True
+    return failed
+
+
+def test_find_charge_curve_discharge_percent_with_battery_scaling(my_predbat):
+    """
+    The discharge half of #6183: with a soc_percent sensor the discharge curve learned at
+    battery_scaling 0.8 must be the one learned at 1.0, i.e. at the true SoC. The fixture
+    halves the discharge power below 12%, inside the 5-20% search range, where the old
+    conversion put each point at 0.8 x its SoC. Returns True on failure.
+    """
+    print("*** Running test: find_charge_curve_discharge_percent_with_battery_scaling ***")
+    curves = {}
+    for scaling in [1.0, 0.8]:
+        inv = create_curve_test_inverter(my_predbat)
+        inv.battery_scaling = scaling
+        create_test_history_data(my_predbat, num_days=7, discharge_taper_below=12)
+        try:
+            curves[scaling] = inv.find_charge_curve(discharge=True)
+        finally:
+            remove_test_history_data(my_predbat)
+        print("Discharge curve found with battery_scaling {}: {}".format(scaling, curves[scaling]))
+    reference = curves[1.0]
+    if not reference or not any(value < 1.0 for value in reference.values()):
+        print("ERROR: Expected a tapered discharge curve at battery_scaling 1.0, got {}".format(reference))
+        return True
+    if curves[0.8] != reference:
+        print("ERROR: Discharge curve at battery_scaling 0.8 {} differs from the one at 1.0 {}".format(curves[0.8], reference))
+        return True
+    return False
+
+
 def run_find_charge_curve_tests(my_predbat):
     """
     Run all find_charge_curve tests
@@ -520,6 +790,7 @@ def run_find_charge_curve_tests(my_predbat):
         return failed
 
     failed |= test_find_charge_curve_no_data(my_predbat)
+    failed |= test_find_charge_curve_names_missing_entity(my_predbat)
     if failed:
         return failed
 
@@ -528,6 +799,14 @@ def run_find_charge_curve_tests(my_predbat):
         return failed
 
     failed |= test_find_charge_curve_averages_power_across_period(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_charge_curve_zero_soc_glitch(my_predbat)
+    failed |= test_find_charge_curve_missing_soc_minute(my_predbat)
+    failed |= test_find_charge_curve_coarse_soc_steps(my_predbat)
+    failed |= test_find_charge_curve_percent_with_battery_scaling(my_predbat)
+    failed |= test_find_charge_curve_discharge_percent_with_battery_scaling(my_predbat)
     if failed:
         return failed
 

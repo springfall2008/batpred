@@ -29,9 +29,10 @@ from datetime import datetime, timedelta
 import pytz
 from zoneinfo import ZoneInfo
 
+import const
 from const import PREDICT_STEP, EXPORT_MODE_FREEZE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import export_mode_of
-from output import yesterday_slot_is_exporting, more_active_slot_status
+from output import yesterday_slot_is_exporting, split_status_warning, more_active_slot_status
 from tests.test_infra import reset_rates, reset_inverter
 
 UTC = pytz.UTC
@@ -2324,6 +2325,102 @@ def _test_carbon_yesterday(my_predbat, failed):
     return failed
 
 
+def _test_clock_change_reads_yesterday_final_value(my_predbat, failed):
+    """GH#5760: on a clock-change day cost_yesterday is read at yesterday's last minute, not an hour off it.
+
+    minute_data() keys history by real elapsed time while minutes_now counts wall-clock minutes, so the two differ by the
+    change. Autumn: the lookup used to land an hour into today and publish today's early cost as yesterday's. Spring: it
+    landed an hour before yesterday ended and dropped yesterday's last write. now_utc, midnight_utc and minutes_now are
+    built as update_time() builds them, from a Europe/London clock.
+    """
+    print("calculate_yesterday: Test - cost_yesterday read at yesterday's final minute on a clock-change day (GH#5760)")
+    london = pytz.timezone("Europe/London")
+    local_tz_before = my_predbat.local_tz
+    my_predbat.local_tz = london
+    entity_id = my_predbat.prefix + ".cost_yesterday"
+
+    def _stamp(when_utc):
+        """Format a UTC time as Home Assistant history stamps it."""
+        return when_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+    cases = [
+        # (label, wall-clock now in London, [(UTC time, cost_today value)], expected yesterday, the value the wall-clock lookup read)
+        # Autumn 2026: clocks go back at 02:00 BST. Yesterday ended 1087.25 at 23:59 BST (22:59 UTC); at 00:59 BST today read 47.47
+        ("autumn", datetime(2026, 10, 25, 2, 0), [(datetime(2026, 10, 24, 12, 0), 500.0), (datetime(2026, 10, 24, 22, 59), 1087.25), (datetime(2026, 10, 24, 23, 0), 10.0), (datetime(2026, 10, 24, 23, 59), 47.47)], 1087.25, 47.47),
+        # Spring 2027: clocks go forward at 01:00 GMT. Yesterday's last write was 910.0 at 23:30 GMT; at 22:59 GMT it read 900.0
+        ("spring", datetime(2027, 3, 28, 3, 0), [(datetime(2027, 3, 27, 12, 0), 500.0), (datetime(2027, 3, 27, 22, 59), 900.0), (datetime(2027, 3, 27, 23, 30), 910.0), (datetime(2027, 3, 28, 0, 0), 5.0)], 910.0, 900.0),
+    ]
+    # A History cost row and what it reads on the view's axis (the read is 4 minutes into the row). Autumn: the axis starts at
+    # 00:00 UTC on the 24th, so row 1379 is 22:59 UTC and reads 23:03, after the 23:00 UTC midnight reset (10.0; shifted by the
+    # correction it would read 22:03, 500.0). Spring: the axis starts at 23:00 UTC on the 26th, so row 1379 is 21:59 UTC on
+    # the 27th and reads 22:03 (500.0; shifted it would read 23:03, 900.0). The spring view's first hour is the 26th's last, and
+    # with no history before 12:00 on the 27th the 26th reads 500.0 too: its total is carried across the 27th's midnight at row
+    # 60, so every later spring row reads 500.0 more
+    axis_checks = [(1379, 10.0), (1379, 1000.0)]
+    # And where yesterday's total starts being added (cost_today resets at local midnight, row 1440 + the change): autumn row
+    # 1380 is 23:00 UTC, local midnight, and is pinned to yesterday's total 1087.25 (today's running total is 0 at its midnight);
+    # spring row 1440 is still yesterday (23:00 UTC on the 27th, reading 900.0 with nothing added) and row 1500 is local midnight (910.0)
+    midnight_checks = [[(1380, 1087.25)], [(1440, 1400.0), (1500, 1410.0)]]
+    try:
+        for (label, wall_now, points, expected, wrong), (axis_row, axis_value), midnight_rows in zip(cases, axis_checks, midnight_checks):
+            now_utc_base = _setup_base(my_predbat)
+            now_local = london.normalize(london.localize(wall_now))
+            my_predbat.now_utc = now_local
+            my_predbat.midnight_utc = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            my_predbat.minutes_now = int((now_local - my_predbat.midnight_utc).total_seconds() / 60)
+            history = [[{"state": str(value), "last_updated": _stamp(when), "attributes": {"p/kWh": "0.0"}} for when, value in points]]
+            base_history = _make_history_mock(my_predbat, now_local)
+
+            def _get_history_wrapper(entity_id, days=30, required=True, tracked=True, history=history, base_history=base_history):
+                """Return the canned history for the entity under test."""
+                if entity_id == my_predbat.prefix + ".cost_today":
+                    return history
+                return base_history(entity_id, days=days, required=required, tracked=tracked)
+
+            captured_load, original_run_pred = _apply_mocks(my_predbat, now_local)
+            my_predbat.get_history_wrapper = _get_history_wrapper
+            replayed = {}
+            my_predbat.replay_history_day = lambda **kw: (replayed.update(kw), ("", {}))[1]
+            my_predbat.calculate_yesterday()
+            my_predbat.__dict__.pop("replay_history_day", None)
+            state = my_predbat.get_state_wrapper(entity_id)
+            # The History view's cost array stays on its own wall-clock axis (row m is midnight_utc - 1 day + m), aligned with the
+            # load, rates and status rows: only the yesterday total takes the clock-change correction
+            cost_array = replayed.get("cost_array", {})
+            if cost_array.get(axis_row) != axis_value:
+                print("ERROR: {} clock change: History cost row {} should read {} (on the view's own axis), got {}".format(label, axis_row, axis_value, cost_array.get(axis_row)))
+                failed = True
+            if state != expected:
+                print("ERROR: {} clock change: cost_yesterday should be {} (yesterday's final value), got {}{}".format(label, expected, state, " - the wall-clock lookup's value" if state == wrong else ""))
+                failed = True
+            for row, row_value in midnight_rows:
+                if cost_array.get(row) != row_value:
+                    print("ERROR: {} clock change: History cost row {} should read {} (yesterday's total added from local midnight's row), got {}".format(label, row, row_value, cost_array.get(row)))
+                    failed = True
+            _restore_methods(my_predbat, original_run_pred)
+            my_predbat.savings_last_updated = None
+            my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+            my_predbat.now_utc = now_utc_base
+
+        # No clock change since midnight: no correction
+        _setup_base(my_predbat)
+        my_predbat.now_utc = london.localize(datetime(2026, 10, 26, 2, 0))
+        if my_predbat.clock_change_minutes_today() != 0:
+            print("ERROR: clock_change_minutes_today should be 0 on a day without a change, got {}".format(my_predbat.clock_change_minutes_today()))
+            failed = True
+        for wall, expected_change in ((datetime(2026, 10, 25, 2, 0), -60), (datetime(2026, 10, 25, 0, 30), 0), (datetime(2027, 3, 28, 3, 0), 60), (datetime(2027, 3, 28, 0, 30), 0)):
+            my_predbat.now_utc = london.normalize(london.localize(wall))
+            if my_predbat.clock_change_minutes_today() != expected_change:
+                print("ERROR: clock_change_minutes_today at {} should be {}, got {}".format(my_predbat.now_utc, expected_change, my_predbat.clock_change_minutes_today()))
+                failed = True
+
+    finally:
+        my_predbat.local_tz = local_tz_before
+        my_predbat.__dict__.pop("replay_history_day", None)
+    _setup_base(my_predbat)
+    return failed
+
+
 def _test_yesterday_slot_is_exporting(my_predbat, failed):
     """Test: yesterday_slot_is_exporting() recognises Cross-charging as export activity.
 
@@ -2348,6 +2445,254 @@ def _test_yesterday_slot_is_exporting(my_predbat, failed):
         if result != expected:
             print("ERROR: yesterday_slot_is_exporting({!r}) should be {}, got {}".format(slot_status, expected, result))
             failed = True
+
+    return failed
+
+
+def _test_split_status_warning(my_predbat, failed):
+    """Test: split_status_warning() keeps real states and blanks out warnings and errors.
+
+    A warning pinned on the status sensor was read by substring: "car_charging_soc" contains
+    "charging", so a day of force exports was rebuilt as charge holds.
+    """
+    print("calculate_yesterday: Test - split_status_warning drops warnings and errors, keeps real states")
+
+    cases = [
+        ("Exporting", "Exporting"),
+        ("Hold charging", "Hold charging"),
+        ("Freeze exporting", "Freeze exporting"),
+        ("Demand", "Demand"),
+        ("Warn: Return bad float value unavailable from car_charging_soc", ""),
+        ("Warn: Inverter 0 set_charge_window: No entity_id for charge_start_time to write 00:00", ""),
+        ("Error: Inverter 0 unable to read Export window - no source is configured", ""),
+        ("Error: Complete run status Exporting with component errors: gecloud", "Exporting"),
+        ("Error: Complete run status Hold charging with component errors: fox", "Hold charging"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Exporting]", "Exporting"),
+        ("Error: Inverter 0 unable to read Export window [Freeze exporting, Hold for car]", "Freeze exporting, Hold for car"),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature", ""),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature [Exporting]", "Exporting"),
+        # The run's state can carry brackets of its own, so the suffix is matched by balance
+        ("Warn: Return bad float value unavailable from car_charging_soc [Demand [Freeze exporting]]", "Demand [Freeze exporting]"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Charging [Alert]]", "Charging [Alert]"),
+        # A warning that ends in brackets of its own, with no state after it, has no state
+        ("Warn: Bad windows [1, 2]", ""),
+        ("Warn: Unknown entities ['sensor.a', 'sensor.b']", ""),
+        ("Error: Some components failed to start (phase 1)", ""),
+        ("Warn: Bad windows [1, 2] [Hold charging]", "Hold charging"),
+        # An unbalanced tail is not a state either
+        ("Warn: truncated text ]", ""),
+    ]
+    for status, expected in cases:
+        result = split_status_warning(status)[0]
+        if result != expected:
+            print("ERROR: split_status_warning({!r}) state should be {!r}, got {!r}".format(status, expected, result))
+            failed = True
+
+    # The warning half is what flags the History slot, so every form must hand one back
+    warning_cases = [
+        ("Exporting", ""),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature", "Warn - Unable to fetch data from sensor.outdoor_temperature"),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature [Exporting]", "Warn - Unable to fetch data from sensor.outdoor_temperature"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Exporting]", "Warn: Return bad float value unavailable from car_charging_soc"),
+        ("Warn: Return bad float value unavailable from car_charging_soc [Demand [Freeze exporting]]", "Warn: Return bad float value unavailable from car_charging_soc"),
+        # Brackets that are not a state stay part of the warning
+        ("Warn: Bad windows [1, 2]", "Warn: Bad windows [1, 2]"),
+        ("Warn: Bad windows [1, 2] [Hold charging]", "Warn: Bad windows [1, 2]"),
+    ]
+    for status, expected in warning_cases:
+        result = split_status_warning(status)[1]
+        if result != expected:
+            print("ERROR: split_status_warning({!r}) warning should be {!r}, got {!r}".format(status, expected, result))
+            failed = True
+
+    # Every run state execute.py can write must come back out from behind a warning, or History shows
+    # those slots as no state while the warning lasts. A RUN_STATE_* name missing from RUN_STATE_NAMES
+    # is the drift this catches; the qualified forms are the ones execute.py builds from the names.
+    run_states = [value for key, value in vars(const).items() if key.startswith("RUN_STATE_") and key != "RUN_STATE_NAMES"]
+    qualified = [
+        const.RUN_STATE_DEMAND + " (Holiday)",
+        const.RUN_STATE_READ_ONLY + " (Axle)",
+        const.RUN_STATE_DEMAND + " [" + const.RUN_STATE_FREEZE_EXPORTING + "]",
+        const.RUN_STATE_FREEZE_EXPORTING + ", " + const.RUN_STATE_HOLD_FOR_CAR,
+        const.RUN_STATE_CHARGING + ", " + const.RUN_STATE_HOLD_FOR_IBOOST,
+        const.RUN_STATE_CHARGING + " [Alert]",
+    ]
+    for run_state in run_states + qualified:
+        status = "Warn: Return bad float value unavailable from car_charging_soc [" + run_state + "]"
+        result = split_status_warning(status)[0]
+        if result != run_state:
+            print("ERROR: run state {!r} behind a warning should read back as itself, got {!r} - is it in RUN_STATE_NAMES?".format(run_state, result))
+            failed = True
+
+    return failed
+
+
+def _reconstruct_windows_from_status(my_predbat, status_for_stamp):
+    """Run calculate_yesterday() against a predbat.status history built by status_for_stamp and
+    return the charge and export windows it hands to publish_html_plan().
+
+    status_for_stamp(stamp) returns a list of (seconds_offset, state) points for the 5-minute cycle
+    starting at stamp.
+    """
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    start = now_utc - timedelta(days=2)
+    status_points = []
+    for step in range(0, 2 * 24 * 60, 5):
+        stamp = start + timedelta(minutes=step)
+        for seconds_offset, state in status_for_stamp(stamp):
+            point_time = stamp + timedelta(seconds=seconds_offset)
+            status_points.append({"state": state, "last_updated": point_time.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": {"p/kWh": "0.0"}})
+    status_hist = [status_points]
+
+    def _history_with_status(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
+        captured["status_warnings"] = kwargs.get("status_warnings")
+        return ("", {})
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_status
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", {})
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return captured
+
+
+def _test_warning_status_is_not_a_charge_state(my_predbat, failed):
+    """A warning pinned on predbat.status must not be rebuilt as a charge window.
+
+    A car integration logged out, so car_charging_soc read "unavailable" and every cycle recorded
+    "Warn: Return bad float value unavailable from car_charging_soc" with had_errors, which pins the
+    warning on the status sensor for the whole run. The History view then showed a day of force
+    exports as HoldChrg, because the reconstruction matched "charging" inside "car_charging_soc".
+    """
+    print("calculate_yesterday: Test - a pinned car_charging_soc warning is not rebuilt as charging")
+    warning = "Warn: Return bad float value unavailable from car_charging_soc"
+
+    # The warning holds the sensor for the whole day, as it does when it recurs every cycle
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning)])
+    if "charge_window_best" not in captured:
+        print("ERROR: publish_html_plan was never called - could not observe the reconstructed windows")
+        return True
+    if captured["charge_window_best"]:
+        print("ERROR: a pinned warning should rebuild no charge windows, got {}".format(len(captured["charge_window_best"])))
+        failed = True
+
+    # A warning at the top of each cycle that the real status then replaces - the export must survive
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning), (60, "Exporting")])
+    if captured.get("charge_window_best"):
+        print("ERROR: a transient warning before each Exporting cycle rebuilt {} charge windows, expected none".format(len(captured["charge_window_best"])))
+        failed = True
+    if not captured.get("export_window_best"):
+        print("ERROR: a transient warning before each Exporting cycle should still rebuild export windows, got none")
+        failed = True
+
+    # A run records its state after the warning - the state is rebuilt, the warning flagged
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning + " [Exporting]")])
+    if captured.get("charge_window_best"):
+        print("ERROR: 'Warn: ... [Exporting]' rebuilt {} charge windows, expected none".format(len(captured["charge_window_best"])))
+        failed = True
+    if not captured.get("export_window_best"):
+        print("ERROR: 'Warn: ... [Exporting]' should rebuild export windows, got none")
+        failed = True
+    elif any(export_mode_of(limit) == EXPORT_MODE_FREEZE for limit in captured["export_limits_best"]):
+        print("ERROR: 'Warn: ... [Exporting]' should rebuild force exports, not freezes")
+        failed = True
+    if not captured.get("status_warnings") or set(captured["status_warnings"].values()) != {warning}:
+        print("ERROR: the warning should be passed on to flag the slots, got {}".format(captured.get("status_warnings") and set(captured["status_warnings"].values())))
+        failed = True
+
+    # The real sequence in a cycle: the bare warning mid-run, then the state added after it
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning), (8, warning + " [Exporting]")])
+    if captured.get("charge_window_best") or not captured.get("export_window_best"):
+        print("ERROR: a bare warning followed by 'Warn: ... [Exporting]' should rebuild exports only, got {} charge and {} export windows".format(len(captured.get("charge_window_best") or []), len(captured.get("export_window_best") or [])))
+        failed = True
+
+    # A freeze export under a warning stays a freeze - the exact state survives, not just its side
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning + " [Freeze exporting]")])
+    if not captured.get("export_limits_best") or any(export_mode_of(limit) != EXPORT_MODE_FREEZE for limit in captured["export_limits_best"]):
+        print("ERROR: 'Warn: ... [Freeze exporting]' should rebuild freeze exports only")
+        failed = True
+
+    # A bare warning (no state after it - nothing executed) is still flagged
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning)])
+    if not captured.get("status_warnings"):
+        print("ERROR: a bare warning should still flag its slots")
+        failed = True
+
+    # The flag lands on the plan minutes the warning covered, and no others. _setup_base fixes now at
+    # 2024-10-04 06:00 UTC, so plan minute 0 is yesterday midnight; flag yesterday 16:00-17:00 only.
+    plan_start = datetime(2024, 10, 3, 0, 0, 0, tzinfo=pytz.utc)
+    warning_start, warning_end = 16 * 60, 17 * 60
+
+    def _warning_for_one_hour(stamp):
+        plan_minute = int((stamp - plan_start).total_seconds() // 60)
+        if warning_start <= plan_minute < warning_end:
+            return [(0, warning + " [Exporting]")]
+        return [(0, "Exporting")]
+
+    captured = _reconstruct_windows_from_status(my_predbat, _warning_for_one_hour)
+    flagged = set((captured.get("status_warnings") or {}).keys())
+    if flagged != set(range(warning_start, warning_end)):
+        print("ERROR: the warning should flag plan minutes {}-{} exactly, got {} minutes from {} to {}".format(warning_start, warning_end - 1, len(flagged), min(flagged) if flagged else None, max(flagged) if flagged else None))
+        failed = True
+
+    # A warning that lags two minutes into the next slot, under the previous slot's state, is that
+    # slot's leftover: the next slot's state is rebuilt without those minutes, so its flag is too.
+    lag_slot = 16 * 60
+
+    def _warning_lags_into_next_slot(stamp):
+        plan_minute = int((stamp - plan_start).total_seconds() // 60)
+        if lag_slot - 30 <= plan_minute < lag_slot:
+            return [(0, warning + " [Charging]")]
+        if plan_minute == lag_slot:
+            return [(0, warning + " [Charging]"), (120, "Exporting")]
+        return [(0, "Exporting")]
+
+    captured = _reconstruct_windows_from_status(my_predbat, _warning_lags_into_next_slot)
+    flagged = set((captured.get("status_warnings") or {}).keys())
+    if flagged != set(range(lag_slot - 30, lag_slot)):
+        print(
+            "ERROR: a warning lagging into the next slot's edge should flag only the slot it belongs to ({}-{}), got {} minutes from {} to {}".format(
+                lag_slot - 30, lag_slot - 1, len(flagged), min(flagged) if flagged else None, max(flagged) if flagged else None
+            )
+        )
+        failed = True
+
+    # A clean run is not flagged
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, "Exporting")])
+    if captured.get("status_warnings"):
+        print("ERROR: a history with no warnings should flag no slots, got {}".format(len(captured["status_warnings"])))
+        failed = True
+
+    # The component-error summary carries the real run status and must still count as exporting
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, "Error: Complete run status Exporting with component errors: gecloud")])
+    if captured.get("charge_window_best"):
+        print("ERROR: a component-error Exporting status rebuilt {} charge windows, expected none".format(len(captured["charge_window_best"])))
+        failed = True
+    if not captured.get("export_window_best"):
+        print("ERROR: a component-error Exporting status should rebuild export windows, got none")
+        failed = True
 
     return failed
 
@@ -2380,6 +2725,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_soc_kw_h0_fallback(my_predbat, failed)
     failed = _test_missing_cost_today_history(my_predbat, failed)
     failed = _test_carbon_yesterday(my_predbat, failed)
+    failed = _test_clock_change_reads_yesterday_final_value(my_predbat, failed)
     failed = _test_yesterday_slot_is_exporting(my_predbat, failed)
     failed = _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed)
     failed = _test_slot_status_read_at_the_right_minute(my_predbat, failed)
@@ -2391,5 +2737,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_brief_edge_blip_is_not_counted(my_predbat, failed)
     failed = _test_edge_only_state_still_gets_real_window_bounds(my_predbat, failed)
     failed = _test_cross_charging_export_window_covers_the_slot(my_predbat, failed)
+    failed = _test_split_status_warning(my_predbat, failed)
+    failed = _test_warning_status_is_not_a_charge_state(my_predbat, failed)
 
     return failed

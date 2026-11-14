@@ -38,7 +38,6 @@ from utils import (
     str2time,
 )
 
-
 # Log filter levels accepted by the get_log tool, matching the web log view's tabs
 LOG_FILTER_TYPES = ("all", "info", "warnings", "errors")
 
@@ -1254,7 +1253,6 @@ class PredbatTools:
             debug_enable, _ = self.base.get_ha_config("debug_enable", None)
             read_only, _ = self.base.get_ha_config("set_read_only", None)
             predbat_mode, _ = self.base.get_ha_config("mode", None)
-            num_cars, _ = self.base.get_ha_config("num_cars", None)
             status_entity = self.prefix + ".status"
             last_updated = self.base.get_state_wrapper(status_entity, attribute="last_updated", default=None)
             soc_percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
@@ -1270,7 +1268,7 @@ class PredbatTools:
                 "soc_percent": soc_percent,
                 "reserve": self.base.reserve,
                 "mode": predbat_mode,
-                "num_cars": num_cars,
+                "num_cars": self.base.num_cars,
                 "carbon_enable": self.base.carbon_enable,
                 "iboost_enable": self.base.iboost_enable,
                 "forecast_minutes": self.base.forecast_minutes,
@@ -1618,7 +1616,7 @@ class PredbatTools:
             # reason: a one-off browse of any HA entity must not become a permanent subscription.
             # Offloaded for the same reason get_log is: get_history_wrapper reaches
             # HAInterface.get_history, which chunks the window at HISTORY_CHUNK_DAYS and issues
-            # one synchronous requests.get per chunk, each with TIMEOUT (300s) to spare. A 30-day
+            # one synchronous http_get per chunk, each with TIMEOUT (300s) to spare. A 30-day
             # window is up to 11 sequential blocking fetches of potentially tens of megabytes,
             # and tracked=False means none of it is cached, so every call refetches. Run on the
             # event loop that would freeze the component - and with it every chat and MCP request

@@ -993,7 +993,7 @@ def run_iog_consider_full_predict_test(testname, my_predbat):
         for scenario, model_limit in [("clamped", None), ("uncapped", [CAR_CHARGING_LIMIT_UNCAPPED])]:
             my_predbat.car_charging_limit_model = model_limit
             pred = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
-            (metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, predict_soc, car_soc_next, iboost_next, ib_run, ib_solar, ib_full) = pred.run_prediction(
+            metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, predict_soc, car_soc_next, iboost_next, ib_run, ib_solar, ib_full = pred.run_prediction(
                 [], [], [], [], False, end_record
             )
             results[scenario] = {"import": import_kwh_battery + import_kwh_house, "soc": final_soc}
@@ -1044,8 +1044,6 @@ def run_update_car_manual_soc_cap_test(testname, my_predbat):
     try:
         my_predbat.num_cars = 1
         my_predbat.car_charging_manual_soc = [True]
-        # The car_charging_manual_soc_kwh config item is enable-gated on the car_charging_manual_soc
-        # switch - turn it on so expose_config()/get_arg() actually store and return the value
         my_predbat.expose_config("car_charging_manual_soc", True)
         my_predbat.car_charging_soc = [4.0]
         my_predbat.car_charging_limit = [5.0]
