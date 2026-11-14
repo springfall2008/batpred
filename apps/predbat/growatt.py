@@ -564,10 +564,12 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                     app="growatt",
                 )
             detail = self.device_detail.get(sn, {})
-            # The inverter's own SoC floors (getDeviceInfo, read-only through the OpenAPI): on-grid
-            # discharge stops at dischargeCutOffSOC, which Predbat's export floor never goes below,
-            # and off-grid (backup) discharge at backupCutOffSOC
-            for leaf, field, name in (("discharge_cutoff_soc", "dischargeCutOffSOC", "Discharge Cut-off SoC"), ("backup_cutoff_soc", "backupCutOffSOC", "Backup Cut-off SoC")):
+            # The inverter's own SoC floors (getDeviceInfo, read-only through the OpenAPI).
+            # dischargeCutOffSOC is the floor for forced export, not a reserve: a live SPH reading
+            # 100% exported nothing from an export slot at 100% SoC, yet kept discharging to cover
+            # the house below it. Predbat's export gate never goes below it. backupCutOffSOC is the
+            # off-grid (backup) minimum. Neither is bound to battery_min_soc.
+            for leaf, field, name in (("discharge_cutoff_soc", "dischargeCutOffSOC", "Export Cut-off SoC"), ("backup_cutoff_soc", "backupCutOffSOC", "Backup Cut-off SoC")):
                 value = self._as_float(detail.get(field), None)
                 if value is not None:
                     self.dashboard_item(self._sensor_name(sn, leaf), state=value, attributes={"unit_of_measurement": "%", "friendly_name": "Growatt {} {}".format(sn, name), "icon": "mdi:battery-arrow-down"}, app="growatt")
