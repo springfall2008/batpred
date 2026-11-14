@@ -78,7 +78,7 @@ predbat:
 
     # Heating cop is the maximum efficiency and will be scaled down based on temperatures
     # put 1.0 for condensing gas boilers, or around 4.0 for heat pumps
-    heat_cop: 1.0
+    heating_cop: 1.0
 
     # Current flow temperature setting
     flow_temp: number.boiler_heatingtemp
