@@ -3084,8 +3084,9 @@ The rate the battery actually took in those minutes is recorded against the batt
 - A degree is only used once it has at least 30 minutes of charging behind it.
 - Recent charges count for more than old ones, so the curve follows a battery as it ages.
 - What has been learned is kept in Predbat's cache for a year. Last winter's cold-weather data is therefore still there when the next cold spell arrives, even though the history only goes back a few days.
-- The learned degrees are laid over your **battery_temperature_charge_curve**, which still applies wherever nothing has been learned yet. That makes it a good starting point: Predbat starts from your curve and corrects it as your battery is seen charging in the cold.
-- A gap between two learned degrees is filled in proportionally, and degrees colder than the coldest learned one (down to 1 degree) use the coldest learned rate. In both cases this only happens where your own curve has no value.
+- The learned curve replaces your **battery_temperature_charge_curve** over the whole range it covers, from the coldest to the warmest degree learned. A degree in that range with no data of its own is filled in proportionally from the learned degrees either side.
+- Outside that range your own curve still applies, so it is a good starting point: Predbat starts from your curve and replaces it as your battery is seen charging at more temperatures.
+- Below the coldest learned degree (down to 1 degree), any degree your curve does not set uses the coldest learned rate.
 - 20 degrees and above, and 0 degrees, are never learned. 20 is used for all warmer temperatures and must stay uncapped. An exact 0 is how several integrations report a missing reading.
 
 The entity **predbat.battery_temperature_charge_curve** shows how many degrees have been learned, with the learned and combined curves (and the minutes behind each degree) in its attributes.

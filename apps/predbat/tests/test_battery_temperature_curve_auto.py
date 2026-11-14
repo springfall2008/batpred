@@ -130,15 +130,16 @@ def _test_pure_helpers():
     # 30 days old weighs half: (4 + 2 * 0.5) / (20 + 20 * 0.5) = 0.1667
     failed |= _check("t3 weighted", curve == {5: 0.17}, curve)
 
-    print("Test 4: overlay - learned wins, gaps interpolated, colder filled, configured kept, 0 left alone")
-    configured = {15: 0.2, 3: 0.04, 0: 0.0}
+    print("Test 4: overlay - the learned range replaces the configured curve, gaps interpolated, colder filled, 0 left alone")
+    configured = {15: 0.2, 8: 0.5, 3: 0.04, 0: 0.0}
     curve = overlay_battery_temperature_curve(configured, {5: 0.13, 12: 0.26})
     failed |= _check("t4 learned", curve[5] == 0.13 and curve[12] == 0.26, curve)
-    failed |= _check("t4 interpolated", curve[8] == round(0.13 + 0.13 * 3 / 7, 2), curve)
-    failed |= _check("t4 configured gap kept", curve[3] == 0.04 and curve[15] == 0.2, curve)
+    failed |= _check("t4 interpolated", curve[6] == round(0.13 + 0.13 / 7, 2) and curve[11] == round(0.13 + 0.13 * 6 / 7, 2), curve)
+    failed |= _check("t4 learned range replaces configured", curve[8] == round(0.13 + 0.13 * 3 / 7, 2), curve)
+    failed |= _check("t4 configured kept outside the learned range", curve[3] == 0.04 and curve[15] == 0.2, curve)
     failed |= _check("t4 colder filled", curve[1] == 0.13 and curve[2] == 0.13 and curve[4] == 0.13, curve)
     failed |= _check("t4 zero and warm untouched", curve[0] == 0.0 and 20 not in curve and 13 not in curve, curve)
-    failed |= _check("t4 configured not modified", configured == {15: 0.2, 3: 0.04, 0: 0.0}, configured)
+    failed |= _check("t4 configured not modified", configured == {15: 0.2, 8: 0.5, 3: 0.04, 0: 0.0}, configured)
     failed |= _check("t4 nothing learned", overlay_battery_temperature_curve(configured, {}) == configured)
     curve = overlay_battery_temperature_curve({}, {-3: 0.05, 4: 0.12})
     failed |= _check("t4 zero not interpolated", 0 not in curve and curve[-1] == 0.07 and curve[1] == 0.09, curve)

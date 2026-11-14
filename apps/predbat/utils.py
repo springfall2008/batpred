@@ -2738,11 +2738,13 @@ def overlay_battery_temperature_curve(configured, learned):
     """
     Lay a learned battery temperature charge curve over the configured one.
 
-    A learned degree replaces the configured value. A degree with neither is filled so the learned curve has no
-    holes - a hole would otherwise fall back to the 20 degree value and plan an uncapped charge in the middle of a
-    cold range: between two learned degrees by straight-line interpolation, and below the coldest learned degree
-    (down to 1) with the coldest learned rate, as a colder battery is never expected to charge faster. 0 and below
-    are left to the configured curve, because an exact 0 is how several integrations report a missing reading.
+    The learned curve replaces the configured one over the whole range it covers, from the coldest to the warmest
+    learned degree: a degree with no data of its own inside that range is interpolated in a straight line from the
+    learned degrees either side, as this battery's own neighbours are better evidence than a curve written for
+    batteries in general. Outside that range the configured curve still applies, and below the coldest learned degree
+    (down to 1) a degree the configured curve does not set takes the coldest learned rate, so there is no hole that
+    falls back to the 20 degree value and plans an uncapped charge in the cold - a colder battery is never expected
+    to charge faster. 0 is never filled, because an exact 0 is how several integrations report a missing reading.
 
     Args:
         configured: battery_temperature_charge_curve from apps.yaml, {int: float}
@@ -2762,7 +2764,7 @@ def overlay_battery_temperature_curve(configured, learned):
             curve[temp] = learned[coldest]
     for lower, upper in zip(temps, temps[1:]):
         for temp in range(lower + 1, upper):
-            if temp not in configured and temp != 0:
+            if temp != 0:
                 fraction = (temp - lower) / (upper - lower)
                 curve[temp] = round(learned[lower] + (learned[upper] - learned[lower]) * fraction, 2)
     return curve
