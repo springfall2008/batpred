@@ -2665,7 +2665,7 @@ def clean_battery_temperature_samples(data):
                 rate_sum, minutes = float(entry[0]), int(entry[1])
             except (ValueError, TypeError, IndexError, KeyError):
                 continue
-            if minutes > 0 and rate_sum >= 0 and temp < BATTERY_TEMPERATURE_CURVE_TEMP_MAX:
+            if minutes > 0 and rate_sum >= 0 and temp != 0 and temp < BATTERY_TEMPERATURE_CURVE_TEMP_MAX:
                 clean_bins[temp] = [rate_sum, minutes]
         if clean_bins:
             cleaned[str(day)] = clean_bins

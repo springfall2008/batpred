@@ -1846,7 +1846,8 @@ class Inverter:
             )
             return values
 
-        soc = to_minutes(history["soc"], scale=self.battery_scaling, required_unit="%" if soc_kwh_percent else "kWh")
+        # A percent is already of usable capacity and soc_max already includes battery_scaling, only kWh is scaled (#6183)
+        soc = to_minutes(history["soc"], scale=1.0 if soc_kwh_percent else self.battery_scaling, required_unit="%" if soc_kwh_percent else "kWh")
         charge_rate = to_minutes(history["charge_rate"], required_unit="W")
         battery_power = to_minutes(history["battery_power"], required_unit="W")
         temperature = to_minutes(history["temperature"])
@@ -1877,11 +1878,12 @@ class Inverter:
             if soc_percent >= BATTERY_TEMPERATURE_CURVE_SOC_MAX:
                 continue
             temp = temperature.get(minute, None)
-            if temp is None or temp == 0:
-                # An exact 0 is how several integrations report a missing reading
+            if temp is None:
                 continue
             temp = int(max(temp, -20))
-            if temp >= BATTERY_TEMPERATURE_CURVE_TEMP_MAX:
+            if temp == 0 or temp >= BATTERY_TEMPERATURE_CURVE_TEMP_MAX:
+                # The 0 entry is the fallback for every reading at or below 0, including the exact 0 several integrations
+                # report for a missing reading, so it is never learned (anything between -1 and 1 truncates to it)
                 continue
             rate_c = abs(power) / 1000.0 / battery_loss / self.soc_max
             day = (self.base.now_utc - timedelta(minutes=minute)).strftime("%Y-%m-%d")

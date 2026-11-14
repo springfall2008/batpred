@@ -4254,7 +4254,7 @@ class Fetch:
                     self.log("Info: Battery temperature charge curve learned (rate in C per degree): {}".format(learned))
                 self.battery_temperature_curve_learned, self.battery_temperature_curve_minutes = learned, minutes
 
-        configured = self.battery_temperature_charge_curve
+        configured = self.battery_temperature_charge_curve_configured
         self.battery_temperature_charge_curve = overlay_battery_temperature_curve(configured, self.battery_temperature_curve_learned)
         self.dashboard_item(
             self.prefix + ".battery_temperature_charge_curve",
@@ -4929,6 +4929,9 @@ class Fetch:
         self.battery_temperature_discharge_curve = self.validate_curve(self.args.get("battery_temperature_discharge_curve", {}), "battery_temperature_discharge_curve")
         # Learn the charge curve from history and lay it over the configured one (see battery_temperature_curve_auto_update)
         self.battery_temperature_charge_curve_auto = bool(self.get_arg("battery_temperature_charge_curve_auto", False))
+        # Kept apart from battery_temperature_charge_curve, which holds the overlay once auto has run and is only reset here,
+        # while fetch_inverter_data() (and so the overlay) runs several times a cycle
+        self.battery_temperature_charge_curve_configured = dict(self.battery_temperature_charge_curve)
 
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_min = self.get_arg("best_soc_min")

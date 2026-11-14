@@ -33,6 +33,8 @@ HOUR_PLAN = {
     6: ("Charging", 2600, -2600, 50, 21.0),  # 20 and above is never learned
     7: ("Exporting", 2600, 2600, 50, 7.0),  # not charging
     8: ("Charging", 2600, -10, 50, 9.0),  # charge finished, almost no power
+    9: ("Charging", 2600, -2600, 50, 0.4),  # truncates to 0, the bin that is never learned
+    10: ("Charging", 2600, -2600, 50, -0.6),  # also truncates to 0
 }
 IDLE = ("Idle", 0, 0, 50, 15.0)
 
@@ -108,7 +110,7 @@ def _test_pure_helpers():
     today = date(2026, 11, 14)
 
     print("Test 1: samples read back from storage are cleaned")
-    cleaned = clean_battery_temperature_samples({"2026-11-13": {"5": [1.3, 10], "x": [1, 1], "6": "junk", "7": [1.0, 0], "25": [1.0, 5]}, "not-a-day": {"5": [1, 1]}, "2026-11-12": "junk"})
+    cleaned = clean_battery_temperature_samples({"2026-11-13": {"5": [1.3, 10], "0": [0.5, 10], "x": [1, 1], "6": "junk", "7": [1.0, 0], "25": [1.0, 5]}, "not-a-day": {"5": [1, 1]}, "2026-11-12": "junk"})
     failed |= _check("t1 cleaned", cleaned == {"2026-11-13": {5: [1.3, 10]}}, cleaned)
     failed |= _check("t1 junk", clean_battery_temperature_samples(["junk"]) == {} and clean_battery_temperature_samples(None) == {})
 
@@ -164,6 +166,13 @@ def _test_scan(my_predbat):
     failed |= _check("t5 rates", curve == {5: 0.13, 12: 0.26}, curve)
     failed |= _check("t5 minutes", minutes.get(5, 0) >= (HISTORY_DAYS - 1) * 60, minutes)
 
+    print("Test 6a: a percent SoC is not rescaled by battery_scaling (#6183), so the taper above 80% stays out")
+    inv.battery_scaling = 0.8  # 85% would read 68% if it were rescaled, and hour 3's taper would be learned at 7 degrees
+    samples = inv.find_battery_temperature_samples()
+    temps = {temp for day_bins in samples.values() for temp in day_bins}
+    failed |= _check("t6a scaling", temps == {5, 12}, temps)
+    inv.battery_scaling = 1.0
+
     print("Test 6: battery_power_invert is honoured")
     my_predbat.args["battery_power_invert"] = [True]
     failed |= _check("t6 inverted", inv.find_battery_temperature_samples() == {}, "")
@@ -199,6 +208,7 @@ def _test_update(my_predbat):
         inv.find_battery_temperature_samples = counting_scan
 
         print("Test 8: the learned curve is laid over the configured one and published")
+        my_predbat.battery_temperature_charge_curve_configured = {15: 0.2, 3: 0.04}
         my_predbat.battery_temperature_charge_curve = {15: 0.2, 3: 0.04}
         my_predbat.battery_temperature_curve_auto_update(inv)
         curve = my_predbat.battery_temperature_charge_curve
@@ -210,9 +220,10 @@ def _test_update(my_predbat):
         failed |= _check("t8 saved", isinstance(saved, dict) and clean_battery_temperature_samples(saved.get("samples")) == my_predbat.battery_temperature_samples, saved)
 
         print("Test 9: the next cycle re-applies the overlay without scanning the history again")
-        my_predbat.battery_temperature_charge_curve = {15: 0.2}  # as fetch_config_options() resets it
-        my_predbat.battery_temperature_curve_auto_update(inv)
+        my_predbat.battery_temperature_curve_auto_update(inv)  # a second fetch_inverter_data() in the same cycle, no reset in between
         failed |= _check("t9 one scan", len(scans) == 1, scans)
+        configured = my_predbat.get_state_wrapper(my_predbat.prefix + ".battery_temperature_charge_curve", attribute="configured")
+        failed |= _check("t9 configured still the apps.yaml curve", configured == {"3": 0.04, "15": 0.2}, configured)
         failed |= _check("t9 overlay", my_predbat.battery_temperature_charge_curve.get(5) == 0.13, my_predbat.battery_temperature_charge_curve)
         my_predbat.battery_temperature_curve_last_scan = my_predbat.now_utc - timedelta(minutes=61)
         my_predbat.battery_temperature_curve_auto_update(inv)
@@ -224,6 +235,7 @@ def _test_update(my_predbat):
         my_predbat.battery_temperature_curve_learned = {}
         my_predbat.battery_temperature_curve_last_scan = None
         my_predbat.battery_temperature_charge_curve = {}
+        my_predbat.battery_temperature_charge_curve_configured = {}
         _install_history(my_predbat, enabled=False)
         my_predbat.battery_temperature_curve_auto_update(inv)
         curve = my_predbat.battery_temperature_charge_curve
@@ -236,6 +248,7 @@ def _test_update(my_predbat):
         my_predbat.battery_temperature_curve_learned = {}
         my_predbat.battery_temperature_curve_last_scan = None
         my_predbat.battery_temperature_charge_curve = {}
+        my_predbat.battery_temperature_charge_curve_configured = {}
         _install_history(my_predbat)
         my_predbat.battery_temperature_curve_auto_update(inv)
         failed |= _check("t11 learned", my_predbat.battery_temperature_charge_curve.get(12) == 0.26, my_predbat.battery_temperature_charge_curve)
@@ -253,8 +266,11 @@ def _test_config(my_predbat):
     my_predbat.fetch_config_options()
     failed |= _check("t12 default off", my_predbat.battery_temperature_charge_curve_auto is False)
     my_predbat.args["battery_temperature_charge_curve_auto"] = True
+    my_predbat.args["battery_temperature_charge_curve"] = {"10": 0.2}
     my_predbat.fetch_config_options()
     failed |= _check("t12 on", my_predbat.battery_temperature_charge_curve_auto is True)
+    failed |= _check("t12 configured kept apart", my_predbat.battery_temperature_charge_curve_configured == {10: 0.2}, my_predbat.battery_temperature_charge_curve_configured)
+    my_predbat.args.pop("battery_temperature_charge_curve", None)
     my_predbat.args.pop("battery_temperature_charge_curve_auto", None)
     return failed
 
