@@ -58,6 +58,7 @@ from tests.test_car_max_rate import run_car_max_rate_tests
 from tests.test_fetch_config_options import test_fetch_config_options, test_save_restore_options_are_per_engine
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_heterogeneous_fleet import test_heterogeneous_fleet
+from tests.test_balance_sim import run_balance_sim_tests
 from tests.test_window2minutes import test_window2minutes
 from tests.test_car_plan_windows import test_car_plan_windows
 from tests.test_hass_watcher import test_hass_watcher
@@ -861,6 +862,7 @@ def main():
         ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
         ("heterogeneous_fleet", test_heterogeneous_fleet, "Heterogeneous multi-inverter fleet tests (#4856)", False),
         ("balance_pure", run_balance_pure_tests, "Pure balance_inverters function tests", False),
+        ("balance_sim", run_balance_sim_tests, "Closed-loop balancing harness: misbehaving, derated and CT-driven inverters", False),
         ("allocate_export", run_allocate_export_tests, "Export rate allocator tests", False),
         # GE Cloud unit tests
         ("ge_cloud", test_ge_cloud, "GE Cloud comprehensive tests (API, devices, EVC, inverter ops, events, publishing, config, downloads, cache)", False),

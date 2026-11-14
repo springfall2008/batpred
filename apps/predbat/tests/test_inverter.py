@@ -5921,6 +5921,81 @@ def test_export_commit_guard_latches_across_fetches(test_name, my_predbat):
     return failed
 
 
+def test_balance_preserves_zero_rate_readback(my_predbat):
+    """A real status refresh must not turn an existing balancing hold into a release.
+
+    The prediction rate has a nonzero minimum, but a zero hardware rate means this battery is
+    already held. Exercise status -> snapshot -> balance -> apply after its power reaches zero,
+    on both sides, including convergence and a peer that can no longer carry the load/surplus.
+    """
+    print("Test: balance_preserves_zero_rate_readback")
+    failed = False
+    fixture = _snapshot_fixture(my_predbat)
+    saved_inverters = my_predbat.inverters
+    saved_scaling = my_predbat.battery_rate_max_scaling, my_predbat.battery_rate_max_scaling_discharge
+    try:
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        my_predbat.args["charge_rate"] = [3000, 3000]
+        my_predbat.args["discharge_rate"] = [3000, 3000]
+        my_predbat.args.pop("charge_rate_percent", None)
+        my_predbat.args.pop("discharge_rate_percent", None)
+        inverters = [Inverter(my_predbat, index, quiet=True) for index in range(2)]
+        my_predbat.inverters = inverters
+        my_predbat.battery_rate_max_scaling = 0.8
+        my_predbat.battery_rate_max_scaling_discharge = 0.9
+        for inverter in inverters:
+            inverter.battery_rate_min = 25 / MINUTE_WATT
+            inverter.battery_rate_max_charge = 3000 / MINUTE_WATT
+            inverter.battery_rate_max_discharge = 3000 / MINUTE_WATT
+            inverter.battery_rate_max_raw = 3000
+
+        from utils import balance_inverters
+
+        for side in ("charge", "discharge"):
+            for case, raw_rate, held_power, same_soc, peer_max, expected in (
+                ("first hold", 3000, 240, False, 3000, 0),
+                ("held with no flow", 0, 0, False, 3000, 0),
+                ("held with small flow", 0, 2, False, 3000, 0),
+                ("converged", 0, 0, True, 3000, 3000),
+                ("peer lacks capacity", 0, 0, False, 1000, 3000),
+                ("small nonzero rate is not a hold", 3, 0, False, 3000, 3000),
+            ):
+                my_predbat.args["charge_rate"] = [3000, raw_rate if side == "charge" else 3000]
+                my_predbat.args["discharge_rate"] = [3000, raw_rate if side == "discharge" else 3000]
+                for inverter in inverters:
+                    inverter.update_status(my_predbat.minutes_now, quiet=True)
+                    inverter.in_calibration = False
+                    inverter.reserve_percent_current = 10
+                    inverter.soc_percent = 72 if same_soc else (71 + inverter.id if side == "charge" else 72 - inverter.id)
+                    inverter.battery_power = (-1 if side == "charge" else 1) * (1546 if inverter.id == 0 else held_power)
+                    inverter.grid_power = 0
+                    inverter.battery_rate_max_charge = (peer_max if inverter.id == 0 else 3000) / MINUTE_WATT
+                    inverter.battery_rate_max_discharge = (peer_max if inverter.id == 0 else 3000) / MINUTE_WATT
+
+                # Prediction's minimum and nonzero scaling must retain their existing behaviour.
+                model_rate = getattr(inverters[1], side + "_rate_now") * MINUTE_WATT
+                expected_model_rate = max(raw_rate * (0.8 if side == "charge" else 0.9), 25)
+                if abs(model_rate - expected_model_rate) > 0.001:
+                    print("ERROR: {} {} changed prediction rate: {} != {}".format(side, case, model_rate, expected_model_rate))
+                    failed = True
+
+                intent = {index: {"charge_rate": None, "discharge_rate": None, "owner": "demand"} for index in range(2)}
+                balance_inverters(intent, my_predbat.build_inverter_snapshot(), side == "charge", side == "discharge", False, 1, 1)
+                writes = {}
+                # Capture the actuator boundary: no mock of status, snapshot, balancing or rate resolution.
+                inverters[1].adjust_charge_rate = lambda rate, notify=True: writes.update(charge=rate)
+                inverters[1].adjust_discharge_rate = lambda rate, notify=True: writes.update(discharge=rate)
+                my_predbat.apply_inverter_rates(inverters[1], intent[1])
+                if writes[side] != expected:
+                    print("ERROR: {} {} wrote {}W, expected {}W".format(side, case, writes[side], expected))
+                    failed = True
+    finally:
+        my_predbat.inverters = saved_inverters
+        my_predbat.battery_rate_max_scaling, my_predbat.battery_rate_max_scaling_discharge = saved_scaling
+        _restore_fixture(my_predbat, fixture)
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -5988,6 +6063,7 @@ def run_inverter_tests(my_predbat_dummy):
         arg_name = entity_id.split(".")[1]
         my_predbat.args[arg_name] = entity_id
 
+    failed |= test_balance_preserves_zero_rate_readback(my_predbat)
     failed |= test_inverter_time_handling(my_predbat, dummy_items)
     failed |= test_inverter_clock_skew_bands(my_predbat)
     failed |= test_inverter_time_space_no_tz_gh2444(my_predbat, dummy_items)

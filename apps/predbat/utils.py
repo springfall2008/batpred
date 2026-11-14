@@ -25,6 +25,8 @@ from email.utils import parsedate_to_datetime
 from io import StringIO
 from functools import lru_cache
 from const import (
+    BALANCE_CEILING_EXPIRY_SECONDS,
+    BALANCE_CEILING_SHORTFALL_W,
     TEMPERATURE_SCALES,
     MINUTE_WATT,
     PREDICT_STEP,
@@ -3332,6 +3334,57 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
                 log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))
             intent[id]["charge_rate"] = 0
             held.add(id)
+
+
+def learn_rate_ceilings(snapshot, now):
+    """
+    Learn the rate each inverter can really deliver from the grid meter, and cap its rate in the snapshot at it.
+
+    balance_inverters() decides whether the rest of the fleet can carry a held inverter's share from the peers'
+    CONFIGURED rates. A peer that delivers less - a cold battery, a BMS derate, an AC limit lower than Predbat
+    was told, none of which Predbat necessarily knows about - passes that check, and the house sits on the grid
+    for as long as the hold lasts. With a badly derated peer that is until SoC converges, which can be hours.
+
+    The grid meter shows it. If the site is short in a direction - importing while the batteries discharge,
+    exporting surplus while they charge - by more than BALANCE_CEILING_SHORTFALL_W while an inverter reads a
+    rate of 0 that way, every peer still moving power that way is already giving all it can, or the shortfall
+    would not be there. Each such peer's measured power becomes its learned ceiling, recorded only where it is
+    clearly below the configured rate, and caps that rate in the snapshot. The capacity guard then sees the
+    shortfall itself and lets the hold go, and does not take it again while the peer cannot cover it.
+
+    A ceiling is forgotten as soon as the peer delivers more than it, or after BALANCE_CEILING_EXPIRY_SECONDS, so
+    a battery that has warmed up is trusted with its full rate again. Learning from a moment when a peer was
+    still ramping up only records a ceiling that is too low, which makes balancing hold less, never puts more
+    on the grid, and is corrected the next time that peer is seen delivering more.
+
+    Each snapshot entry carries learned_charge_ceiling and learned_discharge_ceiling, None or [watts, seen_at],
+    as stored after the previous pass. They are updated in place, along with battery_rate_max_charge and
+    battery_rate_max_discharge.
+
+    Args:
+        snapshot (list): per-inverter readings from Execute.build_inverter_snapshot()
+        now (float): the current time in seconds, on the same clock as the stored seen_at
+    """
+    total_grid = sum(entry.get("grid_power", 0.0) for entry in snapshot)
+    # Predbat's grid convention is +ve export and battery_power is +ve discharging, so the shortfall while
+    # discharging is import (-grid) and while charging it is export (+grid); sign turns battery power into
+    # power moved in that direction.
+    for kind, sign, shortfall in (("discharge", 1.0, -total_grid), ("charge", -1.0, total_grid)):
+        rate_key = kind + "_rate_now"
+        max_key = "battery_rate_max_" + kind
+        learned_key = "learned_" + kind + "_ceiling"
+        held = {index for index, entry in enumerate(snapshot) if entry[rate_key] == 0}
+        short = bool(held) and shortfall > BALANCE_CEILING_SHORTFALL_W
+        for index, entry in enumerate(snapshot):
+            power = sign * entry["battery_power"]
+            learned = entry.get(learned_key)
+            if learned is not None and (power > learned[0] + BALANCE_CEILING_SHORTFALL_W or now - learned[1] > BALANCE_CEILING_EXPIRY_SECONDS):
+                learned = None
+            if short and index not in held and 0.0 < power < entry[max_key] * 0.95:
+                learned = [power, now]
+            entry[learned_key] = learned
+            if learned is not None:
+                entry[max_key] = min(entry[max_key], learned[0])
 
 
 def allocate_export_rates(needs, max_rates, p_fleet):

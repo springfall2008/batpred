@@ -39,7 +39,7 @@ from const import (
     RESERVE_HOLD_MARGIN_PERCENT,
     RESERVE_HOLD_HYSTERESIS_PERCENT,
 )
-from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
+from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, learn_rate_ceilings, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
 from predbat_metrics import metrics
 from inverter import Inverter, calibration_reported
 import time
@@ -238,6 +238,12 @@ class Execute:
         Keeping the readings as plain scalars is what lets the balancing algorithm live in utils as
         a pure function, testable without a PredBat instance or a mock Home Assistant.
 
+        Each inverter's rate ceilings are first capped at what learn_rate_ceilings() has seen it really
+        deliver, so a derated peer is not counted on for its configured rate. The learned ceilings are
+        stored back on the inverters for the next pass - the one piece of balancing state that has to
+        outlive a pass, because the evidence for it (the grid short while a hold was in place) is gone
+        once the hold is released.
+
         Returns:
         - list: one dict per inverter, indexed by inverter id
         """
@@ -250,13 +256,21 @@ class Execute:
                     "battery_power": inverter.battery_power,
                     "pv_power": inverter.pv_power,
                     "grid_power": inverter.grid_power,
-                    "charge_rate_now": inverter.charge_rate_now * MINUTE_WATT,
-                    "discharge_rate_now": inverter.discharge_rate_now * MINUTE_WATT,
+                    # Nonzero rates retain their existing scaling; an actual zero must survive the
+                    # prediction rate floor, or a hold reads back as a release.
+                    "charge_rate_now": 0 if inverter.charge_rate_is_zero else inverter.charge_rate_now * MINUTE_WATT,
+                    "discharge_rate_now": 0 if inverter.discharge_rate_is_zero else inverter.discharge_rate_now * MINUTE_WATT,
                     "battery_rate_max_charge": inverter.battery_rate_max_charge * MINUTE_WATT,
                     "battery_rate_max_discharge": inverter.battery_rate_max_discharge * MINUTE_WATT,
                     "in_calibration": inverter.in_calibration,
+                    "learned_charge_ceiling": inverter.balance_ceiling_charge,
+                    "learned_discharge_ceiling": inverter.balance_ceiling_discharge,
                 }
             )
+        learn_rate_ceilings(snapshot, self.now_utc.timestamp())
+        for inverter, entry in zip(self.inverters, snapshot):
+            inverter.balance_ceiling_charge = entry["learned_charge_ceiling"]
+            inverter.balance_ceiling_discharge = entry["learned_discharge_ceiling"]
         return snapshot
 
     def balance_inverter_rates(self, intent):
