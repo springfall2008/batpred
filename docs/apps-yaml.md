@@ -1233,17 +1233,19 @@ Configuration keys:
 - `growatt_control_enable`: allow dispatch writes, default `true`; set false for monitoring only
 - `growatt_battery_rate_max`: optional W override when the reported battery rating is wrong or absent
 - `growatt_api_delay`: delay between different-device calls, default `0.2` seconds
-- `growatt_min_write_interval`: dispatch pacing, default and minimum `5` seconds
+- `growatt_min_write_interval`: dispatch pacing, default and minimum `6` seconds (Growatt's five-second limit plus a second of margin)
 
 Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from telemetry, which Growatt updates about every five minutes. When the charge target is reached the charge slot stays in place at 0% power, so the battery holds until the window ends (full power resumes if the charge level falls more than 1% below the target); when the export floor is reached the export slot is removed. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval (about five minutes) of overshoot and confirm the behaviour on the target model before relying on it.
 
 Growatt has no reserve Predbat can hold the battery with, so the reserve functions (`switch.predbat_set_reserve_enable` and the reserve-based holds) are turned off for this inverter. Outside a slot the inverter runs its own self-consumption down to its local minimum.
 
-The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat hands control back to the inverter's own settings.
+The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat clears the slot table it wrote, handing control back to the inverter's own settings. Before writing a table that exports, Predbat raises the inverter's OpenAPI export limit to 100% if it reads as anything lower (see below).
 
 The API times are UTC. Predbat converts the local planned windows on every apply, including the current daylight-saving offset, and splits a window that crosses UTC midnight.
 
-The OpenAPI does not report the site's grid export cap. Set `export_limit` manually if the DNO cap is below the inverter's nominal rating.
+Predbat reads the inverter's OpenAPI export limit (`readDeviceDispatch` `export_limit`) every eight hours and publishes it as `sensor.predbat_growatt_<serial>_export_limit` in W. Growatt gives it as a percentage; Predbat takes that as a percentage of the inverter's rated output (`nominalPower`). On a live SPH the limit read 0% and Predbat's export slots only covered the house load, while the inverter's own schedule still exported to the grid. So, while it is in control, Predbat raises the limit to 100% before an export unless it is already at 100% or disabled (reading it first if it has not been read yet), and leaves it there - it is not set back on release. Predbat does not change it while it is read-only. The sensor is not bound to Predbat's `export_limit`: if your grid connection is capped below the inverter's rating, set `export_limit` in `apps.yaml`.
+
+The inverter's own SoC floors from the device information are published as `sensor.predbat_growatt_<serial>_discharge_cutoff_soc` (`dischargeCutOffSOC`) and `sensor.predbat_growatt_<serial>_backup_cutoff_soc` (`backupCutOffSOC`, the off-grid minimum). The discharge cut-off acts as the floor for forced export, not as a reserve. On a live SPH reading 100%, an export slot at 100% SoC exported nothing, while the battery still discharged to cover the house. Predbat's export slots stop at it, so at 100% Predbat's exports do nothing. Neither value is used as Predbat's minimum reserve, and the OpenAPI cannot change either, so set them in the Growatt app.
 
 See [Components - Growatt OpenAPI](components.md#growatt-openapi-growatt) and [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi).
 
