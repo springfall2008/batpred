@@ -15,6 +15,7 @@ import asyncio
 import inspect
 import re
 
+from bindings import SITE_SETTINGS
 from config import INVERTER_DEF
 from coordinator import PRESENCE_FLAGS, inverter_definition, validate_report
 
@@ -52,9 +53,6 @@ SETTINGS_OUTSIDE_THE_RECORD = frozenset(
 
 # A *_invert setting describes the sign of the entity it names
 INVERT_SETTINGS = {"grid_power_invert": "grid_power", "battery_power_invert": "battery_power", "load_power_invert": "load_power"}
-
-# Bound once for the whole site, from the first driven inverter (spec D15) - expected on that record only
-SITE_SETTINGS = frozenset({"battery_temperature_history"})
 
 # GE Cloud builds entity ids from the raw, upper-case serial, so the object id may hold capitals
 ENTITY_ID_RE = re.compile(r"^[a-z_]+\.[A-Za-z0-9_]+$")

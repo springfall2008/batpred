@@ -367,6 +367,7 @@ from tests.test_car_charger_control import run_car_charger_control_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
 from tests.test_coordinator import test_coordinator_all
+from tests.test_bindings import test_bindings_all
 from tests.test_discovery_contract import run_discovery_contract_tests
 from tests.test_discovery_catalogue import test_discovery_catalogue_all
 from tests.test_mock_base import test_mock_base_all
@@ -925,6 +926,7 @@ def main():
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("components", test_components_all, "Components registry tests (all)", False),
         ("coordinator", test_coordinator_all, "Discovery catalogue coordinator tests", False),
+        ("bindings", test_bindings_all, "Discovery bindings: manual slots, allocation and replay", False),
         ("discovery_contract", run_discovery_contract_tests, "Discovery reporter contract checks", False),
         ("discovery_catalogue", test_discovery_catalogue_all, "End-to-end discovery catalogue assembly and the observe-only invariant", False),
         # Shared MockBase tests

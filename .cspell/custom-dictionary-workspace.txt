@@ -82,6 +82,7 @@ calcsize
 calib
 callees
 Cantarell
+casefolded
 cbat
 CDLL
 cdn
