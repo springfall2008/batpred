@@ -51,6 +51,15 @@ def test_manual_slot_service_api():
     return 0
 
 
+def test_manual_slot_needs_a_modify_binding():
+    """Only a bound entity on a setting Predbat writes is a control method: a read-only binding or a literal on a modify setting leaves a typed slot free."""
+    assert manual_slots({"inverter_type": ["GE"], "soc_percent": ["sensor.givtcp_soc"]})[0]["origin"] == "free"  # read-only setting
+    assert manual_slots({"inverter_type": ["GE"], "charge_rate": [3000]})[0]["origin"] == "free"  # a literal, not an entity
+    assert manual_slots({"inverter_type": ["GE"], "charge_rate": ["number.givtcp_charge_rate"]})[0]["origin"] == "manual"  # the same setting bound to an entity
+    print("PASS: a control method needs an entity on a modify setting")
+    return 0
+
+
 def test_manual_slot_regex_binding():
     """A re: pattern on a modify setting is a control method (Review Focus 5)."""
     assert manual_slots({"inverter_type": ["GE"], "charge_rate": ["re:(number.givtcp_.*_charge_rate)"]})[0]["origin"] == "manual"
@@ -81,7 +90,10 @@ def test_slot_serials_skip_summed_settings():
 
 
 def test_binding_settings_leave_tuning_alone():
-    """No user tuning setting is owned by the bindings, so the coordinator never reads, writes or clears one."""
+    """No user tuning setting is owned by the bindings, so the coordinator never clears one.
+
+    Whether it writes one a record binds (tests/discovery_contract.py REPORTED_TUNING) is decided when the component binding it is converted.
+    """
     tuning = {"inverter_battery_rate_min", "inverter_limit_charge", "inverter_limit_discharge", "inverter_limit_export", "inverter_limit_override", "battery_export_permitted", "soc_max_fallback", "inverter_reserve_max"}
     assert not tuning & BINDING_SETTINGS, sorted(tuning & BINDING_SETTINGS)
     assert "givtcp_rest" in BINDING_SETTINGS and "inverter_mode" in BINDING_SETTINGS
@@ -190,20 +202,54 @@ def test_build_takeover():
 
 
 def test_build_gateway_two_manual_slots():
-    """A gateway record claiming the batteries in manual slots 0 and 1 takes slot 0 and clears slot 1."""
+    """A gateway record claiming the batteries in manual slots 0 and 1 takes slot 0 and clears slot 1, and stays that way once replayed."""
     apps = _manual_apps("number.givtcp_ce1111g111_charge_rate", "number.givtcp_ce2222g222_charge_rate")
-    b, w = build_bindings(apps, copy.deepcopy(apps), [_src([_rec("gw1111g111", serials=["ce1111g111", "ce2222g222"])])], None)
-    assert _layout(b) == [("discovered", "gecloud:gw1111g111", 0)], _layout(b)
-    assert b["inverters"][0]["serials"] == ["ce1111g111", "ce2222g222", "gw1111g111"]
     warnings = [
         "Inverter slot 0: gecloud inverter ce1111g111 is also configured manually in apps.yaml - discovery is taking over this slot",
         "Inverter slot 1: also names ce2222g222, already configured in slot 0 - clearing this slot",
     ]
-    assert w == warnings, w
-    # Stable on the next pass: the sticky slot 0 still matches, slot 1 is cleared again
-    again, w = build_bindings(apps, copy.deepcopy(apps), [_src([_rec("gw1111g111", serials=["ce1111g111", "ce2222g222"])])], b)
-    assert again == b and w == warnings, (again, w)
+    # The gateway's own entities name only the gateway, so once replayed the live args at slots 0 and 1 hold no battery serial
+    for gateway in ("gw1111g111", "gw001"):
+        record = _rec(gateway, {"charge_rate": _rw("number.gecloud_{}_rate".format(gateway))}, serials=["ce1111g111", "ce2222g222"])
+        results, args = _passes(apps, [_src([record])])
+        b, w, written = results[0]
+        assert _layout(b) == [("discovered", "gecloud:" + gateway, 0)], (gateway, _layout(b))
+        assert b["inverters"][0]["serials"] == sorted(["ce1111g111", "ce2222g222", gateway]), b["inverters"][0]["serials"]
+        assert w == warnings, (gateway, w)
+        assert written and args["num_inverters"] == 1 and args["inverter_type"] == ["GEC"], (gateway, args)
+        # Stable on the next passes: slot 0 still matches through the first pass's args, slot 1 is cleared again, nothing is written
+        for again, w, written in results[1:]:
+            assert again == b and w == warnings and written == [], (gateway, _layout(again), w, written)
+        assert args["num_inverters"] == 1 and args["inverter_type"] == ["GEC"] and args["charge_rate"] == ["number.gecloud_{}_rate".format(gateway)], (gateway, args)
     print("PASS: gateway collapses two manual slots")
+    return 0
+
+
+def test_build_takeover_stable_after_replay():
+    """A taken-over slot whose discovered entities name no serial stays taken over once replayed: the same bindings, the same warning and no writes."""
+    apps = _manual_apps("number.givtcp_CE1111G111_charge_rate")
+    apps["soc_percent"] = ["sensor.givtcp_ce1111g111_soc"]
+    record = _rec("CE1111G111", {"charge_rate": _rw("number.gecloud_main_rate"), "soc_percent": _ro("sensor.gecloud_main_soc")})
+    results, args = _passes(apps, [_src([record])])
+    b, w, written = results[0]
+    warning = ["Inverter slot 0: gecloud inverter ce1111g111 is also configured manually in apps.yaml - discovery is taking over this slot"]
+    assert _layout(b) == [("discovered", "gecloud:CE1111G111", 0)] and w == warning and written, (_layout(b), w, written)
+    for again, w, written in results[1:]:
+        assert again == b and w == warning and written == [], (_layout(again), w, written)
+    assert args["num_inverters"] == 1 and args["inverter_type"] == ["GEC"] and args["charge_rate"] == ["number.gecloud_main_rate"], args
+    print("PASS: takeover stable after replay")
+    return 0
+
+
+def test_build_scans_the_given_baseline():
+    """The serial scan reads scan_args when given and args otherwise; ge_cloud_serial still comes from the snapshot."""
+    apps = _manual_apps("number.givtcp_ce1111g111_charge_rate")
+    rewritten = dict(copy.deepcopy(apps), charge_rate=["number.gecloud_rate"])
+    sources = [_src([_rec("ce1111g111")])]
+    assert _layout(build_bindings(apps, rewritten, sources, None)[0])[0] == ("manual", None, 0)
+    assert _layout(build_bindings(apps, rewritten, sources, None, scan_args=copy.deepcopy(apps))[0]) == [("discovered", "gecloud:ce1111g111", 0)]
+    assert _layout(build_bindings(dict(apps, ge_cloud_serial="CE1111G111"), rewritten, sources, None, scan_args={})[0]) == [("discovered", "gecloud:ce1111g111", 0)]
+    print("PASS: build scans the given baseline")
     return 0
 
 
@@ -492,6 +538,25 @@ def _ro(entity_id):
     return {"entity_id": entity_id, "access": "r"}
 
 
+def _passes(apps, sources, count=3, args=None):
+    """
+    count coordinator-style passes: build, then replay into args, each pass building on the last pass's bindings.
+
+    The serial scan reads a copy of args taken before the first pass, as the coordinator's baseline does. Returns
+    ([(bindings, warnings, written)] one per pass, args as the last pass left them).
+    """
+    args = copy.deepcopy(apps) if args is None else args
+    baseline = copy.deepcopy(args)
+    previous = None
+    results = []
+    for _ in range(count):
+        bindings, warnings = build_bindings(apps, args, sources, previous, scan_args=baseline)
+        written = _apply(bindings, apps, args)
+        results.append((copy.deepcopy(bindings), warnings, written))
+        previous = bindings
+    return results, args
+
+
 def test_replay_discovered_only():
     """Manual slot 0's entries are never written; discovered slot 1 gets inverter_type and each bound setting at index 1."""
     apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
@@ -757,6 +822,24 @@ def test_replay_single_entry():
     return 0
 
 
+def test_replay_leaves_manual_change_alone():
+    """A manual slot's non-summed entry changed from outside between passes is left as it now is, not repaired."""
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    apps["soc_percent"] = ["sensor.givtcp_sa9999s999_soc"]
+    record = _rec("a11111", {"charge_rate": _rw("number.a_rate"), "soc_percent": _ro("sensor.a_soc")})
+    b, args = _bind(apps, [record])
+    baseline = copy.deepcopy(args)
+    _apply(b, apps, args)
+    args["charge_rate"][0] = "number.changed_elsewhere"
+    args["soc_percent"][0] = "sensor.changed_elsewhere"
+    again, _ = build_bindings(apps, args, [_src([record])], b, scan_args=baseline)
+    assert _layout(again) == [("manual", None, 0), ("discovered", "gecloud:a11111", 1)], _layout(again)
+    assert _apply(again, apps, args) == [], args
+    assert args["charge_rate"] == ["number.changed_elsewhere", "number.a_rate"] and args["soc_percent"] == ["sensor.changed_elsewhere", "sensor.a_soc"], args
+    print("PASS: a manual slot's changed entry is left alone")
+    return 0
+
+
 def test_replay_repairs_overwrite():
     """An entry something else overwrote, or a key it deleted, is written back by the next replay."""
     b, args = _bind({}, [_rec("a11111", {"soc_percent": _ro("sensor.a_soc")})])
@@ -814,6 +897,7 @@ def test_bindings_all(my_predbat=None):
     failures += test_manual_slot_scalar_type()
     failures += test_manual_slot_givtcp_rest()
     failures += test_manual_slot_service_api()
+    failures += test_manual_slot_needs_a_modify_binding()
     failures += test_manual_slot_regex_binding()
     failures += test_slot_serials()
     failures += test_slot_serials_skip_summed_settings()
@@ -823,6 +907,8 @@ def test_bindings_all(my_predbat=None):
     failures += test_build_manual_plus_discovered()
     failures += test_build_takeover()
     failures += test_build_gateway_two_manual_slots()
+    failures += test_build_takeover_stable_after_replay()
+    failures += test_build_scans_the_given_baseline()
     failures += test_build_dead_slot_taken()
     failures += test_build_fifth_inverter()
     failures += test_build_sticky()
@@ -857,6 +943,7 @@ def test_bindings_all(my_predbat=None):
     failures += test_replay_all_none_key_deleted()
     failures += test_replay_idempotent()
     failures += test_replay_single_entry()
+    failures += test_replay_leaves_manual_change_alone()
     failures += test_replay_repairs_overwrite()
     failures += test_replay_never_zero_inverters()
     failures += test_replay_nothing_discovered()

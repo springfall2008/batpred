@@ -6,8 +6,8 @@
 """Discovery bindings: which inverter slot each discovered record drives, and what it binds there.
 
 Pure functions and constants only - nothing here reads Home Assistant, writes args, logs or holds
-state. The coordinator calls them with the apps.yaml snapshot (args exactly as the user wrote them)
-and the live args, both plain dicts. See
+state. The coordinator calls them with the apps.yaml snapshot (args exactly as the user wrote them),
+the live args and the args it scans for serials (its first-pass baseline), all plain dicts. See
 docs/superpowers/specs/2026-11-14-discovery-automatic-inverter-config-design.md.
 """
 
@@ -155,8 +155,9 @@ def manual_slots(apps_yaml: dict) -> list[dict]:
 def slot_serials(slot: int, apps_yaml: dict, args: dict, serials: list[str]) -> list[str]:
     """Which of `serials` (already casefolded) appear in the strings bound at this slot.
 
-    The strings are every per-inverter setting's entry at this slot in the live args (so re: patterns
-    are already resolved), plus ge_cloud_serial for slot 0 as the apps.yaml snapshot has it - never the
+    The strings are every per-inverter setting's entry at this slot in `args` - build_bindings passes
+    the args it scans, which the coordinator gives as its first-pass baseline (re: patterns resolved,
+    nothing yet replayed) - plus ge_cloud_serial for slot 0 as the apps.yaml snapshot has it, never the
     live value, which GE Cloud sets to its own first battery. Serials shorter than MIN_SERIAL_LENGTH
     are ignored.
 
@@ -225,12 +226,14 @@ def _discovered_entry(source, record):
     }
 
 
-def _manual_entries(apps_yaml, args, candidate_serials):
+def _manual_entries(apps_yaml, args, scan_args, candidate_serials):
     """Step 1 and 2: one entry per index below the manual num_inverters, each manual slot carrying its settings and scanned serials.
 
     Summed settings come from the apps.yaml snapshot, since replay rewrites those lists in live args and a
     live index stops meaning a slot after the first pass; every other binding setting comes from live args
-    at the slot index, where re: patterns are resolved.
+    at the slot index, where re: patterns are resolved. Serials are scanned in scan_args, never live args:
+    replay rewrites the entries at every slot it takes over or clears, so a scan of live args stops finding
+    the serial that matched on the first pass and the slot comes back as manual on the next.
     """
     entries = []
     for slot in manual_slots(apps_yaml):
@@ -247,7 +250,7 @@ def _manual_entries(apps_yaml, args, candidate_serials):
             value = slot_value(apps_yaml.get(setting), index)
             if value is not None:
                 settings[setting] = _manual_descriptor(value)
-        serials = sorted(slot_serials(index, apps_yaml, args, candidate_serials))
+        serials = sorted(slot_serials(index, apps_yaml, scan_args, candidate_serials))
         entries.append({"slot": index, "origin": "manual", "source": None, "device_id": None, "inverter_type": slot["inverter_type"], "serials": serials, "settings": settings})
     return entries
 
@@ -334,13 +337,16 @@ def _site_settings(slots, fresh_records, previous):
     return settings
 
 
-def build_bindings(apps_yaml: dict, args: dict, sources: list[dict], previous: dict | None) -> tuple[dict, list[str]]:
+def build_bindings(apps_yaml: dict, args: dict, sources: list[dict], previous: dict | None, scan_args: dict | None = None) -> tuple[dict, list[str]]:
     """Return (bindings, warnings) for the apps.yaml snapshot, live args, the opted-in sources and the previous bindings. Writes nothing.
 
     sources: one dict per opted-in component, {"name", "records", "skip_settings", "keep_user_settings",
     "include_pv_only"}. previous: the bindings the last call returned, or None. A record previous placed
     keeps its slot. A source that reports no driven record, or is absent from sources, keeps every slot
     previous gave it, copied verbatim; only a source reporting at least one driven record can lose a slot.
+    scan_args: the args a manual slot's serials are scanned in, args when None. The coordinator passes the
+    args as they were before its first replay, so a slot taken over or cleared on one pass matches again on
+    the next, however replay has rewritten its live entries.
     """
     warnings = []
     previous_entries = [entry for entry in (previous or {}).get("inverters", []) if entry.get("origin") == "discovered"]
@@ -363,7 +369,7 @@ def build_bindings(apps_yaml: dict, args: dict, sources: list[dict], previous: d
     retained = [copy.deepcopy(entry) for entry in previous_entries if entry.get("source") not in driven_sources]
 
     candidate_serials = sorted({serial for _, record in fresh for serial in _record_serials(record)} | {serial for entry in retained for serial in entry.get("serials", [])})
-    slots = _manual_entries(apps_yaml, args, candidate_serials)
+    slots = _manual_entries(apps_yaml, args, args if scan_args is None else scan_args, candidate_serials)
     slots.extend(_free_entry(index) for index in range(len(slots), MAX_INVERTERS))
 
     sticky = [(entry, entry["slot"]) for entry in retained]

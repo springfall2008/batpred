@@ -172,12 +172,19 @@ def test_switch_off_is_inert():
     return 0
 
 
-def test_switch_string_value():
-    """A string switch value is read the way get_arg reads a boolean: "true" is on, "false" off."""
-    base, registry, coordinator = _setup(switch="false")
-    assert coordinator.allow_automatic("gecloud") is False
-    base, registry, coordinator = _setup(switch="true")
-    assert coordinator.allow_automatic("gecloud") is True
+def test_switch_string_value(my_predbat):
+    """A string switch value is read through Predbat's real get_arg, which turns it into a bool: "true" is on, "false" off."""
+    present, saved = "discovery_automatic" in my_predbat.args, my_predbat.args.get("discovery_automatic")
+    try:
+        for value, expected in (("false", False), ("true", True), ("on", True), ("off", False)):
+            my_predbat.args["discovery_automatic"] = value
+            coordinator = Coordinator(my_predbat)
+            assert coordinator._automatic_enabled() is expected, (value, expected)
+    finally:
+        if present:
+            my_predbat.args["discovery_automatic"] = saved
+        else:
+            my_predbat.args.pop("discovery_automatic", None)
     print("PASS: switch string value")
     return 0
 
@@ -573,6 +580,68 @@ def test_summed_lists_keep_resolved_patterns():
     return 0
 
 
+def test_baseline_drops_unresolved_patterns():
+    """A re: pattern still unresolved when the baseline is taken counts as unset: a list entry becomes None, a scalar drops the key, and none is ever written."""
+    raw = {
+        "num_inverters": 1,
+        "inverter_type": ["GE"],
+        "charge_rate": ["number.givtcp_sa1_charge_rate"],
+        "load_today": ["re:sensor.givtcp_(.+)_load_today", "sensor.extra_load_today"],
+        "pv_today": "re:sensor.givtcp_(.+)_pv_today",
+    }
+    base, registry, coordinator = _setup(args=raw, apps_yaml=raw)
+    coordinator.allow_automatic("gecloud")
+    baseline = coordinator.args_baseline
+    assert baseline["load_today"] == [None, "sensor.extra_load_today"], baseline
+    assert "pv_today" not in baseline, baseline
+    assert coordinator_module.capture_baseline({"battery_temperature": "re:sensor.givtcp_(.+)_temperature", "soc_percent": ("re:x", "sensor.b_soc"), "inverter_limit_charge": [1]}) == {"soc_percent": [None, "sensor.b_soc"]}
+    assert baseline["charge_rate"] == ["number.givtcp_sa1_charge_rate"] and baseline["inverter_type"] == ["GE"], baseline
+    assert set(baseline) <= BINDING_SETTINGS | {"inverter_type"}, sorted(baseline)
+    baseline["charge_rate"].append("changed")
+    assert raw["charge_rate"] == ["number.givtcp_sa1_charge_rate"] and base.args["charge_rate"] == ["number.givtcp_sa1_charge_rate"]  # a deep copy
+    del baseline["charge_rate"][1]
+    entities = dict(_entities("ce1111g111"), load_today=_ro("sensor.predbat_gecloud_ce1111g111_load_today"))
+    coordinator.report("gecloud", {"automatic": True, "inverters": [_record("ce1111g111", entities)]})
+    assert coordinator.slot_map == {"gecloud:ce1111g111": 1}, coordinator.slot_map
+    assert base.args["load_today"] == ["sensor.predbat_gecloud_ce1111g111_load_today", "sensor.extra_load_today"], base.args["load_today"]
+    assert not [value for _, value, _ in base.set_calls if "re:" in str(value)], base.set_calls
+    print("PASS: baseline drops unresolved patterns")
+    return 0
+
+
+def test_slot_is_empty():
+    """A slot a released device left below a used one is empty, and says so; nothing else is, and it is safe with no bindings or the switch off."""
+    base, registry, coordinator = _setup()
+    assert coordinator.slot_is_empty(0) is False  # no bindings yet
+    coordinator.allow_automatic("gecloud")
+    coordinator.report("gecloud", _report(["a11111", "b22222"]))
+    assert [coordinator.slot_is_empty(index) for index in range(3)] == [False, False, False]
+    coordinator.report("gecloud", _report(["b22222"]))
+    assert base.args["num_inverters"] == 2 and base.args["inverter_type"] == [None, "GEC"], (base.args["num_inverters"], base.args["inverter_type"])
+    assert "Warn: Coordinator: Inverter slot 0 is empty below a configured inverter - it has no inverter_type and Predbat will stop on it" in base.log_messages, base.log_messages
+    assert coordinator.slot_is_empty(0) is True and coordinator.slot_is_empty(1) is False and coordinator.slot_is_empty(2) is False and coordinator.slot_is_empty(-1) is False
+    base.args["discovery_automatic"] = False
+    assert coordinator.slot_is_empty(0) is False
+    # A hole in the user's own apps.yaml, with nothing discovered, is not one discovery left
+    apps = {"num_inverters": 3, "inverter_type": ["GE", "", "GE"], "charge_rate": ["number.a_charge_rate", "number.b_charge_rate", "number.c_charge_rate"]}
+    base, registry, coordinator = _setup(args=apps)
+    coordinator.allow_automatic("gecloud")
+    assert coordinator.bindings is not None and coordinator.slot_is_empty(1) is False
+    print("PASS: slot is empty")
+    return 0
+
+
+def test_assemble_slots_follow_bindings():
+    """assemble() takes each record's slot from the bindings it reads, never from a slot map out of step with them."""
+    base, registry, coordinator = _setup()
+    coordinator.allow_automatic("gecloud")
+    coordinator.report("gecloud", _report(["ce1111g111"]))
+    coordinator.slot_map = {"gecloud:ce1111g111": 3}  # stale, as a reader between two separate assignments could once see
+    assert coordinator.assemble()["inverters"][0]["slot"] == 0
+    print("PASS: assemble slots follow bindings")
+    return 0
+
+
 class _Bare:
     """A base with only log and args, as the standalone harnesses build."""
 
@@ -679,7 +748,9 @@ def _automatic_run(devices, settings, info, start, switch):
     One GE Cloud automatic configuration from args `start` (also the apps.yaml snapshot), with discovery_automatic `switch`.
 
     A real Coordinator is registered either way, so the switch-off run is the real switch-off path. Runs the
-    real async_automatic_config(), then the real refresh_discovery(), as run() does in one cycle. Returns (ge, base).
+    real async_automatic_config(), then the real refresh_discovery(), as run() does in one cycle. Then two more
+    configure() passes, as Predbat runs after phase 1 and at the startup barrier, which must write nothing:
+    a pass that rebuilds from args an earlier pass rewrote must reach the same configuration. Returns (ge, base).
     """
     base = _Base(args=start, apps_yaml=start, switch=switch)
     ge = _AutoGECloud(base)
@@ -689,6 +760,12 @@ def _automatic_run(devices, settings, info, start, switch):
     _Components(base, {"gecloud": ge})
     run_async(ge.async_automatic_config(ge.devices_dict))
     ge.refresh_discovery()
+    settled = copy.deepcopy(base.args)
+    calls = len(base.set_calls)
+    base.components.coordinator.configure()
+    base.components.coordinator.configure()
+    assert base.set_calls[calls:] == [], "a later configure() pass wrote {}".format(base.set_calls[calls:])
+    assert base.args == settled, "a later configure() pass changed args: {}".format(compare_configuration(settled, base.args))
     return ge, base
 
 
@@ -957,8 +1034,14 @@ def test_accept_manual_plus_discovered():
     return 0
 
 
-def _template_apps_yaml(serial):
-    """The inverter bindings of templates/givenergy_cloud.yaml with geserial resolved, for one inverter."""
+def _template_apps_yaml(*serials):
+    """The inverter bindings of templates/givenergy_cloud.yaml with geserial (and geserial2, ...) resolved, one inverter per serial."""
+    slots = [_template_slot(serial) for serial in serials]
+    return {setting: (len(serials) if setting == "num_inverters" else [entry for slot in slots for entry in slot[setting]]) for setting in slots[0]}
+
+
+def _template_slot(serial):
+    """templates/givenergy_cloud.yaml's bindings for one inverter."""
     return {
         "num_inverters": 1,
         "inverter_type": ["GEC"],
@@ -1011,7 +1094,55 @@ def test_accept_template_takeover():
     assert differences == [], "\n".join(differences)
     assert takeover in log, log
     assert not [line for line in log if line.startswith("Warn: GECloud: discovery set")], log
+    assert any(line.startswith("Info: GECloud: discovery configuration matches") for line in log), log
     print("PASS: accept template takeover")
+    return 0
+
+
+def _assert_gateway_template_collapse(gateway):
+    """The two-serial givenergy_cloud.yaml bindings with a gateway in front of both batteries: one GEC slot, the gateway's, and it stays that way."""
+    devices, _, info = _two_batteries(None, gateway=gateway)
+    settings = {gateway: dict(GEC_FULL_REGISTERS)}
+    single, _ = run_new(devices, settings, info)
+    # run_new's harness runs two more configure() passes and fails if either writes anything
+    new, log = run_new(devices, settings, info, apps_yaml=_template_apps_yaml("battery001", "battery002"))
+    assert new["num_inverters"] == 1 and new["inverter_type"] == ["GEC"], (gateway, new["num_inverters"], new["inverter_type"])
+    assert new["load_today"] == [_entity("sensor", gateway, "consumption_total")], (gateway, new["load_today"])
+    differences = compare_configuration(single, new)
+    assert differences == [], "\n".join(differences)
+    assert "Warn: Coordinator: Inverter slot 0: gecloud inverter battery001 is also configured manually in apps.yaml - discovery is taking over this slot" in log, log
+    assert "Warn: Coordinator: Inverter slot 1: also names battery002, already configured in slot 0 - clearing this slot" in log, log
+    assert not [line for line in log if line.startswith("Warn: GECloud: discovery")], log
+
+
+def test_accept_template_gateway():
+    """Two template slots naming battery001 and battery002, behind gateway gw00000001: slot 0 is taken over, slot 1 cleared, on every pass."""
+    _assert_gateway_template_collapse("gw00000001")
+    print("PASS: accept template gateway")
+    return 0
+
+
+def test_accept_template_short_gateway():
+    """The same with a gateway serial shorter than MIN_SERIAL_LENGTH, so slot 0 can only ever match through the template's battery serial."""
+    _assert_gateway_template_collapse("gw001")
+    print("PASS: accept template short gateway")
+    return 0
+
+
+def test_accept_givtcp_rest_manual():
+    """A manual GivTCP inverter with givtcp_rest: the old run deletes the key and takes over, the new run keeps slot 0 and clears only its own slot (a known difference)."""
+    rest = "http://192.168.1.10:6345"
+    apps_yaml = {"num_inverters": 1, "inverter_type": ["GE"], "givtcp_rest": [rest]}
+    old, new, log = run_old_and_new(*_one_battery(), apps_yaml=apps_yaml)
+    assert "givtcp_rest" not in old and old["inverter_type"] == ["GEC"] and old["num_inverters"] == 1, old
+    assert _normal(new.get("givtcp_rest")) == [rest], new.get("givtcp_rest")
+    assert new["inverter_type"] == ["GE", "GEC"] and new["num_inverters"] == 2, new
+    single, _ = run_new(*_one_battery())
+    for setting in SLOT_SETTINGS:
+        assert slot_value(new.get(setting), 1) == slot_value(single.get(setting), 0), (setting, new.get(setting), single.get(setting))
+    assert any(line.startswith("Info: GECloud: discovery differs on givtcp_rest (") for line in log), log
+    assert not [line for line in log if line.startswith("Warn: GECloud: discovery") or line.startswith("Warn: Coordinator")], log
+    print("PASS: accept givtcp_rest manual")
     return 0
 
 
@@ -1048,6 +1179,7 @@ def test_accept_run_loop_incremental():
     assert base.args["num_inverters"] == 2 and base.args["inverter_type"] == ["GEC", "GEC"], base.args
     assert base.args["charge_rate"] == [_entity("number", "battery001", "battery_charge_power"), _entity("number", "battery002", "battery_charge_power")], base.args["charge_rate"]
     assert not [line for line in base.log_messages if line.startswith("Warn: GECloud: discovery set")], base.log_messages
+    assert any(line.startswith("Info: GECloud: discovery configuration matches") for line in base.log_messages), base.log_messages
     print("PASS: accept run loop incremental")
     return 0
 
@@ -1056,7 +1188,7 @@ def test_discovery_automatic_all(my_predbat=None):
     """Run every automatic configuration test, returning the number of failures."""
     failures = 0
     failures += test_switch_off_is_inert()
-    failures += test_switch_string_value()
+    failures += test_switch_string_value(my_predbat)
     failures += test_configures_on_report()
     failures += test_not_opted_in_is_not_configured()
     failures += test_unchanged_report_writes_nothing()
@@ -1076,6 +1208,9 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_catalogue_carries_slots()
     failures += test_takeover_and_hole_warnings_logged()
     failures += test_summed_lists_keep_resolved_patterns()
+    failures += test_baseline_drops_unresolved_patterns()
+    failures += test_slot_is_empty()
+    failures += test_assemble_slots_follow_bindings()
     failures += test_bare_base_is_inert()
     failures += test_allow_automatic_config_wrapper()
     # Acceptance: discovery against the old automatic configuration
@@ -1093,5 +1228,8 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_accept_opt_outs()
     failures += test_accept_manual_plus_discovered()
     failures += test_accept_template_takeover()
+    failures += test_accept_template_gateway()
+    failures += test_accept_template_short_gateway()
+    failures += test_accept_givtcp_rest_manual()
     failures += test_accept_run_loop_incremental()
     return failures

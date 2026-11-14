@@ -33,14 +33,39 @@ from utils import is_secret_key
 
 SCHEMA_VERSION = 2
 
-# The strings get_arg() reads as True for a boolean setting (userinterface.py)
-TRUE_STRINGS = ("on", "true", "yes", "enabled", "enable", "connected")
-
 # Settings indexed by slot, so a whole-value write to one can be traced to the slots whose entry changed
 SLOT_INDEXED_SETTINGS = (BINDING_SETTINGS - set(COMPACT_SETTINGS)) | {"inverter_type"}
 
+# The args the first pass keeps a copy of: every binding setting and inverter_type (see Coordinator.configure())
+BASELINE_SETTINGS = BINDING_SETTINGS | {"inverter_type"}
+
 # Marks a setting that was absent from args before a pass wrote it, so a failed pass can delete it again
 _ABSENT = object()
+
+
+def _unresolved(value):
+    """Whether an args value is a re: pattern that was not resolved to an entity."""
+    return isinstance(value, str) and value.startswith("re:")
+
+
+def capture_baseline(args):
+    """A deep copy of args' BASELINE_SETTINGS, an unresolved re: pattern counting as unset.
+
+    In a list the pattern becomes None, so every other entry keeps its position; a scalar pattern drops the
+    key. A pattern can still be unresolved when the first pass runs, before finalize_config(), and copied as it
+    is it would later be written back as though it were an entity - nor can it name a serial.
+    """
+    baseline = {}
+    for setting in sorted(BASELINE_SETTINGS):
+        if setting not in args:
+            continue
+        value = args[setting]
+        if isinstance(value, (list, tuple)):
+            baseline[setting] = [None if _unresolved(entry) else copy.deepcopy(entry) for entry in value]
+        elif not _unresolved(value):
+            baseline[setting] = copy.deepcopy(value)
+    return baseline
+
 
 MAX_STRING = 64
 VOCAB_RE = re.compile(r"^[a-z0-9_]{1,32}$")
@@ -316,9 +341,9 @@ class Coordinator:
         self.automatic = {}
         self.bindings = None
         self.slot_map = {}
-        # The live SUMMED_SETTINGS values on the first pass, after auto_config() resolved their re:
-        # patterns and before anything was replayed - stands in for the snapshot's raw entries (see configure())
-        self.summed_baseline = None
+        # capture_baseline() of the live args on the first pass, before anything was replayed: the serials are
+        # scanned in it, and its SUMMED_SETTINGS stand in for the snapshot's raw entries (see configure())
+        self.args_baseline = None
         self.warned = set()
         self.reports = {}
         # UTC ISO-8601 timestamp of the last report(), by component name - surfaced as
@@ -355,8 +380,7 @@ class Coordinator:
             value = get_arg("discovery_automatic", False, indirect=False)
         except Exception:
             return False
-        if isinstance(value, str):
-            return value.strip().lower() in TRUE_STRINGS
+        # get_arg() turns a string into a bool itself when the default is one
         return value is True
 
     def allow_automatic(self, component_name, skip_settings=(), keep_user_settings=(), include_pv_only=False):
@@ -382,10 +406,11 @@ class Coordinator:
         Runs on whichever thread triggered it, under configure_lock for the whole pass. A pass with nothing new
         writes nothing and logs nothing.
 
-        bindings.py reads a manual inverter's SUMMED_SETTINGS entries from the snapshot it is given, but
-        args_from_apps_yaml is taken before Predbat resolves re: patterns. So the first pass keeps a copy of those
-        settings' live values (resolved by then, nothing yet replayed) and every pass hands bindings.py the snapshot
-        with that copy in place of its own summed entries.
+        The first pass keeps a baseline: a copy of the live binding settings and inverter_type, before anything is
+        replayed (capture_baseline()). Every pass scans it for a manual slot's serials - replay rewrites the live entries at
+        every slot it takes over or clears, so a scan of live args would let such a slot come back on the next pass -
+        and hands bindings.py the snapshot with the baseline's SUMMED_SETTINGS in place of its own, since
+        args_from_apps_yaml is taken before Predbat resolves re: patterns.
 
         A failure is logged as a warning and the writes the pass had already made are undone, so args are as they
         were before it; the bindings stay as the last good pass left them.
@@ -407,10 +432,11 @@ class Coordinator:
         args = getattr(base, "args", None)
         if not isinstance(snapshot, dict) or not isinstance(args, dict) or not callable(getattr(base, "set_arg", None)):
             return
-        if self.summed_baseline is None:
-            self.summed_baseline = {setting: copy.deepcopy(args[setting]) for setting in SUMMED_SETTINGS if setting in args}
+        if self.args_baseline is None:
+            self.args_baseline = capture_baseline(args)
+        baseline = copy.deepcopy(self.args_baseline)
         apps_yaml = {key: value for key, value in snapshot.items() if key not in SUMMED_SETTINGS}
-        apps_yaml.update(copy.deepcopy(self.summed_baseline))
+        apps_yaml.update({setting: baseline[setting] for setting in SUMMED_SETTINGS if setting in baseline})
 
         with self.lock:
             automatic = dict(self.automatic)
@@ -419,7 +445,7 @@ class Coordinator:
         # slots, and would otherwise warn that it reported no inverter before it had reported anything
         sources = [dict(automatic[name], name=name, records=list(reports[name].get("inverters", []))) for name in sorted(automatic) if name in reports]
 
-        bindings, warnings = build_bindings(apps_yaml, args, sources, self.bindings)
+        bindings, warnings = build_bindings(apps_yaml, args, sources, self.bindings, scan_args=baseline)
         for warning in warnings:
             self._warn_once(warning)
         written = replay_bindings(bindings, apps_yaml, args, self._recording_set_arg(before))
@@ -438,6 +464,21 @@ class Coordinator:
             entry = bindings["inverters"][index]
             self.log("Coordinator: inverter slot {} configured from {} ({})".format(index, entry["source"], entry["device_id"]))
         self._check(written, bindings, sources)
+
+    def slot_is_empty(self, index):
+        """Whether inverter slot `index` is an empty slot inside the current bindings: free, below the slot count, among discovered slots.
+
+        A slot a discovered device held is left like this when the device stops being reported while a higher
+        slot is still in use - slots are not compacted until a restart. Read-only; False with the switch off,
+        with no bindings yet, and for a layout with no discovered slot (any hole there is the user's own).
+        """
+        if not self._automatic_enabled():
+            return False
+        bindings = self.bindings
+        entries = (bindings or {}).get("inverters", [])
+        if not isinstance(index, int) or index < 0 or index >= len(entries):
+            return False
+        return entries[index].get("origin") == "free" and any(entry.get("origin") == "discovered" for entry in entries)
 
     def _warn_once(self, text):
         """Log a warning the first time its text is seen in this coordinator's life; passes repeat them while the situation lasts."""
@@ -555,9 +596,9 @@ class Coordinator:
         with self.lock:
             reports = {name: report for name, report in self.reports.items()}
             reported_at = dict(self.reported_at)
-        # Read once: configure() replaces both attributes rather than changing them in place
+        # Read once, and the slots derived from it, so they always belong to the same pass's bindings
         bindings = self.bindings
-        slots = self.slot_map
+        slots = slot_map(bindings)
         catalogue = {"schema_version": SCHEMA_VERSION, "generated": datetime.now(timezone.utc).isoformat(), "components": self._component_status(reports, reported_at)}
         for section in SECTION_SPEC:
             merged = []
