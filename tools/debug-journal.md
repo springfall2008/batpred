@@ -357,6 +357,9 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - One batched `iotSet` per change; a partial accept is never cached; overlapping writes fail with error 300004. The one-hour rolling hold slot is deliberate.
 - Predbat commits a window in stages (times, target, rates), pressing the write button after each. Writing on the first press sent a new slot with the previous cycle's `CHG_PWR_LMT`/`DTU_AC_CHG_SOC_LMT` (e.g. 4000 W / 100% from `inverter_soc_reset`), and `hanchu_min_write_interval` then held the hold values back ~95 s: a live grid charge at a hold's start. Presses are now debounced (`hanchu_write_debounce`, default 10 s); the rates arrive after the loop with no press, so any schedule change while a write is pending restarts the wait too, and the reconcile tick skips while one is pending. Look for two `iotSet`s a minute or more apart at a window start. (GH#6074)
 - HC-HY-SL-*-G2 is missing from the `devModel` table, so it always takes the fallback.
+- Battery health (SoH, full-charge capacity) is only on the `/gateway/platform/` `bmsInfo/queryAllList` and `bmsInfo/queryBatteryDataDivisions` endpoints, which need an AES-encrypted body: plain JSON gets HTTP 403 code 433 "Json Request Forbidden Under Crypto Mode On". `bmsDesignCap` is the design figure, so for "is my battery smaller than rated" run `hanchu.py --battery-health` (`read_battery_health()`, `encrypt_payload()`; PR #5715, verified live 2026-10-24).
+- Those battery endpoints answer 403 "Permission Denied" until the account has signed into the Hanchu web portal once; one sign-in unlocks them for good (PR #5715).
+- `station/detail` (UPTON's way to list packs) answers code 100 "This API has been deprecated."; name packs with `--battery-serial` instead (PR #5715).
 
 ### Growatt Cloud OpenAPI (`growatt.py`, `growatt_const.py`)
 
