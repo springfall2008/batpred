@@ -756,6 +756,299 @@ def test_find_charge_curve_discharge_percent_with_battery_scaling(my_predbat):
     return False
 
 
+def test_find_charge_curve_skips_temperature_limited(my_predbat):
+    """
+    A cold battery held back by its BMS looks like a high-SoC taper, so charges the temperature curve says were
+    limited are left out of the learned SoC curve, while warm charges and installs with no temperature curve are not.
+    """
+    print("*** Running test: find_charge_curve_skips_temperature_limited ***")
+    failed = False
+    temp_sensor = "sensor.battery_temperature_curve_test"
+    saved_curve = my_predbat.battery_temperature_charge_curve
+    saved_arg = my_predbat.args.get("battery_temperature_history", None)
+
+    def install_temperature(temp):
+        """Add a constant battery temperature history to the mocked HA history."""
+        create_test_history_data(my_predbat, num_days=7)
+        base_get_history = my_predbat.ha_interface.get_history
+        base_time = my_predbat.midnight_utc - timedelta(days=7)
+        temp_history = [{"state": temp, "last_updated": (base_time + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S%z"), "attributes": {}} for minutes in range(0, 7 * 24 * 60, 5)]
+
+        def mock_get_history(entity_id, now=None, days=30):
+            """Serve the temperature history alongside the charge history."""
+            if entity_id == temp_sensor:
+                return [temp_history]
+            return base_get_history(entity_id, now=now, days=days)
+
+        my_predbat.ha_interface.get_history = mock_get_history
+
+    try:
+        inv = Inverter(my_predbat, 0)
+        inv.battery_rate_max_charge = 2600 / 60000
+        inv.battery_rate_max_discharge = 2600 / 60000
+        inv.soc_max = 10.0
+        inv.battery_scaling = 1.0
+        setup_predbat(my_predbat)
+        my_predbat.args["battery_temperature_history"] = temp_sensor
+        # 0.13 C of a 10 kWh battery is 1.3 kW, below the 2.6 kW the history charges at
+        my_predbat.battery_temperature_charge_curve = {5: 0.13, 25: 1.0}
+
+        install_temperature(5.5)
+        curve = inv.find_charge_curve(discharge=False)
+        if curve:
+            print("ERROR: a charge the temperature curve limits should not be learned as the SoC curve, got {}".format(curve))
+            failed = True
+
+        install_temperature(25.0)
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve or any(value != 1 for value in curve.values()):
+            print("ERROR: a warm charge should still be learned, got {}".format(curve))
+            failed = True
+
+        install_temperature(0)
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve:
+            print("ERROR: an exact 0 temperature is a missing reading and should not exclude the charge")
+            failed = True
+
+        install_temperature(5.5)
+        my_predbat.battery_temperature_charge_curve = {}
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve:
+            print("ERROR: with no temperature curve nothing should be excluded")
+            failed = True
+    finally:
+        my_predbat.battery_temperature_charge_curve = saved_curve
+        if saved_arg is None:
+            my_predbat.args.pop("battery_temperature_history", None)
+        else:
+            my_predbat.args["battery_temperature_history"] = saved_arg
+        remove_test_history_data(my_predbat)
+    return failed
+
+
+def test_find_charge_curve_skips_export_limited(my_predbat):
+    """
+    A discharge the export limit held back looks like a low-SoC tail-off, so exports with the grid at export_limit
+    are left out of the learned discharge curve; with no grid_power history the curve is only learned when the
+    limit is above the discharge rate.
+    """
+    print("*** Running test: find_charge_curve_skips_export_limited ***")
+    failed = False
+    grid_sensor = "sensor.grid_power_curve_test"
+    saved_args = {key: my_predbat.args.get(key, None) for key in ("grid_power", "grid_power_invert")}
+
+    def install_grid(export_w, invert=False):
+        """Add a grid_power history exporting export_w during the discharge sessions (17:00-22:59)."""
+        create_test_history_data(my_predbat, num_days=7)
+        base_get_history = my_predbat.ha_interface.get_history
+        base_time = my_predbat.midnight_utc - timedelta(days=7)
+        grid_history = []
+        for minutes in range(0, 7 * 24 * 60, 5):
+            timestamp = base_time + timedelta(minutes=minutes)
+            power = export_w if 17 <= timestamp.hour <= 22 else 0
+            grid_history.append({"state": -power if invert else power, "last_updated": timestamp.strftime("%Y-%m-%dT%H:%M:%S%z"), "attributes": {"unit_of_measurement": "W"}})
+
+        def mock_get_history(entity_id, now=None, days=30):
+            """Serve the grid history alongside the discharge history."""
+            if entity_id == grid_sensor:
+                return [grid_history]
+            return base_get_history(entity_id, now=now, days=days)
+
+        my_predbat.ha_interface.get_history = mock_get_history
+
+    try:
+        inv = Inverter(my_predbat, 0)
+        inv.battery_rate_max_charge = 2600 / 60000
+        inv.battery_rate_max_discharge = 2600 / 60000
+        inv.soc_max = 10.0
+        inv.battery_scaling = 1.0
+        setup_predbat(my_predbat)
+        my_predbat.args["grid_power"] = [grid_sensor]
+        my_predbat.args["grid_power_invert"] = [False]
+
+        print("Export at the 2000 W limit - left out")
+        inv.export_limit = 2000 / 60000
+        install_grid(2000)
+        curve = inv.find_charge_curve(discharge=True)
+        if curve:
+            print("ERROR: an export held at export_limit should not be learned as the discharge curve, got {}".format(curve))
+            failed = True
+
+        print("Export at the limit with an inverted grid sensor - left out")
+        my_predbat.args["grid_power_invert"] = [True]
+        install_grid(2000, invert=True)
+        curve = inv.find_charge_curve(discharge=True)
+        if curve:
+            print("ERROR: grid_power_invert should be applied to the export check, got {}".format(curve))
+            failed = True
+        my_predbat.args["grid_power_invert"] = [False]
+
+        print("Export well under the limit - learned")
+        install_grid(1000)
+        curve = inv.find_charge_curve(discharge=True)
+        if not curve:
+            print("ERROR: an export below export_limit should still be learned")
+            failed = True
+
+        print("No grid_power history and the limit below the discharge rate - not learned")
+        create_test_history_data(my_predbat, num_days=7)
+        curve = inv.find_charge_curve(discharge=True)
+        if curve:
+            print("ERROR: with no grid_power history a limit below the rate should stop the discharge curve, got {}".format(curve))
+            failed = True
+
+        print("No grid_power history and the limit above the discharge rate - learned")
+        inv.export_limit = 5000 / 60000
+        curve = inv.find_charge_curve(discharge=True)
+        if not curve:
+            print("ERROR: a limit above the discharge rate cannot hold it back, so the curve should be learned")
+            failed = True
+
+        print("No export limit - learned, and the charge curve is unaffected by a limit")
+        inv.export_limit = 99999.0 / 60000
+        install_grid(2600)
+        curve = inv.find_charge_curve(discharge=True)
+        if not curve:
+            print("ERROR: with no export limit nothing should be excluded")
+            failed = True
+        inv.export_limit = 2000 / 60000
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve:
+            print("ERROR: the export limit should not affect the charge curve")
+            failed = True
+    finally:
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+        remove_test_history_data(my_predbat)
+    return failed
+
+
+def _scale_battery_power(my_predbat, factor):
+    """Scale the mocked battery_power history in place, so the fixture's battery never reaches its full rate."""
+    for record in my_predbat.ha_interface.get_history("sensor.battery_power")[0]:
+        record["state"] = round(float(record["state"]) * factor, 1)
+
+
+def test_find_charge_curve_needs_evidence(my_predbat):
+    """
+    One day of data, however clean, is not enough: a point needs full-rate data from two days, and the curve must
+    reach 95% SoC (charge) / 10% (discharge) rather than extrapolate there.
+    """
+    print("*** Running test: find_charge_curve_needs_evidence ***")
+    failed = False
+    inv = create_curve_test_inverter(my_predbat)
+    try:
+        create_test_history_data(my_predbat, num_days=1)
+        if inv.find_charge_curve(discharge=False) or inv.find_charge_curve(discharge=True):
+            print("ERROR: a curve was learned from a single day of data")
+            failed = True
+        create_test_history_data(my_predbat, num_days=2)
+        if not inv.find_charge_curve(discharge=False):
+            print("ERROR: two days of clean charges should be enough for the charge curve")
+            failed = True
+        # Charges that stop at 92% never reach the taper, so no curve is claimed for it
+        create_stepped_history_data(my_predbat, start_soc=80)
+        for record in my_predbat.ha_interface.get_history("sensor.soc_percent")[0]:
+            record["state"] = str(min(int(record["state"]), 92))
+        if inv.find_charge_curve(discharge=False):
+            print("ERROR: a charge curve was learned from charges that never passed 92%")
+            failed = True
+    finally:
+        remove_test_history_data(my_predbat)
+    return failed
+
+
+def test_find_charge_curve_auto_keeps_level(my_predbat):
+    """
+    A battery that only ever charges at 65% of its rated rate: auto mode returns the curve at 0.65, as learned, while
+    the apps.yaml version is rescaled to 1.0 (with battery_rate_max_scaling logged), and a scaling the user has already
+    set is divided out, as the plan multiplies the curve by it.
+    """
+    print("*** Running test: find_charge_curve_auto_keeps_level ***")
+    failed = False
+    inv = create_curve_test_inverter(my_predbat)
+    saved_scaling = my_predbat.battery_rate_max_scaling
+    try:
+        create_test_history_data(my_predbat, num_days=7)
+        _scale_battery_power(my_predbat, 0.65)
+        my_predbat.battery_charge_power_curve_auto = True
+        curve = inv.find_charge_curve(discharge=False)
+        # The fixture's first learned point is 86%: below it auto mode claims no limit (1.0), as everywhere below the curve
+        if not curve or any(abs(value - 0.65) > 0.011 for soc, value in curve.items() if soc >= 86) or curve.get(85) != 1.0:
+            print("ERROR: auto should keep the 0.65 level the battery charged at from the first learned point up, got {}".format(curve))
+            failed = True
+        my_predbat.battery_rate_max_scaling = 0.65
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve or any(value < 0.99 for value in curve.values()):
+            print("ERROR: with battery_rate_max_scaling 0.65 already set the auto curve should be 1.0, got {}".format(curve))
+            failed = True
+        my_predbat.battery_rate_max_scaling = 1.0
+        my_predbat.battery_charge_power_curve_auto = False
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve or any(value != 1.0 for value in curve.values()):
+            print("ERROR: the apps.yaml curve should be rescaled to 1.0, got {}".format(curve))
+            failed = True
+    finally:
+        my_predbat.battery_rate_max_scaling = saved_scaling
+        my_predbat.battery_charge_power_curve_auto = True
+        remove_test_history_data(my_predbat)
+    return failed
+
+
+def test_find_charge_curve_keeps_taper_below_temperature_cap(my_predbat):
+    """
+    Only minutes held at the temperature cap are left out: with a cap of 2 kW at the fixture's temperature, the 2.6 kW
+    minutes below 91% are at the cap and dropped, while the 1.3 kW taper above it is below the cap and still learned.
+    In auto mode the points below the first learned one are 1.0, the cap modelling them, not the taper's 0.5.
+    """
+    print("*** Running test: find_charge_curve_keeps_taper_below_temperature_cap ***")
+    failed = False
+    temp_sensor = "sensor.battery_temperature_binding_test"
+    saved_curve = my_predbat.battery_temperature_charge_curve
+    saved_arg = my_predbat.args.get("battery_temperature_history", None)
+    inv = create_curve_test_inverter(my_predbat)
+    try:
+        create_test_history_data(my_predbat, num_days=7, slow=True)
+        base_get_history = my_predbat.ha_interface.get_history
+        base_time = my_predbat.midnight_utc - timedelta(days=7)
+        temp_history = [{"state": 8.5, "last_updated": (base_time + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S%z"), "attributes": {}} for minutes in range(0, 7 * 24 * 60, 5)]
+
+        def mock_get_history(entity_id, now=None, days=30):
+            """Serve the temperature history alongside the charge history."""
+            if entity_id == temp_sensor:
+                return [temp_history]
+            return base_get_history(entity_id, now=now, days=days)
+
+        my_predbat.ha_interface.get_history = mock_get_history
+        my_predbat.args["battery_temperature_history"] = temp_sensor
+        my_predbat.battery_temperature_charge_curve = {8: 0.2}  # 0.2 C of 10 kWh = 2 kW, below the 2.6 kW maximum
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve:
+            print("ERROR: the taper below the temperature cap should still be learned")
+            failed = True
+        else:
+            taper = [curve[soc] for soc in range(92, 100) if soc in curve]
+            below = [curve[soc] for soc in range(85, 90) if soc in curve]
+            if not taper or any(value != 0.5 for value in taper):
+                print("ERROR: the 1.3 kW taper should be learned as 0.5, got {}".format(curve))
+                failed = True
+            if not below or any(value != 1.0 for value in below):
+                print("ERROR: points held at the cap should be left to the cap (1.0), got {}".format(curve))
+                failed = True
+    finally:
+        my_predbat.battery_temperature_charge_curve = saved_curve
+        if saved_arg is None:
+            my_predbat.args.pop("battery_temperature_history", None)
+        else:
+            my_predbat.args["battery_temperature_history"] = saved_arg
+        remove_test_history_data(my_predbat)
+    return failed
+
+
 def run_find_charge_curve_tests(my_predbat):
     """
     Run all find_charge_curve tests
@@ -807,6 +1100,20 @@ def run_find_charge_curve_tests(my_predbat):
     failed |= test_find_charge_curve_coarse_soc_steps(my_predbat)
     failed |= test_find_charge_curve_percent_with_battery_scaling(my_predbat)
     failed |= test_find_charge_curve_discharge_percent_with_battery_scaling(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_charge_curve_skips_temperature_limited(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_charge_curve_skips_export_limited(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_charge_curve_needs_evidence(my_predbat)
+    failed |= test_find_charge_curve_auto_keeps_level(my_predbat)
+    failed |= test_find_charge_curve_keeps_taper_below_temperature_cap(my_predbat)
     if failed:
         return failed
 

@@ -2870,6 +2870,7 @@ APPS_SCHEMA = {
     "battery_discharge_power_curve": {"type": "int_float_dict", "or_auto": True},
     "battery_charge_power_curve_default": {"type": "int_float_dict"},
     "battery_discharge_power_curve_default": {"type": "int_float_dict"},
+    "battery_temperature_charge_curve_auto": {"type": "boolean"},
     "clock_skew": {"type": "integer"},
     "predbat_repository": {"type": "string", "empty": True},
     "predbat_branch": {"type": "string|string_list", "empty": False},

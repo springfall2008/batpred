@@ -39,6 +39,8 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
+    BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK,
 )
 import copy
 import pytz
@@ -2689,8 +2691,13 @@ def get_curve_value(curve, index, default=1.0):
 def find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, max_rate):
     """
     Find the battery temperature cap
+
+    The reading is looked up by whole degree between -20 and BATTERY_TEMPERATURE_CURVE_TEMP_MAX (30); a warmer
+    reading uses the warmest degree. A positive degree the curve does not set falls back to the 20 entry (then to
+    uncapped), as it did when 20 was the warmest degree looked up, so a curve that sets 20 still caps every warmer
+    reading it does not set and a curve without one leaves them uncapped.
     """
-    battery_temperature_idx = min(battery_temperature, 20)
+    battery_temperature_idx = min(battery_temperature, BATTERY_TEMPERATURE_CURVE_TEMP_MAX)
     battery_temperature_idx = max(battery_temperature_idx, -20)
     battery_temperature_idx = int(battery_temperature_idx)  # Convert to int for proper key matching
     # Try to get the temperature adjustment from the curve (handles both int and string keys)
@@ -2698,7 +2705,7 @@ def find_battery_temperature_cap(battery_temperature, battery_temperature_curve,
     if battery_temperature_adjust is None:
         # If not found, try fallback values
         if battery_temperature_idx > 0:
-            battery_temperature_adjust = get_curve_value(battery_temperature_curve, 20, 1.0)
+            battery_temperature_adjust = get_curve_value(battery_temperature_curve, BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK, 1.0)
         else:
             battery_temperature_adjust = get_curve_value(battery_temperature_curve, 0, 1.0)
     battery_temperature_rate_cap = soc_max * battery_temperature_adjust / 60.0

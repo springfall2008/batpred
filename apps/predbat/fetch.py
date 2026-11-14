@@ -20,6 +20,7 @@ dictionaries for use by the prediction engine.
 
 from datetime import datetime, timedelta
 from utils import clock_change_minutes, minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
+from battery_curve import clean_battery_temperature_samples, merge_battery_temperature_samples, learn_battery_temperature_curve, overlay_battery_temperature_curve
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -43,6 +44,9 @@ from const import (
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
+    BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES,
+    BATTERY_POWER_CURVE_RESCAN_MINUTES,
+    BATTERY_POWER_CURVE_RETRY_MINUTES,
 )
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -4125,6 +4129,150 @@ class Fetch:
         num_cars = min(self.get_arg("num_cars", 1), PREDBAT_MAX_CARS)
         self.car_charging_max_rate = [self.car_max_rate_cap(car_n) for car_n in range(max(num_cars, 1))]
 
+    def battery_power_curve_update(self, inverter, discharge):
+        """
+        Work out the battery charge (or discharge) power curve from history, for the first inverter.
+
+        Not in auto mode and no curve configured: the curve is computed once (as before), falling back to
+        battery_charge_power_curve_default.
+
+        battery_charge_power_curve: auto (the default for the charge curve) - the last curve found is kept in
+        storage, so it is in use from the first plan after a restart rather than only once a full-rate charge to
+        100% is back in the history window. The history is re-scanned every BATTERY_POWER_CURVE_RETRY_MINUTES while
+        no curve has been found (the default curve does not count), then every BATTERY_POWER_CURVE_RESCAN_MINUTES,
+        and a scan that finds nothing (no full-rate cycle in the window, or only temperature- or export-limited
+        ones) leaves the curve as it was rather than replacing it.
+
+        Args:
+            inverter: the Inverter whose history is scanned
+            discharge: True for battery_discharge_power_curve, False for battery_charge_power_curve
+        """
+        kind = "discharge" if discharge else "charge"
+        name = "battery_{}_power_curve".format(kind)
+        computed_name = "computed_{}_curve".format(kind)
+        curve = getattr(self, name)
+        default = getattr(self, name + "_default")
+
+        if not getattr(self, name + "_auto"):
+            if getattr(self, computed_name) or curve:
+                return
+            found = inverter.find_charge_curve(discharge=discharge)
+            if found:
+                self.log("Saved computed battery {} power curve".format(kind))
+                setattr(self, name, found)
+            elif default:
+                setattr(self, name, default)
+                self.log("Using default battery {} power curve".format(kind))
+            # Stop retrying every cycle when not in auto mode
+            setattr(self, computed_name, True)
+            return
+
+        from ha import run_async
+
+        storage = self.components.get_component("storage") if self.components else None
+        if not self.battery_power_curve_loaded.get(kind):
+            self.battery_power_curve_loaded[kind] = True
+            if storage and not curve:
+                try:
+                    data = run_async(storage.load("predbat", name))
+                except Exception as e:
+                    self.log("Warn: {}: failed to load the saved curve: {}".format(name, e))
+                    data = None
+                stored = data.get("curve") if isinstance(data, dict) else None
+                if isinstance(stored, dict) and stored:
+                    curve = self.validate_curve(stored, name)
+                    if curve:
+                        self.log("Restored the saved battery {} power curve".format(kind))
+                        setattr(self, name, curve)
+                        setattr(self, computed_name, True)
+
+        last_scan = self.battery_power_curve_last_scan.get(kind)
+        interval = BATTERY_POWER_CURVE_RESCAN_MINUTES if (curve and curve != default) else BATTERY_POWER_CURVE_RETRY_MINUTES
+        if last_scan is not None and (self.now_utc - last_scan) < timedelta(minutes=interval):
+            return
+        self.battery_power_curve_last_scan[kind] = self.now_utc
+
+        found = inverter.find_charge_curve(discharge=discharge)
+        if found:
+            if found != curve:
+                self.log("Saved computed battery {} power curve".format(kind))
+                if storage:
+                    try:
+                        if not run_async(storage.save("predbat", name, {"curve": {str(soc): value for soc, value in found.items()}}, format="json")):
+                            self.log("Warn: {}: failed to save the computed curve".format(name))
+                    except Exception as e:
+                        self.log("Warn: {}: failed to save the computed curve: {}".format(name, e))
+            setattr(self, name, found)
+            setattr(self, computed_name, True)
+        elif not curve and default:
+            # The default is not saved, so a curve learned later is never mistaken for it
+            setattr(self, name, default)
+            setattr(self, computed_name, True)
+            self.log("Using default battery {} power curve".format(kind))
+
+    def battery_temperature_curve_auto_update(self, inverter):
+        """
+        battery_temperature_charge_curve_auto: learn how fast this battery charges at each temperature and lay it
+        over the configured battery_temperature_charge_curve.
+
+        Called every cycle for the first inverter, after fetch_config_options() has reset the curve to its configured
+        value, so the overlay is re-applied from scratch each time. The history is only re-scanned every
+        BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES. What is learned is kept in storage for a year, because the history
+        window is only max_days_previous long and a cold spell's data would otherwise be gone by the next one.
+
+        Args:
+            inverter: the Inverter whose history is scanned
+        """
+        from ha import run_async
+
+        storage = self.components.get_component("storage") if self.components else None
+        today = self.now_utc.date()
+
+        if not self.battery_temperature_samples_loaded:
+            self.battery_temperature_samples_loaded = True
+            if storage:
+                try:
+                    data = run_async(storage.load("predbat", "battery_temperature_curve"))
+                except Exception as e:
+                    self.log("Warn: battery_temperature_charge_curve_auto: failed to load the learned samples: {}".format(e))
+                    data = None
+                self.battery_temperature_samples = clean_battery_temperature_samples(data.get("samples") if isinstance(data, dict) else None)
+            self.battery_temperature_curve_learned, self.battery_temperature_curve_minutes = learn_battery_temperature_curve(self.battery_temperature_samples, today)
+
+        if self.battery_temperature_curve_last_scan is None or (self.now_utc - self.battery_temperature_curve_last_scan) >= timedelta(minutes=BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES):
+            self.battery_temperature_curve_last_scan = self.now_utc
+            scanned = inverter.find_battery_temperature_samples()
+            if scanned is not None:
+                merged = merge_battery_temperature_samples(self.battery_temperature_samples, scanned, today)
+                if merged != self.battery_temperature_samples:
+                    self.battery_temperature_samples = merged
+                    if storage:
+                        try:
+                            if not run_async(storage.save("predbat", "battery_temperature_curve", {"samples": merged}, format="json")):
+                                self.log("Warn: battery_temperature_charge_curve_auto: failed to save the learned samples")
+                        except Exception as e:
+                            self.log("Warn: battery_temperature_charge_curve_auto: failed to save the learned samples: {}".format(e))
+                learned, minutes = learn_battery_temperature_curve(self.battery_temperature_samples, today)
+                if learned != self.battery_temperature_curve_learned:
+                    self.log("Info: Battery temperature charge curve learned (rate in C per degree): {}".format(learned))
+                self.battery_temperature_curve_learned, self.battery_temperature_curve_minutes = learned, minutes
+
+        configured = self.battery_temperature_charge_curve_configured
+        self.battery_temperature_charge_curve = overlay_battery_temperature_curve(configured, self.battery_temperature_curve_learned)
+        self.dashboard_item(
+            self.prefix + ".battery_temperature_charge_curve",
+            state=len(self.battery_temperature_curve_learned),
+            attributes={
+                "curve": {str(temp): rate for temp, rate in sorted(self.battery_temperature_charge_curve.items())},
+                "learned": {str(temp): rate for temp, rate in sorted(self.battery_temperature_curve_learned.items())},
+                "learned_minutes": {str(temp): count for temp, count in sorted(self.battery_temperature_curve_minutes.items())},
+                "configured": {str(temp): rate for temp, rate in sorted(configured.items())},
+                "days": len(self.battery_temperature_samples),
+                "friendly_name": "Battery temperature charge curve (learned degrees)",
+                "icon": "mdi:thermometer-chevron-up",
+            },
+        )
+
     def fetch_ml_load_forecast(self, now_utc, save=True):
         """
         Fetches ML load forecast from sensor
@@ -4763,12 +4911,16 @@ class Fetch:
         self.log("Freeze Export discharge rate configured: {:.0f} W".format(self.inverter_freeze_export_discharge_rate * MINUTE_WATT))
         self.base_load = self.get_arg("base_load", 100) / 1000.0
 
-        # Charge curve
-        if self.args.get("battery_charge_power_curve", "") == "auto":
+        # Charge curve - learned from history unless apps.yaml sets one
+        if self.args.get("battery_charge_power_curve", "auto") == "auto":
             self.battery_charge_power_curve_auto = True
         else:
             self.battery_charge_power_curve_auto = False
-            self.battery_charge_power_curve = self.validate_curve(self.args.get("battery_charge_power_curve", {}), "battery_charge_power_curve")
+            configured_curve = self.validate_curve(self.args.get("battery_charge_power_curve", {}), "battery_charge_power_curve")
+            # With no curve in apps.yaml, keep the one battery_power_curve_update() computed from history (or the default):
+            # it is only computed once, so resetting it here every cycle threw it away after the first plan
+            if configured_curve or not self.computed_charge_curve:
+                self.battery_charge_power_curve = configured_curve
         self.battery_charge_power_curve_default = self.validate_curve(self.args.get("battery_charge_power_curve_default", {}), "battery_charge_power_curve_default")
 
         # Discharge curve
@@ -4776,12 +4928,19 @@ class Fetch:
             self.battery_discharge_power_curve_auto = True
         else:
             self.battery_discharge_power_curve_auto = False
-            self.battery_discharge_power_curve = self.validate_curve(self.args.get("battery_discharge_power_curve", {}), "battery_discharge_power_curve")
+            configured_curve = self.validate_curve(self.args.get("battery_discharge_power_curve", {}), "battery_discharge_power_curve")
+            if configured_curve or not self.computed_discharge_curve:
+                self.battery_discharge_power_curve = configured_curve
         self.battery_discharge_power_curve_default = self.validate_curve(self.args.get("battery_discharge_power_curve_default", {}), "battery_discharge_power_curve_default")
 
         # Temperature curve charge/discharge
         self.battery_temperature_charge_curve = self.validate_curve(self.args.get("battery_temperature_charge_curve", {}), "battery_temperature_charge_curve")
         self.battery_temperature_discharge_curve = self.validate_curve(self.args.get("battery_temperature_discharge_curve", {}), "battery_temperature_discharge_curve")
+        # Learn the charge curve from history and lay it over the configured one (see battery_temperature_curve_auto_update)
+        self.battery_temperature_charge_curve_auto = bool(self.get_arg("battery_temperature_charge_curve_auto", False))
+        # Kept apart from battery_temperature_charge_curve, which holds the overlay once auto has run and is only reset here,
+        # while fetch_inverter_data() (and so the overlay) runs several times a cycle
+        self.battery_temperature_charge_curve_configured = dict(self.battery_temperature_charge_curve)
 
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_min = self.get_arg("best_soc_min")

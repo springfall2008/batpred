@@ -674,6 +674,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_discharge_power_curve_auto = False
         self.computed_charge_curve = False
         self.computed_discharge_curve = False
+        self.battery_power_curve_loaded = {}  # "charge"/"discharge" -> True once the saved auto curve has been read from storage
+        self.battery_power_curve_last_scan = {}  # "charge"/"discharge" -> time of the last auto curve history scan
         self.isCharging = False
         self.isCharging_Target = 0
         self.isExporting = False
@@ -759,6 +761,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_minutes_age = 0
         self.load_minutes_source = None
         self.battery_temperature_charge_curve = {}
+        self.battery_temperature_charge_curve_auto = False
+        self.battery_temperature_charge_curve_configured = {}  # battery_temperature_charge_curve as set in apps.yaml, before the auto overlay
+        self.battery_temperature_samples = {}  # battery_temperature_charge_curve_auto: {day: {temperature: [sum_of_c, minutes]}}, kept in storage
+        self.battery_temperature_samples_loaded = False
+        self.battery_temperature_curve_learned = {}
+        self.battery_temperature_curve_minutes = {}
+        self.battery_temperature_curve_last_scan = None
         self.battery_temperature_discharge_curve = {}
         self.battery_temperature_history = {}
         self.battery_temperature_prediction = {}
