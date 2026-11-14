@@ -312,7 +312,10 @@ class BatteryCurve:
         """
         inverters = getattr(self.base, "inverters", None) or []
         if self.id == 0 and getattr(self.base, "num_inverters", 1) > 1 and len(inverters) == self.base.num_inverters and inverters[0] is self:
-            return list(inverters)
+            # An inverter with no battery (soc_max 0, e.g. a PV-only one) adds nothing to the combined battery
+            fleet = [inverter for inverter in inverters if inverter is self or (inverter.soc_max or 0) > 0]
+            if len(fleet) > 1:
+                return fleet
         return [self]
 
     def record_curve_scan_coverage(self, kind, minutes):
@@ -327,7 +330,7 @@ class BatteryCurve:
         coverage = self.__dict__.setdefault("curve_scan_coverage", {})
         coverage[kind] = charge_day(self.base.now_utc, max(minutes - 1, 0), getattr(self.base, "local_tz", None)) if minutes > 0 else None
 
-    def load_curve_history(self, discharge, purpose):
+    def load_curve_history(self, discharge, purpose, fleet=None):
         """
         Load the SoC, written rate, battery power and Predbat status history the curve learners scan, for the whole fleet.
 
@@ -340,12 +343,15 @@ class BatteryCurve:
         Args:
             discharge: True to read discharge_rate rather than charge_rate
             purpose: what is being learned, for the log ("battery charge curve")
+            fleet: the inverters to read, curve_fleet() when not given. When another inverter in it lacks a setting or its
+                history, the learners fall back to this inverter alone (as before multi-inverter learning) rather than stop.
 
         Returns:
             {"soc_kwh", "rate", "battery_power", "status": {minute: value}, "min_len", "soc_max", "max_power" (W),
             "export_limit_w", "inverters"}, or None (after logging which setting or history is missing).
         """
-        fleet = self.curve_fleet()
+        if fleet is None:
+            fleet = self.curve_fleet()
         days = self.base.max_days_previous
         rate_name = "discharge_rate" if discharge else "charge_rate"
         predbat_status_sensor = self.base.prefix + ".status"
@@ -384,6 +390,9 @@ class BatteryCurve:
             battery_power_invert = self.base.get_arg("battery_power_invert", False, index=inverter.id)
             if not (soc_sensor and rate_sensor and battery_power_sensor):
                 missing_settings = [setting for setting, entity_id in [(soc_label, soc_sensor), (rate_name, rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
+                if inverter is not self:
+                    self.log("Info: Inverter {} {} not set in apps.yaml, learning the {} from inverter {} alone".format(inverter.id, ", ".join(missing_settings), purpose, self.id))
+                    return self.load_curve_history(discharge, purpose, fleet=[self])
                 self.log("Warn: Inverter {} Cannot find {} (settings missing), {} not set in apps.yaml".format(inverter.id, purpose, ", ".join(missing_settings)))
                 return None
             battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
@@ -394,6 +403,9 @@ class BatteryCurve:
             history_checks = [(soc_label, soc_sensor, soc_data), (rate_name, rate_sensor, rate_data), ("battery_power", battery_power_sensor, battery_power_data), ("predbat.status", predbat_status_sensor, predbat_status_data)]
             if not all(data for _, _, data in history_checks):
                 no_history = ["{} ({})".format(setting, entity_id) for setting, entity_id, data in history_checks if not data]
+                if inverter is not self and predbat_status_data:
+                    self.log("Info: Inverter {} has no history for {}, learning the {} from inverter {} alone".format(inverter.id, ", ".join(no_history), purpose, self.id))
+                    return self.load_curve_history(discharge, purpose, fleet=[self])
                 self.log("Warn: Inverter {} Cannot find {} (missing history), no history found for {} - check the entity name in apps.yaml and that Home Assistant is recording its history".format(inverter.id, purpose, ", ".join(no_history)))
                 self.log("Warn: Inverter {} Sensor history record counts: {}".format(inverter.id, ", ".join("{} {}".format(setting, len(data[0]) if data else 0) for setting, entity_id, data in history_checks)))
                 return None
@@ -671,9 +683,10 @@ class BatteryCurve:
                 if point in final_curve:
                     value = final_curve[point]
                     break
-            if auto and not discharge:
-                # Auto mode claims a limit only where one was seen: below the first learned point the charge was either
-                # not seen at full rate or held at the temperature cap, which battery_temperature_charge_curve models
+            if auto and not discharge and self.base.battery_temperature_charge_curve:
+                # With a temperature curve in use, auto mode claims a limit only where one was seen: below the first
+                # learned point the charge was either not seen at full rate or held at the temperature cap, which that
+                # curve models. Without one nothing would model the level there, so the first point's value carries down
                 value = 1.0
 
             # Fill gaps

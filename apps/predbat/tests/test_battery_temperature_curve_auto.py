@@ -292,6 +292,41 @@ def _test_update(my_predbat):
         curve = my_predbat.battery_temperature_charge_curve
         failed |= _check("t10 restored", curve.get(5) == 0.13 and curve.get(12) == 0.26, curve)
 
+        print("Test 10b: a failed read at start-up does not lose the stored days")
+        saved = run_async(storage.load("predbat", "battery_temperature_curve"))
+        samples = dict(saved["samples"])
+        samples["2026-01-05"] = {"5": [1.3, 10], "6": [1.3, 10]}
+        run_async(storage.save("predbat", "battery_temperature_curve", {"samples": samples}, format="json"))
+
+        class FlakyStorage:
+            """The first read fails (None), as a failed KeyDB or file read does."""
+
+            def __init__(self, real):
+                """Wrap the real storage."""
+                self.real, self.fails = real, 1
+
+            async def load(self, module, filename):
+                """None once, then the real data."""
+                if self.fails:
+                    self.fails -= 1
+                    return None
+                return await self.real.load(module, filename)
+
+            async def save(self, module, filename, data, format="yaml"):
+                """Saves go through."""
+                return await self.real.save(module, filename, data, format=format)
+
+        my_predbat.components = MockStorageComponents(FlakyStorage(storage))
+        my_predbat.battery_temperature_samples = {}
+        my_predbat.battery_temperature_samples_loaded = False
+        my_predbat.battery_temperature_curve_learned = {}
+        my_predbat.battery_temperature_curve_last_scan = None
+        _install_history(my_predbat)
+        my_predbat.battery_temperature_curve_auto_update(inv)
+        saved = run_async(storage.load("predbat", "battery_temperature_curve"))
+        failed |= _check("t10b old day kept", "2026-01-05" in saved.get("samples", {}), sorted(saved.get("samples", {})))
+        my_predbat.components = MockStorageComponents(storage)
+
         print("Test 11: with no storage the curve is still learned from history")
         my_predbat.components = MockStorageComponents(None)
         my_predbat.battery_temperature_samples = {}
@@ -321,6 +356,12 @@ def _test_config(my_predbat):
     my_predbat.fetch_config_options()
     failed |= _check("t12 on", my_predbat.battery_temperature_charge_curve_auto is True)
     failed |= _check("t12 configured kept apart", my_predbat.battery_temperature_charge_curve_configured == {10: 0.2}, my_predbat.battery_temperature_charge_curve_configured)
+    # The tariff comparison calls fetch_config_options() for each tariff and plans without fetch_inverter_data() in between
+    saved_learned = my_predbat.battery_temperature_curve_learned
+    my_predbat.battery_temperature_curve_learned = {5: 0.13}
+    my_predbat.fetch_config_options()
+    failed |= _check("t12 overlay kept through a config reset", my_predbat.battery_temperature_charge_curve.get(5) == 0.13 and my_predbat.battery_temperature_charge_curve.get(10) == 0.2, my_predbat.battery_temperature_charge_curve)
+    my_predbat.battery_temperature_curve_learned = saved_learned
     my_predbat.args.pop("battery_temperature_charge_curve", None)
     my_predbat.args.pop("battery_temperature_charge_curve_auto", None)
     return failed

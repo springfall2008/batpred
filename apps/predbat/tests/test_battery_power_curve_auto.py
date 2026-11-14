@@ -81,6 +81,26 @@ class FakeInverter:
         return {point: round(sums[point] / counts[point], 2) for point in sums}
 
 
+class FlakyStorage:
+    """A storage whose first `fails` reads come back as None, as a failed KeyDB or file read does."""
+
+    def __init__(self, storage, fails):
+        """Wrap a real storage."""
+        self.storage = storage
+        self.fails = fails
+
+    async def load(self, module, filename):
+        """None for the first reads, then the real data."""
+        if self.fails > 0:
+            self.fails -= 1
+            return None
+        return await self.storage.load(module, filename)
+
+    async def save(self, module, filename, data, format="yaml"):
+        """Saves go through."""
+        return await self.storage.save(module, filename, data, format=format)
+
+
 def _check(name, condition, detail=""):
     """Print and return a failure when condition is false."""
     if not condition:
@@ -272,6 +292,17 @@ def _run(my_predbat, storage):
     failed |= _check("t12b covered day replaced", samples.get(day1) == {99: [0.3, 1, 5.0]}, samples)
     failed |= _check("t12b day before the scan kept", samples.get(day7) == {99: [0.5, 1, 5.0]}, samples)
     del inv.curve_scan_coverage
+
+    print("Test 12c: a failed read at start-up does not lose the stored days - the store is read again before the first save")
+    run_async(storage.save("predbat", "battery_charge_power_curve", {"curve": {"99": 0.5}, "samples": {day7: {"99": [0.5, 1, 5.0]}}}, format="json"))
+    _restart(my_predbat)
+    my_predbat.components = MockStorageComponents(FlakyStorage(storage, 1))
+    inv.scan[False] = _samples(day0, {99: 0.3})
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    curve, samples = _stored(storage, "battery_charge_power_curve")
+    failed |= _check("t12c stored day kept", set(samples) == {day0, day7}, samples)
+    failed |= _check("t12c learned from both", my_predbat.battery_charge_power_curve == {99: 0.4}, my_predbat.battery_charge_power_curve)
+    my_predbat.components = MockStorageComponents(storage)
 
     print("Test 12: with no storage auto mode still learns")
     my_predbat.components = MockStorageComponents(None)

@@ -4173,16 +4173,32 @@ class Fetch:
         from ha import run_async
 
         storage = self.components.get_component("storage") if self.components else None
-        if not self.battery_power_curve_loaded.get(kind):
-            self.battery_power_curve_loaded[kind] = True
+        merged_on_load = [False]
+
+        def load_store(curve):
+            """
+            Read the saved curve and samples. The store only counts as loaded once a read returns data (or there is no
+            storage): a failed read and an empty store both come back as None, and treating a failed read as empty would
+            let the next save replace weeks of samples with one history window, so it is tried again before each scan.
+            """
             data = None
             if storage:
                 try:
                     data = run_async(storage.load("predbat", name))
                 except Exception as e:
                     self.log("Warn: {}: failed to load the saved curve: {}".format(name, e))
+            else:
+                self.battery_power_curve_loaded[kind] = True
             if isinstance(data, dict):
-                self.battery_power_curve_samples[kind] = clean_power_curve_samples(data.get("samples"))
+                self.battery_power_curve_loaded[kind] = True
+                stored_samples = clean_power_curve_samples(data.get("samples"))
+                current = self.battery_power_curve_samples.get(kind, {})
+                if current:
+                    # Anything scanned while the store could not be read is kept, the stored days merged under it, and saved
+                    today = datetime.strptime(charge_day(self.now_utc, 0, self.local_tz), "%Y-%m-%d").date()
+                    stored_samples = merge_daily_samples(stored_samples, current, today, BATTERY_POWER_CURVE_MAX_AGE_DAYS)
+                    merged_on_load[0] = True
+                self.battery_power_curve_samples[kind] = stored_samples
                 stored = data.get("curve")
                 if not curve and isinstance(stored, dict) and stored:
                     curve = self.validate_curve(stored, name)
@@ -4190,12 +4206,20 @@ class Fetch:
                         self.log("Restored the saved battery {} power curve".format(kind))
                         setattr(self, name, curve)
                         setattr(self, computed_name, True)
+            return curve
 
         last_scan = self.battery_power_curve_last_scan.get(kind)
+        if not self.battery_power_curve_loaded.get(kind) and last_scan is None:
+            curve = load_store(curve)
+
         interval = BATTERY_POWER_CURVE_RESCAN_MINUTES if (curve and curve != default) else BATTERY_POWER_CURVE_RETRY_MINUTES
         if last_scan is not None and (self.now_utc - last_scan) < timedelta(minutes=interval):
             return
         self.battery_power_curve_last_scan[kind] = self.now_utc
+        if not self.battery_power_curve_loaded.get(kind):
+            # Read again just before merging and saving: if storage is failing, the save that would replace the stored
+            # samples fails with it, and if the read now works the stored days are merged in rather than lost
+            curve = load_store(curve)
 
         stored_samples = self.battery_power_curve_samples.get(kind, {})
         samples = stored_samples
@@ -4213,7 +4237,7 @@ class Fetch:
                 self.log("Saved computed battery {} power curve".format(kind))
             new_curve = found
         elif discharge and curve and curve != default:
-            self.log("Battery discharge power curve: its evidence is over {} days old, no longer used".format(BATTERY_POWER_CURVE_MAX_AGE_DAYS))
+            self.log("Battery discharge power curve: the stored samples ({} days) no longer make a curve - aged past {} days, or too few days left after a re-scan - so it is no longer used".format(len(samples), BATTERY_POWER_CURVE_MAX_AGE_DAYS))
             new_curve = {}
 
         if not new_curve and default:
@@ -4222,7 +4246,7 @@ class Fetch:
                 self.log("Using default battery {} power curve".format(kind))
             new_curve = default
         saved_curve = {} if new_curve == default and not found else new_curve
-        if storage and (samples != stored_samples or new_curve != curve):
+        if storage and (samples != stored_samples or new_curve != curve or merged_on_load[0]):
             try:
                 payload = {"curve": {str(soc): value for soc, value in saved_curve.items()}, "samples": {day: {str(point): entry for point, entry in day_points.items()} for day, day_points in samples.items()}}
                 if not run_async(storage.save("predbat", name, payload, format="json")):
@@ -4251,19 +4275,37 @@ class Fetch:
         storage = self.components.get_component("storage") if self.components else None
         today = self.now_utc.date()
 
-        if not self.battery_temperature_samples_loaded:
-            self.battery_temperature_samples_loaded = True
+        def load_store():
+            """
+            Read the saved samples. As for the power curves, the store only counts as loaded once a read returns data
+            (or there is no storage), so a failed read is tried again before the next scan rather than letting the next
+            save replace a year of samples with one history window.
+            """
+            data = None
             if storage:
                 try:
                     data = run_async(storage.load("predbat", "battery_temperature_curve"))
                 except Exception as e:
                     self.log("Warn: battery_temperature_charge_curve_auto: failed to load the learned samples: {}".format(e))
-                    data = None
-                self.battery_temperature_samples = clean_battery_temperature_samples(data.get("samples") if isinstance(data, dict) else None)
+            else:
+                self.battery_temperature_samples_loaded = True
+            if isinstance(data, dict):
+                self.battery_temperature_samples_loaded = True
+                stored = clean_battery_temperature_samples(data.get("samples"))
+                # Days scanned while the store could not be read are kept, the stored days merged under them (and saved
+                # with the next scan's merge)
+                self.battery_temperature_samples = merge_battery_temperature_samples(stored, self.battery_temperature_samples, today) if self.battery_temperature_samples else stored
             self.battery_temperature_curve_learned, self.battery_temperature_curve_minutes = learn_battery_temperature_curve(self.battery_temperature_samples, today)
 
-        if self.battery_temperature_curve_last_scan is None or (self.now_utc - self.battery_temperature_curve_last_scan) >= timedelta(minutes=BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES):
+        scan_due = self.battery_temperature_curve_last_scan is None or (self.now_utc - self.battery_temperature_curve_last_scan) >= timedelta(minutes=BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES)
+        if not self.battery_temperature_samples_loaded and self.battery_temperature_curve_last_scan is None:
+            load_store()
+
+        if scan_due:
             self.battery_temperature_curve_last_scan = self.now_utc
+            if not self.battery_temperature_samples_loaded:
+                # Read again just before merging and saving, as for the power curves
+                load_store()
             scanned = inverter.find_battery_temperature_samples()
             if scanned is not None:
                 merged = merge_battery_temperature_samples(self.battery_temperature_samples, scanned, today, covered_from_day=getattr(inverter, "curve_scan_coverage", {}).get("temperature"))
@@ -4964,6 +5006,10 @@ class Fetch:
         # Kept apart from battery_temperature_charge_curve, which holds the overlay once auto has run and is only reset here,
         # while fetch_inverter_data() (and so the overlay) runs several times a cycle
         self.battery_temperature_charge_curve_configured = dict(self.battery_temperature_charge_curve)
+        if self.battery_temperature_charge_curve_auto and self.battery_temperature_curve_learned:
+            # Re-apply what has been learned straight away: the tariff comparison calls this for every tariff it models,
+            # and plans without a fetch_inverter_data() in between, so the overlay would otherwise be missing from it
+            self.battery_temperature_charge_curve = overlay_battery_temperature_curve(self.battery_temperature_charge_curve_configured, self.battery_temperature_curve_learned)
 
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_min = self.get_arg("best_soc_min")

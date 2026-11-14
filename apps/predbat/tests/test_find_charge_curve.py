@@ -999,9 +999,17 @@ def test_find_charge_curve_auto_keeps_level(my_predbat):
         _scale_battery_power(my_predbat, 0.65)
         my_predbat.battery_charge_power_curve_auto = True
         curve = inv.find_charge_curve(discharge=False)
-        # The fixture's first learned point is 86%: below it auto mode claims no limit (1.0), as everywhere below the curve
-        if not curve or any(abs(value - 0.65) > 0.011 for soc, value in curve.items() if soc >= 86) or curve.get(85) != 1.0:
-            print("ERROR: auto should keep the 0.65 level the battery charged at from the first learned point up, got {}".format(curve))
+        # The fixture's first learned point is 86%; with no temperature curve in use its 0.65 carries down to 85%
+        if not curve or any(abs(value - 0.65) > 0.011 for value in curve.values()):
+            print("ERROR: auto should keep the 0.65 level the battery charged at, got {}".format(curve))
+            failed = True
+        # With a temperature curve in use, auto claims no limit below the first learned point (the temperature curve covers it)
+        saved_temperature_curve = my_predbat.battery_temperature_charge_curve
+        my_predbat.battery_temperature_charge_curve = {5: 0.1}
+        curve = inv.find_charge_curve(discharge=False)
+        my_predbat.battery_temperature_charge_curve = saved_temperature_curve
+        if not curve or curve.get(85) != 1.0 or abs(curve.get(86, 0) - 0.65) > 0.011:
+            print("ERROR: with a temperature curve, below the first learned point should be 1.0, got {}".format(curve))
             failed = True
         my_predbat.battery_rate_max_scaling = 0.65
         curve = inv.find_charge_curve(discharge=False)
@@ -1082,7 +1090,7 @@ def test_find_charge_curve_two_inverters(my_predbat):
     saved = {key: my_predbat.args.get(key) for key in ("soc_percent", "charge_rate", "discharge_rate", "battery_power", "battery_power_invert")}
     saved_inverters, saved_num = getattr(my_predbat, "inverters", []), getattr(my_predbat, "num_inverters", None)
 
-    def install(second_power_factor, second_rate):
+    def install(second_power_factor, second_rate, second_power_history=True):
         """The fixture's history for inverter 0, and the same charges for inverter 1 at a fraction of the power and the given written rate."""
         create_test_history_data(my_predbat, num_days=7)
         base_get_history = my_predbat.ha_interface.get_history
@@ -1090,6 +1098,8 @@ def test_find_charge_curve_two_inverters(my_predbat):
         def mock_get_history(entity_id, now=None, days=30):
             """Inverter 1's entities are inverter 0's history, transformed."""
             if entity_id.endswith("_2"):
+                if entity_id.startswith("sensor.battery_power") and not second_power_history:
+                    return None
                 records = [dict(record) for record in base_get_history(entity_id[:-2], now=now, days=days)[0]]
                 for record in records:
                     if entity_id.startswith("sensor.battery_power"):
@@ -1132,6 +1142,20 @@ def test_find_charge_curve_two_inverters(my_predbat):
         curve = inv0.find_charge_curve(discharge=False)
         if curve:
             print("ERROR: with inverter 1 written below its maximum no minute is full rate for the fleet, got {}".format(curve))
+            failed = True
+
+        install(0.5, 2600, second_power_history=False)
+        curve = inv0.find_charge_curve(discharge=False)
+        if not curve or any(value != 1.0 for value in curve.values()):
+            print("ERROR: with no history for inverter 1 the curve should be learned from inverter 0 alone, got {}".format(curve))
+            failed = True
+
+        install(0.5, 2600)
+        inv1.soc_max = 0
+        curve = inv0.find_charge_curve(discharge=False)
+        inv1.soc_max = 10.0
+        if not curve or any(value != 1.0 for value in curve.values()):
+            print("ERROR: an inverter with no battery should be left out of the combined battery, got {}".format(curve))
             failed = True
     finally:
         for key, value in saved.items():

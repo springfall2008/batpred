@@ -2893,11 +2893,11 @@ Setting this option to **auto** (the default when it is not set) will cause the 
 - The last curve found is saved in Predbat's cache, so it is used straight away after a restart.
 - With more than one inverter, the curve is learned from the combined battery (the SoC across all batteries, and their power added together), as that is what Predbat plans with; a minute only counts when every inverter was set to its maximum rate.
 - What each day's charges showed is saved too, for 60 days, and the curve is learned from all of it, recent days counting for more. A full-power charge once a week therefore still adds up, even though each search only looks back `days_previous` days.
-- Until a curve has been found, Predbat looks for one every hour (using `battery_charge_power_curve_default` meanwhile, if you set one).
+- Until a curve has been found, Predbat looks for one every 6 hours (using `battery_charge_power_curve_default` meanwhile, if you set one).
 - Each SoC point needs full-power charging seen on at least two different days (and at least 5 minutes of it), and the curve must reach 95% SoC, so a single charge cannot set it. Days run from noon to noon, so an overnight charge counts as one day.
 - When the saved days no longer make a curve (no full-power charge for 60 days, common with low power charging), the curve already found is kept.
 - The curve is used as learned rather than rescaled to 1.0. If your battery only ever charges at, say, 65% of its maximum rate, the curve says 0.65 where that was seen, rather than full rate until the tail-off.
-  Below the first SoC point learned the curve claims no limit; a learned `battery_temperature_charge_curve` covers the rate there.
+  If you have a `battery_temperature_charge_curve` (or `battery_temperature_charge_curve_auto`), the curve claims no limit below the first SoC point learned, as the temperature curve covers the rate there; without one, the first point's rate also applies below it.
 - Once it has a curve, Predbat looks for a newer one once a day. A search that finds no full-power charge in the history keeps the curve it already has.
 - If you use low power charging mode, your history may contain few full power charges. The saved curve then stays in use, but it is only updated when one is seen, so you may still prefer to configure the charge curve manually in `apps.yaml`.
 - If you have a `battery_temperature_charge_curve` (or `battery_temperature_charge_curve_auto`), minutes where the battery was charging at the rate that curve allows for its temperature are left out,
@@ -2954,7 +2954,7 @@ The same fix applies to the discharge curve. There the old offset was SoC x (1 -
 
 Unlike the charge curve, the discharge curve is not calculated automatically by default.
 Setting this option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
-As with the charge curve, the curve and what each day's exports showed are saved for 60 days, looked for every hour until a curve is found and then re-checked once a day.
+As with the charge curve, the curve and what each day's exports showed are saved for 60 days, looked for every 6 hours until a curve is found and then re-checked once a day.
 Unlike the charge curve, once the last full-power discharge behind it is over 60 days old the discharge curve stops being used, as deep discharges at full power are rare and one unusual export should not set it for good.
 Each SoC point needs full-power discharging seen on at least two different days, and the curve must reach 10% SoC, and the curve is used as learned rather than rescaled to 1.0.
 Discharges that `battery_temperature_discharge_curve` says were limited by a cold battery are left out.
