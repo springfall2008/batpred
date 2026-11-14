@@ -661,6 +661,39 @@ def test_replay_keep_user_setting():
     return 0
 
 
+def test_replay_keep_single_value_whole_key():
+    """
+    A kept setting apps.yaml gives as one value (3000, 0) is the user's for the whole key: on two discovered slots nothing is
+    written to it on any pass and live args keep it as they are, as set_arg_auto(overwrite=False) kept the whole value. None in
+    apps.yaml does not count, and a list keeps the per-slot rule.
+    """
+    records = [_rec(serial, {"export_limit": _ro("sensor.{}_export_limit".format(serial)), "charge_rate": _rw("number.{}_charge".format(serial))}) for serial in ("a11111", "b22222")]
+    for value in (3000, 0):
+        apps = {"export_limit": value}
+        results, args = _passes(apps, [_src(records, keep_user_settings={"export_limit"})])
+        for _, warnings, written in results:
+            assert "export_limit" not in [setting for setting, _ in written], (value, written)
+        assert args["export_limit"] == value and type(args["export_limit"]) is type(value), (value, args)
+        assert results[1][2] == [] and results[2][2] == [], (value, results)  # idempotent
+        assert args["charge_rate"] == ["number.a11111_charge", "number.b22222_charge"], args
+        assert "export_limit" not in desired_args(results[-1][0], apps, args), value
+    # None in apps.yaml is no value of the user's: the slots are bound from the records
+    apps = {"export_limit": None}
+    _, args = _passes(apps, [_src(records, keep_user_settings={"export_limit"})], args={})
+    assert args["export_limit"] == ["sensor.a11111_export_limit", "sensor.b22222_export_limit"], args
+    # A list is per slot: kept where it has an entry, bound where it has none
+    apps = {"export_limit": [2000]}
+    results, args = _passes(apps, [_src(records, keep_user_settings={"export_limit"})])
+    assert args["export_limit"] == [2000, "sensor.b22222_export_limit"], args
+    assert results[1][2] == [] and results[2][2] == [], results
+    # Not kept at all, a single value is replaced as any other binding
+    apps = {"export_limit": 3000}
+    _, args = _passes(apps, [_src(records)])
+    assert args["export_limit"] == ["sensor.a11111_export_limit", "sensor.b22222_export_limit"], args
+    print("PASS: a single kept value owns the whole key")
+    return 0
+
+
 def test_replay_skip_keep_keep_live():
     """A skipped or kept non-summed setting keeps whatever live args hold, even when that differs from apps.yaml; a summed one still takes the apps.yaml entry."""
     apps = {"soc_percent": ["re:sensor.givtcp_(.+)_soc"], "inverter_mode": ["select.user_mode"], "load_today": ["sensor.user_load_today"]}
@@ -932,6 +965,7 @@ def test_bindings_all(my_predbat=None):
     failures += test_replay_tuning_untouched()
     failures += test_replay_skip_setting()
     failures += test_replay_keep_user_setting()
+    failures += test_replay_keep_single_value_whole_key()
     failures += test_replay_skip_keep_keep_live()
     failures += test_replay_scalar_becomes_list()
     failures += test_replay_value_binding()

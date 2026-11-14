@@ -2234,8 +2234,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             inverter_type = slot_value(legacy_types, index) if index is not None else None
             if setting in GE_CLOUD_DUMMIED_SETTINGS.get(inverter_type, ()):
                 reason = "inverter.py replaces it with a dummy for {}, so the discovery record leaves it out".format(inverter_type)
-            elif setting in GE_CLOUD_KEEP_USER_SETTINGS and slot is not None and slot_value(self.apps_yaml_value(setting), slot) is not None:
-                # Kept only where apps.yaml gives the slot a value, as the coordinator keeps it; with none there it is a real finding
+            elif setting in GE_CLOUD_KEEP_USER_SETTINGS and slot is not None and self._user_keeps(setting, slot):
+                # Kept where apps.yaml gives the slot a value, or gives the setting one single value for every slot, as the
+                # coordinator keeps it; with none there it is a real finding
                 reason = "the user's apps.yaml value for the slot is kept"
             else:
                 reason = GE_CLOUD_KNOWN_DIFFERENCES.get(setting)
@@ -2276,6 +2277,13 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         if not warnings:
             self.log("Info: GECloud: discovery configuration matches the previous automatic configuration{}".format(" apart from {} known difference(s)".format(len(known)) if known else ""))
         return warnings
+
+    def _user_keeps(self, setting, slot):
+        """Whether the user's apps.yaml value of a kept setting holds at this slot: a single value (not a list) holds for every slot, a list only where its entry is set."""
+        value = self.apps_yaml_value(setting)
+        if value is not None and not isinstance(value, (list, tuple)):
+            return True
+        return slot_value(value, slot) is not None
 
     def _register_features(self, device):
         """

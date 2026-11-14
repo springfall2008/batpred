@@ -6793,15 +6793,14 @@ def _test_automatic_config_golden(my_predbat):
             if outcome[part] != expected[part]:
                 print("ERROR: layout {} {} differs:\n  got      {}\n  expected {}".format(name, part, outcome[part], expected[part]))
                 failed = 1
-        # The golden "keeping your apps.yaml setting" notes are logged as they were once the coordinator keeps the value
+        # The golden "keeping your apps.yaml setting" notes, none included, are logged as they were once the coordinator keeps the value
         notes = [line for line in AUTOMATIC_CONFIG_GOLDEN[name]["logs"] if line.startswith(KEPT_NOTE_PREFIX)]
-        if notes:
-            ge, _ = _switch_on_component(layout)
-            run_async(ge.async_automatic_config(ge.devices_dict))
-            logged = [line for line in ge.log_messages if line.startswith(KEPT_NOTE_PREFIX)]
-            if logged != notes:
-                print("ERROR: layout {} with a coordinator logged kept notes {}, expected {}".format(name, logged, notes))
-                failed = 1
+        ge, _ = _switch_on_component(layout)
+        run_async(ge.async_automatic_config(ge.devices_dict))
+        logged = [line for line in ge.log_messages if line.startswith(KEPT_NOTE_PREFIX)]
+        if logged != notes:
+            print("ERROR: layout {} with a coordinator logged kept notes {}, expected {}".format(name, logged, notes))
+            failed = 1
     if not failed:
         print("PASS: the automatic configuration is unchanged for {} layouts".format(len(layouts)))
     return failed
@@ -8173,6 +8172,17 @@ def _test_checker_kept_and_skipped_are_info(my_predbat):
     assert ge.check_automatic_config([0, 1]) == [], ge.log_messages
     for setting in ("inverter_mode", "export_limit"):
         assert any(line.startswith("Info: GECloud: discovery differs on {} (".format(setting)) for line in ge.log_messages), ge.log_messages
+    assert not _checker_lines(ge, "Warn"), ge.log_messages
+
+    # A single apps.yaml value is kept for every inverter, so slot 1 differing is Info too, not a warning
+    ge = _layout_component(_automatic_config_layouts()["site_export_limit"])
+    _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict))
+    ge.base.args_from_apps_yaml = {"inverter_mode": "switch.my_inverter_mode", "export_limit": 3000}
+    ge.config_args["inverter_mode"] = "switch.my_inverter_mode"
+    ge.config_args["export_limit"] = 3000
+    assert ge.check_automatic_config([0, 1]) == [], ge.log_messages
+    for where in ("inverter_mode[1]", "export_limit[1]"):
+        assert any(line.startswith("Info: GECloud: discovery differs on ") and ": {} is None".format(where) in line for line in ge.log_messages), (where, ge.log_messages)
     assert not _checker_lines(ge, "Warn"), ge.log_messages
 
     # The same differences with no apps.yaml value at the slot are real findings: a Warn line each, returned
@@ -10702,6 +10712,9 @@ def _test_site_export_limit(my_predbat):
         for override in [3000, 0, [2000, 3000]]:
             ge = await configure(make_ge([42, 42], enabled, override=override), coordinator=True)
             assert ge.legacy["export_limit"] == override, (override, ge.legacy["export_limit"])
+            # The coordinator keeps the user's whole value, a single one included, for every inverter
+            assert ge.config_args["export_limit"] == override, (override, ge.config_args["export_limit"])
+            assert not [line for line in ge.log_messages if line.startswith("Warn: GECloud: discovery")], (override, ge.log_messages)
             assert published(ge, "bat0") == 4000
             assert any("keeping your apps.yaml setting" in message for message in ge.log_messages), override
 

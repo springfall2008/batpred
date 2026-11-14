@@ -708,7 +708,17 @@ def _entity(domain, device, suffix):
     return "{}.predbat_gecloud_{}_{}".format(domain, device, suffix)
 
 
-def _automatic_run(devices, settings, info, start):
+def _install(ge, devices, settings, info, site):
+    """Give ge the discovered install: devices, settings, info and, when site is (limit_w, inverters), the site's export limit."""
+    ge.devices_dict = copy.deepcopy(devices)
+    ge.settings = copy.deepcopy(settings)
+    ge.info = copy.deepcopy(info or {})
+    if site is not None:
+        ge.site_id = "site001"
+        ge.site_export_limit, ge.site_inverters = site[0], list(site[1])
+
+
+def _automatic_run(devices, settings, info, start, site=None):
     """
     One GE Cloud automatic configuration through a real Coordinator from args `start` (also the apps.yaml snapshot).
 
@@ -718,9 +728,7 @@ def _automatic_run(devices, settings, info, start):
     """
     base = _Base(args=start, apps_yaml=start)
     ge = _AutoGECloud(base)
-    ge.devices_dict = copy.deepcopy(devices)
-    ge.settings = copy.deepcopy(settings)
-    ge.info = copy.deepcopy(info or {})
+    _install(ge, devices, settings, info, site)
     _Components(base, {"gecloud": ge})
     run_async(ge.async_automatic_config(ge.devices_dict))
     ge.refresh_discovery()
@@ -746,20 +754,18 @@ def run_new(devices, settings, info=None, config=None, apps_yaml=None):
     return base.args, list(base.log_messages)
 
 
-def _legacy_run(devices, settings, info, start):
+def _legacy_run(devices, settings, info, start, site=None):
     """The previous automatic configuration from args `start` (also the apps.yaml snapshot): _legacy_bindings() applied to a copy of start by the rules it was written with."""
     ge = _AutoGECloud(_Base(args=start, apps_yaml=start))
-    ge.devices_dict = copy.deepcopy(devices)
-    ge.settings = copy.deepcopy(settings)
-    ge.info = copy.deepcopy(info or {})
+    _install(ge, devices, settings, info, site)
     return apply_legacy_bindings(ge._legacy_bindings(ge.devices_dict), start, start)
 
 
-def run_old_and_new(devices, settings, info=None, config=None, apps_yaml=None) -> tuple[dict, dict, list[str]]:
-    """GE Cloud's configuration twice from the same starting args - the previous automatic configuration, then the real one through a Coordinator - as (old_args, new_args, new_run_log)."""
+def run_old_and_new(devices, settings, info=None, config=None, apps_yaml=None, site=None) -> tuple[dict, dict, list[str]]:
+    """GE Cloud's configuration twice from the same starting args - the previous automatic configuration, then the real one through a Coordinator - as (old_args, new_args, new_run_log); site is (limit_w, inverters) or None."""
     start = _starting_args(config, apps_yaml)
-    old_args = _legacy_run(devices, settings, info, copy.deepcopy(start))
-    _, new_base = _automatic_run(devices, settings, info, copy.deepcopy(start))
+    old_args = _legacy_run(devices, settings, info, copy.deepcopy(start), site=site)
+    _, new_base = _automatic_run(devices, settings, info, copy.deepcopy(start), site=site)
     return old_args, new_base.args, list(new_base.log_messages)
 
 
@@ -989,6 +995,24 @@ def test_accept_opt_outs():
     return 0
 
 
+def test_accept_single_kept_values_two_batteries():
+    """
+    A single apps.yaml value for a kept setting on two batteries is kept whole, for both inverters, exactly as the previous
+    configuration kept it: export_limit 0 with and without a site limit, 3000 with one, and one inverter_mode switch.
+    """
+    site = (8000, ["battery001", "battery002"])
+    for apps_yaml, site_limit in (({"export_limit": 0}, site), ({"export_limit": 0}, None), ({"export_limit": 3000}, site), ({"inverter_mode": "switch.mine"}, None)):
+        old, new, log = run_old_and_new(*_two_batteries(([1001], [1002])), apps_yaml=apps_yaml, site=site_limit)
+        _assert_accepted(old, new, log)
+        for setting, value in apps_yaml.items():
+            assert old[setting] == value and new[setting] == value, (apps_yaml, site_limit, old.get(setting), new.get(setting))
+        assert not [line for line in log if line.startswith("Warn: GECloud")], (apps_yaml, site_limit, log)
+        if site_limit is not None:
+            assert "keeping your apps.yaml setting" in " ".join(log), (apps_yaml, log)
+    print("PASS: accept single kept values on two batteries")
+    return 0
+
+
 def test_accept_manual_plus_discovered():
     """A manual inverter of another type keeps slot 0 unchanged; the GE Cloud inverter lands in slot 1, bound as in the single run."""
     apps_yaml = {"num_inverters": 1, "inverter_type": ["SolisCloud"], "charge_rate": ["number.solis_charge"], "soc_percent": ["sensor.solis_soc"]}
@@ -1198,6 +1222,7 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_accept_gateway()
     failures += test_accept_ems()
     failures += test_accept_opt_outs()
+    failures += test_accept_single_kept_values_two_batteries()
     failures += test_accept_manual_plus_discovered()
     failures += test_accept_template_takeover()
     failures += test_accept_template_gateway()

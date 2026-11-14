@@ -404,7 +404,7 @@ def _discovered_value(entry, setting, apps_yaml, args):
     """A discovered slot's entry for one binding setting.
 
     A skipped setting, or a kept one the snapshot gives a value at this slot (a re: pattern counts), is not
-    touched: a slot-indexed one keeps the live args entry, which may be a resolved pattern or another writer's
+    touched (a kept one the snapshot gives as a single value is not decided at all - see desired_args()): a slot-indexed one keeps the live args entry, which may be a resolved pattern or another writer's
     value. A summed one takes the snapshot's entry, since replay rewrites those lists and a live index stops
     meaning a slot. Otherwise it is the bound entity id or value, None when unbound - except pv_power, which is a fixed 0.
     """
@@ -435,14 +435,22 @@ def desired_args(bindings: dict, apps_yaml: dict, args: dict) -> dict:
     settings the bindings carry. Slot-indexed settings are lists as long as the slot count; COMPACT_SETTINGS
     are the slots' entries in slot order with None left out, then site extras; pv_power is slot-indexed, then
     its extras. A list whose every entry is None is None. With no discovered slot nothing is decided: {}.
+
+    A kept setting (a discovered slot's keep_user_settings) that the snapshot gives as a single value - not a
+    list, and not None or absent; 0 and False count - is the user's for the whole key: nothing is decided for
+    it, so args keep it exactly as they hold it, for every slot, manual or discovered. That is what
+    set_arg_auto(..., overwrite=False) did: it kept the user's whole value, never only its first entry. A list
+    value is per slot, as _discovered_value() describes.
     """
     entries = (bindings or {}).get("inverters", [])
     if not any(entry.get("origin") == "discovered" for entry in entries):
         return {}
     site = bindings.get("site") or {}
     extras = site.get("extras") or {}
+    kept = {setting for entry in entries if entry.get("origin") == "discovered" for setting in entry.get("keep_user_settings", ())}
+    user_owned = {setting for setting in kept if apps_yaml.get(setting) is not None and not isinstance(apps_yaml.get(setting), (list, tuple))}
     desired = {"num_inverters": len(entries)}
-    for setting in sorted(BINDING_SETTINGS | {"inverter_type"}):
+    for setting in sorted((BINDING_SETTINGS | {"inverter_type"}) - user_owned):
         values = [_slot_entry(entry, setting, apps_yaml, args) for entry in entries]
         if setting in COMPACT_SETTINGS:
             values = [value for value in values if value is not None]
