@@ -15,7 +15,7 @@ import asyncio
 import inspect
 import re
 
-from bindings import BINDING_SETTINGS, SITE_SETTINGS
+from bindings import BINDING_SETTINGS, INVERT_SETTINGS, SITE_SETTINGS
 from config import INVERTER_DEF
 from coordinator import PRESENCE_FLAGS, inverter_definition, validate_report
 
@@ -50,9 +50,6 @@ SETTINGS_OUTSIDE_THE_RECORD = frozenset(
         "car_charging_power",
     }
 )
-
-# A *_invert setting describes the sign of the entity it names
-INVERT_SETTINGS = {"grid_power_invert": "grid_power", "battery_power_invert": "battery_power", "load_power_invert": "load_power"}
 
 # User tuning that TESLA, SIGCLOUD, SolisCloud and SunsynkCloud records bind but BINDING_SETTINGS leaves out. The
 # coordinator never clears these; whether it writes them when a record binds them is decided when one of those

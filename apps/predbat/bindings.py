@@ -434,6 +434,19 @@ def _descriptor_value(descriptor):
     return descriptor["entity_id"] if "entity_id" in descriptor else descriptor.get("value")
 
 
+def _live_invert(args, setting, slot):
+    """The live args entry of an INVERT_SETTINGS member at slot: a scalar (not None) is every inverter's, as get_arg reads a boolean flag; a list is per slot."""
+    value = args.get(setting)
+    if value is not None and not isinstance(value, (list, tuple)):
+        return value
+    return slot_value(value, slot)
+
+
+def _user_owns_slot(entry, setting, apps_yaml):
+    """Whether a discovered slot leaves setting to the user: skipped, or kept and the snapshot gives the slot a value."""
+    return setting in entry.get("skip_settings", ()) or (setting in entry.get("keep_user_settings", ()) and slot_value(apps_yaml.get(setting), entry["slot"]) is not None)
+
+
 def _discovered_value(entry, setting, apps_yaml, args):
     """A discovered slot's entry for one binding setting.
 
@@ -442,11 +455,13 @@ def _discovered_value(entry, setting, apps_yaml, args):
     value. A summed one takes the snapshot's entry, since replay rewrites those lists and a live index stops
     meaning a slot. Otherwise it is the bound entity id or value, None when unbound - except pv_power, which is a fixed 0,
     and an INVERT_SETTINGS member, which is whether the descriptor of the setting it describes is marked invert (False when
-    that setting is unbound or carries no invert).
+    that setting is unbound or carries no invert). An invert follows the setting it describes: where that one is skipped or
+    kept at this slot the live entity is the user's, so the invert keeps its live entry (_live_invert) too.
     """
-    snapshot = slot_value(apps_yaml.get(setting), entry["slot"])
-    if setting in entry.get("skip_settings", ()) or (setting in entry.get("keep_user_settings", ()) and snapshot is not None):
-        return snapshot if setting in SUMMED_SETTINGS else slot_value(args.get(setting), entry["slot"])
+    if setting in INVERT_SETTINGS and (_user_owns_slot(entry, setting, apps_yaml) or _user_owns_slot(entry, INVERT_SETTINGS[setting], apps_yaml)):
+        return _live_invert(args, setting, entry["slot"])
+    if _user_owns_slot(entry, setting, apps_yaml):
+        return slot_value(apps_yaml.get(setting), entry["slot"]) if setting in SUMMED_SETTINGS else slot_value(args.get(setting), entry["slot"])
     if setting in INVERT_SETTINGS:
         descriptor = entry["settings"].get(INVERT_SETTINGS[setting])
         return bool(descriptor.get("invert", False)) if isinstance(descriptor, dict) else False
@@ -458,11 +473,14 @@ def _slot_entry(entry, setting, apps_yaml, args):
     """One slot's entry for inverter_type or a binding setting, before compacting and extras.
 
     A manual slot keeps the live args entry, except for the summed settings, which come from its own
-    settings (taken from the snapshot by build_bindings). A free slot has its inverter_type and nothing else.
+    settings (taken from the snapshot by build_bindings), and an INVERT_SETTINGS member given as a scalar, which
+    is every inverter's flag and so is the entry at every manual slot. A free slot has its inverter_type and nothing else.
     """
     if entry["origin"] == "discovered":
         return entry["inverter_type"] if setting == "inverter_type" else _discovered_value(entry, setting, apps_yaml, args)
     if entry["origin"] == "manual":
+        if setting in INVERT_SETTINGS:
+            return _live_invert(args, setting, entry["slot"])
         return _descriptor_value(entry["settings"].get(setting)) if setting in SUMMED_SETTINGS else slot_value(args.get(setting), entry["slot"])
     return entry["inverter_type"] if setting == "inverter_type" else None
 

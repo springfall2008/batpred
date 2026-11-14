@@ -1086,7 +1086,7 @@ def test_replay_invert_from_descriptor():
 
 
 def test_replay_invert_defaults_false():
-    """No descriptor marked invert, and none of the three entities bound at all: all three invert settings are written False at the slot."""
+    """No descriptor marked invert - grid_power bound without one, battery_power and load_power not bound at all: all three invert settings are written False at the slot."""
     b, args = _bind({}, [_rec("a11111", {"charge_rate": _rw("number.a_rate"), "grid_power": _ro("sensor.a_grid_power")})])
     written = _apply(b, {}, args)
     assert ("battery_power_invert", 0) in written and ("grid_power_invert", 0) in written and ("load_power_invert", 0) in written, written
@@ -1111,6 +1111,47 @@ def test_replay_invert_leaves_manual_slot():
     assert args["battery_power_invert"] == [False, True, False], args["battery_power_invert"]
     assert args["load_power_invert"] == [False, None, False], args["load_power_invert"]
     print("PASS: replay leaves a manual slot's invert entries alone")
+    return 0
+
+
+def test_replay_invert_manual_scalar():
+    """A scalar live invert value means every inverter: each manual slot keeps it, whatever its index, and a discovered slot takes its record's."""
+    record = _rec("a11111", {"battery_power": _ro("sensor.a_battery_power")})
+    apps = _manual_apps("number.m0_charge_rate", "number.m1_charge_rate")
+    apps["battery_power_invert"] = True
+    b, args = _bind(apps, [record])
+    assert _layout(b) == [("manual", None, 0), ("manual", None, 1), ("discovered", "gecloud:a11111", 2)], _layout(b)
+    _apply(b, apps, args)
+    assert args["battery_power_invert"] == [True, True, False], args["battery_power_invert"]
+    assert _apply(b, apps, args) == [], args
+
+    apps = _manual_apps("number.m0_charge_rate")
+    apps["battery_power_invert"] = True
+    b, args = _bind(apps, [record])
+    _apply(b, apps, args)
+    assert args["battery_power_invert"] == [True, False], args["battery_power_invert"]
+    print("PASS: a scalar invert value is kept at every manual slot")
+    return 0
+
+
+def test_replay_invert_follows_skipped_partner():
+    """With grid_power skipped, or kept where apps.yaml gives the slot one, the live entity is the user's: grid_power_invert keeps its live entry, not the record's invert."""
+    record = _rec("a11111", {"grid_power": {"entity_id": "sensor.a_grid_power", "access": "r", "invert": True}, "battery_power": {"entity_id": "sensor.a_battery_power", "access": "r", "invert": True}})
+    apps = {"grid_power": ["sensor.user_grid_power"]}
+    for options in ({"skip_settings": {"grid_power"}}, {"keep_user_settings": {"grid_power"}}):
+        for live, expected in ((None, None), ([False], [False]), (False, [False])):
+            args = copy.deepcopy(apps)
+            if live is not None:
+                args["grid_power_invert"] = live
+            b, args = _bind(apps, [record], args=args, **options)
+            _apply(b, apps, args)
+            assert args.get("grid_power_invert") == expected and args["grid_power"] == ["sensor.user_grid_power"], (options, live, args)
+            assert args["battery_power_invert"] == [True], (options, args)  # its partner is not skipped: the record's invert
+    # Kept but apps.yaml gives the slot no grid_power: the record's entity is bound, so its invert is too
+    b, args = _bind({}, [record], keep_user_settings={"grid_power"})
+    _apply(b, {}, args)
+    assert args["grid_power"] == ["sensor.a_grid_power"] and args["grid_power_invert"] == [True], args
+    print("PASS: invert follows a skipped or kept partner")
     return 0
 
 
@@ -1212,6 +1253,8 @@ def test_bindings_all(my_predbat=None):
     failures += test_replay_invert_from_descriptor()
     failures += test_replay_invert_defaults_false()
     failures += test_replay_invert_leaves_manual_slot()
+    failures += test_replay_invert_manual_scalar()
+    failures += test_replay_invert_follows_skipped_partner()
     failures += test_replay_invert_idempotent()
     failures += test_invert_not_scanned_for_serials()
     return failures

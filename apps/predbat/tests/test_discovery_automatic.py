@@ -1201,6 +1201,10 @@ def test_accept_single():
     # GE Cloud marks nothing inverted, so discovery writes an explicit False per slot where the old configuration left the keys unset
     for setting in INVERT_SETTINGS:
         assert new.get(setting) == [False] and old.get(setting) is None, (setting, old.get(setting), new.get(setting))
+    # Only unset against all-False is equal: a True, or a mixed list, against unset is still a difference
+    assert compare_configuration(old, dict(new, grid_power_invert=[True])) == ["grid_power_invert: old None new [True]"]
+    assert compare_configuration(dict(old, load_power_invert=[False, True]), new) == ["load_power_invert: old [False, True] new [False]"]
+    assert compare_configuration(old, dict(new, battery_power_invert=[None, True])) == ["battery_power_invert: old None new [None, True]"]
     print("PASS: accept single")
     return 0
 
