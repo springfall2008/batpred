@@ -3016,16 +3016,26 @@ class GatewayMQTT(ComponentBase):
 
         Enabling read-only is held back while the switch's handover reset is still pending (see
         _hold_read_only_for_reset), because the Hub rejects writes once it is read-only and the
-        reset's safe-state writes would never land. Disabling is never held back.
+        reset's safe-state writes would never land. Disabling is never held back. If a new handover
+        reset is pending while the Hub is already read-only (the switch went off and on between two
+        cycles, so no change was seen), read-only is first disabled to reopen the Hub, then held.
         """
         if not self._mqtt_connected:
             # Force a re-send after reconnect (command is not retained).
             self._last_read_only = None
             return
         read_only = bool(self.get_arg("set_read_only", False))
-        if not read_only:
+        reset_pending = getattr(self.base, "inverter_needs_reset_force", "") == "set_read_only"
+        if not read_only or not reset_pending:
             self._read_only_held_since = None
         now = self.monotonic()
+        if read_only and reset_pending and self._last_read_only and self._read_only_held_since is None:
+            # The switch went off and on again between two cycles, so the Hub is still read-only from the
+            # earlier enable and would reject the new handover reset's writes: reopen it, then hold as usual.
+            await self.publish_command("set_read_only", enable=False)
+            self._last_read_only = False
+            self._last_read_only_sent_time = now
+            self.log("Info: GatewayMQTT: set_read_only command sent (read_only=False) so the inverter can be reset to a safe state")
         changed = read_only != self._last_read_only
         stale = not self._last_read_only_sent_time or now - self._last_read_only_sent_time >= 30 * 60
         if not changed and not stale:
