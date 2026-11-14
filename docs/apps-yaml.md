@@ -135,8 +135,8 @@ note the list items appear on separate lines beneath the configuration item name
   compare_list:
     - id: 'igo_fixed'
       name: 'Intelligent GO import/Fixed export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
 ```
 
 the configuration item **dno_region** is firstly set to `A` and then that region name is expanded in the configuration of the Octopus URL's.

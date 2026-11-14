@@ -225,7 +225,7 @@ def test_annual_store(my_predbat):
             },
         }
     }
-    config = {"tariff": {"import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/x/"}}
+    config = {"tariff": {"import_octopus_url": "https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/x/"}}
     summary = build_summary(results, config)
     if summary["total_kwp"] != 5.6 or summary["battery_kwh"] != 9.5:
         print("  ERROR: the summary should carry the system size, got {}".format(summary))
@@ -272,7 +272,7 @@ def test_annual_store(my_predbat):
     # catalogue, which includes the user's own compare_list entries, and only the web
     # layer can read those. A name baked in here could not see them.
     tariffs = {
-        "tariff": {"import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/x/", "rates_export": [{"rate": 0.0}]},
+        "tariff": {"import_octopus_url": "https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/x/", "rates_export": [{"rate": 0.0}]},
         "baseline_tariff": {"rates_import": [{"rate": 26.11}]},
     }
     with_tariffs = build_summary(results, tariffs)

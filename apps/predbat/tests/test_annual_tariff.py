@@ -165,7 +165,8 @@ def test_annual_tariff(my_predbat):
 
     print("Test: an Octopus URL tariff resolves rates for a specific date, following pagination")
     page_two = {"results": build_agile_results(date(2025, 3, 16), 16, 20.0), "next": None}
-    page_one = {"results": build_agile_results(date(2025, 3, 1), 15, 20.0), "next": "https://example.com/page2"}
+    # The new Octopus host still links further pages on the old one, which must be fetched from the new host (GH#5786)
+    page_one = {"results": build_agile_results(date(2025, 3, 1), 15, 20.0), "next": "https://api.octopus.energy/page2"}
 
     calls = []
 
@@ -185,6 +186,9 @@ def test_annual_tariff(my_predbat):
         failed = True
     if len(calls) != 4:
         print("  ERROR: expected 4 requests (2 pages x import and export), got {}".format(len(calls)))
+        failed = True
+    if [url for url in calls if "page2" in url] != ["https://api.oegb-kraken.energy/page2"] * 2:
+        print("  ERROR: page 2 linked on the old Octopus host should be fetched from the new one, got {}".format(calls))
         failed = True
 
     print("Test: rates_for returns a 48 hour window keyed by absolute minute, for both import and export")
