@@ -504,6 +504,108 @@ def test_sigenergy_battery_charge_discharge_split(my_predbat):
     return failed
 
 
+def test_sigenergy_inverter_reported_ceiling(my_predbat):
+    """The plant's MQTT-reported feed-in/absorption ceilings raise the inverter cap above the device list's
+    nameplate (#5784: an EC 6.0 SP rated 6.0 kW reports and delivers 6.6 kW), per direction, and never lower it."""
+    failed = False
+
+    def make_api(devices):
+        """An API with one system whose device list is devices."""
+        api = MockSigenergyAPI()
+        api.systems["sys1"] = {"systemName": "Home", "batteryCapacity": 16.0}
+        api.devices["sys1"] = devices
+        api.energy_flow["sys1"] = {"batterySoc": 50.0}
+        return api
+
+    plant = [
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 4.2, "ratedDischargePower": 4.8}},
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 4.2, "ratedDischargePower": 4.8}},
+        {"deviceType": "Inverter", "attrMap": {"ratedActivePower": 6.0}},
+    ]
+
+    # Before any period message the nameplate caps everything
+    api = make_api(plant)
+    if api._get_inverter_max_power_kw("sys1") != 6.0 or api._get_battery_max_power_kw("sys1", "discharge") != 6.0:
+        print("ERROR: before MQTT the 6.0 kW nameplate should cap, got inverter {} battery {}".format(api._get_inverter_max_power_kw("sys1"), api._get_battery_max_power_kw("sys1", "discharge")))
+        failed = True
+
+    # The period message reports 6.6 kW both ways: every cap derived from the inverter follows it
+    api._handle_mqtt_period("sys1", {"inverterMaxFeedInActivePowerW": "6600.0", "inverterMaxAbsorptionActivePowerW": "6600.0"})
+    for direction in (None, "charge", "discharge"):
+        got = api._get_inverter_max_power_kw("sys1", direction)
+        if abs(got - 6.6) > 1e-9:
+            print("ERROR: inverter ceiling {} should be the reported 6.6 kW, got {}".format(direction, got))
+            failed = True
+        got = api._get_battery_max_power_kw("sys1", direction)
+        if abs(got - 6.6) > 1e-9:
+            print("ERROR: battery ceiling {} should be capped at the reported 6.6 kW, got {}".format(direction, got))
+            failed = True
+    run_async(api.publish_system_entities("sys1"))
+    slug = api._system_slug("sys1")
+    for leaf in ("inverter_limit", "battery_rate_max", "battery_charge_rate_max", "battery_discharge_rate_max"):
+        state = api.dashboard_items.get("sensor.predbat_sigenergy_{}_{}".format(slug, leaf), {}).get("state")
+        if state != 6600:
+            print("ERROR: sensor {} should be 6600, got {}".format(leaf, state))
+            failed = True
+    if api._control_info("sys1", "export", "rate")[7] != 6600:
+        print("ERROR: export rate control max should be 6600, got {}".format(api._control_info("sys1", "export", "rate")[7]))
+        failed = True
+    if api._discovery_ratings("sys1").get("inverter_limit") != 6600.0:
+        print("ERROR: discovery inverter_limit should be 6600, got {}".format(api._discovery_ratings("sys1").get("inverter_limit")))
+        failed = True
+
+    # Each direction has its own ceiling; inverter_limit (no direction) bounds AC output, so it takes feed-in
+    api = make_api(plant)
+    api._handle_mqtt_period("sys1", {"inverterMaxFeedInActivePowerW": "6300.0", "inverterMaxAbsorptionActivePowerW": "6600.0"})
+    for direction, expected in ((None, 6.3), ("charge", 6.6), ("discharge", 6.3)):
+        got = api._get_inverter_max_power_kw("sys1", direction)
+        if abs(got - expected) > 1e-9:
+            print("ERROR: inverter ceiling {} should be {}, got {}".format(direction, expected, got))
+            failed = True
+
+    # A later period message without the ceilings (the broker sends only changed fields) keeps them
+    api._handle_mqtt_period("sys1", {"PV power": "1.2"})
+    if abs(api._get_inverter_max_power_kw("sys1", "discharge") - 6.3) > 1e-9:
+        print("ERROR: a period message without the ceilings should keep them, got {}".format(api._get_inverter_max_power_kw("sys1", "discharge")))
+        failed = True
+
+    # A ceiling merged from a message too stale to process is picked up by the next one processed
+    api = make_api(plant)
+    api.mqtt_period_raw["sys1"] = {"inverterMaxFeedInActivePowerW": "6600.0", "inverterMaxAbsorptionActivePowerW": "6600.0"}
+    api._handle_mqtt_period("sys1", {"PV power": "1.2"})
+    if abs(api._get_inverter_max_power_kw("sys1") - 6.6) > 1e-9:
+        print("ERROR: a ceiling already in the merged period state should be used, got {}".format(api._get_inverter_max_power_kw("sys1")))
+        failed = True
+
+    # A malformed cached entry leaves the nameplate rather than raising
+    api = make_api(plant)
+    api.inverter_ceilings = {"sys1": 6600.0}
+    if api._get_inverter_max_power_kw("sys1") != 6.0:
+        print("ERROR: a malformed cached ceiling should leave the nameplate, got {}".format(api._get_inverter_max_power_kw("sys1")))
+        failed = True
+
+    # A reported figure below the nameplate, implausibly far above it, or one that doesn't parse or isn't
+    # finite, leaves the nameplate
+    for value in ("5000.0", "9100.0", "65535.0", "", "unknown", "inf", "nan", "-6600.0"):
+        api = make_api(plant)
+        api._handle_mqtt_period("sys1", {"inverterMaxFeedInActivePowerW": value, "inverterMaxAbsorptionActivePowerW": value})
+        got = api._get_inverter_max_power_kw("sys1")
+        if got != 6.0:
+            print("ERROR: reported {!r} should leave the 6.0 kW nameplate, got {}".format(value, got))
+            failed = True
+
+    # A system whose device list has no Inverter device has no rating to check a report against, so the
+    # reports are ignored: the inverter limit stays 0 and the battery rate stays uncapped, as before
+    for value in ("5000.0", "65535.0"):
+        api = make_api([{"deviceType": "Battery", "attrMap": {"ratedChargePower": 8.0}}])
+        api._handle_mqtt_period("sys1", {"inverterMaxFeedInActivePowerW": value, "inverterMaxAbsorptionActivePowerW": value})
+        if api._get_inverter_max_power_kw("sys1") != 0.0 or api._get_battery_max_power_kw("sys1", "charge") != 8.0:
+            print("ERROR: with no Inverter device a report of {} should be ignored, got inverter {} battery {}".format(value, api._get_inverter_max_power_kw("sys1"), api._get_battery_max_power_kw("sys1", "charge")))
+            failed = True
+
+    return failed
+
+
 def test_sigenergy_automatic_config_charge_discharge_limits(my_predbat):
     """automatic_config wires inverter_limit_charge/_discharge to the per-direction sensors, and an
     apps.yaml value for either still wins."""
@@ -913,6 +1015,43 @@ def test_sigenergy_export_limit_survives_restart(my_predbat):
 
     state = _published_export_limit(restarted, sid)
     assert state == 3680, "The 3680 W limit is restored from the cache after a restart, got {}".format(state)
+
+    return failed
+
+
+def test_sigenergy_inverter_ceiling_survives_restart(my_predbat):
+    """run() persists the inverter's reported power ceilings and load_cached_data() restores them, so a
+    restart doesn't fall back to the nameplate when the broker sends only changed fields (#5784)."""
+    failed = False
+    sid = "SIG12345"
+    storage = FakeStorage()
+
+    api = _make_export_limit_api(sid)
+    api._mock_storage = storage
+    api.current_mode = {sid: SIGENERGY_MODE_VPP}
+    api.system_id_filter = {sid}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api._manage_vpp_registration = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_energy_flow = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock(return_value=True)
+    api.fetch_history_totals = AsyncMock(return_value=True)
+    api.apply_controls = AsyncMock()
+    api._handle_mqtt_period(sid, {"inverterMaxFeedInActivePowerW": "13200.0", "inverterMaxAbsorptionActivePowerW": "12600.0"})
+
+    run_async(api.run(seconds=300, first=False))
+
+    restarted = _make_export_limit_api(sid)
+    restarted._mock_storage = storage
+    run_async(restarted.load_cached_data())
+
+    for direction, expected in (("discharge", 13.2), ("charge", 12.6), (None, 13.2)):
+        got = restarted._get_inverter_max_power_kw(sid, direction)
+        if abs(got - expected) > 1e-9:
+            print("ERROR: restored inverter ceiling {} should be {} kW, got {}".format(direction, expected, got))
+            failed = True
 
     return failed
 
@@ -1500,7 +1639,7 @@ def test_sigenergy_save_cache_settings_expiry(my_predbat):
     storage = FakeStorage()
     api._mock_storage = storage
 
-    for key in ("energy_flow", "grid_export", "device_cutoffs"):
+    for key in ("energy_flow", "grid_export", "device_cutoffs", "inverter_ceilings"):
         run_async(api._save_cache(key, {"SIG001": {}}))
     now = datetime.now(timezone.utc)
 
@@ -1511,6 +1650,8 @@ def test_sigenergy_save_cache_settings_expiry(my_predbat):
     assert 0.99 < days_left("energy_flow") <= 1.0, "poll data expires after a day, got {:.2f}".format(days_left("energy_flow"))
     assert 27.99 < days_left("grid_export") <= 28.0, "export limit kept for 28 days, got {:.2f}".format(days_left("grid_export"))
     assert 27.99 < days_left("device_cutoffs") <= 28.0, "SoC cut-offs kept for 28 days, got {:.2f}".format(days_left("device_cutoffs"))
+    # A reported power ceiling may never be sent again after a restart, so it is kept like the plant settings (#5784)
+    assert 27.99 < days_left("inverter_ceilings") <= 28.0, "inverter ceilings kept for 28 days, got {:.2f}".format(days_left("inverter_ceilings"))
 
     return failed
 
@@ -2762,11 +2903,13 @@ def _run_listener_with_messages(api, messages):
             run_async(api._mqtt_listener_loop())
 
 
-def _period_payload(sid, soc, statistics_time=None):
-    """Build an MQTT period payload as the broker sends it, optionally with its statisticsTime envelope field."""
+def _period_payload(sid, soc, statistics_time=None, extra=None):
+    """Build an MQTT period payload as the broker sends it, optionally with its statisticsTime envelope field and extra value fields."""
     import json as _json
 
     entry = {"deviceType": "system", "systemId": sid, "snCode": sid, "value": {"storageSOC%": str(soc), "storageChargeDischargePowerW": "-8804.0", "PV power": "0.0", "gridActivePowerW": "-4861.0"}}
+    if extra:
+        entry["value"].update(extra)
     if statistics_time is not None:
         entry["statisticsTime"] = statistics_time
     return _json.dumps([entry]).encode()
@@ -2816,6 +2959,79 @@ def test_sigenergy_mqtt_listener_applies_fresh_period(my_predbat):
     assert abs(api.energy_flow[sid]["batterySoc"] - 61.3) < 0.01, "fresh MQTT SOC applied, got {}".format(api.energy_flow[sid]["batterySoc"])
     assert api.mqtt_data_lag.get(sid, 999) < 60, "small lag recorded, got {}".format(api.mqtt_data_lag.get(sid))
     assert not [m for m in api.log_messages if "minutes old" in m], "no staleness warning for fresh data"
+    return failed
+
+
+def test_sigenergy_mqtt_listener_republishes_controls_on_new_ceiling(my_predbat):
+    """A period message that changes the inverter's reported power ceiling republishes the controls, so the charge and
+    export rate numbers' max follows it (#5784). publish_controls() is otherwise only run on the first tick, a change
+    message or a control write, so on a cold cache the sliders stayed at the nameplate. A stale message's ceiling is
+    taken too, since it is a fixed figure, not a live reading, and the broker may lag for hours."""
+    failed = False
+    sid = "SIG001"
+    topic = "openapi/period/test_app_key/{}".format(sid)
+    ceiling = {"inverterMaxFeedInActivePowerW": "6600.0", "inverterMaxAbsorptionActivePowerW": "6600.0"}
+
+    def make_api():
+        """A started API for one 6.0 kW system with the publishers mocked."""
+        api = MockSigenergyAPI()
+        api.access_token = "tok"
+        api.token_expires_at = 9_999_999_999
+        api.systems[sid] = {"systemName": "Test"}
+        api.devices[sid] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 6.0}}]
+        api.energy_flow[sid] = {"batterySoc": 7.0, "batteryPower": 0.0, "pvPower": 0.0, "gridPower": 0.0, "loadPower": 0.0, "evPower": 0.0}
+        api.api_stop = False
+        api.api_started = True
+        api.publish_controls = AsyncMock()
+        api.publish_system_entities = AsyncMock()
+        return api
+
+    # Fresh messages: the first ceiling republishes the controls, a repeat of the same figure or a message without it does not
+    api = make_api()
+    fresh = int(time.time()) - 20
+    _run_listener_with_messages(
+        api,
+        [
+            (topic, _period_payload(sid, 50.0, statistics_time=fresh, extra=ceiling)),
+            (topic, _period_payload(sid, 51.0, statistics_time=fresh, extra=ceiling)),
+            (topic, _period_payload(sid, 52.0, statistics_time=fresh)),
+        ],
+    )
+    if [c.args for c in api.publish_controls.call_args_list] != [(sid,)]:
+        print("ERROR: a new ceiling should republish the controls once for {}, got {}".format(sid, api.publish_controls.call_args_list))
+        failed = True
+    if abs(api._get_inverter_max_power_kw(sid) - 6.6) > 1e-9:
+        print("ERROR: the reported ceiling should be used, got {}".format(api._get_inverter_max_power_kw(sid)))
+        failed = True
+
+    # A changed figure republishes again
+    api.api_stop = False
+    _run_listener_with_messages(api, [(topic, _period_payload(sid, 53.0, statistics_time=fresh, extra={"inverterMaxFeedInActivePowerW": "6500.0"}))])
+    if api.publish_controls.call_count != 2:
+        print("ERROR: a changed ceiling should republish the controls, got {} calls".format(api.publish_controls.call_count))
+        failed = True
+
+    # A stale message: its live readings are not applied, but the ceiling is stored and the controls republished
+    api = make_api()
+    _run_listener_with_messages(api, [(topic, _period_payload(sid, 61.3, statistics_time=int(time.time()) - 7020, extra=ceiling))])
+    if api.energy_flow[sid]["batterySoc"] != 7.0:
+        print("ERROR: a stale message's SOC must not be applied, got {}".format(api.energy_flow[sid]["batterySoc"]))
+        failed = True
+    if abs(api._get_inverter_max_power_kw(sid) - 6.6) > 1e-9:
+        print("ERROR: a stale message's ceiling should be stored, got {}".format(api._get_inverter_max_power_kw(sid)))
+        failed = True
+    if [c.args for c in api.publish_controls.call_args_list] != [(sid,)]:
+        print("ERROR: a stale message's new ceiling should republish the controls, got {}".format(api.publish_controls.call_args_list))
+        failed = True
+
+    # Before the component has started nothing is published; the first-tick publish_controls() picks the ceiling up
+    api = make_api()
+    api.api_started = False
+    _run_listener_with_messages(api, [(topic, _period_payload(sid, 50.0, statistics_time=fresh, extra=ceiling))])
+    if api.publish_controls.call_count != 0:
+        print("ERROR: nothing should be published before the component has started, got {}".format(api.publish_controls.call_args_list))
+        failed = True
+
     return failed
 
 
@@ -6161,6 +6377,7 @@ def run_sigenergy_tests(my_predbat):
         ("mqtt_listener_loop", test_sigenergy_mqtt_listener_loop),
         ("mqtt_listener_loop_ignores_other_systems", test_sigenergy_mqtt_listener_loop_ignores_other_systems),
         ("mqtt_listener_ignores_stale_period", test_sigenergy_mqtt_listener_ignores_stale_period),
+        ("mqtt_listener_republishes_controls_on_new_ceiling", test_sigenergy_mqtt_listener_republishes_controls_on_new_ceiling),
         ("mqtt_listener_applies_fresh_period", test_sigenergy_mqtt_listener_applies_fresh_period),
         ("run_polls_rest_when_mqtt_lagging", test_sigenergy_run_polls_rest_when_mqtt_lagging),
         ("run_mqtt_fresh_window_covers_cadence_jitter", test_sigenergy_run_mqtt_fresh_window_covers_cadence_jitter),
@@ -6181,6 +6398,8 @@ def run_sigenergy_tests(my_predbat):
         ("build_tls_context", test_sigenergy_build_tls_context),
         ("battery_max_power", test_sigenergy_battery_max_power),
         ("battery_charge_discharge_split", test_sigenergy_battery_charge_discharge_split),
+        ("inverter_reported_ceiling", test_sigenergy_inverter_reported_ceiling),
+        ("inverter_ceiling_survives_restart", test_sigenergy_inverter_ceiling_survives_restart),
         ("automatic_config_charge_discharge_limits", test_sigenergy_automatic_config_charge_discharge_limits),
         ("options_time_format", test_sigenergy_options_time_format),
         ("update_control_time_validation", test_sigenergy_update_control_time_validation),
