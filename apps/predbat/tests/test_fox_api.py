@@ -22,6 +22,9 @@ from fox import (
     FOX_CACHE_KEYS,
     FOX_REFRESH_SETTINGS,
     FOX_REFRESH_REALTIME,
+    FOX_POLL_SECONDS_MIN,
+    FOX_POLL_SECONDS_MAX,
+    fox_poll_minutes,
     OPTIONS_WORK_MODE,
     FOX_SETTINGS_CACHE_VERSION,
     SCHEDULER_READ_STALE_SECONDS,
@@ -101,6 +104,7 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.fdsoc_min = {}
         self.device_scheduler_count = {}
         self.data_age = {}
+        self.realtime_refresh_minutes = FOX_REFRESH_REALTIME
         self.local_tz = pytz.timezone("Europe/London")
         self.inverter_sn_filter = []
 
@@ -1580,15 +1584,16 @@ def test_api_get_device_detail(my_predbat):
     return False
 
 
-def test_capacity_watts_half_kw_device_type(my_predbat):
+def test_capacity_watts_fractional_kw_device_type(my_predbat):
     """
-    Test capacity_watts() corrects the truncated 'capacity' field for half-kW models.
+    Test capacity_watts() corrects the truncated 'capacity' field for fractional-kW models.
 
     Fox's device/detail 'capacity' field is an integer, so a 10.5kW KH10.5 inverter
-    reports capacity=10. Only a deviceType ending in '.5' with a whole-kW capacity
-    should be bumped up to end in 500; anything else passes through unchanged.
+    reports capacity=10 and a 3.7kW H1-3.7 reports capacity=3. A whole-kW capacity takes
+    the decimal rating in deviceType whose whole part matches it; anything else passes
+    through unchanged.
     """
-    print("  - test_capacity_watts_half_kw_device_type")
+    print("  - test_capacity_watts_fractional_kw_device_type")
 
     # Whole-kW model is untouched
     assert FoxAPI.capacity_watts({"capacity": 8, "deviceType": "KH8"}) == 8000
@@ -1601,6 +1606,12 @@ def test_capacity_watts_half_kw_device_type(my_predbat):
     assert FoxAPI.capacity_watts({"capacity": 0, "deviceType": "KH10.5"}) == 0
     # A capacity that isn't a whole kW multiple is left alone (already carries a fraction)
     assert FoxAPI.capacity_watts({"capacity": 10.3, "deviceType": "KH10.5"}) == 10300
+    # Any decimal kW rating in deviceType restores the truncated fraction, not only .5 (GH#5938: H1-3.7 reports capacity=3)
+    assert FoxAPI.capacity_watts({"capacity": 3, "deviceType": "H1-3.7-E-G2-WL"}) == 3700
+    # ...but only when the rating's whole part matches the reported capacity
+    assert FoxAPI.capacity_watts({"capacity": 5, "deviceType": "H1-3.7-E-G2-WL"}) == 5000
+    # A whole-kW rating written with a decimal leaves the capacity as it is
+    assert FoxAPI.capacity_watts({"capacity": 10, "deviceType": "H3-10.0-E"}) == 10000
 
     return False
 
@@ -2243,12 +2254,13 @@ def test_api_get_scheduler(my_predbat):
 
 def test_api_get_scheduler_half_kw_capacity(my_predbat):
     """
-    Test get_scheduler doesn't clamp fdpwr_max below a genuine half-kW rating.
+    Test get_scheduler doesn't clamp fdpwr_max below a genuine fractional-kW rating.
 
     Fox's device/detail 'capacity' field is an integer, so a 10.5kW KH10.5 inverter reports
     capacity=10 even though the scheduler API correctly reports a 10500W fdpwr max. The clamp
-    uses capacity_watts(), which corrects the half-kW deviceType before capping, so it should
-    still clamp to the true 10500W rather than the truncated 10000W.
+    uses capacity_watts(), which corrects the fractional-kW deviceType before capping, so it should
+    still clamp to the true 10500W rather than the truncated 10000W. The same holds for a 3.7kW
+    H1-3.7-E-G2-WL reporting capacity=3 (GH#5938): it clamps to 3700W, not 3000W.
     """
     print("  - test_api_get_scheduler_half_kw_capacity")
 
@@ -2272,6 +2284,23 @@ def test_api_get_scheduler_half_kw_capacity(my_predbat):
     asyncio.run(fox.get_scheduler(deviceSN))
 
     assert fox.fdpwr_max[deviceSN] == 10500
+
+    # GH#5938: a 3.7kW H1 reports capacity=3, and Fox's own fdpwr max is the usual inflated 8000
+    fox = MockFoxAPIWithRequests()
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 3, "deviceType": "H1-3.7-E-G2-WL"}
+    fox.set_mock_response(
+        "/op/v1/device/scheduler/get",
+        {
+            "enable": 1,
+            "groups": [],
+            "properties": {
+                "fdpwr": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 8000.0}},
+                "fdsoc": {"unit": "%", "precision": 1.0, "range": {"min": 10.0, "max": 100.0}},
+            },
+        },
+    )
+    asyncio.run(fox.get_scheduler(deviceSN))
+    assert fox.fdpwr_max[deviceSN] == 3700
 
     return False
 
@@ -4691,6 +4720,73 @@ def test_run_realtime_refresh_after_cache_expires(my_predbat):
     return False
 
 
+def test_fox_poll_seconds_clamped(my_predbat):
+    """
+    Test fox_poll_seconds is rounded to whole minutes and clamped, defaults to the old fixed
+    5 minutes, and is wired from apps.yaml through the component registry and schema
+    """
+    print("  - test_fox_poll_seconds_clamped")
+
+    from components import COMPONENT_LIST
+    from config import APPS_SCHEMA
+
+    assert fox_poll_minutes(300) == 5
+    assert fox_poll_minutes(120) == 2
+    assert fox_poll_minutes("120") == 2
+    assert fox_poll_minutes(90) == 2
+    assert fox_poll_minutes(5) == FOX_POLL_SECONDS_MIN // 60
+    assert fox_poll_minutes(99999) == FOX_POLL_SECONDS_MAX // 60
+    assert fox_poll_minutes("junk") == FOX_REFRESH_REALTIME
+    assert fox_poll_minutes(None) == FOX_REFRESH_REALTIME
+    assert fox_poll_minutes(float("nan")) == FOX_REFRESH_REALTIME
+
+    assert FoxAPI(my_predbat, key="test_key", automatic=False).realtime_refresh_minutes == FOX_REFRESH_REALTIME
+    assert FoxAPI(my_predbat, key="test_key", automatic=False, poll_seconds=120).realtime_refresh_minutes == 2
+
+    arg = COMPONENT_LIST["fox"]["args"]["poll_seconds"]
+    assert arg["config"] == "fox_poll_seconds"
+    assert arg["default"] == FOX_REFRESH_REALTIME * 60, "The registry default must keep the existing 5 minute refresh"
+    assert APPS_SCHEMA["fox_poll_seconds"]["type"] == "integer"
+
+    return False
+
+
+def test_run_realtime_refresh_follows_poll_seconds(my_predbat):
+    """
+    Test the real time refresh fires at the fox_poll_seconds interval, while the settings,
+    production and static data keep their own fixed intervals
+    """
+    print("  - test_run_realtime_refresh_follows_poll_seconds")
+
+    from datetime import datetime, timedelta, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+    fox.realtime_refresh_minutes = fox_poll_minutes(120)
+
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    # 90 seconds old: younger than the 2 minute interval, so it is left alone
+    fox.data_age["device_values"] = now - timedelta(seconds=90)
+    assert run_async(fox.run(60, first=False)) is True
+    assert "get_real_time_data:TEST123" not in fox.method_calls
+
+    # 150 seconds old: past the 2 minute interval but well inside the default 5 minutes
+    fox.method_calls = []
+    fox.data_age["device_values"] = now - timedelta(seconds=150)
+    assert run_async(fox.run(120, first=False)) is True
+    assert "get_real_time_data:TEST123" in fox.method_calls
+
+    # Only the real time stream polls faster - nothing else is re-fetched
+    assert "get_device_settings:TEST123" not in fox.method_calls
+    assert "get_device_detail:TEST123" not in fox.method_calls
+    assert not any(call.startswith("get_device_production_month") for call in fox.method_calls)
+
+    return False
+
+
 def test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat):
     """
     Test that a failed device list poll does not reset the refresh timer, so the next run
@@ -5700,8 +5796,8 @@ def test_publish_data_device_info_half_kw_capacity(my_predbat):
     Test publish_data corrects a half-kW model's truncated capacity.
 
     Fox reports the device/detail 'capacity' field as an integer, so a 10.5kW KH10.5
-    inverter reports capacity=10. deviceType ending in '.5' with a whole-kW capacity
-    should bump the reported watts up to end in 500 rather than 000.
+    inverter reports capacity=10. A deviceType carrying the decimal rating restores the
+    fraction, so the reported watts end in 500 rather than 000.
     """
     print("  - test_publish_data_device_info_half_kw_capacity")
 
@@ -8189,7 +8285,7 @@ def run_fox_api_tests(my_predbat):
         # API endpoint tests with mocked request_get
         failed |= test_api_get_device_list(my_predbat)
         failed |= test_api_get_device_detail(my_predbat)
-        failed |= test_capacity_watts_half_kw_device_type(my_predbat)
+        failed |= test_capacity_watts_fractional_kw_device_type(my_predbat)
         failed |= test_api_get_device_history(my_predbat)
         failed |= test_api_get_device_history_empty(my_predbat)
         failed |= test_api_get_available_variables(my_predbat)
@@ -8290,6 +8386,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_run_settings_refresh_forced_by_stale_cache_version(my_predbat)
         failed |= test_run_stale_cache_version_not_cleared_without_scheduler_success(my_predbat)
         failed |= test_run_realtime_refresh_after_cache_expires(my_predbat)
+        failed |= test_fox_poll_seconds_clamped(my_predbat)
+        failed |= test_run_realtime_refresh_follows_poll_seconds(my_predbat)
         failed |= test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat)
         failed |= test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat)
         failed |= test_run_new_device_invalidates_detail_cache(my_predbat)

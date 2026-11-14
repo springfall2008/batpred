@@ -10,7 +10,7 @@ predbat:
     # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
     run_every: 5
 
-    # Days previous is the number of days back to find historical load data
+    # Days previous controls historical data lookback, including thermostat setpoints
     # Recommended is 7 to capture day of the week but 1 can also be used
     # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
     days_previous:
@@ -34,10 +34,10 @@ predbat:
     # Sensor with history that monitors the thermostat setting in the house
     target_temperature: sensor.living_room_target
 
-    # Thermostat Hysteresis turn on amount in degrees (default 0.5)
+    # Turn heating ON below target by this many degrees (default 0.5)
     hysteresis: 0.5
 
-    # Thermostat Hysteresis turn off amount in degrees (default 0.1)
+    # Turn heating OFF above target by this many degrees (default 0.1)
     hysteresis_off: 0.1
 
     # When true models a smart thermostat that turns the heating ahead of the target temperature so it reaches it just in time
@@ -46,7 +46,7 @@ predbat:
     # Longest lead time in minutes that Predheat models before a setpoint rise, set to the longest early start your thermostat makes (uncapped when not set)
     # smart_thermostat_max_minutes: 60
 
-    # Past energy consumption of heating in KWh, scaled with heating_energy_scaling
+    # Cumulative gas/electrical energy consumed in kWh (not thermal output), scaled with heating_energy_scaling
     heating_energy: sensor.boiler_nrgheat
     heating_energy_scaling: 1.4
 
@@ -76,9 +76,9 @@ predbat:
     heat_max_power: 30000
     heat_min_power: 7000
 
-    # Heating cop is the maximum efficiency and will be scaled down based on temperatures
+    # Maximum COP; in heat-pump mode scaled by outdoor temperature using heat_pump_efficiency
     # put 1.0 for condensing gas boilers, or around 4.0 for heat pumps
-    heat_cop: 1.0
+    heating_cop: 1.0
 
     # Current flow temperature setting
     flow_temp: number.boiler_heatingtemp

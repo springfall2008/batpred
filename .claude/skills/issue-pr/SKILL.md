@@ -28,6 +28,7 @@ A `bug` label can arrive without that statement: the split and evidence gates (`
   ```
 
 - Read [tools/debug-journal.md](../../../tools/debug-journal.md) before forming an implementation approach — it maps common symptoms to modules and records known per-integration behaviour from past investigations. Its entries are dated observations, not current truth — confirm anything you rely on against the working tree.
+- If the `mcp__shared-memory__*` tools are available, `search` for `issue:<issue-number>` and the area you are about to change. A triage memory may record approaches already ruled out. Confirm against the working tree.
 - Read the relevant source area named in the triage comment's root-cause pointer, or that the issue's classification points to.
 - Check `git log`/`git blame` on that area — the triage comment may already cover this, but confirm nothing has changed on `main` since triage ran.
 
@@ -35,6 +36,7 @@ A `bug` label can arrive without that statement: the split and evidence gates (`
 
 - Write the fix or feature following this repo's conventions (`CLAUDE.md`, already loaded automatically for this session): `lower_case_with_underscores` naming, 256-character line length, a one-line docstring on every new function or class.
 - Add or update a unit test for the change, in the matching `apps/predbat/tests/test_<feature>.py` module (registered in `TEST_REGISTRY` in `apps/predbat/unit_test.py` if it's a new module) — `CLAUDE.md` requires unit tests for all new code, no exceptions for bot-authored ones.
+- If the triage replayed the reporter's log forwards (`tools/triage_replay.py`, see `/issue-triage` step 5), run it again on your branch with `--simulate` and say in the PR body's Testing section what changed in the plans. That is evidence for the fix, not a substitute for the unit test.
 - Keep the change scoped to what the issue describes. Don't refactor unrelated code, even if you notice something else worth fixing.
 
 ## 4. Quality gate
@@ -126,7 +128,9 @@ EOF
 )"
 ```
 
-This is the last step on success — there is nothing further to report; the daemon detects the new PR itself.
+If the `mcp__shared-memory__*` tools are available, record the outcome: `update` the issue's memory (found by `issue:<issue-number>`), or `store` one in scope `predbat-devs`. Tag it `repo:batpred`, `issue:<issue-number>`, `pr:<pr-number>` and `status:in-review`. Say what the fix changes and why this approach over the alternatives. The public-safety rules in CLAUDE.md's "Shared team memory" apply.
+
+That is the last step on success — there is nothing further to report; the daemon detects the new PR itself.
 
 ## 8. On failure
 

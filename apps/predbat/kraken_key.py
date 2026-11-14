@@ -32,6 +32,7 @@ import json
 
 import aiohttp
 
+from component_base import new_http_session
 from kraken_auth_mixin import summarise_token_errors
 
 KRAKEN_KEY_TIMEOUT_SECONDS = 30
@@ -61,14 +62,14 @@ def normalise_kraken_token(text):
     return "".join(token.split())
 
 
-async def _kraken_request(base_url, payload, secrets, token=None):
+async def _kraken_request(base_url, payload, secrets, token=None, session_factory=None):
     """POST one GraphQL request to Kraken; return (data, None) on success or (None, log-safe error)."""
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = token
     try:
         timeout = aiohttp.ClientTimeout(total=KRAKEN_KEY_TIMEOUT_SECONDS)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with (session_factory or new_http_session)(timeout=timeout) as session:
             async with session.post(f"{base_url}/v1/graphql/", json=payload, headers=headers) as response:
                 status = response.status
                 text = await response.text()
@@ -93,7 +94,7 @@ async def _kraken_request(base_url, payload, secrets, token=None):
     return data, None
 
 
-async def check_kraken_key(base_url, token):
+async def check_kraken_key(base_url, token, session_factory=None):
     """Report the account's current API key without changing it.
 
     Returns {"status": "none"} when there is no key, {"status": "existing", "masked": ...} when Kraken
@@ -101,7 +102,7 @@ async def check_kraken_key(base_url, token):
     the reply does not answer the question (no viewer, or no liveSecretKey field), or {"status": "error", "error": ...}.
     "unknown" is kept apart from "none" because only "none" lets the page generate without a confirmation.
     """
-    data, error = await _kraken_request(base_url, {"query": KRAKEN_LIVE_SECRET_KEY_QUERY}, [token], token=token)
+    data, error = await _kraken_request(base_url, {"query": KRAKEN_LIVE_SECRET_KEY_QUERY}, [token], token=token, session_factory=session_factory)
     if error:
         return {"status": "error", "error": error}
     viewer = data.get("viewer")
@@ -117,13 +118,13 @@ async def check_kraken_key(base_url, token):
     return {"status": "full", "key": key}
 
 
-async def generate_kraken_key(base_url, token):
+async def generate_kraken_key(base_url, token, session_factory=None):
     """Mint a new API key, replacing any existing one, then prove it signs in.
 
     Returns {"status": "generated", "key": ..., "verified": bool} or {"status": "error", "error": ...}. Once
     regenerate succeeds the old key is gone, so a failed sign-in check still returns the new key.
     """
-    data, error = await _kraken_request(base_url, {"query": KRAKEN_REGENERATE_SECRET_KEY_MUTATION}, [token], token=token)
+    data, error = await _kraken_request(base_url, {"query": KRAKEN_REGENERATE_SECRET_KEY_MUTATION}, [token], token=token, session_factory=session_factory)
     if error:
         return {"status": "error", "error": error}
     regenerated = data.get("regenerateSecretKey")
@@ -132,6 +133,6 @@ async def generate_kraken_key(base_url, token):
         return {"status": "error", "error": "Kraken did not return a key"}
 
     verify_payload = {"query": KRAKEN_OBTAIN_TOKEN_MUTATION, "variables": {"input": {"APIKey": key}}}
-    data, error = await _kraken_request(base_url, verify_payload, [token, key])
+    data, error = await _kraken_request(base_url, verify_payload, [token, key], session_factory=session_factory)
     verified = not error and isinstance(data.get("obtainKrakenToken"), dict) and bool(data["obtainKrakenToken"].get("token"))
     return {"status": "generated", "key": key, "verified": verified}

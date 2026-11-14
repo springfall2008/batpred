@@ -24,6 +24,7 @@ jobs:
   label:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Add BOT_REVIEW unless it has been applied before
         run: |

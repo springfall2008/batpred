@@ -161,7 +161,6 @@ def test_annual_bootstrap(my_predbat):
     my_predbat.soc_kw = 3.3
     my_predbat.manual_charge_times = [1, 2, 3]
     my_predbat.manual_export_times = [4]
-    my_predbat.manual_all_times = [5]
     my_predbat.cost_today_sofar = 123.0
     my_predbat.import_today_now = 4.0
     my_predbat.export_today_now = 5.0

@@ -47,6 +47,9 @@ high battery charge levels when the car was charged previously (e.g. last week).
         - Automatically disable **switch.predbat_car_charging_hold** (no need to strip car data from house load, as it was never included).
         - Automatically set **switch.predbat_car_charging_from_battery** to On in the model (the battery cannot discharge into the car anyway as it is on a separate circuit).
         - Model that any export from the battery/PV may flow into the car rather than the grid, and so conservatively not credit that energy with export income.
+        - Add the car's energy, from **car_charging_energy** in `apps.yaml`, to today's cost (**predbat.cost_today**) and to the History view's import and export kWh, since your supplier's meter bills it even though the inverter never sees it. Energy the inverter counts as export goes into the car first and is not credited; the rest is costed as import at that time's rate - on Octopus Intelligent the rate your dispatches gave it, or the peak rate for car charging beyond the 6-hour daily cap.
+
+        This assumes **import_today** and **export_today** come from your inverter's CT clamp, as they are meant to. If yours come from a smart meter (for example a Glow or Octopus Home Mini sensor), the meter already sees the car, so it would be counted twice - use your inverter's import and export sensors instead.
 
 - **switch.predbat_car_charging_hold** - A switch that when turned On (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. This switch is automatically overridden to Off when **switch.predbat_car_energy_reported_load** is Off, since the car load is not in the house load data.
 
@@ -138,6 +141,13 @@ The following `apps.yaml` configuration items are pre-defined with regular expre
   octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
 ```
+
+*Note:* if your Octopus Intelligent device is an **Ohme charger**, these defaults won't work. For Ohme devices the Octopus Energy integration does not create the
+[charge target or target time entities](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/), and its 'intelligent dispatching' sensor never turns on.
+Predbat then logs `Regular expression argument: octopus_ready_time unable to match ..., now will disable` (and the same for `octopus_charge_limit`) and has no Octopus slots,
+ready time or charge limit for the car. Remove these three entries from `apps.yaml` and use the [Ohme car charger direct integration](#ohme-car-charger-direct-integration) instead,
+with `ohme_automatic_octopus_intelligent: true` if Predbat has no [Octopus direct connection](energy-rates.md#octopus-energy-direct) of its own to detect your tariff from.
+Alternatively, let Predbat plan the charging itself (Predbat-led) using the Home Assistant Ohme integration's sensors - see [Ohme HA in-built integration](devices.md#ohme-ha-in-built-integration).
 
 - **octopus_intelligent_slot** - Points to the Octopus Energy integration 'intelligent dispatching' sensor in the Octopus Energy integration that indicates
 whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
@@ -777,6 +787,9 @@ Once your car is charging in the dispatch (see **Charging the battery while the 
 Instead the house and battery pay the peak rate for 5 minutes of each half hour of it, and the car's own charging pays none of that, as the car stops with its dispatch.
 This applies whether the dispatches come from the Octopus Energy integration or from Predbat's own Octopus connection.
 
+- When a dispatch is withdrawn, the Octopus Energy integration's import rate sensor can keep showing its cheap rate for a while. Predbat puts those minutes back to your normal rate once no dispatch covers them, as long as it saw a dispatch covering them before.
+Nothing is changed while a car is charging, as Octopus briefly lists no dispatches while it re-plans a running charge. With **switch.predbat_octopus_intelligent_dynamic** Off the half hour in progress is left alone too, as the car may have charged in it before the dispatch was withdrawn.
+
 - Let the Octopus app control when your car charges.
 
 #### Checking Intelligent dispatches against the car
@@ -789,6 +802,7 @@ It only applies to Octopus Intelligent charging (**switch.predbat_octopus_intell
 Octopus only confirms a dispatch as completed some time after it has run, typically 15 to 60 minutes later.
 Until then Predbat keeps the dispatch rate on each half hour the dispatch ran in, unless the check above cancelled it, so today's cost does not jump up after each half hour of charging and fall back later.
 A half hour Octopus has still not confirmed after 90 minutes goes back to your normal rate.
+If Octopus withdraws a dispatch in the half hour it started in, before the car has been seen charging in it, that half hour goes back to your normal rate at the next update once the car shows it is not charging (**car_charging_now**, or the house load when the car is inside the CT clamp), as Octopus will not bill it cheap.
 
 With the Octopus component, Predbat also reads what Octopus says the device is doing:
 

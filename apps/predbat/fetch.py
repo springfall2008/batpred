@@ -19,7 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
+from utils import clock_change_minutes, minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -39,6 +39,7 @@ from const import (
     CAR_MANUAL_SOC_IDLE_MINUTES,
     CAR_MANUAL_SOC_RATE_MARGIN,
     CAR_MANUAL_SOC_ENERGY_SLACK,
+    CARBON_WARN_COVERAGE_HOURS,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -49,6 +50,11 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import ast
 import copy
+import math
+
+# Days of battery temperature history to fetch: predict_battery_temperature() looks back at most
+# 24 hours plus one step, so a longer window is only held in memory (about 3 MB at 22 days)
+BATTERY_TEMPERATURE_HISTORY_DAYS = 2
 
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
@@ -77,6 +83,15 @@ REPLAY_INVERTER_FIELDS = (
     "battery_rate_max_charge",
     "battery_rate_max_discharge",
 )
+
+
+class LoadSourceMissing(ValueError):
+    """No load source (load_today or load_forecast) is configured yet, so there is no load data to plan with.
+
+    plan_once() treats it as a failed pre-condition and skips the cycle without a traceback. It is often temporary:
+    a component's automatic configuration sets load_today once it has started (#5092). A ValueError subclass, as
+    the bare ValueError it replaces was, so other callers of fetch_sensor_data() see no change.
+    """
 
 
 class Fetch:
@@ -468,13 +483,48 @@ class Fetch:
 
         return load_yesterday, load_yesterday_raw
 
+    def load_counter_quantum(self, load_minutes, max_minute):
+        """
+        Work out the step a load counter moves in (0.01 kWh, 0.1 kWh, ...) from the gaps between the levels it
+        sits at: interpolation between readings smooths the steps but keeps the flat stretches. The levels sit
+        on the counter's grid, so the step is the greatest common divisor of the gaps between them (two flat
+        stretches can be several steps apart). Only gaps seen at least twice count: a counter that only sits
+        still where it stalled has a few one-off gaps that say nothing about its step. Returns 0 when there are
+        none - a counter that doesn't keep sitting still between steps is as fine as the history can show.
+        """
+        levels = []
+        minute = 0
+        while minute < max_minute:
+            value = load_minutes.get(minute, 0)
+            run_end = minute
+            while run_end < max_minute and load_minutes.get(run_end + 1, 0) == value:
+                run_end += 1
+            if run_end > minute:
+                levels.append(value)
+            minute = run_end + 1
+        gaps = {}
+        for newer, older in zip(levels, levels[1:]):
+            gap = int(round((newer - older) * 10000))
+            if gap > 0:
+                gaps[gap] = gaps.get(gap, 0) + 1
+        repeated = [gap for gap, count in gaps.items() if count >= 2]
+        divisor = 0
+        for gap in repeated:
+            divisor = math.gcd(divisor, gap)
+        return divisor / 10000.0
+
     def fill_load_from_power(self, load_minutes, load_power_data):
         """
         This function helps to deal with load sensors which don't increment very often leading to poor quality load data
         For example if its in kWh units then it might take many hours to increment.
         Predbat actually wants a much more real time estimate, but integrating power sensors alone leads to drift over time.
 
-        Strategy: Divide data into 30-minute periods. For each period:
+        Strategy:
+        0. Flat runs of the load sensor while power shows consumption (a counter that moves in coarse steps,
+           or stalled and caught up) are taken with the rise after them and the counter's own rise is spread
+           over them in the shape of the power. The load sensor decides how much energy, the power only when
+           (#5855), so the total is the load sensor's.
+        Then divide data into 30-minute periods. For each period:
         1. Calculate total load consumed (difference between start and end of period)
         2. Integrate power data over that period
         3. Scale power data to match the total load
@@ -535,40 +585,100 @@ class Fetch:
                     period_start = None
                 last_value = current_value
 
-        # Check final period
-        if period_start is not None and period_start < max_minute:
-            period_length = max_minute - period_start + 1
-            # Only consider it zero load if it exceeds the gap_size threshold
-            if period_length >= gap_size:
-                has_power = any(load_power_data.get(m, 0) > 0 for m in range(period_start, max_minute + 1))
-                if has_power and last_value == 0:
-                    zero_periods.append((period_start, max_minute, last_value))
+        # A flat run that reaches the oldest minute never closes above (the value past max_minute defaults to the run's own), and
+        # widening below can't walk a closed run into it, so it is never filled here. That is deliberate: the history starts at 0,
+        # so a flat run there can't tell a counter that didn't exist yet from one that stalled, and is left for the history and gap fillers
 
         # Fill zero periods with integrated power data
         if zero_periods:
-            self.log("Warn: Found {} periods of zero load with power data, filling using power integration".format(len(zero_periods)))
-            # Print the first 5 periods for debugging
-            for _i, (period_start, period_end, base_value) in enumerate(zero_periods[:5]):
-                start_timestamp = self.now_utc - timedelta(minutes=period_start)
-                self.log("Zero load period starting at {} ({} minutes) for {} minutes with base value {}".format(start_timestamp.strftime(TIME_FORMAT), period_start, period_end - period_start + 1, base_value))
+            # Work on the whole flat run: detection leaves out the minutes at either edge that still hold the
+            # plateau value, and filling inside them alone would let the series step backwards
+            flat_runs = []
+            for period_start, period_end, base_value in zero_periods:
+                while period_start > 0 and load_minutes.get(period_start - 1, 0) == base_value:
+                    period_start -= 1
+                while period_end < max_minute and load_minutes.get(period_end + 1, 0) == base_value:
+                    period_end += 1
+                flat_runs.append((period_start, period_end, base_value))
 
-            for period_start, period_end, _base_value in zero_periods:
-                # Integrate power data over this period
-                # First calculate total energy consumed in this period
-                total_energy = 0
-                for minute in range(period_start, period_end + 1):
-                    power = load_power_data.get(minute, 0)
-                    total_energy += power / 60.0 / 1000.0
+            # A flat run is the load sensor standing still while the power shows consumption. Whether energy is
+            # missing depends on how coarse the sensor is: a counter that moves in steps of quantum kWh can sit
+            # still for up to a step's worth of use, and then its next step holds that energy, so adding the
+            # power's energy on top as well counts it twice (#5855). Only a flat run holding well over a step's
+            # worth of power has lost readings.
+            quantum = self.load_counter_quantum(load_minutes, max_minute)
+            filled_runs = []
+            lift_after = {}
+            for period_start, period_end, base_value in flat_runs:
+                # The value at a minute is the reading at that time, so the energy up to it is the power of the
+                # minutes after the run's oldest reading: period_end itself is the starting point
+                run_energy = sum(max(load_power_data.get(minute, 0), 0) for minute in range(period_start, period_end)) / 60.0 / 1000.0
+                if run_energy <= 0:
+                    continue
 
-                amount_to_fill = 0
-                for minute in range(period_end, period_start, -1):
-                    power = max(load_power_data.get(minute, 0), 0)
-                    energy = power / 60.0 / 1000.0
-                    amount_to_fill += energy
-                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
-                # Fill to start
-                for minute in range(period_start, -1, -1):
-                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
+                segment_start = period_start
+                if period_start == 0:
+                    # Up to now: not counted yet, so the power's energy is all there is
+                    run_share, ramp_rise, lift = run_energy, 0.0, 0.0
+                elif run_energy <= 2 * quantum:
+                    # A step's worth or less: the counter's next step holds it, and the counter decides how much.
+                    # Take the rise up to one step (spread over the reporting interval by the interpolation)
+                    while segment_start > 0 and load_minutes.get(segment_start - 1, 0) > load_minutes.get(segment_start, 0) and load_minutes.get(segment_start, 0) - base_value < quantum - 1e-6:
+                        segment_start -= 1
+                    rise = load_minutes.get(segment_start, 0) - base_value
+                    ramp_energy = sum(max(load_power_data.get(minute, 0), 0) for minute in range(segment_start, period_start)) / 60.0 / 1000.0
+                    if rise <= 0:
+                        continue
+                    run_share = rise * run_energy / (run_energy + ramp_energy)
+                    ramp_rise, lift = rise - run_share, 0.0
+                else:
+                    # Readings were lost. Whatever the counter made up afterwards - the rise much steeper than the
+                    # power explains - belongs to the run; only what it never made up is filled from the power
+                    ramp_energy = 0.0
+                    while segment_start > 0:
+                        increase = load_minutes.get(segment_start - 1, 0) - load_minutes.get(segment_start, 0)
+                        step_energy = max(load_power_data.get(segment_start - 1, 0), 0) / 60.0 / 1000.0
+                        if increase <= 2 * step_energy + 0.0005:
+                            break
+                        ramp_energy += step_energy
+                        segment_start -= 1
+                    rise = load_minutes.get(segment_start, 0) - base_value
+                    caught_up = max(rise - ramp_energy, 0.0)
+                    run_share = max(caught_up, run_energy)
+                    ramp_rise, lift = rise - caught_up, run_share - caught_up
+
+                # Ramp the run by the power up to its share, then the rise after it up to its own share
+                energy_so_far = 0.0
+                for minute in range(period_end, period_start - 1, -1):
+                    if minute < period_end:
+                        energy_so_far += max(load_power_data.get(minute, 0), 0) / 60.0 / 1000.0
+                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + base_value + run_share * energy_so_far / run_energy - load_minutes.get(minute, 0)
+                if segment_start < period_start:
+                    ramp_power = [max(load_power_data.get(minute, 0), 0) for minute in range(segment_start, period_start)]
+                    ramp_total = sum(ramp_power)
+                    so_far = 0.0
+                    for minute in range(period_start - 1, segment_start - 1, -1):
+                        so_far += ramp_power[minute - segment_start] if ramp_total > 0 else 1
+                        share = so_far / (ramp_total if ramp_total > 0 else len(ramp_power))
+                        new_load_minutes[minute] = new_load_minutes.get(minute, 0) + base_value + run_share + ramp_rise * share - load_minutes.get(minute, 0)
+                if lift > 0 and segment_start > 0:
+                    lift_after[segment_start - 1] = lift_after.get(segment_start - 1, 0) + lift
+                filled_runs.append((period_start, period_end, base_value, run_share if period_start == 0 else lift))
+
+            # Apply the lifts in one pass from the oldest minute to now
+            if lift_after:
+                lift_total = 0
+                for minute in range(max_minute, -1, -1):
+                    lift_total += lift_after.get(minute, 0)
+                    if lift_total:
+                        new_load_minutes[minute] = new_load_minutes.get(minute, 0) + lift_total
+
+            if filled_runs:
+                self.log("Warn: Found {} periods of zero load with power data, filling using power integration (load sensor steps {} kWh)".format(len(filled_runs), dp4(quantum)))
+                # Print the first 5 periods for debugging
+                for period_start, period_end, base_value, added in filled_runs[:5]:
+                    start_timestamp = self.now_utc - timedelta(minutes=period_start)
+                    self.log("Zero load period starting at {} ({} minutes) for {} minutes with base value {}, {} kWh added from load_power".format(start_timestamp.strftime(TIME_FORMAT), period_start, period_end - period_start + 1, base_value, dp4(added)))
 
         # Process in 30-minute periods
         period_length = 30
@@ -716,6 +826,14 @@ class Fetch:
         self.log("Filled load_today before its history starts {} minutes ago with {}kWh from {} history, data now goes back {} days".format(gap_start, dp2(added), entity_id, load_minutes_age))
         return data, load_minutes_age
 
+    def clock_change_minutes_today(self):
+        """Minutes the clocks have moved since the start of today: 60 after a spring change, -60 after an autumn one, otherwise 0 (see utils.clock_change_minutes)."""
+        return clock_change_minutes(self.now_utc, self.local_tz)
+
+    def minutes_since_day_start(self):
+        """Real minutes since the start of today, for reading history keyed by real minutes back from now; minutes_now on any day but a clock-change one (GH#5760)."""
+        return self.minutes_now - self.clock_change_minutes_today()
+
     def fetch_load_today(self):
         """
         Read the load_today history, backfill the days before it starts from load_energy_h0, then work out
@@ -725,7 +843,9 @@ class Fetch:
         self.log("Found {} load_today datapoints going back {} days".format(len(load_minutes), load_minutes_age))
         self.load_minutes, self.load_minutes_age = self.fill_load_from_history(load_minutes, load_minutes_age)
         self.load_minutes_source = "load_today"
-        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
+        # Today so far: the history is keyed by real minutes back from now, so read it back to the real start of the day,
+        # which on a clock-change day is not minutes_now back (GH#5760). The same applies to every "today" read below
+        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_since_day_start(), backwards=True)
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
 
     def previous_days_modal_filter(self, data):
@@ -1054,7 +1174,9 @@ class Fetch:
         Never raises - these run every cycle on the main loop, and a logging fault must not stop the plan.
         """
         try:
-            signature = signature_of()
+            # The values are keyed in minutes from midnight, so a day that repeats yesterday's (a fixed tariff) would
+            # match its signature while the replay, moving the old values back a day, runs a day short: log once a day
+            signature = (self.midnight_utc, signature_of())
             if signature == getattr(self, attribute, None):
                 return
             setattr(self, attribute, signature)
@@ -1207,6 +1329,77 @@ class Fetch:
 
         self.log_replay_changed("replay_rates_signature", lambda: hash(tuple(tuple(sorted((rates or {}).items())) for _, rates in series)), build, "rates")
 
+    def log_replay_dispatch_minutes(self):
+        """Log the minutes marked as Octopus Intelligent dispatches (io_adjusted) whenever they change.
+
+        The PV10 scenario assumes a planned dispatch more than half an hour away may be taken away, and finds those
+        minutes in io_adjusted, which the rates line does not carry. Without it a replay kept the yaml's dispatches and
+        its PV10 scenario drifted from live's once a new dispatch was planned. Logged as [minutes from now, length] for
+        each run of marked minutes. Never raises - this runs every cycle on the main loop.
+        """
+
+        def runs():
+            """The marked minutes as [start, length] runs, in order."""
+            out = []
+            for minute in sorted(minute for minute, marked in (self.io_adjusted or {}).items() if marked):
+                if out and minute == out[-1][0] + out[-1][1]:
+                    out[-1][1] += 1
+                else:
+                    out.append([minute, 1])
+            return out
+
+        def build():
+            """The dispatch line: each run of marked minutes as [minutes from now, length]."""
+            start = self.minutes_now
+            return "Replay input: dispatch minutes changed, from {} {}".format(self.replay_clock(start), [[minute - start, length] for minute, length in runs()])
+
+        self.log_replay_changed("replay_dispatch_signature", lambda: hash(tuple(tuple(run) for run in runs())), build, "dispatch minutes")
+
+    def log_replay_rate_sessions(self):
+        """Log which minutes a saving, free or Axle session priced, and each one's tariff rate beneath, whenever they change.
+
+        set_rate_thresholds() works out the tariff's own min/max/average with the session minutes mapped back to
+        their pre-session rate, so an event reward does not read as the tariff. The rates line carries the session
+        prices but not which minutes they are, so without this a replay counts a new event as tariff and sets the
+        thresholds far too high. Each side is logged as [minutes from now, value] at every change over the span of
+        its session minutes, then the minute it runs to: None outside a session, the pre-session rate inside one,
+        True for a session minute the tariff has no rate for. Never raises - this runs every cycle on the main loop.
+        """
+
+        def sides():
+            """Each side's name, session minutes and pre-session rates, read inside the caller's try."""
+            return (("import", self.rate_import_saving_minutes, self.rate_import_pre_saving), ("export", self.rate_export_saving_minutes, self.rate_export_pre_saving))
+
+        def value_at(minute, saving_minutes, pre_saving):
+            """None outside a session, else the pre-session rate, or True where the tariff has none."""
+            if minute not in saving_minutes:
+                return None
+            return pre_saving.get(minute, True) if pre_saving is not None else True
+
+        def build():
+            """The sessions line: each side as change points over the span of its session minutes, then the minute it runs to."""
+            start = self.minutes_now
+            parts = []
+            for name, saving_minutes, pre_saving in sides():
+                points = []
+                end = 0
+                if saving_minutes:
+                    last = object()
+                    for minute in range(min(saving_minutes), max(saving_minutes) + 1):
+                        value = value_at(minute, saving_minutes, pre_saving)
+                        if value != last or type(value) is not type(last):
+                            last = value
+                            points.append([minute - start, value])
+                    end = max(saving_minutes) + 1 - start
+                parts.append("{} {} {}".format(name, points, end))
+            return "Replay input: rate sessions changed, from {} {}".format(self.replay_clock(start), " ".join(parts))
+
+        def signature():
+            """The session minutes and their pre-session rates on both sides; the type keeps True apart from a rate of 1.0."""
+            return hash(tuple(tuple((minute, value, type(value).__name__) for minute in sorted(saving_minutes or ()) for value in [value_at(minute, saving_minutes, pre_saving)]) for _, saving_minutes, pre_saving in sides()))
+
+        self.log_replay_changed("replay_rate_sessions_signature", signature, build, "rate sessions")
+
     def log_replay_inverter(self):
         """Log the inverter's programmed state whenever it changes: the windows it holds now, whether it is charging or
         exporting and to what target, the reserve and the battery rate limits.
@@ -1344,6 +1537,16 @@ class Fetch:
                 self.log("Warn: manual_soc_max target {}% at minute {} is below the manual_soc/alert floor {}% for the same minute - ignoring the ceiling there".format(self.all_active_keep_max[minute], minute, floor_value))
                 del self.all_active_keep_max[minute]
 
+    @property
+    def manual_all_times(self):
+        """
+        Every slot under a manual charge, export, demand or freeze override, which the optimiser leaves alone.
+
+        Derived from the per-type manual time lists rather than stored, so it can never disagree with them: not
+        after a reset, nor in a compare run, nor when a debug dump is replayed with one of the lists edited.
+        """
+        return self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
+
     def fetch_sensor_data(self, save=True):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
@@ -1404,7 +1607,7 @@ class Fetch:
         if "iboost_energy_today" in self.args:
             self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0)
             if iboost_energy_age >= 1:
-                self.iboost_today = dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
+                self.iboost_today = dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_since_day_start()]))
                 self.log("iBoost energy today from sensor reads {} kWh".format(self.iboost_today))
 
         # Fetch ML forecast if enabled
@@ -1445,40 +1648,41 @@ class Fetch:
                     self.load_minutes_source = "load_forecast"
                     self.load_minutes_age = 0
                     self.load_last_period = 0
+                elif self.get_arg("load_forecast", None, indirect=False):
+                    # A forecast sensor is configured but gave nothing: it is unavailable. Load ML is not a
+                    # source here, as it trains on load_today and so cannot forecast without it
+                    self.log("Error: No load data: load_today is not set and the load forecast returned no data. Skipping this cycle")
+                    self.record_status(message="Error: No load data - load_today not set and the load forecast returned no data", had_errors=True)
+                    raise LoadSourceMissing("load_today is not set and the load forecast returned no data")
                 else:
-                    self.log("Error: You have not set load_today or load_forecast in apps.yaml, you will have no load data")
-                    self.record_status(message="Error: load_today not set correctly", had_errors=True)
-                    raise ValueError
+                    self.log("Error: No load data: load_today or load_forecast is not set. Set one in apps.yaml, or if your inverter component configures it automatically, wait for it to start. Skipping this cycle")
+                    self.record_status(message="Error: No load data - load_today not set (in apps.yaml, or by a component's automatic configuration)", had_errors=True)
+                    raise LoadSourceMissing("load_today or load_forecast is not set")
 
             # Load import today data
             if "import_today" in self.args:
                 self.import_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
+                self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_since_day_start(), backwards=True)
             else:
                 self.log("Warn: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data
             if "export_today" in self.args:
                 self.export_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
+                self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_since_day_start(), backwards=True)
             else:
                 self.log("Warn: You have not set export_today in apps.yaml, you will have no previous export data")
 
             # PV today data
             if "pv_today" in self.args:
                 self.pv_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "pv_today", required_unit="kWh")
-                self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
+                self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_since_day_start(), backwards=True)
             else:
                 self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous PV data")
 
         # Battery temperature
         if "battery_temperature_history" in self.args:
-            self.battery_temperature_history = self.minute_data_import_export(self.max_days_previous, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
-            data = []
-            for minute in range(0, 24 * 60, 5):
-                data.append({minute: self.battery_temperature_history.get(minute, 0)})
-            self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
-            self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
+            self.fetch_battery_temperature()
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = self.load_car_energy(self.now_utc)
@@ -1573,8 +1777,11 @@ class Fetch:
         # before the rates are built, so a cancelled dispatch never gets its cheap rate
         dynamic_load_car_changed = self.dynamic_load_car_check(save=save)
         if save:
-            # Remember the half hour a dispatch is running in, now it is known whether the car was cancelled
-            self.octopus_held_update()
+            # Remember the half hour a dispatch is running in, now it is known whether the car was cancelled. One
+            # let go here that the slots above still kept (the car's reading arrived in between) is in this cycle's
+            # rates, so run again
+            if self.octopus_held_update():
+                self.update_pending = True
         octopus_surplus_changed = False
 
         if "rates_export_octopus_url" in self.args:
@@ -1636,6 +1843,7 @@ class Fetch:
                 self.log("Octopus Intelligent: dispatch minutes no car needs changed to {}".format(len(self.octopus_surplus)))
                 octopus_surplus_changed = True
             import_rates = self.dynamic_load_car_strip_feed_rates(import_rates)
+            import_rates = self.octopus_strip_withdrawn_feed_rates(import_rates, save=save)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True, use_future=True)
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
@@ -1707,6 +1915,8 @@ class Fetch:
         # Not for the tariff comparison, which fetches with save off and would log every tariff it tries
         if save:
             self.log_replay_rates()
+            self.log_replay_rate_sessions()
+            self.log_replay_dispatch_minutes()
 
         # Set rate thresholds
         if self.rate_import or self.rate_export:
@@ -2558,11 +2768,15 @@ class Fetch:
         pv_forecast10_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast10")
         pv_forecast90_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast90")
         relative_time = self.get_state_wrapper(entity_id=entity_id, attribute="relative_time")
-        try:
-            relative_time = strptime_aware(relative_time, TIME_FORMAT)
-        except (ValueError, TypeError):
-            self.log(f"Warn: Unable to parse relative_time from PV forecast sensor: {relative_time}, using midnight UTC as fallback")
+        if relative_time is None:
+            # No PV forecast source configured (or it has not published yet) - midnight UTC is the correct default
             relative_time = self.midnight_utc
+        else:
+            try:
+                relative_time = strptime_aware(relative_time, TIME_FORMAT)
+            except (ValueError, TypeError):
+                self.log(f"Warn: Unable to parse relative_time from PV forecast sensor: {relative_time}, using midnight UTC as fallback")
+                relative_time = self.midnight_utc
 
         # Convert keys to integers and values to floats
         pv_forecast_packed = {}
@@ -2618,6 +2832,17 @@ class Fetch:
             pv_forecast_minute90 = dict(pv_forecast_minute)
 
         return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90
+
+    def fetch_battery_temperature(self):
+        """
+        Fetch the battery temperature history and predict the temperature forward from it.
+
+        Only BATTERY_TEMPERATURE_HISTORY_DAYS are fetched, not max_days_previous: the prediction looks
+        back at most 24 hours plus one step, so a longer per-minute window is only held in memory.
+        """
+        self.battery_temperature_history = self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
+        self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
+        self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
 
     def predict_battery_temperature(self, battery_temperature_history, step):
         """
@@ -2680,33 +2905,33 @@ class Fetch:
         self.export_today, _ = minute_data(ge_cloud_data.filter_data(mdata, "export"), self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.pv_today, _ = minute_data(ge_cloud_data.filter_data(mdata, "pv"), self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
-        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
+        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_since_day_start(), backwards=True)
         self.load_minutes_source = "ge_cloud"
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
-        self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
-        self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
-        self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
+        self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_since_day_start(), backwards=True)
+        self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_since_day_start(), backwards=True)
+        self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_since_day_start(), backwards=True)
 
         # More up to date sensors for current values if set
         if "load_today" in self.args:
             load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0, interpolate=True)
-            self.load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_now, backwards=True)
+            self.load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_since_day_start(), backwards=True)
             self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             self.log("GECloudData load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
 
         if "import_today" in self.args:
             import_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.import_today_now = get_now_from_cumulative(import_today, self.minutes_now, backwards=True)
+            self.import_today_now = get_now_from_cumulative(import_today, self.minutes_since_day_start(), backwards=True)
 
         # Load export today data
         if "export_today" in self.args:
             export_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.export_today_now = get_now_from_cumulative(export_today, self.minutes_now, backwards=True)
+            self.export_today_now = get_now_from_cumulative(export_today, self.minutes_since_day_start(), backwards=True)
 
         # PV today data
         if "pv_today" in self.args:
             pv_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "pv_today", required_unit="kWh")
-            self.pv_today_now = get_now_from_cumulative(pv_today, self.minutes_now, backwards=True)
+            self.pv_today_now = get_now_from_cumulative(pv_today, self.minutes_since_day_start(), backwards=True)
 
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
@@ -2957,6 +3182,9 @@ class Fetch:
         alt_rate_min = min(alt_rates.values()) if alt_rates else 0
         alt_rate_threshold = abs(alt_rate_max - alt_rate_min) * 0.1
 
+        # Looked up for every minute below, so taken once rather than rebuilt from the per-type lists each time
+        manual_all_times = set(self.manual_all_times)
+
         stop_at = self.forecast_minutes + self.minutes_now + 12 * 60
         # Scan for lower rate start and end
         while minute < stop_at and not (minute >= (self.forecast_minutes + self.minutes_now) and (rate_low_start < 0)):
@@ -2975,7 +3203,7 @@ class Fetch:
                 pv_boundary = True
             if minute in rates:
                 rate = rates[minute]
-                if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)) or (minute in self.manual_all_times) or (rate_low_start in self.manual_all_times):
+                if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)) or (minute in manual_all_times) or (rate_low_start in manual_all_times):
                     rate_diff = abs(rate - rate_low_rate)
                     if (rate_low_start >= 0) and rate_diff > self.combine_rate_threshold:
                         # Refuse mixed rates that are different by more than threshold
@@ -2989,7 +3217,7 @@ class Fetch:
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if (rate_low_start in self.manual_all_times or minute in self.manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.plan_interval_minutes):
+                    if (rate_low_start in manual_all_times or minute in manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.plan_interval_minutes):
                         # Manual slot
                         rate_low_end = minute
                         break
@@ -3708,6 +3936,8 @@ class Fetch:
         """
         self.car_charging_planned = [False for c in range(self.num_cars)]
         self.car_charging_now = [False for c in range(self.num_cars)]
+        # True charging, False not charging, None no reading (no car_charging_now sensor, or unknown/unavailable)
+        self.car_charging_now_state = [None for c in range(self.num_cars)]
         self.car_charging_plan_smart = [False for c in range(self.num_cars)]
         self.car_charging_plan_max_price = [0 for c in range(self.num_cars)]
         self.car_charging_plan_time = ["07:00:00" for c in range(self.num_cars)]
@@ -3728,7 +3958,9 @@ class Fetch:
             self.car_charging_planned[car_n] = bool(self.car_plugged_in_now(car_n))
 
             # Car is charging now sensor - an on/off sensor, or a charging power sensor read in watts
-            self.car_charging_now[car_n] = bool(self.car_charging_now_value(self.get_arg("car_charging_now", "no", index=car_n, required_unit="W")))
+            # (no sensor configured reads None, so the state is None: no reading)
+            self.car_charging_now_state[car_n] = self.car_charging_now_value(self.get_arg("car_charging_now", None, index=car_n, required_unit="W"))
+            self.car_charging_now[car_n] = bool(self.car_charging_now_state[car_n])
 
             # Other car related configuration
             self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", True)
@@ -4322,7 +4554,10 @@ class Fetch:
                 carbon_data, _ = minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
                 carbon_data, carbon_replicated = self.carbon_replicate(carbon_data)
                 if carbon_replicated:
-                    self.log("Warn: Carbon intensity forecast only covers {} hours of the {} hour plan, replicating it forward to cover the rest".format(dp1(min(carbon_replicated) / 60), dp1(self.forecast_minutes / 60)))
+                    # Coverage shrinks every cycle between the component's ~4 hourly polls, so only warn once it is thin
+                    covered_hours = min(carbon_replicated) / 60
+                    severity = "Warn: " if covered_hours < CARBON_WARN_COVERAGE_HOURS else ""
+                    self.log("{}Carbon intensity forecast only covers {} hours of the {} hour plan, replicating it forward to cover the rest".format(severity, dp1(covered_hours), dp1(self.forecast_minutes / 60)))
 
         entity_id = self.prefix + ".carbon_now"
         state = self.get_state_wrapper(entity_id=entity_id)
@@ -4709,7 +4944,6 @@ class Fetch:
         self.manual_freeze_charge_times = self.manual_times("manual_freeze_charge")
         self.manual_freeze_export_times = self.manual_times("manual_freeze_export")
         self.manual_demand_times = self.manual_times("manual_demand")
-        self.manual_all_times = self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
         self.manual_api = self.api_select_update("manual_api")
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))

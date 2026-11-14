@@ -25,16 +25,20 @@ web interface. It shows the per-section record counts, any conflicts, a status f
 and a card per record, with the entity map collapsed behind a toggle and the whole document
 available at the bottom in the same YAML form a debug dump carries.
 
-The page is **redacted by default** - what you see is what a bug report would contain. "Show raw
-values" (`?raw=1`) switches to the unredacted document, so you can confirm your own serial number
-or MPAN was captured correctly. The raw view is labelled on screen and is **not safe to share**:
-Predbat's web interface has no authentication of its own, so treat raw mode the way you already
-treat the Apps page.
+**The Components page.** To look at one component, click the ⓘ button on its card (or its
+**Discovery** line). The pop-up shows an at-a-glance summary of each device that component
+reported, with the full record folded beneath it. The summary is built from the record's own
+fields, so anything a reporter adds later appears there without a change to the page.
+
+The page shows **what a bug report would contain** by default: everything the components reported,
+with email addresses removed. "Show raw values" (`?raw=1`) switches to the document as reported, email addresses included. The
+raw view is labelled on screen and is **not safe to share**: Predbat's web interface has no
+authentication of its own, so treat raw mode the way you already treat the Apps page.
 
 **A debug dump.** Every `predbat_debug.yaml` (written to `debug/` when
 `switch.predbat_debug_enable` is on, and what you normally attach to a bug report) carries the full
-catalogue under a top-level `discovery:` key. This is the complete document, and the redacted form
-described below - safe to attach to a public GitHub issue.
+catalogue under a top-level `discovery:` key. This is the complete document, in the form described
+below: no passwords, keys or email addresses, but every identifier readable.
 
 **`sensor.predbat_discovery`.** This entity carries a summary rather than the full document: its
 state is the total number of records found, and its attributes carry `schema_version`, `generated`,
@@ -62,7 +66,7 @@ restart Predbat, or read a fresh debug dump, to see anything reported later than
 | `chargers` | EV chargers, cross-linked to the cars they serve |
 | `cars` | Electric vehicles, cross-linked to the charger that charges them |
 | `meters` | Electricity (and gas) supply points, each with a direction (`import`/`export`) and, where known, a nested tariff record |
-| `forecasts` | Solar forecast providers (Solcast, forecast.solar, Open-Meteo, or your own HA sensors) and what each one covers |
+| `forecasts` | Forecast services and what each one covers: solar providers (Solcast, forecast.solar, Open-Meteo, or your own HA sensors), the carbon intensity forecast for your postcode district, and the Open-Meteo temperature forecast the ML load model reads |
 | `programmes` | Flexibility enrolments (a VPP, a saving session, a free-electricity event) that emit events and may constrain Predbat, cross-linked to the meter they apply to |
 
 Deye and Sunsynk cannot tell a PV-only inverter from a hybrid: their APIs give no signal, and
@@ -73,8 +77,15 @@ is configured as a PV source. A PV-only unit that has been configured as a batte
 usually show it in its record: `battery` among its functions, but no `battery_capacity_ah` rating
 and no `soc_max` entity.
 
-No reporter populates `programmes` yet - it is part of the schema for a future Axle/VPP-style
-reporter - so today it is always present as an empty list rather than missing from the document.
+Three reporters populate `programmes`. Octopus reports a joined Saving Sessions campaign as a
+`saving_session` programme, and a `free_electricity` programme once the account has had a Free
+Electricity session (that campaign has no joined flag, so a session is the only evidence). Kraken
+reports an EDF account enrolled in Flextras as a `free_electricity` programme. Each of these links
+its `meter` to the account's import meter. Axle reports its VPP enrolment
+as a `vpp` programme with the effects it has on Predbat: `rate_override` always, plus
+`forces_read_only` when `axle_control` is on. Axle cannot tell which supply point it is enrolled on,
+so its record names no `meter`. On other installs the section is present as an empty list rather
+than missing from the document.
 
 A charger integration that knows nothing about the vehicle it charges still reports a car, marked
 `flags: ["stub"]`, because Predbat indexes cars rather than chargers. A car without that flag is a
@@ -94,7 +105,7 @@ extra top-level sections describe the fleet as a whole rather than any one devic
     Two kinds of component are deliberately left out, because their silence carries no
     information: one you never configured (its absence is its status - the full registry is in
     `components.py`), and one that is running fine but has no reporter at all. Most components are
-    in that second group - `web`, `ha`, `chat`, `carbon`, `temperature` and the rest are not
+    in that second group - `web`, `ha`, `chat` and the rest are not
     hardware sources and will never report. Listing them all made the map thirty-odd entries of
     which a handful said anything, and buried the case that matters: a component that *can* report
     and did not
@@ -116,60 +127,24 @@ happened to run first - the catalogue observes them, it does not resolve them:
 
 ## What is, and is not, redacted
 
-The document you get from a debug dump or `sensor.predbat_discovery` has already been through
-redaction - the catalogue in memory is never published in its raw form. Two classes of information
-are treated very differently, deliberately:
+Only **credentials and email addresses** are kept out of the catalogue. Everything else a component
+reports is published exactly as reported (maintainer decision, 2 Nov 2026):
 
-**Pseudonymised** - never appears in the clear: account and site identifiers that trace back to
-*you specifically* - an MPAN, an Octopus/utility account number, a Solcast site id. Each is replaced
-with a short stable token (`#` followed by 8 hex characters) derived from the value and a random
-salt generated once per installation, so the *same* identifier always maps to the *same* token
-within one install's dumps (letting you correlate two records that share an account), but a
-different installation's token for the identical MPAN is completely unrelated - there is nothing to
-compare across users. Anywhere that identifier would otherwise be echoed elsewhere in the document -
-inside an entity id, a free-text note - is caught and replaced too, including a case- or
-`-`/`_`-folded form the same value can appear in (either direction: an upper-cased echo of a
-lower-cased original is caught exactly as a lower-cased echo of an upper-cased one is). This
-echo-substitution only fires for an original of six characters or more - anything shorter would
-corrupt more ordinary text as a false-positive substring match than it would ever hide, so a very
-short identifier is only ever replaced where it appears whole, not embedded inside a longer string.
+- **Never included:** a password, an API key, a token or any other field whose name reads as a
+  credential (`api_key`, `password`, `token`, ...). Validation refuses such a field outright,
+  wherever it is nested, so it never reaches the assembled catalogue.
+- **Removed:** an email address, wherever a component put it - a value, an entity id, a dict key -
+  is replaced with `<email>` in the debug dump, the web page and `sensor.predbat_discovery`. Only
+  the raw web view (`?raw=1`) shows it.
+- **Readable:** every identifier - hardware serials, MPANs, account numbers, site, plant and system
+  ids, charger ids, Intelligent device ids - along with location fields, firmware, models, tariff
+  and product codes, and entity ids. Identifiers are what make a record useful: they let you match
+  it to your own hardware and dashboard, and they are what anything configuring Predbat from the
+  catalogue needs to re-bind an entity. Earlier versions replaced account identifiers with `#`
+  tokens; they no longer do.
 
-**Kept readable, deliberately** - a hardware serial number, a firmware version string, a device
-model name, and a tariff or product code. None of these identify *you*; they identify a public
-product or a specific physical device, and stripping them would make a bug report undiagnosable -
-"my GivEnergy inverter won't discharge" is a much harder bug to chase without knowing which
-inverter, which firmware, or which tariff is in play. **Entity ids are published verbatim too** -
-exactly the `sensor.`/`number.`/... id Home Assistant knows the entity by - since that is what lets
-you match a catalogue record back to something you can see on your own dashboard; a component is
-expected to build its entity ids from public naming, never from a value this catalogue treats as
-sensitive (and where one is, the redactor still catches it - see the guards below).
-
-A handful of further guards run regardless of which container a value landed in: anything that
-looks like a credential by its field name (`api_key`, `password`, `token`, ...) is refused outright,
-wherever it is nested; a value that looks like a misfiled identifier is pseudonymised even inside a
-container that is not supposed to hold one - a 10-or-more-digit run is enough anywhere it turns up
-in a clear container's value (embedded in a longer string too, e.g. `"MPAN 1234567890123"`), except
-inside `hardware_ids`, where a value is only flagged when it is *nothing but* digits, so a
-letter-prefixed vendor serial like `HV2160123456` stays readable. A serial a record declares -
-`hardware_ids.serial`, or an entry in `serials` - is never flagged, whatever its shape: Solis, Deye
-and Sunsynk serials are nothing but digits, and they stay readable wherever they appear as a whole
-token, in a `device_id` built from one or a `duplicate_serial` observation that names one. Only the
-serial itself is let through - a digit run left beside it, or one it merely sits inside, is still
-checked. Finally, a field literally named `latitude`, `longitude` or `postcode` is pseudonymised
-regardless of what it contains, since a location cannot otherwise be recognised from one value
-alone. A debug dump is safe to attach to a
-public issue; **the equivalent in-process, unredacted view exists only for Predbat's own internal
-diagnostics and must never be written anywhere.**
-
-One visible side effect of pseudonymisation worth knowing about when reading a dump: a `device_id`
-built from a sensitive identifier is replaced *wholesale* by its pseudonym token rather than having
-just that part of it swapped out. Octopus's meter `device_id` is `"octopus:{mpan}"`, so a
-pseudonymised one loses its `"octopus:"` prefix entirely and reads as a bare `#` token, unlike a
-`device_id` in most other sections. Nothing is lost functionally - cross-links between records still
-resolve to the same token, and the record is still tagged with its `source` - but a maintainer
-comparing sections will notice the inconsistency and should not have to wonder whether it is a bug.
-A `device_id` built from the record's own serial is not replaced, even when the record also carries
-`account_ids`: Deye's `"deye:{serial}"` stays readable beside its pseudonymised station id.
+Bear that in mind before attaching a dump to a public issue: it carries your serial numbers, MPAN
+and account ids.
 
 ## For developers: the report schema
 
@@ -202,19 +177,18 @@ with a warning) plus whichever *structural* fields that section defines (`invert
 ### The container model, and why it is typed
 
 Rather than trying to name every field a future reporter might need, the schema instead defines a
-small set of **containers**, each declaring the *type* of value it accepts and the *redaction
-class* that value gets:
+small set of **containers**, each declaring the *type* of value it accepts:
 
-| Container | Accepts | Redaction |
-| --------- | ------- | --------- |
-| `hardware_ids` | Short strings | Clear |
-| `info` | Short strings, no `@` | Clear |
-| `ratings` | Numbers and booleans, keyed by Predbat's setting name where one exists (`inverter_limit`, `export_limit`, `import_limit`, `battery_rate_max`, `soc_max`, `battery_min_soc`) | Clear |
-| `coverage` | A number/boolean, or a list of lowercase tokens | Clear |
-| `entities` | An entity descriptor: `access` (`rw` or `r`, required), exactly one of `entity_id` or a fixed `value`, and typed fields such as `domain`, `unit`, `format`, `min`/`max`, `invert` | Clear |
-| `capabilities` | `true`/`false` for the seven behaviour keys of an inverter definition (`support_charge_freeze`, `support_discharge_freeze`, `support_feedin_first`, `can_span_midnight`, `charge_discharge_with_rate`, `charge_control_immediate`, `target_soc_used_for_discharge`) | Clear |
-| `account_ids` | Any scalar | Pseudonymised |
-| `functions` / `flags` / `effects` | Lists of short lowercase tokens | Clear |
+| Container | Accepts |
+| --------- | ------- |
+| `hardware_ids` | Short strings |
+| `info` | Short strings, no `@` |
+| `ratings` | Numbers and booleans, keyed by Predbat's setting name where one exists (`inverter_limit`, `export_limit`, `import_limit`, `battery_rate_max`, `soc_max`, `battery_min_soc`) |
+| `coverage` | A number/boolean, or a list of lowercase tokens |
+| `entities` | An entity descriptor: `access` (`rw` or `r`, required), exactly one of `entity_id` or a fixed `value`, and typed fields such as `domain`, `unit`, `format`, `min`/`max`, `invert` |
+| `capabilities` | `true`/`false` for the seven behaviour keys of an inverter definition (`support_charge_freeze`, `support_discharge_freeze`, `support_feedin_first`, `can_span_midnight`, `charge_discharge_with_rate`, `charge_control_immediate`, `target_soc_used_for_discharge`) |
+| `account_ids` | Any scalar: an identifier that names your account or site rather than hardware (an MPAN, an account number, a site id) |
+| `functions` / `flags` / `effects` | Lists of short lowercase tokens |
 
 A value that does not fit its container's declared type is silently **dropped**, not coerced and
 not raised as an error - a string offered to `ratings`, or free text over 64 characters offered to
