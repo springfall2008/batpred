@@ -2043,6 +2043,30 @@ def test_reserve_above_soc_inverter_types():
     return failed
 
 
+def test_discharge_to_target_inverter_types():
+    """
+    Pin the inverter types that can discharge to a Hold charging target in demand mode (#5937).
+
+    The branch in execute_plan runs when no pause can hold (no timed pause) and the window cannot act as a floor
+    (no target SoC). It is reached by more types than Sigenergy, the one in the issue: the service-driven ones
+    (SE, SX4, SF, SFMB, HU, SIG) stop the charge as demand does, FoxESS only when its reserve cannot hold at the
+    target (reserve_max below it, or set_reserve_enable off), and GS through mimic_target_soc (test_inverter
+    solis_gs_discharge_to_target). HanchuCloud has a target SoC, so it is not here: its component leaves the
+    charge slot out itself (#5955, #6127).
+    This pins the static flags only; the reserve conditions are runtime.
+    A type joining this set changes how its Hold charging behaves, so it has to be added here on purpose.
+    """
+    from config import INVERTER_DEF
+
+    failed = False
+    reached = sorted(name for name, idef in INVERTER_DEF.items() if not idef.get("has_timed_pause", False) and not idef.get("has_target_soc", False))
+    expected = ["FoxESS", "GS", "HU", "SE", "SF", "SFMB", "SIG", "SX4"]
+    if reached != expected:
+        print("ERROR: inverter types that can discharge to a Hold charging target should be {}, got {}".format(expected, reached))
+        failed = True
+    return failed
+
+
 def test_reserve_full_only_above_80_inverter_types():
     """Only the Powerwall, whose firmware honours no backup reserve between 80 and 100 (GH#6046), opts in."""
     from config import INVERTER_DEF
@@ -2217,6 +2241,7 @@ def run_execute_tests(my_predbat):
     failed |= test_inverter_reads_battery_export_permitted(my_predbat)
     failed |= test_fetch_inverter_data_battery_export_not_permitted(my_predbat)
     failed |= test_reserve_above_soc_inverter_types()
+    failed |= test_discharge_to_target_inverter_types()
     failed |= test_reserve_full_only_above_80_inverter_types()
     failed |= test_reserve_full_only_above_80_reaches_the_inverter(my_predbat)
     failed |= test_reserve_via_discharge_rate_inverter_types(my_predbat)
@@ -3135,6 +3160,148 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
+
+    # No target SoC, reserve or pause (Sigenergy): stop rather than freeze, so the battery covers the house down to the target (#5937)
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_immediate_soc_target=0,
+        assert_immediate_charge_soc_freeze_array=[False, False],
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
+    # Its rates are claimed as demand, so the crosscharge balancer does not hold the discharge against a charging fleet
+    for inverter in my_predbat.inverters:
+        owner = my_predbat.inverter_rate_intent[inverter.id].get("owner")
+        if owner != "demand":
+            print("ERROR: Inverter {} discharging to target should claim its rates as demand, got {}".format(inverter.id, owner))
+            failed = True
+    if failed:
+        return failed
+
+    # The same inverter at the target holds with a freeze, as #5541 intended
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_at_target",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=5.1,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=780,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=50,
+        assert_immediate_soc_target=50,
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
+    if failed:
+        return failed
+
+    # With set_discharge_during_charge off the plan never discharges in the window, so keep holding
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_no_discharge",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=780,
+        assert_discharge_rate=0,
+        assert_pause_discharge=False,
+        assert_soc_target=50,
+        assert_immediate_soc_target=50,
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+        set_discharge_during_charge=False,
+    )
+    if failed:
+        return failed
+
+    # A rate-controlled inverter (Huawei) also needs its discharge rate back, or a zero rate still holds the battery
+    for inverter in my_predbat.inverters:
+        inverter.inv_charge_discharge_with_rate = True
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_with_rate",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_immediate_soc_target=0,
+        assert_immediate_charge_soc_freeze_array=[False, False],
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
+    for inverter in my_predbat.inverters:
+        inverter.inv_charge_discharge_with_rate = False
+    if failed:
+        return failed
+
+    # A car hold still holds the battery at its current SoC while discharging to the target
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_car",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging, Hold for car",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=0,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_immediate_soc_target=90,
+        assert_immediate_charge_soc_freeze_array=[True, True],
+        car_slot=charge_window_best_slot,
+        car_charging_from_battery=False,
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
+    if failed:
+        return failed
+
     # Here the target is 5kWh and we are at 9kWh so we will let it discharge.
     failed |= run_execute_test(
         my_predbat,
