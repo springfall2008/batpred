@@ -7,6 +7,7 @@ import pytz
 from predheat import PredHeat
 from const import TIME_FORMAT
 from tests.test_predheat import _make_simulation, BASE_TEMP
+from unittest.mock import patch
 
 
 def test_predheat_climate_scheduler(my_predbat):
@@ -20,7 +21,7 @@ def test_predheat_climate_scheduler(my_predbat):
     def local(y, m, d, hour, minute):
         return tz.localize(datetime(y, m, d, hour, minute))
 
-    def make(now, response, live=20.0, settings=None, days=2, scheduler_settings=None, workday_dates=None):
+    def make(now, response, live=20.0, settings=None, days=2, scheduler_settings=None, workday_dates=None, hvac_mode="heat"):
         my_predbat.args["predheat"] = {
             "forecast_days": days,
             "target_temperature": "sensor.test_room_target",
@@ -43,6 +44,8 @@ def test_predheat_climate_scheduler(my_predbat):
 
         def get_state(entity_id=None, default=None):
             state_calls.append(entity_id)
+            if entity_id == "climate.test_scheduler":
+                return hvac_mode
             return live
 
         def call_service(service, **kwargs):
@@ -95,7 +98,7 @@ def test_predheat_climate_scheduler(my_predbat):
         ]
         heat, calls, states = make(local(2026, 11, 7, 21, 15), response({"all_days": nodes}), live="20.75")
         assert calls == [("climate_scheduler/get_schedule", {"schedule_id": "climate.test_scheduler", "return_response": True})]
-        assert states == ["sensor.test_room_target"]
+        assert states == ["sensor.test_room_target", "climate.test_scheduler"]
         assert heat.schedule_change_minutes[:3] == [15.0, 45.0, 615.0]
         values(heat, [(0, 20.75), (14, 20.75), (15, 19), (44, 19), (45, 16), (614, 16), (615, 21)])
 
@@ -207,7 +210,7 @@ def test_predheat_climate_scheduler(my_predbat):
     def numeric_live():
         nodes = {"all_days": [{"time": "22:00", "temp": 18}]}
         heat, _, state_calls = make(local(2026, 11, 7, 21, 15), response(nodes), live=100, settings={"target_temperature": 21.25})
-        assert state_calls == []
+        assert state_calls == ["climate.test_scheduler"]
         values(heat, [(0, 21.25), (44, 21.25), (45, 18)])
 
     def failures():
@@ -222,7 +225,7 @@ def test_predheat_climate_scheduler(my_predbat):
             ("empty schedule", response({}), 20, {}),
             ("unavailable setpoint", response({"all_days": [{"time": "22:00", "temp": 19}]}), "unavailable", {}),
             ("non-finite setpoint", response({"all_days": [{"time": "22:00", "temp": 19}]}), "nan", {}),
-            ("HVAC off", response({"all_days": [{"time": "22:00", "temp": 19, "hvac_mode": "off"}]}), 20, {}),
+            ("unsupported HVAC", response({"all_days": [{"time": "22:00", "temp": 19, "hvac_mode": "cool"}]}), 20, {}),
         ]
         for name, payload, live, settings in cases:
             heat, calls, _ = make(when, payload, live=live, settings=settings)
@@ -255,6 +258,120 @@ def test_predheat_climate_scheduler(my_predbat):
         assert heat.schedule_change_minutes[:2] == [120.0, 300.0]
         values(heat, [(119, 20), (120, 18), (299, 18), (300, 21)])
 
+    def hvac_modes():
+        # "No Change" applies to temperature only; mode transitions remain.
+        now = local(2026, 11, 7, 21, 15)
+        nodes = {"all_days": [
+            {"time": "21:30", "temp": None, "noChange": True, "hvac_mode": "off"},
+            {"time": "21:45", "temp": 21},
+            {"time": "22:00", "temp": None, "noChange": True, "hvac_mode": "heat"},
+            {"time": "22:30", "temp": 18},
+        ]}
+        heat, _, states = make(now, response(nodes))
+        assert states == ["sensor.test_room_target", "climate.test_scheduler"], states
+        assert heat.schedule_mode_minutes[:2] == [15.0, 45.0]
+        assert heat.schedule_mode_enabled[:2] == [False, True]
+        for minute, expected in [(0, True), (14, True), (15, False),
+                                 (30, False), (44, False), (45, True), (90, True)]:
+            assert heat.get_heating_enabled(minute) is expected, minute
+        values(heat, [(0, 20), (29, 20), (30, 21), (74, 21), (75, 18)])
+
+        # Current HVAC-off state must be used until the first future change.
+        off, _, _ = make(now, response(nodes), hvac_mode="off")
+        assert not off.get_heating_enabled(0)
+        assert not off.get_heating_enabled(40)
+        assert off.get_heating_enabled(45)
+
+        # Inability to read the live mode safely returns to history and clears
+        # both channels, rather than assuming that heating is enabled.
+        unknown, _, _ = make(now, response(nodes), hvac_mode="unavailable")
+        assert unknown.schedule_change_minutes is None
+        assert unknown.schedule_mode_minutes is None
+        values(unknown, [(0, 17.5), (30, 17.5)])
+
+        heat.call_service = lambda *args, **kwargs: None
+        heat.load_target_schedule(now + timedelta(minutes=5))
+        assert heat.schedule_change_minutes is None
+        assert heat.schedule_mode_minutes is None
+        assert heat.get_heating_enabled(30)
+
+    def current_mode_without_transitions():
+        # Temperature-only schedules must respect a manual HVAC-off state;
+        # temperature changes must not implicitly re-enable the heating.
+        now = local(2026, 11, 7, 21, 15)
+        nodes = {"all_days": [
+            {"time": "21:30", "temp": 21},
+            {"time": "22:00", "temp": 18},
+        ]}
+        for mode, enabled in (("off", False), ("heat", True)):
+            heat, _, states = make(now, response(nodes), hvac_mode=mode)
+            assert states == ["sensor.test_room_target", "climate.test_scheduler"], states
+            assert heat.schedule_change_minutes[:2] == [15.0, 45.0]
+            assert heat.schedule_mode_minutes == [], (mode, heat.schedule_mode_minutes)
+            assert heat.schedule_mode_enabled == []
+            assert heat.schedule_initial_enabled is enabled
+            for minute in (0, 15, 45, 2000):
+                assert heat.get_heating_enabled(minute) is enabled, (mode, minute)
+            values(heat, [(0, 20), (15, 21), (45, 18)])
+
+        # Unknown or unsupported current modes must not break a
+        # temperature-only schedule or accidentally disable the heat source.
+        for mode in ("unavailable", "auto", None):
+            heat, _, _ = make(now, response(nodes), hvac_mode=mode)
+            assert heat.schedule_change_minutes is not None, mode
+            assert heat.schedule_mode_minutes is None, mode
+            assert heat.get_heating_enabled(0), mode
+            assert heat.get_heating_enabled(2000), mode
+            values(heat, [(0, 20), (15, 21), (45, 18)])
+
+        # A failed HVAC state lookup also leaves a temperature-only
+        # forecast intact, with the existing heating assumption.
+        heat, _, _ = make(now, response(nodes), hvac_mode="heat")
+        def missing_mode(entity_id=None, default=None):
+            if entity_id == "climate.test_scheduler":
+                raise RuntimeError("Home Assistant unavailable")
+            return 20.0
+        heat.get_state = missing_mode
+        heat.load_target_schedule(now)
+        assert heat.schedule_change_minutes is not None
+        assert heat.schedule_mode_minutes is None
+        assert heat.get_heating_enabled(0)
+        values(heat, [(0, 20), (15, 21), (45, 18)])
+
+    def hvac_simulation():
+        # Exercise the actual thermal model, including an off interval and
+        # subsequent restart. No heat is produced during the off interval.
+        heat = _make_simulation(my_predbat, [], smart_thermostat=False)
+        heat.schedule_initial_temperature = 24
+        heat.schedule_change_minutes = []
+        heat.schedule_change_temperatures = []
+        heat.schedule_initial_enabled = True
+        heat.schedule_mode_minutes = [30, 90]
+        heat.schedule_mode_enabled = [False, True]
+        heat.run_simulation(BASE_TEMP, True)
+        heating = heat.published[heat.prefix + ".heat_to_temp"]["results"]
+        energy = heat.published[heat.prefix + ".heat_energy"]["results"]
+        stamp = lambda minute: (heat.midnight_utc + timedelta(minutes=minute)).strftime(TIME_FORMAT)
+        assert heating[stamp(10)] > 0, "heating should initially run"
+        assert heating[stamp(40)] == 0 and heating[stamp(80)] == 0, "off must gate the heat source"
+        assert heating[stamp(100)] > 0, "heating should restart after heat mode resumes"
+        assert energy[stamp(80)] == energy[stamp(70)], "off interval must use no heat-source energy"
+
+        # The smart thermostat may raise the requested target early, but must
+        # never override an explicit HVAC-off interval.
+        heat = _make_simulation(my_predbat, [], smart_thermostat=True)
+        heat.schedule_initial_temperature = 18
+        heat.schedule_change_minutes = [90]
+        heat.schedule_change_temperatures = [24]
+        heat.schedule_initial_enabled = False
+        heat.schedule_mode_minutes = [90]
+        heat.schedule_mode_enabled = [True]
+        first_pass = {minute: BASE_TEMP for minute in range(0, heat.forecast_days * 1440, 5)}
+        heat.run_simulation(BASE_TEMP, False, last_predict_minute=first_pass)
+        heating = heat.published[heat.prefix + ".heat_to_temp"]["results"]
+        assert heating[stamp(80)] == 0, "preheat must respect HVAC-off"
+        assert heating[stamp(100)] > 0, "preheat may run once heating is enabled"
+
     def update_pred_wiring():
         # Exercise the production update_pred path, not just load_target_schedule.
         my_predbat.args["predheat"] = {
@@ -280,19 +397,33 @@ def test_predheat_climate_scheduler(my_predbat):
 
         def service(name, **kwargs):
             calls.append((name, kwargs))
-            return response({"all_days": [{"time": "00:00", "temp": 18}]})
+            return response({"all_days": [{"time": "21:22", "temp": 18}]})
 
         heat.call_service = service
         captured = []
 
         def simulate(volume_temp, heating_active, save="best", last_predict_minute=None):
-            captured.append(heat.get_target_temperature(0))
+            captured.append(
+                [heat.get_target_temperature(m) for m in (0, 5, 10)]
+            )
             return volume_temp, {}
 
         heat.run_simulation = simulate
-        heat.update_pred(scheduled=False)
-        assert calls == [("climate_scheduler/get_schedule", {"schedule_id": "climate.test_scheduler", "return_response": True})]
-        assert captured == [22.0, 22.0], "both passes must use the live scheduled setpoint: {}".format(captured)
+
+        # Run between five-minute boundaries to test schedule alignment.
+        with patch("predheat.datetime", wraps=datetime) as clock:
+            clock.now.return_value = local(2026, 11, 7, 21, 17).replace(second=30)
+            heat.update_pred(scheduled=False)
+
+        assert calls == [
+            ("climate_scheduler/get_schedule", {
+                "schedule_id": "climate.test_scheduler",
+                "return_response": True,
+            })
+        ]
+
+        assert heat.schedule_change_minutes == [7.0, 1447.0]
+        assert captured == [[22.0, 22.0, 18.0]] * 2, captured
 
     def simulation():
         # Verify that the simulation itself uses the new targets, not just the helper.
@@ -318,6 +449,9 @@ def test_predheat_climate_scheduler(my_predbat):
         check("failure and compatibility fallbacks", failures)
         check("discard stale schedule on failure", reset_after_failure)
         check("UK daylight-saving transitions", dst)
+        check("HVAC mode parsing and fallback", hvac_modes)
+        check("current HVAC mode without transitions", current_mode_without_transitions)
+        check("HVAC off/on thermal simulation and preheat", hvac_simulation)
         check("update_pred integration", update_pred_wiring)
         check("simulation uses scheduled targets", simulation)
     finally:
