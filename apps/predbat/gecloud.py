@@ -27,7 +27,7 @@ import random
 from component_base import ComponentBase, writes
 from bindings import BINDING_SETTINGS, SITE_SETTINGS, SUMMED_SETTINGS, slot_value
 from coordinator import charger_with_stub_car, inverter_record
-from mock_base import MockBase as SharedMockBase
+from mock_base import CoordinatorHarness, MockBase as SharedMockBase
 
 """
 GE Cloud data download
@@ -371,7 +371,7 @@ GE_CLOUD_TIME_SELECT_FORMAT = "HH:MM:SS"
 # this component (spec D13), so the discovery record describes the sensor, not the row.
 GE_CLOUD_CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
-# The whole inverter configuration: num_inverters, inverter_type and every binding and site setting
+# The whole inverter configuration: what the command-line review prints and compares, old against new
 GE_CLOUD_CONFIGURATION_SETTINGS = ("num_inverters", "inverter_type") + tuple(sorted(BINDING_SETTINGS | SITE_SETTINGS))
 
 
@@ -395,6 +395,80 @@ def apply_legacy_bindings(bound, args, apps_yaml):
         else:
             result[setting] = copy.deepcopy(value)
     return result
+
+
+def _review_value(value):
+    """A configuration value as the review compares it: trailing None entries dropped, and absent, None or all-None all None."""
+    if isinstance(value, (list, tuple)):
+        value = list(value)
+        while value and value[-1] is None:
+            value.pop()
+        return value or None
+    return value
+
+
+def discovery_review_lines(report, bindings, args, legacy_args, checker_lines=()):
+    """
+    The command-line review of one discovery configuration, as a list of lines. Pure.
+
+    report is GE Cloud's discovery report, bindings the coordinator's last bindings, args the configuration it
+    left, legacy_args apply_legacy_bindings() of the same starting args and checker_lines what
+    check_automatic_config() logged. Five sections: the inverter records, the bindings slot by slot, the final
+    inverter configuration, the settings where the old and new configurations differ (a known difference or
+    a setting the inverter type dummies is marked expected) and the checker's lines.
+    """
+    args = args or {}
+    legacy_args = legacy_args or {}
+    lines = ["GE Cloud inverter records:"]
+    records = (report or {}).get("inverters", [])
+    for record in records:
+        serials = record.get("serials") or [(record.get("hardware_ids") or {}).get("serial")]
+        lines.append("  {} inverter_type={} composition={} serials={}".format(record.get("device_id"), record.get("inverter_type") or "-", record.get("composition") or "-", ", ".join(str(serial) for serial in serials if serial)))
+        for name, descriptor in sorted((record.get("entities") or {}).items()):
+            lines.append("    {}: {}".format(name, descriptor.get("entity_id", descriptor.get("value")) if isinstance(descriptor, dict) else descriptor))
+    if not records:
+        lines.append("  (none)")
+
+    lines.append("Bindings:")
+    entries = (bindings or {}).get("inverters", [])
+    for entry in entries:
+        lines.append("  slot {} origin={} source={} device_id={} inverter_type={}".format(entry.get("slot"), entry.get("origin"), entry.get("source") or "-", entry.get("device_id") or "-", entry.get("inverter_type") or "-"))
+    if not entries:
+        lines.append("  (none)")
+
+    lines.append("Inverter configuration:")
+    lines.append("  num_inverters: {}".format(args.get("num_inverters")))
+    lines.append("  inverter_type: {}".format(args.get("inverter_type")))
+    for setting in sorted(BINDING_SETTINGS | SITE_SETTINGS):
+        if args.get(setting) is not None:
+            lines.append("  {}: {}".format(setting, args[setting]))
+
+    lines.append("Old against new:")
+    types = set()
+    for value in (legacy_args.get("inverter_type"), args.get("inverter_type")):
+        types.update(entry for entry in (value if isinstance(value, (list, tuple)) else [value]) if isinstance(entry, str))
+    differences = 0
+    for setting in GE_CLOUD_CONFIGURATION_SETTINGS:
+        old, new = _review_value(legacy_args.get(setting)), _review_value(args.get(setting))
+        if old == new:
+            continue
+        differences += 1
+        dummied = sorted(inverter_type for inverter_type in types if setting in GE_CLOUD_DUMMIED_SETTINGS.get(inverter_type, ()))
+        if setting in GE_CLOUD_KNOWN_DIFFERENCES:
+            note = "expected: {}".format(GE_CLOUD_KNOWN_DIFFERENCES[setting])
+        elif dummied:
+            note = "expected: inverter.py replaces it with a dummy for {}".format(", ".join(dummied))
+        else:
+            note = "UNEXPECTED"
+        lines.append("  {}: old {!r} new {!r} ({})".format(setting, old, new, note))
+    if not differences:
+        lines.append("  no difference")
+
+    lines.append("Checker:")
+    lines.extend("  " + line for line in checker_lines)
+    if not checker_lines:
+        lines.append("  (no line logged)")
+    return lines
 
 
 def ge_code_message(data, code):
@@ -4340,8 +4414,10 @@ async def test_gecloud_direct(api_key, write_entity=None, write_value=None, writ
 
     print(f"Testing GECloud Direct API with key: {api_key}")
 
-    # Create a mock base object
+    # Create a mock base object, with a real discovery coordinator: GE Cloud configures the inverters only through it
     mock_base = MockBase()
+    harness = CoordinatorHarness(mock_base)
+    start = copy.deepcopy(mock_base.args)
 
     # Create GECloudDirect(mock_base, **arg_dict)
     arg_dict = {
@@ -4350,8 +4426,19 @@ async def test_gecloud_direct(api_key, write_entity=None, write_value=None, writ
         "automatic": True,
     }
     gecloud_direct = GECloudDirect(mock_base, **arg_dict)
+    gecloud_direct.component_name = "gecloud"
+    harness.register("gecloud", gecloud_direct)
     await gecloud_direct.run(0, True)
     # await gecloud_direct.run(1, False)
+
+    # Review what discovery configured, and how it compares with the previous automatic configuration
+    devices = gecloud_direct.devices_dict
+    legacy_args = apply_legacy_bindings(gecloud_direct._legacy_bindings(devices), start, mock_base.args_from_apps_yaml)
+    checker_lines = [line for line in harness.log_lines if line.startswith(("Info: GECloud: discovery", "Warn: GECloud: discovery", "Info: GECloud: could not compare"))]
+    print("")
+    print("Discovery review")
+    for line in discovery_review_lines(gecloud_direct._discovery_report, harness.coordinator.bindings, mock_base.args, legacy_args, checker_lines):
+        print(line)
 
     if write_entity and write_value is not None:
         mapping = gecloud_direct.register_entity_map.get(write_entity, None)

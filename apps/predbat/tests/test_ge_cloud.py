@@ -14,7 +14,7 @@ from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_
 from gecloud import EVCCommandFailed, GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
 from gecloud import CONTROL_SETTINGS_REFRESH_SECONDS, DEVICE_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
 from gecloud import DEVICE_HOLD_INITIAL_SECONDS, DEVICE_HOLD_MAX_SECONDS, DEVICE_TIMEOUT_ATTEMPTS
-from gecloud import GE_CLOUD_CONFIGURATION_SETTINGS, GE_CLOUD_KEEP_USER_SETTINGS, apply_legacy_bindings
+from gecloud import GE_CLOUD_CONFIGURATION_SETTINGS, GE_CLOUD_KEEP_USER_SETTINGS, apply_legacy_bindings, discovery_review_lines
 from utils import dp4
 import asyncio
 import copy
@@ -395,6 +395,7 @@ def test_ge_cloud(my_predbat=None):
         ("legacy_bindings_is_pure", _test_legacy_bindings_is_pure, "_legacy_bindings() matches the automatic configuration and writes nothing"),
         ("switch_on_writes_no_binding", _test_switch_on_opts_in_and_writes_no_binding, "opts in, files the report, writes no binding"),
         ("no_coordinator_configures_nothing", _test_no_coordinator_configures_nothing, "no coordinator: one warning, no binding, live work still done"),
+        ("discovery_review_lines", _test_discovery_review_lines, "the command-line discovery review of a two-inverter install"),
         ("opt_in_options_follow_config", _test_opt_in_options_follow_config, "opt-in options follow ge_cloud_load_today_ignore and ge_cloud_automatic_split_pv"),
         ("switch_on_control_registers", _test_switch_on_configures_before_control_registers, "args configured by the coordinator before the control registers are read"),
         ("checker_clean", _test_checker_clean, "check_automatic_config: matching args"),
@@ -7995,6 +7996,67 @@ def _test_no_coordinator_configures_nothing(my_predbat):
     assert ge.base.ha_interface.external_states.get("switch.predbat_inverter_hybrid") is True, ge.base.ha_interface.external_states
     assert not [line for line in ge.log_messages if line.startswith(KEPT_NOTE_PREFIX)], ge.log_messages
     print("PASS: with no coordinator GE Cloud warns once and configures nothing")
+    return 0
+
+
+def _test_discovery_review_lines(my_predbat):
+    """
+    The command-line review of a dummy two-inverter install configured through a real coordinator on the shared
+    MockBase and CoordinatorHarness, as gecloud.py's harness runs it: the slot lines, the configuration lines and
+    an expected difference, plus MockBase.set_arg's per-slot writes.
+    """
+    from gecloud import GE_CLOUD_KNOWN_DIFFERENCES
+    from mock_base import CoordinatorHarness, MockBase as SharedMockBase
+
+    # MockBase.set_arg follows Fetch.set_arg: an index pads with None, None deletes the whole key even with an index
+    base = SharedMockBase()
+    base.set_arg("charge_rate", "number.b", index=1)
+    assert base.args["charge_rate"] == [None, "number.b"], base.args
+    base.set_arg("charge_rate", "number.a", index=0)
+    assert base.args["charge_rate"] == ["number.a", "number.b"], base.args
+    base.set_arg("charge_rate", None, index=1)
+    assert "charge_rate" not in base.args, base.args
+    assert base.components is None and base.args_from_apps_yaml == {} and base.apps_yaml_override_warned == set()
+
+    base = SharedMockBase()
+    harness = CoordinatorHarness(base)
+    start = copy.deepcopy(base.args)
+    ge = GECloudDirect(base, ge_cloud_direct=True, api_key="test_api_key", automatic=True)
+    ge.component_name = "gecloud"
+    harness.register("gecloud", ge)
+    devices = {"ems": None, "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {"battery001": [1001], "battery002": [1002]}}
+    ge.devices_dict = devices
+    ge.settings = {"battery001": dict(GEC_FULL_REGISTERS), "battery002": dict(GEC_MIXED_REGISTERS)}
+    ge.info = {"battery001": GEC_INFO, "battery002": GEC_INFO}
+    run_async(ge.async_automatic_config(devices))
+
+    legacy_args = apply_legacy_bindings(ge._legacy_bindings(devices), start, base.args_from_apps_yaml)
+    checker = [line for line in harness.log_lines if line.startswith(("Info: GECloud: discovery", "Warn: GECloud: discovery"))]
+    lines = discovery_review_lines(ge._discovery_report, harness.coordinator.bindings, base.args, legacy_args, checker)
+
+    headers = ["GE Cloud inverter records:", "Bindings:", "Inverter configuration:", "Old against new:", "Checker:"]
+    assert [line for line in lines if not line.startswith(" ")] == headers, lines
+    assert "  gecloud:battery001 inverter_type=GEC composition=direct serials=battery001" in lines, lines
+    assert "    charge_rate_percent: number.predbat_gecloud_battery002_inverter_charge_power_percentage" in lines, lines
+    assert "  slot 0 origin=discovered source=gecloud device_id=gecloud:battery001 inverter_type=GEC" in lines, lines
+    assert "  slot 1 origin=discovered source=gecloud device_id=gecloud:battery002 inverter_type=GEC" in lines, lines
+    assert "  num_inverters: 2" in lines and "  inverter_type: ['GEC', 'GEC']" in lines, lines
+    assert "  charge_rate_percent: [None, 'number.predbat_gecloud_battery002_inverter_charge_power_percentage']" in lines, lines
+    assert "  battery_temperature_history: sensor.predbat_gecloud_battery001_battery_temperature" in lines, lines
+    pause = "  pause_mode: old ['select.predbat_gecloud_battery001_pause_battery', 'select.predbat_gecloud_battery002_pause_battery'] new ['select.predbat_gecloud_battery001_pause_battery'] (expected: {})".format(GE_CLOUD_KNOWN_DIFFERENCES["pause_mode"])
+    assert pause in lines, lines
+    assert not [line for line in lines if "UNEXPECTED" in line], lines
+    assert "  Info: GECloud: discovery configuration matches the previous automatic configuration apart from 4 known difference(s)" in lines, lines
+    # The coordinator wrote the slots through MockBase.set_arg's index path
+    assert base.args["charge_rate"] == ["number.predbat_gecloud_battery001_battery_charge_power"], base.args.get("charge_rate")
+
+    # A setting the inverter type dummies is expected, any other difference is not; and the empty cases say so
+    lines = discovery_review_lines({}, None, {"inverter_type": ["GEE"], "soc_percent": ["sensor.new"]}, {"inverter_type": ["GEE"], "soc_percent": ["sensor.old"], "scheduled_charge_enable": ["switch.x"]}, [])
+    assert "  scheduled_charge_enable: old ['switch.x'] new None (expected: inverter.py replaces it with a dummy for GEE)" in lines, lines
+    assert "  soc_percent: old ['sensor.old'] new ['sensor.new'] (UNEXPECTED)" in lines, lines
+    assert lines.count("  (none)") == 2 and "  (no line logged)" in lines, lines
+    assert "  no difference" in discovery_review_lines(None, None, {"num_inverters": 1}, {"num_inverters": 1}), "equal configurations differ in nothing"
+    print("PASS: the discovery review prints the records, slots, configuration, differences and checker lines")
     return 0
 
 
