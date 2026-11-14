@@ -4607,10 +4607,12 @@ def test_inverter_type_required(test_name, my_predbat):
     class StubComponents:
         """Just enough of the component registry for Inverter's inverter-source questions."""
 
-        def __init__(self, active, names):
-            """Record whether an inverter component is active and the names it reports."""
+        def __init__(self, active, names, coordinator=None):
+            """Record whether an inverter component is active, the names it reports and the discovery coordinator, if any."""
             self.active = active
             self.names = names
+            if coordinator is not None:
+                self.coordinator = coordinator
 
         def inverter_source_active(self):
             """Whether any inverter component is active."""
@@ -4673,10 +4675,41 @@ def test_inverter_type_required(test_name, my_predbat):
 
         # 4. inverter_type explicitly configured as GE - builds and assumes nothing
         log_messages.clear()
-        Inverter(my_predbat, 0)
+        inv = Inverter(my_predbat, 0)
+        if inv.inverter_type != "GE":
+            print("ERROR: inverter_type ['GE'] should give Inverter 0 type GE, got {}".format(inv.inverter_type))
+            failed = True
         if any("assuming" in msg for msg in log_messages):
             print("ERROR: unexpected 'assuming' log line when inverter_type is explicitly set to GE")
             failed = True
+
+        class StubCoordinator:
+            """A discovery coordinator that reports one slot as empty, or raises when asked."""
+
+            def __init__(self, empty_slot=None, fail=False):
+                """Which slot is empty, and whether asking fails."""
+                self.empty_slot = empty_slot
+                self.fail = fail
+
+            def slot_is_empty(self, index):
+                """Whether this slot is the empty one."""
+                if self.fail:
+                    raise RuntimeError("no bindings")
+                return index == self.empty_slot
+
+        # 5. A slot discovery left empty below a used one - the "empty slot" error, even with the component active
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["inverter_type"] = [None, "GEC"]
+        my_predbat.components = StubComponents(True, ["GivEnergy Cloud Direct"], coordinator=StubCoordinator(empty_slot=0))
+        failed |= expect_error(0, "Inverter 0: this inverter slot is empty because the device discovery configured there is no longer reported - restart Predbat to reallocate the inverter slots")
+
+        # 6. A coordinator that does not call the slot empty, or fails when asked, leaves the other two messages as they were
+        for coordinator in (StubCoordinator(empty_slot=1), StubCoordinator(fail=True)):
+            my_predbat.components = StubComponents(True, ["GivEnergy Cloud Direct"], coordinator=coordinator)
+            failed |= expect_error(0, "Inverter 0: inverter_type is not set yet - waiting for GivEnergy Cloud Direct to configure this inverter")
+            my_predbat.components = StubComponents(False, [], coordinator=coordinator)
+            failed |= expect_error(0, "Inverter 0: inverter_type is not set in apps.yaml")
+        my_predbat.args["num_inverters"] = 1
     finally:
         my_predbat.log = orig_log
         my_predbat.record_status = orig_record_status
