@@ -2053,18 +2053,25 @@ class GECloudDirect(ComponentBase, CarChargerControl):
 
         Called by the coordinator after a configure pass that wrote one of this component's slots. slots is
         the slot of each of this component's driven records in report order (None for one given no slot),
-        so legacy logical inverter i is compared with args at slots[i]. Per-slot lists are compared entry by
-        entry, a legacy None meaning every one of this component's slots is None or absent; SUMMED_SETTINGS
-        by order (the legacy entries, None left out, appear in the arg's list in the same order); scalars and
-        SITE_SETTINGS directly; num_inverters not at all. A difference on a skipped setting, one the GEE row
-        dummies, a kept setting where the user's apps.yaml gives that slot a value, or one in
-        GE_CLOUD_KNOWN_DIFFERENCES is logged at Info with its reason; any other is a Warn line, returned. Each distinct line is logged once for the life of the process.
+        so legacy logical inverter i is compared with args at slots[i]. A legacy logical inverter given no slot
+        (slots[i] None, or slots too short) is one Warn line of its own and its per-slot entries are not
+        compared. Per-slot lists are compared entry by entry, a legacy None meaning every one of this
+        component's slots is None or absent; SUMMED_SETTINGS by order (the legacy entries, None left out,
+        appear in the arg's list in the same order); scalars and SITE_SETTINGS directly; num_inverters not at
+        all. A skipped setting is never compared: the legacy plan leaves load_today out exactly when
+        ge_cloud_load_today_ignore skips it. A difference on a setting the GEE row dummies, a kept setting where
+        the user's apps.yaml gives that slot a value, or one in GE_CLOUD_KNOWN_DIFFERENCES is logged at Info
+        with its reason; any other is a Warn line, returned. Each distinct line is logged once for the life of
+        the process, and "matches" is logged only when there is no Warn line.
 
         Threading contract: the coordinator calls this holding its configure lock, possibly on the main thread
         while this component's own thread is running. So it is synchronous, takes no lock, awaits nothing,
         does no I/O, never calls report_discovery(), refresh_discovery() or allow_automatic_config(), and only
-        reads self.devices_dict, self.settings, self.info, args and the apps.yaml snapshot (apps_yaml_value()). It changes no configuration and no
-        component health, and never raises: a failure is logged at Info and gives [].
+        reads self.devices_dict, self.settings, self.info, self.site_export_limit, self.prefix, args, the
+        apps.yaml snapshot (apps_yaml_value()) and, through get_arg(), the config flags the legacy plan follows
+        (ge_cloud_load_today_ignore, ge_cloud_automatic_split_pv, ge_cloud_automatic_split_ct and
+        ge_cloud_automatic_shared_ct). It changes no configuration and no component health, and never raises:
+        a failure is logged at Info and gives [].
         """
         try:
             return self._check_automatic_config(slots)
@@ -2084,22 +2091,25 @@ class GECloudDirect(ComponentBase, CarChargerControl):
     def _check_automatic_config(self, slots):
         """The body of check_automatic_config(), which catches anything it raises."""
         devices = self.devices_dict
-        legacy = self._legacy_bindings(devices)
-        if not legacy:
+        if not devices or not devices.get("battery"):
             return []
+        legacy, facts = self._legacy_plan(devices)
         slots = list(slots)
         args = getattr(self, "args", None) or {}
-        skipped = {"load_today"} if self.get_arg("ge_cloud_load_today_ignore", default=False) else set()
         legacy_types = legacy.get("inverter_type") or []
         warnings = []
         known = []
 
+        for index, device in enumerate(facts["batteries"]):
+            if slot_value(slots, index) is None:
+                line = "Warn: GECloud: discovery gave inverter {} ({}) no slot, the previous automatic configuration would configure it".format(index, device)
+                warnings.append(line)
+                self._log_check_once(line)
+
         def differs(setting, where, actual, expected, index=None, slot=None):
             """Classify and log one difference; index is the legacy logical inverter and slot its args slot, when the setting is per slot."""
             inverter_type = slot_value(legacy_types, index) if index is not None else None
-            if setting in skipped:
-                reason = "skipped at the user's request, so left as args hold it"
-            elif setting in GE_CLOUD_DUMMIED_SETTINGS.get(inverter_type, ()):
+            if setting in GE_CLOUD_DUMMIED_SETTINGS.get(inverter_type, ()):
                 reason = "inverter.py replaces it with a dummy for {}, so the discovery record leaves it out".format(inverter_type)
             elif setting in GE_CLOUD_KEEP_USER_SETTINGS and slot is not None and slot_value(self.apps_yaml_value(setting), slot) is not None:
                 # Kept only where apps.yaml gives the slot a value, as the coordinator keeps it; with none there it is a real finding

@@ -379,6 +379,7 @@ def test_ge_cloud(my_predbat=None):
         ("checker_kept_and_skipped", _test_checker_kept_and_skipped_are_info, "check_automatic_config: kept and skipped settings are Info"),
         ("checker_warns_once", _test_checker_warns_once, "check_automatic_config: a repeated warning is logged once"),
         ("checker_never_raises", _test_checker_never_raises, "check_automatic_config: never raises"),
+        ("checker_inverter_without_slot", _test_checker_inverter_without_slot, "check_automatic_config: an inverter given no slot is a warning"),
         ("known_differences_are_real", _test_known_differences_are_real, "GE_CLOUD_KNOWN_DIFFERENCES holds only differences a coordinator run shows"),
         ("checker_no_warnings_on_layouts", _test_checker_no_warnings_on_layouts, "discovery_automatic on: no checker warning on any layout"),
         ("discovery_record_gateway", _test_discovery_record_gateway, "gateway record rebuilds the GEC row and agrees"),
@@ -7990,7 +7991,7 @@ def _test_checker_known_difference_is_info(my_predbat):
 
 
 def _test_checker_kept_and_skipped_are_info(my_predbat):
-    """A kept setting is Info only where the user's apps.yaml gives it a value at that slot; with none there, the same difference is a warning. A skipped one is never a warning."""
+    """A kept setting is Info only where the user's apps.yaml gives it a value at that slot; with none there, the same difference is a warning. A skipped one is never compared."""
     ge = _layout_component(_automatic_config_layouts()["site_export_limit"])
     _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict))
     ge.base.args_from_apps_yaml = {"inverter_mode": "switch.my_inverter_mode", "export_limit": [3600]}
@@ -8016,12 +8017,15 @@ def _test_checker_kept_and_skipped_are_info(my_predbat):
     assert _checker_lines(ge, "Warn") == expected, ge.log_messages
     assert not [line for line in ge.log_messages if line.startswith("Info: GECloud: discovery differs")], ge.log_messages
 
-    # load_today is skipped under ge_cloud_load_today_ignore and the old configuration binds none, so the user's value there is not a difference
+    # Under ge_cloud_load_today_ignore the old configuration leaves load_today out of its plan altogether, so the
+    # checker has nothing to compare it with: whatever args hold there gives no line at all, Info or Warn
     ge = _layout_component(_automatic_config_layouts()["load_today_ignore"])
     _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict))
+    assert "load_today" not in ge._legacy_bindings(ge.devices_dict)
     ge.config_args["load_today"] = ["sensor.my_load_today"]
     assert ge.check_automatic_config([0]) == [], ge.log_messages
-    assert not _checker_lines(ge, "Warn"), ge.log_messages
+    assert not [line for line in ge.log_messages if "load_today" in line], ge.log_messages
+    assert any(line.startswith("Info: GECloud: discovery configuration matches") for line in ge.log_messages), ge.log_messages
     print("PASS: kept and skipped settings are Info")
     return 0
 
@@ -8040,17 +8044,46 @@ def _test_checker_warns_once(my_predbat):
 
 
 def _test_checker_never_raises(my_predbat):
-    """No devices, or settings it cannot read, give no warning and no exception."""
+    """No devices gives nothing to compare; devices, settings or slots it cannot read each take the exception path to one Info line. No warning and no exception."""
+    could_not = "Info: GECloud: could not compare the discovery configuration with the previous automatic configuration: "
+
+    def failures(ge):
+        """The checker's could-not-compare lines so far."""
+        return [line for line in ge.log_messages if line.startswith(could_not)]
+
     ge = _layout_component(_automatic_config_layouts()["single"])
     ge.devices_dict = None
-    assert ge.check_automatic_config([0]) == []
-    ge = _layout_component(_automatic_config_layouts()["single"])
-    ge.settings = None
-    assert ge.check_automatic_config([0]) == []
-    ge.settings = {"battery001": dict(GEC_FULL_REGISTERS)}
-    assert ge.check_automatic_config(None) == []
-    assert not [line for line in ge.log_messages if line.startswith("Warn")], ge.log_messages
+    assert ge.check_automatic_config([0]) == [] and failures(ge) == [], ge.log_messages  # nothing to compare is not a failure
+    for case in ("devices", "settings", "slots"):
+        ge = _layout_component(_automatic_config_layouts()["single"])
+        slots = [0]
+        if case == "devices":
+            ge.devices_dict = ["battery001"]
+        elif case == "settings":
+            ge.settings = None
+        else:
+            slots = None
+        assert ge.check_automatic_config(slots) == [], (case, ge.log_messages)
+        assert len(failures(ge)) == 1, (case, ge.log_messages)
+        assert not [line for line in ge.log_messages if line.startswith("Warn")], (case, ge.log_messages)
     print("PASS: the checker never raises")
+    return 0
+
+
+def _test_checker_inverter_without_slot(my_predbat):
+    """Three manual slots and two GE Cloud batteries: the second gets no slot, and the checker says so once, for inverter 1 only, instead of "matches"."""
+    apps_yaml = {"num_inverters": 3, "inverter_type": ["MINE", "MINE", "MINE"], "charge_rate": ["number.a_charge_rate", "number.b_charge_rate", "number.c_charge_rate"]}
+    ge, base = _switch_on_component(_automatic_config_layouts()["two_meters"], apps_yaml=apps_yaml)
+    run_async(ge.async_automatic_config(ge.devices_dict))
+    assert base.components.coordinator.slot_map == {"gecloud:battery001": 3}, base.components.coordinator.slot_map
+    line = "Warn: GECloud: discovery gave inverter 1 (battery002) no slot, the previous automatic configuration would configure it"
+    no_slot = [entry for entry in ge.log_messages if "no slot, the previous automatic configuration would configure it" in entry]
+    assert no_slot == [line], ge.log_messages
+    assert not any(entry.startswith("Info: GECloud: discovery configuration matches") for entry in ge.log_messages), ge.log_messages
+    # Returned on every check, logged once; a slots list shorter than the legacy inverters counts the same
+    assert line in ge.check_automatic_config([3, None]) and line in ge.check_automatic_config([3])
+    assert ge.log_messages.count(line) == 1, ge.log_messages
+    print("PASS: the checker warns about an inverter given no slot")
     return 0
 
 
