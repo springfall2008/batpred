@@ -8082,10 +8082,12 @@ def _test_discovery_review_lines(my_predbat):
 
     legacy_args = apply_legacy_bindings(ge._legacy_bindings(devices), start, base.args_from_apps_yaml)
     checker = [line for line in harness.log_lines if line.startswith(("Info: GECloud: discovery", "Warn: GECloud: discovery"))]
-    lines = discovery_review_lines(ge._discovery_report, harness.coordinator.bindings, base.args, legacy_args, checker)
+    lines = discovery_review_lines(ge._discovery_report, harness.coordinator.bindings, base.args, legacy_args, checker, harness.coordinator.hybrid_decision())
 
-    headers = ["GE Cloud inverter records:", "Bindings:", "Inverter configuration:", "Old against new:", "Checker:"]
+    headers = ["GE Cloud inverter records:", "Bindings:", "Inverter configuration:", "Site settings:", "Old against new:", "Checker:"]
     assert [line for line in lines if not line.startswith(" ")] == headers, lines
+    # Both GIV-HY5.0 records are hybrid, so the site setting is on, naming the records that decide it
+    assert lines[lines.index("Site settings:") + 1] == "  inverter_hybrid: on (gecloud:battery001, gecloud:battery002)", lines
     assert "  gecloud:battery001 inverter_type=GEC composition=direct serials=battery001" in lines, lines
     assert "    charge_rate_percent: number.predbat_gecloud_battery002_inverter_charge_power_percentage" in lines, lines
     assert "  slot 0 origin=discovered source=gecloud device_id=gecloud:battery001 inverter_type=GEC" in lines, lines
@@ -8113,7 +8115,11 @@ def _test_discovery_review_lines(my_predbat):
     assert "  grid_power_invert: old None new [True] (UNEXPECTED)" in lines and "  load_power_invert: old [True] new [False] (UNEXPECTED)" in lines, lines
     assert lines.count("  (none)") == 2 and "  (no line logged)" in lines, lines
     assert "  no difference" in discovery_review_lines(None, None, {"num_inverters": 1}, {"num_inverters": 1}), "equal configurations differ in nothing"
-    print("PASS: the discovery review prints the records, slots, configuration, differences and checker lines")
+    # The site setting: off names the records that are not hybrid, and with no decision (or none passed) it is unchanged
+    unchanged = "  inverter_hybrid: unchanged (no automatic inverter record says whether it is hybrid)"
+    assert "  inverter_hybrid: off (gecloud:fd2445g166)" in discovery_review_lines({}, None, {}, {}, [], (False, ["gecloud:fd2445g166"])), "a record that is not hybrid turns it off"
+    assert unchanged in discovery_review_lines({}, None, {}, {}, [], (None, [])) and unchanged in lines, "nothing known leaves it unchanged"
+    print("PASS: the discovery review prints the records, slots, configuration, site settings, differences and checker lines")
     return 0
 
 

@@ -411,16 +411,18 @@ def _review_value(value):
     return value
 
 
-def discovery_review_lines(report, bindings, args, legacy_args, checker_lines=()):
+def discovery_review_lines(report, bindings, args, legacy_args, checker_lines=(), hybrid=None):
     """
     The command-line review of one discovery configuration, as a list of lines. Pure.
 
     report is GE Cloud's discovery report, bindings the coordinator's last bindings, args the configuration it
-    left, legacy_args apply_legacy_bindings() of the same starting args and checker_lines what
-    check_automatic_config() logged. Five sections: the inverter records, the bindings slot by slot, the final
-    inverter configuration, the settings where the old and new configurations differ (a known difference, a
-    setting the inverter type dummies, or an invert setting left unset before and all-False now is marked
-    expected) and the checker's lines.
+    left, legacy_args apply_legacy_bindings() of the same starting args, checker_lines what
+    check_automatic_config() logged and hybrid the coordinator's hybrid_decision() - a (value, device_ids) pair,
+    None when there is none. Six sections: the inverter records, the bindings slot by slot, the final inverter
+    configuration, the site settings discovery decides (inverter_hybrid on, off or unchanged, with the device_ids
+    that decide it), the settings where the old and new configurations differ (a known difference, a setting the
+    inverter type dummies, or an invert setting left unset before and all-False now is marked expected) and the
+    checker's lines.
     """
     args = args or {}
     legacy_args = legacy_args or {}
@@ -447,6 +449,13 @@ def discovery_review_lines(report, bindings, args, legacy_args, checker_lines=()
     for setting in sorted(BINDING_SETTINGS | SITE_SETTINGS):
         if args.get(setting) is not None:
             lines.append("  {}: {}".format(setting, args[setting]))
+
+    lines.append("Site settings:")
+    value, device_ids = hybrid if hybrid else (None, [])
+    if value is None:
+        lines.append("  inverter_hybrid: unchanged (no automatic inverter record says whether it is hybrid)")
+    else:
+        lines.append("  inverter_hybrid: {} ({})".format("on" if value else "off", ", ".join(str(device_id) for device_id in device_ids)))
 
     lines.append("Old against new:")
     types = set()
@@ -4496,7 +4505,7 @@ async def test_gecloud_direct(api_key, write_entity=None, write_value=None, writ
     checker_lines = [line for line in harness.log_lines if line.startswith(("Info: GECloud: discovery", "Warn: GECloud: discovery", "Info: GECloud: could not compare"))]
     print("")
     print("Discovery review")
-    for line in discovery_review_lines(gecloud_direct._discovery_report, harness.coordinator.bindings, mock_base.args, legacy_args, checker_lines):
+    for line in discovery_review_lines(gecloud_direct._discovery_report, harness.coordinator.bindings, mock_base.args, legacy_args, checker_lines, harness.coordinator.hybrid_decision()):
         print(line)
 
     if write_entity and write_value is not None:

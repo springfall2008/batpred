@@ -32,22 +32,28 @@ structural fields), and documented in `docs/discovery-catalogue.md`.
 ### Who reports what
 
 Each component states only what it has evidence for. The builder confirms each against the component's code and
-tests, and records any component that turns out to have no evidence as "unknown":
+tests, and records any component that turns out to have no evidence as "unknown".
+
+Revised 14 Nov 2026, during the build: the table below is what was built, replacing the planned one. The changes are
+that the GivEnergy rule also treats any spelling of all-in-one as not hybrid and a coordinator's own model as unknown;
+AlphaESS holds its last decided verdict; Teslemetry reports `False` for an unknown model; Solis, Fox and Growatt
+turned out to have model evidence.
 
 | Component | Evidence | hybrid |
 | --- | --- | --- |
-| GE Cloud | device model | `False` when the model contains `ac`, `aio` or `all-in-one` (the existing rule), else `True`; unknown when no model |
-| GivTCP | inverter model / type | the same rule as GE Cloud (Trefor) |
-| Gateway | `inv.model` | the same rule (it already uses it); unknown on firmware that reports no model |
-| AlphaESS | `detect_ac_coupled()` | `False` when AC coupled, `True` when hybrid, unknown when undecided |
-| Sigenergy | `detect_ac_coupled()` | as AlphaESS |
-| Teslemetry | `teslemetry_hybrid`, then Powerwall 3 / `battery_type` | the value its current code writes; unknown when the model is unknown |
-| Hanchu | the AC-coupled field (`HANCHU_AC_COUPLED_FIELD`) | `False` when it says AC coupled, else `True` if the field is present |
-| Enphase | AC batteries (`hasAcb` / IQ Battery) | `False` (AC coupled) when the site reports them |
-| SolaX | model code table | `False` for AC models (`X1-AC`), `True` for the Hybrid models, unknown otherwise |
-| Solis | model naming | `True` for the hybrid/storage ranges, unknown otherwise |
-| Growatt | device type, if its API reports it | builder to confirm; unknown if not |
-| Deye, Sunsynk, Fox | none (their code says they cannot tell) | unknown |
+| GE Cloud | device model (`utils.givenergy_model_is_hybrid()`); a gateway or EMS record uses the models of the units it fronts | `False` for a model containing `ac` or `aio`, or any spelling of all-in-one; unknown for no model, or a coordinator's own model (`gateway`, or `ems` as a whole word); else `True` |
+| GivTCP | its readable `Invertor_Type` | the same rule as GE Cloud (Trefor) |
+| Gateway | `inv.model`; a gateway or EMS record uses the fronted units' models | the same rule; unknown on firmware that reports no model |
+| AlphaESS | `detect_ac_coupled(sn)` | `not detect_ac_coupled(sn)`, holding the last decided verdict per serial (kept in the ratings cache), so an undecided reading never changes the record |
+| Sigenergy | `detect_ac_coupled(system_id)` | `not detect_ac_coupled(system_id)` |
+| Teslemetry | `teslemetry_hybrid`, then the model | the override when set; else `True` for a Powerwall 3, else `False` - including an unknown model (GH#5275) |
+| Hanchu | the AC-coupled field (`bypMeterSwitch`) | `False` when it says AC coupled, else `True` if the field is present |
+| Enphase | AC batteries (`hasEncharge` / `hasAcb`) | `False` (AC coupled) when the site reports them, else unknown |
+| SolaX | model code table | `False` for the AC models (X1-AC, A1-AC-G2), `True` for the Hybrid/HYB models, unknown otherwise |
+| Solis | `machine` | `True` for EH and RHI, `False` for EA and RAI, unknown otherwise |
+| Fox | `deviceType` / `productType` | `False` for AC1/AC3, `True` for H1/H3/KH, unknown otherwise or when the two disagree |
+| Growatt | `model` | `True` for SPH, `False` for SPA, unknown otherwise |
+| Deye, Sunsynk | none (their code says they cannot tell) | unknown |
 
 ### The rule
 

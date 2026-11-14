@@ -702,7 +702,9 @@ Predbat now supports direct communication with the GivEnergy cloud services inst
 Log into the GivEnergy Portal web site and [create an API key](#givenergy-cloud-data) and copy it into the **ge_cloud_key** setting in `apps.yaml`.
 
 If you set **ge_cloud_automatic** to true, the number of inverters and their settings will be configured automatically and any inverter/battery configuration in `apps.yaml` will be ignored.
-Or, if you set **ge_cloud_automatic** to false then you need to manually configure **ge_cloud_serial** to your inverter serial number for Predbat to use on the GivEnergy Cloud.
+Or, if you set **ge_cloud_automatic** to false then you configure your inverters in `apps.yaml` yourself.
+**ge_cloud_serial** is now optional while GivEnergy Cloud Direct is running: GE Cloud Data takes the serial of the inverter GE Cloud finds (see [GivEnergy Cloud Data](#givenergy-cloud-data)).
+Set it only to choose a different serial for the cloud data.
 
 If you set **ge_cloud_data** to false then Predbat will use the local Home Assistant data for history rather than the cloud data;
 you will need to wait until you have a few days of history established (at least **days_previous** days) before this will work correctly.
@@ -1417,8 +1419,10 @@ If you have an issue with the GivTCP data, Predbat can get the required historic
 Connecting to the cloud is less efficient and means that Predbat will be dependent upon your internet connection and the GivEnergy cloud to operate.
 
 - **ge_cloud_data** - When true Predbat will connect to the GivEnergy cloud rather than GivTCP sensors for historical load_today, import_today and export_today inverter data
-- **ge_cloud_serial** - Set the inverter serial number to use for the cloud data
+- **ge_cloud_serial** - Set the inverter serial number to use for the cloud data. Optional while GivEnergy Cloud Direct (`ge_cloud_direct`) is running, which supplies the serial of its first inverter (the first battery behind a Gateway)
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
+
+Behind a GivEnergy EMS the cloud data is not used: Predbat takes its load history from **load_today**, exactly as if **ge_cloud_data** were false, and goes back to the cloud data by itself if the EMS is no longer reported.
 
 If you need to create a **ge_cloud_key**, in the GivEnergy cloud portal:
 
