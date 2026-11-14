@@ -523,6 +523,21 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "luxpower": {
+        "class": "luxpower.LuxpowerAPI",
+        "name": "LuxPower VPP API",
+        "event_filter": "predbat_luxpower_",
+        "args": {
+            "asset_id": {"required": True, "config": "luxpower_asset_id"},
+            "base_url": {"required": True, "config": "luxpower_base_url"},
+            "partner_token": {"required": False, "secret": True, "config": "luxpower_partner_token"},
+            "binding_ready": {"required": False, "default": False, "config": "luxpower_binding_ready"},
+            "telemetry_ready": {"required": False, "default": False, "config": "luxpower_telemetry_ready"},
+            "control_ready": {"required": False, "default": False, "config": "luxpower_control_ready"},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
     "hanchu": {
         "class": "hanchu.HanchuAPI",
         "name": "Hanchu ESS Cloud API",
