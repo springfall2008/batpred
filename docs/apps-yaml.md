@@ -2891,6 +2891,7 @@ The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_
 Setting this option to **auto** (the default when it is not set) will cause the computed curve to be stored and used automatically.
 
 - The last curve found is saved in Predbat's cache, so it is used straight away after a restart.
+- With more than one inverter, the curve is learned from the combined battery (the SoC across all batteries, and their power added together), as that is what Predbat plans with; a minute only counts when every inverter was set to its maximum rate.
 - What each day's charges showed is saved too, for 60 days, and the curve is learned from all of it, recent days counting for more. A full-power charge once a week therefore still adds up, even though each search only looks back `days_previous` days.
 - Until a curve has been found, Predbat looks for one every hour (using `battery_charge_power_curve_default` meanwhile, if you set one).
 - Each SoC point needs full-power charging seen on at least two different days (and at least 5 minutes of it), and the curve must reach 95% SoC, so a single charge cannot set it. Days run from noon to noon, so an overnight charge counts as one day.
@@ -3116,7 +3117,8 @@ If you have set **input_number.battery_rate_max_scaling**, the rate is divided b
 
 The entity **predbat.battery_temperature_charge_curve** shows how many degrees have been learned, with the learned and combined curves (and the minutes behind each degree) in its attributes.
 
-Only the first inverter's history is used, and only the charge curve is learned; `battery_temperature_discharge_curve` is unchanged.
+With more than one inverter the combined battery is learned from, as Predbat plans them as one: the batteries' power is added up and divided by their combined size, and a minute only counts when every inverter was set to charge at its maximum rate.
+Only the charge curve is learned; `battery_temperature_discharge_curve` is unchanged.
 
 ## Weather Alert System
 

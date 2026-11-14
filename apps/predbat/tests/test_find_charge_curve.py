@@ -1071,6 +1071,83 @@ def test_find_charge_curve_keeps_taper_below_temperature_cap(my_predbat):
     return failed
 
 
+def test_find_charge_curve_two_inverters(my_predbat):
+    """
+    With two inverters the curve is learned from the combined battery, as the plan applies it: one battery charging at
+    full rate and one at half gives 0.75 of the combined rate, not inverter 0's 1.0; a minute counts as full rate only
+    when both inverters were written at their maximum.
+    """
+    print("*** Running test: find_charge_curve_two_inverters ***")
+    failed = False
+    saved = {key: my_predbat.args.get(key) for key in ("soc_percent", "charge_rate", "discharge_rate", "battery_power", "battery_power_invert")}
+    saved_inverters, saved_num = getattr(my_predbat, "inverters", []), getattr(my_predbat, "num_inverters", None)
+
+    def install(second_power_factor, second_rate):
+        """The fixture's history for inverter 0, and the same charges for inverter 1 at a fraction of the power and the given written rate."""
+        create_test_history_data(my_predbat, num_days=7)
+        base_get_history = my_predbat.ha_interface.get_history
+
+        def mock_get_history(entity_id, now=None, days=30):
+            """Inverter 1's entities are inverter 0's history, transformed."""
+            if entity_id.endswith("_2"):
+                records = [dict(record) for record in base_get_history(entity_id[:-2], now=now, days=days)[0]]
+                for record in records:
+                    if entity_id.startswith("sensor.battery_power"):
+                        record["state"] = round(float(record["state"]) * second_power_factor, 1)
+                    elif entity_id.startswith("number.charge_rate") and int(record["state"]) > 0:
+                        record["state"] = second_rate
+                return [records]
+            return base_get_history(entity_id, now=now, days=days)
+
+        my_predbat.ha_interface.get_history = mock_get_history
+
+    try:
+        inv0 = create_curve_test_inverter(my_predbat)
+        inv1 = Inverter(my_predbat, 1)
+        inv1.battery_rate_max_charge = 2600 / 60000
+        inv1.battery_rate_max_discharge = 2600 / 60000
+        inv1.soc_max = 10.0
+        inv1.battery_scaling = 1.0
+        my_predbat.args["soc_percent"] = ["sensor.soc_percent", "sensor.soc_percent_2"]
+        my_predbat.args["charge_rate"] = ["number.charge_rate", "number.charge_rate_2"]
+        my_predbat.args["discharge_rate"] = ["number.discharge_rate", "number.discharge_rate_2"]
+        my_predbat.args["battery_power"] = ["sensor.battery_power", "sensor.battery_power_2"]
+        my_predbat.args["battery_power_invert"] = [False, False]
+
+        install(0.5, 2600)
+        my_predbat.inverters, my_predbat.num_inverters = [inv0, inv1], 2
+        curve = inv0.find_charge_curve(discharge=False)
+        if not curve or any(abs(value - 0.75) > 0.011 for soc, value in curve.items() if soc >= 86):
+            print("ERROR: two batteries at full and half power should learn 0.75 of the combined rate, got {}".format(curve))
+            failed = True
+
+        my_predbat.inverters, my_predbat.num_inverters = [inv0], 1
+        curve = inv0.find_charge_curve(discharge=False)
+        if not curve or any(value != 1.0 for value in curve.values()):
+            print("ERROR: inverter 0 on its own should still learn its own full rate, got {}".format(curve))
+            failed = True
+
+        install(1.0, 1000)
+        my_predbat.inverters, my_predbat.num_inverters = [inv0, inv1], 2
+        curve = inv0.find_charge_curve(discharge=False)
+        if curve:
+            print("ERROR: with inverter 1 written below its maximum no minute is full rate for the fleet, got {}".format(curve))
+            failed = True
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+        my_predbat.inverters = saved_inverters
+        if saved_num is None:
+            del my_predbat.num_inverters
+        else:
+            my_predbat.num_inverters = saved_num
+        remove_test_history_data(my_predbat)
+    return failed
+
+
 def run_find_charge_curve_tests(my_predbat):
     """
     Run all find_charge_curve tests
@@ -1136,6 +1213,7 @@ def run_find_charge_curve_tests(my_predbat):
     failed |= test_find_charge_curve_needs_evidence(my_predbat)
     failed |= test_find_charge_curve_auto_keeps_level(my_predbat)
     failed |= test_find_charge_curve_keeps_taper_below_temperature_cap(my_predbat)
+    failed |= test_find_charge_curve_two_inverters(my_predbat)
     if failed:
         return failed
 

@@ -286,13 +286,140 @@ class BatteryCurve:
             return {}
         return self.learn_charge_curve(samples, discharge)
 
+    def curve_fleet(self):
+        """
+        The inverters whose combined history the curve learners read.
+
+        The plan models every inverter as one battery - soc_max and the rated rates summed, the SoC curve and the
+        temperature cap applied to the combined SoC% - so with more than one inverter the curves are learned from the
+        combined battery the same way, from inverter 0 (the one fetch_inverter_data() runs the learners on). Anything
+        else (a single inverter, or one not part of the base's inverter list, as in tests) is learned on its own.
+        """
+        inverters = getattr(self.base, "inverters", None) or []
+        if self.id == 0 and getattr(self.base, "num_inverters", 1) > 1 and len(inverters) == self.base.num_inverters and inverters[0] is self:
+            return list(inverters)
+        return [self]
+
+    def load_curve_history(self, discharge, purpose):
+        """
+        Load the SoC, written rate, battery power and Predbat status history the curve learners scan, for the whole fleet.
+
+        Each inverter's own soc (soc_percent, else soc_kw), charge_rate (discharge_rate) and battery_power (with its
+        battery_power_invert) are read and combined: the SoC in kWh and the battery power are summed, and a minute counts
+        as written at full rate only when every inverter was written at 95% or more of its own maximum - the combined
+        rate series is then the fleet's maximum, otherwise 0, so the learners' full-rate test is unchanged. A single
+        inverter's series are its own.
+
+        Args:
+            discharge: True to read discharge_rate rather than charge_rate
+            purpose: what is being learned, for the log ("battery charge curve")
+
+        Returns:
+            {"soc_kwh", "rate", "battery_power", "status": {minute: value}, "min_len", "soc_max", "max_power" (W),
+            "export_limit_w", "inverters"}, or None (after logging which setting or history is missing).
+        """
+        fleet = self.curve_fleet()
+        days = self.base.max_days_previous
+        rate_name = "discharge_rate" if discharge else "charge_rate"
+        predbat_status_sensor = self.base.prefix + ".status"
+        predbat_status_data = self.base.get_history_wrapper(entity_id=predbat_status_sensor, days=days, required=False)
+
+        def to_minutes(entries, scale=1.0, required_unit=None):
+            """Minute series (minutes before now) from one entity's history."""
+            values, _ = minute_data(
+                entries,
+                days,
+                self.base.now_utc,
+                "state",
+                "last_updated",
+                backwards=True,
+                clean_increment=False,
+                smoothing=False,
+                divide_by=1.0,
+                scale=scale,
+                required_unit=required_unit,
+                can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
+            )
+            return values
+
+        per_inverter = []
+        for inverter in fleet:
+            if "soc_percent" in self.base.args:
+                soc_sensor = self.base.get_arg("soc_percent", indirect=False, index=inverter.id)
+                soc_percent_sensor = True
+                soc_label = "soc_percent"
+            else:
+                soc_sensor = self.base.get_arg("soc_kw", indirect=False, index=inverter.id)
+                soc_percent_sensor = False
+                soc_label = "soc_kw"
+            rate_sensor = self.base.get_arg(rate_name, indirect=False, index=inverter.id)
+            battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=inverter.id)
+            battery_power_invert = self.base.get_arg("battery_power_invert", False, index=inverter.id)
+            if not (soc_sensor and rate_sensor and battery_power_sensor):
+                missing_settings = [setting for setting, entity_id in [(soc_label, soc_sensor), (rate_name, rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
+                self.log("Warn: Inverter {} Cannot find {} (settings missing), {} not set in apps.yaml".format(inverter.id, purpose, ", ".join(missing_settings)))
+                return None
+            battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
+            self.log("Inverter {} Looking for {} with sensors {}, {}, {} and {}".format(inverter.id, purpose, soc_sensor, rate_sensor, predbat_status_sensor, battery_power_sensor))
+            soc_data = self.base.get_history_wrapper(entity_id=soc_sensor, days=days, required=False)
+            rate_data = self.base.get_history_wrapper(entity_id=rate_sensor, days=days, required=False)
+            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=days, required=False)
+            history_checks = [(soc_label, soc_sensor, soc_data), (rate_name, rate_sensor, rate_data), ("battery_power", battery_power_sensor, battery_power_data), ("predbat.status", predbat_status_sensor, predbat_status_data)]
+            if not all(data for _, _, data in history_checks):
+                no_history = ["{} ({})".format(setting, entity_id) for setting, entity_id, data in history_checks if not data]
+                self.log("Warn: Inverter {} Cannot find {} (missing history), no history found for {} - check the entity name in apps.yaml and that Home Assistant is recording its history".format(inverter.id, purpose, ", ".join(no_history)))
+                self.log("Warn: Inverter {} Sensor history record counts: {}".format(inverter.id, ", ".join("{} {}".format(setting, len(data[0]) if data else 0) for setting, entity_id, data in history_checks)))
+                return None
+            if soc_percent_sensor:
+                # A percent is already of usable capacity, and soc_max already includes battery_scaling (#6183)
+                soc_kwh = {minute: dp4(value * inverter.soc_max / 100.0) for minute, value in to_minutes(soc_data[0], required_unit="%").items()}
+            else:
+                soc_kwh = to_minutes(soc_data[0], scale=inverter.battery_scaling, required_unit="kWh")
+            battery_power = to_minutes(battery_power_data[0], required_unit="W")
+            if battery_power_invert:
+                battery_power = {minute: -value for minute, value in battery_power.items()}
+            max_power = (inverter.battery_rate_max_discharge if discharge else inverter.battery_rate_max_charge) * MINUTE_WATT
+            per_inverter.append({"soc_kwh": soc_kwh, "rate": to_minutes(rate_data[0], required_unit="W"), "battery_power": battery_power, "max_power": max_power})
+
+        status = minute_data_state(predbat_status_data[0], days, self.base.now_utc, "state", "last_updated")
+        for minute in status:
+            if "," in status[minute]:
+                # If there are multiple statuses take the first one
+                status[minute] = status[minute].split(",")[0].strip()
+        min_len = min([len(status)] + [min(len(series["soc_kwh"]), len(series["rate"]), len(series["battery_power"])) for series in per_inverter])
+        fleet_max_power = int(sum(series["max_power"] for series in per_inverter))
+        if len(per_inverter) == 1:
+            series = per_inverter[0]
+            soc_kwh, rate, battery_power = series["soc_kwh"], series["rate"], series["battery_power"]
+        else:
+            soc_kwh, rate, battery_power = {}, {}, {}
+            for minute in range(0, min_len):
+                if all(minute in series["soc_kwh"] for series in per_inverter):
+                    soc_kwh[minute] = dp4(sum(series["soc_kwh"][minute] for series in per_inverter))
+                battery_power[minute] = sum(series["battery_power"].get(minute, 0) for series in per_inverter)
+                rate[minute] = fleet_max_power if all(series["rate"].get(minute, 0) >= series["max_power"] * 0.95 for series in per_inverter) else 0
+        export_limits = [inverter.export_limit * MINUTE_WATT for inverter in fleet]
+        export_limit_w = EXPORT_LIMIT_DEFAULT_W if any(limit >= EXPORT_LIMIT_DEFAULT_W for limit in export_limits) else sum(export_limits)
+        return {
+            "soc_kwh": soc_kwh,
+            "rate": rate,
+            "battery_power": battery_power,
+            "status": status,
+            "min_len": min_len,
+            "soc_max": sum(inverter.soc_max for inverter in fleet),
+            "max_power": fleet_max_power,
+            "export_limit_w": export_limit_w,
+            "inverters": len(fleet),
+        }
+
     def find_charge_curve_samples(self, discharge):
         """
         Scan the history window for full-rate charge (or discharge) steps through each SoC%.
 
         Each SoC step is the mean power over the minutes the SoC spent there, while Predbat was Charging (Exporting) with
         the rate written at 95% or more of the maximum, as a fraction of the maximum (after battery_loss). Minutes held at
-        the temperature cap, or for discharge at the export limit, are left out.
+        the temperature cap, or for discharge at the export limit, are left out. With more than one inverter the combined
+        battery is scanned (see load_curve_history()), as the plan applies the curve to it.
 
         Args:
             discharge: True for the discharge curve
@@ -302,264 +429,150 @@ class BatteryCurve:
             holds no full-rate cycle; None when the settings or their history are missing, or the export limit cannot be
             told apart (so stored samples are left as they are).
         """
-        curve_type = "charge"
-        if discharge:
-            curve_type = "discharge"
-
-        predbat_status_sensor = self.base.prefix + ".status"
-
-        if "soc_percent" in self.base.args:
-            soc_kwh_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
-            soc_kwh_percent = True
-            soc_label = "soc_percent"
-        else:
-            soc_kwh_percent = False
-            soc_label = "soc_kw"
-            soc_kwh_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
-
-        if discharge:
-            charge_rate_sensor = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
-            curve_label = "empty"
-        else:
-            charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
-            curve_label = "full"
-
-        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
-        battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
-
-        samples = {}
-
-        if discharge:
-            max_power = int(self.battery_rate_max_discharge * MINUTE_WATT)
-        else:
-            max_power = int(self.battery_rate_max_charge * MINUTE_WATT)
-
+        curve_type = "discharge" if discharge else "charge"
+        curve_label = "empty" if discharge else "full"
+        history = self.load_curve_history(discharge, "battery {} curve".format(curve_type))
+        if history is None:
+            return None
+        soc_kwh = history["soc_kwh"]
+        charge_rate = history["rate"]
+        battery_power = history["battery_power"]
+        predbat_status = history["status"]
+        min_len = history["min_len"]
+        soc_max = history["soc_max"]
+        max_power = history["max_power"]
         max_power_scaled = max_power * 0.95
+        samples = {}
+        self.log(
+            "Inverter {} Looking for {} curve{}, have found {} days of history data, max days {}".format(
+                self.id, curve_type, " across {} inverters".format(history["inverters"]) if history["inverters"] > 1 else "", dp1(min_len / 60 / 24.0), self.base.max_days_previous
+            )
+        )
 
-        if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
-            battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
-            self.log("Inverter {} Looking for {} curve with sensors {}, {}, {} and {}".format(self.id, curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
-            if soc_kwh_percent:
-                soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous, required=False)
-            else:
-                soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous, required=False)
-            charge_rate_data = self.base.get_history_wrapper(entity_id=charge_rate_sensor, days=self.base.max_days_previous, required=False)
-            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=self.base.max_days_previous, required=False)
-            predbat_status_data = self.base.get_history_wrapper(entity_id=predbat_status_sensor, days=self.base.max_days_previous, required=False)
+        soc_percent = {}
+        for minute in range(0, min_len):
+            soc_percent[minute] = calc_percent_limit(soc_kwh.get(minute, 0), soc_max)
 
-            if soc_kwh_data and charge_rate_data and battery_power_data and predbat_status_data:
-                if soc_kwh_percent:
-                    # If its in percent convert to kWh
-                    soc_kwh, ignore_io = minute_data(
-                        soc_kwh_data[0],
-                        self.base.max_days_previous,
-                        self.base.now_utc,
-                        "state",
-                        "last_updated",
-                        backwards=True,
-                        clean_increment=False,
-                        smoothing=False,
-                        divide_by=1.0,
-                        scale=1.0,  # A percent is already of usable capacity, and soc_max already includes battery_scaling (#6183)
-                        required_unit="%",
-                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
-                    )
-                    for entry in soc_kwh:
-                        soc_kwh[entry] = dp4(soc_kwh[entry] * self.soc_max / 100.0)
-                else:
-                    soc_kwh, ignore_io = minute_data(
-                        soc_kwh_data[0],
-                        self.base.max_days_previous,
-                        self.base.now_utc,
-                        "state",
-                        "last_updated",
-                        backwards=True,
-                        clean_increment=False,
-                        smoothing=False,
-                        divide_by=1.0,
-                        scale=self.battery_scaling,
-                        required_unit="kWh",
-                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
-                    )
-                charge_rate, ignore_io = minute_data(
-                    charge_rate_data[0],
-                    self.base.max_days_previous,
-                    self.base.now_utc,
-                    "state",
-                    "last_updated",
-                    backwards=True,
-                    clean_increment=False,
-                    smoothing=False,
-                    divide_by=1.0,
-                    scale=1.0,
-                    required_unit="W",
-                    can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
-                )
-                predbat_status = minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
-                for minute in predbat_status:
-                    status = predbat_status[minute]
-                    if "," in status:
-                        # If there are multiple statuses take the first one
-                        predbat_status[minute] = status.split(",")[0].strip()
-                battery_power, ignore_io = minute_data(
-                    battery_power_data[0],
-                    self.base.max_days_previous,
-                    self.base.now_utc,
-                    "state",
-                    "last_updated",
-                    backwards=True,
-                    clean_increment=False,
-                    smoothing=False,
-                    divide_by=1.0,
-                    scale=1.0,
-                    required_unit="W",
-                    can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
-                )
-                if battery_power_invert:
-                    # Invert the battery power if required
-                    for minute in battery_power:
-                        battery_power[minute] = -battery_power[minute]
-                min_len = min(len(soc_kwh), len(charge_rate), len(predbat_status), len(battery_power))
-                self.log("Inverter {} Looking for {} curve, have found {} days of history data, max days {}".format(self.id, curve_type, dp1(min_len / 60 / 24.0), self.base.max_days_previous))
+        temperature_limited = self.find_temperature_limited_minutes(discharge, min_len, battery_power, soc_max, max_power)
+        if discharge:
+            export_limited = self.find_export_limited_minutes(min_len, max_power_scaled, history["export_limit_w"])
+            if export_limited is None:
+                return None
+            temperature_limited = temperature_limited | export_limited
 
-                soc_percent = {}
-                for minute in range(0, min_len):
-                    soc_percent[minute] = calc_percent_limit(soc_kwh.get(minute, 0), self.soc_max)
-
-                temperature_limited = self.find_temperature_limited_minutes(discharge, min_len, max_power_scaled, battery_power)
-                if discharge:
-                    export_limited = self.find_export_limited_minutes(min_len, max_power_scaled)
-                    if export_limited is None:
-                        return None
-                    temperature_limited = temperature_limited | export_limited
-
-                if discharge:
-                    search_range = range(5, 20, 1)
-                else:
-                    search_range = range(99, 85, -1)
-
-                # Find 100% end points. The exact-match checks below ("Charging" / "Exporting",
-                # "Discharging") deliberately exclude "Cross-charging" minutes - during genuine
-                # cross-charging another inverter is simultaneously drawing/feeding power at the
-                # same time, so this inverter's battery_power reading isn't a clean single-inverter
-                # charge/discharge sample and would corrupt the learned curve if included.
-                for data_point in search_range:
-                    for minute in range(1, min_len):
-                        # Start trigger is when the SoC just increased above the data point
-                        previous_point = soc_percent.get(minute - 1, 0)
-                        if (
-                            not discharge
-                            and previous_point > data_point
-                            and soc_percent.get(minute, 0) == data_point
-                            and predbat_status.get(minute - 1, "") == "Charging"
-                            and predbat_status.get(minute, "") == "Charging"
-                            and predbat_status.get(minute + 1, "") == "Charging"
-                            and charge_rate.get(minute - 1, 0) >= max_power_scaled
-                            and charge_rate.get(minute, 0) >= max_power_scaled
-                            and battery_power.get(minute, 0) < 0
-                        ) or (
-                            discharge
-                            and previous_point < data_point
-                            and soc_percent.get(minute, 0) == data_point
-                            and predbat_status.get(minute - 1, "") in ["Exporting", "Discharging"]
-                            and predbat_status.get(minute, "") in ["Exporting", "Discharging"]
-                            and predbat_status.get(minute + 1, "") in ["Exporting", "Discharging"]
-                            and charge_rate.get(minute - 1, 0) >= max_power_scaled
-                            and charge_rate.get(minute, 0) >= max_power_scaled
-                            and battery_power.get(minute, 0) > 0
-                        ):
-                            total_power = 0
-                            total_count = 0
-                            # Find a period where charging was at full rate and the SoC just drops below the data point
-                            for target_minute in range(minute, min_len):
-                                this_soc = soc_percent.get(target_minute, 0)
-                                if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) >= 0):
-                                    break
-                                if discharge and (predbat_status.get(target_minute, "") not in ["Exporting", "Discharging"] or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) <= 0):
-                                    break
-                                if target_minute in temperature_limited:
-                                    # A cold battery (or, discharging, the export limit) was holding the rate down, which is not the SoC curve
-                                    break
-
-                                if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
-                                    if total_power == 0:
-                                        # No power data, so skip this data point
-                                        break
-                                    if target_minute not in soc_kwh or abs(previous_point - data_point) > CHARGE_CURVE_MAX_SOC_STEP or abs(data_point - this_soc) > CHARGE_CURVE_MAX_SOC_STEP:
-                                        # Missing or implausible SoC reading at either end of the step, skip this sample (#5259)
-                                        break
-                                    if discharge:
-                                        this_soc -= 1
-                                    else:
-                                        this_soc += 1
-                                    # So the power for this data point average has been stored, it's possible we spanned more than one data point
-                                    # if not all SoC %'s are represented for this battery size
-                                    from_soc = soc_kwh.get(minute, 0)
-                                    to_soc = soc_kwh.get(target_minute, 0)
-                                    soc_charged = from_soc - to_soc
-                                    average_power = total_power / total_count
-                                    charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
-                                    if self.base.debug_enable:
-                                        self.log(
-                                            "Curve Percent: {}-{} at {} took {} minutes charged {} curve {} average_power {}".format(
-                                                data_point,
-                                                this_soc,
-                                                self.base.time_abs_str(self.base.minutes_now - minute),
-                                                total_count,
-                                                round(soc_charged, 2),
-                                                charge_curve,
-                                                average_power,
-                                            )
-                                        )
-                                    # Store data points
-                                    if discharge:
-                                        store_range = range(this_soc, previous_point, -1)
-                                    else:
-                                        store_range = range(this_soc, previous_point)
-
-                                    # Evidence behind each point: the day it was seen on, and its share of the step's minutes
-                                    step_day = charge_day(self.base.now_utc, minute, getattr(self.base, "local_tz", None))
-                                    step_minutes = total_count / max(len(store_range), 1)
-                                    day_points = samples.setdefault(step_day, {})
-                                    for point in store_range:
-                                        entry = day_points.setdefault(point, [0.0, 0, 0.0])
-                                        entry[0] += charge_curve
-                                        entry[1] += 1
-                                        entry[2] += step_minutes
-
-                                    break
-                                else:
-                                    # Store data for this minute of the period, so total_power/total_count
-                                    # below is the mean power across the whole SoC step rather than the
-                                    # reading at the single minute the step was triggered on
-                                    total_power += abs(battery_power.get(target_minute, 0))
-                                    total_count += 1
-                if samples:
-                    for day_points in samples.values():
-                        for entry in day_points.values():
-                            entry[0] = dp4(entry[0])
-                            entry[2] = dp2(entry[2])
-                    return samples
-                self.log(
-                    "Info: Cannot find battery {} curve (no full rate {} cycle to {} found in history), battery may not have been fully charged/discharged at max rate recently - this is normal in cost-optimised operation".format(
-                        curve_type, curve_type, curve_label
-                    )
-                )
-                return {}
-            else:
-                history_checks = [
-                    (soc_label, soc_kwh_sensor, soc_kwh_data),
-                    ("{}_rate".format(curve_type), charge_rate_sensor, charge_rate_data),
-                    ("battery_power", battery_power_sensor, battery_power_data),
-                    ("predbat.status", predbat_status_sensor, predbat_status_data),
-                ]
-                no_history = ["{} ({})".format(setting, entity_id) for setting, entity_id, data in history_checks if not data]
-                self.log("Warn: Inverter {} Cannot find battery {} curve (missing history), no history found for {} - check the entity name in apps.yaml and that Home Assistant is recording its history".format(self.id, curve_type, ", ".join(no_history)))
-                self.log("Warn: Inverter {} Sensor history record counts: {}".format(self.id, ", ".join("{} {}".format(setting, len(data[0]) if data else 0) for setting, entity_id, data in history_checks)))
+        if discharge:
+            search_range = range(5, 20, 1)
         else:
-            missing_settings = [setting for setting, entity_id in [(soc_label, soc_kwh_sensor), ("{}_rate".format(curve_type), charge_rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
-            self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), {} not set in apps.yaml".format(self.id, curve_type, ", ".join(missing_settings)))
-        return None
+            search_range = range(99, 85, -1)
+
+        # Find 100% end points. The exact-match checks below ("Charging" / "Exporting",
+        # "Discharging") deliberately exclude "Cross-charging" minutes - during genuine
+        # cross-charging another inverter is simultaneously drawing/feeding power at the
+        # same time, so this inverter's battery_power reading isn't a clean single-inverter
+        # charge/discharge sample and would corrupt the learned curve if included.
+        for data_point in search_range:
+            for minute in range(1, min_len):
+                # Start trigger is when the SoC just increased above the data point
+                previous_point = soc_percent.get(minute - 1, 0)
+                if (
+                    not discharge
+                    and previous_point > data_point
+                    and soc_percent.get(minute, 0) == data_point
+                    and predbat_status.get(minute - 1, "") == "Charging"
+                    and predbat_status.get(minute, "") == "Charging"
+                    and predbat_status.get(minute + 1, "") == "Charging"
+                    and charge_rate.get(minute - 1, 0) >= max_power_scaled
+                    and charge_rate.get(minute, 0) >= max_power_scaled
+                    and battery_power.get(minute, 0) < 0
+                ) or (
+                    discharge
+                    and previous_point < data_point
+                    and soc_percent.get(minute, 0) == data_point
+                    and predbat_status.get(minute - 1, "") in ["Exporting", "Discharging"]
+                    and predbat_status.get(minute, "") in ["Exporting", "Discharging"]
+                    and predbat_status.get(minute + 1, "") in ["Exporting", "Discharging"]
+                    and charge_rate.get(minute - 1, 0) >= max_power_scaled
+                    and charge_rate.get(minute, 0) >= max_power_scaled
+                    and battery_power.get(minute, 0) > 0
+                ):
+                    total_power = 0
+                    total_count = 0
+                    # Find a period where charging was at full rate and the SoC just drops below the data point
+                    for target_minute in range(minute, min_len):
+                        this_soc = soc_percent.get(target_minute, 0)
+                        if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) >= 0):
+                            break
+                        if discharge and (predbat_status.get(target_minute, "") not in ["Exporting", "Discharging"] or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) <= 0):
+                            break
+                        if target_minute in temperature_limited:
+                            # A cold battery (or, discharging, the export limit) was holding the rate down, which is not the SoC curve
+                            break
+
+                        if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
+                            if total_power == 0:
+                                # No power data, so skip this data point
+                                break
+                            if target_minute not in soc_kwh or abs(previous_point - data_point) > CHARGE_CURVE_MAX_SOC_STEP or abs(data_point - this_soc) > CHARGE_CURVE_MAX_SOC_STEP:
+                                # Missing or implausible SoC reading at either end of the step, skip this sample (#5259)
+                                break
+                            if discharge:
+                                this_soc -= 1
+                            else:
+                                this_soc += 1
+                            # So the power for this data point average has been stored, it's possible we spanned more than one data point
+                            # if not all SoC %'s are represented for this battery size
+                            from_soc = soc_kwh.get(minute, 0)
+                            to_soc = soc_kwh.get(target_minute, 0)
+                            soc_charged = from_soc - to_soc
+                            average_power = total_power / total_count
+                            charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
+                            if self.base.debug_enable:
+                                self.log(
+                                    "Curve Percent: {}-{} at {} took {} minutes charged {} curve {} average_power {}".format(
+                                        data_point,
+                                        this_soc,
+                                        self.base.time_abs_str(self.base.minutes_now - minute),
+                                        total_count,
+                                        round(soc_charged, 2),
+                                        charge_curve,
+                                        average_power,
+                                    )
+                                )
+                            # Store data points
+                            if discharge:
+                                store_range = range(this_soc, previous_point, -1)
+                            else:
+                                store_range = range(this_soc, previous_point)
+
+                            # Evidence behind each point: the day it was seen on, and its share of the step's minutes
+                            step_day = charge_day(self.base.now_utc, minute, getattr(self.base, "local_tz", None))
+                            step_minutes = total_count / max(len(store_range), 1)
+                            day_points = samples.setdefault(step_day, {})
+                            for point in store_range:
+                                entry = day_points.setdefault(point, [0.0, 0, 0.0])
+                                entry[0] += charge_curve
+                                entry[1] += 1
+                                entry[2] += step_minutes
+
+                            break
+                        else:
+                            # Store data for this minute of the period, so total_power/total_count
+                            # below is the mean power across the whole SoC step rather than the
+                            # reading at the single minute the step was triggered on
+                            total_power += abs(battery_power.get(target_minute, 0))
+                            total_count += 1
+        if samples:
+            for day_points in samples.values():
+                for entry in day_points.values():
+                    entry[0] = dp4(entry[0])
+                    entry[2] = dp2(entry[2])
+            return samples
+        self.log(
+            "Info: Cannot find battery {} curve (no full rate {} cycle to {} found in history), battery may not have been fully charged/discharged at max rate recently - this is normal in cost-optimised operation".format(
+                curve_type, curve_type, curve_label
+            )
+        )
+        return {}
 
     def learn_charge_curve(self, samples, discharge):
         """
@@ -691,7 +704,7 @@ class BatteryCurve:
                 self.log("Warn: Inverter {} Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(self.id, curve_type))
         return {}
 
-    def find_temperature_limited_minutes(self, discharge, min_len, max_power_scaled, battery_power):
+    def find_temperature_limited_minutes(self, discharge, min_len, battery_power, soc_max, max_power):
         """
         Find the minutes of history where the battery was held at its temperature cap.
 
@@ -712,15 +725,16 @@ class BatteryCurve:
         Args:
             discharge: True to use the discharge temperature curve
             min_len: minutes of history being searched
-            max_power_scaled: the rate in W a minute must reach to count as full rate (95% of the rated rate)
-            battery_power: {minute: W} as find_charge_curve() read it (sign already corrected)
+            battery_power: {minute: W} as load_curve_history() read it (sign already corrected, summed over the fleet)
+            soc_max: the (combined) battery size the cap is worked out for, kWh
+            max_power: the (combined) rated rate, W
 
         Returns:
             A set of minute indexes (minutes before now); empty when there is no temperature curve or history.
         """
         temperature_curve = self.base.battery_temperature_discharge_curve if discharge else self.base.battery_temperature_charge_curve
         temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False)
-        if not temperature_curve or not temperature_sensor or self.soc_max <= 0:
+        if not temperature_curve or not temperature_sensor or soc_max <= 0:
             return set()
         temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=self.base.max_days_previous, required=False)
         if not temperature_data:
@@ -741,7 +755,7 @@ class BatteryCurve:
         battery_loss = self.base.battery_loss if self.base.battery_loss > 0 else 1.0
         rate_scaling = self.base.battery_rate_max_scaling_discharge if discharge else self.base.battery_rate_max_scaling
         rate_scaling = rate_scaling if rate_scaling > 0 else 1.0
-        limit_w = (self.battery_rate_max_discharge if discharge else self.battery_rate_max_charge) * MINUTE_WATT * BATTERY_TEMPERATURE_CURVE_LIMIT_FRACTION
+        limit_w = max_power * BATTERY_TEMPERATURE_CURVE_LIMIT_FRACTION
         limited = set()
         cap_cache = {}
         for minute in range(0, min_len):
@@ -750,7 +764,7 @@ class BatteryCurve:
                 continue
             temp_idx = int(min(max(temp, -20), BATTERY_TEMPERATURE_CURVE_TEMP_MAX))
             if temp_idx not in cap_cache:
-                cap_cache[temp_idx] = find_battery_temperature_cap(temp_idx, temperature_curve, self.soc_max, float("inf")) * MINUTE_WATT * battery_loss * rate_scaling
+                cap_cache[temp_idx] = find_battery_temperature_cap(temp_idx, temperature_curve, soc_max, float("inf")) * MINUTE_WATT * battery_loss * rate_scaling
             cap_w = cap_cache[temp_idx]
             if cap_w < limit_w and abs(battery_power.get(minute, 0)) >= cap_w * BATTERY_TEMPERATURE_CURVE_BINDING_MARGIN:
                 limited.add(minute)
@@ -758,7 +772,7 @@ class BatteryCurve:
             self.log("Inverter {} Leaving {} temperature-limited minutes out of the battery {} curve".format(self.id, len(limited), "discharge" if discharge else "charge"))
         return limited
 
-    def find_export_limited_minutes(self, min_len, max_power_scaled):
+    def find_export_limited_minutes(self, min_len, max_power_scaled, export_limit_w=None):
         """
         Find the minutes of history where the export limit, not the battery, held back a discharge.
 
@@ -770,6 +784,7 @@ class BatteryCurve:
         Args:
             min_len: minutes of history being searched
             max_power_scaled: the rate in W a minute must reach to count as full rate
+            export_limit_w: the (combined) export limit in W; this inverter's own when not given
 
         Returns:
             A set of minute indexes (minutes before now): empty when no export limit is set, or when there is no
@@ -777,7 +792,8 @@ class BatteryCurve:
             None when the limit is below the full rate and there is no grid_power history to tell the minutes apart,
             as the discharge curve cannot then be learned safely.
         """
-        export_limit_w = self.export_limit * MINUTE_WATT
+        if export_limit_w is None:
+            export_limit_w = self.export_limit * MINUTE_WATT
         if export_limit_w >= EXPORT_LIMIT_DEFAULT_W:
             return set()
         grid_sensor = self.base.get_arg("grid_power", indirect=False, index=self.id)
@@ -829,87 +845,65 @@ class BatteryCurve:
         battery_rate_max_scaling: the plan multiplies the temperature cap by that scaling, so without the division a
         battery with a scaling below 1.0 would be planned at the learned rate times the scaling, not the learned rate.
         Degrees up to BATTERY_TEMPERATURE_CURVE_TEMP_MAX are learned, a warmer reading counting as that degree, as the
-        cap looks it up.
+        cap looks it up. With more than one inverter the combined battery is scanned (load_curve_history()), as the plan
+        applies the cap to it.
 
         Returns:
             {day: {temperature: [sum_of_c, minutes]}} keyed by charge_day() (YYYY-MM-DD) and the whole degree
             the temperature truncates to (as find_battery_temperature_cap() looks it up), or None when the
             sensors or their history are missing.
         """
-        predbat_status_sensor = self.base.prefix + ".status"
-        soc_kwh_percent = "soc_percent" in self.base.args
-        if soc_kwh_percent:
-            soc_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
-        else:
-            soc_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
-        charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
-        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
-        battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
         temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False)
-
-        if not (soc_sensor and charge_rate_sensor and battery_power_sensor and temperature_sensor) or self.soc_max <= 0:
-            self.log("Warn: Inverter {} Cannot learn the battery temperature charge curve, soc, charge_rate, battery_power and battery_temperature_history must all be set in apps.yaml".format(self.id))
+        if not temperature_sensor or self.soc_max <= 0:
+            self.log("Warn: Inverter {} Cannot learn the battery temperature charge curve, battery_temperature_history must be set in apps.yaml".format(self.id))
             return None
-        battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
-
+        history = self.load_curve_history(False, "battery temperature charge curve")
+        if history is None:
+            return None
         days = self.base.max_days_previous
-        history = {}
-        for name, entity_id in [("soc", soc_sensor), ("charge_rate", charge_rate_sensor), ("battery_power", battery_power_sensor), ("temperature", temperature_sensor), ("status", predbat_status_sensor)]:
-            data = self.base.get_history_wrapper(entity_id=entity_id, days=days, required=False)
-            if not data:
-                self.log("Warn: Inverter {} Cannot learn the battery temperature charge curve, no history found for {} ({})".format(self.id, name, entity_id))
-                return None
-            history[name] = data[0]
+        temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=days, required=False)
+        if not temperature_data:
+            self.log("Warn: Inverter {} Cannot learn the battery temperature charge curve, no history found for temperature ({})".format(self.id, temperature_sensor))
+            return None
+        temperature, _ = minute_data(
+            temperature_data[0],
+            days,
+            self.base.now_utc,
+            "state",
+            "last_updated",
+            backwards=True,
+            clean_increment=False,
+            smoothing=False,
+            divide_by=1.0,
+            scale=1.0,
+            can_modify_history=True,  # history is not accessed after this point
+        )
+        soc_kwh = history["soc_kwh"]
+        charge_rate = history["rate"]
+        battery_power = history["battery_power"]
+        status = history["status"]
+        soc_max = history["soc_max"]
 
-        def to_minutes(entries, scale=1.0, required_unit=None):
-            values, _ = minute_data(
-                entries,
-                days,
-                self.base.now_utc,
-                "state",
-                "last_updated",
-                backwards=True,
-                clean_increment=False,
-                smoothing=False,
-                divide_by=1.0,
-                scale=scale,
-                required_unit=required_unit,
-                can_modify_history=True,  # history is not accessed after this point
-            )
-            return values
-
-        # A percent is already of usable capacity and soc_max already includes battery_scaling, only kWh is scaled (#6183)
-        soc = to_minutes(history["soc"], scale=1.0 if soc_kwh_percent else self.battery_scaling, required_unit="%" if soc_kwh_percent else "kWh")
-        charge_rate = to_minutes(history["charge_rate"], required_unit="W")
-        battery_power = to_minutes(history["battery_power"], required_unit="W")
-        temperature = to_minutes(history["temperature"])
-        status = minute_data_state(history["status"], days, self.base.now_utc, "state", "last_updated")
-
-        max_power = self.battery_rate_max_charge * MINUTE_WATT
+        max_power = history["max_power"]
         min_charge_rate = max_power * 0.95
         min_battery_power = max(max_power * BATTERY_TEMPERATURE_CURVE_MIN_POWER, 1.0)
         battery_loss = self.base.battery_loss if self.base.battery_loss > 0 else 1.0
         rate_scaling = self.base.battery_rate_max_scaling if self.base.battery_rate_max_scaling > 0 else 1.0
         local_tz = getattr(self.base, "local_tz", None)
         samples = {}
-        for minute in range(0, min(len(soc), len(charge_rate), len(battery_power), len(temperature), len(status))):
-            this_status = status.get(minute, "")
-            if this_status.split(",")[0].strip() != "Charging":
+        for minute in range(0, min(history["min_len"], len(temperature))):
+            if status.get(minute, "") != "Charging":
                 continue
             if charge_rate.get(minute, 0) < min_charge_rate:
                 continue
             power = battery_power.get(minute, 0)
-            if battery_power_invert:
-                power = -power
             if power >= 0 or abs(power) < min_battery_power:
                 # Not charging, or so little that the charge has finished rather than been limited
                 continue
-            soc_percent = soc.get(minute, None)
-            if soc_percent is None:
+            soc_value = soc_kwh.get(minute, None)
+            if soc_value is None:
                 continue
-            if not soc_kwh_percent:
-                soc_percent = soc_percent / self.soc_max * 100.0
-            if soc_percent >= BATTERY_TEMPERATURE_CURVE_SOC_MAX:
+            if soc_value / soc_max * 100.0 >= BATTERY_TEMPERATURE_CURVE_SOC_MAX:
                 continue
             temp = temperature.get(minute, None)
             if temp is None:
@@ -919,7 +913,7 @@ class BatteryCurve:
                 # The 0 entry is the fallback for every reading at or below 0, including the exact 0 several integrations
                 # report for a missing reading, so it is never learned (anything between -1 and 1 truncates to it)
                 continue
-            rate_c = abs(power) / 1000.0 / battery_loss / self.soc_max / rate_scaling
+            rate_c = abs(power) / 1000.0 / battery_loss / soc_max / rate_scaling
             day = charge_day(self.base.now_utc, minute, local_tz)
             day_bins = samples.setdefault(day, {})
             entry = day_bins.setdefault(temp, [0.0, 0])

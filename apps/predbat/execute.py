@@ -1566,13 +1566,6 @@ class Execute:
                     return False
             inverter.update_status(self.minutes_now, quiet=quick)
 
-            if id == 0:
-                # Temperature first, so the SoC curve learner can leave out the charges the temperature curve says were limited
-                if self.battery_temperature_charge_curve_auto:
-                    self.battery_temperature_curve_auto_update(inverter)
-                self.battery_power_curve_update(inverter, discharge=False)
-                self.battery_power_curve_update(inverter, discharge=True)
-
             # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
             if not found_first:
                 found_first = True
@@ -1624,6 +1617,15 @@ class Execute:
             battery_power += inverter.battery_power
             grid_power += inverter.grid_power
             battery_temperature += inverter.battery_temperature
+
+        # The curve learners read the whole fleet's history (the plan models it as one battery), so they run once every
+        # inverter exists and is refreshed - on a fresh start the others are only created after inverter 0. Temperature
+        # first, so the SoC curve learner can leave out the charges the temperature curve says were limited.
+        if self.inverters:
+            if self.battery_temperature_charge_curve_auto:
+                self.battery_temperature_curve_auto_update(self.inverters[0])
+            self.battery_power_curve_update(self.inverters[0], discharge=False)
+            self.battery_power_curve_update(self.inverters[0], discharge=True)
 
         # Atomically publish all accumulated totals so the web server never reads partial sums
         self.current_charge_limit_kwh = current_charge_limit_kwh
