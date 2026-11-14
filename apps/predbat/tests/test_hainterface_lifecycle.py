@@ -13,6 +13,7 @@ from unittest.mock import patch
 from tests.test_hainterface_common import MockBase, create_ha_interface, create_mock_requests_response
 from tests.test_infra import run_async
 from ha import HAInterface
+from http_sync import HttpConnectionError, HttpTimeout
 
 
 def test_hainterface_initialize_ha_only(my_predbat=None):
@@ -167,6 +168,33 @@ def test_hainterface_initialize_retries_transient_statuses(my_predbat=None):
     return 0
 
 
+def test_hainterface_initialize_retries_unreachable_without_fatal_error(my_predbat=None):
+    """Connection errors and timeouts with no HTTP status are retried quietly and never reach the fatal API error limit."""
+    mock_base = MockBase()
+    ha_interface = _make_uninitialized_ha_interface(mock_base)
+    # 12 consecutive failures is past the 10-error limit in api_call(), so only the per-attempt reset keeps it clear
+    failures = [HttpConnectionError("Connection refused") if index % 2 == 0 else HttpTimeout("Timed out") for index in range(12)]
+    responses = failures + [create_mock_requests_response(200, [{"domain": "test"}])]
+    with patch("ha.http_get", side_effect=responses) as mock_get, patch("ha.time.sleep") as mock_sleep:
+        ha_interface.initialize("http://test", "test_key", False, False, False)
+    failed = 0
+    if mock_get.call_count != 13 or mock_sleep.call_count != 12 or ha_interface.ha_key != "test_key":
+        print("ERROR: expected unreachable startup responses to retry through success, got {} calls and {} sleeps".format(mock_get.call_count, mock_sleep.call_count))
+        failed += 1
+    if mock_base.fatal_error:
+        print("ERROR: startup retries reached the fatal API error limit")
+        failed += 1
+    if any("Timeout from" in log or "Connection error from" in log for log in mock_base.log_messages):
+        print("ERROR: silent startup probe logged a per-request timeout or connection error")
+        failed += 1
+    if not any("http://test" in log and "HTTP unavailable" in log for log in mock_base.log_messages):
+        print("ERROR: startup retry warning should name the URL and report no HTTP status")
+        failed += 1
+    if not failed:
+        print("✓ Unreachable startup responses retried without a fatal error")
+    return failed
+
+
 def test_hainterface_initialize_rejects_non_retryable_status(my_predbat=None):
     """A non-retryable 4xx response fails immediately without sleeping."""
     mock_base = MockBase()
@@ -182,6 +210,9 @@ def test_hainterface_initialize_rejects_non_retryable_status(my_predbat=None):
             return 1
     if mock_get.call_count != 1 or mock_sleep.called or ha_interface.ha_key is not None:
         print("ERROR: non-retryable 401 was not rejected immediately")
+        return 1
+    if not any("HTTP 401" in log and "ha_url/ha_key" in log for log in mock_base.log_messages):
+        print("ERROR: non-retryable 401 should point at the ha_url/ha_key configuration")
         return 1
     print("✓ Non-retryable 401 rejected immediately")
     return 0
@@ -201,6 +232,9 @@ def test_hainterface_initialize_retry_deadline(my_predbat=None):
             return 1
     if mock_get.call_count != 1 or mock_sleep.called or ha_interface.ha_key is not None:
         print("ERROR: retry deadline did not stop initialization cleanly")
+        return 1
+    if not any("http://test" in log and "ha_url/ha_key" in log for log in mock_base.log_messages):
+        print("ERROR: retry deadline error should name the URL and point at the ha_url/ha_key configuration")
         return 1
     print("✓ Retry deadline stops initialization cleanly")
     return 0
@@ -559,6 +593,7 @@ def run_hainterface_lifecycle_tests(my_predbat):
     failed += test_hainterface_initialize_no_key_no_db(my_predbat)
     failed += test_hainterface_initialize_api_check_failed(my_predbat)
     failed += test_hainterface_initialize_retries_transient_statuses(my_predbat)
+    failed += test_hainterface_initialize_retries_unreachable_without_fatal_error(my_predbat)
     failed += test_hainterface_initialize_rejects_non_retryable_status(my_predbat)
     failed += test_hainterface_initialize_retry_deadline(my_predbat)
     failed += test_predbat_stops_phase0_start_without_ha_interface(my_predbat)

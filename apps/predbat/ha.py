@@ -519,19 +519,19 @@ class HAInterface(ComponentBase):
 
                 status = self.last_api_status
                 if status is not None and 400 <= status < 500 and status not in (408, 429):
-                    self.log("Error: Home Assistant rejected the startup API request with HTTP {}".format(status))
+                    self.log("Error: Home Assistant at {} rejected the startup API request with HTTP {}, please check your configuration of ha_url/ha_key".format(self.ha_url, status))
                     self.ha_key = None
                     raise ValueError
 
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    self.log("Error: Home Assistant API did not become ready within {} seconds".format(HA_STARTUP_API_RETRY_TIMEOUT))
+                    self.log("Error: Home Assistant API at {} did not become ready within {} seconds, please check your configuration of ha_url/ha_key".format(self.ha_url, HA_STARTUP_API_RETRY_TIMEOUT))
                     self.ha_key = None
                     raise ValueError
 
                 attempts += 1
                 if attempts == 1 or attempts % 6 == 0:
-                    self.log("Warn: Home Assistant API is not ready during startup (HTTP {}); retrying".format(status if status is not None else "unavailable"))
+                    self.log("Warn: Home Assistant API at {} is not ready during startup (HTTP {}); retrying".format(self.ha_url, status if status is not None else "unavailable"))
                 # Keep boot-time proxy failures from tripping the runtime fatal-error limit.
                 self.api_errors = 0
                 time.sleep(min(HA_STARTUP_API_RETRY_INTERVAL, remaining))
