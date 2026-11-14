@@ -718,16 +718,16 @@ def test_predheat_temperature_units(my_predbat):
             print("ERROR: 20 °C records and 68 °F records should all read 20 °C, got {} now and {} earlier".format(data.get(0), data.get(200)))
             failed = True
 
-        # Published temperatures follow the display unit, except a 0 'heating off' marker
-        if predheat.display_temperature(20.0) != 68.0 or predheat.display_series({"t": 0.0}) != {"t": 32.0} or predheat.display_series({"t": 0, "u": 20.0}, zero_is_off=True) != {"t": 0, "u": 68.0}:
-            print("ERROR: temperatures should be published in °F when the internal sensor is in °F, keeping a heating-off 0")
+        # Published temperatures follow the display unit, a 0 included: heating off is None now (#6134), so a 0 is a real 0 °C
+        if predheat.display_temperature(20.0) != 68.0 or predheat.display_series({"t": 0.0, "u": 20.0}) != {"t": 32.0, "u": 68.0}:
+            print("ERROR: temperatures should be published in °F when the internal sensor is in °F, 0 °C as 32 °F")
             failed = True
 
         # A missing value (None, e.g. heating off as #6134 marks it) is published as-is in either display unit, not converted
         for display_unit in ("°F", "°C"):
             predheat.display_unit = display_unit
             try:
-                got = (predheat.display_temperature(None), predheat.display_series({"t": None, "u": 20.0}, zero_is_off=True))
+                got = (predheat.display_temperature(None), predheat.display_series({"t": None, "u": 20.0}))
             except TypeError as error:
                 got = error
             expected = (None, {"t": None, "u": 68.0 if display_unit == "°F" else 20.0})
@@ -754,4 +754,70 @@ def test_predheat_temperature_units(my_predbat):
             my_predbat.args.pop("predheat", None)
         else:
             my_predbat.args["predheat"] = original_predheat_args
+
+    return failed
+
+
+def _published_heat_to(predheat, volume_temp, heating_active):
+    """Run one simulation pass and return the published heat_to_temp state and results series.
+
+    The published state is captured as well as the attributes, unlike _make_simulation's
+    stub which only keeps the attributes.
+    """
+    predheat.published = {}
+    predheat.set_state = lambda entity_id, state=None, attributes=None: predheat.published.__setitem__(entity_id, {"state": state, "attributes": attributes or {}})
+    predheat.run_simulation(volume_temp, heating_active, save="best")
+    published = predheat.published[predheat.prefix + ".heat_to_temp"]
+    return published["state"], published["attributes"]["results"]
+
+
+def test_predheat_heat_to_temp_off_marker(my_predbat):
+    """Heating off must publish a distinct off marker for heat_to_temp, not 0 (#6078)."""
+    failed = False
+    print("**** Running Predheat heat_to_temp off-marker tests ****")
+
+    # ------------------------------------------------------------------
+    print("Test: heating off publishes 'unknown', not 0, for heat_to_temp")
+    # No heating period, inside and outside both at BASE_TEMP, so the heating never switches on.
+    predheat = _make_simulation(my_predbat, [], smart_thermostat=False)
+    predheat.external_temperature = {0: BASE_TEMP}
+    state, results = _published_heat_to(predheat, BASE_TEMP, False)
+    if state != "unknown":
+        print("  ERROR: heating off expected heat_to_temp state 'unknown', got {}".format(repr(state)))
+        failed = True
+    if any(value is not None for value in results.values()):
+        non_none = {stamp: value for stamp, value in results.items() if value is not None}
+        print("  ERROR: heating off expected every heat_to_temp result to be None, got {} non-None values, first: {}".format(len(non_none), list(non_none.items())[:3]))
+        failed = True
+
+    # ------------------------------------------------------------------
+    print("Test: heating to a real 0 C target still publishes 0")
+    predheat = _make_simulation(my_predbat, [(0, SIM_MINUTES, 0.0)], smart_thermostat=False)
+    predheat.internal_temperature = {0: -5.0}
+    state, results = _published_heat_to(predheat, BASE_TEMP, True)
+    first_stamp = predheat.midnight_utc.strftime(TIME_FORMAT)
+    if state != 0.0:
+        print("  ERROR: heating to 0 C expected heat_to_temp state 0.0, got {}".format(repr(state)))
+        failed = True
+    if results.get(first_stamp) != 0.0:
+        print("  ERROR: heating to 0 C expected the first heat_to_temp result to be 0.0, got {}".format(repr(results.get(first_stamp))))
+        failed = True
+
+    # ------------------------------------------------------------------
+    print("Test: in a °F display, heating off stays 'unknown' and a real 0 C target publishes as 32 F")
+    predheat = _make_simulation(my_predbat, [], smart_thermostat=False)
+    predheat.external_temperature = {0: BASE_TEMP}
+    predheat.display_unit = "°F"
+    state, results = _published_heat_to(predheat, BASE_TEMP, False)
+    if state != "unknown" or any(value is not None for value in results.values()):
+        print("  ERROR: heating off in °F expected state 'unknown' and every result None, got state {}".format(repr(state)))
+        failed = True
+    predheat = _make_simulation(my_predbat, [(0, SIM_MINUTES, 0.0)], smart_thermostat=False)
+    predheat.internal_temperature = {0: -5.0}
+    predheat.display_unit = "°F"
+    state, results = _published_heat_to(predheat, BASE_TEMP, True)
+    if state != 32.0 or results.get(first_stamp) != 32.0:
+        print("  ERROR: heating to 0 C in °F expected state and first result 32.0, got {} and {}".format(repr(state), repr(results.get(first_stamp))))
+        failed = True
+
     return failed

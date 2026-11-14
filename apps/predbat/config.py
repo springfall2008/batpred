@@ -2437,7 +2437,8 @@ INVERTER_DEF = {
         # slot to 0% power (a hold) when telemetry reaches the target.
         "has_target_soc": True,
         # No reserve is claimed. Outside a slot the inverter runs its own self-consumption down
-        # to its local dischargeCutOffSOC, so a reserve Predbat raised to hold the battery
+        # to its local minimum, which the OpenAPI does not report (dischargeCutOffSOC is the
+        # floor for forced export, not for self-consumption), so a reserve Predbat raised to hold the battery
         # (set_reserve_enable / set_reserve_hold) would never be honoured. Without it Predbat
         # turns those functions off and plans against the battery's real behaviour.
         "has_reserve_soc": False,
@@ -2450,8 +2451,9 @@ INVERTER_DEF = {
         "has_ge_eco_toggle": False,
         "time_button_press": True,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
-        # The dispatch endpoint is limited to one request per five seconds per device.
-        "write_and_poll_sleep": 5,
+        # The dispatch endpoint is limited to one request per five seconds per device; 6 leaves a
+        # second of margin (GROWATT_DISPATCH_INTERVAL).
+        "write_and_poll_sleep": 6,
         "has_time_window": False,
         # A zero percentage applies only inside a time slot and cannot hold the battery in
         # ordinary self-consumption, so neither generic freeze capability is claimed.

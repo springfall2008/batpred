@@ -326,15 +326,15 @@ class PredHeat:
         internal_unit = self.entity_unit(internal_id) if internal_id else None
         self.display_unit = TEMPERATURE_LABELS.get(temperature_scale(internal_unit) or temperature_scale(self.system_unit), TEMPERATURE_UNIT)
 
-    def display_temperature(self, value, zero_is_off=False):
-        """Return a °C temperature for publishing, in the display unit. None (no value) passes through, and with zero_is_off a 0 (heating off) stays 0."""
-        if value is None or (zero_is_off and value == 0):
+    def display_temperature(self, value):
+        """Return a °C temperature for publishing, in the display unit. None (no value, e.g. heating off) passes through."""
+        if value is None:
             return value
         return dp2(convert_temperature(value, TEMPERATURE_UNIT, self.display_unit))
 
-    def display_series(self, series, zero_is_off=False):
+    def display_series(self, series):
         """Return a {time: °C temperature} series for publishing, in the display unit."""
-        return {stamp: self.display_temperature(value, zero_is_off) for stamp, value in series.items()}
+        return {stamp: self.display_temperature(value) for stamp, value in series.items()}
 
     def get_from_incrementing(self, data, index):
         """
@@ -488,7 +488,7 @@ class PredHeat:
             heat_loss_current -= self.heat_gain_static * PREDICT_STEP / 60.0
 
             flow_temp = 0
-            heat_to = 0
+            heat_to = None
             heat_power_in = 0
             heat_power_out = 0
             if heating_on:
@@ -549,7 +549,7 @@ class PredHeat:
                 internal_temp_predict_stamp[stamp] = dp2(internal_temp)
                 external_temp_predict_stamp[stamp] = dp2(external_temp)
                 target_temp_predict_stamp[stamp] = dp2(target_temp)
-                heat_to_predict_stamp[stamp] = dp2(heat_to)
+                heat_to_predict_stamp[stamp] = dp2(heat_to) if heat_to is not None else None
                 heat_energy_predict_stamp[stamp] = dp2(heat_energy)
                 volume_temp_stamp[stamp] = dp2(volume_temp)
                 cost_stamp[stamp] = dp2(cost)
@@ -562,7 +562,7 @@ class PredHeat:
             # Store raw data
             target_temp_predict_minute[minute] = dp2(target_temp)
             internal_temp_predict_minute[minute] = dp2(internal_temp)
-            heat_to_predict_temperature[minute] = dp2(heat_to)
+            heat_to_predict_temperature[minute] = dp2(heat_to) if heat_to is not None else None
             heat_energy_predict_minute[minute] = dp2(heat_energy)
             cost_minute[minute] = dp2(cost)
 
@@ -587,8 +587,8 @@ class PredHeat:
             )
             self.set_state(
                 self.prefix + ".heat_to_temp",
-                state=self.display_temperature(heat_to_predict_temperature[0], zero_is_off=True),
-                attributes={"results": self.display_series(heat_to_predict_stamp, zero_is_off=True), "friendly_name": "Predict heating to target", "state_class": "measurement", "unit_of_measurement": self.display_unit},
+                state=self.display_temperature(heat_to_predict_temperature[0]) if heat_to_predict_temperature[0] is not None else "unknown",
+                attributes={"results": self.display_series(heat_to_predict_stamp), "friendly_name": "Predict heating to target", "state_class": "measurement", "unit_of_measurement": self.display_unit},
             )
             self.set_state(
                 self.prefix + ".internal_temp_h1", state=self.display_temperature(internal_temp_predict_minute[60]), attributes={"friendly_name": "Internal Temperature Predicted +1hr", "state_class": "measurement", "unit_of_measurement": self.display_unit}

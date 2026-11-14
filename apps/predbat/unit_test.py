@@ -38,7 +38,7 @@ from tests.test_kernel_static_cache import run_kernel_static_cache_tests
 from tests.test_execute import run_execute_tests
 from tests.test_execute_multi_inverter_status import test_multi_inverter_status
 from tests.test_load_car_energy import test_load_car_energy_warns_when_configured_entity_has_no_data
-from tests.test_predheat import test_predheat, test_predheat_smart_thermostat, test_predheat_optional_energy_history, test_predheat_temperature_units, test_predheat_volume_temp, test_predheat_volume_temp_persistence
+from tests.test_predheat import test_predheat, test_predheat_smart_thermostat, test_predheat_optional_energy_history, test_predheat_temperature_units, test_predheat_volume_temp, test_predheat_volume_temp_persistence, test_predheat_heat_to_temp_off_marker
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_temperature_units import test_temperature_unit_conversion
 from tests.test_charge_hold import run_charge_hold_tests
@@ -80,6 +80,7 @@ from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_active_flag import test_active_flag
 from tests.test_time_loop_guard import test_time_loop_guard
 from tests.test_plan_execute_split import test_plan_execute_split
+from tests.test_savings_bookkeeping import run_savings_bookkeeping_tests
 from tests.test_component_health_status import (
     test_component_health_status,
     test_record_status_state_clamped,
@@ -159,6 +160,7 @@ from tests.test_chat import run_chat_tests
 from tests.test_web_chat import run_web_chat_tests
 from tests.test_web_mcp import run_web_mcp_tests
 from tests.test_web_mcp_auth import run_web_mcp_auth_tests
+from tests.test_jwt_hs256 import run_jwt_hs256_tests
 from tests.test_web_auth import run_web_auth_tests
 from tests.test_debug_history_client_js import test_debug_history_client_js
 from tests.test_plan_staleness_js import test_plan_staleness_js
@@ -587,6 +589,7 @@ def main():
         ("predheat_volume_temp", test_predheat_volume_temp, "Predheat volume temperature initialisation tests", False),
         ("temperature_units", test_temperature_unit_conversion, "Shared unit conversion handles temperatures, other units unchanged (#5153)", False),
         ("predheat_volume_temp_persistence", test_predheat_volume_temp_persistence, "Predheat persisted volume temperature range tests", False),
+        ("predheat_heat_to_temp_off", test_predheat_heat_to_temp_off_marker, "Predheat heat_to_temp off-marker tests (#6078)", False),
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
@@ -666,6 +669,7 @@ def main():
         ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
         ("time_loop_guard", test_time_loop_guard, "Run-loop guard reports a missing HA interface and sets fatal_error (#5135)", False),
         ("plan_execute_split", test_plan_execute_split, "plan_once/execute_once split and update_pred characterisation tests", False),
+        ("savings_bookkeeping", run_savings_bookkeeping_tests, "Daily savings totals, rollover and repeated-call tests", False),
         ("component_health_status", test_component_health_status, "Component errors fail the recorded run status tests", False),
         ("record_status_state_clamped", test_record_status_state_clamped, "Status sensor state is clamped at the 255 characters Home Assistant accepts", False),
         ("record_status_under_warning", test_record_status_under_warning, "A run's state is recorded after the warning it raised, in brackets", False),
@@ -705,6 +709,7 @@ def main():
         ("web_mcp", run_web_mcp_tests, "MCP get_log and apps.yaml redaction tests (issue #4768)", False),
         ("web_auth", run_web_auth_tests, "Web interface optional username/password login tests (issue #6103)", False),
         ("web_mcp_auth", run_web_mcp_auth_tests, "MCP OAuth registration, signing key, default secret and scope tests (issue #5847)", False),
+        ("jwt_hs256", run_jwt_hs256_tests, "Standard-library HS256 JWT signer: PyJWT-compatible tokens, rejections, and MCP not loading PyJWT", False),
         ("debug_history_client_js", test_debug_history_client_js, "Debug-history client-side JS structure tests (#4438 review item 22)", False),
         ("plan_staleness_js", test_plan_staleness_js, "Plan page stale-data warning JS: per-view data and refresh interval", False),
         ("plan_totals_js", test_plan_totals_js, "Plan card summary row total cost 2dp formatting JS (#5785)", False),
