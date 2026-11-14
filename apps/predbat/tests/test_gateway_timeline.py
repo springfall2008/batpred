@@ -247,6 +247,18 @@ class TestTimelineSubPayload:
         assert payload["timeline"][:2] == [TIMELINE_IMPORT, TIMELINE_CHARGE]
         assert payload["timeline_sub"][:2] == [TIMELINE_SUB_NONE, TIMELINE_SUB_HOLD]
 
+    def test_bad_soc_does_not_drop_the_publish(self):
+        """An unparseable soc_percent repeats the previous slot's SoC rather than aborting the whole payload."""
+        payload = self._payload([{"state": "Chrg", "soc_percent": 40}, {"state": "HoldChrg", "soc_percent": "n/a"}, {"state": "Chrg", "soc_percent": 55}])
+        assert payload["block_soc"] == [40, 40, 55]
+        assert payload["timeline"][:3] == [TIMELINE_CHARGE, TIMELINE_CHARGE, TIMELINE_CHARGE]
+        assert payload["timeline_sub"][:3] == [TIMELINE_SUB_NONE, TIMELINE_SUB_HOLD, TIMELINE_SUB_NONE]
+
+    def test_bad_soc_on_first_row_reads_as_zero(self):
+        """With no earlier slot to repeat, an unparseable first soc_percent reads as 0."""
+        payload = self._payload([{"state": "Chrg", "soc_percent": "n/a"}, {"state": "Chrg", "soc_percent": 30}])
+        assert payload["block_soc"] == [0, 30]
+
     def test_block_state_still_reports_raw_state(self):
         """The label the Hub shows for the current block is untouched by the modifier."""
         payload = self._payload([{"state": "HoldChrg"}, {"state": "Chrg"}])

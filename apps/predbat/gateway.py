@@ -161,11 +161,13 @@ TIMELINE_CHARGE = 1
 TIMELINE_EXPORT = 2
 TIMELINE_SOLAR = 3
 TIMELINE_IMPORT = 4
-# Per-slot modifier published in "timeline_sub", saying how a charge or export slot is held.
+# Per-slot modifier published in "timeline_sub", naming the plan's mode for a charge or export slot.
 # Devices that do not read it draw the plain code, exactly as before.
-TIMELINE_SUB_NONE = 0  # Active charge/export, or a slot with no modifier
-TIMELINE_SUB_HOLD = 1  # Hold charging/exporting - target reached, battery held there
-TIMELINE_SUB_FREEZE = 2  # Freeze charging/exporting - battery frozen at its current level
+# The modifier says which mode the plan puts the slot in, not whether energy flows: a freeze-charge
+# window that starts below the reserve still charges up to the reserve before it holds.
+TIMELINE_SUB_NONE = 0  # Charge/export to a target, or a slot with no modifier
+TIMELINE_SUB_HOLD = 1  # Hold mode - charge target already met, or export target out of reach, so the slot holds
+TIMELINE_SUB_FREEZE = 2  # Freeze mode - charge-freeze (limit at the reserve, hold-at-reserve) or freeze export
 
 # Plan row raw state -> (timeline code, timeline_sub modifier)
 TIMELINE_STATE_CODES = {
@@ -2882,7 +2884,11 @@ class GatewayMQTT(ComponentBase):
                         block_state_name = state
 
                     if slot_idx < 24:
-                        block_soc.append(int(float(row.get("soc_percent", 0) or 0)))
+                        try:
+                            block_soc.append(int(float(row.get("soc_percent", 0) or 0)))
+                        except (ValueError, TypeError):
+                            # One bad row must not drop the whole publish - repeat the previous SoC so the sparkline has no false dip
+                            block_soc.append(block_soc[-1] if block_soc else 0)
 
                     slot_idx += 1
 
