@@ -262,3 +262,6 @@ REPEAT_FULL_LOG_SECONDS = 3600
 
 # The default mcp_secret. It is published in the source and the docs, so the MCP server refuses to run with it (#5847)
 MCP_DEFAULT_SECRET = "predbat_mcp_secret"
+
+# Names of the temperature scales, after temperature_scale() has stripped degree marks and case
+TEMPERATURE_SCALES = {"c": "C", "celsius": "C", "f": "F", "fahrenheit": "F", "k": "K", "kelvin": "K"}

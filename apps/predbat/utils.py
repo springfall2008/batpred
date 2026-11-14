@@ -25,6 +25,7 @@ from email.utils import parsedate_to_datetime
 from io import StringIO
 from functools import lru_cache
 from const import (
+    TEMPERATURE_SCALES,
     MINUTE_WATT,
     PREDICT_STEP,
     TIME_FORMAT,
@@ -1411,6 +1412,40 @@ def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
     return [rate for rate in rates if not isinstance(rate, dict) or rate.get("payment_method") in (preferred, None)]
 
 
+def temperature_scale(unit):
+    """
+    Return which temperature scale a unit names ("C", "F" or "K"), or None if it isn't a temperature unit.
+
+    Hand-written template sensors spell these many ways (c, °c, ºC, degC, Celsius), so marks and case are ignored.
+    """
+    if not unit:
+        return None
+    name = str(unit).strip().lower().replace("℃", "c").replace("℉", "f")
+    for mark in ("degrees", "degree", "deg", "°", "º", "˚", " "):
+        name = name.replace(mark, "")
+    return TEMPERATURE_SCALES.get(name)
+
+
+def convert_temperature(value, unit, required_unit):
+    """Return a temperature converted between °C, °F and K, or None when either unit isn't a temperature unit."""
+    scale_from = temperature_scale(unit)
+    scale_to = temperature_scale(required_unit)
+    if not scale_from or not scale_to:
+        return None
+    if scale_from == scale_to:
+        return value
+    celsius = value
+    if scale_from == "F":
+        celsius = (value - 32) * 5 / 9
+    elif scale_from == "K":
+        celsius = value - 273.15
+    if scale_to == "F":
+        return celsius * 9 / 5 + 32
+    if scale_to == "K":
+        return celsius + 273.15
+    return celsius
+
+
 def minute_data(
     history,
     days,
@@ -1518,7 +1553,8 @@ def minute_data(
 
         # Get the numerical key and the timestamp and ignore if in error
         try:
-            state = float(state) * scale
+            raw_state = float(state)
+            state = raw_state * scale
             last_updated_time = str2time(item[last_updated_key])
             # Truncate sub-minute precision: a timestamp of 23:30:04 should land on the 23:30 minute boundary,
             # not be floored to 23:31 due to int() truncation of the elapsed seconds.
@@ -1546,8 +1582,12 @@ def minute_data(
                     elif required_unit in ["kW", "kWh"] and unit in ["MW", "MWh"]:
                         state = state * 1000.0
                     else:
-                        # Ignore data in wrong units if we can't converter
-                        continue
+                        converted = convert_temperature(raw_state, unit, required_unit)
+                        if converted is None:
+                            # Ignore data in wrong units if we can't converter
+                            continue
+                        # Scaled after converting: a temperature's unit has an offset, so the order matters
+                        state = converted * scale
 
         # Divide down the state if required
         if divide_by:
