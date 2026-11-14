@@ -202,6 +202,11 @@ def split_change_by_rate(change_kwh, members):
     return [member[0] + direction * amount for member, amount in zip(members, moved)]
 
 
+# Columns of the balance sensor's hourly counts, and how many recent events it shows
+BALANCE_COUNT_INDEX = {"hold": 0, "release": 1, "cross_charge": 2, "ceiling": 3}
+BALANCE_EVENTS_KEPT = 10
+
+
 class Execute:
     """Execution mixin for applying optimised plans to physical inverters.
 
@@ -307,7 +312,8 @@ class Execute:
         A hold is an inverter/direction balancing holds this pass that it did not hold the pass before, and a
         release the other way round - so the 60s re-application of a hold that is still wanted is not counted
         again. A ceiling event is a learned rate ceiling present now that was not the pass before, so a ceiling
-        relearned after it expired counts again. Events older than 24 hours are dropped.
+        relearned after it expired counts again. Each event is counted into its hour's bucket of
+        balance_counts, which give the 24-hour totals, and the ten most recent are kept to show.
 
         Args:
             snapshot (list): the readings balancing was given, after learn_rate_ceilings()
@@ -315,17 +321,18 @@ class Execute:
         """
         now = self.now_utc.timestamp()
         stamp = self.now_utc.isoformat()
+        new_events = []
         held_now = {id: {direction: reason for direction, reason in holds.items() if reason} for id, holds in decisions["holds"].items()}
         held_now = {id: holds for id, holds in held_now.items() if holds}
         previous = self.balance_held_previous
         for id, holds in held_now.items():
             for direction, reason in holds.items():
                 if direction not in previous.get(id, {}):
-                    self.balance_events.append([now, stamp, "hold", id, direction, reason])
+                    new_events.append([now, stamp, "hold", id, direction, reason])
         for id, holds in previous.items():
             for direction, reason in holds.items():
                 if direction not in held_now.get(id, {}):
-                    self.balance_events.append([now, stamp, "release", id, direction, reason])
+                    new_events.append([now, stamp, "release", id, direction, reason])
         ceilings_now = []
         for id, entry in enumerate(snapshot):
             for direction in ("charge", "discharge"):
@@ -335,12 +342,57 @@ class Execute:
                 key = "{}:{}".format(id, direction)
                 ceilings_now.append(key)
                 if key not in self.balance_ceilings_previous:
-                    self.balance_events.append([now, stamp, "ceiling", id, direction, int(round(learned[0]))])
+                    new_events.append([now, stamp, "ceiling", id, direction, int(round(learned[0]))])
         self.balance_ceilings_previous = ceilings_now
         self.balance_held_previous = held_now
         self.balance_last_decisions = decisions
-        self.balance_events = [event for event in self.balance_events if now - event[0] <= 24 * 60 * 60]
+        hour = int(now // 3600 * 3600)
+        bucket = self.balance_counts.setdefault(hour, [0, 0, 0, 0])
+        for event in new_events:
+            action, reason = event[2], event[5]
+            bucket[BALANCE_COUNT_INDEX[action]] += 1
+            if action == "hold" and reason == "cross_charge":
+                bucket[BALANCE_COUNT_INDEX["cross_charge"]] += 1
+        self.balance_events = (self.balance_events + new_events)[-BALANCE_EVENTS_KEPT:]
         self.publish_balance_inverters()
+
+    def restore_balance_history(self, entity):
+        """
+        Read the balance sensor's own history back after a restart, once, before it is first published again.
+
+        The sensor is the durable store, as for the control-failure sensors: its "history" attribute holds the
+        hourly counts behind the 24-hour totals and "events" the most recent events. load_previous_value_from_ha()
+        reads the current state, or the last recorded one when Home Assistant itself has restarted. What is read
+        back is added to anything counted since the start - this process only counts events after it - and
+        anything unreadable is ignored, so the totals restart from what was counted since.
+
+        Args:
+            entity (str): the balance sensor's entity id
+        """
+        self.balance_restored = True
+        history = self.load_previous_value_from_ha(entity, attribute="history")
+        if isinstance(history, dict):
+            for hour_text, counts in history.items():
+                try:
+                    hour = int(float(hour_text))
+                    counts = [int(value) for value in counts]
+                except (TypeError, ValueError):
+                    continue
+                if len(counts) != len(BALANCE_COUNT_INDEX):
+                    continue
+                bucket = self.balance_counts.setdefault(hour, [0] * len(BALANCE_COUNT_INDEX))
+                for index, value in enumerate(counts):
+                    bucket[index] += value
+        events = self.load_previous_value_from_ha(entity, attribute="events")
+        if isinstance(events, list):
+            restored = []
+            for event in events:
+                try:
+                    epoch = datetime.fromisoformat(event["time"]).timestamp()
+                    restored.append([epoch, event["time"], event["action"], event["inverter"], event["direction"], event["detail"]])
+                except (TypeError, ValueError, KeyError, AttributeError):
+                    continue
+            self.balance_events = (restored + self.balance_events)[-BALANCE_EVENTS_KEPT:]
 
     def publish_balance_inverters(self, status=None):
         """
@@ -358,7 +410,12 @@ class Execute:
         """
         if not self.inverters or len(self.inverters) < 2:
             return
+        entity = "sensor." + self.prefix + "_balance_inverters"
+        if not self.balance_restored:
+            self.restore_balance_history(entity)
         now = self.now_utc.timestamp()
+        # An hour's bucket counts towards the 24-hour totals while any of it is within the last 24 hours
+        self.balance_counts = {hour: counts for hour, counts in self.balance_counts.items() if hour + 3600 > now - 24 * 60 * 60}
         decisions = self.balance_last_decisions if status is None else None
         held = self.balance_held_previous if status is None else {}
         inverters = []
@@ -372,13 +429,13 @@ class Execute:
         count = sum(1 for entry in inverters if entry["charge_hold"] or entry["discharge_hold"])
         if status is None:
             status = "calibrating" if decisions and decisions["status"] == "calibrating" else ("holding" if count else "balanced")
-        events = self.balance_events
-        holds_24h = sum(1 for event in events if event[2] == "hold")
-        releases_24h = sum(1 for event in events if event[2] == "release")
-        cross_24h = sum(1 for event in events if event[2] == "hold" and event[5] == "cross_charge")
-        ceilings_24h = sum(1 for event in events if event[2] == "ceiling")
+        totals = [sum(counts[index] for counts in self.balance_counts.values()) for index in range(len(BALANCE_COUNT_INDEX))]
+        holds_24h = totals[BALANCE_COUNT_INDEX["hold"]]
+        releases_24h = totals[BALANCE_COUNT_INDEX["release"]]
+        cross_24h = totals[BALANCE_COUNT_INDEX["cross_charge"]]
+        ceilings_24h = totals[BALANCE_COUNT_INDEX["ceiling"]]
         self.dashboard_item(
-            "sensor." + self.prefix + "_balance_inverters",
+            entity,
             state=count,
             attributes={
                 "friendly_name": "Balance inverters - inverters held",
@@ -394,7 +451,10 @@ class Execute:
                 "releases_24h": releases_24h,
                 "cross_charges_caught_24h": cross_24h,
                 "ceilings_learned_24h": ceilings_24h,
-                "events": [{"time": event[1], "action": event[2], "inverter": event[3], "direction": event[4], "detail": event[5]} for event in events[-10:]],
+                "events": [{"time": event[1], "action": event[2], "inverter": event[3], "direction": event[4], "detail": event[5]} for event in self.balance_events],
+                # The hourly counts behind the totals, [holds, releases, cross-chargers caught, ceilings learned] by
+                # hour start - read back after a restart, and small enough for the recorder however busy balancing is
+                "history": {str(hour): counts for hour, counts in sorted(self.balance_counts.items())},
             },
         )
         m = metrics()

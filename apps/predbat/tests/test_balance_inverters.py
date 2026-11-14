@@ -51,6 +51,9 @@ def test_balance_sensor(my_predbat):
     my_predbat.balance_ceilings_previous = []
     my_predbat.balance_last_decisions = None
     my_predbat.balance_events = []
+    my_predbat.balance_counts = {}
+    my_predbat.balance_restored = False
+    my_predbat.ha_interface.dummy_items.pop("sensor.{}_balance_inverters".format(my_predbat.prefix), None)
     my_predbat.balance_inverters_discharge = False
     my_predbat.balance_inverters_charge = False
     my_predbat.balance_inverters_crosscharge = True
@@ -91,6 +94,20 @@ def test_balance_sensor(my_predbat):
     if sensor:
         expect(sensor["state"] == 0 and sensor["status"] == "balanced", "nothing should be held once the fleet charges")
         expect(sensor["releases_24h"] == 1 and sensor["events"][-1]["action"] == "release", "the release should be counted once")
+        expect(isinstance(sensor["history"], dict) and len(sensor["history"]) == 1, "the hourly counts should be published")
+
+    # Restart: Predbat's in-memory record is gone, the sensor is not. The next pass reads it back and carries on.
+    my_predbat.balance_counts = {}
+    my_predbat.balance_events = []
+    my_predbat.balance_held_previous = {}
+    my_predbat.balance_ceilings_previous = []
+    my_predbat.balance_restored = False
+    setup_two_inverters(my_predbat, soc1=50, soc2=40, battery_power1=1000, battery_power2=-100)
+    run_balance(my_predbat)
+    sensor = balance_sensor(my_predbat)
+    if sensor:
+        expect(sensor["holds_24h"] == 2 and sensor["releases_24h"] == 1 and sensor["cross_charges_caught_24h"] == 2, "the counts should carry on from before the restart")
+        expect(len(sensor["events"]) == 3 and [event["action"] for event in sensor["events"]] == ["hold", "release", "hold"], "the events from before the restart should be kept")
 
     # Balancing switched off
     my_predbat.balance_inverters_enable = False

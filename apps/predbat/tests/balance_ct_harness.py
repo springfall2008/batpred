@@ -369,6 +369,8 @@ def run_ct_scenario(my_predbat, scenario):
             "balance_ceilings_previous",
             "balance_last_decisions",
             "balance_events",
+            "balance_counts",
+            "balance_restored",
             "inverters",
             "now_utc",
             "export_limits_best",
@@ -411,6 +413,8 @@ def run_ct_scenario(my_predbat, scenario):
             my_predbat.balance_ceilings_previous = []
             my_predbat.balance_last_decisions = None
             my_predbat.balance_events = []
+            my_predbat.balance_counts = {}
+            my_predbat.balance_restored = False
             if scenario.export_limit is not None:
                 my_predbat.export_limits_best = [scenario.export_limit]
                 my_predbat.set_export_window = True

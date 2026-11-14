@@ -322,6 +322,8 @@ def run_scenario(my_predbat, scenario):
             "balance_ceilings_previous",
             "balance_last_decisions",
             "balance_events",
+            "balance_counts",
+            "balance_restored",
             "inverters",
             "now_utc",
         )
@@ -360,6 +362,8 @@ def run_scenario(my_predbat, scenario):
             my_predbat.balance_ceilings_previous = []
             my_predbat.balance_last_decisions = None
             my_predbat.balance_events = []
+            my_predbat.balance_counts = {}
+            my_predbat.balance_restored = False
             with routed_to_sims(ha, sims, clock, scenario.rate_max):
                 start_utc = my_predbat.now_utc
                 for minute in range(scenario.minutes):
