@@ -1360,12 +1360,12 @@ def test_solis_catalogue_describes_battery_and_pv_only():
 
 
 def test_solis_catalogue_reports_hybrid_from_the_machine_name():
-    """hybrid is True for a machine Solis names a hybrid (S5/S6-EH, RHI), absent for every other name.
+    """hybrid is True for a machine Solis names a hybrid (S5/S6-EH, RHI), False for an AC-coupled storage range
+    (S5/S6-EA, RAI), absent for every other name.
 
-    The AC-coupled storage ranges (S6-EA, RAI) and the grid-tied GR range are left out: EA and RAI are AC
-    coupled, and stating True for them would turn inverter_hybrid on for an AC-coupled site. A GR record has
-    no inverter_type, so the coordinator would not count it anyway. productModel is not the evidence - live
-    inverterDetail carries a numeric code there - so a fixture model name alone says nothing.
+    The grid-tied GR range is left out: it names no coupling, and a GR record has no inverter_type, so the
+    coordinator would not count it anyway. productModel is not the evidence - live inverterDetail carries a
+    numeric code there - so a fixture model name alone says nothing.
     """
     cases = [
         ("single-phase EH hybrid", "S5-EH1P6K-L", True),
@@ -1373,10 +1373,13 @@ def test_solis_catalogue_reports_hybrid_from_the_machine_name():
         ("EH in lower case", "s6-eh1p5k-l", True),
         ("RHI hybrid", "RHI-6K-48ES-5G", True),
         ("three-phase RHI hybrid", "RHI-3P10K-HV-5G", True),
-        ("EA AC-coupled storage", "S6-EA1P5K-L", "absent"),
-        ("RAI AC-coupled retrofit", "RAI-3K-48ES-5G", "absent"),
+        ("EA AC-coupled storage", "S6-EA1P5K-L", False),
+        ("EA in lower case", "s6-ea1p5k-l", False),
+        ("RAI AC-coupled retrofit", "RAI-3K-48ES-5G", False),
         ("grid-tied GR", "S6-GR1P6K", "absent"),
         ("EH only later in the name", "S6-GR1P-EH1P", "absent"),
+        ("EA only later in the name", "S6-GR1P-EA1P", "absent"),
+        ("EA without a phase count is not the range", "S6-EAX5K", "absent"),
         ("machine empty", "", "absent"),
         ("machine absent", None, "absent"),
     ]
@@ -1391,7 +1394,7 @@ def test_solis_catalogue_reports_hybrid_from_the_machine_name():
         assert actual == expected and type(actual) is type(expected), "{}: expected hybrid {!r}, got {!r}".format(label, expected, actual)
     api = _solis_fleet()
     pv_record = {record["device_id"]: record for record in api.build_discovery()["inverters"]}["solis:PV001"]
-    assert "hybrid" not in pv_record, "a PV-only detail names no hybrid machine"
+    assert "hybrid" not in pv_record, "a PV-only detail names no hybrid or AC-coupled machine"
     return False
 
 

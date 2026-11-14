@@ -100,6 +100,19 @@ from growatt_const import (
 )
 
 
+def growatt_model_hybrid(model):
+    """The discovery hybrid value a getDeviceInfo model string states: True for an SPH (hybrid), False for an SPA (AC coupled), else None.
+
+    Any other model - MIN, MIC, MOD and the rest are PV-only or name no coupling - says nothing.
+    """
+    model = str(model or "").strip().upper()
+    if model.startswith("SPH"):
+        return True
+    if model.startswith("SPA"):
+        return False
+    return None
+
+
 class GrowattAPI(ComponentBase, OAuthMixin):
     """Growatt cloud telemetry and schedule control."""
 
@@ -1264,6 +1277,12 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         return entities
 
     def build_discovery(self):
+        """Describe the authorised Growatt battery inverters for the discovery catalogue, or None before any is found.
+
+        hybrid comes from getDeviceInfo's model (growatt_model_hybrid()): True for SPH, False for SPA, left out
+        otherwise. The model is static device info, refreshed on the static tier and kept through a failed
+        refresh, so the value does not move between polls. The discovery coordinator sets inverter_hybrid from it.
+        """
         if not self.device_list:
             return None
         inverters = []
@@ -1283,6 +1302,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                     inverter_type="GrowattCloud",
                     control=self.control_enable,
                     composition="direct",
+                    hybrid=growatt_model_hybrid(detail.get("model")),
                     functions=["solar", "battery"],
                     capabilities=dict(GROWATT_CAPABILITIES),
                     hardware_ids={"serial": sn},

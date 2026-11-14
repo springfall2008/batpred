@@ -7762,7 +7762,6 @@ def test_fox_build_discovery_describes_each_device(my_predbat):
     assert battery["ratings"]["export_limit"] == 12000.0, "the configured ExportLimit, in W"
     assert battery["capabilities"] == FOX_CAPABILITIES, battery["capabilities"]
     assert "flags" not in battery, "thirdPartyGen is not set on this device"
-    assert "hybrid" not in battery, "Fox's code classifies no deviceType as hybrid or AC coupled, so hybrid is unknown"
 
     # The station name is user-authored free text - get_device_list()'s own sample holds a street
     # address - so neither it nor the station and module identifiers may reach a public dump.
@@ -7789,6 +7788,48 @@ def test_fox_build_discovery_describes_each_device(my_predbat):
     battery = {record["device_id"]: record for record in fox.build_discovery()["inverters"]}["fox:BATT001"]
     assert battery["ratings"]["inverter_limit"] == 10500.0, "a half-kW model must go through capacity_watts(), not capacity * 1000"
     print("PASS: Fox build_discovery describes each discovered device")
+    return 0
+
+
+def test_fox_build_discovery_reports_hybrid_from_the_model(my_predbat):
+    """hybrid is False for the AC-coupled AC1/AC3 range, True for the H1/H3/KH hybrids, absent for anything else.
+
+    deviceType and productType are static device detail; each states its own verdict and the record carries the
+    one they agree on. A disagreement, or a model neither names, leaves hybrid out - unknown is always safe.
+    """
+    print("**** test_fox_build_discovery_reports_hybrid_from_the_model ****")
+    cases = [
+        ("KH as captured", "KH8", "KH", True),
+        ("KH half-kW model", "KH10.5", "KH", True),
+        ("H1", "H1-3.7-E-G2-WL", None, True),
+        ("H3", "H3-10.0-E", None, True),
+        ("H3 Pro", "H3-Pro-15.0", None, True),
+        ("H1 from productType alone", None, "H1", True),
+        ("lower case", "h1-5.0-e", None, True),
+        ("AC1", "AC1-5.0-E", None, False),
+        ("AC3", "AC3-10.0", "AC3", False),
+        ("AC1 from productType alone", None, "AC1", False),
+        ("a PV-only string inverter", "S1-5.0", None, "absent"),
+        ("an all-in-one names no prefix it knows", "AIO-H3-10.0", None, "absent"),
+        ("H1 with a further digit is not H1", "H10-5.0", None, "absent"),
+        ("AC1 with a further digit is not AC1", "AC10-5.0", None, "absent"),
+        ("KH followed by a letter is not KH", "KHX8", None, "absent"),
+        ("an unknown model", "P3-8.0", None, "absent"),
+        ("deviceType and productType disagree", "KH8", "AC1", "absent"),
+        ("neither field", None, None, "absent"),
+    ]
+    for label, device_type, product_type, expected in cases:
+        fox = _fox_discovery_api(my_predbat)
+        detail = fox.device_detail["BATT001"]
+        for field, value in (("deviceType", device_type), ("productType", product_type)):
+            if value is None:
+                detail.pop(field, None)
+            else:
+                detail[field] = value
+        record = {record["device_id"]: record for record in validated_inverters(fox.build_discovery())}["fox:BATT001"]
+        actual = record.get("hybrid", "absent")
+        assert actual == expected and type(actual) is type(expected), "{}: expected hybrid {!r}, got {!r}".format(label, expected, actual)
+    print("PASS: Fox build_discovery reports hybrid from the model")
     return 0
 
 
@@ -7822,7 +7863,8 @@ def test_fox_build_discovery_round_trips_through_validate_report(my_predbat):
 
     by_id = {record["device_id"]: record for record in cleaned["inverters"]}
     battery = by_id["fox:BATT001"]
-    assert set(battery) == {"device_id", "inverter_type", "composition", "functions", "capabilities", "flags", "hardware_ids", "info", "ratings", "entities"}, set(battery)
+    assert set(battery) == {"device_id", "inverter_type", "composition", "hybrid", "functions", "capabilities", "flags", "hardware_ids", "info", "ratings", "entities"}, set(battery)
+    assert battery["hybrid"] is True, "a KH is a hybrid"
     assert set(battery["info"]) == {"model", "product_type", "firmware"}, battery["info"]
     assert set(battery["ratings"]) == {"inverter_limit", "export_limit", "battery_capacity_entries", "battery_capacity_serials"}, battery["ratings"]
     assert battery["entities"]["pv_power"]["entity_id"] == "sensor.predbat_fox_batt001_pvpower" and battery["entities"]["export_limit"]["access"] == "r", battery["entities"]
@@ -8501,6 +8543,7 @@ def run_fox_api_tests(my_predbat):
 
         # Discovery catalogue tests
         failed |= test_fox_build_discovery_describes_each_device(my_predbat)
+        failed |= test_fox_build_discovery_reports_hybrid_from_the_model(my_predbat)
         failed |= test_fox_build_discovery_round_trips_through_validate_report(my_predbat)
         failed |= test_fox_build_discovery_battery_ratings_tell_the_aio_bug_from_a_healthy_stack(my_predbat)
         failed |= test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_would(my_predbat)

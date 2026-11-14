@@ -438,11 +438,37 @@ def test_growatt_discovery_matches_definition_and_automatic_config():
     records = validated_inverters(client.build_discovery())
     captured = capture_automatic_config(client)
     assert len(records) == 1
-    # Growatt's code reads no device type that tells an SPH (hybrid) from an SPA (AC coupled), so hybrid is unknown
-    assert "hybrid" not in records[0], records[0]
     assert_definition_complete(records[0], GrowattAPI.WRITE_AND_POLL_SLEEP)
     assert_record_agrees(records[0], captured)
     assert_record_binds_nothing_extra(records[0], captured)
+
+
+def test_growatt_discovery_reports_hybrid_from_the_model():
+    """hybrid is True for an SPH model, False for an SPA (AC coupled), absent for any other model or none.
+
+    The model is device_info's static model string, kept through a failed refresh; MIN, MIC, MOD and the rest
+    are PV-only or name no coupling, so they say nothing.
+    """
+    cases = [
+        ("SPH as captured", "SPH 6000TL", True),
+        ("three-phase SPH", "SPH 10000TL3 BH-UP", True),
+        ("lower case with leading space", " sph 3600tl", True),
+        ("SPA", "SPA 3000TL BL", False),
+        ("MIN", "MIN 3600TL-XH", "absent"),
+        ("MOD", "MOD 10KTL3-XH", "absent"),
+        ("SP only", "SP 5000", "absent"),
+        ("empty", "", "absent"),
+        ("missing", None, "absent"),
+    ]
+    for label, model, expected in cases:
+        client, sn = _ready_client(automatic=True)
+        if model is None:
+            client.device_detail[sn].pop("model", None)
+        else:
+            client.device_detail[sn]["model"] = model
+        record = validated_inverters(client.build_discovery())[0]
+        actual = record.get("hybrid", "absent")
+        assert actual == expected and type(actual) is type(expected), "{}: expected hybrid {!r}, got {!r}".format(label, expected, actual)
 
 
 def test_growatt_request_ids_are_unique_32_character_hex():
@@ -1864,6 +1890,7 @@ def run_growatt_tests(my_predbat):
         ("registration", test_growatt_registration_and_schema),
         ("inverter_definition", test_growatt_inverter_definition_is_complete),
         ("discovery_contract", test_growatt_discovery_matches_definition_and_automatic_config),
+        ("discovery_hybrid", test_growatt_discovery_reports_hybrid_from_the_model),
         ("request_id", test_growatt_request_ids_are_unique_32_character_hex),
         ("refresh_threshold", test_growatt_refresh_threshold_fits_two_hour_tokens),
         ("unknown_table_written", test_growatt_unknown_table_is_written_even_when_empty),
