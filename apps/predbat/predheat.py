@@ -327,8 +327,8 @@ class PredHeat:
         self.display_unit = TEMPERATURE_LABELS.get(temperature_scale(internal_unit) or temperature_scale(self.system_unit), TEMPERATURE_UNIT)
 
     def display_temperature(self, value, zero_is_off=False):
-        """Return a °C temperature for publishing, in the display unit. With zero_is_off a 0 (heating off) stays 0."""
-        if zero_is_off and value == 0:
+        """Return a °C temperature for publishing, in the display unit. None (no value) passes through, and with zero_is_off a 0 (heating off) stays 0."""
+        if value is None or (zero_is_off and value == 0):
             return value
         return dp2(convert_temperature(value, TEMPERATURE_UNIT, self.display_unit))
 
