@@ -258,12 +258,19 @@ SIGENERGY_PV_PRESENT_KWH = 1.0
 # Storage cache keys for poll-interval system state persisted between restarts (see
 # load_cached_data()). System/device discovery is deliberately excluded — it is always
 # re-fetched fresh on startup.
-SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status", "grid_export", "device_cutoffs"]
+SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status", "grid_export", "device_cutoffs", "inverter_ceilings"]
 SIGENERGY_CACHE_EXPIRY_DAYS = 1
 # Plant settings that only an openapi/change snapshot reports - kept for longer so a missed snapshot
-# doesn't silently drop the export limit and SoC cut-offs back to their defaults
-SIGENERGY_SETTINGS_CACHE_KEYS = ["grid_export", "device_cutoffs"]
+# doesn't silently drop the export limit and SoC cut-offs back to their defaults. The inverter's
+# reported power ceilings come in period messages, which carry only the fields that changed, so a
+# fixed ceiling may not be sent again after a restart: they are kept the same way.
+SIGENERGY_SETTINGS_CACHE_KEYS = ["grid_export", "device_cutoffs", "inverter_ceilings"]
 SIGENERGY_SETTINGS_CACHE_EXPIRY_DAYS = 28
+
+# MQTT period fields holding the inverter's own maximum active power, by Predbat's direction name (#5784)
+SIGENERGY_INVERTER_CEILING_FIELDS = {"charge": "inverterMaxAbsorptionActivePowerW", "discharge": "inverterMaxFeedInActivePowerW"}
+# A reported ceiling more than this many times the inverters' rating is taken as a bad reading and ignored
+SIGENERGY_INVERTER_CEILING_MAX_RATIO = 1.5
 
 # Inverter args automatic_config() binds to the component's control entities. With sigenergy_automatic
 # off, the component sends commands only if at least one of these names one of them (GH#4894).
@@ -543,6 +550,7 @@ class SigenergyAPI(ComponentBase):
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
         self.grid_export = {}     # systemId → {"antiReflux": "on"/"off", "gridMaxBackfeedPowerW": W} from openapi/change, cached
         self.device_cutoffs = {}  # systemId → {"backup": %, "discharge": %} from openapi/change, cached - the plant's own SoC floors
+        self.inverter_ceilings = {}  # systemId → {"charge": W, "discharge": W} reported in openapi/period, cached
 
         # Age (datetime of last update) of each SIGENERGY_CACHE_KEYS category, used to avoid an
         # unnecessary API refresh on restart when the persisted cache is still fresh
@@ -1871,7 +1879,9 @@ class SigenergyAPI(ComponentBase):
         return "Unknown"
 
     def _get_battery_max_power_kw(self, system_id, direction=None):
-        """Return the combined rated battery power in kW for a system, capped at the inverter rating.
+        """Return the combined rated battery power in kW for a system, capped at the inverter's maximum.
+
+        Each direction is capped at the inverter's maximum in that direction (_get_inverter_max_power_kw).
 
         direction "charge" sums the modules' ratedChargePower and "discharge" their ratedDischargePower,
         which can be higher (a Sigenergy 8 kWh module is rated 4.2 kW charge, 4.8 kW discharge). A module
@@ -1881,7 +1891,7 @@ class SigenergyAPI(ComponentBase):
         if direction is None:
             return max(self._get_battery_max_power_kw(system_id, "charge"), self._get_battery_max_power_kw(system_id, "discharge"))
         power = 0.0
-        inverter_power = self._get_inverter_max_power_kw(system_id)
+        inverter_power = self._get_inverter_max_power_kw(system_id, direction)
         for device in self.devices.get(system_id, []):
             if device.get("deviceType") == SIGENERGY_DEVICE_BATTERY:
                 attr = device.get("attrMap", {})
@@ -1898,14 +1908,37 @@ class SigenergyAPI(ComponentBase):
         else:
             return inverter_power
 
-    def _get_inverter_max_power_kw(self, system_id):
-        """Return the combined inverter rated active power in kW."""
+    def _get_inverter_max_power_kw(self, system_id, direction=None):
+        """Return the inverter's maximum active power in kW for a system.
+
+        The base is the device list's nameplate, the inverters' summed ratedActivePower. The plant's MQTT
+        period message also reports its own ceilings, inverterMaxFeedInActivePowerW (exporting, so the
+        "discharge" direction) and inverterMaxAbsorptionActivePowerW (importing, "charge"), which can be
+        higher: an EC 6.0 SP is rated 6.0 kW but reports, and delivers, 6.6 kW (#5784). They are kept in
+        self.inverter_ceilings, which is cached across restarts (see _store_inverter_ceilings). The higher of
+        the nameplate and the reported ceiling is used, so a reported figure only ever raises the limit, and a
+        figure more than SIGENERGY_INVERTER_CEILING_MAX_RATIO times the rating is taken as a bad reading.
+        A system with no rating to compare against (no Inverter device in its list) ignores the reports.
+
+        With no direction this is inverter_limit, which takes the feed-in ceiling. The plan applies
+        inverter_limit to the inverter's AC output (PV plus battery), so the absorption figure, if higher,
+        would let it plan exports the plant cannot make. The cost falls on charging: the plan also clips
+        grid charging at inverter_limit (Prediction.run_prediction), so on a plant whose absorption ceiling
+        is above its feed-in ceiling the plan charges at the feed-in figure, even though the charge rate
+        published for inverter_limit_charge and the charge rate control's range use the absorption figure.
+        """
         power = 0.0
         for device in self.devices.get(system_id, []):
             if device.get("deviceType") == SIGENERGY_DEVICE_INVERTER:
                 attr = device.get("attrMap", {})
                 power += _safe_float(attr.get("ratedActivePower", 0))
-        return power
+        ceilings = self.inverter_ceilings.get(system_id)
+        if not isinstance(ceilings, dict):
+            return power
+        reported_kw = _safe_float(ceilings.get("charge" if direction == "charge" else "discharge", 0)) / 1000.0
+        if power <= 0 or not math.isfinite(reported_kw) or reported_kw > power * SIGENERGY_INVERTER_CEILING_MAX_RATIO:
+            return power
+        return max(power, reported_kw)
 
     def _get_export_limit_w(self, system_id):
         """Return the grid export limit in W, or 99999 (no limit) when the system is not limiting export.
@@ -1978,11 +2011,17 @@ class SigenergyAPI(ComponentBase):
         Args:
             system_id: Sigenergy system identifier extracted from the MQTT topic.
             value_dict: ``value`` sub-dict from the parsed MQTT payload (string→string).
+
+        Returns:
+            True when the message changed the inverter's stored power ceilings (see _store_inverter_ceilings),
+            so the caller knows the rate controls' range has moved and must be republished.
         """
         # The broker only sends fields that changed, so merge onto the last known
         # raw values rather than treating an absent field as 0.
         raw = self.mqtt_period_raw.setdefault(system_id, {})
         raw.update(value_dict)
+
+        ceilings_changed = self._store_inverter_ceilings(system_id)
 
         # A field the broker has *never* sent is still absent from the merged state, and defaulting
         # it to 0 here would overwrite a good value the REST poll already put in energy_flow with a
@@ -2034,6 +2073,30 @@ class SigenergyAPI(ComponentBase):
                 system_id, flow["batterySoc"], bat_power_kw, pv_power_kw, grid_power_kw, flow["loadPower"]
             )
         )
+        return ceilings_changed
+
+    def _store_inverter_ceilings(self, system_id):
+        """Copy the inverter's reported power ceilings from the merged period state into self.inverter_ceilings.
+
+        They are kept apart from the raw fields so they can be cached: a fixed ceiling is not necessarily sent
+        again after a restart. They are read from the merged state, and are taken from a period message too
+        stale for its live readings to be used, because a ceiling is a fixed plant figure rather than a reading.
+        Only a usable (finite, positive) figure is kept; the plausibility check against the rating is left to
+        _get_inverter_max_power_kw, which also has to apply it to a figure restored from the cache.
+
+        Returns:
+            True when a stored figure was added or changed.
+        """
+        raw = self.mqtt_period_raw.get(system_id, {})
+        changed = False
+        for name, field in SIGENERGY_INVERTER_CEILING_FIELDS.items():
+            ceiling_w = _safe_float(raw.get(field, None), None)
+            if ceiling_w is not None and math.isfinite(ceiling_w) and ceiling_w > 0:
+                stored = self.inverter_ceilings.setdefault(system_id, {})
+                if stored.get(name) != ceiling_w:
+                    stored[name] = ceiling_w
+                    changed = True
+        return changed
 
     def _handle_mqtt_change(self, system_id, value_dict):
         """Handle a Sigenergy ``openapi/change`` MQTT message.
@@ -2293,9 +2356,15 @@ class SigenergyAPI(ComponentBase):
                                             entry_sid, lag / 60, datetime.fromtimestamp(statistics_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                                         )
                                     )
+                                    # The power ceiling is a fixed figure, not a reading, so a stale message's still counts
+                                    if self._store_inverter_ceilings(entry_sid) and self.api_started:
+                                        await self.publish_controls(entry_sid)
                                     continue
-                                self._handle_mqtt_period(entry_sid, value_dict)
+                                ceilings_changed = self._handle_mqtt_period(entry_sid, value_dict)
                                 if self.api_started:
+                                    # The rate controls' max follows the ceiling, and publish_controls() is not on the poll cadence
+                                    if ceilings_changed:
+                                        await self.publish_controls(entry_sid)
                                     await self.publish_system_entities(entry_sid)
                             elif msg_type == "change":
                                 self._handle_mqtt_change(entry_sid, value_dict)
@@ -2685,8 +2754,8 @@ class SigenergyAPI(ComponentBase):
         """The figures the system reports, under Predbat's setting names (spec D14).
 
         soc_max is the system's own batteryCapacity, never the module sum that may be converted from Ah.
-        battery_rate_max is left out: _get_battery_max_power_kw() caps it at the inverter rating, so it is
-        derived. export_limit is given only when the plant has reported one (not the 99999 sentinel).
+        battery_rate_max is left out: _get_battery_max_power_kw() caps it at the inverter's maximum, so it
+        is derived. export_limit is given only when the plant has reported one (not the 99999 sentinel).
         """
         ratings = {}
         inverter_kw = self._get_inverter_max_power_kw(system_id)
@@ -3557,6 +3626,8 @@ class SigenergyAPI(ComponentBase):
         device_cutoffs is restored for the same reason - without it battery_min_soc would fall back to
         the 4% default after every restart and push set_reserve_min back up, and the reserve would
         read the 10% default.
+        inverter_ceilings is restored because period messages carry only the fields that changed, so a
+        fixed power ceiling may not arrive again - without it inverter_limit would fall back to the rating.
         """
         if not self.storage:
             return
@@ -3584,6 +3655,10 @@ class SigenergyAPI(ComponentBase):
         device_cutoffs = await self._load_cache("device_cutoffs")
         if device_cutoffs is not None:
             self.device_cutoffs = device_cutoffs
+
+        inverter_ceilings = await self._load_cache("inverter_ceilings")
+        if inverter_ceilings is not None:
+            self.inverter_ceilings = inverter_ceilings
 
 
         self.log("SigenergyAPI: Restored cached poll-interval state from storage")
@@ -3739,6 +3814,8 @@ class SigenergyAPI(ComponentBase):
                 await self._save_cache("grid_export", self.grid_export)
             if self.device_cutoffs:
                 await self._save_cache("device_cutoffs", self.device_cutoffs)
+            if self.inverter_ceilings:
+                await self._save_cache("inverter_ceilings", self.inverter_ceilings)
 
         # Fetch controls from HA on first run only
         if first:

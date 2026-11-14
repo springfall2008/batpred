@@ -82,6 +82,7 @@ from const import (
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
 from utils import (
+    convert_temperature,
     strptime_aware,
     RepeatLogGate,
     minutes_since_yesterday,
@@ -159,6 +160,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             units, required_unit = required_unit, units
 
         if isinstance(state, float) and units and required_unit and units != required_unit:
+            converted = convert_temperature(state, units, required_unit)
+            if converted is not None:
+                return converted
+
             units_lhs = units[0]
             if units_lhs == "K":
                 units_lhs = "k"
@@ -2022,7 +2027,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 errors += 1
                                 continue
                     elif required_entries > 1:
-                        if not optional_entries:
+                        # single_value_ok: one plain value applies to every entry (#5369)
+                        if not optional_entries and not spec.get("single_value_ok", False):
                             self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list, but requires {} entries based on {}".format(name, required_entries, entries))
                             self.arg_errors[name] = "Invalid type, expected list"
                             errors += 1
@@ -2510,6 +2516,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.components = Components(self)
             self.components.initialize(phase=0)
 
+            # Do not start phase-0 dependents (notably HAHistory) when HA interface
+            # construction failed. They cannot recover without it, and their startup
+            # wait would delay the standalone runner's retry by up to ten minutes.
+            if not self.ha_interface:
+                raise ValueError("HA interface not found")
+
             # Initialise plugin system early so plugins can register web endpoints
             # before the web server starts
             try:
@@ -2524,9 +2536,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             if not self.components.start(phase=0):
                 self.log("Error: Some components failed to start (phase0)")
                 self.record_status("Error: Some components failed to start (phase0)", had_errors=True)
-
-            if not self.ha_interface:
-                raise ValueError("HA interface not found")
 
             # Call plugin initialisation hooks after components are ready
             if self.plugin_system:
