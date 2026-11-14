@@ -362,9 +362,10 @@ def test_predheat_pr5767_regressions(my_predbat):
         stopped.heat_max_power = 0
         stopped.heat_min_power = 0
         stopped.run_simulation(40, False)
+        # Heating off is published as None, not 0 (#6134)
         heat_to = list(stopped.published["predheat.heat_to_temp"]["results"].values())
-        if any(value != 0 for value in heat_to):
-            print("  ERROR: heating engaged before the hysteresis_on threshold")
+        if any(value is not None for value in heat_to):
+            print("  ERROR: heating engaged before the hysteresis_on threshold: {}".format(heat_to[:3]))
             failed = True
 
         # An already-running thermostat must turn off at +0.1 °C, while the
@@ -379,7 +380,7 @@ def test_predheat_pr5767_regressions(my_predbat):
         running.heat_min_power = 0
         running.run_simulation(40, True)
         heat_to = list(running.published["predheat.heat_to_temp"]["results"].values())
-        if len(heat_to) < 2 or heat_to[0] != 20.0 or heat_to[1] != 0:
+        if len(heat_to) < 2 or heat_to[0] != 20.0 or heat_to[1] is not None:
             print("  ERROR: heating did not turn off at the hysteresis_off threshold: {}".format(heat_to[:3]))
             failed = True
 
