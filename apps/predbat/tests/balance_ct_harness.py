@@ -232,6 +232,12 @@ class CTScenario:
     dynamics: list = None
     behaviours: list = None
     balance: bool = True
+    # The three balancing switches, applied when balance is on. All on by default here; a default install has
+    # only the cross-charge correction on (switch.predbat_balance_inverters_crosscharge), with charge and
+    # discharge SoC balancing off.
+    balance_charge: bool = True
+    balance_discharge: bool = True
+    balance_crosscharge: bool = True
     rate_min: float = 200.0
     soc_max: float = 9.5
     rate_max: float = 3000
@@ -373,9 +379,9 @@ def run_ct_scenario(my_predbat, scenario):
             for inverter in my_predbat.inverters:
                 inverter.sleep = lambda seconds_slept: clock.__setitem__("s", clock["s"] + seconds_slept)
             my_predbat.balance_inverters_enable = scenario.balance
-            my_predbat.balance_inverters_charge = True
-            my_predbat.balance_inverters_discharge = True
-            my_predbat.balance_inverters_crosscharge = True
+            my_predbat.balance_inverters_charge = scenario.balance_charge
+            my_predbat.balance_inverters_discharge = scenario.balance_discharge
+            my_predbat.balance_inverters_crosscharge = scenario.balance_crosscharge
             my_predbat.balance_inverters_threshold_charge = scenario.threshold
             my_predbat.balance_inverters_threshold_discharge = scenario.threshold
             my_predbat.set_read_only = False

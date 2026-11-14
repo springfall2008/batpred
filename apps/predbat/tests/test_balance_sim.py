@@ -166,6 +166,16 @@ def run_ct_tests(my_predbat):
             if cloud_on["writes"] > 120:
                 print("ERROR: {} inv broken cloud {}: {} rate writes in an hour".format(count, loops_name, cloud_on["writes"]))
                 failed = True
+        # A default install has only the cross-charge correction on, with charge and discharge SoC balancing off.
+        # The latch is what that configuration relies on: one hold, kept, rather than one every minute or two.
+        default = run_ct_scenario(
+            my_predbat,
+            CTScenario(name="default", mode="eco", soc=socs["eco"], house=busy_evening(), dynamics=disagreeing(count), balance=True, balance_charge=False, balance_discharge=False, balance_crosscharge=True),
+        )
+        print("{} inv CT disagree, default switches (cross-charge only): cross {}kWh writes {}".format(count, default["cross_kwh"], default["writes"]))
+        if default["cross_kwh"] > 0.02 or default["writes"] > 10:
+            print("ERROR: {} inv default switches: {}kWh cross-charging and {} writes in an hour".format(count, default["cross_kwh"], default["writes"]))
+            failed = True
         # The cross-charge hold is latched, so it is written once rather than taken and released every minute or two
         if on["writes"] > 40:
             print("ERROR: {} inv CT disagree: {} rate writes in an hour - the cross-charge hold is not latching".format(count, on["writes"]))
