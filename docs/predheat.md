@@ -165,6 +165,40 @@ The final figure should be the number of watts your house loses per 1 degree of 
 Then you can set **heat_gain_static** to be the static heat output of other things in your house eg. computers and people. You can figure this out by looking at how many degrees of
 temperature difference your house can maintain without any heating and multiply up your heat loss watts figure by this.
 
+### Scheduled target temperatures (Climate Scheduler)
+
+By default, Predheat estimates future thermostat setpoints from the history of
+`target_temperature`. If you use the third-party [Climate Scheduler](https://github.com/kneave/climate-scheduler)
+integration to control your thermostat, you can optionally use its future
+setpoint changes in the Predheat forecast instead:
+
+```yaml
+predheat:
+  target_temperature: sensor.my_heating_setpoint
+  target_temperature_schedule: climate.my_thermostat
+```
+
+Keep `target_temperature` pointing to the **current effective setpoint** (including
+any manual override). Set `target_temperature_schedule` to the climate entity
+managed by Climate Scheduler. Replace both example entity IDs with yours. The
+schedule is fetched when Predheat updates its forecast; the current effective
+setpoint applies until the next scheduled temperature change.
+
+If Climate Scheduler is unavailable, its schedule is disabled or invalid, or a
+required Workday lookup fails, Predheat falls back to its existing historical
+setpoint prediction.
+
+Predheat also forecasts explicit `hvac_mode: off` and `hvac_mode: heat` changes.
+An `off` interval prevents the simulated heat source from running, while the
+house and radiator water continue cooling normally. A node with `noChange: true`
+(or `temp: null`) can change HVAC mode without changing the temperature setpoint.
+The current HVAC state of the scheduled climate entity is also used for
+schedules containing only temperature changes. If it is `off`, heating remains
+disabled throughout the forecast unless a future `heat` node switches it back on.
+Only `heat` and `off` are modelled. An unknown current HVAC mode preserves the
+existing heating assumption for temperature-only schedules, but causes a fallback
+to historical setpoint prediction when explicit HVAC-mode changes are scheduled.
+
 ### Weather Compensation
 
 If your heat source makes use of weather compensation then add the following to the configuration to map out your heat curve. The example has a flow temp of 45C at -3C outside and 25C at 15C outside:
