@@ -15,7 +15,7 @@ import tempfile
 from datetime import timedelta
 
 from tests.test_infra import MockStorageComponents, make_test_storage, run_async
-from const import BATTERY_POWER_CURVE_RESCAN_MINUTES
+from const import BATTERY_POWER_CURVE_RESCAN_MINUTES, BATTERY_POWER_CURVE_RETRY_MINUTES
 
 CURVE_A = {100: 0.5, 99: 0.6, 98: 0.8}
 CURVE_B = {100: 0.4, 99: 0.5, 98: 0.7}
@@ -102,22 +102,32 @@ def _run(my_predbat, storage):
     failed |= _check("t2 default", my_predbat.battery_charge_power_curve == DEFAULT and my_predbat.computed_charge_curve, my_predbat.battery_charge_power_curve)
     failed |= _check("t2 one scan", inv.calls[False] == 1, inv.calls)
 
-    print("Test 3: auto - nothing found yet retries every cycle, using the default meanwhile, which is not saved")
+    print("Test 3: auto - nothing found yet retries hourly (not every cycle), using the default meanwhile, which is not saved")
     _restart(my_predbat, default=DEFAULT)
     inv.calls[False] = 0
     my_predbat.battery_power_curve_update(inv, discharge=False)
+    my_predbat.battery_power_curve_update(inv, discharge=False)
     failed |= _check("t3 default", my_predbat.battery_charge_power_curve == DEFAULT, my_predbat.battery_charge_power_curve)
     failed |= _check("t3 default not saved", _stored(storage, "battery_charge_power_curve") is None)
+    failed |= _check("t3 default waits an hour", inv.calls[False] == 1, inv.calls)
+    my_predbat.battery_power_curve_last_scan["charge"] = my_predbat.now_utc - timedelta(minutes=BATTERY_POWER_CURVE_RETRY_MINUTES + 1)
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    failed |= _check("t3 default retried after an hour, not a day", inv.calls[False] == 2, inv.calls)
     _restart(my_predbat)
     inv.calls[False] = 0
     for _cycle in range(3):
         my_predbat.battery_power_curve_update(inv, discharge=False)
-    failed |= _check("t3 retries", inv.calls[False] == 3 and my_predbat.battery_charge_power_curve == {}, inv.calls)
+    failed |= _check("t3 one scan per hour", inv.calls[False] == 1 and my_predbat.battery_charge_power_curve == {}, inv.calls)
+    my_predbat.battery_power_curve_last_scan["charge"] = my_predbat.now_utc - timedelta(minutes=BATTERY_POWER_CURVE_RETRY_MINUTES + 1)
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    failed |= _check("t3 retried", inv.calls[False] == 2, inv.calls)
 
     print("Test 4: auto - a curve found is used and saved, then only re-scanned once a day")
     inv.result[False] = CURVE_A
     inv.calls[False] = 0
+    my_predbat.battery_power_curve_last_scan["charge"] = my_predbat.now_utc - timedelta(minutes=BATTERY_POWER_CURVE_RETRY_MINUTES + 1)
     my_predbat.battery_power_curve_update(inv, discharge=False)
+    my_predbat.battery_power_curve_last_scan["charge"] = my_predbat.now_utc - timedelta(minutes=BATTERY_POWER_CURVE_RETRY_MINUTES + 1)
     my_predbat.battery_power_curve_update(inv, discharge=False)
     failed |= _check("t4 curve", my_predbat.battery_charge_power_curve == CURVE_A, my_predbat.battery_charge_power_curve)
     failed |= _check("t4 saved", _stored(storage, "battery_charge_power_curve") == CURVE_A, _stored(storage, "battery_charge_power_curve"))
@@ -157,11 +167,16 @@ def _run(my_predbat, storage):
     my_predbat.battery_power_curve_update(inv, discharge=False)
     failed |= _check("t9 junk", my_predbat.battery_charge_power_curve == {}, my_predbat.battery_charge_power_curve)
 
-    print("Test 11: not auto, no curve in apps.yaml - the computed or default curve survives fetch_config_options() every cycle")
-    saved_args = {key: my_predbat.args.get(key) for key in ("battery_charge_power_curve", "battery_charge_power_curve_default")}
+    print("Test 11: not auto, empty curve in apps.yaml - the computed or default curve survives fetch_config_options() every cycle")
+    saved_args = {key: my_predbat.args.get(key) for key in ("battery_charge_power_curve", "battery_charge_power_curve_default", "battery_discharge_power_curve")}
     try:
         for key in saved_args:
             my_predbat.args.pop(key, None)
+        my_predbat.fetch_config_options()
+        failed |= _check("t11 charge curve defaults to auto", my_predbat.battery_charge_power_curve_auto is True)
+        failed |= _check("t11 discharge curve defaults to off", my_predbat.battery_discharge_power_curve_auto is False)
+
+        my_predbat.args["battery_charge_power_curve"] = {}
         _restart(my_predbat, auto=False)
         inv.result[False] = CURVE_A
         my_predbat.battery_power_curve_update(inv, discharge=False)
@@ -178,9 +193,9 @@ def _run(my_predbat, storage):
 
         my_predbat.args["battery_charge_power_curve"] = {"100": 0.3}
         my_predbat.fetch_config_options()
-        failed |= _check("t11 apps.yaml curve wins", my_predbat.battery_charge_power_curve == {100: 0.3}, my_predbat.battery_charge_power_curve)
+        failed |= _check("t11 apps.yaml curve wins", my_predbat.battery_charge_power_curve == {100: 0.3} and not my_predbat.battery_charge_power_curve_auto, my_predbat.battery_charge_power_curve)
 
-        my_predbat.args.pop("battery_charge_power_curve")
+        my_predbat.args["battery_charge_power_curve"] = {}
         my_predbat.args.pop("battery_charge_power_curve_default")
         _restart(my_predbat, auto=False)
         my_predbat.battery_charge_power_curve = {100: 0.3}

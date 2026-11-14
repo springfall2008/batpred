@@ -43,6 +43,7 @@ from const import (
     INVERTER_CLOCK_SKEW_WARN_MINUTES,
     INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
     BATTERY_SIZE_RETRY_MINUTES,
+    BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN,
     BATTERY_TEMPERATURE_CURVE_MIN_POWER,
     BATTERY_TEMPERATURE_CURVE_SOC_MAX,
     BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
@@ -1543,6 +1544,11 @@ class Inverter:
                     soc_percent[minute] = calc_percent_limit(soc_kwh.get(minute, 0), self.soc_max)
 
                 temperature_limited = self.find_temperature_limited_minutes(discharge, min_len, max_power_scaled)
+                if discharge:
+                    export_limited = self.find_export_limited_minutes(min_len, max_power_scaled)
+                    if export_limited is None:
+                        return {}
+                    temperature_limited = temperature_limited | export_limited
 
                 if discharge:
                     search_range = range(5, 20, 1)
@@ -1589,7 +1595,7 @@ class Inverter:
                                 if discharge and (predbat_status.get(target_minute, "") not in ["Exporting", "Discharging"] or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) <= 0):
                                     break
                                 if target_minute in temperature_limited:
-                                    # A cold battery was holding the rate down, which is not the SoC curve
+                                    # A cold battery (or, discharging, the export limit) was holding the rate down, which is not the SoC curve
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
@@ -1700,7 +1706,7 @@ class Inverter:
                                 if (final_curve[key] < 1.0 or first) and final_curve[key] > 0.0:
                                     text += "    {} : {}\n".format(key, final_curve[key])
                                     first = False
-                            if self.base.battery_charge_power_curve_auto:
+                            if self.base.battery_discharge_power_curve_auto if discharge else self.base.battery_charge_power_curve_auto:
                                 self.log("Info: Inverter {} curve automatically computed as:\n".format(self.id) + text)
                             else:
                                 self.log("Info: Inverter {} {} curve can be entered into apps.yaml or set to auto:\n".format(self.id, curve_type) + text)
@@ -1788,6 +1794,66 @@ class Inverter:
                 limited.add(minute)
         if limited:
             self.log("Inverter {} Leaving {} temperature-limited minutes out of the battery {} curve".format(self.id, len(limited), "discharge" if discharge else "charge"))
+        return limited
+
+    def find_export_limited_minutes(self, min_len, max_power_scaled):
+        """
+        Find the minutes of history where the export limit, not the battery, held back a discharge.
+
+        While exporting, the battery supplies the house load plus the grid export, so once the export reaches
+        export_limit the inverter turns the battery down and the discharge rate drops for a reason that has nothing to
+        do with the SoC. A minute counts as limited when grid_power (positive for export) was at or above
+        BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN of export_limit.
+
+        Args:
+            min_len: minutes of history being searched
+            max_power_scaled: the rate in W a minute must reach to count as full rate
+
+        Returns:
+            A set of minute indexes (minutes before now): empty when no export limit is set, or when there is no
+            grid_power history and the limit is above the full rate (so it cannot be what held the battery back).
+            None when the limit is below the full rate and there is no grid_power history to tell the minutes apart,
+            as the discharge curve cannot then be learned safely.
+        """
+        export_limit_w = self.export_limit * MINUTE_WATT
+        if export_limit_w >= EXPORT_LIMIT_DEFAULT_W:
+            return set()
+        grid_sensor = self.base.get_arg("grid_power", indirect=False, index=self.id)
+        grid_data = None
+        if grid_sensor and is_entity_id(grid_sensor):
+            grid_data = self.base.get_history_wrapper(entity_id=grid_sensor, days=self.base.max_days_previous, required=False)
+        if not grid_data:
+            if export_limit_w < max_power_scaled:
+                self.log("Info: Inverter {} Cannot find battery discharge curve, export_limit {}W is below the discharge rate and there is no grid_power history to tell which exports it limited".format(self.id, dp0(export_limit_w)))
+                return None
+            return set()
+        grid_power, _ = minute_data(
+            grid_data[0],
+            self.base.max_days_previous,
+            self.base.now_utc,
+            "state",
+            "last_updated",
+            backwards=True,
+            clean_increment=False,
+            smoothing=False,
+            divide_by=1.0,
+            scale=1.0,
+            required_unit="W",
+            can_modify_history=True,  # history is not accessed after this point
+        )
+        invert = self.base.get_arg("grid_power_invert", False, index=self.id)
+        threshold = export_limit_w * BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN
+        limited = set()
+        for minute in range(0, min_len):
+            power = grid_power.get(minute, None)
+            if power is None:
+                continue
+            if invert:
+                power = -power
+            if power >= threshold:
+                limited.add(minute)
+        if limited:
+            self.log("Inverter {} Leaving {} export-limited minutes out of the battery discharge curve".format(self.id, len(limited)))
         return limited
 
     def find_battery_temperature_samples(self):

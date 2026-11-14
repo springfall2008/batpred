@@ -46,6 +46,7 @@ from const import (
     PV_ARRAY_KWP_UNKNOWN,
     BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES,
     BATTERY_POWER_CURVE_RESCAN_MINUTES,
+    BATTERY_POWER_CURVE_RETRY_MINUTES,
 )
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -4135,11 +4136,12 @@ class Fetch:
         Not in auto mode and no curve configured: the curve is computed once (as before), falling back to
         battery_charge_power_curve_default.
 
-        battery_charge_power_curve: auto - the last curve found is kept in storage, so it is in use from the first
-        plan after a restart rather than only once a full-rate charge to 100% is back in the history window. The
-        history is re-scanned every cycle while there is no curve, then every BATTERY_POWER_CURVE_RESCAN_MINUTES,
-        and a scan that finds nothing (no full-rate cycle in the window, or only temperature-limited ones) leaves
-        the curve as it was rather than replacing it.
+        battery_charge_power_curve: auto (the default for the charge curve) - the last curve found is kept in
+        storage, so it is in use from the first plan after a restart rather than only once a full-rate charge to
+        100% is back in the history window. The history is re-scanned every BATTERY_POWER_CURVE_RETRY_MINUTES while
+        no curve has been found (the default curve does not count), then every BATTERY_POWER_CURVE_RESCAN_MINUTES,
+        and a scan that finds nothing (no full-rate cycle in the window, or only temperature- or export-limited
+        ones) leaves the curve as it was rather than replacing it.
 
         Args:
             inverter: the Inverter whose history is scanned
@@ -4185,7 +4187,8 @@ class Fetch:
                         setattr(self, computed_name, True)
 
         last_scan = self.battery_power_curve_last_scan.get(kind)
-        if curve and last_scan is not None and (self.now_utc - last_scan) < timedelta(minutes=BATTERY_POWER_CURVE_RESCAN_MINUTES):
+        interval = BATTERY_POWER_CURVE_RESCAN_MINUTES if (curve and curve != default) else BATTERY_POWER_CURVE_RETRY_MINUTES
+        if last_scan is not None and (self.now_utc - last_scan) < timedelta(minutes=interval):
             return
         self.battery_power_curve_last_scan[kind] = self.now_utc
 
@@ -4908,8 +4911,8 @@ class Fetch:
         self.log("Freeze Export discharge rate configured: {:.0f} W".format(self.inverter_freeze_export_discharge_rate * MINUTE_WATT))
         self.base_load = self.get_arg("base_load", 100) / 1000.0
 
-        # Charge curve
-        if self.args.get("battery_charge_power_curve", "") == "auto":
+        # Charge curve - learned from history unless apps.yaml sets one
+        if self.args.get("battery_charge_power_curve", "auto") == "auto":
             self.battery_charge_power_curve_auto = True
         else:
             self.battery_charge_power_curve_auto = False

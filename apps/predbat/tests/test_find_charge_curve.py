@@ -827,6 +827,106 @@ def test_find_charge_curve_skips_temperature_limited(my_predbat):
     return failed
 
 
+def test_find_charge_curve_skips_export_limited(my_predbat):
+    """
+    A discharge the export limit held back looks like a low-SoC tail-off, so exports with the grid at export_limit
+    are left out of the learned discharge curve; with no grid_power history the curve is only learned when the
+    limit is above the discharge rate.
+    """
+    print("*** Running test: find_charge_curve_skips_export_limited ***")
+    failed = False
+    grid_sensor = "sensor.grid_power_curve_test"
+    saved_args = {key: my_predbat.args.get(key, None) for key in ("grid_power", "grid_power_invert")}
+
+    def install_grid(export_w, invert=False):
+        """Add a grid_power history exporting export_w during the discharge sessions (17:00-22:59)."""
+        create_test_history_data(my_predbat, num_days=7)
+        base_get_history = my_predbat.ha_interface.get_history
+        base_time = my_predbat.midnight_utc - timedelta(days=7)
+        grid_history = []
+        for minutes in range(0, 7 * 24 * 60, 5):
+            timestamp = base_time + timedelta(minutes=minutes)
+            power = export_w if 17 <= timestamp.hour <= 22 else 0
+            grid_history.append({"state": -power if invert else power, "last_updated": timestamp.strftime("%Y-%m-%dT%H:%M:%S%z"), "attributes": {"unit_of_measurement": "W"}})
+
+        def mock_get_history(entity_id, now=None, days=30):
+            """Serve the grid history alongside the discharge history."""
+            if entity_id == grid_sensor:
+                return [grid_history]
+            return base_get_history(entity_id, now=now, days=days)
+
+        my_predbat.ha_interface.get_history = mock_get_history
+
+    try:
+        inv = Inverter(my_predbat, 0)
+        inv.battery_rate_max_charge = 2600 / 60000
+        inv.battery_rate_max_discharge = 2600 / 60000
+        inv.soc_max = 10.0
+        inv.battery_scaling = 1.0
+        setup_predbat(my_predbat)
+        my_predbat.args["grid_power"] = [grid_sensor]
+        my_predbat.args["grid_power_invert"] = [False]
+
+        print("Export at the 2000 W limit - left out")
+        inv.export_limit = 2000 / 60000
+        install_grid(2000)
+        curve = inv.find_charge_curve(discharge=True)
+        if curve:
+            print("ERROR: an export held at export_limit should not be learned as the discharge curve, got {}".format(curve))
+            failed = True
+
+        print("Export at the limit with an inverted grid sensor - left out")
+        my_predbat.args["grid_power_invert"] = [True]
+        install_grid(2000, invert=True)
+        curve = inv.find_charge_curve(discharge=True)
+        if curve:
+            print("ERROR: grid_power_invert should be applied to the export check, got {}".format(curve))
+            failed = True
+        my_predbat.args["grid_power_invert"] = [False]
+
+        print("Export well under the limit - learned")
+        install_grid(1000)
+        curve = inv.find_charge_curve(discharge=True)
+        if not curve:
+            print("ERROR: an export below export_limit should still be learned")
+            failed = True
+
+        print("No grid_power history and the limit below the discharge rate - not learned")
+        create_test_history_data(my_predbat, num_days=7)
+        curve = inv.find_charge_curve(discharge=True)
+        if curve:
+            print("ERROR: with no grid_power history a limit below the rate should stop the discharge curve, got {}".format(curve))
+            failed = True
+
+        print("No grid_power history and the limit above the discharge rate - learned")
+        inv.export_limit = 5000 / 60000
+        curve = inv.find_charge_curve(discharge=True)
+        if not curve:
+            print("ERROR: a limit above the discharge rate cannot hold it back, so the curve should be learned")
+            failed = True
+
+        print("No export limit - learned, and the charge curve is unaffected by a limit")
+        inv.export_limit = 99999.0 / 60000
+        install_grid(2600)
+        curve = inv.find_charge_curve(discharge=True)
+        if not curve:
+            print("ERROR: with no export limit nothing should be excluded")
+            failed = True
+        inv.export_limit = 2000 / 60000
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve:
+            print("ERROR: the export limit should not affect the charge curve")
+            failed = True
+    finally:
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+        remove_test_history_data(my_predbat)
+    return failed
+
+
 def run_find_charge_curve_tests(my_predbat):
     """
     Run all find_charge_curve tests
@@ -882,6 +982,10 @@ def run_find_charge_curve_tests(my_predbat):
         return failed
 
     failed |= test_find_charge_curve_skips_temperature_limited(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_charge_curve_skips_export_limited(my_predbat)
     if failed:
         return failed
 
