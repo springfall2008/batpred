@@ -789,23 +789,89 @@ def test_hybrid_no_write_when_unchanged():
     return 0
 
 
+def _deferred_writes(base):
+    """Give base a create_task that holds each coroutine instead of running it; returns the list they are held in."""
+    held = []
+
+    def create_task(coro, name="TaskCreate"):
+        """Hold the coroutine, as a task not yet run."""
+        held.append(coro)
+
+    base.create_task = create_task
+    return held
+
+
+def _report_in_loop(coordinator, name, report):
+    """File a report from inside a running event loop, as a component's run() does, so the write is handed to base.create_task."""
+
+    async def component_run():
+        """A component's run() filing its report."""
+        coordinator.report(name, report)
+
+    run_async(component_run())
+
+
+def _land(coro):
+    """Run one held write to completion on a loop of its own."""
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 def test_hybrid_write_not_repeated_while_pending():
-    """A write not yet applied is not sent again; once applied the pending value clears, and a later user change is corrected again."""
+    """A write still in flight is not sent again by a second changed report; once it lands it is no longer pending."""
+    base, coordinator, ha = _hybrid_setup(current=True)
+    held = _deferred_writes(base)
+    _report_in_loop(coordinator, "gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
+    _report_in_loop(coordinator, "alphaess", _hybrid_report([("alphaess:b", False, "AlphaESS")]))
+    assert len(held) == 1 and ha.calls == [], (held, ha.calls)
+    assert coordinator.hybrid_pending is False
+    _land(held.pop())
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    assert base.args["inverter_hybrid"] is False and coordinator.hybrid_pending is None
+    print("PASS: hybrid write not repeated while pending")
+    return 0
+
+
+def test_hybrid_user_override_corrected():
+    """The write lands, the user turns the switch back, and the very next changed report sets it again."""
+    base, coordinator, ha = _hybrid_setup(current=True)
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
+    assert ha.calls == [(HYBRID_ENTITY, False)] and base.args["inverter_hybrid"] is False, ha.calls
+    assert coordinator.hybrid_pending is None
+    base.args["inverter_hybrid"] = True
+    coordinator.report("alphaess", _hybrid_report([("alphaess:b", None, "AlphaESS")]))
+    assert ha.calls == [(HYBRID_ENTITY, False), (HYBRID_ENTITY, False)], ha.calls
+    assert base.args["inverter_hybrid"] is False
+    # A write that completes without changing the setting is not pending either: the next changed report sends it again
     base, coordinator, ha = _hybrid_setup(current=True, apply=False)
     coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
-    coordinator.report("alphaess", _hybrid_report([("alphaess:b", False, "AlphaESS")]))
-    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
-    assert coordinator.hybrid_pending is False
-    # The setting now holds the value: the next changed report clears the pending value and writes nothing
-    base.args["inverter_hybrid"] = False
-    coordinator.report("alphaess", _hybrid_report([("alphaess:b", False, "AlphaESS"), ("alphaess:c", None, "AlphaESS")]))
-    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
-    assert coordinator.hybrid_pending is None
-    # The user turns it back on: the next changed report turns it off again
-    base.args["inverter_hybrid"] = True
-    coordinator.report("alphaess", _hybrid_report([("alphaess:b", False, "AlphaESS")]))
+    coordinator.report("alphaess", _hybrid_report([("alphaess:b", None, "AlphaESS")]))
     assert ha.calls == [(HYBRID_ENTITY, False), (HYBRID_ENTITY, False)], ha.calls
-    print("PASS: hybrid write not repeated while pending")
+    print("PASS: hybrid user override corrected")
+    return 0
+
+
+def test_hybrid_old_failure_keeps_newer_pending():
+    """An older write failing after a newer one was scheduled leaves the newer value pending; the newer one landing clears it."""
+    base, coordinator, ha = _hybrid_setup(current=True)
+    held = _deferred_writes(base)
+    _report_in_loop(coordinator, "gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
+    assert coordinator.hybrid_pending is False and len(held) == 1
+    # The setting moves to False by other means, then the decision becomes True: a newer write, of True, is scheduled
+    base.args["inverter_hybrid"] = False
+    _report_in_loop(coordinator, "gecloud", _hybrid_report([("gecloud:a", True, "GEC")]))
+    assert coordinator.hybrid_pending is True and len(held) == 2
+    ha.fail = RuntimeError("late")
+    _land(held.pop(0))  # the older write, of False, fails
+    assert coordinator.hybrid_pending is True, coordinator.hybrid_pending
+    assert [line for line in base.log_messages if line.startswith("Warn:")] == ["Warn: Coordinator: could not set inverter_hybrid: late"], base.log_messages
+    ha.fail = None
+    _land(held.pop(0))
+    assert base.args["inverter_hybrid"] is True and coordinator.hybrid_pending is None
+    print("PASS: hybrid old failure keeps newer pending")
     return 0
 
 
@@ -1533,6 +1599,8 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_hybrid_ignores_non_automatic_report()
     failures += test_hybrid_no_write_when_unchanged()
     failures += test_hybrid_write_not_repeated_while_pending()
+    failures += test_hybrid_user_override_corrected()
+    failures += test_hybrid_old_failure_keeps_newer_pending()
     failures += test_hybrid_runs_without_opt_in()
     failures += test_hybrid_never_raises()
     failures += test_hybrid_log_line()

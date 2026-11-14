@@ -467,14 +467,16 @@ class Coordinator:
 
         Does nothing on a thin base (no ha_interface, get_arg or prefix). The write goes through
         ha_interface.set_state_external() - the path a component uses, which changes the setting the planner reads -
-        and is scheduled, never awaited here (see _schedule_hybrid_write()). The value is held as pending from then
-        until the setting equals it, so a second changed report before the write lands does not send it again.
+        and is scheduled, never awaited here (see _schedule_hybrid_write()). The value is held as pending while the
+        write is in flight - until it completes, or the setting is seen to equal it - so a second changed report
+        before the write lands does not send it again, while a user's later change is corrected on the next one.
         """
         base = self.base
         ha_interface = getattr(base, "ha_interface", None)
         prefix = getattr(base, "prefix", None)
         if ha_interface is None or not callable(getattr(ha_interface, "set_state_external", None)) or not callable(getattr(base, "get_arg", None)) or not prefix:
             return
+        scheduled = None
         try:
             value, device_ids = self.hybrid_decision()
             current = base.get_arg("inverter_hybrid", True)
@@ -484,6 +486,7 @@ class Coordinator:
                 if value is None or value == current or value == self.hybrid_pending:
                     return
                 self.hybrid_pending = value
+                scheduled = value
             if value:
                 reason = "{} reports it is a hybrid inverter" if len(device_ids) == 1 else "{} report they are hybrid inverters"
             else:
@@ -491,12 +494,17 @@ class Coordinator:
             self.log("Coordinator: inverter_hybrid set {} - {}".format("on" if value else "off", reason.format(", ".join(device_ids))))
             self._schedule_hybrid_write("switch.{}_inverter_hybrid".format(prefix), value)
         except Exception as e:
-            self._hybrid_write_failed(e)
+            self._hybrid_write_failed(e, scheduled)
 
-    def _hybrid_write_failed(self, error):
-        """Log a failed inverter_hybrid write and drop the pending value, so a later changed report tries again."""
+    def _hybrid_write_done(self, value):
+        """A write of value has completed: it is no longer pending, unless a newer write has replaced it."""
         with self.lock:
-            self.hybrid_pending = None
+            if self.hybrid_pending is not None and self.hybrid_pending == value:
+                self.hybrid_pending = None
+
+    def _hybrid_write_failed(self, error, value):
+        """Log a failed inverter_hybrid write of value and drop it from pending (only if still the pending one), so a later changed report tries again."""
+        self._hybrid_write_done(value)
         self.log("Warn: Coordinator: could not set inverter_hybrid: {}".format(error))
 
     def _schedule_hybrid_write(self, entity_id, value):
@@ -512,11 +520,13 @@ class Coordinator:
         """
 
         async def write():
-            """The write, its failure logged rather than raised."""
+            """The write, its failure logged rather than raised; either way it is no longer pending once it completes."""
             try:
                 await self.base.ha_interface.set_state_external(entity_id, value)
             except Exception as e:
-                self._hybrid_write_failed(e)
+                self._hybrid_write_failed(e, value)
+                return
+            self._hybrid_write_done(value)
 
         try:
             asyncio.get_running_loop()
