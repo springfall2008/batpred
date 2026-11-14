@@ -109,6 +109,10 @@ GROWATT_SET_EXPORT_LIMIT = "export_limit"
 GROWATT_EXPORT_LIMIT_OPEN = {"exportLimitEnabled": 1, "percentage": 100}
 # Minutes before retrying an export limit change that could not be confirmed
 GROWATT_EXPORT_OPEN_RETRY = 10
+# Refresh clocks saved across a restart (by tier prefix), so a restart neither re-reads the export
+# limit early nor cuts short a release or export-limit retry. The telemetry, static and read-back
+# tiers are not: a fresh process should read those straight away.
+GROWATT_PERSISTED_TIERS = ("export_limit", "export_open", "release")
 # Minutes between reads of the export limit once one has been read, and while none has yet
 GROWATT_TTL_EXPORT_LIMIT = 8 * 60
 GROWATT_TTL_EXPORT_LIMIT_RETRY = 10

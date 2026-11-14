@@ -83,6 +83,7 @@ from growatt_const import (
     GROWATT_SET_EXPORT_LIMIT,
     GROWATT_EXPORT_LIMIT_OPEN,
     GROWATT_EXPORT_OPEN_RETRY,
+    GROWATT_PERSISTED_TIERS,
     GROWATT_TTL_EXPORT_LIMIT,
     GROWATT_TTL_EXPORT_LIMIT_RETRY,
     GROWATT_CONTROL_ON,
@@ -159,10 +160,10 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         self.readback_slots = {}
         self.last_write_time = {}
         self.control_active = set()
-        # control_enabled: enable_control was sent by this process, so a write can skip it.
+        # control_enabled: enable_control 1 was confirmed, so a write can skip it. Persisted; a
+        # device that drops it answers the next table with a mismatch, which sends it again.
         # control_claimed: persisted - Predbat holds OpenAPI control and must release it when
-        # it goes read-only, even after a restart. A restart re-sends enable_control once
-        # rather than trusting that the device still has it.
+        # it goes read-only, even after a restart.
         self.control_enabled = set()
         self.control_claimed = set()
         # A slot table written but not confirmed because its read-back failed: the next attempt
@@ -226,9 +227,13 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         A live answer read "Endpoint rate limited for clientId=... deviceSn=..., retry after 3551ms".
         Without a parsable wait, one dispatch interval is used.
         """
+        return min(float(GROWATT_RATE_LIMIT_WAIT_MAX), GrowattAPI.rate_limit_wait_asked(message))
+
+    @staticmethod
+    def rate_limit_wait_asked(message):
+        """Seconds a 105 answer asks for (its "retry after Nms" plus half a second), uncapped; one dispatch interval without one."""
         match = re.search(r"retry after\s+(\d+)\s*ms", str(message or ""), re.IGNORECASE)
-        seconds = int(match.group(1)) / 1000.0 + 0.5 if match else float(GROWATT_DISPATCH_INTERVAL)
-        return min(float(GROWATT_RATE_LIMIT_WAIT_MAX), seconds)
+        return int(match.group(1)) / 1000.0 + 0.5 if match else float(GROWATT_DISPATCH_INTERVAL)
 
     async def _request(self, endpoint_key, body=None, _retry_after_refresh=False, _rate_limited=False):
         """POST one OAuth request and return (code, data).
@@ -279,7 +284,9 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                             if code == GROWATT_CODE_TOKEN_INVALID and not _retry_after_refresh:
                                 if await self.handle_oauth_401():
                                     return await self._request(endpoint_key, body=body, _retry_after_refresh=True)
-                            if code == GROWATT_CODE_TOO_MANY_REQUESTS and not _rate_limited:
+                            # A wait longer than the cap (getDeviceData allows one request a minute)
+                            # would only be refused again, so that answer is returned as it is
+                            if code == GROWATT_CODE_TOO_MANY_REQUESTS and not _rate_limited and self.rate_limit_wait_asked(message) <= GROWATT_RATE_LIMIT_WAIT_MAX:
                                 # Refused before it reached the device, so sending it again is
                                 # safe - under a new requestId, which Growatt requires per request
                                 wait = self.rate_limit_wait(message)
@@ -465,6 +472,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         previous = self.export_limit_setting.get(sn)
         self.export_limit_setting[sn] = setting
         if setting != previous:
+            await self.save_state()
             enabled, percent = setting
             watts = self.export_limit_w(sn)
             if not enabled:
@@ -500,6 +508,17 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         export slot is written anyway, so the battery at least covers the house load.
         """
         previous = self.export_limit_setting.get(sn)
+        if previous is None:
+            # Never read (a first run with nothing saved): read it rather than write blind, so a
+            # limit that is already open is left exactly as it is
+            ok, data = await self.read_dispatch_retry(sn, GROWATT_SET_EXPORT_LIMIT)
+            previous = parse_export_limit(data) if ok else None
+            if previous is not None:
+                self.export_limit_setting[sn] = previous
+                self.export_limit_read_failed.discard(sn)
+                self.mark_refreshed("export_limit:{}".format(sn))
+                if self._export_limit_is_open(sn):
+                    return True
         target = (int(GROWATT_EXPORT_LIMIT_OPEN["exportLimitEnabled"]) == 1, float(GROWATT_EXPORT_LIMIT_OPEN["percentage"]))
         ok = await self.write_verified(sn, GROWATT_SET_EXPORT_LIMIT, dict(GROWATT_EXPORT_LIMIT_OPEN), lambda data: parse_export_limit(data) == target)
         if not ok:
@@ -986,22 +1005,28 @@ class GrowattAPI(ComponentBase, OAuthMixin):
             if wait > 0:
                 self.log("Info: Growatt {} schedule update deferred for {:.1f}s by the documented dispatch rate limit".format(sn, wait))
                 return False
+            confirmed = not unchanged and self.unverified_slots.get(sn) == slots and await self._confirm_unverified(sn, slots)
+            write_table = not unchanged and not confirmed
+            # Control first: a device at enable_control 0 refuses the export limit and the table alike
+            if (write_table or open_export) and sn not in self.control_enabled:
+                if not await self.set_control_verified(sn, GROWATT_CONTROL_ON):
+                    if write_table:
+                        minutes = self._note_write_failure(sn, slots)
+                    else:
+                        self.mark_refreshed("export_open:{}".format(sn))
+                        minutes = GROWATT_EXPORT_OPEN_RETRY
+                    self.log("Warn: Growatt {} could not confirm enable_control 1 ({}), retrying in {} minute(s)".format(sn, self.last_api_error or self.last_write_outcome, minutes))
+                    await self.save_state()
+                    return False
+                self.control_enabled.add(sn)
+                self.control_claimed.add(sn)
             if open_export:
                 await self._open_export_limit(sn)
             if unchanged:
                 # The table is already on the device; only the export limit needed opening
+                await self.save_state()
                 return True
-            if self.unverified_slots.get(sn) == slots and await self._confirm_unverified(sn, slots):
-                ok = True
-            else:
-                if sn not in self.control_enabled:
-                    if not await self.set_control_verified(sn, GROWATT_CONTROL_ON):
-                        minutes = self._note_write_failure(sn, slots)
-                        self.log("Warn: Growatt {} could not confirm enable_control 1 ({}), retrying in {} minute(s)".format(sn, self.last_api_error or self.last_write_outcome, minutes))
-                        return False
-                    self.control_enabled.add(sn)
-                    self.control_claimed.add(sn)
-                ok = await self.write_slots_verified(sn, slots)
+            ok = confirmed or await self.write_slots_verified(sn, slots)
             if ok:
                 self.applied_slots[sn] = list(slots)
                 self.unverified_slots.pop(sn, None)
@@ -1079,6 +1104,7 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         if not ok:
             self.mark_refreshed("release:{}".format(sn))
             self.log("Warn: Growatt {} could not confirm its slot table was cleared to release control ({}), retrying in {} minutes".format(sn, self.last_write_outcome, GROWATT_RELEASE_RETRY))
+            await self.save_state()
             return False
         self.control_claimed.discard(sn)
         self.control_enabled.discard(sn)
@@ -1090,11 +1116,32 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         return True
 
     async def save_state(self):
-        """Persist the control state a restart must not forget: the known slot tables and who holds control."""
+        """Persist the control state a restart must not forget.
+
+        The known slot tables and who holds control; whether enable_control is confirmed; a table
+        whose write is unconfirmed and any write back-off; the export limit last read; the charge
+        hold; and the release, export-limit and export-limit-raise clocks. Without them a restart
+        would write the export limit blind, re-send enable_control, and restart every back-off.
+        The back-off deadline is monotonic, so it is saved as seconds still to wait.
+        """
         storage = self.storage
         if storage is None:
             return
-        payload = {"applied_slots": self.applied_slots, "control_active": sorted(self.control_active), "control_claimed": sorted(self.control_claimed)}
+        now = time.monotonic()
+        payload = {
+            "applied_slots": self.applied_slots,
+            "control_active": sorted(self.control_active),
+            "control_claimed": sorted(self.control_claimed),
+            "control_enabled": sorted(self.control_enabled),
+            "unverified_slots": self.unverified_slots,
+            "write_failures": self.write_failures,
+            "failed_slots": self.failed_slots,
+            "write_retry_in": {sn: max(0.0, at - now) for sn, at in self.write_retry_at.items()},
+            "export_limit_setting": {sn: [bool(enabled), percent] for sn, (enabled, percent) in self.export_limit_setting.items()},
+            "export_limit_read_failed": sorted(self.export_limit_read_failed),
+            "charge_hold": sorted(self._charge_hold),
+            "tiers": {tier: at for tier, at in self._tier_refreshed.items() if tier.split(":")[0] in GROWATT_PERSISTED_TIERS},
+        }
         try:
             await storage.save(GROWATT_STORAGE_MODULE, GROWATT_CACHE_CONTROL, payload)
         except Exception as error:
@@ -1117,6 +1164,32 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 self.applied_slots[str(sn)] = normalize_slots(slots)
         self.control_active |= {str(sn) for sn in data.get("control_active") or []}
         self.control_claimed |= {str(sn) for sn in data.get("control_claimed") or []}
+        self.control_enabled |= {str(sn) for sn in data.get("control_enabled") or []}
+        self.export_limit_read_failed |= {str(sn) for sn in data.get("export_limit_read_failed") or []}
+        self._charge_hold |= {str(sn) for sn in data.get("charge_hold") or []}
+        for sn, slots in (data.get("unverified_slots") or {}).items():
+            if isinstance(slots, list) and sn not in self.unverified_slots:
+                self.unverified_slots[str(sn)] = normalize_slots(slots)
+        for sn, slots in (data.get("failed_slots") or {}).items():
+            if isinstance(slots, list) and sn not in self.failed_slots:
+                self.failed_slots[str(sn)] = normalize_slots(slots)
+        for sn, count in (data.get("write_failures") or {}).items():
+            if sn not in self.write_failures:
+                self.write_failures[str(sn)] = int(self._as_float(count, 0))
+        now = time.monotonic()
+        for sn, wait in (data.get("write_retry_in") or {}).items():
+            if sn not in self.write_retry_at:
+                self.write_retry_at[str(sn)] = now + max(0.0, self._as_float(wait, 0.0))
+        for sn, setting in (data.get("export_limit_setting") or {}).items():
+            if sn not in self.export_limit_setting and isinstance(setting, list) and len(setting) == 2:
+                percent = self._as_float(setting[1], None)
+                if percent is not None:
+                    self.export_limit_setting[str(sn)] = (bool(setting[0]), percent)
+        for tier, at in (data.get("tiers") or {}).items():
+            if tier.split(":")[0] in GROWATT_PERSISTED_TIERS and tier not in self._tier_refreshed:
+                stamp = self._as_float(at, None)
+                if stamp is not None:
+                    self._tier_refreshed[str(tier)] = stamp
         self._state_restored = True
 
     async def _reconcile_control(self, sn):
