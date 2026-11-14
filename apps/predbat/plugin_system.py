@@ -118,31 +118,18 @@ class PluginSystem:
 
         # Look for plugin classes or initialisation functions
         plugin_instance = None
+        local_classes, imported_classes = self._find_plugin_classes(plugin_module)
 
-        # Plugin discovery fallthrough (try in order of preference):
+        # A class defined in the file wins; an imported class is only used when the file defines none.
+        for obj in local_classes or imported_classes:
+            try:
+                self.log(f"Initialising plugin class: {obj.__name__}")
+                plugin_instance = obj(self.base)
+                break
+            except Exception as e:
+                self.log(f"Failed to initialise plugin class {obj.__name__}: {e}")
 
-        # 1. MOST PREFERRED: Class name ends with "Plugin"
-        for name, obj in inspect.getmembers(plugin_module, inspect.isclass):
-            if name.endswith("Plugin"):
-                try:
-                    self.log(f"Initialising plugin class (name-based): {name}")
-                    plugin_instance = obj(self.base)
-                    break
-                except Exception as e:
-                    self.log(f"Failed to initialise plugin class {name}: {e}")
-
-        # 2. FALLBACK: Class has PREDBAT_PLUGIN = True attribute
-        if plugin_instance is None:
-            for name, obj in inspect.getmembers(plugin_module, inspect.isclass):
-                if hasattr(obj, "PREDBAT_PLUGIN") and getattr(obj, "PREDBAT_PLUGIN"):
-                    try:
-                        self.log(f"Initialising plugin class (attribute-based): {name}")
-                        plugin_instance = obj(self.base)
-                        break
-                    except Exception as e:
-                        self.log(f"Failed to initialise plugin class {name}: {e}")
-
-        # 3. FINAL FALLBACK: initialise_plugin function
+        # Final fallback: initialize_plugin function
         if plugin_instance is None and hasattr(plugin_module, "initialize_plugin"):
             try:
                 self.log(f"Calling initialise_plugin function in {plugin_name}")
@@ -160,8 +147,37 @@ class PluginSystem:
                     plugin_instance.register_hooks(self)
                 except Exception as e:
                     self.log(f"Failed to register hooks for plugin {plugin_name}: {e}")
+        elif local_classes or imported_classes or hasattr(plugin_module, "initialize_plugin"):
+            self.log(f"Plugin {plugin_name} was found but could not be initialised, see the errors above")
         else:
             self.log(f"No plugin class or initialisation function found in {plugin_name}")
+
+        if local_classes and imported_classes:
+            skipped = ", ".join(f"{obj.__name__} (from {obj.__module__})" for obj in imported_classes)
+            self.log(f"Plugin classes in {plugin_name} that are imported, not defined there, are not loaded: {skipped}")
+
+    def _find_plugin_classes(self, plugin_module):
+        """
+        Find the plugin classes a module offers, keeping only the most-derived ones.
+
+        Dropping any class another candidate inherits from means neither PredBatPlugin
+        nor a plugin's own base class is chosen, whatever the alphabet says.
+
+        Args:
+            plugin_module: The imported plugin module
+
+        Returns:
+            tuple: (classes defined in the module, classes imported into it), each with
+            names ending in "Plugin" ahead of PREDBAT_PLUGIN matches
+        """
+        members = inspect.getmembers(plugin_module, inspect.isclass)
+        named = [obj for name, obj in members if name.endswith("Plugin")]
+        marked = [obj for _, obj in members if getattr(obj, "PREDBAT_PLUGIN", False)]
+        found = [obj for obj in dict.fromkeys(named + marked) if obj is not PredBatPlugin]
+        candidates = [obj for obj in found if not any(other is not obj and issubclass(other, obj) for other in found)]
+        local_classes = [obj for obj in candidates if obj.__module__ == plugin_module.__name__]
+        imported_classes = [obj for obj in candidates if obj.__module__ != plugin_module.__name__]
+        return local_classes, imported_classes
 
     def get_plugin(self, plugin_name: str):
         """
