@@ -384,15 +384,17 @@ def _descriptor_value(descriptor):
     return descriptor["entity_id"] if "entity_id" in descriptor else descriptor.get("value")
 
 
-def _discovered_value(entry, setting, apps_yaml):
+def _discovered_value(entry, setting, apps_yaml, args):
     """A discovered slot's entry for one binding setting.
 
-    A skipped setting, or a kept one the snapshot gives a value at this slot, is the snapshot's own entry.
-    Otherwise it is the bound entity id or value, None when unbound - except pv_power, which is a fixed 0.
+    A skipped setting, or a kept one the snapshot gives a value at this slot (a re: pattern counts), is not
+    touched: a slot-indexed one keeps the live args entry, which may be a resolved pattern or another writer's
+    value. A summed one takes the snapshot's entry, since replay rewrites those lists and a live index stops
+    meaning a slot. Otherwise it is the bound entity id or value, None when unbound - except pv_power, which is a fixed 0.
     """
     snapshot = slot_value(apps_yaml.get(setting), entry["slot"])
     if setting in entry.get("skip_settings", ()) or (setting in entry.get("keep_user_settings", ()) and snapshot is not None):
-        return snapshot
+        return snapshot if setting in SUMMED_SETTINGS else slot_value(args.get(setting), entry["slot"])
     value = _descriptor_value(entry["settings"].get(setting))
     return 0 if value is None and setting == "pv_power" else value
 
@@ -404,7 +406,7 @@ def _slot_entry(entry, setting, apps_yaml, args):
     settings (taken from the snapshot by build_bindings). A free slot has its inverter_type and nothing else.
     """
     if entry["origin"] == "discovered":
-        return entry["inverter_type"] if setting == "inverter_type" else _discovered_value(entry, setting, apps_yaml)
+        return entry["inverter_type"] if setting == "inverter_type" else _discovered_value(entry, setting, apps_yaml, args)
     if entry["origin"] == "manual":
         return _descriptor_value(entry["settings"].get(setting)) if setting in SUMMED_SETTINGS else slot_value(args.get(setting), entry["slot"])
     return entry["inverter_type"] if setting == "inverter_type" else None

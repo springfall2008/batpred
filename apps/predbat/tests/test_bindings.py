@@ -570,7 +570,7 @@ def test_replay_tuning_untouched():
 
 
 def test_replay_skip_setting():
-    """A skipped setting is left exactly as apps.yaml had it, slot-indexed or compact."""
+    """A skipped setting is left alone when live args match apps.yaml, slot-indexed or compact."""
     apps = {"load_today": ["sensor.user_load_today", "sensor.user_extra_load_today"], "soc_percent": ["sensor.user_soc"]}
     record = _rec("a11111", {"charge_rate": _rw("number.a_rate"), "load_today": _ro("sensor.a_load_today"), "soc_percent": _ro("sensor.a_soc")})
     b, args = _bind(apps, [record], skip_settings={"load_today", "soc_percent"})
@@ -593,6 +593,22 @@ def test_replay_keep_user_setting():
     written = _apply(b, {}, args)
     assert ("inverter_mode", 0) in written and args["inverter_mode"] == ["select.a_mode"], (written, args)
     print("PASS: kept user setting")
+    return 0
+
+
+def test_replay_skip_keep_keep_live():
+    """A skipped or kept non-summed setting keeps whatever live args hold, even when that differs from apps.yaml; a summed one still takes the apps.yaml entry."""
+    apps = {"soc_percent": ["re:sensor.givtcp_(.+)_soc"], "inverter_mode": ["select.user_mode"], "load_today": ["sensor.user_load_today"]}
+    args = {"soc_percent": ["sensor.givtcp_x_soc"], "inverter_mode": ["select.written_elsewhere"], "load_today": ["sensor.rewritten_load_today"]}
+    record = _rec("a11111", {"soc_percent": _ro("sensor.a_soc"), "inverter_mode": _rw("select.a_mode"), "load_today": _ro("sensor.a_load_today"), "reserve": _rw("number.a_reserve")})
+    b, args = _bind(apps, [record], args=args, skip_settings={"soc_percent", "load_today"}, keep_user_settings={"inverter_mode", "reserve"})
+    written = _apply(b, apps, args)
+    assert written == [("inverter_type", 0), ("load_today", 0), ("num_inverters", None), ("pv_power", 0), ("reserve", 0)], written
+    assert args["soc_percent"] == ["sensor.givtcp_x_soc"] and args["inverter_mode"] == ["select.written_elsewhere"], args  # left exactly as live had them
+    assert args["reserve"] == ["number.a_reserve"], args  # kept, but apps.yaml has no value: written from the record
+    assert args["load_today"] == ["sensor.user_load_today"], args  # summed: the apps.yaml entry
+    assert desired_args(b, apps, args)["soc_percent"] == ["sensor.givtcp_x_soc"]
+    print("PASS: skipped and kept settings keep live args")
     return 0
 
 
@@ -830,6 +846,7 @@ def test_bindings_all(my_predbat=None):
     failures += test_replay_tuning_untouched()
     failures += test_replay_skip_setting()
     failures += test_replay_keep_user_setting()
+    failures += test_replay_skip_keep_keep_live()
     failures += test_replay_scalar_becomes_list()
     failures += test_replay_value_binding()
     failures += test_replay_compact_settings()
