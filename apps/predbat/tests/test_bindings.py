@@ -69,6 +69,15 @@ def test_slot_serials():
     return 0
 
 
+def test_slot_serials_skip_summed_settings():
+    """A serial found only in a summed list is not matched: those lists are not indexed by slot."""
+    args = {"charge_rate": ["number.a_charge_rate", "number.b_charge_rate"], "load_today": ["sensor.a_load_today", "sensor.ge_ce1234g567_load_today"]}
+    assert slot_serials(1, {}, args, ["ce1234g567"]) == []  # compact list: index 1 may be another slot's entry or a user's extra
+    assert slot_serials(0, {}, {"pv_power": ["sensor.ge_ce1234g567_pv_power"]}, ["ce1234g567"]) == []  # pv_power alone
+    print("PASS: slot serial scan skips summed settings")
+    return 0
+
+
 def test_binding_settings_leave_tuning_alone():
     """No user tuning setting is owned by the bindings, so the coordinator never reads, writes or clears one."""
     tuning = {"inverter_battery_rate_min", "inverter_limit_charge", "inverter_limit_discharge", "inverter_limit_export", "inverter_limit_override", "battery_export_permitted", "soc_max_fallback", "inverter_reserve_max"}
@@ -89,5 +98,6 @@ def test_bindings_all(my_predbat=None):
     failures += test_manual_slot_service_api()
     failures += test_manual_slot_regex_binding()
     failures += test_slot_serials()
+    failures += test_slot_serials_skip_summed_settings()
     failures += test_binding_settings_leave_tuning_alone()
     return failures

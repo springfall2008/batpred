@@ -147,9 +147,14 @@ def slot_serials(slot: int, apps_yaml: dict, args: dict, serials: list[str]) -> 
     are already resolved), plus ge_cloud_serial for slot 0 as the apps.yaml snapshot has it - never the
     live value, which GE Cloud sets to its own first battery. Serials shorter than MIN_SERIAL_LENGTH
     are ignored.
+
+    SUMMED_SETTINGS are not scanned: those lists are not indexed by slot (the compact ones leave unbound
+    slots out, and all of them can carry the user's extras), so their entry at this index may belong to
+    another slot or to no inverter at all. Every control and per-inverter sensor is still scanned, so no
+    identifying string is lost.
     """
     bound = []
-    for setting in sorted(BINDING_SETTINGS):
+    for setting in sorted(BINDING_SETTINGS - set(SUMMED_SETTINGS)):
         value = slot_value(args.get(setting), slot)
         if isinstance(value, str):
             bound.append(value.casefold())
