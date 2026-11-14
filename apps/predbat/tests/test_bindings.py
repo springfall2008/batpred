@@ -195,10 +195,14 @@ def test_build_gateway_two_manual_slots():
     b, w = build_bindings(apps, copy.deepcopy(apps), [_src([_rec("gw1111g111", serials=["ce1111g111", "ce2222g222"])])], None)
     assert _layout(b) == [("discovered", "gecloud:gw1111g111", 0)], _layout(b)
     assert b["inverters"][0]["serials"] == ["ce1111g111", "ce2222g222", "gw1111g111"]
-    assert w == [
+    warnings = [
         "Inverter slot 0: gecloud inverter ce1111g111 is also configured manually in apps.yaml - discovery is taking over this slot",
         "Inverter slot 1: also names ce2222g222, already configured in slot 0 - clearing this slot",
-    ], w
+    ]
+    assert w == warnings, w
+    # Stable on the next pass: the sticky slot 0 still matches, slot 1 is cleared again
+    again, w = build_bindings(apps, copy.deepcopy(apps), [_src([_rec("gw1111g111", serials=["ce1111g111", "ce2222g222"])])], b)
+    assert again == b and w == warnings, (again, w)
     print("PASS: gateway collapses two manual slots")
     return 0
 
@@ -293,6 +297,23 @@ def test_build_sticky_never_overrides_unrelated_manual():
     assert _layout(b) == [("manual", None, 0), ("manual", None, 1), ("manual", None, 2), ("manual", None, 3)], _layout(b)
     assert w == ["gecloud inverter gecloud:a11111 cannot be configured - all {} inverter slots are in use".format(MAX_INVERTERS)], w
     print("PASS: sticky slot never overrides an unrelated manual inverter")
+    return 0
+
+
+def test_build_displaced_sticky_waits_for_kept_sticky():
+    """Every previous placement that can keep its slot is placed before a displaced one looks for a free slot."""
+    first, _ = build_bindings({}, {}, [_src([_rec("a11111"), _rec("b11111")])], None)
+    assert slot_map(first) == {"gecloud:a11111": 0, "gecloud:b11111": 1}, slot_map(first)
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    expected = [("manual", None, 0), ("discovered", "gecloud:b11111", 1), ("discovered", "gecloud:a11111", 2)]
+    # Fresh path: the source reports both again
+    b, w = build_bindings(apps, copy.deepcopy(apps), [_src([_rec("a11111"), _rec("b11111")])], first)
+    assert _layout(b) == expected and w == [], (_layout(b), w)
+    # Retained path: the source is absent
+    b, w = build_bindings(apps, copy.deepcopy(apps), [], first)
+    assert _layout(b) == expected and w == [], (_layout(b), w)
+    assert b["inverters"][1] == first["inverters"][1] and b["inverters"][2] == dict(first["inverters"][0], slot=2), b["inverters"]
+    print("PASS: displaced sticky entry waits for the kept ones")
     return 0
 
 
@@ -435,6 +456,7 @@ def test_bindings_all(my_predbat=None):
     failures += test_build_no_release_on_empty_report()
     failures += test_build_retained_absent_source()
     failures += test_build_sticky_never_overrides_unrelated_manual()
+    failures += test_build_displaced_sticky_waits_for_kept_sticky()
     failures += test_build_duplicate_device_id()
     failures += test_build_hole_warns()
     failures += test_build_site_setting()

@@ -266,12 +266,20 @@ def _allocate(slots, placements, warnings):
     A sticky slot is honoured only when it is free, or manual and matching the entry by serial: a manual inverter
     that shares no serial with a discovered one is never changed. Otherwise the entry - fresh or retained - takes
     the normal path, and with no slot left it is dropped with the no-room warning.
+
+    Two passes: every sticky entry that can keep its slot is placed first, so a displaced one cannot take a free
+    slot a later sticky entry still owns. The displaced entries then take the normal path, ahead of new records.
     """
+    deferred = []
     for entry, sticky in placements:
         matched = [slot for slot in slots if slot["origin"] == "manual" and set(slot["serials"]) & set(entry["serials"])]
         if sticky is not None and sticky < len(slots) and (slots[sticky]["origin"] == "free" or any(slot is slots[sticky] for slot in matched)):
-            target = sticky
-        elif matched:
+            _place(slots, sticky, entry, matched, warnings)
+        else:
+            deferred.append(entry)
+    for entry in deferred:
+        matched = [slot for slot in slots if slot["origin"] == "manual" and set(slot["serials"]) & set(entry["serials"])]
+        if matched:
             target = matched[0]["slot"]
         else:
             target = next((slot["slot"] for slot in slots[:MAX_INVERTERS] if slot["origin"] == "free"), None)
