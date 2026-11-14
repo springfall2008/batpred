@@ -57,6 +57,7 @@ class DaemonPathsTestCase(unittest.TestCase):
         self._patch("GITNEXUS_RUNNER", base / "batpred" / ".gitnexus" / "run.cjs")
         self._patch("GITNEXUS_HEAD_FILE", base / "gitnexus-head")
         self._patch("MCP_CONFIG_FILE", base / "mcp-gitnexus.json")
+        self._patch("MEMORY_ENV_FILE", base / "agent-memory.env")
         self._patch("JOURNAL_BODY_FILE", base / "scratch" / "journal-pr-body.md")
 
     def _patch(self, name, value):
@@ -173,6 +174,16 @@ class EnsureTriagedTests(unittest.TestCase):
         """A comment containing the triage disclosure line counts as already triaged."""
         mock_run.return_value = MagicMock(stdout=json.dumps({"comments": [{"body": "This is an automated first-pass triage of..."}]}))
         self.assertTrue(triage_daemon.find_triage_comment(4720))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_find_triage_comment_true_when_the_disclosure_opens_capitalised(self, mock_run):
+        """The skill words its own opening line, and 46 of 62 sampled triage comments start with a
+        capital A. A case-sensitive match missed them, so swapping BOT_TRIAGED for BOT_PR (#5964)
+        or BOT_REVIEW (#5741) triaged the issue all over again; #5741 got a second comment."""
+        for opening in ("🤖 Automated first-pass triage — a maintainer will review before any action is taken.", "**Automated first-pass triage** — a maintainer will review before any action is taken."):
+            with self.subTest(opening=opening):
+                mock_run.return_value = MagicMock(stdout=json.dumps({"comments": [{"body": opening + "\n\nClassification: **enhancement**"}]}))
+                self.assertTrue(triage_daemon.find_triage_comment(4720))
 
     @patch("triage_daemon.subprocess.run")
     def test_find_triage_comment_false_when_no_match(self, mock_run):
@@ -512,6 +523,14 @@ class PermissionModelTests(unittest.TestCase):
     def test_triage_allowed_tools_still_contains_the_broad_gh_grant(self):
         """Sanity check that the refactor didn't drop the base allowlist's core entry."""
         self.assertIn("Bash(gh *)", triage_daemon.ALLOWED_TOOLS.split(","))
+
+    def test_every_investigating_flow_may_run_the_forward_replay_wrapper(self):
+        """The skills tell triage, follow-up, PR, review and cleanup runs to use tools/triage_replay.py; it is
+        allowed today only by the broad Bash(python3 *) rule, so narrowing that rule must not drop it silently."""
+        command = "python3 tools/triage_replay.py --yaml /s/predbat_debug.yaml --log /s/predbat.log --out /s/replay"
+        for name in ("ALLOWED_TOOLS", "ALLOWED_TOOLS_PR", "ALLOWED_TOOLS_REVIEW", "ALLOWED_TOOLS_CLEANUP"):
+            rules = getattr(triage_daemon, name).split(",")
+            self.assertTrue(any(rule.startswith("Bash(") and bash_rule_matches(rule, command) for rule in rules), name)
 
     def test_pr_disallowed_tools_still_blocks_dangerous_gh_subcommands(self):
         """Everything dangerous stays denied for the PR flow too."""
@@ -1245,6 +1264,16 @@ class GitnexusIndexTests(DaemonPathsTestCase):
         self.assertIn("analyze", commands[-1])
         self.assertEqual(triage_daemon.GITNEXUS_HEAD_FILE.read_text(), "abc1234")
 
+    def test_analyze_does_not_rewrite_tracked_files(self):
+        """A plain analyze rewrites AGENTS.md, CLAUDE.md and the GitNexus skills, which left
+        every flow on a dirty clone and made PR #5997's finished cleanup look unpushed."""
+        self._install_runner()
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.side_effect = [MagicMock(returncode=0, stdout="abc1234\n"), MagicMock(returncode=0, stdout="")]
+            triage_daemon.refresh_gitnexus_index()
+            commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn("--index-only", commands[-1])
+
     def test_analyze_is_skipped_when_head_is_unchanged(self):
         """analyze takes ~37s and sync_repo() runs before every flow, so an unguarded call
         would spend minutes an hour rebuilding an index for a tree that had not moved."""
@@ -1331,6 +1360,78 @@ class McpScopeTests(DaemonPathsTestCase):
         self.assertEqual(args[args.index("--mcp-config") + 1], str(triage_daemon.MCP_CONFIG_FILE))
 
 
+class SharedMemoryConfigTests(DaemonPathsTestCase):
+    """The shared-memory server joins the pinned config only from the bot's own credentials file."""
+
+    URL = "https://example.supabase.co/functions/v1/agent-memory"
+    TOKEN = "amm_" + "b" * 43
+
+    def write_env(self, text, mode=0o600):
+        triage_daemon.MEMORY_ENV_FILE.write_text(text)
+        triage_daemon.MEMORY_ENV_FILE.chmod(mode)
+
+    def write_config(self, gitnexus="/usr/local/bin/gitnexus"):
+        with patch("triage_daemon.shutil.which", return_value=gitnexus):
+            return triage_daemon.write_mcp_config()
+
+    def test_credentials_add_the_server_beside_gitnexus(self):
+        self.write_env(f"AGENT_MEMORY_URL={self.URL}\nAGENT_MEMORY_TOKEN={self.TOKEN}\n")
+        self.assertTrue(self.write_config())
+        servers = json.loads(triage_daemon.MCP_CONFIG_FILE.read_text())["mcpServers"]
+        self.assertEqual(sorted(servers), ["gitnexus", "shared-memory"])
+        self.assertEqual(servers["shared-memory"], {"type": "http", "url": self.URL, "headers": {"Authorization": f"Bearer {self.TOKEN}"}})
+
+    def test_the_config_holding_the_token_is_owner_only(self):
+        self.write_env(f"AGENT_MEMORY_URL={self.URL}\nAGENT_MEMORY_TOKEN={self.TOKEN}\n")
+        self.write_config()
+        self.assertEqual(triage_daemon.MCP_CONFIG_FILE.stat().st_mode & 0o777, 0o600)
+
+    def test_shell_exports_are_ignored(self):
+        """An operator's personal all-scopes token in the environment must never become the bot's."""
+        with patch.dict(os.environ, {"AGENT_MEMORY_URL": self.URL, "AGENT_MEMORY_TOKEN": self.TOKEN}):
+            self.write_config()
+        servers = json.loads(triage_daemon.MCP_CONFIG_FILE.read_text())["mcpServers"]
+        self.assertEqual(list(servers), ["gitnexus"])
+
+    def test_memory_alone_still_writes_a_config(self):
+        """No gitnexus binary no longer means no config when memory is configured."""
+        self.write_env(f"AGENT_MEMORY_URL={self.URL}\nAGENT_MEMORY_TOKEN={self.TOKEN}\n")
+        self.assertTrue(self.write_config(gitnexus=None))
+        self.assertEqual(list(json.loads(triage_daemon.MCP_CONFIG_FILE.read_text())["mcpServers"]), ["shared-memory"])
+        self.assertIn("--strict-mcp-config", triage_daemon.claude_mcp_args())
+
+    def test_comments_export_and_quotes_are_tolerated(self):
+        self.write_env(f"# bot credentials\nexport AGENT_MEMORY_URL='{self.URL}'\nAGENT_MEMORY_TOKEN=\"{self.TOKEN}\"\nOTHER=x\n")
+        self.assertEqual(triage_daemon.read_memory_env(), {"AGENT_MEMORY_URL": self.URL, "AGENT_MEMORY_TOKEN": self.TOKEN})
+
+    def test_an_unusable_file_is_reported_not_used(self):
+        for text in (f"AGENT_MEMORY_URL={self.URL}\n", f"AGENT_MEMORY_URL=ftp://x\nAGENT_MEMORY_TOKEN={self.TOKEN}\n", f"AGENT_MEMORY_URL={self.URL}\nAGENT_MEMORY_TOKEN=sk-nope\n"):
+            with self.subTest(text=text):
+                self.write_env(text)
+                with patch("builtins.print") as mock_print:
+                    self.assertIsNone(triage_daemon.read_memory_env())
+                self.assertIn("without shared memory", mock_print.call_args.args[0])
+
+    def test_a_world_readable_file_is_warned_about(self):
+        self.write_env(f"AGENT_MEMORY_URL={self.URL}\nAGENT_MEMORY_TOKEN={self.TOKEN}\n", mode=0o644)
+        with patch("builtins.print") as mock_print:
+            self.assertIsNotNone(triage_daemon.read_memory_env())
+        self.assertIn("chmod 600", mock_print.call_args.args[0])
+
+    def test_an_explicit_path_overrides_the_default(self):
+        other = Path(self.tmp_dir.name) / "elsewhere.env"
+        other.write_text(f"AGENT_MEMORY_URL={self.URL}\nAGENT_MEMORY_TOKEN={self.TOKEN}\n")
+        other.chmod(0o600)
+        with patch("triage_daemon.shutil.which", return_value=None):
+            self.assertTrue(triage_daemon.write_mcp_config(str(other)))
+        self.assertIn("shared-memory", json.loads(triage_daemon.MCP_CONFIG_FILE.read_text())["mcpServers"])
+
+    def test_inherited_memory_variables_are_stripped_from_claude(self):
+        with patch.dict(os.environ, {"AGENT_MEMORY_TOKEN": "amm_operator", "AGENT_MEMORY_URL": self.URL, "AGENT_MEMORY_DB_URL": "postgres://x"}):
+            env = triage_daemon.claude_env()
+        self.assertFalse([k for k in env if k.startswith("AGENT_MEMORY_")])
+
+
 class McpPermissionTests(unittest.TestCase):
     """The second, independent layer: even if another server were loaded, its tools are not
     permitted. Under dontAsk anything not named in the allowlist is denied."""
@@ -1342,6 +1443,15 @@ class McpPermissionTests(unittest.TestCase):
         for name in self.FLOWS:
             with self.subTest(flow=name):
                 self.assertIn("mcp__gitnexus__*", getattr(triage_daemon, name).split(","))
+
+    def test_every_flow_may_use_shared_memory_but_never_delete_from_it(self):
+        """Recall and store, yes; delete and prune are denied, and deny wins over allow."""
+        for name in self.FLOWS:
+            with self.subTest(flow=name):
+                self.assertIn("mcp__shared-memory__*", getattr(triage_daemon, name).split(","))
+                denied = getattr(triage_daemon, "DIS" + name).split(",")
+                self.assertIn("mcp__shared-memory__delete", denied)
+                self.assertIn("mcp__shared-memory__prune", denied)
 
     def test_no_flow_gets_a_blanket_mcp_grant(self):
         """A blanket grant would reach the operator's Slack and Drive servers."""
@@ -2067,6 +2177,36 @@ class ReporterRepliedSinceBotTests(unittest.TestCase):
         """A waiting_for_user a human applied, with no bot comment, is not the bot's to clear."""
         mock_run.return_value = MagicMock(stdout=comments_json(("maintainer", "please attach a log"), ("reporter", "attached")))
         self.assertFalse(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_reporter_reply_after_a_capitalised_triage_comment(self, mock_run):
+        """Most real triage comments open "Automated first-pass triage". Missing one left the issue
+        looking as if the bot had never spoken, so the reporter's answer never woke it."""
+        mock_run.return_value = MagicMock(stdout=comments_json(("maintainer", "🤖 Automated first-pass triage — a maintainer will review before any action is taken."), ("reporter", "log attached")))
+        self.assertTrue(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
+
+
+class IsBotCommentTests(unittest.TestCase):
+    """Tests for is_bot_comment()."""
+
+    def test_recognises_each_disclosure_line_whatever_its_case(self):
+        """The skills word their opening lines themselves, so the case of the disclosure varies."""
+        for body in (
+            "🤖 Automated first-pass triage — a maintainer will review before any action is taken.",
+            "🤖 This is an automated follow-up triage review (a maintainer will review before any action is taken).",
+            "**Automated me-too check** - this looks like a different problem.",
+        ):
+            with self.subTest(body=body):
+                self.assertTrue(triage_daemon.is_bot_comment({"body": body}))
+
+    def test_recognises_the_attachment_nudge(self):
+        """The nudge from the issue-attachment-nudge workflow is long and mentions .log and .yaml, so it must not be taken for a me-too post."""
+        import issue_attachment_nudge
+
+        self.assertTrue(triage_daemon.is_bot_comment({"body": issue_attachment_nudge.render(issue_attachment_nudge.REASON_OFFER)}))
+
+    def test_an_ordinary_comment_is_not_the_bots(self):
+        self.assertFalse(triage_daemon.is_bot_comment({"body": "Same here, my battery stopped charging too."}))
 
 
 class WakeWaitingIssueTests(unittest.TestCase):

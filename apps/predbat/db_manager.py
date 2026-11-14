@@ -17,6 +17,7 @@ from multiple async contexts.
 
 from datetime import timedelta, datetime, timezone
 import asyncio
+import inspect
 import time
 import traceback
 import threading
@@ -83,7 +84,7 @@ class DatabaseManager(ComponentBase):
             try:
                 queue_id, command, info = item[0], item[1], item[2]
                 if command == "get_history":
-                    history = self.db_engine._get_history_db(info["sensor"], info["now"], info["days"])
+                    history = self.get_history_from_engine(info)
                     self.queue_results[queue_id] = history
                     self.return_event.set()  # Notify that the result is ready
                 elif command == "set_state":
@@ -183,10 +184,42 @@ class DatabaseManager(ComponentBase):
         item = {"last_changed": now_utc.strftime(TIME_FORMAT_DB), "state": state, "attributes": attributes}
         return item
 
-    def get_history_db(self, sensor, now, days=30):
+    def get_history_db(self, sensor, now, days=30, from_time=None):
         """
         Get history but run it from the DB thread
+
+        from_time, when given, is the window start and overrides days (HAHistory's refresh asks
+        only for what is newer than its last sample).
         """
         # Queue the request using IPC and wait for the result
-        result = self.send_via_ipc("get_history", {"sensor": sensor, "now": now, "days": days}, expect_response=True)
+        result = self.send_via_ipc("get_history", {"sensor": sensor, "now": now, "days": days, "from_time": from_time}, expect_response=True)
         return result
+
+    def get_history_from_engine(self, info):
+        """
+        Run a queued get_history request against the database engine (DB thread only).
+
+        from_time is passed only to an engine whose _get_history_db accepts it. A replacement
+        engine written before it existed would raise TypeError, and an exception here posts no
+        result, so the caller would wait out IPC_TIMEOUT on every refresh. Without it the engine
+        reads the whole days window, a superset the caller already de-duplicates.
+        """
+        from_time = info.get("from_time")
+        if from_time is not None and self.engine_accepts_from_time():
+            return self.db_engine._get_history_db(info["sensor"], info["now"], info["days"], from_time=from_time)
+        return self.db_engine._get_history_db(info["sensor"], info["now"], info["days"])
+
+    def engine_accepts_from_time(self):
+        """
+        True when the database engine's _get_history_db takes a from_time argument (checked once per engine).
+        """
+        engine = self.db_engine
+        if getattr(self, "from_time_engine", None) is not engine:
+            try:
+                parameters = inspect.signature(engine._get_history_db).parameters
+                accepts = "from_time" in parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values())
+            except (TypeError, ValueError):
+                accepts = False
+            self.from_time_engine = engine
+            self.from_time_supported = accepts
+        return self.from_time_supported

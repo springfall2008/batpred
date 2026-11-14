@@ -14,6 +14,7 @@ once; a component supplies only what is specific to its charger.
 
 from datetime import datetime, timedelta, timezone
 
+from component_base import writes
 from utils import parse_car_plan_windows, in_car_plan_window, strptime_aware
 
 
@@ -358,6 +359,7 @@ class CarChargerControl:
                 )
             )
 
+    @writes
     async def charger_control_hand_to_octopus(self, handle, charge):
         """Let go of a charger Octopus is taking over, without starting a charge.
 

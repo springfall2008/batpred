@@ -20,6 +20,7 @@ Evidence is car_charging_now when it is a real entity (2 minute grace), otherwis
 when the car is inside the CT clamp (10 minute grace), otherwise nothing. Only slots Octopus
 Intelligent charging built are affected - Predbat-led charging is never cancelled.
 """
+
 import copy
 import shutil
 import tempfile

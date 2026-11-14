@@ -7,7 +7,9 @@
 // C++ prediction kernel - a fast mirror of Prediction.run_prediction() in prediction.py.
 //
 // PARITY RULE: This file must produce bit-identical results to the Python engine
-// for the scenarios it supports (see prediction_kernel.py capability check).
+// for the scenarios it supports (see prediction_kernel.py capability check). The one
+// documented exception is the 4dp rounding of the scalar results (round4_fast), which can
+// differ from Python's round(x, 4) by one unit in the 4th decimal place.
 // Any behavioural change to the hot loop in prediction.py MUST be mirrored here
 // and PK_PARITY_REVISION below AND KERNEL_PARITY_REVISION in prediction_kernel.py must
 // both be bumped. A mismatch at load time disables the kernel (Python fallback).
@@ -57,9 +59,12 @@
 // export's target is raised to (as a whole percent, rounded down), mirroring floor_export_limits in
 // prediction_batch.py - and PkBatchJob::phase, so a batch can floor a job from its nominal twin's
 // export_end_soc_out within one call.
-// ABI 11: the car slot cancel table (cancel_count to cancel_penalty_rate) follows car_rate_flat in PkContext.
-// ABI 12: cancel_floor_kw, each cancellable slot's car charge rate, follows cancel_penalty_rate in PkContext.
-#define PK_ABI_VERSION 12
+// ABI 11: the ten scalar PkResult fields from final_metric to final_carbon_g are returned already
+// rounded to 4dp (round4_fast), and Python no longer rounds them. The layout is unchanged, but a binary
+// from before this returns them unrounded, so it must be refused rather than read.
+// ABI 12 (car cancel branch): the car slot cancel table (cancel_count to cancel_penalty_rate) follows car_rate_flat in PkContext.
+// ABI 13: both of the above, plus cancel_floor_kw, each cancellable slot's car charge rate, after cancel_penalty_rate in PkContext.
+#define PK_ABI_VERSION 13
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
@@ -76,11 +81,16 @@
 // dispatch is kept and the non-car import pays PK_RUN_EVERY minutes of each half hour at the worst-case rate.
 // Parity 19 (car cancel branch): an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted.
 // Parity 20 (car cancel branch): a cancelled step is charged the buy-back penalty on at least the car's full charge rate (cancel_floor_kw).
-// Parity 21: both of the above together; a cancelled step is not a confirmed run's dispatch, so it carries no dispatch_risk.
-#define PK_PARITY_REVISION 21
+// Parity 21 (car cancel branch): both of the above together; a cancelled step is not a confirmed run's dispatch, so it carries no dispatch_risk.
+// Parity 20 (main): below a manual_soc or alert floor the keep penalty's import rate, and above a manual_soc_max
+// ceiling its export rate, is at least PK_KEEP_TARGET_MIN_RATE, so a target in a free or negative-price
+// slot still costs something to miss (#5162).
+// Parity 22: the car cancel branch's parity 21 merged with main's parity 20.
+#define PK_PARITY_REVISION 22
 #define PK_MAX_CARS 8
 #define PK_CANCEL_MAX_SLOTS 64 // Must equal car_cancel.py CAR_CANCEL_MAX_SLOTS (it sizes PkContext's cancel arrays), so a change to either needs an ABI bump - the cancelled set is a 64-bit mask
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
+#define PK_KEEP_TARGET_MIN_RATE 1.0 // const.py KEEP_TARGET_MIN_RATE
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
 #define PK_EXPORT_MODE_FREEZE 1 // const.py EXPORT_MODE_FREEZE
 #define PK_EXPORT_MODE_IDLE 2   // const.py EXPORT_MODE_IDLE
@@ -114,6 +124,18 @@ double round_py(double value, int ndigits)
     char buf[64];
     snprintf(buf, sizeof(buf), "%.*f", ndigits, value);
     return strtod(buf, nullptr);
+}
+
+// The 4dp rounding the result fields are returned with (Python's kernel_result_tuple used to apply
+// round(x, 4) to each). Scale, round half to even (nearbyint in the default rounding mode, as Python's
+// round(float) does) and scale back - the division is correctly rounded, so the result is the double
+// nearest k / 10^4. Unlike round_py this rounds the scaled double rather than the exact binary value,
+// so a value within an ulp of a halfway point can land one unit in the 4th decimal place away from
+// round(x, 4) - about 1 value in 10,000 on real plans, never enough to move one. That is accepted
+// for the speed: round_py is ~96ns, this is a few, and ten fields are rounded per simulation.
+inline double round4_fast(double value)
+{
+    return std::nearbyint(value * 1e4) / 1e4;
 }
 
 // Mirror of utils.py calc_percent_limit() for a scalar value
@@ -1508,13 +1530,16 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
         // Metric keep - prediction.py:1100-1102
         if (best_soc_keep > 0 && soc <= best_soc_keep) {
-            metric_keep += (best_soc_keep - soc) * import_rate * keep_minute_scaling * step / 60.0;
+            // A manual or alert floor still costs something to miss at a free or negative rate (#5162)
+            const double keep_rate = (alert_keep > 0) ? std::max(import_rate, PK_KEEP_TARGET_MIN_RATE) : import_rate;
+            metric_keep += (best_soc_keep - soc) * keep_rate * keep_minute_scaling * step / 60.0;
         }
 
         // Metric keep max - pretend the excess above the ceiling should have been exported instead
         // of held - mirrors prediction.py's best_soc_max block right after the floor.
         if (best_soc_max >= 0 && soc >= best_soc_max) {
-            metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0;
+            // Likewise a ceiling still costs something to break at a free or negative export rate (#5162)
+            metric_keep += (soc - best_soc_max) * std::max(export_rate, PK_KEEP_TARGET_MIN_RATE) * keep_minute_scaling * step / 60.0;
         }
 
         // Import/export accounting - prediction.py:1104-1143
@@ -1585,16 +1610,17 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         }
     }
 
-    out->final_metric = final_metric;
-    out->import_kwh_battery = final_import_kwh_battery;
-    out->import_kwh_house = final_import_kwh_house;
-    out->export_kwh = final_export_kwh;
-    out->soc_min = soc_min;
-    out->final_soc = final_soc;
-    out->battery_cycle = final_battery_cycle;
-    out->metric_keep = final_metric_keep;
-    out->final_iboost = final_iboost_kwh;
-    out->final_carbon_g = final_carbon_g;
+    // Returned rounded to 4dp (see round4_fast and ABI 11), so the Python side copies them as they are
+    out->final_metric = round4_fast(final_metric);
+    out->import_kwh_battery = round4_fast(final_import_kwh_battery);
+    out->import_kwh_house = round4_fast(final_import_kwh_house);
+    out->export_kwh = round4_fast(final_export_kwh);
+    out->soc_min = round4_fast(soc_min);
+    out->final_soc = round4_fast(final_soc);
+    out->battery_cycle = round4_fast(final_battery_cycle);
+    out->metric_keep = round4_fast(final_metric_keep);
+    out->final_iboost = round4_fast(final_iboost_kwh);
+    out->final_carbon_g = round4_fast(final_carbon_g);
     for (int32_t car_n = 0; car_n < PK_MAX_CARS; car_n++) {
         out->car_soc_next[car_n] = car_soc_next[car_n];
     }

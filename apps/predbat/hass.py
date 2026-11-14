@@ -51,7 +51,7 @@ def write_git_version_marker():
 write_git_version_marker()
 
 import predbat
-from utils import load_apps_yaml, predbat_log_count, predbat_log_name, rotate_predbat_logs
+from utils import describe_apps_yaml_error, load_apps_yaml, load_secrets, predbat_log_count, predbat_log_name, rotate_predbat_logs
 import time
 from datetime import datetime, timedelta, timezone
 from multiprocessing import set_start_method
@@ -290,8 +290,14 @@ class Hass(LogRedaction):
         # Load apps.yaml (resolving !secret) through the shared loader
         try:
             self.args, self.secrets = load_apps_yaml(apps_file=self.apps_file, log=self.log, secrets_file=self.secrets_file)
-        except yaml.YAMLError as exc:
-            print(exc)
+        except (yaml.YAMLError, KeyError, OSError) as exc:
+            # Logged rather than printed so the reason reaches predbat.log, not only the add-on
+            # console - the process exits before the web interface starts, so a bare print left
+            # predbat.log showing nothing but the restart loop (GH#5530). The secret names let
+            # the message repeat a mistyped reference without echoing an unknown tag that might
+            # be a pasted credential.
+            secret_names = load_secrets(log=lambda message, **kwargs: None, secrets_file=self.secrets_file).keys()
+            self.log(describe_apps_yaml_error(exc, apps_file=self.apps_file, secret_names=secret_names), quiet=False)
             sys.exit(1)
 
         # Both args and secrets have just been populated, so the redaction pattern built from them

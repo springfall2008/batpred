@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from component_base import ComponentBase
+from billing import BillingReader
 from const import TIME_FORMAT
 from utils import (
     filter_payment_method,
@@ -340,6 +341,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.flextras_property_id = None
         self.flextras_sessions = []
         self.flextras_fetched_at = None
+        # What the supplier actually billed, half-hour by half-hour, published as sensor.predbat_billing
+        self.billing = BillingReader(self, "kraken", f"billing_{account_id}")
         self.flextras_last_status = None
         # Whether this process has bound octopus_free_electricity to the Flextras sensor - what the discovery
         # programme record follows (build_discovery()). Never persisted: the binding itself is per process.
@@ -443,7 +446,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         try:
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.post(url, json={"query": query}, headers=headers) as response:
                     if response.status != 200:
                         # Include the response body — Kraken returns GraphQL validation errors
@@ -1016,7 +1019,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         pages = 0
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 while url and pages < 3:
                     async with session.get(url, auth=auth, headers=headers) as response:
                         if response.status != 200:
@@ -1190,7 +1193,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         http_error_status = None
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url) as response:
                     if response.status != 200:
                         http_error_status = response.status
@@ -1747,7 +1750,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         try:
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url, headers=headers) as response:
                     status = response.status
                     body = await response.json(content_type=None) if status == 200 else await response.text()
@@ -1907,6 +1910,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         """
         if first:
             await self.load_kraken_cache()
+            await self.billing.load()
 
         had_success = False
 
@@ -1963,6 +1967,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # Publish rate sensors from current in-memory data (cache or fresh)
         if self.current_tariff and (first or rates_due):
             self._publish_rate_sensors()
+
+        # Half-hourly billing for the MPANs Predbat models, refreshed every few hours
+        await self.async_update_billing(first)
 
         # Fetch SmartFlex intelligent dispatches for any known devices, then publish + wire them.
         # dispatch_due stays permanently true for accounts with no devices (dispatch_fetched_at
@@ -2044,6 +2051,27 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             return False
 
         return True
+
+    async def async_update_billing(self, first):
+        """Read the half-hourly billing for the modelled import/export MPANs when due, and publish sensor.predbat_billing.
+
+        Export is read on the export account when it differs from the import one. KrakenAPI's GraphQL
+        query already returns None for any response carrying errors, so a partial error is a failed read.
+        """
+        if not self.current_tariff or not self.import_mpan:
+            return
+        now_utc = datetime.now(timezone.utc)
+        self.billing.random_delay = self.get_arg("plan_random_delay", 0) > 0
+        # The first run only publishes what was cached, keeping a restart free of API calls; the read follows a cycle later
+        if not first and self.billing.due(now_utc):
+            mpans = {"import": (self.account_id, self.import_mpan), "export": (self.export_account_id or self.account_id, self.export_mpan) if self.export_mpan else None}
+            await self.billing.read(self.async_graphql_query, mpans, now_utc, self.provider, app="kraken")
+        elif first:
+            self.billing.publish(self.provider, now_utc, app="kraken")
+
+    async def final(self):
+        """Cancel a background billing read that is still running."""
+        self.billing.stop()
 
 
 async def test_kraken_api(

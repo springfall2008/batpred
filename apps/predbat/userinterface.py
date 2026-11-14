@@ -24,6 +24,7 @@ import functools
 import io
 import itertools
 import json
+import math
 import yaml
 import re
 import copy
@@ -37,7 +38,7 @@ from const import (
     MANUAL_TIME_MAX_MINUTES,
     REPEAT_FULL_LOG_SECONDS,
 )
-from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
+from config import APPS_SCHEMA, CONFIG_API_OVERRIDE, CURRENCY_UNITS
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
 
@@ -87,6 +88,26 @@ def construct_numpy_dtype(loader, node):
 
 DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:numpy.dtype", construct_numpy_dtype)
 DEBUG_YAML_LOADER = DebugYamlLoader
+
+# Parsed debug dumps keyed by (path, mtime, size). None, the default, turns the cache off: Predbat replays
+# a dump once, so only the unit tests - which replay the same few dumps dozens of times, at about a second a
+# parse - switch it on. read_debug_yaml() copies everything it takes from the parsed dict, so a cached
+# parse is never changed by a replay.
+DEBUG_YAML_PARSE_CACHE = None
+
+
+def load_debug_yaml_file(filename):
+    """Parse a debug dump with DEBUG_YAML_LOADER, through DEBUG_YAML_PARSE_CACHE when that is switched on."""
+    cache = DEBUG_YAML_PARSE_CACHE
+    if cache is None:
+        with open(filename, "r") as file:
+            return yaml.load(file, Loader=DEBUG_YAML_LOADER)
+    stat = os.stat(filename)
+    key = (os.path.abspath(filename), stat.st_mtime_ns, stat.st_size)
+    if key not in cache:
+        with open(filename, "r") as file:
+            cache[key] = yaml.load(file, Loader=DEBUG_YAML_LOADER)
+    return cache[key]
 
 
 class DebugYamlDumper(yaml.Dumper):
@@ -207,7 +228,8 @@ class UserInterface:
                 value = None
             index = None
 
-        if index and value is not None:
+        if index and value is not None and not APPS_SCHEMA.get(arg, {}).get("single_value_ok", False):
+            # A single_value_ok item (#5369) may be one value for every entry, so reading it by index is not a mistake
             self.log("Warn: item {} is incorrectly setup, element {} has value {}".format(arg, index, value))
 
         # If we have a list of items get each and add them up or return them as a list
@@ -350,10 +372,16 @@ class UserInterface:
                         self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
                         value = None
             elif overrides:
+                # An override with no index of a single_value_ok item (#5369) is one value for every entry, as
+                # the item itself can be, so it applies whichever index is read
+                broadcast = APPS_SCHEMA.get(arg, {}).get("single_value_ok", False)
                 for override in overrides:
                     override_index = override.get("index", 0)
                     if override_index is None:
-                        override_index = 0
+                        if broadcast:
+                            override_index = index
+                        else:
+                            override_index = 0
                     if override_index == index:
                         value = override.get("value", value)
                         self.log("Note: API Overridden arg {} value {}".format(arg, value))
@@ -602,6 +630,43 @@ class UserInterface:
             return value, default
         return None, default
 
+    def apply_currency_scale(self):
+        """
+        Multiply the min/max of every money input_number in CONFIG_ITEMS by apps.yaml currency_scale.
+
+        Every money setting is in the minor currency unit and its range was chosen in pence, so for a
+        currency whose minor unit is worth far less (CZK haléř is ~1/29p) the top of the range is too
+        small to be a meaningful threshold (#6155). Only the range moves: defaults and stored values are
+        left alone, so turning this on never changes a setting by itself. A scale below 1 would narrow the
+        ranges and clamp settings already made, so it is refused. Runs once from reset(), before the
+        entities are created, so the HA input_number and the web /config slider both get the scaled range.
+        """
+        scale = self.args.get("currency_scale", 1)
+        try:
+            scale = float(scale)
+        except (ValueError, TypeError):
+            self.log("Warn: currency_scale {} in apps.yaml is not a number - ignoring it".format(scale))
+            scale = 1.0
+        if not math.isfinite(scale):
+            self.log("Warn: currency_scale {} in apps.yaml is not a finite number - ignoring it".format(scale))
+            scale = 1.0
+        elif scale < 1:
+            self.log("Warn: currency_scale {} in apps.yaml is below 1, which would narrow the ranges of money settings - ignoring it".format(scale))
+            scale = 1.0
+        self.currency_scale = scale
+        if scale == 1:
+            return
+
+        for item in self.CONFIG_ITEMS:
+            if item.get("type") != "input_number" or item.get("unit") not in CURRENCY_UNITS:
+                continue
+            for bound in ("min", "max"):
+                value = round(item[bound] * scale, 4)
+                if value == int(value):
+                    value = int(value)
+                item[bound] = value
+        self.log("Scaled the range of money settings by currency_scale {}".format(scale))
+
     def convert_currency_unit(self, unit):
         """
         Convert a config item unit string (using the default £/p symbols) into the
@@ -696,6 +761,27 @@ class UserInterface:
                                 "supported_features": 1,
                             },
                         )
+
+    def expose_config_min(self, name, floor):
+        """
+        Raise the min an input_number config item publishes to a runtime floor, or put back its declared min once the floor drops below it.
+
+        The min goes onto the item itself, so the HA entity's attributes and the web /config slider both
+        follow it, and load_user_config() clamps to it. The value is left alone: raising it is the caller's
+        decision. Republished only when the min actually changes (GH#5995).
+        """
+        item = self.config_index.get(name, None)
+        if not item or item.get("type") != "input_number":
+            return
+        declared_min = item.setdefault("declared_min", item["min"])
+        new_min = min(max(declared_min, floor or 0), item["max"])
+        if isinstance(new_min, float) and new_min == int(new_min):
+            new_min = int(new_min)
+        if new_min == item["min"]:
+            return
+        item["min"] = new_min
+        if item.get("value", None) is not None:
+            self.expose_config(name, item["value"], force_ha=True)
 
     def user_config_item_enabled(self, item):
         """
@@ -860,8 +946,7 @@ class UserInterface:
         """
         debug = {}
         if os.path.exists(filename):
-            with open(filename, "r") as file:
-                debug = yaml.load(file, Loader=DEBUG_YAML_LOADER)
+            debug = load_debug_yaml_file(filename)
         else:
             self.log("Warn: Debug file {} not found".format(filename))
             return
@@ -870,8 +955,15 @@ class UserInterface:
         if schema_version > DEBUG_SCHEMA_VERSION:
             self.log("Warn: Debug file {} was written by a newer Predbat (schema {} > {}) - replaying it may misread fields that have changed shape".format(filename, schema_version, DEBUG_SCHEMA_VERSION))
 
+        derived_saved = {}
         for key in debug:
             if key == "debug_schema_version":
+                continue
+            # A value now derived by a property (manual_all_times) is not restored: the instance copy would be
+            # ignored on reads but still walked by anything iterating __dict__, such as the next debug dump. Its
+            # saved value is checked against the derived one once everything it is derived from has loaded
+            if isinstance(getattr(type(self), key, None), property):
+                derived_saved[key] = debug[key]
                 continue
             if key not in ["CONFIG_ITEMS", "inverters"]:
                 self.__dict__[key] = copy.deepcopy(debug[key])
@@ -904,12 +996,19 @@ class UserInterface:
             self.plan_preclip[3] = export_limits_from_stored(self.plan_preclip[3])
             self.plan_preclip = tuple(self.plan_preclip)
 
+        # A saved value that disagrees with what is derived means the dump's state was out of step when it was
+        # written, or that the dump has been edited since - either way, what replays is not what was planned live
+        for key, saved in derived_saved.items():
+            derived = getattr(self, key)
+            if sorted(saved or []) != sorted(derived or []):
+                self.log("Warn: Debug file {} saved {} as {} but it derives as {} from the rest of the file - the replay uses the derived value".format(filename, key, saved, derived))
+
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)
             if current:
                 # print("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                 if current.get("value", None) != item.get("value", None):
-                    current["value"] = item.get("value", None)
+                    current["value"] = copy.deepcopy(item.get("value", None))
         self.log("Restored debug settings - minutes now {}".format(self.minutes_now))
 
     def create_debug_yaml(self, write_file=True):
@@ -935,6 +1034,9 @@ class UserInterface:
                         debug[key] = mask_secret_args(self.__dict__[key])
                     else:
                         debug[key] = self.__dict__[key]
+        # Derived from the per-type manual time lists rather than stored, so not in __dict__, but still written for
+        # an older Predbat replaying this dump, which reads it rather than deriving it
+        debug["manual_all_times"] = self.manual_all_times
         inverters_debug = []
         for inverter in self.inverters:
             inverter_debug = {}

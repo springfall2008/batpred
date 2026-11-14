@@ -90,6 +90,7 @@ CALCULATE_PLAN_REBUILT = (
     "metric_load_divergence",
     "plan_last_duration_seconds",
     "car_cancel_keys",
+    "charge_keep_target",
 )
 
 
@@ -606,7 +607,6 @@ def test_compare(my_predbat):
     pb.manual_freeze_charge_times = None
     pb.manual_freeze_export_times = None
     pb.manual_demand_times = None
-    pb.manual_all_times = None
     pb.octopus_intelligent_charging = False
     pb.iboost_plan = ["stale_plan_from_live_tariff"]
 
@@ -655,7 +655,6 @@ def test_compare(my_predbat):
     pb.manual_freeze_charge_times = None
     pb.manual_freeze_export_times = None
     pb.manual_demand_times = None
-    pb.manual_all_times = None
     pb.octopus_intelligent_charging = False
     pb.iboost_plan = ["stale_plan_from_live_tariff"]
     pb.plan_iboost_smart = lambda: tariff_plan_calls.append(1) or []

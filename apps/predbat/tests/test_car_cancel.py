@@ -151,7 +151,7 @@ def test_car_cancel_slots(my_predbat):
 
 def test_full_car_not_cancellable(my_predbat):
     """A car already at its charge limit keeps the hard block, so cancelling its slot is never free; a held one keeps its forced slots."""
-    names = ("num_cars", "car_charging_slots", "car_charging_now_slots", "car_planned_by_predbat", "car_force_holdable", "car_force_hold_until", "minutes_now", "car_charging_soc", "car_charging_limit", "car_cancel_keys", "car_charging_from_battery", "export_window_best", "calculate_best_export", "calculate_export_oncharge", "manual_all_times", "iboost_enable")
+    names = ("num_cars", "car_charging_slots", "car_charging_now_slots", "car_planned_by_predbat", "car_force_holdable", "car_force_hold_until", "minutes_now", "car_charging_soc", "car_charging_limit", "car_cancel_keys", "car_charging_from_battery", "export_window_best", "calculate_best_export", "calculate_export_oncharge", "manual_charge_times", "manual_export_times", "manual_demand_times", "manual_freeze_charge_times", "manual_freeze_export_times", "iboost_enable")
     saved = {name: copy.deepcopy(getattr(my_predbat, name)) for name in names}
     saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
     try:
@@ -175,7 +175,7 @@ def test_full_car_not_cancellable(my_predbat):
             setattr(my_predbat, name, value)
 
 
-GATE_NAMES = ("num_cars", "car_charging_slots", "car_charging_now_slots", "car_planned_by_predbat", "car_force_holdable", "car_force_hold_until", "minutes_now", "car_cancel_keys", "car_charging_from_battery", "export_window_best", "calculate_best_export", "calculate_export_oncharge", "manual_all_times", "iboost_enable")
+GATE_NAMES = ("num_cars", "car_charging_slots", "car_charging_now_slots", "car_planned_by_predbat", "car_force_holdable", "car_force_hold_until", "minutes_now", "car_cancel_keys", "car_charging_from_battery", "export_window_best", "calculate_best_export", "calculate_export_oncharge", "manual_charge_times", "manual_export_times", "manual_demand_times", "manual_freeze_charge_times", "manual_freeze_export_times", "iboost_enable")
 
 
 def _gate_setup(my_predbat, slots, planned, switch=True):
@@ -191,7 +191,12 @@ def _gate_setup(my_predbat, slots, planned, switch=True):
     my_predbat.export_window_best = [{"start": 60, "end": 90, "average": 10.0}]
     my_predbat.calculate_best_export = True
     my_predbat.calculate_export_oncharge = True
-    my_predbat.manual_all_times = []
+    # manual_all_times is derived from these, so clearing them leaves no manual override
+    my_predbat.manual_charge_times = []
+    my_predbat.manual_export_times = []
+    my_predbat.manual_demand_times = []
+    my_predbat.manual_freeze_charge_times = []
+    my_predbat.manual_freeze_export_times = []
     my_predbat.iboost_enable = False
     _set_switch(my_predbat, switch)
     my_predbat.car_cancel_keys = frozenset((s.car_n, s.index) for s in my_predbat.car_cancel_slots())
