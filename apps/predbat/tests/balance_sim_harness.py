@@ -96,10 +96,10 @@ class Scenario:
     seed: int = 1
     # (minute, W) changes to the house load (discharge) or PV surplus (charge), applied from that minute on
     steps: list = field(default_factory=list)
-    # Battery temperature in C per inverter, and the battery_temperature_discharge_curve / _charge_curve Predbat
-    # is configured with ({temperature: C-rate}); empty means no temperature derating is configured
-    temperatures: list = None
-    temperature_curve: dict = field(default_factory=dict)
+    # Claim every inverter's rate in the intent at its maximum, as execute_plan does in a charge window (owner
+    # "charge") or an export window (owner "export") - the path on which the capacity guards reason about the
+    # claim rather than the snapshot's ceiling. Off, the intent is a demand slot with nothing claimed.
+    claim_rates: bool = False
 
     def demand_at(self, minute):
         """
@@ -289,8 +289,7 @@ def run_scenario(my_predbat, scenario):
     """
     rng = random.Random(scenario.seed)
     count = len(scenario.soc)
-    temperatures = scenario.temperatures or [20.0] * count
-    fleet = [FleetInverter(scenario.soc_max, rate_max=scenario.rate_max, inverter_limit=max(5000, scenario.rate_max), rate_min=scenario.rate_min, temperature=temperatures[index]) for index in range(count)]
+    fleet = [FleetInverter(scenario.soc_max, rate_max=scenario.rate_max, inverter_limit=max(5000, scenario.rate_max), rate_min=scenario.rate_min) for index in range(count)]
     sims = [SimInverter(scenario.soc_max, scenario.rate_max, scenario.soc[index], scenario.behaviours[index], rng) for index in range(count)]
     clock = {"s": 0.0}
     ha = my_predbat.ha_interface
@@ -319,8 +318,6 @@ def run_scenario(my_predbat, scenario):
             "inverter_rate_intent",
             "inverter_balance_overridden",
             "inverters",
-            "battery_temperature_charge_curve",
-            "battery_temperature_discharge_curve",
         )
     }
     trace = []
@@ -344,9 +341,12 @@ def run_scenario(my_predbat, scenario):
             my_predbat.balance_inverters_threshold_charge = scenario.threshold
             my_predbat.balance_inverters_threshold_discharge = scenario.threshold
             my_predbat.set_read_only = False
-            my_predbat.battery_temperature_charge_curve = dict(scenario.temperature_curve)
-            my_predbat.battery_temperature_discharge_curve = dict(scenario.temperature_curve)
-            my_predbat.inverter_rate_intent = {index: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand"} for index in range(count)}
+            if scenario.claim_rates:
+                kind = "charge" if scenario.direction == "charge" else "discharge"
+                owner = "charge" if scenario.direction == "charge" else "export"
+                my_predbat.inverter_rate_intent = {index: {"charge_rate": None, "discharge_rate": None, kind + "_rate": scenario.rate_max, "pause_charge": False, "pause_discharge": False, "owner": owner} for index in range(count)}
+            else:
+                my_predbat.inverter_rate_intent = {index: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand"} for index in range(count)}
             my_predbat.inverter_balance_overridden = {}
             with routed_to_sims(ha, sims, clock, scenario.rate_max):
                 for minute in range(scenario.minutes):
@@ -589,6 +589,23 @@ def derated_scenarios():
     for derate in (2000, 1000, 200):
         scenarios.append(Scenario(name="3 inv discharge high one derated {}W, 1600W".format(derate), direction="discharge", soc=[80, 70, 70], behaviours=[Behaviour(derate_w=derate), PAUSE, PAUSE], rate_min=200, load_w=1600, minutes=60))
         scenarios.append(Scenario(name="3 inv charge low one derated {}W, 2600W".format(derate), direction="charge", soc=[70, 80, 80], behaviours=[Behaviour(derate_w=derate), PAUSE, PAUSE], rate_min=200, surplus_w=2600, minutes=30))
+    # The same derated peer behind a charge or export window, where the executor claims every inverter's rate and
+    # the guard has to cap the claim at the learned ceiling rather than trust it
+    for direction in ("discharge", "charge"):
+        soc = [80, 70] if direction == "discharge" else [70, 80]
+        demand_kw = {"load_w": 2600} if direction == "discharge" else {"surplus_w": 2600}
+        scenarios.append(
+            Scenario(
+                name="2 inv {} peer derated 1000W, 2600W, rates claimed".format(direction),
+                direction=direction,
+                soc=soc,
+                behaviours=[Behaviour(derate_w=1000), PAUSE],
+                rate_min=200,
+                minutes=30 if direction == "charge" else 60,
+                claim_rates=True,
+                **demand_kw,
+            )
+        )
     scenarios.append(Scenario(name="3 inv discharge middle derated 1000W, 2600W", direction="discharge", soc=[80, 75, 70], behaviours=[PAUSE, Behaviour(derate_w=1000), PAUSE], rate_min=200, load_w=2600, minutes=60))
     scenarios.append(Scenario(name="3 inv discharge GE trickle mix, high one derated 1000W, 2600W", direction="discharge", soc=[80, 70, 70], behaviours=[Behaviour(derate_w=1000), GE_TRICKLE, PAUSE], rate_min=200, load_w=2600, minutes=60))
     return scenarios

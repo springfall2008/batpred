@@ -790,6 +790,40 @@ def test_derated_peer_hold_released_end_to_end():
     assert intent[1]["discharge_rate"] is None, "with the learned ceiling the hold must be released: {}".format(intent)
 
 
+def test_learned_ceiling_caps_a_claimed_charge_rate():
+    """
+    In a charge window the executor claims every inverter's rate, and the capacity guard reasons about that claim.
+    A peer claimed at 2600W but seen absorbing only 1000W cannot soak up a 2000W surplus on its own, so the fuller
+    inverter must not be held from charging - holding it would export the difference.
+    """
+    snapshot = [
+        make_snapshot(70.0, -1000.0, rate_max=2600.0, grid_power=1000.0),
+        make_snapshot(80.0, 0.0, charge_rate_now=0.0, rate_max=2600.0),
+    ]
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["battery_rate_max_charge"] == 1000.0, "precondition: the peer's ceiling is learned: {}".format(snapshot[0])
+    intent = make_intent(2, {0: {"charge_rate": 2600, "owner": "charge"}, 1: {"charge_rate": 2600, "owner": "charge"}})
+    balance_inverters(intent, snapshot, True, False, False, 1.0, 1.0)
+    assert intent[1]["charge_rate"] == 2600, "the learned ceiling was bypassed by the claimed rate: {}".format(intent)
+
+
+def test_learned_ceiling_caps_a_claimed_discharge_rate():
+    """
+    The export mirror: a peer claimed at 2600W in an export window but seen delivering 1000W cannot carry the
+    fleet's 2400W on its own, so the lower inverter must not be held from discharging.
+    """
+    snapshot = [
+        make_snapshot(80.0, 1000.0, rate_max=2600.0, grid_power=-1400.0),
+        make_snapshot(70.0, 0.0, discharge_rate_now=0.0, rate_max=2600.0),
+    ]
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["battery_rate_max_discharge"] == 1000.0, "precondition: the peer's ceiling is learned: {}".format(snapshot[0])
+    intent = make_intent(2, {0: {"discharge_rate": 2600, "owner": "export"}, 1: {"discharge_rate": 2600, "owner": "export"}})
+    snapshot[0]["battery_power"] = 2400.0
+    balance_inverters(intent, snapshot, False, True, False, 1.0, 1.0)
+    assert intent[1]["discharge_rate"] == 2600, "the learned ceiling was bypassed by the claimed rate: {}".format(intent)
+
+
 def run_balance_pure_tests(my_predbat):
     """
     Run the pure balance_inverters tests.

@@ -3205,8 +3205,12 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
         if id in intent:
             claimed_charge = intent[id].get("charge_rate", None)
             claimed_discharge = intent[id].get("discharge_rate", None)
-            effective_charge_rates.append(snapshot[id]["battery_rate_max_charge"] if claimed_charge is None else claimed_charge)
-            effective_discharge_rates.append(snapshot[id]["battery_rate_max_discharge"] if claimed_discharge is None else claimed_discharge)
+            # A claimed rate is what will be written, but the inverter can still deliver no more than the
+            # snapshot's ceiling - which carries any rate learn_rate_ceilings() has seen it really manage. A charge
+            # or export window claims every inverter's rate, so without the min() a derated peer would be counted
+            # on for its claim and the guard would let a hold leave the house short.
+            effective_charge_rates.append(snapshot[id]["battery_rate_max_charge"] if claimed_charge is None else min(claimed_charge, snapshot[id]["battery_rate_max_charge"]))
+            effective_discharge_rates.append(snapshot[id]["battery_rate_max_discharge"] if claimed_discharge is None else min(claimed_discharge, snapshot[id]["battery_rate_max_discharge"]))
         else:
             # Not being written this pass (read-only, or skipped for calibration), so whatever it
             # reads now is what it will keep

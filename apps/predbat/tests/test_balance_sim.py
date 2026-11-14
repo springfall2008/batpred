@@ -15,7 +15,7 @@ the number of BAD releases - a balancing hold dropped while the inverter is stil
 could still carry the house - plus convergence and the capacity guard.
 """
 
-from tests.balance_ct_harness import CTScenario, broken_cloud_midday, busy_evening, cloudy_midday, disagreeing, mixed, run_ct_scenario
+from tests.balance_ct_harness import CTScenario, broken_cloud_midday, busy_evening, cloud_matrix, cloudy_midday, ct_matrix, disagreeing, format_ct_report, mixed, run_ct_scenario
 from tests.balance_sim_harness import derated_scenarios, format_report, format_step_report, load_step_scenarios, run_scenario, standard_scenarios
 
 # Scenarios whose bad releases come from a cause other than the status-refresh floor, so they are reported
@@ -169,5 +169,30 @@ def run_ct_tests(my_predbat):
         # The cross-charge hold is latched, so it is written once rather than taken and released every minute or two
         if on["writes"] > 40:
             print("ERROR: {} inv CT disagree: {} rate writes in an hour - the cross-charge hold is not latching".format(count, on["writes"]))
+            failed = True
+    return failed
+
+
+def run_balance_sim_matrix(my_predbat):
+    """
+    The full CT matrix - every mode, loop type, fleet size and cloud profile, with balancing off and on - printed
+    as one report, for exploring a balancing change by eye (./run_all --test balance_sim_matrix). Slow, so not in
+    the quick suite; the cases that pin behaviour are in run_balance_sim_tests().
+
+    The one thing asserted: wherever an eco run cross-charges meaningfully with balancing off, balancing at least
+    halves it.
+    """
+    print("**** Full CT balancing matrix ****")
+    failed = False
+    results = {}
+    for scenario in ct_matrix() + cloud_matrix():
+        results[scenario.name] = run_ct_scenario(my_predbat, scenario)
+    print(format_ct_report(list(results.values())))
+    for name, result in results.items():
+        if result["mode"] != "eco" or not name.endswith("balance on"):
+            continue
+        off = results[name[: -len("balance on")] + "balance off"]
+        if off["cross_kwh"] > 0.1 and result["cross_kwh"] > off["cross_kwh"] / 2:
+            print("ERROR: {}: balancing left {}kWh of {}kWh cross-charging".format(name, result["cross_kwh"], off["cross_kwh"]))
             failed = True
     return failed

@@ -483,10 +483,10 @@ def format_ct_report(results):
     """
     One line per CT scenario.
     """
-    lines = ["{:<52} {:>7} {:>7} {:>7} {:>6} {:>6} {:>14} {:>6}".format("scenario", "import", "export", "cross", "spread0", "spread1", "holds", "writes")]
+    lines = ["{:<66} {:>7} {:>7} {:>7} {:>6} {:>6} {:>14} {:>6}".format("scenario", "import", "export", "cross", "spread0", "spread1", "holds", "writes")]
     for result in results:
         lines.append(
-            "{:<52} {:>7} {:>7} {:>7} {:>6} {:>6} {:>14} {:>6}".format(
+            "{:<66} {:>7} {:>7} {:>7} {:>6} {:>6} {:>14} {:>6}".format(
                 result["name"],
                 result["import_kwh"],
                 result["export_kwh"],
