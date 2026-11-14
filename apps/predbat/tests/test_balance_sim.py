@@ -147,6 +147,11 @@ def run_ct_tests(my_predbat):
                 count, off["cross_kwh"], off["cross_over_1kw_s"], off["cross_peak_w"], off["cross_peak_powers"], on["cross_kwh"], on["cross_over_1kw_s"], on["writes"]
             )
         )
+        # With balancing off nothing may be reported as held (the 60s pass does not run balancing at all, so the
+        # sensor is only published by execute_plan, which the eco harness does not run)
+        if off["balance_sensor"] is not None and (off["balance_sensor"]["state"] != 0 or off["balance_sensor"]["holds_24h"]):
+            print("ERROR: {} inv CT disagree: balancing off but the sensor reports holds: {}".format(count, off["balance_sensor"]))
+            failed = True
         if off["cross_over_1kw_s"] < 600:
             print("ERROR: {} inv CT disagree: the model no longer latches into cross-charging ({}s above 1kW)".format(count, off["cross_over_1kw_s"]))
             failed = True
@@ -181,6 +186,14 @@ def run_ct_tests(my_predbat):
         print("{} inv CT disagree, default switches (cross-charge only): cross {}kWh writes {}".format(count, default["cross_kwh"], default["writes"]))
         if default["cross_kwh"] > 0.02 or default["writes"] > 10:
             print("ERROR: {} inv default switches: {}kWh cross-charging and {} writes in an hour".format(count, default["cross_kwh"], default["writes"]))
+            failed = True
+        # The balance sensor has to agree with what the simulator saw: the cross-chargers it caught, and as many
+        # holds as there were registers going to 0 (with only the cross-charge correction on, every hold is one)
+        sensor = default["balance_sensor"]
+        harness_holds = sum(default["holds"])
+        print("{} inv default switches, balance sensor: {}".format(count, {key: sensor.get(key) for key in ("state", "status", "holds_24h", "releases_24h", "cross_charges_caught_24h")} if sensor else None))
+        if not sensor or sensor["cross_charges_caught_24h"] < 1 or sensor["holds_24h"] != harness_holds:
+            print("ERROR: {} inv balance sensor disagrees with the simulation: {} holds seen at the registers".format(count, harness_holds))
             failed = True
         # A forced export, at full power and at half power, where the executor's own allocate_fleet_export_rates()
         # splits the planned power and sets each inverter's target so they finish together. Balancing must not

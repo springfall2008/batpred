@@ -3178,15 +3178,25 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
         threshold_charge (float): minimum SoC% divergence to act on during charge
         threshold_discharge (float): minimum SoC% divergence to act on during discharge
         log_to (callable): optional logger, called with a single string
+
+    Returns:
+    - dict: what this pass decided, for the balance sensor. "status" is "single" or "calibrating" when nothing was
+      considered, else "considered"; "direction" is "discharge" or "charge" (the way the fleet should be going);
+      "spare_pv_w" and "spread_percent" are what that was judged on; "holds" maps each inverter id to
+      {"charge": reason, "discharge": reason}, a reason being None (not held by balancing), "soc",
+      "cross_charge" (caught working against the fleet this pass) or "cross_charge_latched" (kept from before).
     """
     num_inverters = len(snapshot)
+    decisions = {"status": "considered", "direction": None, "spare_pv_w": None, "spread_percent": None, "holds": {id: {"charge": None, "discharge": None} for id in range(num_inverters)}}
     if num_inverters < 2:
-        return
+        decisions["status"] = "single"
+        return decisions
     for entry in snapshot:
         if entry["in_calibration"]:
             if log_to:
                 log_to("BALANCE: an inverter is in calibration, not balancing")
-            return
+            decisions["status"] = "calibrating"
+            return decisions
 
     socs = [entry["soc_percent"] for entry in snapshot]
     reserves = [entry["reserve_percent"] for entry in snapshot]
@@ -3303,14 +3313,20 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     else:
         against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_discharge[id] or (discharge_rates[id] == 0 and spare_pv >= BALANCE_LATCH_SURPLUS_W))]
 
+    decisions["direction"] = "discharge" if fleet_should_discharge else "charge"
+    decisions["spare_pv_w"] = spare_pv
+    decisions["spread_percent"] = soc_max - soc_min
+
     if balance_crosscharge:
         for id in against_fleet:
-            if log_to and (power_enough_charge[id] if fleet_should_discharge else power_enough_discharge[id]):
+            caught = power_enough_charge[id] if fleet_should_discharge else power_enough_discharge[id]
+            if log_to and caught:
                 log_to("BALANCE: Inverter {} is working against the fleet, holding it".format(id))
             if fleet_should_discharge:
                 intent[id]["charge_rate"] = 0
             else:
                 intent[id]["discharge_rate"] = 0
+            decisions["holds"][id]["charge" if fleet_should_discharge else "discharge"] = "cross_charge" if caught else "cross_charge_latched"
         # SoC balancing still runs. An inverter held here can no longer help in the direction it was held in,
         # so the SoC guard below that needs that direction leaves it out of the capacity it counts on: one held
         # from discharging into a surplus cannot take over the house, and one held from charging while the fleet
@@ -3320,7 +3336,7 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     cross_held_charge = set(against_fleet) if (balance_crosscharge and fleet_should_discharge) else set()
 
     if not out_of_balance:
-        return
+        return decisions
 
     # SoC balancing, in the fleet's own direction only. Holds are applied cumulatively - the rate
     # guard asks "if I stop this one, can the rest cover?", so each hold has to account for the
@@ -3350,6 +3366,7 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             if log_to:
                 log_to("BALANCE: Inverter {} is low at {}% against {}%, holding its discharge".format(id, socs[id], soc_max))
             intent[id]["discharge_rate"] = 0
+            decisions["holds"][id]["discharge"] = "soc"
             held.add(id)
     elif during_charge and balance_charge and total_charge_rates > 0:
         held = set()
@@ -3371,7 +3388,9 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             if log_to:
                 log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))
             intent[id]["charge_rate"] = 0
+            decisions["holds"][id]["charge"] = "soc"
             held.add(id)
+    return decisions
 
 
 def learn_rate_ceilings(snapshot, now):

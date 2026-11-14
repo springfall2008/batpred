@@ -280,13 +280,17 @@ class Execute:
         Args:
             intent (dict): inverter id -> rate intent, mutated in place
         """
-        if not self.balance_inverters_enable or self.set_read_only:
-            return
         if len(self.inverters) < 2:
             return
-        balance_inverters(
+        if not self.balance_inverters_enable or self.set_read_only:
+            # Nothing is held by balancing now; a later enable must not report releases for holds made before
+            self.balance_held_previous = {}
+            self.publish_balance_inverters("read_only" if self.set_read_only else "off")
+            return
+        snapshot = self.build_inverter_snapshot()
+        decisions = balance_inverters(
             intent,
-            self.build_inverter_snapshot(),
+            snapshot,
             self.balance_inverters_charge,
             self.balance_inverters_discharge,
             self.balance_inverters_crosscharge,
@@ -294,6 +298,110 @@ class Execute:
             self.balance_inverters_threshold_discharge,
             log_to=self.log,
         )
+        self.record_balance_decisions(snapshot, decisions)
+
+    def record_balance_decisions(self, snapshot, decisions):
+        """
+        Turn one balancing pass into hold, release and ceiling events, and publish the balance sensor.
+
+        A hold is an inverter/direction balancing holds this pass that it did not hold the pass before, and a
+        release the other way round - so the 60s re-application of a hold that is still wanted is not counted
+        again. A ceiling event is a learned rate ceiling present now that was not the pass before, so a ceiling
+        relearned after it expired counts again. Events older than 24 hours are dropped.
+
+        Args:
+            snapshot (list): the readings balancing was given, after learn_rate_ceilings()
+            decisions (dict): what balance_inverters() returned
+        """
+        now = self.now_utc.timestamp()
+        stamp = self.now_utc.isoformat()
+        held_now = {id: {direction: reason for direction, reason in holds.items() if reason} for id, holds in decisions["holds"].items()}
+        held_now = {id: holds for id, holds in held_now.items() if holds}
+        previous = self.balance_held_previous
+        for id, holds in held_now.items():
+            for direction, reason in holds.items():
+                if direction not in previous.get(id, {}):
+                    self.balance_events.append([now, stamp, "hold", id, direction, reason])
+        for id, holds in previous.items():
+            for direction, reason in holds.items():
+                if direction not in held_now.get(id, {}):
+                    self.balance_events.append([now, stamp, "release", id, direction, reason])
+        ceilings_now = []
+        for id, entry in enumerate(snapshot):
+            for direction in ("charge", "discharge"):
+                learned = entry.get("learned_" + direction + "_ceiling")
+                if learned is None:
+                    continue
+                key = "{}:{}".format(id, direction)
+                ceilings_now.append(key)
+                if key not in self.balance_ceilings_previous:
+                    self.balance_events.append([now, stamp, "ceiling", id, direction, int(round(learned[0]))])
+        self.balance_ceilings_previous = ceilings_now
+        self.balance_held_previous = held_now
+        self.balance_last_decisions = decisions
+        self.balance_events = [event for event in self.balance_events if now - event[0] <= 24 * 60 * 60]
+        self.publish_balance_inverters()
+
+    def publish_balance_inverters(self, status=None):
+        """
+        Publish sensor.<prefix>_balance_inverters: how many inverters balancing is holding now, why, and what it has done.
+
+        The state is the number of inverters with a balancing hold in either direction. Attributes give the
+        status ("off", "read_only", "calibrating", "balanced" or "holding"), the fleet direction, SoC spread and
+        spare PV the last pass judged on, each inverter's holds with their reasons and any learned rate ceiling with
+        its age, counts of holds, releases, cross-chargers caught and ceilings learned over the last 24 hours (since
+        Predbat started, if that is sooner), and the most recent events. Not published for a single inverter.
+
+        Args:
+            status (str): "off" or "read_only" when balancing did not run this pass; otherwise worked out from the
+                last decisions
+        """
+        if not self.inverters or len(self.inverters) < 2:
+            return
+        now = self.now_utc.timestamp()
+        decisions = self.balance_last_decisions if status is None else None
+        held = self.balance_held_previous if status is None else {}
+        inverters = []
+        for inverter in self.inverters:
+            holds = held.get(inverter.id, {})
+            entry = {"id": inverter.id, "soc_percent": inverter.soc_percent, "charge_hold": holds.get("charge"), "discharge_hold": holds.get("discharge")}
+            for direction, learned in (("charge", inverter.balance_ceiling_charge), ("discharge", inverter.balance_ceiling_discharge)):
+                entry[direction + "_ceiling_w"] = int(round(learned[0])) if learned else None
+                entry[direction + "_ceiling_age_minutes"] = int((now - learned[1]) // 60) if learned else None
+            inverters.append(entry)
+        count = sum(1 for entry in inverters if entry["charge_hold"] or entry["discharge_hold"])
+        if status is None:
+            status = "calibrating" if decisions and decisions["status"] == "calibrating" else ("holding" if count else "balanced")
+        events = self.balance_events
+        holds_24h = sum(1 for event in events if event[2] == "hold")
+        releases_24h = sum(1 for event in events if event[2] == "release")
+        cross_24h = sum(1 for event in events if event[2] == "hold" and event[5] == "cross_charge")
+        ceilings_24h = sum(1 for event in events if event[2] == "ceiling")
+        self.dashboard_item(
+            "sensor." + self.prefix + "_balance_inverters",
+            state=count,
+            attributes={
+                "friendly_name": "Balance inverters - inverters held",
+                "icon": "mdi:scale-balance",
+                "state_class": "measurement",
+                "unit_of_measurement": "inverters",
+                "status": status,
+                "fleet_direction": decisions["direction"] if decisions else None,
+                "spread_percent": dp2(decisions["spread_percent"]) if decisions and decisions["spread_percent"] is not None else None,
+                "spare_pv_w": dp0(decisions["spare_pv_w"]) if decisions and decisions["spare_pv_w"] is not None else None,
+                "inverters": inverters,
+                "holds_24h": holds_24h,
+                "releases_24h": releases_24h,
+                "cross_charges_caught_24h": cross_24h,
+                "ceilings_learned_24h": ceilings_24h,
+                "events": [{"time": event[1], "action": event[2], "inverter": event[3], "direction": event[4], "detail": event[5]} for event in events[-10:]],
+            },
+        )
+        m = metrics()
+        m.balance_held.set(count)
+        m.balance_holds_24h.set(holds_24h)
+        m.balance_cross_charges_24h.set(cross_24h)
+        m.balance_ceilings_learned_24h.set(ceilings_24h)
 
     def allocate_fleet_export_rates(self):
         """

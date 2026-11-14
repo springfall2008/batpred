@@ -862,6 +862,34 @@ def test_soc_guard_does_not_count_a_peer_just_held_from_discharging():
     assert intent[0]["discharge_rate"] is None, "A was held too, counting on B: {}".format(intent)
 
 
+def test_decisions_report_each_hold_and_its_reason():
+    """
+    balance_inverters() returns what it held and why, for the balance sensor: a cross-charger caught this pass, one
+    kept from before (latched), and a SoC hold, each in its own direction.
+    """
+    intent = make_intent(3)
+    snapshot = [
+        make_snapshot(80.0, 2000.0),  # the fullest, carrying the house
+        make_snapshot(50.0, -500.0),  # charging against the fleet - caught
+        make_snapshot(20.0, 0.0, charge_rate_now=0.0),  # held from charging last pass - latched; also the lowest
+    ]
+    decisions = balance_inverters(intent, snapshot, False, True, True, 1.0, 1.0)
+    assert decisions["status"] == "considered" and decisions["direction"] == "discharge", decisions
+    assert decisions["holds"][1]["charge"] == "cross_charge", decisions
+    assert decisions["holds"][2]["charge"] == "cross_charge_latched", decisions
+    assert decisions["holds"][0] == {"charge": None, "discharge": None}, decisions
+    assert decisions["spread_percent"] == 60.0, decisions
+    held_discharge = [id for id in range(3) if decisions["holds"][id]["discharge"] == "soc"]
+    assert held_discharge == [id for id in range(3) if intent[id]["discharge_rate"] == 0], "decisions must match the intent: {} {}".format(decisions, intent)
+
+
+def test_decisions_report_why_nothing_was_considered():
+    """A single inverter, or one calibrating, is reported as such rather than as balanced."""
+    assert balance_inverters(make_intent(1), [make_snapshot(50.0, 1000.0)], True, True, True, 1.0, 1.0)["status"] == "single"
+    snapshot = [make_snapshot(50.0, 1000.0, in_calibration=True), make_snapshot(80.0, 1000.0)]
+    assert balance_inverters(make_intent(2), snapshot, True, True, True, 1.0, 1.0)["status"] == "calibrating"
+
+
 def run_balance_pure_tests(my_predbat):
     """
     Run the pure balance_inverters tests.

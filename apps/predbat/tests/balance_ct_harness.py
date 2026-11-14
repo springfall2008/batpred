@@ -365,6 +365,10 @@ def run_ct_scenario(my_predbat, scenario):
             "set_read_only",
             "inverter_rate_intent",
             "inverter_balance_overridden",
+            "balance_held_previous",
+            "balance_ceilings_previous",
+            "balance_last_decisions",
+            "balance_events",
             "inverters",
             "now_utc",
             "export_limits_best",
@@ -372,6 +376,7 @@ def run_ct_scenario(my_predbat, scenario):
             "set_export_low_power",
         )
     }
+    balance_sensor = None
     flows = {"import_kwh": 0.0, "export_kwh": 0.0, "cross_kwh": 0.0, "battery_out_kwh": 0.0, "battery_in_kwh": 0.0, "clipped_kwh": 0.0}
     # Instantaneous cross-charging: the worst second, and how long it ran above 1kW and 2kW - a fleet stuck with
     # one battery charging hard from another looks very different from small hunting, though both add up to kWh
@@ -400,6 +405,12 @@ def run_ct_scenario(my_predbat, scenario):
             my_predbat.set_read_only = False
             my_predbat.inverter_rate_intent = {index: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": owner} for index in range(count)}
             my_predbat.inverter_balance_overridden = {}
+            # Balancing's own record starts empty, so the balance sensor reports this run alone
+            ha.dummy_items.pop("sensor.{}_balance_inverters".format(my_predbat.prefix), None)
+            my_predbat.balance_held_previous = {}
+            my_predbat.balance_ceilings_previous = []
+            my_predbat.balance_last_decisions = None
+            my_predbat.balance_events = []
             if scenario.export_limit is not None:
                 my_predbat.export_limits_best = [scenario.export_limit]
                 my_predbat.set_export_window = True
@@ -468,6 +479,8 @@ def run_ct_scenario(my_predbat, scenario):
                             held_edges[index] += 1 if (is_held and not previous_held[index]) else 0
                             previous_held[index] = is_held
                         socs_by_minute.append([sim.soc_kwh / sim.soc_max * 100.0 for sim in sims])
+            sensor = ha.dummy_items.get("sensor.{}_balance_inverters".format(my_predbat.prefix))
+            balance_sensor = dict(sensor) if isinstance(sensor, dict) else None
     finally:
         my_predbat.log = original_log
         for name, value in saved.items():
@@ -489,6 +502,8 @@ def run_ct_scenario(my_predbat, scenario):
         "held_minutes": held,
         "holds": held_edges,
         "writes": sum(sim.writes[kind] for sim in sims for kind in RATE_KINDS),
+        # What sensor.<prefix>_balance_inverters reported at the end of the run, for checking it against the physics
+        "balance_sensor": balance_sensor,
         "cross_peak_w": round(cross_peak["w"]),
         "cross_peak_at_s": cross_peak["t"],
         "cross_peak_powers": cross_peak["powers"],

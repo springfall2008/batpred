@@ -29,6 +29,87 @@ def run_balance(my_predbat):
         my_predbat.apply_inverter_rates(inverter, intent[inverter.id])
 
 
+def balance_sensor(my_predbat):
+    """
+    The balance sensor's state and attributes as published, or None if it was not.
+    """
+    item = my_predbat.ha_interface.dummy_items.get("sensor.{}_balance_inverters".format(my_predbat.prefix))
+    if not isinstance(item, dict):
+        return None
+    return item
+
+
+def test_balance_sensor(my_predbat):
+    """
+    sensor.<prefix>_balance_inverters follows a cross-charge hold through being caught, latched and released.
+
+    The latched pass must not count as a second hold, the release must be counted once, and switching balancing
+    off reports status "off" with nothing held. A single inverter gets no sensor at all.
+    """
+    failed = False
+    my_predbat.balance_held_previous = {}
+    my_predbat.balance_ceilings_previous = []
+    my_predbat.balance_last_decisions = None
+    my_predbat.balance_events = []
+    my_predbat.balance_inverters_discharge = False
+    my_predbat.balance_inverters_charge = False
+    my_predbat.balance_inverters_crosscharge = True
+
+    def expect(condition, message):
+        """Record a failed expectation."""
+        nonlocal failed
+        if not condition:
+            print("ERROR: balance sensor: {} - {}".format(message, balance_sensor(my_predbat)))
+            failed = True
+
+    # Caught: inverter 1 charging while the fleet discharges
+    setup_two_inverters(my_predbat, soc1=50, soc2=40, battery_power1=1000, battery_power2=-100)
+    run_balance(my_predbat)
+    sensor = balance_sensor(my_predbat)
+    expect(sensor is not None, "not published")
+    if sensor:
+        expect(sensor["state"] == 1 and sensor["status"] == "holding", "one inverter should be held")
+        expect(sensor["inverters"][1]["charge_hold"] == "cross_charge" and sensor["inverters"][0]["charge_hold"] is None, "inverter 1 should be held from charging, caught")
+        expect(sensor["fleet_direction"] == "discharge", "the fleet should be discharging")
+        expect(sensor["holds_24h"] == 1 and sensor["cross_charges_caught_24h"] == 1 and sensor["releases_24h"] == 0, "one hold, caught cross-charging")
+        expect(sensor["events"] and sensor["events"][-1]["action"] == "hold" and sensor["events"][-1]["inverter"] == 1, "the hold should be the last event")
+
+    # Latched: held, so it now reads 0W and a charge rate of 0, while the fleet still discharges
+    setup_two_inverters(my_predbat, soc1=50, soc2=40, battery_power1=1000, battery_power2=0, charge_rate2=0)
+    for inverter in my_predbat.inverters:
+        inverter.charge_rate_is_zero = inverter.id == 1
+    run_balance(my_predbat)
+    sensor = balance_sensor(my_predbat)
+    if sensor:
+        expect(sensor["state"] == 1 and sensor["inverters"][1]["charge_hold"] == "cross_charge_latched", "the hold should be kept, latched")
+        expect(sensor["holds_24h"] == 1, "a latched hold must not count as another hold")
+
+    # Released: the fleet turns to soaking up PV surplus
+    setup_two_inverters(my_predbat, soc1=50, soc2=40, battery_power1=-1000, battery_power2=0, charge_rate2=0)
+    run_balance(my_predbat)
+    sensor = balance_sensor(my_predbat)
+    if sensor:
+        expect(sensor["state"] == 0 and sensor["status"] == "balanced", "nothing should be held once the fleet charges")
+        expect(sensor["releases_24h"] == 1 and sensor["events"][-1]["action"] == "release", "the release should be counted once")
+
+    # Balancing switched off
+    my_predbat.balance_inverters_enable = False
+    my_predbat.balance_inverter_rates({inverter.id: {"charge_rate": None, "discharge_rate": None, "owner": "demand"} for inverter in my_predbat.inverters})
+    sensor = balance_sensor(my_predbat)
+    if sensor:
+        expect(sensor["state"] == 0 and sensor["status"] == "off", "balancing off should report status off")
+
+    # A single inverter has nothing to balance, so no sensor
+    del my_predbat.ha_interface.dummy_items["sensor.{}_balance_inverters".format(my_predbat.prefix)]
+    my_predbat.inverters = my_predbat.inverters[:1]
+    my_predbat.balance_inverters_enable = True
+    my_predbat.balance_inverter_rates({0: {"charge_rate": None, "discharge_rate": None, "owner": "demand"}})
+    expect(balance_sensor(my_predbat) is None, "a single inverter should get no sensor")
+    if not failed:
+        print("✓ Test passed: balance sensor follows hold, latch, release, off and single inverter")
+    return failed
+
+
 def run_balance_inverters_tests(my_predbat):
     """
     Test the balance_inverters function with various scenarios
@@ -105,6 +186,7 @@ def run_balance_inverters_tests(my_predbat):
     print("Test 11: Reset balance when already balanced, charge")
     failed |= test_balance_reset_balanced_charge(my_predbat)
     failed |= test_balance_charge_hold_latched_while_discharging(my_predbat)
+    failed |= test_balance_sensor(my_predbat)
     if failed:
         return failed
 

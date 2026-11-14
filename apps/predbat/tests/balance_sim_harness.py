@@ -318,6 +318,10 @@ def run_scenario(my_predbat, scenario):
             "set_read_only",
             "inverter_rate_intent",
             "inverter_balance_overridden",
+            "balance_held_previous",
+            "balance_ceilings_previous",
+            "balance_last_decisions",
+            "balance_events",
             "inverters",
             "now_utc",
         )
@@ -350,6 +354,12 @@ def run_scenario(my_predbat, scenario):
             else:
                 my_predbat.inverter_rate_intent = {index: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand"} for index in range(count)}
             my_predbat.inverter_balance_overridden = {}
+            # Balancing's own record starts empty, so the balance sensor reports this run alone
+            ha.dummy_items.pop("sensor.{}_balance_inverters".format(my_predbat.prefix), None)
+            my_predbat.balance_held_previous = {}
+            my_predbat.balance_ceilings_previous = []
+            my_predbat.balance_last_decisions = None
+            my_predbat.balance_events = []
             with routed_to_sims(ha, sims, clock, scenario.rate_max):
                 start_utc = my_predbat.now_utc
                 for minute in range(scenario.minutes):
