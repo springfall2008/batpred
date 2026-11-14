@@ -375,3 +375,105 @@ def build_bindings(apps_yaml: dict, args: dict, sources: list[dict], previous: d
     fresh_records = {record["device_id"]: record for _, record in fresh}
     site = {"settings": _site_settings(slots, fresh_records, previous), "extras": _site_extras(apps_yaml, sources)}
     return {"inverters": slots, "site": site}, warnings
+
+
+def _descriptor_value(descriptor):
+    """What a binding writes: its entity_id, else its value; None when there is no binding."""
+    if not isinstance(descriptor, dict):
+        return None
+    return descriptor["entity_id"] if "entity_id" in descriptor else descriptor.get("value")
+
+
+def _discovered_value(entry, setting, apps_yaml):
+    """A discovered slot's entry for one binding setting.
+
+    A skipped setting, or a kept one the snapshot gives a value at this slot, is the snapshot's own entry.
+    Otherwise it is the bound entity id or value, None when unbound - except pv_power, which is a fixed 0.
+    """
+    snapshot = slot_value(apps_yaml.get(setting), entry["slot"])
+    if setting in entry.get("skip_settings", ()) or (setting in entry.get("keep_user_settings", ()) and snapshot is not None):
+        return snapshot
+    value = _descriptor_value(entry["settings"].get(setting))
+    return 0 if value is None and setting == "pv_power" else value
+
+
+def _slot_entry(entry, setting, apps_yaml, args):
+    """One slot's entry for inverter_type or a binding setting, before compacting and extras.
+
+    A manual slot keeps the live args entry, except for the summed settings, which come from its own
+    settings (taken from the snapshot by build_bindings). A free slot has its inverter_type and nothing else.
+    """
+    if entry["origin"] == "discovered":
+        return entry["inverter_type"] if setting == "inverter_type" else _discovered_value(entry, setting, apps_yaml)
+    if entry["origin"] == "manual":
+        return _descriptor_value(entry["settings"].get(setting)) if setting in SUMMED_SETTINGS else slot_value(args.get(setting), entry["slot"])
+    return entry["inverter_type"] if setting == "inverter_type" else None
+
+
+def desired_args(bindings: dict, apps_yaml: dict, args: dict) -> dict:
+    """The full value of every arg the bindings decide: {setting: list-or-scalar}, None for a key that should be absent. Pure.
+
+    Decided: num_inverters (the slot count), inverter_type and every BINDING_SETTINGS member, and the site
+    settings the bindings carry. Slot-indexed settings are lists as long as the slot count; COMPACT_SETTINGS
+    are the slots' entries in slot order with None left out, then site extras; pv_power is slot-indexed, then
+    its extras. A list whose every entry is None is None. With no discovered slot nothing is decided: {}.
+    """
+    entries = (bindings or {}).get("inverters", [])
+    if not any(entry.get("origin") == "discovered" for entry in entries):
+        return {}
+    site = bindings.get("site") or {}
+    extras = site.get("extras") or {}
+    desired = {"num_inverters": len(entries)}
+    for setting in sorted(BINDING_SETTINGS | {"inverter_type"}):
+        values = [_slot_entry(entry, setting, apps_yaml, args) for entry in entries]
+        if setting in COMPACT_SETTINGS:
+            values = [value for value in values if value is not None]
+        if setting in SUMMED_SETTINGS:
+            values += list(extras.get(setting) or [])
+        desired[setting] = values if any(value is not None for value in values) else None
+    for name, descriptor in (site.get("settings") or {}).items():
+        desired[name] = _descriptor_value(descriptor)
+    return desired
+
+
+def _entry_writes(desired, live):
+    """The indices to write one at a time to turn a live list into desired, or None when it takes one whole-value write.
+
+    A whole-value write is needed when live is not a list, is longer than desired, or an entry must become
+    None: set_arg(setting, None, index) would delete the whole key.
+    """
+    if not isinstance(live, list) or len(live) > len(desired):
+        return None
+    changed = [index for index, value in enumerate(desired) if slot_value(live, index) != value]
+    return None if any(desired[index] is None for index in changed) else changed
+
+
+def replay_bindings(bindings: dict, apps_yaml: dict, args: dict, set_arg) -> list[tuple[str, int | None]]:
+    """Write only what differs from args, through set_arg(arg, value, index=None). Return the (setting, index) pairs written; index is None for a whole-value write.
+
+    set_arg has PredBat.set_arg's semantics: a None value deletes the key, a value with an index pads the
+    list with None and sets that entry, a value without one replaces the whole value.
+    """
+    written = []
+    for setting, value in sorted(desired_args(bindings, apps_yaml, args).items()):
+        present = setting in args
+        live = args[setting] if present else None
+        if value is None:
+            if present:
+                set_arg(setting, None)
+                written.append((setting, None))
+            continue
+        if not isinstance(value, list):
+            if not present or live != value:
+                set_arg(setting, value)
+                written.append((setting, None))
+            continue
+        indices = _entry_writes(value, live if present else [])
+        if indices is None:
+            set_arg(setting, list(value))
+            written.append((setting, None))
+            continue
+        for index in indices:
+            set_arg(setting, value[index], index=index)
+            written.append((setting, index))
+    return written

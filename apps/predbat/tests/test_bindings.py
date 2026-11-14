@@ -4,7 +4,7 @@
 
 import copy
 
-from bindings import BINDING_SETTINGS, MAX_INVERTERS, build_bindings, manual_slots, slot_map, slot_serials
+from bindings import BINDING_SETTINGS, MAX_INVERTERS, build_bindings, desired_args, manual_slots, replay_bindings, slot_map, slot_serials
 
 
 def test_manual_slot_type_and_control():
@@ -431,6 +431,364 @@ def test_build_record_without_serial_or_entities():
     return 0
 
 
+class _ReadTracker(dict):
+    """A dict that records every key read through [], get or in, to prove replay never looks at a key."""
+
+    def __init__(self, *args, **kwargs):
+        """Build the dict with nothing read yet."""
+        super().__init__(*args, **kwargs)
+        self.read = set()
+
+    def __getitem__(self, key):
+        """Record the key, then read it."""
+        self.read.add(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        """Record the key, then read it."""
+        self.read.add(key)
+        return super().get(key, default)
+
+    def __contains__(self, key):
+        """Record the key, then test for it."""
+        self.read.add(key)
+        return super().__contains__(key)
+
+
+def _apply(bindings, apps_yaml, args):
+    """Replay bindings into args through a set_arg with PredBat.set_arg's semantics; return the (setting, index) pairs replay reported, checked against the calls made."""
+    calls = []
+
+    def set_arg(arg, value, index=None):
+        """Record the call, refuse a per-entry None (PredBat.set_arg would delete the whole key), then apply it as PredBat.set_arg does."""
+        assert not (value is None and index is not None), "set_arg({}, None, index={}) deletes the whole key".format(arg, index)
+        calls.append((arg, index))
+        if value is None:
+            if arg in args:
+                del args[arg]
+        elif index is not None:
+            if arg not in args:
+                args[arg] = []
+            while len(args[arg]) <= index:
+                args[arg].append(None)
+            args[arg][index] = value
+        else:
+            args[arg] = value
+
+    written = replay_bindings(bindings, apps_yaml, args, set_arg)
+    assert written == calls, (written, calls)
+    return written
+
+
+def _bind(apps, records, args=None, previous=None, **options):
+    """Bindings for the snapshot apps and one gecloud source of records, with the live args (a copy of apps unless given)."""
+    args = copy.deepcopy(apps) if args is None else args
+    bindings, _ = build_bindings(apps, args, [_src(records, **options)], previous)
+    return bindings, args
+
+
+def _ro(entity_id):
+    """A read-only entity descriptor."""
+    return {"entity_id": entity_id, "access": "r"}
+
+
+def test_replay_discovered_only():
+    """Manual slot 0's entries are never written; discovered slot 1 gets inverter_type and each bound setting at index 1."""
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    apps["soc_percent"] = ["sensor.givtcp_sa9999s999_soc"]
+    b, args = _bind(apps, [_rec("a11111", {"charge_rate": _rw("number.a_rate"), "soc_percent": _ro("sensor.a_soc")})])
+    assert _layout(b) == [("manual", None, 0), ("discovered", "gecloud:a11111", 1)], _layout(b)
+    written = _apply(b, apps, args)
+    assert written == [("charge_rate", 1), ("inverter_type", 1), ("num_inverters", None), ("pv_power", 1), ("soc_percent", 1)], written
+    assert args == {
+        "num_inverters": 2,
+        "inverter_type": ["GE", "GEC"],
+        "charge_rate": ["number.givtcp_sa9999s999_charge_rate", "number.a_rate"],
+        "soc_percent": ["sensor.givtcp_sa9999s999_soc", "sensor.a_soc"],
+        "pv_power": [None, 0],
+    }, args
+    print("PASS: replay writes the discovered slot only")
+    return 0
+
+
+def test_replay_clears_unbound():
+    """A binding setting the record does not bind, set in args at the discovered slot, is cleared; givtcp_rest too."""
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    args = copy.deepcopy(apps)
+    args["battery_voltage"] = [None, "sensor.stale_voltage"]
+    args["givtcp_rest"] = [None, "http://old:6345"]
+    b, args = _bind(apps, [_rec("a11111", {"charge_rate": _rw("number.a_rate")})], args=args)
+    written = _apply(b, apps, args)
+    # Every entry left is None, so each key goes in one whole-value delete
+    assert written == [("battery_voltage", None), ("charge_rate", 1), ("givtcp_rest", None), ("inverter_type", 1), ("num_inverters", None), ("pv_power", 1)], written
+    assert "battery_voltage" not in args and "givtcp_rest" not in args, args
+    assert args["charge_rate"] == ["number.givtcp_sa9999s999_charge_rate", "number.a_rate"], args
+    print("PASS: replay clears what the record does not bind")
+    return 0
+
+
+def test_replay_clear_entry_whole_value():
+    """Clearing one entry of a list that keeps a value elsewhere is one whole-value write of the full list, never set_arg(key, None, index)."""
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    apps["battery_power"] = ["sensor.m_battery_power"]
+    apps["givtcp_rest"] = ["http://m:6345"]
+    args = copy.deepcopy(apps)
+    args["battery_power"] = ["sensor.m_battery_power", "sensor.stale_battery_power"]
+    args["givtcp_rest"] = ["http://m:6345", "http://old:6345"]
+    b, args = _bind(apps, [_rec("a11111", {"charge_rate": _rw("number.a_rate")})], args=args)
+    written = _apply(b, apps, args)
+    assert written == [("battery_power", None), ("charge_rate", 1), ("givtcp_rest", None), ("inverter_type", 1), ("num_inverters", None), ("pv_power", 1)], written
+    assert args["battery_power"] == ["sensor.m_battery_power", None] and args["givtcp_rest"] == ["http://m:6345", None], args
+    print("PASS: one entry cleared by a whole-value write")
+    return 0
+
+
+def test_replay_shortens_long_list():
+    """A live list longer than the slot count is shortened by one whole-value write."""
+    args = {"charge_rate": ["number.old0", "number.old1", "number.old2"], "inverter_type": ["X", "Y"], "num_inverters": 2}
+    b, args = _bind({}, [_rec("a11111", {"charge_rate": _rw("number.a_rate")})], args=args)
+    written = _apply(b, {}, args)
+    assert written == [("charge_rate", None), ("inverter_type", None), ("num_inverters", None), ("pv_power", 0)], written
+    assert args == {"charge_rate": ["number.a_rate"], "inverter_type": ["GEC"], "num_inverters": 1, "pv_power": [0]}, args
+    print("PASS: a long live list is shortened")
+    return 0
+
+
+def test_replay_tuning_untouched():
+    """inverter_battery_rate_min at the discovered slot is neither read nor written."""
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    apps["inverter_battery_rate_min"] = [100]
+    args = _ReadTracker(copy.deepcopy(apps))
+    args["inverter_battery_rate_min"] = [100, 200]
+    b, args = _bind(apps, [_rec("a11111", {"charge_rate": _rw("number.a_rate")})], args=args)
+    args.read = set()
+    written = _apply(b, apps, args)
+    assert "inverter_battery_rate_min" not in args.read, sorted(args.read)
+    assert "inverter_battery_rate_min" not in [setting for setting, _ in written] and args["inverter_battery_rate_min"] == [100, 200], (written, args)
+    print("PASS: tuning untouched")
+    return 0
+
+
+def test_replay_skip_setting():
+    """A skipped setting is left exactly as apps.yaml had it, slot-indexed or compact."""
+    apps = {"load_today": ["sensor.user_load_today", "sensor.user_extra_load_today"], "soc_percent": ["sensor.user_soc"]}
+    record = _rec("a11111", {"charge_rate": _rw("number.a_rate"), "load_today": _ro("sensor.a_load_today"), "soc_percent": _ro("sensor.a_soc")})
+    b, args = _bind(apps, [record], skip_settings={"load_today", "soc_percent"})
+    assert _layout(b) == [("discovered", "gecloud:a11111", 0)], _layout(b)
+    written = _apply(b, apps, args)
+    assert written == [("charge_rate", 0), ("inverter_type", 0), ("num_inverters", None), ("pv_power", 0)], written
+    assert args["load_today"] == apps["load_today"] and args["soc_percent"] == apps["soc_percent"], args
+    print("PASS: skipped setting left as apps.yaml had it")
+    return 0
+
+
+def test_replay_keep_user_setting():
+    """A kept setting with an apps.yaml value at the slot is not written; without one the binding is."""
+    record = _rec("a11111", {"inverter_mode": _rw("select.a_mode")})
+    apps = {"inverter_mode": ["select.user_mode"]}
+    b, args = _bind(apps, [record], keep_user_settings={"inverter_mode"})
+    written = _apply(b, apps, args)
+    assert "inverter_mode" not in [setting for setting, _ in written] and args["inverter_mode"] == ["select.user_mode"], (written, args)
+    b, args = _bind({}, [record], keep_user_settings={"inverter_mode"})
+    written = _apply(b, {}, args)
+    assert ("inverter_mode", 0) in written and args["inverter_mode"] == ["select.a_mode"], (written, args)
+    print("PASS: kept user setting")
+    return 0
+
+
+def test_replay_scalar_becomes_list():
+    """A scalar per-inverter arg becomes a list with the scalar at index 0 (Review Focus 1)."""
+    apps = {"num_inverters": 1, "inverter_type": "GE", "charge_rate": "number.a"}
+    b, args = _bind(apps, [_rec("b11111", {"charge_rate": _rw("number.b")})])
+    assert _layout(b) == [("manual", None, 0), ("discovered", "gecloud:b11111", 1)], _layout(b)
+    written = _apply(b, apps, args)
+    assert written == [("charge_rate", None), ("inverter_type", None), ("num_inverters", None), ("pv_power", 1)], written
+    assert args["charge_rate"] == ["number.a", "number.b"] and args["inverter_type"] == ["GE", "GEC"], args
+    print("PASS: scalar becomes a list")
+    return 0
+
+
+def test_replay_value_binding():
+    """A value binding writes its literal."""
+    b, args = _bind({}, [_rec("a11111", {"grid_power": {"value": 0, "access": "r"}})])
+    written = _apply(b, {}, args)
+    assert ("grid_power", 0) in written and args["grid_power"] == [0], (written, args)
+    print("PASS: value binding")
+    return 0
+
+
+def test_replay_compact_settings():
+    """A shared CT bound by one slot only gives a one-entry list with no None, whichever slot binds it."""
+    b, args = _bind({}, [_rec("a11111", {"import_today": _ro("sensor.a_import_today")}), _rec("b11111")])
+    written = _apply(b, {}, args)
+    assert ("import_today", 0) in written and args["import_today"] == ["sensor.a_import_today"], (written, args)
+    b, args = _bind({}, [_rec("a11111"), _rec("b11111", {"import_today": _ro("sensor.b_import_today")})])
+    _apply(b, {}, args)
+    assert args["import_today"] == ["sensor.b_import_today"], args
+    print("PASS: compact settings")
+    return 0
+
+
+def test_replay_pv_power_indexed():
+    """pv_power is indexed by slot, a discovered slot binding nothing gets 0, and the extras follow the last slot."""
+    pv = _rec("pv1111", {"pv_power": _ro("sensor.pv1111_pv_power")}, inverter_type=None)
+    b, args = _bind({}, [_rec("a11111"), _rec("b11111", {"pv_power": _ro("sensor.b_pv_power")}), pv], include_pv_only=True)
+    written = _apply(b, {}, args)
+    assert ("pv_power", 0) in written and args["pv_power"] == [0, "sensor.b_pv_power", "sensor.pv1111_pv_power"], (written, args)
+    print("PASS: pv_power indexed by slot")
+    return 0
+
+
+def test_replay_manual_summed_entries():
+    """A manual slot's summed entries are its own apps.yaml ones, never a fabricated 0; the discovered slot after it and the extras follow."""
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    apps["load_today"] = ["sensor.m_load_today", "sensor.extra_load_today"]
+    apps["pv_power"] = ["sensor.m_pv_power", "sensor.extra_pv_power"]
+    record = _rec("a11111", {"load_today": _ro("sensor.a_load_today")})
+    b, args = _bind(apps, [record])
+    written = _apply(b, apps, args)
+    assert [item for item in written if item[0] in ("load_today", "pv_power")] == [("load_today", 1), ("load_today", 2), ("pv_power", 1), ("pv_power", 2)], written
+    assert args["load_today"] == ["sensor.m_load_today", "sensor.a_load_today", "sensor.extra_load_today"], args
+    assert args["pv_power"] == ["sensor.m_pv_power", 0, "sensor.extra_pv_power"], args
+    # A second pass: the live lists have been rewritten, the manual entries still come from apps.yaml
+    again, _ = build_bindings(apps, args, [_src([record])], b)
+    assert _apply(again, apps, args) == [], args
+    # A manual slot with no pv_power of its own keeps None at its position; one with no load_today contributes nothing
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    apps["pv_power"] = [None, "sensor.extra_pv_power"]
+    b, args = _bind(apps, [record])
+    _apply(b, apps, args)
+    assert args["pv_power"] == [None, 0, "sensor.extra_pv_power"] and args["load_today"] == ["sensor.a_load_today"], args
+    # A manual slot 1 behind a discovered slot 0: its compact entry moves to index 0, and the next pass still finds it
+    apps = _manual_apps("number.dead_charge_rate", "number.givtcp_sa9999s999_charge_rate", types=["", "GE"])
+    apps["load_today"] = ["sensor.dead_load_today", "sensor.m_load_today"]
+    apps["pv_power"] = ["sensor.dead_pv_power", "sensor.m_pv_power"]
+    b, args = _bind(apps, [_rec("a11111")])
+    assert _layout(b) == [("discovered", "gecloud:a11111", 0), ("manual", None, 1)], _layout(b)
+    written = _apply(b, apps, args)
+    assert ("load_today", None) in written and ("pv_power", 0) in written, written
+    assert args["load_today"] == ["sensor.m_load_today"] and args["pv_power"] == [0, "sensor.m_pv_power"], args
+    again, _ = build_bindings(apps, args, [_src([_rec("a11111")])], b)
+    assert _apply(again, apps, args) == [] and args["load_today"] == ["sensor.m_load_today"], args
+    print("PASS: manual slot summed entries")
+    return 0
+
+
+def test_replay_hole_cleared():
+    """A slot a gateway record cleared, below a manual one, has every binding setting and its inverter_type cleared."""
+    apps = _manual_apps("number.givtcp_ce1111g111_charge_rate", "number.givtcp_ce2222g222_charge_rate", "number.givtcp_sa9999s999_charge_rate")
+    b, args = _bind(apps, [_rec("gw1111g111", {"charge_rate": _rw("number.gw_rate")}, serials=["ce1111g111", "ce2222g222"])])
+    assert _layout(b) == [("discovered", "gecloud:gw1111g111", 0), ("free", None, 1), ("manual", None, 2)], _layout(b)
+    written = _apply(b, apps, args)
+    assert written == [("charge_rate", None), ("inverter_type", None), ("pv_power", 0)], written
+    assert args["charge_rate"] == ["number.gw_rate", None, "number.givtcp_sa9999s999_charge_rate"] and args["inverter_type"] == ["GEC", None, "GE"], args
+    assert args["pv_power"] == [0] and args["num_inverters"] == 3, args
+    print("PASS: hole cleared")
+    return 0
+
+
+def test_replay_site_and_count():
+    """battery_temperature_history is written as a scalar and num_inverters is the slot count; a change to the site setting alone writes only it."""
+    rec_a = _rec("a11111", {"battery_temperature_history": _ro("sensor.a_temp_history")})
+    b, args = _bind({}, [rec_a, _rec("b11111")])
+    written = _apply(b, {}, args)
+    assert ("battery_temperature_history", None) in written and ("num_inverters", None) in written, written
+    assert args["battery_temperature_history"] == "sensor.a_temp_history" and args["num_inverters"] == 2, args
+    rec_a = _rec("a11111", {"battery_temperature_history": _ro("sensor.a_temp_history_new")})
+    again, _ = build_bindings({}, args, [_src([rec_a, _rec("b11111")])], b)
+    assert _apply(again, {}, args) == [("battery_temperature_history", None)] and args["battery_temperature_history"] == "sensor.a_temp_history_new", args
+    print("PASS: site setting and count")
+    return 0
+
+
+def test_replay_all_none_key_deleted():
+    """A key whose every entry would be None is deleted from args."""
+    b, args = _bind({}, [_rec("a11111", {"charge_rate": _rw("number.a_rate")})], args={"battery_voltage": ["sensor.stale_voltage"]})
+    written = _apply(b, {}, args)
+    assert ("battery_voltage", None) in written and "battery_voltage" not in args, (written, args)
+    print("PASS: all-None key deleted")
+    return 0
+
+
+def test_replay_idempotent():
+    """A second replay of the same inputs writes nothing."""
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    apps["load_today"] = ["sensor.m_load_today", "sensor.extra_load_today"]
+    apps["pv_power"] = ["sensor.m_pv_power"]
+    entities = {"charge_rate": _rw("number.a_rate"), "load_today": _ro("sensor.a_load_today"), "grid_power": {"value": 0, "access": "r"}, "battery_temperature_history": _ro("sensor.a_temp")}
+    sources = [_src([_rec("a11111", entities), _rec("pv1111", {"pv_power": _ro("sensor.pv1111_pv_power")}, inverter_type=None)], include_pv_only=True)]
+    args = copy.deepcopy(apps)
+    args["charge_rate"] = "number.givtcp_sa9999s999_charge_rate"
+    b, _ = build_bindings(apps, args, sources, None)
+    assert _apply(b, apps, args) != []
+    snapshot = copy.deepcopy(args)
+    assert _apply(b, apps, args) == [] and args == snapshot, args
+    again, _ = build_bindings(apps, args, sources, b)
+    assert _apply(again, apps, args) == [] and args == snapshot, args
+    print("PASS: replay idempotent")
+    return 0
+
+
+def test_replay_single_entry():
+    """Changing one bound entity writes exactly that entry."""
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    b, args = _bind(apps, [_rec("a11111", {"charge_rate": _rw("number.a_rate")})])
+    _apply(b, apps, args)
+    again, _ = build_bindings(apps, args, [_src([_rec("a11111", {"charge_rate": _rw("number.a_rate_new")})])], b)
+    assert _apply(again, apps, args) == [("charge_rate", 1)], args
+    assert args["charge_rate"] == ["number.givtcp_sa9999s999_charge_rate", "number.a_rate_new"], args
+    print("PASS: single entry written")
+    return 0
+
+
+def test_replay_repairs_overwrite():
+    """An entry something else overwrote, or a key it deleted, is written back by the next replay."""
+    b, args = _bind({}, [_rec("a11111", {"soc_percent": _ro("sensor.a_soc")})])
+    _apply(b, {}, args)
+    args["soc_percent"] = ["sensor.other_soc"]
+    assert _apply(b, {}, args) == [("soc_percent", 0)] and args["soc_percent"] == ["sensor.a_soc"], args
+    del args["soc_percent"]
+    assert _apply(b, {}, args) == [("soc_percent", 0)] and args["soc_percent"] == ["sensor.a_soc"], args
+    print("PASS: overwrite repaired")
+    return 0
+
+
+def test_replay_never_zero_inverters():
+    """Bindings with no non-free slot write nothing at all."""
+    b, _ = build_bindings({}, {}, [], None)
+    args = {"num_inverters": 1, "charge_rate": ["number.x"]}
+    assert _apply(b, {}, args) == [] and args == {"num_inverters": 1, "charge_rate": ["number.x"]}, args
+    print("PASS: never zero inverters")
+    return 0
+
+
+def test_replay_nothing_discovered():
+    """Bindings with no discovered slot - manual slots only, or none - decide nothing and write nothing."""
+    apps = _manual_apps("number.a_charge_rate", "number.b_charge_rate")
+    args = copy.deepcopy(apps)
+    args["givtcp_rest"] = ["http://stale:6345"]
+    b, _ = build_bindings(apps, args, [], None)
+    assert _layout(b) == [("manual", None, 0), ("manual", None, 1)], _layout(b)
+    assert desired_args(b, apps, args) == {} and desired_args(None, apps, args) == {}
+    snapshot = copy.deepcopy(args)
+    assert _apply(b, apps, args) == [] and args == snapshot, args
+    print("PASS: nothing discovered, nothing written")
+    return 0
+
+
+def test_desired_args_shape():
+    """desired_args gives the full value of every arg the bindings decide, None for a key that should be absent."""
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    b, args = _bind(apps, [_rec("a11111", {"charge_rate": _rw("number.a_rate")})])
+    desired = desired_args(b, apps, args)
+    assert set(desired) == BINDING_SETTINGS | {"inverter_type", "num_inverters"}, sorted(set(desired) ^ (BINDING_SETTINGS | {"inverter_type", "num_inverters"}))
+    assert desired["charge_rate"] == ["number.givtcp_sa9999s999_charge_rate", "number.a_rate"] and desired["num_inverters"] == 2 and desired["pv_power"] == [None, 0], desired
+    assert desired["soc_percent"] is None and desired["load_today"] is None, desired
+    assert args == apps, args  # pure
+    print("PASS: desired_args shape")
+    return 0
+
+
 def test_bindings_all(my_predbat=None):
     """Run every bindings test, returning the number of failures."""
     failures = 0
@@ -465,4 +823,25 @@ def test_bindings_all(my_predbat=None):
     failures += test_build_summed_from_apps_yaml()
     failures += test_build_manual_settings_shape()
     failures += test_build_record_without_serial_or_entities()
+    failures += test_replay_discovered_only()
+    failures += test_replay_clears_unbound()
+    failures += test_replay_clear_entry_whole_value()
+    failures += test_replay_shortens_long_list()
+    failures += test_replay_tuning_untouched()
+    failures += test_replay_skip_setting()
+    failures += test_replay_keep_user_setting()
+    failures += test_replay_scalar_becomes_list()
+    failures += test_replay_value_binding()
+    failures += test_replay_compact_settings()
+    failures += test_replay_pv_power_indexed()
+    failures += test_replay_manual_summed_entries()
+    failures += test_replay_hole_cleared()
+    failures += test_replay_site_and_count()
+    failures += test_replay_all_none_key_deleted()
+    failures += test_replay_idempotent()
+    failures += test_replay_single_entry()
+    failures += test_replay_repairs_overwrite()
+    failures += test_replay_never_zero_inverters()
+    failures += test_replay_nothing_discovered()
+    failures += test_desired_args_shape()
     return failures
