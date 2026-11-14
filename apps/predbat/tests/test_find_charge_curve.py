@@ -31,7 +31,7 @@ def setup_predbat(my_predbat):
     my_predbat.debug_enable = True  # Enable debug for more info
 
 
-def create_test_history_data(my_predbat, num_days=7, slow=False):
+def create_test_history_data(my_predbat, num_days=7, slow=False, discharge_taper_below=None):
     """
     Create mock history data for testing find_charge_curve
 
@@ -103,7 +103,7 @@ def create_test_history_data(my_predbat, num_days=7, slow=False):
 
             charge_rate = 0  # Max discharge rate
             discharge_rate = 2600  # Max discharge rate in Watts
-            if slow:
+            if slow or (discharge_taper_below is not None and soc < discharge_taper_below):
                 battery_power = 1300  # Positive = discharging
             else:
                 battery_power = 2599  # Positive = discharging
@@ -728,6 +728,34 @@ def test_find_charge_curve_percent_with_battery_scaling(my_predbat):
     return failed
 
 
+def test_find_charge_curve_discharge_percent_with_battery_scaling(my_predbat):
+    """
+    The discharge half of #6183: with a soc_percent sensor the discharge curve learned at
+    battery_scaling 0.8 must be the one learned at 1.0, i.e. at the true SoC. The fixture
+    halves the discharge power below 12%, inside the 5-20% search range, where the old
+    conversion put each point at 0.8 x its SoC. Returns True on failure.
+    """
+    print("*** Running test: find_charge_curve_discharge_percent_with_battery_scaling ***")
+    curves = {}
+    for scaling in [1.0, 0.8]:
+        inv = create_curve_test_inverter(my_predbat)
+        inv.battery_scaling = scaling
+        create_test_history_data(my_predbat, num_days=7, discharge_taper_below=12)
+        try:
+            curves[scaling] = inv.find_charge_curve(discharge=True)
+        finally:
+            remove_test_history_data(my_predbat)
+        print("Discharge curve found with battery_scaling {}: {}".format(scaling, curves[scaling]))
+    reference = curves[1.0]
+    if not reference or not any(value < 1.0 for value in reference.values()):
+        print("ERROR: Expected a tapered discharge curve at battery_scaling 1.0, got {}".format(reference))
+        return True
+    if curves[0.8] != reference:
+        print("ERROR: Discharge curve at battery_scaling 0.8 {} differs from the one at 1.0 {}".format(curves[0.8], reference))
+        return True
+    return False
+
+
 def run_find_charge_curve_tests(my_predbat):
     """
     Run all find_charge_curve tests
@@ -778,6 +806,7 @@ def run_find_charge_curve_tests(my_predbat):
     failed |= test_find_charge_curve_missing_soc_minute(my_predbat)
     failed |= test_find_charge_curve_coarse_soc_steps(my_predbat)
     failed |= test_find_charge_curve_percent_with_battery_scaling(my_predbat)
+    failed |= test_find_charge_curve_discharge_percent_with_battery_scaling(my_predbat)
     if failed:
         return failed
 
