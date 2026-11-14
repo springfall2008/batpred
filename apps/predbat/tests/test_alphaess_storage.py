@@ -126,6 +126,22 @@ def test_alphaess_cache_round_trip():
     if restored.applied_payload.get("AL70", {}).get("charge", {}).get("gridCharge") != 1:
         print(f"ERROR: applied payload not restored: {restored.applied_payload}")
         failed = True
+
+    # A hybrid verdict decided after the last save is saved by the next tick's save_hybrid_verdicts(), with no clean
+    # shutdown: the system's PV strings now report (hybrid), replacing the held False
+    client.device_values = {"AL70": {"ppv_detail_all_null": False}}
+    run_async_local(client.save_hybrid_verdicts())
+    after_change = StoredAlphaESS(store=store)
+    run_async_local(after_change.restore_state())
+    if after_change._hybrid_verdict != {"AL70": True}:
+        print(f"ERROR: a verdict decided after the last save was not saved: {after_change._hybrid_verdict}")
+        failed = True
+    # A tick on which no verdict changed writes nothing
+    del store.data[("alphaess", "ratings")]
+    run_async_local(client.save_hybrid_verdicts())
+    if ("alphaess", "ratings") in store.data:
+        print("ERROR: an unchanged verdict rewrote the ratings cache")
+        failed = True
     assert not failed, "test_alphaess_cache_round_trip"
 
 

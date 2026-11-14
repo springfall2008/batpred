@@ -184,6 +184,9 @@ class AlphaESSAPI(ComponentBase):
         # evidence comes and goes with live telemetry (a payload without ppvDetail, pv_today resetting at
         # midnight) and the record must not change - nor the switch flap - each time it does.
         self._hybrid_verdict = {}
+        # Set when hybrid_verdict() changes a held verdict, cleared when save_ratings() writes the cache, so run()
+        # saves a newly decided verdict straight away rather than only at a clean shutdown (save_hybrid_verdicts())
+        self._hybrid_verdict_unsaved = False
         self._unbind_done = set()
         self._tier_refreshed = {}
         self._cache_restored = False
@@ -785,8 +788,9 @@ class AlphaESSAPI(ComponentBase):
         switch - every time the evidence briefly goes away.
         """
         ac_coupled = self.detect_ac_coupled(sn)
-        if isinstance(ac_coupled, bool):
+        if isinstance(ac_coupled, bool) and self._hybrid_verdict.get(sn) is not (not ac_coupled):
             self._hybrid_verdict[sn] = not ac_coupled
+            self._hybrid_verdict_unsaved = True
         held = self._hybrid_verdict.get(sn)
         return held if isinstance(held, bool) else None
 
@@ -2082,8 +2086,22 @@ class AlphaESSAPI(ComponentBase):
         await self.save_cache(ALPHAESS_CACHE_CONFIG, {"device_config": self.device_config, "periodic_ok": self._periodic_ok})
 
     async def save_ratings(self):
-        """Persist the live-telemetry capability verdicts."""
+        """Persist the live-telemetry capability verdicts, the held hybrid verdicts among them."""
+        self._hybrid_verdict_unsaved = False
         await self.save_cache(ALPHAESS_CACHE_RATINGS, {"live_ok": self._live_ok, "ev_present": self._ev_present, "hybrid_verdict": self._hybrid_verdict})
+
+    async def save_hybrid_verdicts(self):
+        """Save the ratings cache when hybrid_verdict() has changed a held verdict since it was last saved.
+
+        A verdict is decided from live telemetry that comes and goes, so it is saved as soon as it changes - not only
+        by final() at a clean shutdown - and survives an unclean restart too. Each serial's verdict is brought up to
+        date here first, so this does not depend on build_discovery() having run. Nothing is written on a tick where
+        no verdict changed.
+        """
+        for sn in list(self.device_list):
+            self.hybrid_verdict(sn)
+        if self._hybrid_verdict_unsaved:
+            await self.save_ratings()
 
     async def save_control(self):
         """Persist the control state that must survive a restart.
@@ -2198,6 +2216,8 @@ class AlphaESSAPI(ComponentBase):
         # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
         # owns the compare/retry/guard loop and never raises.
         self.refresh_discovery()
+        # Save a hybrid verdict this cycle's telemetry decided or changed, so it survives an unclean restart
+        await self.save_hybrid_verdicts()
 
         if first and not live_ok:
             # Startup has not really succeeded without telemetry: automatic_config() runs

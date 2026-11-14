@@ -45,7 +45,7 @@ turned out to have model evidence.
 | GivTCP | its readable `Invertor_Type` | the same rule as GE Cloud (Trefor) |
 | Gateway | `inv.model`; a gateway or EMS record uses the fronted units' models | the same rule; unknown on firmware that reports no model |
 | AlphaESS | `detect_ac_coupled(sn)` | `not detect_ac_coupled(sn)`, holding the last decided verdict per serial (kept in the ratings cache), so an undecided reading never changes the record |
-| Sigenergy | `detect_ac_coupled(system_id)` | `not detect_ac_coupled(system_id)` |
+| Sigenergy | `detect_ac_coupled(system_id)`, from the lifetime totals | `False` when AC coupled, `True` when the totals show native PV, unknown while undecided (`None if ac_coupled is None else not ac_coupled`) |
 | Teslemetry | `teslemetry_hybrid`, then the model | the override when set; else `True` for a Powerwall 3, else `False` - including an unknown model (GH#5275) |
 | Hanchu | the AC-coupled field (`bypMeterSwitch`) | `False` when it says AC coupled, else `True` if the field is present |
 | Enphase | AC batteries (`hasEncharge` / `hasAcb`) | `False` (AC coupled) when the site reports them, else unknown |

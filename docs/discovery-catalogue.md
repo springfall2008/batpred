@@ -284,20 +284,24 @@ evidence it has:
 
 | Component | Evidence | `hybrid` |
 | --- | --- | --- |
-| GE Cloud, GivTCP, Gateway | the GivEnergy model name (GE Cloud's device model, GivTCP's `Invertor_Type`, the Gateway's `inv.model`); a gateway or EMS record uses the models of the units it fronts | `false` for a model containing `ac` or `aio`, or any spelling of all-in-one; unknown for no model, or for a coordinator's own model (`gateway`, or `ems` as a whole word); otherwise `true` |
+| GE Cloud, GivTCP, Gateway | the GivEnergy model name (GE Cloud's device model, GivTCP's `Invertor_Type`, the Gateway's `inv.model`). Behind an EMS GE Cloud gives one record per battery, each from its own model; a gateway record uses the models of the units it fronts, and any one of them not hybrid makes it `false` | `false` for a model containing `ac` or `aio`, or any spelling of all-in-one; unknown for no model, or for a coordinator's own model (`gateway`, or `ems` as a whole word); otherwise `true` |
 | AlphaESS | its AC-coupled detection, per serial | `false` when AC coupled, `true` when hybrid; the last decided verdict is held (and cached with the ratings), so an undecided reading never changes it |
-| Sigenergy | its AC-coupled detection, per system | `false` when AC coupled, `true` otherwise |
+| Sigenergy | its AC-coupled detection from the lifetime totals, per system | `false` when they show PV only from a third-party inverter, `true` when they show PV on the Sigenergy inverter's own strings; unknown while undecided (no PV history yet) |
 | Teslemetry | `teslemetry_hybrid`, then the model | your `teslemetry_hybrid` when set; otherwise `true` for a Powerwall 3 and `false` for anything else, including an unknown model |
 | Hanchu | the AC-coupled field (`bypMeterSwitch`) | `false` when it says AC coupled, else `true` when the field is present |
-| Enphase | AC batteries | `false` when the site reports AC batteries (`hasEncharge` / `hasAcb`) |
-| SolaX | the model code | `false` for the AC models (X1-AC, A1-AC-G2), `true` for the Hybrid models; unknown otherwise |
+| Enphase | AC batteries | `false` when the site reports AC batteries (`hasEncharge` / `hasAcb`); unknown otherwise |
+| SolaX | the residential model code (a commercial unit's code says nothing) | `false` for the AC models (X1-AC, A1-AC-G2), `true` for the Hybrid models; unknown otherwise |
 | Solis | the `machine` range | `true` for EH and RHI, `false` for EA and RAI; unknown otherwise |
 | Fox | `deviceType` / `productType` | `false` for AC1 and AC3, `true` for H1, H3 and KH; unknown otherwise, or when the two disagree |
 | Growatt | the device model | `true` for SPH, `false` for SPA; unknown otherwise |
 | Deye, Sunsynk | none - their APIs give no signal | unknown |
 
-A component counts only while its automatic configuration is on, so with GE Cloud, GivTCP, Enphase,
-SolaX, Solis, Fox or Growatt in automatic mode the inverter's model now sets `inverter_hybrid`.
+A component counts only while its automatic configuration is on, so with GE Cloud, GivTCP, Hanchu,
+Enphase, SolaX, Solis, Fox or Growatt in automatic mode the inverter now sets `inverter_hybrid` - from its
+model, or for Hanchu its AC-coupled field. GivTCP's automatic configuration (`givtcp_automatic`) is on by
+default, so a GivTCP install now has the switch set from its `Invertor_Type`. A value you set by hand is put
+back on the next changed report; turn that component's automatic configuration off to manage the switch
+yourself.
 
 ### The invert settings
 
@@ -320,12 +324,14 @@ GE Cloud no longer sets `ge_cloud_serial` or changes `ge_cloud_data`. The GE Clo
 (`ge_cloud_data`) works out for itself what to download:
 
 - **Its serial** is your `ge_cloud_serial` when you set one; otherwise it takes it from GE Cloud's
-  inverter records - the record in the lowest slot, using its first battery when it is a gateway and
-  its own serial otherwise, which is the battery the old configuration chose. It looks the serial up
+  inverter records - the record in the lowest slot, or the first reported when GE Cloud is not
+  configuring the inverters, using its first battery when it is a gateway and its own serial otherwise,
+  which is the battery the old configuration chose. It looks the serial up
   before each download, so a GE Cloud report that arrives after GE Cloud Data starts is still used.
   Only when there is neither your setting nor a serial from GE Cloud after its first ten minutes does
   it log `ge_cloud_serial is not set`.
-- **Behind a GivEnergy EMS** (a GE Cloud record with `composition: ems`) it declines to run, logging
+- **When GivEnergy Cloud Direct reports a GivEnergy EMS** (a GE Cloud record with `composition: ems`) it
+  declines to run, logging
   `GECloud: GE Cloud Data is not used behind a GivEnergy EMS - skipping the history download` once,
   and Predbat takes its load history from `load_today`, exactly as if `ge_cloud_data` were off. It
   resumes by itself when the EMS is no longer reported. Your `ge_cloud_data` setting is never changed.

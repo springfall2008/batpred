@@ -704,7 +704,9 @@ Log into the GivEnergy Portal web site and [create an API key](#givenergy-cloud-
 If you set **ge_cloud_automatic** to true, the number of inverters and their settings will be configured automatically and any inverter/battery configuration in `apps.yaml` will be ignored.
 Or, if you set **ge_cloud_automatic** to false then you configure your inverters in `apps.yaml` yourself.
 **ge_cloud_serial** is now optional while GivEnergy Cloud Direct is running: GE Cloud Data takes the serial of the inverter GE Cloud finds (see [GivEnergy Cloud Data](#givenergy-cloud-data)).
-Set it only to choose a different serial for the cloud data.
+Set it only to choose a different serial for the cloud data. A **ge_cloud_serial** you set in `apps.yaml` is also one of the ways discovery
+recognises that the inverter you configured by hand in slot 0 is the one GE Cloud found, so with **ge_cloud_automatic** on it takes that slot over
+rather than configuring the inverter twice (see [Takeover](discovery-catalogue.md#takeover)).
 
 If you set **ge_cloud_data** to false then Predbat will use the local Home Assistant data for history rather than the cloud data;
 you will need to wait until you have a few days of history established (at least **days_previous** days) before this will work correctly.
@@ -1040,7 +1042,7 @@ Then manually configure all required entities following the standard Predbat inv
 The Solis Cloud API supports various Solis hybrid inverter models with battery storage, including:
 
 - RHI series (single-phase hybrid)
-- RAI series (three-phase hybrid)
+- RAI series (AC-coupled retrofit storage inverter)
 - S5 series hybrid inverters
 - Other Solis cloud-connected hybrid inverters
 
@@ -1422,7 +1424,7 @@ Connecting to the cloud is less efficient and means that Predbat will be depende
 - **ge_cloud_serial** - Set the inverter serial number to use for the cloud data. Optional while GivEnergy Cloud Direct (`ge_cloud_direct`) is running, which supplies the serial of its first inverter (the first battery behind a Gateway)
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
 
-Behind a GivEnergy EMS the cloud data is not used: Predbat takes its load history from **load_today**, exactly as if **ge_cloud_data** were false, and goes back to the cloud data by itself if the EMS is no longer reported.
+When GivEnergy Cloud Direct reports a GivEnergy EMS the cloud data is not used: Predbat takes its load history from **load_today**, exactly as if **ge_cloud_data** were false, and goes back to the cloud data by itself if the EMS is no longer reported.
 
 If you need to create a **ge_cloud_key**, in the GivEnergy cloud portal:
 
@@ -1973,6 +1975,10 @@ in/out, solar and battery in/out are the set its Energy Dashboard asks for.
 - **givtcp_automatic** - Optional, defaults to `true`. Set to `false` to stop Predbat pointing its settings
 at those entities, so you can configure `apps.yaml` yourself. The entities are still published either way,
 so you can name them by hand - or point an individual setting at a sensor of your own.
+With `givtcp_automatic` on (the default) Predbat's discovery also sets **switch.predbat_inverter_hybrid** from each inverter's
+`Invertor_Type`: off for an AC-coupled or All-in-One model, on for a hybrid, and left alone when the type is unknown (see
+[The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). GivTCP did not set this switch before. A value you set by hand is put
+back on the next changed report; set `givtcp_automatic: false` to manage the switch yourself.
 
 Note that Predbat will always retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
 
