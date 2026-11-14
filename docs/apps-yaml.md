@@ -3100,7 +3100,7 @@ When **battery_temperature_charge_curve_auto** is True, Predbat looks back over 
 The rate the battery actually took in those minutes is recorded against the battery temperature (to the whole degree) and turned into a rate in C, exactly as `battery_temperature_charge_curve` is written.
 If you have set **input_number.battery_rate_max_scaling**, the rate is divided by it, as Predbat applies that scaling on top of the curve.
 
-- A degree is only used once it has at least 30 minutes of charging behind it.
+- A degree is only used once it has at least 30 minutes of charging behind it, seen on at least two different days.
 - Recent charges count for more than old ones, so the curve follows a battery as it ages.
 - What has been learned is kept in Predbat's cache for a year. Last winter's cold-weather data is therefore still there when the next cold spell arrives, even though the history only goes back a few days.
 - The learned curve replaces your **battery_temperature_charge_curve** over the whole range it covers, from the coldest to the warmest degree learned. A degree in that range with no data of its own is filled in proportionally from the learned degrees either side.

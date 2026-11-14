@@ -28,6 +28,8 @@ from const import (
     BATTERY_POWER_CURVE_MIN_MINUTES,
     BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS,
     BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS,
+    BATTERY_TEMPERATURE_CURVE_MIN_DAY_MINUTES,
+    BATTERY_TEMPERATURE_CURVE_MIN_DAYS,
     BATTERY_TEMPERATURE_CURVE_MIN_MINUTES,
     BATTERY_TEMPERATURE_CURVE_MIN_POWER,
     BATTERY_TEMPERATURE_CURVE_SOC_MAX,
@@ -43,6 +45,25 @@ from utils import calc_percent_limit, dp0, dp1, dp2, dp4, find_battery_temperatu
 # accepts as genuine. Wide enough for inverters that report SoC in 5% steps; a larger jump is a
 # glitch (e.g. a stray 0% reading) and would otherwise stamp one sample across a huge SoC range.
 CHARGE_CURVE_MAX_SOC_STEP = 10
+
+
+def charge_day(now_utc, minutes_ago, local_tz=None):
+    """
+    The day a minute of history counts towards for evidence: the local noon-to-noon day, named by the date of the noon
+    that starts it, so an overnight charge (e.g. 23:30-05:30) is one day rather than two either side of midnight.
+
+    Args:
+        now_utc: the time minutes_ago is measured back from
+        minutes_ago: how far back the minute is
+        local_tz: the install's time zone (pytz), or None for UTC
+
+    Returns:
+        "YYYY-MM-DD"
+    """
+    when = now_utc - timedelta(minutes=minutes_ago)
+    if local_tz is not None:
+        when = when.astimezone(local_tz)
+    return (when - timedelta(hours=12)).strftime("%Y-%m-%d")
 
 
 def _temperature_sample_minutes(day_bins):
@@ -111,13 +132,15 @@ def merge_battery_temperature_samples(stored, scanned, today, max_age_days=BATTE
     return merged
 
 
-def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, half_life_days=BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS):
+def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, half_life_days=BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS, min_days=BATTERY_TEMPERATURE_CURVE_MIN_DAYS):
     """
     Work out a battery_temperature_charge_curve from stored samples.
 
     Each whole degree's rate is the mean of its charging minutes, with every day weighted down by its age
     (halving every half_life_days) so recent behaviour wins. A degree is only learned once it has min_minutes of
-    charging behind it, so one short charge cannot set the rate for a whole winter.
+    charging behind it, from at least min_days different days (each with BATTERY_TEMPERATURE_CURVE_MIN_DAY_MINUTES
+    or more), so one charge cannot set the rate for a whole winter - including a night whose recorded charge rate
+    did not match what the inverter was really doing.
 
     Args:
         samples: {day: {temperature: [sum_of_c, minutes]}}
@@ -129,6 +152,7 @@ def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERAT
     weighted_sum = {}
     weighted_minutes = {}
     minutes = {}
+    days = {}
     for day, day_bins in samples.items():
         age = max((today - datetime.strptime(day, "%Y-%m-%d").date()).days, 0)
         weight = 0.5 ** (age / half_life_days) if half_life_days > 0 else 1.0
@@ -136,10 +160,12 @@ def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERAT
             weighted_sum[temp] = weighted_sum.get(temp, 0.0) + rate_sum * weight
             weighted_minutes[temp] = weighted_minutes.get(temp, 0.0) + count * weight
             minutes[temp] = minutes.get(temp, 0) + count
+            if count >= BATTERY_TEMPERATURE_CURVE_MIN_DAY_MINUTES:
+                days[temp] = days.get(temp, 0) + 1
     curve = {}
     curve_minutes = {}
     for temp in sorted(minutes):
-        if minutes[temp] >= min_minutes and weighted_minutes[temp] > 0:
+        if minutes[temp] >= min_minutes and days.get(temp, 0) >= min_days and weighted_minutes[temp] > 0:
             curve[temp] = round(weighted_sum[temp] / weighted_minutes[temp], 2)
             curve_minutes[temp] = minutes[temp]
     return curve, curve_minutes
@@ -433,7 +459,7 @@ class BatteryCurve:
                                         store_range = range(this_soc, previous_point)
 
                                     # Evidence behind each point: the days it was seen on, and its share of the step's minutes
-                                    step_day = (self.base.now_utc - timedelta(minutes=minute)).strftime("%Y-%m-%d")
+                                    step_day = charge_day(self.base.now_utc, minute, getattr(self.base, "local_tz", None))
                                     step_minutes = total_count / max(len(store_range), 1)
                                     for point in store_range:
                                         if point not in final_curve:
@@ -710,7 +736,7 @@ class BatteryCurve:
         cap looks it up.
 
         Returns:
-            {day: {temperature: [sum_of_c, minutes]}} keyed by the UTC date (YYYY-MM-DD) and the whole degree
+            {day: {temperature: [sum_of_c, minutes]}} keyed by charge_day() (YYYY-MM-DD) and the whole degree
             the temperature truncates to (as find_battery_temperature_cap() looks it up), or None when the
             sensors or their history are missing.
         """
@@ -768,6 +794,7 @@ class BatteryCurve:
         min_battery_power = max(max_power * BATTERY_TEMPERATURE_CURVE_MIN_POWER, 1.0)
         battery_loss = self.base.battery_loss if self.base.battery_loss > 0 else 1.0
         rate_scaling = self.base.battery_rate_max_scaling if self.base.battery_rate_max_scaling > 0 else 1.0
+        local_tz = getattr(self.base, "local_tz", None)
         samples = {}
         for minute in range(0, min(len(soc), len(charge_rate), len(battery_power), len(temperature), len(status))):
             this_status = status.get(minute, "")
@@ -797,7 +824,7 @@ class BatteryCurve:
                 # report for a missing reading, so it is never learned (anything between -1 and 1 truncates to it)
                 continue
             rate_c = abs(power) / 1000.0 / battery_loss / self.soc_max / rate_scaling
-            day = (self.base.now_utc - timedelta(minutes=minute)).strftime("%Y-%m-%d")
+            day = charge_day(self.base.now_utc, minute, local_tz)
             day_bins = samples.setdefault(day, {})
             entry = day_bins.setdefault(temp, [0.0, 0])
             entry[0] += rate_c

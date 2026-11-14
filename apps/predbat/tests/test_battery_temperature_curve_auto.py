@@ -12,12 +12,14 @@
 
 import shutil
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+
+import pytz
 
 from tests.test_infra import TestHAInterface, MockStorageComponents, make_test_storage, run_async
 from predbat import PredBat
 from inverter import Inverter
-from battery_curve import clean_battery_temperature_samples, merge_battery_temperature_samples, learn_battery_temperature_curve, overlay_battery_temperature_curve
+from battery_curve import charge_day, clean_battery_temperature_samples, merge_battery_temperature_samples, learn_battery_temperature_curve, overlay_battery_temperature_curve
 from utils import find_battery_temperature_cap
 
 TEMP_SENSOR = "sensor.battery_temperature"
@@ -133,6 +135,16 @@ def _test_pure_helpers():
     failed |= _check("t3 minutes", minutes == {5: 40}, minutes)
     # 30 days old weighs half: (4 + 2 * 0.5) / (20 + 20 * 0.5) = 0.1667
     failed |= _check("t3 weighted", curve == {5: 0.17}, curve)
+    curve, _ = learn_battery_temperature_curve({"2026-11-14": {5: [0.2 * 90, 90]}}, today)
+    failed |= _check("t3 one day is not enough, however long", curve == {}, curve)
+    curve, _ = learn_battery_temperature_curve({"2026-11-14": {5: [0.2 * 90, 90]}, "2026-11-13": {5: [0.2 * 3, 3]}}, today)
+    failed |= _check("t3 a day needs a few minutes to count", curve == {}, curve)
+
+    print("Test 3b: an overnight charge is one evidence day, not two either side of midnight")
+    london = pytz.timezone("Europe/London")
+    night = datetime(2026, 11, 14, 6, 0, tzinfo=timezone.utc)  # 06:00, so 30 and 390 minutes ago are 05:30 and 23:30 the night before
+    failed |= _check("t3b one night", charge_day(night, 30, london) == charge_day(night, 390, london) == "2026-11-13", (charge_day(night, 30, london), charge_day(night, 390, london)))
+    failed |= _check("t3b next night differs", charge_day(night, 30 + 24 * 60, london) == "2026-11-12")
 
     print("Test 4: overlay - the learned range replaces the configured curve, gaps interpolated, colder filled, 0 left alone")
     configured = {15: 0.2, 8: 0.5, 3: 0.04, 0: 0.0}
