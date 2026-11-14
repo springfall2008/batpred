@@ -122,10 +122,10 @@ def decode_unverified(token):
 
 
 def _time_claim(claims, name):
-    """A numeric time claim, or None when absent; a bool or text value is a DecodeError, as in PyJWT."""
-    value = claims.get(name)
-    if value is None:
+    """A numeric time claim, or None when absent; null, a bool or text is a DecodeError, as PyJWT rejected them."""
+    if name not in claims:
         return None
+    value = claims[name]
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise DecodeError("The {} claim must be a number".format(name))
     return value
@@ -138,13 +138,15 @@ def decode(token, key, audience, leeway=0, now=None):
     The signature must match and the header must say HS256. exp, when present, must be in the
     future, and iat and nbf, when present, must not be. The aud claim must be audience or a list
     containing it. now (seconds since the epoch) is for tests. Raises a JWTError subclass on any
-    failure, with "expired", "audience" or "signature" in the message as PyJWT's had.
+    failure, laid out as PyJWT's: InvalidSignatureError is a DecodeError, the others are not.
     """
     header_segment, payload_segment, signature = _split(token)
     header = _json_object(header_segment, "header")
     if header.get("alg") != ALGORITHM:
         raise DecodeError("The specified algorithm is not allowed: {}".format(header.get("alg")))
-    if not hmac.compare_digest(sign("{}.{}".format(header_segment, payload_segment), key), signature):
+    # Compare bytes: compare_digest raises TypeError for a non-ASCII str, and a client can send one in the signature
+    expected = sign("{}.{}".format(header_segment, payload_segment), key).encode("ascii")
+    if not hmac.compare_digest(expected, signature.encode("utf-8", "surrogatepass")):
         raise InvalidSignatureError("Signature verification failed")
     claims = _json_object(payload_segment, "payload")
 

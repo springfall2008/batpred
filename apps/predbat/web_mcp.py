@@ -356,7 +356,7 @@ class PredbatMCPServer(ComponentBase):
                 except Exception as e2:
                     self.log(f"MCP: Could not even decode without verification: {e2}")
 
-                if last_error and "audience" in str(last_error).lower():
+                if isinstance(last_error, jwt_hs256.InvalidAudienceError):
                     self.log(f"MCP: Invalid token audience: {last_error}")
                 else:
                     self.log(f"MCP: Token verification failed: {last_error}")

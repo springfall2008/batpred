@@ -125,6 +125,9 @@ def test_jwt_hs256_rejects():
     head, _, signature = REFERENCE_TOKEN.split(".")
     tampered = "{}.{}.{}".format(head, _segment(dict(good, scope="mcp:read mcp:write mcp:control")), signature)
     failed |= _expect_error("tampered payload", jwt_hs256.InvalidSignatureError, ["signature"], lambda: decode(tampered, REFERENCE_KEY, audience=REFERENCE_AUDIENCE))
+    # aiohttp reads headers as latin-1, so a client can send a signature with bytes >= 0x80; hmac.compare_digest raises TypeError on non-ASCII str
+    non_ascii = "{}.{}.{}".format(head, REFERENCE_TOKEN.split(".")[1], "\u00e9" + signature[1:])
+    failed |= _expect_error("non-ASCII signature", jwt_hs256.InvalidSignatureError, ["signature"], lambda: decode(non_ascii, REFERENCE_KEY, audience=REFERENCE_AUDIENCE))
 
     print("Test: only HS256 is accepted, so an unsigned 'none' token or another algorithm is refused")
     unsigned = "{}.{}.".format(_segment({"alg": "none", "typ": "JWT"}), _segment(good))
@@ -149,6 +152,9 @@ def test_jwt_hs256_rejects():
     for claim in ("exp", "iat", "nbf"):
         failed |= _expect_error("{} as text".format(claim), jwt_hs256.DecodeError, [claim], lambda claim=claim: decode(_signed(header, dict(good, **{claim: "4102444800"})), REFERENCE_KEY, audience=REFERENCE_AUDIENCE))
     failed |= _expect_error("exp as a boolean", jwt_hs256.DecodeError, ["exp"], lambda: decode(_signed(header, dict(good, exp=True)), REFERENCE_KEY, audience=REFERENCE_AUDIENCE))
+    # A null claim is present, not absent: PyJWT rejected "exp": null, and treating it as absent would make a token that never expires
+    for claim in ("exp", "iat", "nbf"):
+        failed |= _expect_error("{} as null".format(claim), jwt_hs256.DecodeError, [claim], lambda claim=claim: decode(_signed(header, dict(good, **{claim: None})), REFERENCE_KEY, audience=REFERENCE_AUDIENCE))
 
     print("Test: a malformed token is a DecodeError, from decode and decode_unverified alike")
     signed_list = _signed(header, ["not", "an", "object"])

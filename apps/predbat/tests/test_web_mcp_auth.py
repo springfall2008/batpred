@@ -418,8 +418,16 @@ def test_mcp_base_url_behind_proxy(my_predbat):
             print("  ERROR: token with audience {} was refused".format(aud))
             failed = True
     token = server.generate_access_token("connector", resource="https://other.example.com")
-    if server.verify_access_token(token, expected_audience="https://mcp.example.com"):
-        print("  ERROR: token for another server was accepted")
+    logged = []
+    server.log = lambda message, *args, **kwargs: logged.append(message)
+    try:
+        if server.verify_access_token(token, expected_audience="https://mcp.example.com"):
+            print("  ERROR: token for another server was accepted")
+            failed = True
+    finally:
+        server.log = my_predbat.log
+    if not any("Invalid token audience" in line for line in logged):
+        print("  ERROR: a wrong-audience token was not logged as one: {}".format(logged))
         failed = True
 
     print("Test: the base URL follows the proxy headers, and ignores bad ones")
