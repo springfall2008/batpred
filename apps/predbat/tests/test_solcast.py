@@ -10,7 +10,6 @@
 
 import os
 import json
-import hashlib
 import re
 import shutil
 import tempfile
@@ -385,9 +384,7 @@ def test_cache_get_url_hit(my_predbat):
         url = "https://api.solcast.com.au/test/cached"
         params = {}
 
-        # Compute hash key same as cache_get_url
-        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
+        hash_key = test_api.solar.solar_cache_key(url, params)
 
         # Pre-populate storage with a non-expired, recently-created entry (age ~0 < max_age)
         cached_data = {"cached": True, "from": "file"}
@@ -442,8 +439,7 @@ def test_cache_get_url_stale(my_predbat):
         url = "https://api.solcast.com.au/test/stale"
         params = {}
 
-        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
+        hash_key = test_api.solar.solar_cache_key(url, params)
 
         # Save data with 7-day expiry so it won't be removed, then backdate creation to 2 hours ago
         old_data = {"stale": True}
@@ -489,8 +485,7 @@ def test_cache_get_url_failure_with_stale_cache(my_predbat):
         url = "https://api.solcast.com.au/test/failure"
         params = {}
 
-        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
+        hash_key = test_api.solar.solar_cache_key(url, params)
 
         # Save data with 7-day expiry then backdate creation to 2 hours ago to make it stale
         stale_data = {"stale": True, "fallback": "data"}
@@ -556,6 +551,58 @@ def test_cache_get_url_metrics_forecast_solar(my_predbat):
 
         if test_api.solar.solcast_requests_total != 0:
             print(f"ERROR: solcast_requests_total should be 0, got {test_api.solar.solcast_requests_total}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+# The Open-Meteo forecast URL from #6161 - long enough that embedding it in the cache filename exceeded the 255-character limit
+OPEN_METEO_LONG_URL = "https://api.open-meteo.com/v1/forecast?latitude=52.145899374311014&longitude=12.844656407833101&hourly=global_tilted_irradiance,temperature_2m,wind_speed_10m&wind_speed_unit=ms&tilt=39&azimuth=-48&forecast_days=4&timezone=UTC"
+
+
+def test_cache_get_url_long_url(my_predbat):
+    """
+    Test cache_get_url with a long Open-Meteo URL (#6161) - the cache must be written under a short filename and used on the next call.
+    """
+    print("  - test_cache_get_url_long_url")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        mock_data = {"hourly": {"time": ["2025-06-15T12:00"], "global_tilted_irradiance": [500]}}
+        test_api.set_mock_response("api.open-meteo.com", mock_data, 200)
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.cache_get_url(OPEN_METEO_LONG_URL, {}, max_age=60))
+        if result != mock_data:
+            print(f"ERROR: Expected {mock_data}, got {result}")
+            failed = True
+
+        cache_path = os.path.join(test_api.mock_base.config_root, "cache")
+        cache_files = os.listdir(cache_path)
+        if len(cache_files) != 2:
+            print(f"ERROR: Expected a data file and a meta file in the cache, got {cache_files}")
+            failed = True
+        for name in cache_files:
+            if len(name) > 64:
+                print(f"ERROR: Cache filename should be short, got {len(name)} characters: {name}")
+                failed = True
+
+        # Second call within max_age must be served from the cache, not re-downloaded
+        test_api.mock_responses = {}
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.cache_get_url(OPEN_METEO_LONG_URL, {}, max_age=60))
+        if result != mock_data:
+            print(f"ERROR: Expected cached data {mock_data} on second call, got {result}")
+            failed = True
+        if len(test_api.request_log) != 1:
+            print(f"ERROR: Expected one HTTP request in total, got {len(test_api.request_log)}")
             failed = True
 
     finally:
@@ -7026,6 +7073,7 @@ def run_solcast_tests(my_predbat):
 
     # Cache tests
     failed |= test_cache_get_url_miss(my_predbat)
+    failed |= test_cache_get_url_long_url(my_predbat)
     failed |= test_cache_get_url_hit(my_predbat)
     failed |= test_cache_get_url_stale(my_predbat)
     failed |= test_cache_get_url_failure_with_stale_cache(my_predbat)
