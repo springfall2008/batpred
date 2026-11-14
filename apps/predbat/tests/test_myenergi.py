@@ -2064,6 +2064,323 @@ def test_automatic_config_runs_once():
     print("  ✓ Automatic configuration runs exactly once")
 
 
+# A Zappi that has died or been removed but is still on the myenergi account: the direct API lists it with no plug state (#6117)
+MOCK_DIRECT_DEAD_ZAPPI = {key: value for key, value in dict(MOCK_DIRECT_ZAPPI, sno=11110000, sta=0, div=0, che=0).items() if key != "pst"}
+LIVE_ZAPPI_ENERGY = "sensor.predbat_myenergi_zappi_12345678_session_energy"
+DEAD_ZAPPI_ENERGY = "sensor.predbat_myenergi_zappi_11110000_session_energy"
+
+
+def _zappi_liveness_component():
+    """A component whose log lines are captured, for the Zappi liveness tests."""
+    component = _make_component()
+    component.log_messages = []
+    component.log = component.log_messages.append
+    return component
+
+
+def _poll_at(component, now, devices, first=False):
+    """Run one polling cycle at the given clock time, returning what the transport hands back."""
+    component.transport.fetch_devices = AsyncMock(return_value=devices)
+    with patch("myenergi.time.time", return_value=now):
+        run_async(component.run(0, first))
+
+
+def test_normalise_direct_zappi_without_plug_state_is_offline():
+    """A direct Zappi record with no pilot state is offline; any reported state, even one not in the table, is online."""
+    assert normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI).online is True
+    assert normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI).online is False
+    assert normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, pst=""), DEVICE_KIND_ZAPPI).online is False
+    assert normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, pst="A"), DEVICE_KIND_ZAPPI).online is True
+    # A pilot code this module has no name for is still a reading from a live unit
+    unknown = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, pst="Z9"), DEVICE_KIND_ZAPPI)
+    assert unknown.online is True and unknown.plug_status == "", unknown
+    # An Eddi has no pst field at all, and must not be read as offline for it
+    assert normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI).online is True
+    print("  ✓ A direct Zappi record with no plug state reads as offline")
+
+
+def test_automatic_config_skips_an_offline_zappi():
+    """The #6117 site: a dead Zappi with the lower serial must not take car 0 from the live one.
+
+    Covers both transports' signals - the direct API's missing plug state and the cloud API's online flag -
+    and checks wiring, charge control and discovery all leave it out, so they cannot disagree about car order.
+    """
+    for dead in (normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI), normalise_cloud_device(MOCK_CLOUD_ZAPPI_STATUS, dict(MOCK_CLOUD_ZAPPI_META, deviceId="ZA11110000", serialNumber=11110000, online=False))):
+        component = _make_component()
+        live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+        component.devices = {dead.device_id: dead, live.device_id: live}
+        component.automatic_config()
+
+        assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+        assert component.base.args["car_charging_planned"] == ["sensor.predbat_myenergi_zappi_12345678_plug_status"], component.base.args["car_charging_planned"]
+        assert component.base.args["car_charging_plugged"] == ["binary_sensor.predbat_myenergi_zappi_12345678_plugged"]
+        assert component.base.args["car_charging_power"] == ["sensor.predbat_myenergi_zappi_12345678_power"]
+        assert component.base.args["car_charging_now"] == ["sensor.predbat_myenergi_zappi_12345678_power"]
+        assert [key for key, _ in component.charger_control_chargers()] == [live.device_id]
+        discovery = component.build_discovery()
+        assert len(discovery["chargers"]) == 1 and "myenergi:12345678" in str(discovery["chargers"][0]) and "11110000" not in str(discovery), discovery
+        assert component.wired_zappi_ids == [live.device_id]
+    print("  ✓ An offline Zappi gets no car, charge control or discovery record, on either transport")
+
+
+def test_run_leaves_a_zappi_dead_since_start_up_out_at_once():
+    """A Zappi never seen online is left out on the first poll, with the reason logged once rather than every poll."""
+    component = _zappi_liveness_component()
+    devices = [normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI), normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)]
+    _poll_at(component, 1000.0, devices, first=True)
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    _poll_at(component, 1060.0, devices)
+    offline_lines = [message for message in component.log_messages if "Zappi 11110000 is offline" in message]
+    assert len(offline_lines) == 1, component.log_messages
+    assert not any("re-wiring" in message for message in component.log_messages), component.log_messages
+    print("  ✓ A Zappi dead since start-up is never wired, and the reason is logged once")
+
+
+def test_run_rewires_when_a_zappi_dies_and_when_it_comes_back():
+    """A Zappi that stops reporting keeps its car through the grace period, then loses it; reporting again gives it back at once."""
+    component = _zappi_liveness_component()
+    grace = component.zappi_offline_grace
+    alive = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    dead = normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)
+    live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+
+    _poll_at(component, 1000.0, [alive, live], first=True)
+    assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+
+    # One poll without a plug state is a blip, not a death: no renumbering
+    _poll_at(component, 1060.0, [dead, live])
+    assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert not any("is offline" in message for message in component.log_messages), component.log_messages
+
+    # Still silent past the grace period: the unit is dead, and the live Zappi becomes car 0 without a restart
+    _poll_at(component, 1000.0 + grace + 60, [dead, live])
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert component.base.args["car_charging_planned"] == ["sensor.predbat_myenergi_zappi_12345678_plug_status"]
+    assert any("Zappi 11110000 is offline" in message for message in component.log_messages), component.log_messages
+    assert any("re-wiring" in message for message in component.log_messages), component.log_messages
+
+    # Reporting again gives it its car back on the next poll
+    _poll_at(component, 1000.0 + grace + 120, [alive, live])
+    assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert any("Zappi 11110000 is reporting again" in message for message in component.log_messages), component.log_messages
+    print("  ✓ A Zappi that dies mid-session re-wires after the grace period, and again when it comes back")
+
+
+def test_run_keeps_a_zappi_missing_from_one_poll():
+    """The cloud transport skips a device whose status call fails; that must not drop its car or renumber the others."""
+    component = _zappi_liveness_component()
+    grace = component.zappi_offline_grace
+    first = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+
+    _poll_at(component, 1000.0, [first, live], first=True)
+    _poll_at(component, 1060.0, [live])
+    assert set(component.devices) == {first.device_id, live.device_id}, component.devices
+    assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+
+    # Gone for longer than the grace period: let go, and the remaining Zappi becomes car 0
+    _poll_at(component, 1000.0 + grace + 60, [live])
+    assert set(component.devices) == {live.device_id}, component.devices
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    print("  ✓ A Zappi missing from one poll keeps its car until the grace period runs out")
+
+
+def test_zappi_offline_grace_is_eight_hours():
+    """A Zappi silent for most of a night keeps its car; only past 8 hours is it dropped, and one poll back restores it.
+
+    The window is long on purpose: a Wi-Fi dropout or myenergi outage lasting a few hours must not renumber the cars,
+    which would hand the Intelligent Octopus car 0 to the other Zappi. Coming back is not delayed at all.
+    """
+    hours = 60 * 60
+    # Polled every minute and every 30 minutes through the whole dropout: however often the dead
+    # Zappi is seen without a plug state, the grace is measured from when it was last online
+    for poll_seconds in (60, 30 * 60):
+        component = _zappi_liveness_component()
+        component.poll_seconds = poll_seconds
+        assert component.zappi_offline_grace == 8 * hours, component.zappi_offline_grace
+        alive = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+        dead = normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)
+        live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+
+        _poll_at(component, 0.0, [alive, live], first=True)
+        for now in range(poll_seconds, 8 * hours - 60, poll_seconds):
+            _poll_at(component, float(now), [dead, live])
+            assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], (poll_seconds, now, component.base.args["car_charging_energy"])
+        _poll_at(component, 8 * hours - 60, [dead, live])
+        assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], (poll_seconds, component.base.args["car_charging_energy"])
+        assert not any("re-wiring" in message for message in component.log_messages), (poll_seconds, component.log_messages)
+        _poll_at(component, 8 * hours + 60, [dead, live])
+        assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], (poll_seconds, component.base.args["car_charging_energy"])
+        _poll_at(component, 8 * hours + 120, [alive, live])
+        assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], (poll_seconds, component.base.args["car_charging_energy"])
+    print("  ✓ A Zappi keeps its car for 8 hours offline and gets it back on the first poll it reports")
+
+
+def test_rewire_respects_automatic_zappi_off():
+    """With automatic_zappi off a Zappi dying is not a reason to wire car inputs the user asked Predbat to leave alone."""
+    component = _zappi_liveness_component()
+    component.automatic_zappi = False
+    grace = component.zappi_offline_grace
+    _poll_at(component, 1000.0, [normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)], first=True)
+    _poll_at(component, 1000.0 + grace + 60, [normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)])
+    assert "car_charging_energy" not in component.base.args, component.base.args
+    assert not any("re-wiring" in message for message in component.log_messages), component.log_messages
+    # No Zappi has a car with the Zappi half off, so warning that this one lost its car would mislead
+    assert not any("is offline" in message for message in component.log_messages), component.log_messages
+    print("  ✓ Re-wiring and the offline warning are skipped with automatic_zappi off")
+
+
+FIRST_EDDI_ENERGY = "sensor.predbat_myenergi_eddi_11112222_session_energy"
+
+
+def test_rewire_wires_an_eddi_added_later():
+    """An Eddi that appears after start-up is wired into iboost_energy_today on that poll, leaving the car inputs as they were."""
+    component = _zappi_liveness_component()
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    _poll_at(component, 1000.0, [zappi], first=True)
+    assert "iboost_energy_today" not in component.base.args, component.base.args
+    _poll_at(component, 1060.0, [zappi, normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)])
+    assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_87654321_session_energy", component.base.args
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert any("re-wiring" in message for message in component.log_messages), component.log_messages
+    print("  ✓ An Eddi added after start-up is wired without a restart")
+
+
+def test_rewire_keeps_the_eddi_through_a_missed_reply():
+    """The cloud transport skips a device whose status call fails; if that lands on the poll a Zappi re-wire fires,
+    iboost_energy_today must stay on the first Eddi rather than move to the second for good."""
+    component = _zappi_liveness_component()
+    grace = component.zappi_offline_grace
+    alive = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    dead = normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)
+    live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    first_eddi = normalise_direct_device(dict(MOCK_DIRECT_EDDI, sno=11112222), DEVICE_KIND_EDDI)
+    second_eddi = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+
+    _poll_at(component, 0.0, [alive, live, first_eddi, second_eddi], first=True)
+    assert component.base.args["iboost_energy_today"] == FIRST_EDDI_ENERGY, component.base.args
+    _poll_at(component, 60.0, [dead, live, first_eddi, second_eddi])
+    # The Zappi's grace (from its last online reading at 0) runs out on the very poll the first Eddi's status call
+    # fails; the Eddi was last seen at 60, so it is still well inside its own carry-over
+    _poll_at(component, grace + 30, [dead, live, second_eddi])
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert component.base.args["iboost_energy_today"] == FIRST_EDDI_ENERGY, component.base.args["iboost_energy_today"]
+    print("  ✓ A re-wire on a poll that missed the first Eddi keeps iboost_energy_today on it")
+
+
+def test_offline_grace_survives_a_restart():
+    """A restart while a live Zappi is mid-dropout keeps its car; a restart once its grace has run out does not.
+
+    Without the saved last-online times, the restarted component would read the Zappi as dead since start-up and drop
+    it at once, then give it its car back when it reported - renumbering the cars twice.
+    """
+    storage = _MemoryStorage()
+    alive = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    dead = normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)
+    live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    hours = 60 * 60
+
+    component = _zappi_liveness_component()
+    component.base.components = storage
+    _poll_at(component, 0.0, [alive, live], first=True)
+    _poll_at(component, 60.0, [dead, live])
+    saved = storage.saved[("myenergi", "zappi_last_online")]["last_online"]
+    # The Zappi going quiet is saved at once, with the last time it was online
+    assert saved == {"Z11110000": 0.0, "Z12345678": 60.0}, saved
+    # Nothing changed and the re-save is not due, so a poll does not rewrite it
+    _poll_at(component, 120.0, [dead, live])
+    assert storage.saved[("myenergi", "zappi_last_online")]["last_online"]["Z12345678"] == 60.0, storage.saved
+
+    # Restarted an hour later, the Zappi still silent: it keeps car 0
+    restarted = _zappi_liveness_component()
+    restarted.base.components = storage
+    _poll_at(restarted, 1 * hours, [dead, live], first=True)
+    assert restarted.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], restarted.base.args["car_charging_energy"]
+    assert not any("is offline" in message for message in restarted.log_messages), restarted.log_messages
+
+    # Restarted after its grace has run out: dropped at once, and forgotten in storage
+    late = _zappi_liveness_component()
+    late.base.components = storage
+    _poll_at(late, 8 * hours + 60, [dead, live], first=True)
+    assert late.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], late.base.args["car_charging_energy"]
+    assert "Z11110000" not in storage.saved[("myenergi", "zappi_last_online")]["last_online"], storage.saved
+    print("  ✓ The offline grace survives a restart, and a Zappi past it is dropped and forgotten")
+
+
+def test_control_leaves_a_zappi_missing_from_the_poll_alone():
+    """A Zappi kept from an earlier poll still holds its car number, but is not commanded from its frozen reading.
+
+    Without this, a Zappi whose cloud status call kept failing read as still Stopped inside a window, so every poll
+    logged it as drifted and re-sent Fast to a unit that was not answering, for up to the whole grace period.
+    """
+    component = _control_component(plans={0: [NIGHT_WINDOW]})
+    component.log_messages = []
+    component.log = component.log_messages.append
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    # Read and settled Stopped outside the window
+    component.devices = component.update_device_liveness([_zappi(12345678, mode_index=4)], 0.0)
+    run_async(component.charger_control_apply(OUT_OF_WINDOW))
+    commands_before = component.transport.set_mode.await_count
+
+    # The window opens while every status call for it fails: kept, still car 0, but nothing is sent
+    for poll in range(1, 6):
+        component.devices = component.update_device_liveness([], 60.0 * poll)
+        run_async(component.charger_control_apply(IN_WINDOW))
+    assert [key for key, _ in component.charger_control_chargers()] == ["Z12345678"], component.charger_control_chargers()
+    assert component.transport.set_mode.await_count == commands_before, component.transport.set_mode.await_args_list
+    assert not any("re-applying" in message for message in component.log_messages), component.log_messages
+
+    # Read again, and still Stopped inside the window: driven to Fast once
+    component.devices = component.update_device_liveness([_zappi(12345678, mode_index=4)], 360.0)
+    run_async(component.charger_control_apply(IN_WINDOW))
+    assert [call.args[1] for call in component.transport.set_mode.await_args_list[commands_before:]] == ["Fast"], component.transport.set_mode.await_args_list
+    print("  ✓ Charge control leaves a Zappi missing from the poll alone, and drives it again once it is read")
+
+
+def test_renumbered_cars_forget_what_was_kept_per_car():
+    """When a Zappi drops out and the cars renumber, the Zappi now behind a car must not inherit the last one's per-car state.
+
+    charger_control_octopus_cars holds the "left alone" reason last logged for each car number, and
+    charger_control_discovery_since its discovery wait clock. A car whose Zappi did not move keeps both.
+    """
+    component = _zappi_liveness_component()
+    grace = component.zappi_offline_grace
+    first = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    middle = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    middle_dead = normalise_direct_device(dict(MOCK_DIRECT_DEAD_ZAPPI, sno=12345678), DEVICE_KIND_ZAPPI)
+    last = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=33330000), DEVICE_KIND_ZAPPI)
+    since = datetime.datetime(2026, 8, 22, 20, 0)
+
+    _poll_at(component, 1000.0, [first, middle, last], first=True)
+    component.charger_control_octopus_cars = {0: "octopus", 1: "unknown", 2: "car"}
+    component.charger_control_discovery_since = {0: since, 1: since, 2: since}
+
+    # No renumbering, nothing forgotten - including through the grace period, while the middle Zappi still holds car 1
+    _poll_at(component, 1060.0, [first, middle_dead, last])
+    assert component.charger_control_octopus_cars == {0: "octopus", 1: "unknown", 2: "car"}, component.charger_control_octopus_cars
+    assert component.charger_control_discovery_since == {0: since, 1: since, 2: since}, component.charger_control_discovery_since
+
+    # The middle Zappi's grace runs out: the last Zappi moves up to car 1, and car 2 is gone. Car 0 keeps its state
+    _poll_at(component, 1000.0 + grace + 60, [first, middle_dead, last])
+    assert [key for key, _ in component.charger_control_chargers()] == [first.device_id, last.device_id], component.charger_control_chargers()
+    assert component.charger_control_octopus_cars == {0: "octopus"}, component.charger_control_octopus_cars
+    assert component.charger_control_discovery_since == {0: since}, component.charger_control_discovery_since
+    print("  ✓ Renumbered cars forget their per-car control state, and cars that kept their Zappi keep theirs")
+
+
+def test_rewire_respects_automatic_eddi_off():
+    """With automatic_eddi off an Eddi appearing is not a reason to re-wire or claim iboost_energy_today."""
+    component = _zappi_liveness_component()
+    component.automatic_eddi = False
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    _poll_at(component, 1000.0, [zappi], first=True)
+    _poll_at(component, 1060.0, [zappi, normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)])
+    assert "iboost_energy_today" not in component.base.args, component.base.args
+    assert not any("re-wiring" in message for message in component.log_messages), component.log_messages
+    print("  ✓ Re-wiring for an Eddi is skipped with automatic_eddi off")
+
+
 def test_controls_queue_rather_than_call():
     """Switch and number events queue for the run loop instead of calling inline."""
     component = _make_component()
@@ -2739,6 +3056,124 @@ def test_templates_accept_the_connected_zappi_plug_states():
     print("  ✓ {} templates accept every connected Zappi plug state".format(checked))
 
 
+# Discovery catalogue reporter
+
+
+def _eddi(serial):
+    """Build a direct-API Eddi."""
+    return normalise_direct_device(dict(MOCK_DIRECT_EDDI, sno=serial), DEVICE_KIND_EDDI)
+
+
+def _discovery_component(devices, **overrides):
+    """A component polled once with these devices, its entities published, and its reports captured.
+
+    The hub serial differs from every device serial so a leak of it into the report is detectable.
+    """
+    overrides.setdefault("hub_serial", "99887766")
+    component = _make_component(**overrides)
+    component.transport.fetch_devices = AsyncMock(return_value=list(devices))
+    component.filed_reports = []
+    component.report_discovery = component.filed_reports.append
+    assert run_async(component.run(0, True)) is True
+    return component
+
+
+def test_discovery_none_without_zappi():
+    """An account with only an Eddi has no charger to describe."""
+    component = _discovery_component([_eddi(87654321)])
+    assert component.build_discovery() is None
+    assert component.filed_reports == []
+    print("  ✓ Discovery reports nothing without a Zappi")
+
+
+def test_discovery_zappi_record():
+    """A Zappi is a charger keyed by its hardware serial, with a stub car and the four bound entities."""
+    component = _discovery_component([_zappi(12345678), _eddi(87654321)])
+    report = component.build_discovery()
+    assert report["automatic"] is True
+    assert len(report["chargers"]) == 1, report
+    charger, car = report["chargers"][0], report["cars"][0]
+    assert charger["device_id"] == "myenergi:12345678", charger
+    assert charger["hardware_ids"] == {"serial": "12345678"}, charger
+    assert charger["info"] == {"vendor": "myenergi", "model": "zappi"}, charger
+    assert charger["serves_cars"] == ["myenergi:12345678:car"], charger
+    assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_energy", "car_charging_power"}, charger["entities"]
+    assert charger["entities"]["car_charging_planned"]["entity_id"] == "sensor.predbat_myenergi_zappi_12345678_plug_status"
+    assert charger["entities"]["car_charging_plugged"]["entity_id"] == "binary_sensor.predbat_myenergi_zappi_12345678_plugged"
+    assert car == {"device_id": "myenergi:12345678:car", "charged_by": "myenergi:12345678", "flags": ["stub"]}, car
+    assert "87654321" not in str(report), "the Eddi is not a charger and must not be reported"
+    print("  ✓ Discovery reports a Zappi with a stub car and its bound entities")
+
+
+def test_discovery_automatic_follows_automatic_zappi():
+    """With myenergi_automatic_zappi off no Zappi entity is bound, so the report must not claim automatic."""
+    component = _discovery_component([_zappi(12345678)], automatic_zappi=False)
+    assert "car_charging_energy" not in component.base.args, "the Zappi must not have been wired"
+    assert component.build_discovery()["automatic"] is False
+    print("  ✓ Discovery automatic flag follows myenergi_automatic_zappi")
+
+def test_discovery_cloud_alias_never_reported():
+    """The cloud transport's user-chosen alias and the hub serial (a login identifier) never reach the report."""
+    cloud_zappi = normalise_cloud_device(MOCK_CLOUD_ZAPPI_STATUS, MOCK_CLOUD_ZAPPI_META)
+    assert cloud_zappi.name == "Driveway"
+    component = _discovery_component([cloud_zappi])
+    report = component.build_discovery()
+    assert report["chargers"][0]["device_id"] == "myenergi:12345678", "cloud and direct must give the same identity"
+    assert "Driveway" not in str(report), report
+    assert "99887766" not in str(report), report
+    print("  ✓ Discovery never reports the cloud alias or the hub serial")
+
+
+def test_discovery_round_trip():
+    """The report survives the real Coordinator: every entity, the stub flag, and a readable serial."""
+    from coordinator import Coordinator
+
+    component = _discovery_component([_zappi(12345678)])
+    logs = []
+    base = MockBase()
+    coordinator = Coordinator(base)
+    coordinator.log = logs.append
+    coordinator.report("myenergi", component.build_discovery())
+    cleaned = coordinator.reports["myenergi"]
+    assert len(cleaned["chargers"][0]["entities"]) == 4, cleaned
+    assert cleaned["cars"][0]["flags"] == ["stub"], cleaned
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    coordinator.assemble()
+    assert "12345678" in str(coordinator.catalogue()), "the Zappi serial is hardware, and stays readable"
+    print("  ✓ Discovery report round-trips through the Coordinator")
+
+
+def test_discovery_serial_readable_without_hub():
+    """With no hub the Zappi's serial doubles as the login username - still an identifier, so it is published readable.
+
+    Identifiers are not secret (maintainer decision, 2 Nov 2026); only the API key is, and it never
+    enters the record.
+    """
+    from coordinator import Coordinator
+
+    component = _discovery_component([_zappi(12345678)], hub_serial="12345678")
+    charger = component.build_discovery()["chargers"][0]
+    assert charger["hardware_ids"] == {"serial": "12345678"}, charger
+    assert "account_ids" not in charger, charger
+    coordinator = Coordinator(MockBase())
+    coordinator.report("myenergi", component.build_discovery())
+    catalogue = coordinator.catalogue()
+    assert catalogue["chargers"][0]["device_id"] == "myenergi:12345678", catalogue["chargers"]
+    assert "secret-key" not in str(catalogue), "the API key never enters the catalogue"
+    print("  ✓ Discovery keeps a hub-less Zappi's serial readable")
+
+
+def test_discovery_refreshed_on_non_poll_cycle():
+    """A report that failed to build on a poll cycle is retried on the next run(), poll or not."""
+    component = _discovery_component([_zappi(12345678)])
+    assert len(component.filed_reports) == 1, "the first cycle files the report"
+    component.filed_reports.clear()
+    component._discovery_report = None
+    assert run_async(component.run(30, False)) is True
+    assert len(component.filed_reports) == 1, "a non-poll cycle still refreshes the report"
+    print("  ✓ Discovery is refreshed on a non-poll cycle")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -2859,6 +3294,19 @@ def test_myenergi(my_predbat=None):
     test_automatic_config_keeps_user_car_charging_now()
     test_automatic_config_disabled()
     test_automatic_config_runs_once()
+    test_normalise_direct_zappi_without_plug_state_is_offline()
+    test_automatic_config_skips_an_offline_zappi()
+    test_run_leaves_a_zappi_dead_since_start_up_out_at_once()
+    test_run_rewires_when_a_zappi_dies_and_when_it_comes_back()
+    test_run_keeps_a_zappi_missing_from_one_poll()
+    test_zappi_offline_grace_is_eight_hours()
+    test_rewire_respects_automatic_zappi_off()
+    test_rewire_wires_an_eddi_added_later()
+    test_rewire_keeps_the_eddi_through_a_missed_reply()
+    test_offline_grace_survives_a_restart()
+    test_control_leaves_a_zappi_missing_from_the_poll_alone()
+    test_rewire_respects_automatic_eddi_off()
+    test_renumbered_cars_forget_what_was_kept_per_car()
     test_automatic_config_ignores_unsupported_kinds()
     test_templates_accept_the_connected_zappi_plug_states()
     test_controls_queue_rather_than_call()
@@ -2876,6 +3324,13 @@ def test_myenergi(my_predbat=None):
     test_queued_boost_rejection_is_logged_as_a_failure()
     test_device_for_entity_requires_a_whole_prefix_match()
     test_number_event_handler_ignores_other_number_entities()
+    test_discovery_none_without_zappi()
+    test_discovery_zappi_record()
+    test_discovery_automatic_follows_automatic_zappi()
+    test_discovery_cloud_alias_never_reported()
+    test_discovery_round_trip()
+    test_discovery_serial_readable_without_hub()
+    test_discovery_refreshed_on_non_poll_cycle()
 
     print("=" * 70)
     return False

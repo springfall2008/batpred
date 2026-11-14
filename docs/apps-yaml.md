@@ -314,6 +314,24 @@ Sets your symbol to use for your main currency e.g. £, € or $ and for 1/100th
     - 'p'
 ```
 
+### currency_scale
+
+Optional, default 1. Predbat plans in your minor currency unit (pence, cents, øre, haléř...), and the ranges of its money settings,
+such as **input_number.predbat_metric_min_improvement_export**, were chosen in pence.
+If your minor unit is worth much less than a penny the top of those ranges can be too small to be a useful threshold,
+e.g. the 50 limit on the metric_min_improvement settings is only 0.50 CZK.
+
+Set `currency_scale` to roughly how many of your minor units make one penny, and the minimum and maximum of every setting measured in your minor unit
+(the `p`, `p/kWh` and `p/kg` settings) is multiplied by it when Predbat starts, e.g. for Czech koruna (about 29 haléř to the penny):
+
+```yaml
+  currency_scale: 29
+```
+
+Only the ranges change. The defaults and the values you have already set stay as they are, so you still need to raise the thresholds yourself
+to what suits you - multiplying the defaults by the same factor is a good starting point.
+Values below 1 are ignored, as they would narrow the ranges and cut back settings you have already made.
+
 ### template
 
 Initially set to `true`, this is used to stop Predbat from operating until you have finished configuring your `apps.yaml`.
@@ -430,6 +448,36 @@ Docker users can change the web port for the Predbat web interface by setting **
 ```yaml
   web_port: 5052
 ```
+
+If you do not use the web interface you can turn it off entirely by setting **web_enable** to `false`. Predbat then does not start the web server or open its port, so nothing on your network can reach it.
+
+```yaml
+  web_enable: false
+```
+
+- The default is `true`, and leaving it out keeps the web interface on.
+- With the web interface off the Predbat app's **Open Web UI** button and its Home Assistant sidebar panel stop working, as they open this same web interface. Remove the setting (or set it back to `true`) and restart Predbat to turn it on again.
+- The MCP server (`mcp_enable`) is separate and is not affected.
+
+To stop accidental changes to your settings from the web interface (for example from other devices on your network) you can set a username and password with **web_username** and **web_password**.
+It is best to keep the password in `secrets.yaml`:
+
+```yaml
+  web_username: admin
+  web_password: !secret web_password
+```
+
+When both are set the browser asks for a login before it will open the WhatIf, Chat, Settings (Apps, Config, Components, Editor) and Advanced (Discovery, Browse, Internals, Kraken API Key) pages, the debug and download pages, or save any change (plan and rate overrides, restarts and so on).
+The views that only show data (Dash, Metrics, Plan, Charts, Entities, Compare and Log) can still be opened without a login.
+There is a single login with no different levels of access.
+
+- The login is HTTP Basic authentication, which is not encrypted, so on a network you do not trust put the web interface behind an HTTPS reverse proxy.
+- The login stops unauthenticated access, such as other devices on your network or a vulnerability scanner. Once you have logged in your browser re-sends the credentials automatically, so a malicious web page you visit in the same browser could still submit a change (cross-site request forgery). Only a proxy with token-based authentication, or not exposing the web interface at all, closes that.
+- If only one of the two is set then every protected page is refused until you set the other.
+- Leave both unset (the default) for no login, which is what you need when using Predbat through Home Assistant ingress or behind your own authentication proxy.
+- The `/api/ping`, `/api/status`, `/api/state` (read), `/api/log`, `/api/entities` and `/metrics` data endpoints are not protected, nor is the `/images` route.
+- The `/api/login` request, used to set a session cookie when Predbat is behind a reverse proxy, is also not protected. It does not change any setting.
+- Pages added by plugins are only protected for changes (POST), not for viewing.
 
 ### notify_devices
 
@@ -592,6 +640,9 @@ such as 30 or 36 if you have a small battery and thus don't need to forecast 2 d
 Can set the maximum number of seconds of delay when recalculating the plan after it expires. The exact delay will be between 0 and this value.
 The default is 0.
 
+When set above 0 it also spreads out the Octopus/Kraken billing reads shown in the History view: the first read after Predbat starts waits a random 0-30 minutes,
+and each day's billing query waits a further random 0-60 seconds, so many installations restarted together don't all query the supplier at once.
+
 ```yaml
   plan_random_delay: 30
 ```
@@ -727,6 +778,13 @@ is ignored (with a warning), so Predbat's inverter controls are not wired to GE 
 daily pass that sets the inverter's default options (SoC limits, power percentages, clearing charge and discharge slots 2 to 10) is
 skipped. A change you make to one of the inverter's `_gecloud_` entities is still sent to the inverter.
 The EV charger settings above are not affected.
+
+- **ge_cloud_poll_settings** - Optional, defaults to false. GivEnergy limits how many API calls an account can make each month, and
+reading the inverter's settings is done one register at a time, so Predbat reads them sparingly: the registers it controls at
+startup and every 12 hours, and all the others only when it has no stored copy from the last 7 days. They are also re-read
+straight away when Predbat leaves read only mode, and when a control failure shows the inverter is not doing what Predbat asked
+(at most once every 4 hours). A setting you change in the GivEnergy app can therefore take up to 12 hours to be noticed. Set this
+to `true` to read every register every 10 minutes instead, as older versions did, at the cost of many more API calls.
 
 - **ge_cloud_evc_direct** - Optional, defaults to false. Set it to `true`, in place of **ge_cloud_direct**, when your inverter is
 controlled by something else, such as GivTCP or the GivEnergy app, and you only want GE Cloud for your EV charger.
@@ -903,6 +961,14 @@ Keep `solis_api_key` and `solis_api_secret` in `secrets.yaml` rather than in `ap
 - `solis_cloud_pv_load_ignore` - Optional, defaults to false. When set to `true`, Predbat will override the **solis_automatic** setting and use the **load_today**, **load_power**, **pv_today** and **pv_load** sensors configured in `apps.yaml`.<BR>
 This can be useful if the Solis cloud data in the does not accurately reflect your house PV and load (e.g. multiple inverters that share load or PV inverter and micro-inverters) and you want to use a custom sensors.  All other sensors will use either the `apps.yaml` entries or the Solis Cloud entities depending upon **solis_automatic**.
 - `solis_nominal_voltage` - Optional, your battery's nominal pack voltage (e.g. cell count x nominal cell voltage per cell - **not** the live/resting battery voltage reported by the inverter, which varies with charge state). The inverter stores its charge and discharge limits as currents, so this is the voltage Predbat uses to convert them to watts: it sets the `battery_capacity` sensor, the max charge/discharge power and slot power sensors, and hence `battery_rate_max`. Without it, Predbat infers the voltage instead: on an LV pack it classifies the pack from the BMS-requested charge voltage the inverter reports (48V below 55V, 51.2V at or above it), and on an HV pack it continues to use the live reading. The LV result is fixed across polls, so nothing drifts as the battery charges and discharges, but it is an inference rather than a stated figure, so `battery_capacity` is flagged unreliable (a `reliable: false` attribute, plus a log warning). Set this option for an accurate figure - and note that on an HV pack it is the only way to stop the derived watt values moving with state of charge. `soc_max` must still be set manually either way (see below), the `battery_capacity` sensor is informational only and is not auto-bound to it.
+- `solis_parallel_slaves` - Optional, for inverters wired in parallel (master and slave) on one battery bank. Maps each master's serial number to its slave's serial number, or a list of them; quote serial numbers that are all digits. On such a pair the master's charge and discharge slot current is the whole group's, shared between the inverters, so when Predbat sets the master's slots it adds each slave's planned current for the same slot to the master's own. Each inverter is still planned at its own rate. Every slave must also be one of the inverters Predbat controls (see `solis_inverter_sn`), and this only applies in TOU V2 mode (inverters with six charge and discharge slots).
+- `solis_parallel_slot_current_max` - Optional, used with `solis_parallel_slaves`: the most, in amps, that the master's slot current may be set to for the whole group. Without it the master's slots stay capped at its own battery limit (CID 7224/7226), however many inverters share them, and without `solis_parallel_slaves` it does nothing. Set it from your **battery bank's** rated maximum continuous charge and discharge current, never from the sum of the inverters' ratings: two inverters can draw more than a shared bank can safely take. Predbat also checks the slot accepts it by probing, as it does for every inverter's slot current, and uses the lower figure.
+
+```yaml
+  solis_parallel_slaves:
+    "MASTER_SERIAL": "SLAVE_SERIAL"
+  solis_parallel_slot_current_max: 270
+```
 
 #### Important notes (Solis)
 
@@ -1140,6 +1206,55 @@ When **alphaess_automatic** is set to `true`, Predbat will discover every batter
 
 See [AlphaESS Cloud setup](inverter-setup.md#alphaess-cloud) for the diagnostics CLI walkthrough.
 
+### Growatt Cloud OpenAPI
+
+Predbat.com completes Growatt's OAuth flow and injects the short-lived access token, its expiry, the refresh handle, regional API base and the customer's selected inverter serial. The normal SaaS configuration is therefore generated for the instance rather than copied into a user's `apps.yaml`:
+
+```yaml
+  growatt_key: !secret growatt_key
+  growatt_auth_method: oauth
+  growatt_token_expires_at: '2026-10-20T23:00:00Z'
+  growatt_token_hash: !secret growatt_token_hash
+  growatt_inverter_sn: SPH123456
+  growatt_base_url: https://opencloud.growatt.com/prod-api
+  growatt_automatic: true
+  growatt_control_enable: true
+```
+
+The token and token hash are credentials and must stay in `secrets.yaml` on a self-hosted installation. A raw access token without the Predbat.com refresh route will stop working when it expires.
+
+Configuration keys:
+
+- `growatt_key`, `growatt_token_expires_at`, `growatt_token_hash` and `growatt_auth_method`: the OAuth state supplied by Predbat.com
+- `growatt_inverter_sn`: one serial or a list of serials authorised for this token
+- `growatt_base_url`: the OpenAPI base URL for the Growatt application registration, default `https://opencloud.growatt.com/prod-api`. It must include the `/prod-api` path, not just the host, because the endpoint paths (such as `/oauth2/getDeviceInfo`) are appended to it. A trailing slash is ignored
+- `growatt_automatic`: automatically bind all monitoring and schedule entities (recommended)
+- `growatt_automatic_ignore_pv`: preserve a manually configured `pv_power` source
+- `growatt_control_enable`: allow dispatch writes, default `true`; set false for monitoring only
+- `growatt_battery_rate_max`: optional W override when the reported battery rating is wrong or absent
+- `growatt_api_delay`: delay between different-device calls, default `0.2` seconds
+- `growatt_min_write_interval`: dispatch pacing, default and minimum `6` seconds (Growatt's five-second limit plus a second of margin)
+
+Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from telemetry, which Growatt updates about every five minutes. When the charge target is reached the charge slot stays in place at 0% power, so the battery holds until the window ends (full power resumes if the charge level falls more than 1% below the target); when the export floor is reached the export slot is removed. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval (about five minutes) of overshoot and confirm the behaviour on the target model before relying on it.
+
+Growatt has no reserve Predbat can hold the battery with, so the reserve functions (`switch.predbat_set_reserve_enable` and the reserve-based holds) are turned off for this inverter. Outside a slot the inverter runs its own self-consumption down to its local minimum.
+
+The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat clears the slot table it wrote, handing control back to the inverter's own settings. Before writing a table that exports, Predbat raises the inverter's OpenAPI export limit to 100% if it reads as anything lower (see below).
+
+The API times are UTC. Predbat converts the local planned windows on every apply, including the current daylight-saving offset, and splits a window that crosses UTC midnight.
+
+Predbat reads the inverter's OpenAPI export limit (`readDeviceDispatch` `export_limit`) every eight hours and publishes it as `sensor.predbat_growatt_<serial>_export_limit` in W. Growatt gives it as a percentage; Predbat takes that as a percentage of the inverter's rated output (`nominalPower`). On a live SPH the limit read 0% and Predbat's export slots only covered the house load, while the inverter's own schedule still exported to the grid. So, while it is in control, Predbat raises the limit to 100% before an export unless it is already at 100% or disabled (reading it first if it has not been read yet), and leaves it there - it is not set back on release. Predbat does not change it while it is read-only. The sensor is not bound to Predbat's `export_limit`: if your grid connection is capped below the inverter's rating, set `export_limit` in `apps.yaml`.
+
+The inverter's own SoC floors from the device information are published as `sensor.predbat_growatt_<serial>_discharge_cutoff_soc` (`dischargeCutOffSOC`) and `sensor.predbat_growatt_<serial>_backup_cutoff_soc` (`backupCutOffSOC`, the off-grid minimum). The discharge cut-off acts as the floor for forced export, not as a reserve. On a live SPH reading 100%, an export slot at 100% SoC exported nothing, while the battery still discharged to cover the house. Predbat's export slots stop at it, so at 100% Predbat's exports do nothing. Neither value is used as Predbat's minimum reserve, and the OpenAPI cannot change either, so set them in the Growatt app.
+
+See [Components - Growatt OpenAPI](components.md#growatt-openapi-growatt) and [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi).
+
+### Fox Cloud API
+
+Predbat can talk to Fox ESS inverters directly through the Fox Cloud API, configured with `fox_key` and the other `fox_` settings in `apps.yaml`.
+These include `fox_poll_seconds`, which sets how often the live data such as battery SoC is fetched (default `300`).
+See [Components - Fox ESS API](components.md#fox-ess-api-fox) for the full list of settings and what each one does.
+
 ### num_inverters
 
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
@@ -1159,6 +1274,7 @@ inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should 
   GE: GivEnergy via GivTCP
   GEC: GivEnergy Cloud integration
   GEE: GivEnergy EMC
+  GrowattCloud: Growatt public OpenAPI integration (EXPERIMENTAL)
   GS: Ginlong Solis
   HU: Huawei Solar
   SA: Solar Assistant
@@ -1223,7 +1339,7 @@ Edit if necessary if you have non-standard sensor names:
 
 - **load_today** - Entity name for the house load in kWh today (must be incrementing)
 - **load_power** - Current load power sensor in W (used with load_power_fill_enable to improve load_today data accuracy)
-- **load_power_fill_enable** - When true (default), uses load_power data to fill gaps and smooth load_today sensor data. Set to false to disable this feature.
+- **load_power_fill_enable** - When true (default), uses load_power to smooth load_today sensor data that moves in coarse steps, and to fill gaps where load_today lost readings. Set to false to disable this feature.
 - **import_today** - Imported energy today in kWh (incrementing)
 - **export_today** - Exported energy today in kWh (incrementing)
 - **pv_today** - PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
@@ -1326,6 +1442,7 @@ the controls of your inverter inside home assistant.
 - **ge_cloud_direct** - Set to true to enable GE Cloud direct access
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
 - **ge_cloud_inverter_control** - Optional, defaults to true. Set to false to monitor the inverter without Predbat controlling it
+- **ge_cloud_poll_settings** - Optional, defaults to false. Set to true to read every inverter register every 10 minutes instead of only as needed
 - **ge_cloud_evc_direct** - Set to true instead of **ge_cloud_direct** to use GE Cloud for a GivEnergy EV charger only, leaving the inverter alone
 
 ## Load filtering
@@ -1337,8 +1454,8 @@ the lowest day's historical load will be discarded.
 - **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap (that's filled with average data), the default is 30.
 To disable, set it to 1440.
 
-- **load_power_fill_enable** (default true) helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
-out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
+- **load_power_fill_enable** (default true) helps to improve the accuracy of historical load data by using instantaneous power readings to smooth
+out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). Where load_today is only waiting for its next step, it decides how much energy was used and load_power only when, so a power sensor that is somewhat off calibration doesn't change your load totals; load_power only adds energy where load_today lost readings and never made them up, and for the time since load_today's last step. A load_power that is more than about twice off can be mistaken for lost readings. This preprocessing happens before
 the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors. Set to 'false' to turn this feature off.
 
 - **load_history_fill_enable** (default true) fills the days before your load_today sensor's history starts from the history of Predbat's own `predbat.load_energy_h0`
@@ -1430,6 +1547,8 @@ approval was lower than your maximum inverter power (check your install informat
 
 If you do not set an export limit then it is assumed to be unlimited (and thus limited by your inverter or PV system).
 
+With **givtcp_rest**, **ge_cloud** and some other integrations, Predbat reads the limit from the inverter itself when you do not set one - see the section for your integration.
+
 ### **battery_export_permitted**
 
 One per inverter (optional), an entity whose state is `on` or `off`.
@@ -1460,6 +1579,11 @@ This can be used if you need Predbat to cap your inverter battery rate (e.g. due
 By default Predbat will normally configure all timed charges or discharges to be at the inverter's maximum rate and these options enable you to reduce that maximum rate.
 [Low rate charging](customisation.md#inverter-control-options) could also be used to slow down Predbat's charge rate whilst still meeting the battery plan.
 
+Some cloud integrations set these for you from the inverter's own reported ratings: SolisCloud and Sigenergy Cloud in automatic mode both set `inverter_limit_charge` and `inverter_limit_discharge` separately, with `battery_rate_max` as the larger of the two, so a battery that discharges faster than it charges is planned at both rates. A value you set in `apps.yaml` takes precedence.
+
+With more than one inverter, these rates also decide how the fleet's SoC target is shared between the inverters. Each inverter is given a share of the energy to charge in proportion to its charge rate, or of the energy to discharge in proportion to its discharge rate, so the inverters finish together.
+An inverter that is full (or at its reserve) is held there and the others take its share. Forced exports are shared by **inverter_limit_export** instead, see below.
+
 ### **inverter_limit_export**
 
 An optional list of values with one entry per inverter.
@@ -1478,6 +1602,9 @@ while still allowing the battery to discharge at full rate during ECO mode to co
 
 If not set, the value defaults to `inverter_limit_discharge` (or the inverter maximum if that is also not set).
 Predbat will also use this rate when modelling the plan so the prediction accurately reflects the capped export rate.
+
+With more than one inverter, a forced export's fleet SoC target is shared between the inverters in proportion to this rate, so a lower limit on one inverter gives it less to export and a higher per-inverter target SoC.
+An inverter that reaches its reserve stops there and the others export the rest.
 
 ### **inverter_limit_charge_dc**
 
@@ -1577,7 +1704,10 @@ Be careful of setting the rate at a value higher than your inverter can handle f
 - **soc_max** - Entity name for the maximum charge level for the battery in kWh.
 If not set or set to 0, Predbat will attempt to automatically determine the battery size by analyzing historical charging data from `soc_percent` and `battery_power` sensors.
 This requires at least several days of historical data with charging periods of 15% or more SoC change. If automatic detection fails, you must manually set this value.
-- **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
+- **soc_max_fallback** - Optional. The battery size in kWh (or an entity giving it) to plan with while `soc_max` is unset and Predbat has not yet estimated the size from charge history - without it Predbat uses 8 kWh. Unlike `soc_max` it is never treated as the battery's nominal size, so it does not constrain the estimate: once one exists it is used instead, however far it is from the fallback.
+Some inverter integrations (e.g. Sunsynk) set this automatically from a capacity the inverter reports but cannot be trusted.
+- **battery_size_power** - Optional. A battery power sensor (W, same sign convention and `battery_power_invert` as `battery_power`) used only for estimating the battery size from charge history, in place of `battery_power`. Set it when a more accurate battery-side reading exists for sustained charging than the one used for live power - Sunsynk sets it automatically to the battery management system's own power.
+- **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value. Don't point it at the same entity as **reserve**: that entity holds whatever reserve Predbat last wrote, so Predbat ignores `battery_min_soc` in that case and logs a warning
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 Can also be set to a fixed percentage rather than an entity name for inverters that have no reserve register to point at -
 the supplied Huawei and Sofar templates do this. A fixed value tells Predbat what the inverter is set to so it can be modelled,
@@ -1733,6 +1863,22 @@ or
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
+**Warning - window times are set to 00:00:00 on inverters with no enable switch:** if your inverter type has
+[has_discharge_enable_time](inverter-setup.md#has_discharge_enable_time) set to False, Predbat has no switch to turn timed discharge off,
+so it disables the discharge window by writing 00:00:00 to both **discharge_start_time** and **discharge_end_time** instead.
+In Control charge & discharge mode it sets them back to 00:00:00 whenever no export is planned or running, and in any mode it also does it
+when the Predbat mode or the read-only switch is changed. Predbat also keeps writing its planned charge window to **charge_start_time** and **charge_end_time**,
+and if [has_charge_enable_time](inverter-setup.md#has_charge_enable_time) is also False it turns the charge window off the same way, by writing 00:00:00 to both:
+in Control charge and Control charge & discharge modes whenever no charge is planned or running (for example while it waits for the next planned charge),
+and in any mode when the Predbat mode or the read-only switch is changed.
+
+If your inverter is controlled through services or a script and its **charge_time_format** is not "HH:MM:SS" (for example the SolaX Gen4+ Mode 8
+template), leave **charge_start_time**, **charge_end_time**, **discharge_start_time** and **discharge_end_time** out of `apps.yaml`.
+Predbat then creates its own `sensor.predbat_<inverter type>_<inverter number>_...` entities for them, e.g. `sensor.predbat_SOLAX_0_discharge_end_time`, and
+writes the window times there. If you point them at your inverter's real time entities, Predbat overwrites those instead, and the 00:00:00 write
+closes any window you set on the inverter yourself - for example a SolaX discharge window kept at 00:00-23:59 so the battery supplies the house.
+Adding `set_charge_window: false` or `set_discharge_window: false` to `apps.yaml` does not stop these writes, see [has_time_window](inverter-setup.md#has_time_window).
+
 Some inverters require a "button press" to be triggered by Predbat to update the charge/discharge schedules in the inverter after the appropriate HA entities have been set.
 
 If your inverter features a combined charge/discharge update button, the **charge_discharge_update_button** can be set to the button name. e.g.:
@@ -1799,6 +1945,15 @@ repointing them at a sensor it has only just created would throw that history aw
 planning with no load model until the days build back up. This applies per setting, so naming one of
 the four by hand leaves the other three auto-configured. Everything else Predbat auto-configures here
 is read as a current value rather than as history, and anything you set for those is still overridden.
+
+**export_limit** is also left to you if you set it. Predbat publishes the inverter's own export limit
+as `sensor.predbat_givtcp_<n>_export_limit` (from GivTCP's `Export_Limit`, which is 0 for a
+zero-export site) and points **export_limit** at it only when `apps.yaml` does not set one. If your
+`apps.yaml` value differs from what the inverter reports, the log says so once - delete the
+`export_limit` line to use the inverter's figure instead. GivTCP v2 and three-phase inverters do not
+report an export limit, so for those keep setting it by hand. If only some of your inverters report
+one, Predbat leaves **export_limit** entirely to `apps.yaml` (deleting it would make every inverter
+unlimited); the log still notes any inverter whose own figure differs, so you can correct its entry.
 
 Predbat also publishes the battery flows and the lifetime counters -
 `sensor.predbat_givtcp_<n>_battery_{charge,discharge}_today` and
@@ -2439,15 +2594,17 @@ In `apps.yaml`, uncomment (or add) the following lines, customising to the list 
     - '{octopus_intelligent_slot}'
     - '{octopus_ready_time}'
     - '{octopus_charge_limit}'
-    - '{octopus_saving_session}'
     - '+[car_charging_planned]'
-    - '+[car_charging_soc]'
 ```
 
 Note the notation for watch_list, a single value `apps.yaml` configuration item such as **octopus_intelligent_slot** is surrounded by curly bracket parenthesis {},
-but for `apps.yaml` configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
+but for `apps.yaml` configuration items that can be a list such as **car_charging_planned** they are surrounded by +[ and ].
 
 **car_charging_now** does not need to be in the watch list: Predbat already checks it every 15 seconds and re-plans as soon as the car starts or stops charging.
+
+**octopus_saving_session** should not be in the watch list either: Predbat reads it on every update anyway, so watching it only adds extra re-plans that fall between the normal plan times.
+
+**car_charging_soc** is best left out of the watch list too: Predbat reads it to plan the car's charge on every update, and a car SoC from a cloud integration changes while the car is out driving, so watching it re-plans for changes that do not matter.
 
 ## Load Forecast
 
@@ -2610,8 +2767,12 @@ giving a stable average that is robust to occasional outliers).
 
 The calculation is performed at most once per calendar day to avoid wasting compute resources.
 On subsequent Predbat cycles in the same day the stored sensor state is used instead.
+If the day's calculation finds no usable charge (it runs just after midnight UTC, before an overnight charge), it is retried hourly
+until it does, so that night's charge is used the same morning. The time of the last attempt is kept on the sensor as `last_attempt`.
 
 The resulting `battery_scaling` is clamped to the range [0.8, 1.0] if `soc_max` is configured.
+If `soc_max` is not set the estimate is used directly and stays an estimate: it is never written back as `soc_max`,
+so later days are measured afresh rather than held near the first figure.
 
 This is useful for batteries that degrade over time — the scaling will gradually reduce as the measured capacity drifts
 below the nominal figure, without needing any manual adjustment.
@@ -2716,6 +2877,11 @@ or an edit being made to `apps.yaml`), then Predbat will automatically calculate
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
 
+If you use **soc_percent** and your **battery_scaling** is not 1.0, Predbat versions before the fix for [#6183](https://github.com/springfall2008/batpred/issues/6183)
+learned the charge curve at the SoC multiplied by battery_scaling, so a logged curve tapered too early (at battery_scaling 0.95, a taper that really starts at 91% was logged from about 87%),
+and below a battery_scaling of about 0.86 no curve was found at all.
+If you pasted a curve logged in that state into `apps.yaml`, re-learn it: remove it (or set it to **auto**), restart Predbat, and paste the newly logged curve.
+
 The logfile *may* also include an Info recommendation for how to set your **input_number.battery_rate_max_scaling**/**_scaling_discharge** setting in HA if Predbat detects that your inverter is charging/discharging at a different maximum rate than is configured in `apps.yaml`.<BR>
 If you don't get such a message then Predbat didn't detect any charge/discharge rate discrepancy.
 
@@ -2770,6 +2936,8 @@ If the battery_discharge_power_curve option is *not* set in `apps.yaml` and Pred
 or an edit being made to `apps.yaml`), then Predbat will automatically calculate the discharging curve for you from historical battery discharging information.
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery discharging curve and copy/paste it into your `apps.yaml` file.
+
+The same fix applies to the discharge curve. There the old offset was SoC x (1 - battery_scaling), which at 5-20% SoC is small (one percentage point or less at battery_scaling 0.95), so a pasted discharge curve is much less affected.
 
 Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
 

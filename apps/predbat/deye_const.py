@@ -29,6 +29,17 @@ FREEZE_EXPORT_SOC = 99
 # cache is invalidated and the next apply is forced to re-write.
 DEYE_ORDER_MAX_POLLS = 3
 
+# Order-level status that GET /order/{orderId} reports for an order the device rejected. The
+# poll response's outer success flag only says the poll itself worked, so it is true here too.
+# Observed live (GH#6017): an executed order polls as status 666 with error null, a failed one
+# as {"success": true, "status": 500, "error": "540", "analysisResult": null}.
+DEYE_ORDER_FAILED_STATUSES = ("500",)
+
+# Order-level error values that mean "no error". Any other error marks the order failed. Only
+# null has been observed on an executed order; a numeric zero is excluded too so that a firmware
+# reporting error 0 alongside status 666 is not mistaken for a failure and re-sent every cycle.
+DEYE_ORDER_NO_ERROR_VALUES = ("", "0")
+
 # DEYE executes one control order at a time per device. A second command sent while one is
 # still running is rejected with this code — it means "retry shortly", not "rejected", so
 # it is logged as back-pressure rather than a failure and the caller re-applies next cycle.
@@ -168,6 +179,18 @@ DEYE_TELEMETRY_KEYS = {
     "load_power": "TotalConsumptionPower",
     "temperature": "Temperature- Battery",
 }
+
+# Not every model reports the keys above. A single-phase SUN-8K-SG05LP1-EU-AM2-P has no
+# TotalSolarPower and returns TotalDCInputPower plus one DCPowerPV<n> per string instead
+# (#5016). A key counts when its value is numeric: "0.00" at night is a real reading,
+# while a missing, empty or null value falls through to the next source.
+DEYE_TELEMETRY_FALLBACK_KEYS = {
+    "pv_power": ("TotalDCInputPower",),
+}
+
+# Last resort for pv_power when neither TotalSolarPower nor TotalDCInputPower is there:
+# sum the per-string readings (DCPowerPV1, DCPowerPV2, ...).
+DEYE_PV_STRING_KEY_PREFIX = "DCPowerPV"
 
 # Metrics whose sign must be flipped to reach Predbat's convention. DEYE reports grid
 # power positive when IMPORTING (confirmed live: TotalGridPower +25 W with

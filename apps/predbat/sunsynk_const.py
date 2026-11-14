@@ -168,13 +168,18 @@ def encode_setting(name, value):
     return str(value)
 
 
+# Grid-power source fields (GH#6068). limiterTotalPower is the external CT reading and
+# the field grid_power maps to; pac is the fallback for sites with no CT/limiter fitted.
+SUNSYNK_GRID_POWER_CT_FIELD = "limiterTotalPower"
+SUNSYNK_GRID_POWER_FALLBACK_FIELD = "pac"
+
 # Telemetry: Predbat sensor leaf -> (endpoint key, response field).
 SUNSYNK_TELEMETRY = {
     "soc": ("battery", "soc"),
     "battery_power": ("battery", "power"),
     "battery_voltage": ("battery", "voltage"),
     "temperature": ("battery", "temp"),
-    "grid_power": ("grid", "pac"),
+    "grid_power": ("grid", SUNSYNK_GRID_POWER_CT_FIELD),
     "load_power": ("load", "totalPower"),
     "pv_power": ("input", "pac"),
 }
@@ -209,9 +214,22 @@ SUNSYNK_ENERGY = {
 # computed surplus of ~0 W) look like the opposite conclusion and are pure noise; do not
 # re-decide this from a sample under a few hundred watts.
 #
-# `pac` is also the right FIELD: it read 0 W at the same moment the app did, while grid
-# vip[0].power read -418 W and is evidently something else (a CT or per-phase sense, not
-# whole-house flow).
+# `pac` is NOT the right FIELD, despite what this comment used to say (GH#6068): on
+# export Sunsynk switches pac to the inverter's own grid-port reading - the same value
+# as vip[0].power - which counts house load wired on the grid side of the inverter as
+# export. The field that tracks the site flow is limiterTotalPower, the external CT
+# reading, so grid_power maps to it and pac is only the fallback for a site with no
+# CT/limiter fitted (missing field, or 0 while pac is live). The evidence is in the
+# issue: on export pac -3389 W against a CT reading of -1805 W, a 1584 W over-read,
+# while on import pac and the CT agree exactly (5411 W, 4049 W, 4012 W); on a quiet
+# house the 125/121 W gap equals the grid-side load to the watt. The 2026-08-20 sample
+# above still settles the SIGN - pac was negative on export, and the CT reads negative
+# on export too, so the negation stands - but it never recorded the CT field, so it
+# could not have caught the difference between the two. The idle reading that chose
+# pac (0 W while vip[0].power read -418 W) only showed pac matching the app at rest;
+# vip[0].power is the inverter's own grid-port reading, not whole-house flow. The
+# warning above still holds: do not re-decide this from a sample under a few hundred
+# watts.
 SUNSYNK_TELEMETRY_NEGATE = ("grid_power",)
 
 # Fields used to derive ratings rather than published directly.
@@ -260,16 +278,27 @@ SUNSYNK_MAX_SOLAR_FIELD = "solarMaxSellPower"  # settings, watts
 #   bank, POSITIVE WHILE CHARGING - the opposite of power/current - so battery power is
 #   -bmsCurrent x voltage. 411 of 411 samples with a clear direction agreed (246 charging,
 #   165 discharging), and integrated it tracks the SoC change where the counters do not.
-# - Grid, PV and load are each the unit's own share and are summed. Master import alone was
-#   1.85-1.96x below the supplier's meter over four days; master + slave matched it. Load
-#   reads near-identical on both units because they split it evenly, not because it is mirrored.
+# - PV and load are each the unit's own share and are summed. Grid depends on which
+#   field sourced it (GH#6068 follow-up): a CT reading (limiterTotalPower) is the
+#   site-wide flow, so the group takes the master's and summing would double-count
+#   it - but a pac-fallback reading is only that unit's share, so when every member
+#   fell back to pac the shares are summed, as they were on main. The pac evidence
+#   that used to justify summing grid - master import alone 1.85-1.96x below the
+#   supplier's meter over four days, master + slave matching it - was the pac shares
+#   adding up to the site flow; with the CT field the master alone reports the site
+#   flow. Load reads near-identical on both units because they split it evenly, not
+#   because it is mirrored.
 # - Daily battery counters follow each unit's own power, not the bank, and the slave's are
 #   garbage, so a group's battery_charge/discharge_today are integrated from the BMS power.
 SUNSYNK_EQUIP_MODE_FIELD = "equipMode"  # inverter list ("M1"/"S2") and settings ("1"/"0")
 SUNSYNK_PARALLEL_FIELD = "parallel"  # settings, "1" on every member of a parallel group
 SUNSYNK_BMS_CURRENT_FIELD = "bmsCurrent"  # battery realtime, amps, positive while charging
-SUNSYNK_BMS_LINK_FIELDS = ("bmsVolt", "bmsSoc")  # battery realtime, 0 on a unit with no BMS link
-SUNSYNK_PARALLEL_SUMMED_POWER = ("grid_power", "load_power", "pv_power")
+SUNSYNK_BMS_VOLT_FIELD = "bmsVolt"  # battery realtime, volts at the BMS
+SUNSYNK_BMS_LINK_FIELDS = (SUNSYNK_BMS_VOLT_FIELD, "bmsSoc")  # battery realtime, 0 on a unit with no BMS link
+SUNSYNK_PARALLEL_SUMMED_POWER = ("load_power", "pv_power")
+# grid_power stays out of the summed tuple because its combining depends on its source
+# (GH#6068): CT-sourced it is the master's site-wide reading, pac-fallback shares are
+# summed instead - see _group_grid_power in sunsynk.py.
 SUNSYNK_PARALLEL_SUMMED_ENERGY = ("pv_today", "import_today", "export_today", "load_today")
 # Leaf -> integrator total for a group's battery energy.
 SUNSYNK_PARALLEL_BATTERY_ENERGY = {"battery_charge_today": "charge", "battery_discharge_today": "discharge"}

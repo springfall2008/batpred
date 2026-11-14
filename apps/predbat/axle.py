@@ -29,6 +29,8 @@ from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 from utils import str2time, minutes_to_time, TIME_FORMAT
 
+AXLE_HISTORY_DAYS = 9
+
 
 class AxleAPI(ComponentBase):
     """Axle Energy VPP client with managed mode support."""
@@ -165,15 +167,17 @@ class AxleAPI(ComponentBase):
 
     def cleanup_event_history(self):
         """
-        Remove events older than 7 days from history
+        Remove events that ended more than AXLE_HISTORY_DAYS days ago from history
         """
         if not self.event_history:
             return
 
-        cutoff_time = self.now_utc - timedelta(days=7)
+        # Two days longer than a week, so the History view's billing comparison, which reaches back 7 whole local days (one of
+        # them maybe 25 hours long, and kept until the next billing read prunes it), still has every Axle event on its oldest day
+        cutoff_time = self.now_utc - timedelta(days=AXLE_HISTORY_DAYS)
         original_count = len(self.event_history)
 
-        # Keep only events that ended within the last 7 days
+        # Keep only events that ended within the last AXLE_HISTORY_DAYS days
         cleaned_history = []
         for event in self.event_history:
             end_time_str = event.get("end_time")
@@ -189,7 +193,7 @@ class AxleAPI(ComponentBase):
         self.event_history = cleaned_history
         removed = original_count - len(self.event_history)
         if removed > 0:
-            self.log(f"AxleAPI: Cleaned up {removed} events older than 7 days")
+            self.log(f"AxleAPI: Cleaned up {removed} events older than {AXLE_HISTORY_DAYS} days")
 
     def add_event_to_history(self, event_data, allow_future=False):
         """Add an event to history.
@@ -247,7 +251,7 @@ class AxleAPI(ComponentBase):
 
         for attempt in range(max_retries):
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.get(url, headers=headers) as response:
                         if response.status == 200:
                             try:
@@ -293,7 +297,7 @@ class AxleAPI(ComponentBase):
         timeout = aiohttp.ClientTimeout(total=30)
 
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.post(
                     url,
                     data={
@@ -566,6 +570,35 @@ class AxleAPI(ComponentBase):
             },
         )
 
+    def build_discovery(self):
+        """
+        Describe the Axle Energy VPP enrolment for the discovery catalogue.
+
+        One "vpp" programme: a managed site keyed "axle:site:{site_id}" with its site id in account_ids,
+        or a BYOK account keyed "axle:vpp" (BYOK has no site id). An Axle session always rewrites the
+        import or export rate (load_axle_slot()), hence rate_override; with axle_control on, an active
+        session also puts Predbat in read-only mode (fetch.py), hence forces_read_only. Axle does not
+        know which supply point it is enrolled on, so the record names no meter rather than guessing
+        one. The axle_session binding is the event sensor automatic_config() wires, once Home
+        Assistant has seen it.
+
+        Identifiers are published readable; the BYOK API key and the partner login, password and token
+        are never read.
+
+        Returns None while Axle is disabled - no API key and no managed site.
+        """
+        if not self.managed_mode and not self.api_key:
+            return None
+        record = {"device_id": "axle:site:{}".format(self.site_id) if self.managed_mode else "axle:vpp", "kind": "vpp"}
+        if self.managed_mode:
+            record["account_ids"] = {"site_id": str(self.site_id)}
+        record["info"] = {"vendor": "Axle Energy", "mode": "managed" if self.managed_mode else "byok"}
+        record["effects"] = ["rate_override", "forces_read_only"] if self.get_arg("axle_control", False) else ["rate_override"]
+        entities = self.discovery_entities({"axle_session": {"entity_id": "binary_sensor." + self.prefix + "_axle_event", "domain": "binary_sensor", "access": "r"}})
+        if entities:
+            record["entities"] = entities
+        return {"automatic": self.automatic, "programmes": [record]}
+
     async def automatic_config(self):
         """
         Automatic configuration for Axle participation
@@ -599,6 +632,10 @@ class AxleAPI(ComponentBase):
                 self.failures_total += 1
 
         self.publish_axle_event()
+
+        # Filed every cycle, after the publish so the event sensor exists. refresh_discovery() owns the
+        # compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         return True
 

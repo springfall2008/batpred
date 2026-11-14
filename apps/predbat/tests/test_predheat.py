@@ -11,7 +11,7 @@
 """Tests for the Predheat scheduler, its predheat_enable gate (#4670) and the smart thermostat pre-heat model."""
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytz
 
@@ -333,5 +333,491 @@ def test_predheat_smart_thermostat(my_predbat):
             my_predbat.args.pop("predheat", None)
         else:
             my_predbat.args["predheat"] = original_predheat_args
+
+    return failed
+
+
+def test_predheat_volume_temp(my_predbat):
+    """Check sensor, numeric and fallback volume temperature initialisation."""
+    failed = False
+    sensor = "sensor.predheat_test_flow_temp"
+    sensor_f = "sensor.predheat_test_volume_f"
+    flow_f = "sensor.predheat_test_flow_f"
+    flow_helper = "input_number.predheat_test_flow"
+    flow_dead = "sensor.predheat_test_flow_dead"
+    weather_f = "weather.predheat_test_f"
+    flow_plain = "sensor.predheat_test_flow_plain"
+    volume_plain = "input_number.predheat_test_volume_plain"
+    flow_plain_dead = "sensor.predheat_test_flow_plain_dead"
+    flow_attribute = "climate.predheat_test_boiler"
+    missing = object()
+
+    old_args = my_predbat.args.get("predheat", missing)
+    old_enable = my_predbat.config_index["predheat_enable"].get("value")
+    old_next = my_predbat.config_index["next_volume_temp"].get("value")
+    old_sensor = my_predbat.ha_interface.dummy_items.get(sensor, missing)
+
+    histories = {
+        "external_temperature": ({0: 7.5}, 7),
+        "internal_temperature": ({0: 19.9}, 7),
+        "target_temperature": ({0: 20.0}, 7),
+        "heating_energy": ({}, 0),
+    }
+
+    cases = [
+        ("HA sensor", {"volume_temp": sensor}, 24.598, 39.7, 40.0),
+        ("numeric value", {"volume_temp": 35.0}, 24.598, 35.0, 40.0),
+        ("persisted fallback", {}, 24.598, 24.598, 40.0),
+        ("internal fallback", {}, None, 19.9, 40.0),
+        ("sensors in °F (#5153)", {"volume_temp": sensor_f, "flow_temp": flow_f}, 24.598, 60.0, 50.0),
+        ("entity with no unit, Home Assistant in °C", {"flow_temp": flow_helper}, 24.598, 24.598, 45.0),
+        ("entities with no unit, Home Assistant in °F", {"weather": weather_f, "flow_temp": flow_plain, "volume_temp": volume_plain}, 24.598, 60.0, 50.0),
+        ("unreadable entity with no unit, Home Assistant in °F, gives the default unconverted", {"weather": weather_f, "flow_temp": flow_plain_dead}, 24.598, 24.598, 40.0),
+        ("entity$attribute in °F", {"flow_temp": flow_attribute + "$setpoint"}, 24.598, 24.598, 50.0),
+        ("fixed number, Home Assistant in °F, is still °C", {"weather": weather_f, "flow_temp": 45}, 24.598, 24.598, 45.0),
+        ("fixed flow number is °C", {"flow_temp": 45}, 24.598, 24.598, 45.0),
+        ("unreadable flow sensor gives the default", {"flow_temp": flow_dead}, 24.598, 24.598, 40.0),
+    ]
+    extra_sensors = {
+        sensor_f: {"state": "140", "unit_of_measurement": "°F"},
+        flow_f: {"state": "122", "unit_of_measurement": "°F"},
+        flow_helper: "45",
+        flow_dead: {"state": "unavailable", "unit_of_measurement": "°F"},
+        weather_f: {"state": "sunny", "temperature_unit": "°F"},
+        flow_plain: "122",
+        volume_plain: "140",
+        flow_plain_dead: "unavailable",
+        flow_attribute: {"state": "on", "setpoint": "122", "unit_of_measurement": "°F"},
+    }
+    old_items = dict(my_predbat.ha_interface.dummy_items)
+
+    try:
+        # next_volume_temp is only accessible when Predheat is enabled.
+        my_predbat.config_index["predheat_enable"]["value"] = True
+        my_predbat.ha_interface.dummy_items[sensor] = "39.7"
+        my_predbat.ha_interface.dummy_items.update(extra_sensors)
+
+        for label, options, persisted, expected, expected_flow in cases:
+            print("Test: volume_temp {}".format(label))
+
+            my_predbat.args["predheat"] = {
+                "mode": "pump",
+                "forecast_days": 2,
+                "days_previous": [7],
+                **options,
+            }
+            my_predbat.config_index["next_volume_temp"]["value"] = persisted
+
+            predheat = PredHeat(my_predbat)
+            predheat.reset()
+
+            predheat.minute_data_entity = lambda now, key, **kwargs: histories[key]
+            predheat.get_weather_data = lambda now: None
+            predheat.today_cost = lambda history: 0
+
+            initial_temps = []
+
+            def simulate(volume_temp, heating_active, save="best", last_predict_minute=None):
+                initial_temps.append(volume_temp)
+                return volume_temp, {}
+
+            predheat.run_simulation = simulate
+            predheat.update_pred(scheduled=False)
+
+            if len(initial_temps) != 2 or any(abs(float(temp) - expected) > 0.001 for temp in initial_temps):
+                print("  ERROR: {} expected {}, got {}".format(label, expected, initial_temps))
+                failed = True
+            if abs(float(predheat.flow_temp) - expected_flow) > 0.001:
+                print("  ERROR: {} expected flow_temp {}, got {}".format(label, expected_flow, predheat.flow_temp))
+                failed = True
+
+    finally:
+        if old_args is missing:
+            my_predbat.args.pop("predheat", None)
+        else:
+            my_predbat.args["predheat"] = old_args
+
+        my_predbat.config_index["predheat_enable"]["value"] = old_enable
+        my_predbat.config_index["next_volume_temp"]["value"] = old_next
+
+        my_predbat.ha_interface.dummy_items.clear()
+        my_predbat.ha_interface.dummy_items.update(old_items)
+        if old_sensor is missing:
+            my_predbat.ha_interface.dummy_items.pop(sensor, None)
+        else:
+            my_predbat.ha_interface.dummy_items[sensor] = old_sensor
+
+    return failed
+
+
+def test_predheat_volume_temp_persistence(my_predbat):
+    """Check the persisted volume temperature survives a config reload across the range a wet heating system reaches."""
+    failed = False
+    item = my_predbat.config_index["next_volume_temp"]
+
+    old_enable = my_predbat.config_index["predheat_enable"].get("value")
+    old_next = item.get("value")
+    old_had_errors = my_predbat.had_errors
+    old_record_status = my_predbat.record_status
+    statuses = []
+
+    def record_status(message, *args, **kwargs):
+        """Capture each status message, then record it as normal."""
+        statuses.append(message)
+        return old_record_status(message, *args, **kwargs)
+
+    # The volume heats towards the flow temperature, so the value saved after a run sits well above
+    # room temperature. Anything beyond the boiling point of water is still clamped.
+    cases = [
+        ("flow temperature of an electric boiler", 55.5, 55.5, False),
+        ("flow temperature of a gas boiler", 72.25, 72.25, False),
+        ("declared maximum", 100, 100, False),
+        ("above the declared maximum", 150, 100, True),
+    ]
+
+    try:
+        # next_volume_temp is only accessible when Predheat is enabled.
+        my_predbat.expose_config("predheat_enable", True, force_ha=True)
+        my_predbat.record_status = record_status
+
+        for label, persisted, expected, expect_warning in cases:
+            print("Test: next_volume_temp reload with {}".format(label))
+
+            my_predbat.expose_config("next_volume_temp", persisted, force_ha=True)
+            my_predbat.had_errors = False
+            statuses.clear()
+            my_predbat.load_user_config()
+
+            got = my_predbat.get_arg("next_volume_temp")
+            if got is None or abs(float(got) - expected) > 0.001:
+                print("  ERROR: {} expected {} after reload, got {}".format(label, expected, got))
+                failed = True
+
+            warnings = [message for message in statuses if "next_volume_temp" in message]
+            if bool(warnings) != expect_warning or my_predbat.had_errors is not expect_warning:
+                print("  ERROR: {} expected warning {}, got {} with had_errors {}".format(label, expect_warning, warnings, my_predbat.had_errors))
+                failed = True
+
+    finally:
+        my_predbat.record_status = old_record_status
+        my_predbat.expose_config("next_volume_temp", old_next if old_next is not None else item.get("default"), force_ha=True)
+        my_predbat.expose_config("predheat_enable", bool(old_enable), force_ha=True)
+        my_predbat.load_user_config()
+        my_predbat.had_errors = old_had_errors
+
+    return failed
+
+
+def test_predheat_optional_energy_history(my_predbat):
+    """Missing heating-energy history must not disable thermostat schedule history."""
+    failed = False
+    original_args = my_predbat.args.get("predheat")
+    try:
+        my_predbat.args["predheat"] = {"mode": "gas", "forecast_days": 2, "days_previous": [7]}
+        predheat = PredHeat(my_predbat)
+        predheat.reset()
+
+        # The target schedule has seven days of history; gas energy is unavailable.
+        histories = {
+            "external_temperature": ({0: 10.0}, 7),
+            "internal_temperature": ({0: 20.0}, 7),
+            "target_temperature": ({0: 21.0, 7 * 24 * 60: 21.0}, 7),
+            "heating_energy": ({}, 0),
+        }
+        predheat.minute_data_entity = lambda now, key, **kwargs: histories[key]
+        predheat.get_weather_data = lambda now: None
+        predheat.today_cost = lambda history: 0
+        predicted_targets = []
+
+        def simulate(volume_temp, heating_active, save="best", last_predict_minute=None):
+            """Record the replayed setpoint and pass volume temperature through both simulation passes."""
+            predicted_targets.append(predheat.get_historical(predheat.target_temperature, 0, default=20.0))
+            return volume_temp, {}
+
+        predheat.run_simulation = simulate
+
+        print("Test: missing heating-energy history preserves scheduled target history")
+        predheat.update_pred(scheduled=False)
+        if predheat.minute_data_age != 7 or predicted_targets != [21.0, 21.0]:
+            print("  ERROR: expected seven days and 21 C targets; got age {} targets {}".format(predheat.minute_data_age, predicted_targets))
+            failed = True
+
+        print("Test: available heating-energy history continues to limit history age")
+        histories["heating_energy"] = ({0: 1.0}, 3)
+        predicted_targets.clear()
+        predheat.update_pred(scheduled=False)
+        if predheat.minute_data_age != 3:
+            print("  ERROR: expected three days, got {}".format(predheat.minute_data_age))
+            failed = True
+
+        print("Test: absent thermostat history still produces zero history age")
+        histories["heating_energy"] = ({}, 0)
+        histories["target_temperature"] = ({}, 0)
+        predheat.update_pred(scheduled=False)
+        if predheat.minute_data_age != 0:
+            print("  ERROR: expected zero days, got {}".format(predheat.minute_data_age))
+            failed = True
+    finally:
+        if original_args is None:
+            my_predbat.args.pop("predheat", None)
+        else:
+            my_predbat.args["predheat"] = original_args
+
+    return failed
+
+
+def test_predheat_temperature_units(my_predbat):
+    """
+    Predheat models in °C: temperatures from °F entities - the weather forecast, temperature sensors, a flow
+    temperature sensor - are converted from each entity's own unit, and the published temperatures follow
+    the internal temperature sensor's unit (#5153)
+    """
+    print("**** Running Test: predheat_temperature_units ****")
+    failed = False
+    original_predheat_args = my_predbat.args.get("predheat", None)
+    try:
+        units = {"weather.home": None, "sensor.inside_f": "°F", "sensor.inside_c": "°C"}
+        my_predbat.args["predheat"] = {"weather": "weather.home", "internal_temperature": ["sensor.inside_f", "sensor.inside_c"]}
+        now_utc = datetime(2026, 1, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+        def make(weather_unit):
+            """Build a PredHeat with stubbed HA state."""
+            predheat = PredHeat(my_predbat)
+            units["weather.home"] = weather_unit
+
+            def get_state(entity_id=None, default=None, attribute=None, **kwargs):
+                """Stand-in for get_state_wrapper: units from the table."""
+                if attribute in ("unit_of_measurement", "temperature_unit"):
+                    return units.get(entity_id)
+                return default
+
+            predheat.get_state = get_state
+            predheat.set_units()
+            return predheat
+
+        # Weather forecast in °F reaches the model in °C; in °C it is passed through
+        for unit, raw, expected in [("°F", 64.0, 17.78), ("°C", 18.0, 18.0)]:
+            predheat = make(unit)
+            predheat.forecast_days = 1
+            predheat.external_temperature = {0: expected}
+            forecast = [{"datetime": (now_utc + timedelta(hours=hour)).isoformat(), "temperature": raw} for hour in range(0, 26)]
+            predheat.call_service = lambda *args, **kwargs: {"weather.home": {"forecast": forecast}}
+            predheat.get_weather_data(now_utc)
+            got = predheat.temperatures.get(120)
+            if got is None or abs(got - expected) > 0.01:
+                print("ERROR: a {} forecast of {} should reach the model as {} °C, got {}".format(unit, raw, expected, got))
+                failed = True
+
+        # Sensor histories in different units are each converted before they are averaged: 68 °F and 20 °C
+        predheat = make("°C")
+        predheat.max_days_previous = 1
+        history = {
+            "sensor.inside_f": [{"state": "68", "last_updated": (now_utc - timedelta(minutes=minute)).isoformat()} for minute in range(120, -1, -30)],
+            "sensor.inside_c": [{"state": "20", "last_updated": (now_utc - timedelta(minutes=minute)).isoformat()} for minute in range(120, -1, -30)],
+        }
+        predheat.get_history = lambda entity_id=None, days=None, **kwargs: [history[entity_id]]
+        data, _ = predheat.minute_data_entity(now_utc, "internal_temperature", smoothing=True, temperature=True)
+        if abs(data.get(0, 0) - 20.0) > 0.01:
+            print("ERROR: 68 °F and 20 °C should average to 20 °C, got {}".format(data.get(0)))
+            failed = True
+
+        # set_units: the display unit follows the first internal temperature sensor, else Home Assistant's unit
+        # from the weather entity (sensor.inside_f is °F, the weather entity °C here)
+        predheat = make("°C")
+        if predheat.system_unit != "°C" or predheat.display_unit != "°F":
+            print("ERROR: expected Home Assistant's unit °C and display unit °F (internal sensor), got {} and {}".format(predheat.system_unit, predheat.display_unit))
+            failed = True
+        units["sensor.inside_f"] = None
+        predheat = make("°F")
+        if predheat.display_unit != "°F":
+            print("ERROR: an internal sensor with no unit should display in Home Assistant's unit (°F), got {}".format(predheat.display_unit))
+            failed = True
+        units["sensor.inside_f"] = "°F"
+
+        # The display unit follows the first internal temperature sensor, and a sensor with no unit is read in it
+        if predheat.first_entity("internal_temperature") != "sensor.inside_f":
+            print("ERROR: the first internal temperature sensor should be sensor.inside_f, got {}".format(predheat.first_entity("internal_temperature")))
+            failed = True
+        predheat.system_unit = None
+        predheat.display_unit = "°F"
+        if predheat.temperature_unit("sensor.no_unit") != "°F":
+            print("ERROR: with Home Assistant's unit unknown, a sensor with no unit should read in the display unit")
+            failed = True
+
+        # The published unit is a canonical label, and an unrecognised internal unit falls through to Home Assistant's
+        for internal, weather, expected in [("degC", "°F", "°C"), ("degrees", "°F", "°F"), (None, "°F", "°F"), ("F", None, "°F"), ("degrees", None, "°C")]:
+            units["sensor.inside_f"] = internal
+            predheat = make(weather)
+            if predheat.display_unit != expected:
+                print("ERROR: internal unit {} with Home Assistant in {} should publish in {}, got {}".format(internal, weather, expected, predheat.display_unit))
+                failed = True
+        units["sensor.inside_f"] = "°F"
+        predheat = make("°F")
+
+        # The weather entity losing its unit while unavailable keeps the last one known
+        units["weather.home"] = None
+        predheat.set_units()
+        if predheat.system_unit != "°F":
+            print("ERROR: the last known Home Assistant unit should be kept, got {}".format(predheat.system_unit))
+            failed = True
+
+        # The default for a missing entity$attribute is °C already: Home Assistant returns it as the state, and it must not be converted
+        units["sensor.boiler_f"] = "°F"
+        my_predbat.args["predheat"]["flow_temp"] = "sensor.boiler_f$setpoint"
+        real_get_state = my_predbat.ha_interface.get_state
+        my_predbat.ha_interface.get_state = lambda entity_id=None, default=None, attribute=None, refresh=False, raw=False: (
+            default if attribute == "setpoint" else ("°F" if attribute == "unit_of_measurement" else real_get_state(entity_id, default, attribute, refresh, raw))
+        )
+        try:
+            if predheat.get_temperature_arg("flow_temp", 40.0) != 40.0:
+                print("ERROR: a missing attribute should give the 40 °C default unconverted, got {}".format(predheat.get_temperature_arg("flow_temp", 40.0)))
+                failed = True
+        finally:
+            my_predbat.ha_interface.get_state = real_get_state
+        del my_predbat.args["predheat"]["flow_temp"]
+        predheat.system_unit = None
+        predheat.display_unit = "°F"
+
+        # A sensor with no unit is read in Home Assistant's unit, from the weather entity, first
+        predheat.system_unit = "°F"
+        predheat.display_unit = "°C"
+        if predheat.temperature_unit("sensor.template_no_unit") != "°F":
+            print("ERROR: a sensor with no unit should be read in Home Assistant's unit (°F)")
+            failed = True
+        predheat.system_unit = None
+        predheat.display_unit = "°F"
+
+        # Spellings from hand-written templates, including this page's own 'c', are read, and a unit that names no
+        # scale takes the fallback: neither loses the readings (the docs' template used to, and read 0 °C all day)
+        predheat.get_history = lambda entity_id=None, days=None, **kwargs: [[{"state": "7", "last_updated": (now_utc - timedelta(minutes=minute)).isoformat(), "attributes": {"unit_of_measurement": spelling}} for minute in range(120, -1, -30)]]
+        predheat.max_days_previous = 1
+        predheat.display_unit = "°C"
+        for spelling in ("c", "ºC", "degC", "degrees"):
+            my_predbat.args["predheat"]["internal_temperature"] = "sensor.spelled"
+            data, _ = predheat.minute_data_entity(now_utc, "internal_temperature", smoothing=True, temperature=True)
+            if abs(data.get(0, 0) - 7.0) > 0.01:
+                print("ERROR: a 7 degree reading with unit {} should be kept as 7 °C, got {}".format(spelling, data.get(0)))
+                failed = True
+        predheat.display_unit = "°F"
+
+        # A null forecast from an integration with no hourly data still reaches the warning path
+        predheat.call_service = lambda *args, **kwargs: {"weather.home": {"forecast": None}}
+        predheat.get_weather_data(now_utc)
+        if predheat.temperatures != {}:
+            print("ERROR: a null forecast should leave no temperatures, got {}".format(predheat.temperatures))
+            failed = True
+
+        # Each history record in its own unit where it has one
+        mixed = [{"state": "20", "last_updated": (now_utc - timedelta(minutes=minute)).isoformat(), "attributes": {"unit_of_measurement": "°C"}} for minute in range(240, 119, -30)]
+        mixed += [{"state": "68", "last_updated": (now_utc - timedelta(minutes=minute)).isoformat(), "attributes": {"unit_of_measurement": "°F"}} for minute in range(90, -1, -30)]
+        predheat.max_days_previous = 1
+        predheat.get_history = lambda entity_id=None, days=None, **kwargs: [mixed]
+        my_predbat.args["predheat"]["internal_temperature"] = "sensor.inside_f"
+        data, _ = predheat.minute_data_entity(now_utc, "internal_temperature", smoothing=True, temperature=True)
+        if abs(data.get(0, 0) - 20.0) > 0.01 or abs(data.get(200, 0) - 20.0) > 0.01:
+            print("ERROR: 20 °C records and 68 °F records should all read 20 °C, got {} now and {} earlier".format(data.get(0), data.get(200)))
+            failed = True
+
+        # Published temperatures follow the display unit, a 0 included: heating off is None now (#6134), so a 0 is a real 0 °C
+        if predheat.display_temperature(20.0) != 68.0 or predheat.display_series({"t": 0.0, "u": 20.0}) != {"t": 32.0, "u": 68.0}:
+            print("ERROR: temperatures should be published in °F when the internal sensor is in °F, 0 °C as 32 °F")
+            failed = True
+
+        # A missing value (None, e.g. heating off as #6134 marks it) is published as-is in either display unit, not converted
+        for display_unit in ("°F", "°C"):
+            predheat.display_unit = display_unit
+            try:
+                got = (predheat.display_temperature(None), predheat.display_series({"t": None, "u": 20.0}))
+            except TypeError as error:
+                got = error
+            expected = (None, {"t": None, "u": 68.0 if display_unit == "°F" else 20.0})
+            if got != expected:
+                print("ERROR: a None temperature should pass through in {}, expected {} got {}".format(display_unit, expected, got))
+                failed = True
+        predheat.display_unit = "°F"
+
+        # Through a real run, every published temperature is labelled and converted together
+        predheat = _make_simulation(my_predbat, DAILY_PERIODS)
+        predheat.display_unit = "°F"
+        predheat.run_simulation(BASE_TEMP, False, save="best")
+        for name in ("internal_temp", "external_temp", "target_temp", "heat_to_temp", "internal_temp_h1", "internal_temp_h2", "internal_temp_h8", "volume_temp"):
+            attributes = predheat.published.get("predheat." + name, {})
+            if attributes.get("unit_of_measurement") != "°F":
+                print("ERROR: predheat.{} should be published in °F, got {}".format(name, attributes.get("unit_of_measurement")))
+                failed = True
+        internal_results = list(predheat.published.get("predheat.internal_temp", {}).get("results", {}).values())
+        if not internal_results or abs(internal_results[0] - (BASE_TEMP * 9 / 5 + 32)) > 0.1:
+            print("ERROR: the internal temperature series should start at {} °F, got {}".format(BASE_TEMP * 9 / 5 + 32, internal_results[:1]))
+            failed = True
+    finally:
+        if original_predheat_args is None:
+            my_predbat.args.pop("predheat", None)
+        else:
+            my_predbat.args["predheat"] = original_predheat_args
+
+    return failed
+
+
+def _published_heat_to(predheat, volume_temp, heating_active):
+    """Run one simulation pass and return the published heat_to_temp state and results series.
+
+    The published state is captured as well as the attributes, unlike _make_simulation's
+    stub which only keeps the attributes.
+    """
+    predheat.published = {}
+    predheat.set_state = lambda entity_id, state=None, attributes=None: predheat.published.__setitem__(entity_id, {"state": state, "attributes": attributes or {}})
+    predheat.run_simulation(volume_temp, heating_active, save="best")
+    published = predheat.published[predheat.prefix + ".heat_to_temp"]
+    return published["state"], published["attributes"]["results"]
+
+
+def test_predheat_heat_to_temp_off_marker(my_predbat):
+    """Heating off must publish a distinct off marker for heat_to_temp, not 0 (#6078)."""
+    failed = False
+    print("**** Running Predheat heat_to_temp off-marker tests ****")
+
+    # ------------------------------------------------------------------
+    print("Test: heating off publishes 'unknown', not 0, for heat_to_temp")
+    # No heating period, inside and outside both at BASE_TEMP, so the heating never switches on.
+    predheat = _make_simulation(my_predbat, [], smart_thermostat=False)
+    predheat.external_temperature = {0: BASE_TEMP}
+    state, results = _published_heat_to(predheat, BASE_TEMP, False)
+    if state != "unknown":
+        print("  ERROR: heating off expected heat_to_temp state 'unknown', got {}".format(repr(state)))
+        failed = True
+    if any(value is not None for value in results.values()):
+        non_none = {stamp: value for stamp, value in results.items() if value is not None}
+        print("  ERROR: heating off expected every heat_to_temp result to be None, got {} non-None values, first: {}".format(len(non_none), list(non_none.items())[:3]))
+        failed = True
+
+    # ------------------------------------------------------------------
+    print("Test: heating to a real 0 C target still publishes 0")
+    predheat = _make_simulation(my_predbat, [(0, SIM_MINUTES, 0.0)], smart_thermostat=False)
+    predheat.internal_temperature = {0: -5.0}
+    state, results = _published_heat_to(predheat, BASE_TEMP, True)
+    first_stamp = predheat.midnight_utc.strftime(TIME_FORMAT)
+    if state != 0.0:
+        print("  ERROR: heating to 0 C expected heat_to_temp state 0.0, got {}".format(repr(state)))
+        failed = True
+    if results.get(first_stamp) != 0.0:
+        print("  ERROR: heating to 0 C expected the first heat_to_temp result to be 0.0, got {}".format(repr(results.get(first_stamp))))
+        failed = True
+
+    # ------------------------------------------------------------------
+    print("Test: in a °F display, heating off stays 'unknown' and a real 0 C target publishes as 32 F")
+    predheat = _make_simulation(my_predbat, [], smart_thermostat=False)
+    predheat.external_temperature = {0: BASE_TEMP}
+    predheat.display_unit = "°F"
+    state, results = _published_heat_to(predheat, BASE_TEMP, False)
+    if state != "unknown" or any(value is not None for value in results.values()):
+        print("  ERROR: heating off in °F expected state 'unknown' and every result None, got state {}".format(repr(state)))
+        failed = True
+    predheat = _make_simulation(my_predbat, [(0, SIM_MINUTES, 0.0)], smart_thermostat=False)
+    predheat.internal_temperature = {0: -5.0}
+    predheat.display_unit = "°F"
+    state, results = _published_heat_to(predheat, BASE_TEMP, True)
+    if state != 32.0 or results.get(first_stamp) != 32.0:
+        print("  ERROR: heating to 0 C in °F expected state and first result 32.0, got {} and {}".format(repr(state), repr(results.get(first_stamp))))
+        failed = True
 
     return failed
