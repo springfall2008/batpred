@@ -10,7 +10,7 @@
 
 """Growatt public OAuth OpenAPI component.
 
-The public API supplies telemetry (polled each minute, uploaded about every five minutes)
+The public API supplies telemetry (polled every two minutes, uploaded about every five minutes)
 and UTC charge/discharge time slots. It does
 not expose writable battery SoC limits. Predbat therefore keeps its charge target and export
 floor in Home Assistant. When the latest telemetry reaches the charge target the charge slot
@@ -28,10 +28,13 @@ busy, so a write is judged by reading it back, and one whose read-back fails is 
 unknown: the next attempt reads first. A table that could not be confirmed is retried with a
 back-off (GROWATT_WRITE_BACKOFF_MAX), skipped as soon as the planned table changes.
 
-Exporting depends on the site: a live SPH accepted an export slot and an export command, but
-only covered the house load and never exported, while a charge slot charged as set. Its
-export_limit setting (readDeviceDispatch) read {"percentage": 0, "exportLimitEnabled": 1}: zero
-export, set on the inverter.
+The OpenAPI export limit (export_limit) gates exports Predbat commands: a live SPH read
+{"percentage": 0, "exportLimitEnabled": 1} and its export slots only ever covered the house load,
+while the inverter's own schedule still exported to the grid. So before writing a table that
+exports, Predbat raises the export limit to 100% unless it already reads as open, and leaves it
+there while it is in control. The limit is read every GROWATT_TTL_EXPORT_LIMIT minutes and
+published as a sensor; it is not bound to Predbat's export_limit, which would then stop Predbat
+planning the very export that opens it.
 """
 
 # cspell:ignore echarge edischarge
@@ -78,6 +81,8 @@ from growatt_const import (
     GROWATT_SET_TIME_SLOTS,
     GROWATT_SET_ENABLE_CONTROL,
     GROWATT_SET_EXPORT_LIMIT,
+    GROWATT_EXPORT_LIMIT_OPEN,
+    GROWATT_EXPORT_OPEN_RETRY,
     GROWATT_TTL_EXPORT_LIMIT,
     GROWATT_TTL_EXPORT_LIMIT_RETRY,
     GROWATT_CONTROL_ON,
@@ -176,9 +181,6 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         # Serials whose last export limit read failed, so the next read is due sooner even when a
         # setting from an earlier read is still known
         self.export_limit_read_failed = set()
-        # Whether automatic configuration has run, so an export limit first read after it is bound then
-        self._automatic_configured = False
-        self._export_limit_bound = False
         self._state_restored = False
         self._tier_refreshed = {}
         self._write_lock = asyncio.Lock()
@@ -435,12 +437,11 @@ class GrowattAPI(ComponentBase, OAuthMixin):
             return None
         return export_limit_watts(setting[0], setting[1], self.inverter_limit(sn))
 
-    def export_limit_known(self):
-        """True when every device has a usable export limit, so Predbat's export_limit can be bound to them."""
-        return bool(self.device_list) and all(self.export_limit_w(sn) is not None for sn in self.device_list)
-
     async def refresh_export_limit(self, sn):
-        """Read the inverter's own export limit (never written) and log it when it changes.
+        """Read the inverter's OpenAPI export limit and log it when it changes.
+
+        A setting found closed again - set back in the Growatt app, say - is opened by the next
+        apply_schedule() that exports.
 
         Shares the dispatch pacing, so it waits for the next run when a write has just gone out,
         and retries a busy device as the slot reads do. A failed read - before or after the first
@@ -466,12 +467,12 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         if setting != previous:
             enabled, percent = setting
             watts = self.export_limit_w(sn)
-            if watts is not None:
-                self.log("Info: Growatt {} export limit is enabled at {:g}% ({} W); Predbat plans exports within it{}".format(sn, percent, watts, " - none at all" if watts == 0 else ""))
-            elif enabled:
-                self.log("Info: Growatt {} export limit is enabled at {:g}%, which Predbat cannot use as a limit; its own export_limit is left in place".format(sn, percent))
-            else:
+            if not enabled:
                 self.log("Info: Growatt {} export limit is disabled".format(sn))
+            elif watts is not None:
+                self.log("Info: Growatt {} export limit is enabled at {:g}% ({} W){}".format(sn, percent, watts, "" if self._export_limit_is_open(sn) else "; Predbat raises it to 100% before an export while it is in control"))
+            else:
+                self.log("Info: Growatt {} export limit is enabled at {:g}%; Predbat raises it to 100% before an export while it is in control".format(sn, percent))
         return True
 
     def _export_limit_due(self, sn):
@@ -480,19 +481,35 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         ttl = GROWATT_TTL_EXPORT_LIMIT if known else GROWATT_TTL_EXPORT_LIMIT_RETRY
         return self.tier_expired("export_limit:{}".format(sn), ttl)
 
-    def _bind_export_limit(self, again=False):
-        """Bind Predbat's export_limit to the published export limit sensors, once every device has one.
+    def _export_limit_is_open(self, sn):
+        """True when the export limit is known not to hold back an export: disabled, or enabled at 100%."""
+        setting = self.export_limit_setting.get(sn)
+        return setting is not None and (not setting[0] or setting[1] >= 100)
 
-        An export_limit written in apps.yaml wins, as for GE Cloud: the site's connection agreement,
-        not the inverter's setting, is what the user may know better. automatic_config() binds it
-        each time it runs (again=True); a run after it binds it once, when the limit is first read.
+    def _export_limit_needs_opening(self, sn, slots):
+        """True when slots export and the export limit is not known to be open, outside a failed attempt's back-off."""
+        if not any(slot.get("percentage", 0) < 0 for slot in slots) or self._export_limit_is_open(sn):
+            return False
+        return self.tier_expired("export_open:{}".format(sn), GROWATT_EXPORT_OPEN_RETRY)
+
+    async def _open_export_limit(self, sn):
+        """Raise the export limit to 100%, confirmed by read-back; called with the write lock held.
+
+        It is left at 100%: Predbat's own export_limit, not the inverter's, caps what it plans. A
+        change that cannot be confirmed is retried after GROWATT_EXPORT_OPEN_RETRY minutes, and the
+        export slot is written anyway, so the battery at least covers the house load.
         """
-        if not self.export_limit_known() or (self._export_limit_bound and not again):
-            return
-        devices = list(self.device_list)
-        self.set_arg_auto("export_limit", [self._sensor_name(sn, "export_limit") for sn in devices], overwrite=False)
-        self._export_limit_bound = True
-        self.log("Info: Growatt auto-configured export_limit from the inverter's export limit: {}".format(", ".join("{} {} W".format(sn, self.export_limit_w(sn)) for sn in devices)))
+        previous = self.export_limit_setting.get(sn)
+        target = (int(GROWATT_EXPORT_LIMIT_OPEN["exportLimitEnabled"]) == 1, float(GROWATT_EXPORT_LIMIT_OPEN["percentage"]))
+        ok = await self.write_verified(sn, GROWATT_SET_EXPORT_LIMIT, dict(GROWATT_EXPORT_LIMIT_OPEN), lambda data: parse_export_limit(data) == target)
+        if not ok:
+            self.mark_refreshed("export_open:{}".format(sn))
+            self.log("Warn: Growatt {} could not confirm the export limit was raised to 100% ({}), retrying in {} minutes; until then an export may only cover the house load".format(sn, self.last_write_outcome, GROWATT_EXPORT_OPEN_RETRY))
+            return False
+        self.export_limit_setting[sn] = target
+        self.export_limit_read_failed.discard(sn)
+        self.log("Info: Growatt {} export limit raised from {} to 100% before exporting; it is left at 100% while Predbat is in control".format(sn, "unknown" if previous is None else ("disabled" if not previous[0] else "{:g}%".format(previous[1]))))
+        return True
 
     def battery_rate_max(self, sn):
         if self.battery_rate_max_override > 0:
@@ -547,6 +564,13 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                     app="growatt",
                 )
             detail = self.device_detail.get(sn, {})
+            # The inverter's own SoC floors (getDeviceInfo, read-only through the OpenAPI): on-grid
+            # discharge stops at dischargeCutOffSOC, which Predbat's export floor never goes below,
+            # and off-grid (backup) discharge at backupCutOffSOC
+            for leaf, field, name in (("discharge_cutoff_soc", "dischargeCutOffSOC", "Discharge Cut-off SoC"), ("backup_cutoff_soc", "backupCutOffSOC", "Backup Cut-off SoC")):
+                value = self._as_float(detail.get(field), None)
+                if value is not None:
+                    self.dashboard_item(self._sensor_name(sn, leaf), state=value, attributes={"unit_of_measurement": "%", "friendly_name": "Growatt {} {}".format(sn, name), "icon": "mdi:battery-arrow-down"}, app="growatt")
             for leaf, field in (("inverter_model", "model"), ("battery_model", "batteryModel"), ("status", "status")):
                 if detail.get(field) is not None:
                     self.dashboard_item(self._sensor_name(sn, leaf), state=detail[field], attributes={"friendly_name": "Growatt {} {}".format(sn, leaf.replace("_", " ").title())}, app="growatt")
@@ -576,11 +600,9 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 self.set_arg_auto(arg, [self._sensor_name(sn, leaf) for sn in devices])
             elif arg == "soc_max":
                 self.log("Info: Growatt does not report a battery capacity for {}; soc_max is left unset so Predbat estimates the battery size from charge history".format(", ".join(sn for sn in devices if getter(sn) <= 0)))
-        self._automatic_configured = True
-        if self.export_limit_known():
-            self._bind_export_limit(again=True)
-        elif self.get_arg("export_limit", default=None, indirect=False) is None:
-            self.log("Warn: Growatt has not reported an export limit yet; it is bound when one is read. Set export_limit manually if the grid connection is capped below the inverter rating")
+        # export_limit is not bound to the inverter's export limit: Predbat raises that to 100%
+        # before an export, so binding it would stop the export being planned at all. A site whose
+        # grid connection is capped sets export_limit in apps.yaml.
 
         # No reserve is bound: GrowattCloud does not claim has_reserve_soc, so inverter.py gives
         # it a Predbat-owned reserve entity instead (see INVERTER_DEF["GrowattCloud"]).
@@ -950,9 +972,11 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         if not schedule:
             return False
         slots = self.build_time_slots(sn, schedule)
-        if not force and sn in self.applied_slots and normalize_slots(self.applied_slots[sn]) == slots:
+        unchanged = not force and sn in self.applied_slots and normalize_slots(self.applied_slots[sn]) == slots
+        open_export = self._export_limit_needs_opening(sn, slots)
+        if unchanged and not open_export:
             return True
-        if not force and self._write_backing_off(sn, slots):
+        if not unchanged and not force and self._write_backing_off(sn, slots):
             return False
 
         async with self._write_lock:
@@ -960,6 +984,11 @@ class GrowattAPI(ComponentBase, OAuthMixin):
             if wait > 0:
                 self.log("Info: Growatt {} schedule update deferred for {:.1f}s by the documented dispatch rate limit".format(sn, wait))
                 return False
+            if open_export:
+                await self._open_export_limit(sn)
+            if unchanged:
+                # The table is already on the device; only the export limit needed opening
+                return True
             if self.unverified_slots.get(sn) == slots and await self._confirm_unverified(sn, slots):
                 ok = True
             else:
@@ -1124,9 +1153,6 @@ class GrowattAPI(ComponentBase, OAuthMixin):
             entities["inverter_limit"] = {"entity_id": self._sensor_name(sn, "inverter_limit"), "access": "r", "unit": "W"}
         if self.battery_rate_max(sn) > 0:
             entities["battery_rate_max"] = {"entity_id": self._sensor_name(sn, "battery_rate_max"), "access": "r", "unit": "W"}
-        # Only once every device reports one, which is when automatic_config() binds export_limit
-        if self.export_limit_known():
-            entities["export_limit"] = {"entity_id": self._sensor_name(sn, "export_limit"), "access": "r", "unit": "W"}
         return entities
 
     def build_discovery(self):
@@ -1210,10 +1236,6 @@ class GrowattAPI(ComponentBase, OAuthMixin):
             return False
         if first and self.automatic:
             await self.automatic_config()
-        elif self.automatic and self._automatic_configured:
-            # The export limit is read after the slot table, so it is usually first known a run or
-            # two after automatic configuration; bind it then
-            self._bind_export_limit()
         self.update_success_timestamp()
         return True
 

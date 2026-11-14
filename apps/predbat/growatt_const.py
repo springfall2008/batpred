@@ -100,11 +100,15 @@ GROWATT_LOOP_HANDOVER_TIMEOUT = 120
 
 GROWATT_SET_TIME_SLOTS = "time_slot_charge_discharge"
 GROWATT_SET_ENABLE_CONTROL = "enable_control"
-# The inverter's own export limit, read (never written) through readDeviceDispatch: a live SPH
-# answered {"percentage": 0, "exportLimitEnabled": 1} - zero export - and its export slots then
-# only ever covered the house load. Growatt documents percentage from -100 to 100, positive for
-# export limiting and negative for "forward-flow control"; Predbat uses 0..100 only.
+# The OpenAPI export limit: a live SPH answered {"percentage": 0, "exportLimitEnabled": 1} and its
+# export slots then only ever covered the house load, while the inverter's own schedule exported.
+# Growatt documents percentage from -100 to 100, positive for export limiting and negative for
+# "forward-flow control". Predbat writes GROWATT_EXPORT_LIMIT_OPEN before an export when the
+# limit does not already read as open, and leaves it there.
 GROWATT_SET_EXPORT_LIMIT = "export_limit"
+GROWATT_EXPORT_LIMIT_OPEN = {"exportLimitEnabled": 1, "percentage": 100}
+# Minutes before retrying an export limit change that could not be confirmed
+GROWATT_EXPORT_OPEN_RETRY = 10
 # Minutes between reads of the export limit once one has been read, and while none has yet
 GROWATT_TTL_EXPORT_LIMIT = 8 * 60
 GROWATT_TTL_EXPORT_LIMIT_RETRY = 10
