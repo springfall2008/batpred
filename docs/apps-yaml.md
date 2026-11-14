@@ -2875,6 +2875,11 @@ or an edit being made to `apps.yaml`), then Predbat will automatically calculate
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
 
+If you use **soc_percent** and your **battery_scaling** is not 1.0, Predbat versions before the fix for [#6183](https://github.com/springfall2008/batpred/issues/6183)
+learned the charge curve at the SoC multiplied by battery_scaling, so a logged curve tapered too early (at battery_scaling 0.95, a taper that really starts at 91% was logged from about 87%),
+and below a battery_scaling of about 0.86 no curve was found at all.
+If you pasted a curve logged in that state into `apps.yaml`, re-learn it: remove it (or set it to **auto**), restart Predbat, and paste the newly logged curve.
+
 The logfile *may* also include an Info recommendation for how to set your **input_number.battery_rate_max_scaling**/**_scaling_discharge** setting in HA if Predbat detects that your inverter is charging/discharging at a different maximum rate than is configured in `apps.yaml`.<BR>
 If you don't get such a message then Predbat didn't detect any charge/discharge rate discrepancy.
 
@@ -2929,6 +2934,8 @@ If the battery_discharge_power_curve option is *not* set in `apps.yaml` and Pred
 or an edit being made to `apps.yaml`), then Predbat will automatically calculate the discharging curve for you from historical battery discharging information.
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery discharging curve and copy/paste it into your `apps.yaml` file.
+
+The same fix applies to the discharge curve. There the old offset was SoC x (1 - battery_scaling), which at 5-20% SoC is small (one percentage point or less at battery_scaling 0.95), so a pasted discharge curve is much less affected.
 
 Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
 
