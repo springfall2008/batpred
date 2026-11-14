@@ -77,6 +77,10 @@ class ActiveTestInverter:
         self.current_charge_limit = 0
         self.charge_rate_now = 1000
         self.discharge_rate_now = 1000
+        self.charge_rate_is_zero = False
+        self.discharge_rate_is_zero = False
+        self.balance_ceiling_charge = None
+        self.balance_ceiling_discharge = None
         self.battery_rate_min = 0
         self.inverter_limit = 1000
         self.export_limit = 1000

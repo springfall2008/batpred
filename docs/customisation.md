@@ -634,6 +634,15 @@ Turn On **switch.predbat_balance_inverters_enable** to enable this feature. It i
 Equal SoC across the batteries is not in itself worth much, which is why the two SoC balancing switches are
 off by default. They remain fully functional if you want them.
 
+Balancing only holds a battery back when the others can cover for it. It judges that from each inverter's
+charge and discharge rate, but a battery can deliver much less than its rate: when it is cold, when its BMS
+limits it, or when its inverter's AC limit is lower than Predbat was told. If a hold leaves the house importing
+(or leaves PV surplus going to the grid while charging), the batteries still running must already be giving all
+they can. Predbat records what each of them was delivering at that moment and uses it in place of its rate,
+so it releases the hold on the next pass and does not take it again while that battery cannot cover the house.
+A recorded limit is forgotten as soon as the battery delivers more, or after 30 minutes, so a battery that has
+warmed up gets its full rate back.
+
 ## Freeze Export during Demand
 
 An alternative to Predbat's full [inverter balancing](#balance-inverters) option if you have multiple inverters that can cross charge when the inverter is in Eco/Demand mode, is **switch.predbat_set_freeze_export_during_demand** (_expert mode_).

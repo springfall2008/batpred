@@ -495,6 +495,15 @@ class Inverter:
         # checks for that explicitly rather than silently dividing by a placeholder.
         self.battery_power = 0
         self.battery_power_valid = False  # True only when update_status() actually read battery_power
+        # Whether update_status() read the charge/discharge rate back as exactly 0, before the prediction
+        # minimum and scaling are applied to charge_rate_now/discharge_rate_now - a balancing hold has to
+        # read back as one, or the next pass releases it.
+        self.charge_rate_is_zero = False
+        self.discharge_rate_is_zero = False
+        # The rate balancing has seen this inverter really deliver when it fell short of its configured
+        # rate, as [watts, seen_at epoch seconds], or None. Learned and aged by utils.learn_rate_ceilings().
+        self.balance_ceiling_charge = None
+        self.balance_ceiling_discharge = None
         # The rates execute_plan() last wrote, in W, which the control-failure monitor judges against;
         # None until written (and in Monitor mode, where nothing is)
         self.requested_charge_w = None

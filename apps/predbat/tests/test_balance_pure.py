@@ -8,7 +8,8 @@
 
 import random
 
-from utils import balance_inverters
+from const import BALANCE_CEILING_EXPIRY_SECONDS
+from utils import balance_inverters, learn_rate_ceilings
 
 
 def make_snapshot(soc_percent, battery_power, charge_rate_now=2600.0, discharge_rate_now=2600.0, reserve_percent=4.0, pv_power=0.0, rate_max=2600.0, in_calibration=False, grid_power=0.0):
@@ -617,6 +618,100 @@ def test_random_fleets_hold_the_physical_invariants():
                     break
 
     assert not failed, "random fleet invariants violated - see the ERROR lines above"
+
+
+def derated_peer_snapshot(peer_power=2000.0, grid_power=-600.0, held_rate=0.0, rate_max=3000.0):
+    """
+    A discharging pair: inverter 0 the fuller peer, really giving peer_power of its rate_max, and inverter 1
+    held at discharge_rate_now held_rate, with grid_power on the site meter (Predbat sign, -ve import).
+    """
+    return [
+        make_snapshot(80.0, peer_power, rate_max=rate_max, grid_power=grid_power),
+        make_snapshot(70.0, 0.0, discharge_rate_now=held_rate, rate_max=rate_max),
+    ]
+
+
+def test_ceiling_learned_from_shortfall_during_hold():
+    """A peer still short of the house while another is held is already giving all it can: that is its ceiling."""
+    snapshot = derated_peer_snapshot()
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["learned_discharge_ceiling"] == [2000.0, 1000.0], snapshot[0]
+    assert snapshot[0]["battery_rate_max_discharge"] == 2000.0, snapshot[0]
+    assert snapshot[1]["learned_discharge_ceiling"] is None, "the held inverter itself must not learn a ceiling"
+    assert snapshot[0]["learned_charge_ceiling"] is None, "importing says nothing about charging"
+
+
+def test_ceiling_not_learned_without_hold():
+    """Import with nothing held is the fleet's own business - the hold is what has to be shown to cost the grid."""
+    snapshot = derated_peer_snapshot(held_rate=2600.0)
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["learned_discharge_ceiling"] is None and snapshot[0]["battery_rate_max_discharge"] == 3000.0, snapshot[0]
+
+
+def test_ceiling_not_learned_from_small_shortfall():
+    """A meter reading within the shortfall margin is noise, not evidence."""
+    snapshot = derated_peer_snapshot(grid_power=-80.0)
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["learned_discharge_ceiling"] is None, snapshot[0]
+
+
+def test_ceiling_not_learned_at_configured_rate():
+    """A peer already at its configured rate is not derated; the guard sees the shortfall without help."""
+    snapshot = derated_peer_snapshot(peer_power=2900.0)
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["learned_discharge_ceiling"] is None and snapshot[0]["battery_rate_max_discharge"] == 3000.0, snapshot[0]
+
+
+def test_ceiling_kept_and_applied_while_peer_stays_below():
+    """With the hold released and nothing short, a stored ceiling still caps the peer it was learned for."""
+    snapshot = derated_peer_snapshot(peer_power=1300.0, grid_power=0.0, held_rate=2600.0)
+    snapshot[0]["learned_discharge_ceiling"] = [2000.0, 1000.0]
+    learn_rate_ceilings(snapshot, 1300.0)
+    assert snapshot[0]["learned_discharge_ceiling"] == [2000.0, 1000.0], snapshot[0]
+    assert snapshot[0]["battery_rate_max_discharge"] == 2000.0, snapshot[0]
+
+
+def test_ceiling_forgotten_when_peer_delivers_more():
+    """A peer seen giving more than its ceiling has recovered (a battery warming up), so its full rate is back."""
+    snapshot = derated_peer_snapshot(peer_power=2200.0, grid_power=0.0, held_rate=2600.0)
+    snapshot[0]["learned_discharge_ceiling"] = [2000.0, 1000.0]
+    learn_rate_ceilings(snapshot, 1300.0)
+    assert snapshot[0]["learned_discharge_ceiling"] is None and snapshot[0]["battery_rate_max_discharge"] == 3000.0, snapshot[0]
+
+
+def test_ceiling_expires():
+    """A ceiling is only trusted for so long, so a peer that is never asked for more still gets its rate back."""
+    snapshot = derated_peer_snapshot(peer_power=1300.0, grid_power=0.0, held_rate=2600.0)
+    snapshot[0]["learned_discharge_ceiling"] = [2000.0, 1000.0]
+    learn_rate_ceilings(snapshot, 1000.0 + BALANCE_CEILING_EXPIRY_SECONDS + 1)
+    assert snapshot[0]["learned_discharge_ceiling"] is None and snapshot[0]["battery_rate_max_discharge"] == 3000.0, snapshot[0]
+
+
+def test_ceiling_learned_on_charge_side():
+    """Charging mirrors it: surplus exported while one is held at charge 0 shows the peer's real charge rate."""
+    snapshot = [
+        make_snapshot(70.0, -1500.0, rate_max=3000.0, grid_power=1100.0),
+        make_snapshot(80.0, 0.0, charge_rate_now=0.0, rate_max=3000.0),
+    ]
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["learned_charge_ceiling"] == [1500.0, 1000.0], snapshot[0]
+    assert snapshot[0]["battery_rate_max_charge"] == 1500.0, snapshot[0]
+    assert snapshot[0]["learned_discharge_ceiling"] is None, snapshot[0]
+
+
+def test_derated_peer_hold_released_end_to_end():
+    """
+    The guard that used the peer's configured rate holds the low inverter and leaves the house importing; with the
+    learned ceiling it sees the peer cannot carry the house and lets go.
+    """
+    intent = make_intent(2)
+    balance_inverters(intent, derated_peer_snapshot(), False, True, False, 1, 1)
+    assert intent[1]["discharge_rate"] == 0, "precondition: on the configured rate the guard keeps the hold"
+    snapshot = derated_peer_snapshot()
+    learn_rate_ceilings(snapshot, 1000.0)
+    intent = make_intent(2)
+    balance_inverters(intent, snapshot, False, True, False, 1, 1)
+    assert intent[1]["discharge_rate"] is None, "with the learned ceiling the hold must be released: {}".format(intent)
 
 
 def run_balance_pure_tests(my_predbat):
