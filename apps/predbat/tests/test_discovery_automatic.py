@@ -571,23 +571,24 @@ def test_baseline_drops_unresolved_patterns():
     return 0
 
 
-def test_slot_is_empty():
-    """A slot a released device left below a used one is empty, and says so; nothing else is, and it is safe with no bindings."""
+def test_release_compacts():
+    """A device released below a used slot is closed up: the one above moves down, the move is warned about once, and later passes write nothing."""
     base, registry, coordinator = _setup()
-    assert coordinator.slot_is_empty(0) is False  # no bindings yet
     coordinator.allow_automatic("gecloud")
     coordinator.report("gecloud", _report(["a11111", "b22222"]))
-    assert [coordinator.slot_is_empty(index) for index in range(3)] == [False, False, False]
+    assert coordinator.slot_map == {"gecloud:a11111": 0, "gecloud:b22222": 1}, coordinator.slot_map
     coordinator.report("gecloud", _report(["b22222"]))
-    assert base.args["num_inverters"] == 2 and base.args["inverter_type"] == [None, "GEC"], (base.args["num_inverters"], base.args["inverter_type"])
-    assert "Warn: Coordinator: Inverter slot 0 is empty below a configured inverter - it has no inverter_type and Predbat will stop on it" in base.log_messages, base.log_messages
-    assert coordinator.slot_is_empty(0) is True and coordinator.slot_is_empty(1) is False and coordinator.slot_is_empty(2) is False and coordinator.slot_is_empty(-1) is False
-    # A hole in the user's own apps.yaml, with nothing discovered, is not one discovery left
-    apps = {"num_inverters": 3, "inverter_type": ["GE", "", "GE"], "charge_rate": ["number.a_charge_rate", "number.b_charge_rate", "number.c_charge_rate"]}
-    base, registry, coordinator = _setup(args=apps)
-    coordinator.allow_automatic("gecloud")
-    assert coordinator.bindings is not None and coordinator.slot_is_empty(1) is False
-    print("PASS: slot is empty")
+    assert coordinator.slot_map == {"gecloud:b22222": 0}, coordinator.slot_map
+    assert base.args["num_inverters"] == 1 and base.args["inverter_type"] == ["GEC"], (base.args["num_inverters"], base.args["inverter_type"])
+    assert base.args["charge_rate"] == ["number.predbat_gecloud_b22222_battery_charge_rate"], base.args["charge_rate"]
+    moved = "Warn: Coordinator: Inverter slot 1 moved to slot 0: gecloud inverter gecloud:b22222 closes the gap left by a device that is no longer reported"
+    assert base.log_messages.count(moved) == 1, base.log_messages
+    assert not [line for line in base.log_messages if "is empty below" in line], base.log_messages
+    calls = list(base.set_calls)
+    coordinator.configure()
+    coordinator.configure()
+    assert base.set_calls == calls, base.set_calls[len(calls):]
+    print("PASS: release compacts")
     return 0
 
 
@@ -1144,6 +1145,37 @@ def test_accept_givtcp_rest_manual():
     return 0
 
 
+def test_accept_battery_removed():
+    """
+    Two GE Cloud batteries configured, then GE Cloud reports only battery002: discovery closes the gap, and the result is
+    exactly the previous automatic configuration of a battery002-only install, which always rebuilt from slot 0.
+    """
+    devices, settings, info = _two_batteries(([1001], [1002]))
+    start = _starting_args()
+    ge, base = _automatic_run(devices, settings, info, copy.deepcopy(start))
+    assert base.components.coordinator.slot_map == {"gecloud:battery001": 0, "gecloud:battery002": 1}
+    # The run loop's view of the account after battery001 has gone: devices change, settings stay
+    remaining = _gec_devices(battery=["battery002"], meters={"battery002": [1002]})
+    ge.devices_dict = copy.deepcopy(remaining)
+    run_async(ge.async_automatic_config(ge.devices_dict))
+    ge.refresh_discovery()
+    assert base.components.coordinator.slot_map == {"gecloud:battery002": 0}, base.components.coordinator.slot_map
+    old = _legacy_run(remaining, settings, info, copy.deepcopy(start))
+    differences = compare_configuration(old, base.args)
+    assert differences == [], "\n".join(differences)
+    log = list(base.log_messages)
+    assert "Warn: Coordinator: Inverter slot 1 moved to slot 0: gecloud inverter gecloud:battery002 closes the gap left by a device that is no longer reported" in log, log
+    assert not [line for line in log if line.startswith("Warn: GECloud: discovery") or "is empty below" in line], log
+    assert any(line.startswith("Info: GECloud: discovery configuration matches") for line in log), log
+    settled = copy.deepcopy(base.args)
+    calls = len(base.set_calls)
+    base.components.coordinator.configure()
+    base.components.coordinator.configure()
+    assert base.set_calls[calls:] == [] and base.args == settled, base.set_calls[calls:]
+    print("PASS: accept battery removed")
+    return 0
+
+
 def test_accept_run_loop_incremental():
     """The real run() through a coordinator: a battery added to the account later takes slot 1, and slot 0 is never written again."""
     base = _Base(args={})
@@ -1205,7 +1237,7 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_takeover_and_hole_warnings_logged()
     failures += test_summed_lists_keep_resolved_patterns()
     failures += test_baseline_drops_unresolved_patterns()
-    failures += test_slot_is_empty()
+    failures += test_release_compacts()
     failures += test_assemble_slots_follow_bindings()
     failures += test_bare_base_is_inert()
     failures += test_allow_automatic_config_wrapper()
@@ -1228,5 +1260,6 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_accept_template_gateway()
     failures += test_accept_template_short_gateway()
     failures += test_accept_givtcp_rest_manual()
+    failures += test_accept_battery_removed()
     failures += test_accept_run_loop_incremental()
     return failures

@@ -459,19 +459,6 @@ class Coordinator:
             self.log("Coordinator: inverter slot {} configured from {} ({})".format(index, entry["source"], entry["device_id"]))
         self._check(written, bindings, sources)
 
-    def slot_is_empty(self, index):
-        """Whether inverter slot `index` is an empty slot inside the current bindings: free, below the slot count, among discovered slots.
-
-        A slot a discovered device held is left like this when the device stops being reported while a higher
-        slot is still in use - slots are not compacted until a restart. Read-only; False with no bindings yet,
-        and for a layout with no discovered slot (any hole there is the user's own).
-        """
-        bindings = self.bindings
-        entries = (bindings or {}).get("inverters", [])
-        if not isinstance(index, int) or index < 0 or index >= len(entries):
-            return False
-        return entries[index].get("origin") == "free" and any(entry.get("origin") == "discovered" for entry in entries)
-
     def _warn_once(self, text):
         """Log a warning the first time its text is seen in this coordinator's life; passes repeat them while the situation lasts."""
         if text not in self.warned:

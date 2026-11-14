@@ -302,6 +302,32 @@ def _allocate(slots, placements, warnings):
         _place(slots, target, entry, matched, warnings)
 
 
+def _compact(slots, apps_yaml, warnings):
+    """
+    Step 4: close the gaps a released device left, so no free slot sits below a discovered slot at a movable index.
+
+    A pinned index is one manual_slots() marks manual: its slot never moves, whether it is still the user's or a
+    discovered device took it over by serial. Every other index is movable. The discovered slots at movable indexes
+    are moved down, keeping their order, into the lowest movable indexes, and the pinned slots keep theirs, so the
+    movable ones fill in around them. A moved entry keeps everything but its slot, and each move is one warning.
+    A free slot only comes to sit below a discovered one when a device is released (allocation always takes the
+    lowest free slot), so a stable fleet is never moved. The one hole compaction cannot close is a movable index with
+    no movable slot above it: the user's own apps.yaml slot with no inverter_type below a manual one.
+    """
+    pinned = {slot["slot"] for slot in manual_slots(apps_yaml) if slot["origin"] == "manual"}
+    free = {slot["slot"]: slot["inverter_type"] for slot in manual_slots(apps_yaml)}
+    movable_indexes = [index for index in range(len(slots)) if index not in pinned]
+    movable = [slots[index] for index in movable_indexes if slots[index]["origin"] == "discovered"]
+    for index, entry in zip(movable_indexes, movable):
+        old = entry["slot"]
+        if old == index:
+            continue
+        warnings.append("Inverter slot {} moved to slot {}: {} inverter {} closes the gap left by a device that is no longer reported".format(old, index, entry["source"], entry["device_id"]))
+        slots[index] = entry
+        entry["slot"] = index
+        slots[old] = _free_entry(old, free.get(old))
+
+
 def _site_extras(apps_yaml, sources):
     """The summed-setting entries that belong to no slot: the user's apps.yaml extras in order, then PV-only devices' entity ids where included."""
     num_inverters = max(_num_inverters(apps_yaml), 0)
@@ -344,6 +370,8 @@ def build_bindings(apps_yaml: dict, args: dict, sources: list[dict], previous: d
     "include_pv_only"}. previous: the bindings the last call returned, or None. A record previous placed
     keeps its slot. A source that reports no driven record, or is absent from sources, keeps every slot
     previous gave it, copied verbatim; only a source reporting at least one driven record can lose a slot.
+    A lost (released) slot below a discovered one is closed up: see _compact() for the pinned and movable
+    indexes, and the one move warning each discovered slot that moves down gives.
     scan_args: the args a manual slot's serials are scanned in, args when None. The coordinator passes the
     args as they were before its first replay, so a slot taken over or cleared on one pass matches again on
     the next, however replay has rewritten its live entries.
@@ -381,6 +409,7 @@ def build_bindings(apps_yaml: dict, args: dict, sources: list[dict], previous: d
         else:
             placements.append((entry, None))
     _allocate(slots, sorted(sticky, key=lambda item: item[1]) + placements, warnings)
+    _compact(slots, apps_yaml, warnings)
 
     while slots and slots[-1]["origin"] == "free":
         slots.pop()

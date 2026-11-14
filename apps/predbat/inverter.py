@@ -131,22 +131,6 @@ class Inverter:
         """
         time.sleep(seconds)
 
-    def inverter_slot_empty(self):
-        """
-        Whether the discovery coordinator says this inverter's slot is one it left empty below a used slot.
-
-        Reached defensively through the component registry: no registry, no coordinator or a coordinator
-        that fails to answer all mean not empty, so the usual missing-type messages apply.
-        """
-        coordinator = getattr(getattr(self.base, "components", None), "coordinator", None)
-        slot_is_empty = getattr(coordinator, "slot_is_empty", None)
-        if not callable(slot_is_empty):
-            return False
-        try:
-            return slot_is_empty(self.id) is True
-        except Exception:
-            return False
-
     def inverter_source_active(self):
         """
         Whether some component is supplying this inverter's state, even if it has no data yet.
@@ -518,12 +502,8 @@ class Inverter:
         # Solis owner to check GivEnergy credentials (#4990). While an inverter component is active it
         # may still write the type once discovery succeeds, so that case says it is waiting - but the
         # component may have automatic configuration turned off, so it also says how to set the type.
-        # A slot discovery emptied when its device stopped being reported waits for nothing: only a
-        # restart reallocates the slots, so that case says so instead.
         if not self.inverter_type:
-            if self.inverter_slot_empty():
-                message = "Inverter {}: this inverter slot is empty because the device discovery configured there is no longer reported - restart Predbat to reallocate the inverter slots".format(self.id)
-            elif self.inverter_source_active():
+            if self.inverter_source_active():
                 names = ", ".join(self.base.components.inverter_source_names())
                 message = "Inverter {}: inverter_type is not set yet - waiting for {} to configure this inverter - or set inverter_type in apps.yaml to match your inverter".format(self.id, names)
             else:

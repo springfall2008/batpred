@@ -557,6 +557,138 @@ def _passes(apps, sources, count=3, args=None):
     return results, args
 
 
+def _phase_passes(apps, phases, args=None, extra=2):
+    """
+    One coordinator-style pass per entry of phases (a list of sources), then `extra` more with the last sources.
+
+    Each pass builds on the last pass's bindings and replays into args; the serial scan reads a copy of args
+    taken before the first pass, as the coordinator's baseline does. Returns ([(bindings, warnings, written)], args).
+    """
+    args = copy.deepcopy(apps) if args is None else args
+    baseline = copy.deepcopy(args)
+    previous = None
+    results = []
+    for sources in list(phases) + [phases[-1]] * extra:
+        bindings, warnings = build_bindings(apps, args, sources, previous, scan_args=baseline)
+        written = _apply(bindings, apps, args)
+        results.append((copy.deepcopy(bindings), warnings, written))
+        previous = bindings
+    return results, args
+
+
+def _moved(old, new, serial):
+    """The warning a compacting move gives."""
+    return "Inverter slot {} moved to slot {}: gecloud inverter gecloud:{} closes the gap left by a device that is no longer reported".format(old, new, serial)
+
+
+def _full(serial):
+    """A record binding a control, a per-slot sensor and a compact summed total for serial."""
+    return _rec(serial, {"charge_rate": _rw("number.{}_rate".format(serial)), "soc_percent": _ro("sensor.{}_soc".format(serial)), "load_today": _ro("sensor.{}_load_today".format(serial))})
+
+
+def _assert_settled(results, start, warnings_each=()):
+    """Every pass from index start on wrote nothing and warned about nothing but warnings_each (a takeover warns on every pass)."""
+    for bindings, warnings, written in results[start:]:
+        assert written == [] and warnings == list(warnings_each), (warnings, written)
+
+
+def test_compact_two_first_released():
+    """Two discovered, slot 0 released: the device in slot 1 moves to slot 0, its whole configuration is rewritten and every list shortened."""
+    results, args = _phase_passes({}, [[_src([_full("a11111"), _full("b11111")])], [_src([_full("b11111")])]])
+    assert _layout(results[0][0]) == [("discovered", "gecloud:a11111", 0), ("discovered", "gecloud:b11111", 1)], _layout(results[0][0])
+    bindings, warnings, written = results[1]
+    assert _layout(bindings) == [("discovered", "gecloud:b11111", 0)], _layout(bindings)
+    assert warnings == [_moved(1, 0, "b11111")], warnings
+    assert all(index is None for _, index in written), written  # every list is shortened, so every write is a whole value
+    assert args["num_inverters"] == 1 and args["inverter_type"] == ["GEC"], args
+    assert args["charge_rate"] == ["number.b11111_rate"] and args["soc_percent"] == ["sensor.b11111_soc"], args
+    assert args["load_today"] == ["sensor.b11111_load_today"] and args["pv_power"] == [0], args
+    moved = results[1][0]["inverters"][0]
+    assert moved == dict(results[0][0]["inverters"][1], slot=0), moved  # everything but slot is the entry it was
+    _assert_settled(results, 2)
+    print("PASS: compact two, first released")
+    return 0
+
+
+def test_compact_three_middle_released():
+    """Three discovered, the middle one released: the top one moves down to slot 1."""
+    results, args = _phase_passes({}, [[_src([_full("a11111"), _full("b11111"), _full("c11111")])], [_src([_full("a11111"), _full("c11111")])]])
+    bindings, warnings, _ = results[1]
+    assert _layout(bindings) == [("discovered", "gecloud:a11111", 0), ("discovered", "gecloud:c11111", 1)], _layout(bindings)
+    assert warnings == [_moved(2, 1, "c11111")], warnings
+    assert args["num_inverters"] == 2 and args["charge_rate"] == ["number.a11111_rate", "number.c11111_rate"], args
+    assert args["load_today"] == ["sensor.a11111_load_today", "sensor.c11111_load_today"], args
+    _assert_settled(results, 2)
+    print("PASS: compact three, middle released")
+    return 0
+
+
+def test_compact_around_manual():
+    """[discovered A, manual M, discovered B], A released: B moves to slot 0 and M stays at slot 1."""
+    apps = _manual_apps("number.dead_rate", "number.m_rate", types=["", "GE"])
+    results, args = _phase_passes(apps, [[_src([_full("a11111"), _full("b11111")])], [_src([_full("b11111")])]])
+    assert _layout(results[0][0]) == [("discovered", "gecloud:a11111", 0), ("manual", None, 1), ("discovered", "gecloud:b11111", 2)], _layout(results[0][0])
+    bindings, warnings, _ = results[1]
+    assert _layout(bindings) == [("discovered", "gecloud:b11111", 0), ("manual", None, 1)], _layout(bindings)
+    assert warnings == [_moved(2, 0, "b11111")], warnings
+    assert args["num_inverters"] == 2 and args["inverter_type"] == ["GEC", "GE"] and args["charge_rate"] == ["number.b11111_rate", "number.m_rate"], args
+    _assert_settled(results, 2)
+    print("PASS: compact around a manual slot")
+    return 0
+
+
+def test_compact_takeover_pinned():
+    """A takeover slot below a released device is not moved; a released device below a takeover slot leaves a hole, with nothing to move."""
+    # Takeover at 0, released A at 1, B above it: B moves to 1, the takeover stays at 0
+    apps = _manual_apps("number.givtcp_t11111_rate")
+    results, args = _phase_passes(apps, [[_src([_full("t11111"), _full("a11111"), _full("b11111")])], [_src([_full("t11111"), _full("b11111")])]])
+    assert _layout(results[0][0]) == [("discovered", "gecloud:t11111", 0), ("discovered", "gecloud:a11111", 1), ("discovered", "gecloud:b11111", 2)], _layout(results[0][0])
+    takeover = "Inverter slot 0: gecloud inverter t11111 is also configured manually in apps.yaml - discovery is taking over this slot"
+    bindings, warnings, _ = results[1]
+    assert _layout(bindings) == [("discovered", "gecloud:t11111", 0), ("discovered", "gecloud:b11111", 1)], _layout(bindings)
+    assert warnings == [takeover, _moved(2, 1, "b11111")], warnings
+    _assert_settled(results, 2, [takeover])
+    # Released A at 0, below a takeover of the manual slot 1: the takeover is pinned, so nothing moves and the hole is warned about
+    apps = _manual_apps("number.dead_rate", "number.givtcp_t11111_rate", types=["", "GE"])
+    results, args = _phase_passes(apps, [[_src([_full("a11111"), _full("t11111")])], [_src([_full("t11111")])]])
+    assert _layout(results[0][0]) == [("discovered", "gecloud:a11111", 0), ("discovered", "gecloud:t11111", 1)], _layout(results[0][0])
+    hole = "Inverter slot 0 is empty below a configured inverter - it has no inverter_type and Predbat will stop on it"
+    takeover = "Inverter slot 1: gecloud inverter t11111 is also configured manually in apps.yaml - discovery is taking over this slot"
+    for bindings, warnings, _ in results[1:]:
+        assert _layout(bindings) == [("free", None, 0), ("discovered", "gecloud:t11111", 1)], _layout(bindings)
+        assert warnings == [takeover, hole], warnings
+    assert results[2][2] == [] and results[3][2] == [], results
+    print("PASS: takeover slots are pinned")
+    return 0
+
+
+def test_compact_not_on_empty_or_absent_report():
+    """A report with no driven inverter, or a source absent, keeps every slot it had: nothing is released, so nothing moves."""
+    first, _ = build_bindings({}, {}, [_src([_full("a11111"), _full("b11111")])], None)
+    for sources in ([_src([])], []):
+        b, w = build_bindings({}, {}, sources, first)
+        assert _layout(b) == [("discovered", "gecloud:a11111", 0), ("discovered", "gecloud:b11111", 1)], _layout(b)
+        assert not [warning for warning in w if "moved to slot" in warning], w
+    print("PASS: no compaction on an empty or absent report")
+    return 0
+
+
+def test_compact_residual_hole():
+    """The user's dead apps.yaml slot below manual slots, taken by a device that is then released, stays free with the hole warning and no move."""
+    apps = _manual_apps("number.dead_rate", "number.m_rate", "number.givtcp_t11111_rate", types=["", "GE", "GE"])
+    results, args = _phase_passes(apps, [[_src([_full("a11111"), _full("t11111")])], [_src([_full("t11111")])]])
+    assert _layout(results[0][0]) == [("discovered", "gecloud:a11111", 0), ("manual", None, 1), ("discovered", "gecloud:t11111", 2)], _layout(results[0][0])
+    hole = "Inverter slot 0 is empty below a configured inverter - it has no inverter_type and Predbat will stop on it"
+    takeover = "Inverter slot 2: gecloud inverter t11111 is also configured manually in apps.yaml - discovery is taking over this slot"
+    for bindings, warnings, _ in results[1:]:
+        assert _layout(bindings) == [("free", None, 0), ("manual", None, 1), ("discovered", "gecloud:t11111", 2)], _layout(bindings)
+        assert warnings == [takeover, hole], warnings
+    assert args["inverter_type"] == [None, "GE", "GEC"] and args["num_inverters"] == 3, args
+    assert results[2][2] == [] and results[3][2] == [], results
+    print("PASS: residual hole stays, warned")
+    return 0
+
+
 def test_replay_discovered_only():
     """Manual slot 0's entries are never written; discovered slot 1 gets inverter_type and each bound setting at index 1."""
     apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
@@ -958,6 +1090,12 @@ def test_bindings_all(my_predbat=None):
     failures += test_build_summed_from_apps_yaml()
     failures += test_build_manual_settings_shape()
     failures += test_build_record_without_serial_or_entities()
+    failures += test_compact_two_first_released()
+    failures += test_compact_three_middle_released()
+    failures += test_compact_around_manual()
+    failures += test_compact_takeover_pinned()
+    failures += test_compact_not_on_empty_or_absent_report()
+    failures += test_compact_residual_hole()
     failures += test_replay_discovered_only()
     failures += test_replay_clears_unbound()
     failures += test_replay_clear_entry_whole_value()

@@ -151,11 +151,19 @@ Each inverter Predbat drives is a **slot**: index `N` of every per-inverter list
    taking the lowest free slot.
 3. **At most four slots.** An inverter with no slot left is not configured, and a warning says so.
 
-A slot is **sticky**: once an inverter has one it keeps it for as long as Predbat runs, whatever else
-appears or disappears, so a second inverter found later is added in the next free slot and the first
-is not rewritten. A slot is released only when its component reports again, still with at least one
-inverter, but no longer with that one; a component that stops, or reports no inverter at all, keeps
-its slots. Within its slot an inverter's bindings follow every change in its component's report, so a
+A slot is **sticky**: once an inverter has one it keeps it while the fleet stays the same, so a second
+inverter found later is added in the next free slot and the first is not rewritten. A slot is released
+only when its component reports again, still with at least one inverter, but no longer with that one; a
+component that stops, or reports no inverter at all, keeps its slots.
+
+When an inverter is released the slots **compact**: each discovered inverter above the gap moves down,
+keeping its order, so no empty slot is left below one in use, and each move is logged as `Warn:
+Coordinator: Inverter slot N moved to slot M: <component> inverter <device_id> closes the gap left by a
+device that is no longer reported`. A slot you configured by hand is **pinned**: it never moves, and
+neither does a discovered inverter that took one over by serial; the moving inverters fill in around
+them. Per-inverter tuning lists that discovery does not write (such as `inverter_limit_charge`) stay at
+their indexes, so an inverter that moves down picks up the entry of the one that has gone - as the old
+automatic configuration, which always rebuilt from slot 0, did. Within its slot an inverter's bindings follow every change in its component's report, so a
 register that appears or disappears rebinds that slot while Predbat runs, where the old automatic
 configuration bound once. Only differences are written: a pass with nothing new writes nothing and logs nothing, and
 each slot it does change is logged as `Coordinator: inverter slot N configured from <component> (<device_id>)`.
@@ -210,16 +218,11 @@ Predbat no longer assumes `GE` for a missing `inverter_type`, so that slot stops
 `inverter_type is not set in apps.yaml`, or, while an inverter component is still starting,
 `inverter_type is not set yet - waiting for <component> to configure this inverter`.
 
-Discovery can leave such a hole itself. When a device that held a slot is no longer reported while a
-higher slot is still in use - for example GE Cloud dropping a device that has been silent for more than
-five days - its slot is released and emptied, but the slots above it are not moved down while Predbat
-runs. Predbat then stops on every cycle with:
-
-```text
-Inverter 0: this inverter slot is empty because the device discovery configured there is no longer reported - restart Predbat to reallocate the inverter slots
-```
-
-Restarting Predbat gives the slots out again from the start, with no hole.
+When a device that held a slot is no longer reported - for example GE Cloud dropping a device that has
+been silent for more than five days - the slots compact (see Slots above), so discovery leaves no hole of
+its own. The one empty slot that can remain is your own: an `apps.yaml` slot with no `inverter_type`
+below a slot you configured by hand, once the inverter discovery placed there has gone. It gets the
+warning and errors above; give it an `inverter_type` or remove it.
 
 ### The bindings in the catalogue
 
