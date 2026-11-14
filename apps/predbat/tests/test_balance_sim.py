@@ -15,6 +15,7 @@ the number of BAD releases - a balancing hold dropped while the inverter is stil
 could still carry the house - plus convergence and the capacity guard.
 """
 
+from const import BALANCE_CEILING_EXPIRY_SECONDS
 from tests.balance_ct_harness import CTScenario, broken_cloud_midday, busy_evening, cloud_matrix, cloudy_midday, ct_matrix, disagreeing, format_ct_report, mixed, run_ct_scenario
 from tests.balance_sim_harness import derated_scenarios, format_report, format_step_report, load_step_scenarios, run_scenario, standard_scenarios
 
@@ -59,9 +60,12 @@ def run_balance_sim_tests(my_predbat):
     return failed
 
 
-# Energy a scenario may leave to the grid in total: about one minute at the shortfall, the pass it takes the
-# grid meter to show the peer cannot carry the house and the hold to be let go.
+# Energy a scenario may leave to the grid: about one minute at the shortfall each time the ceiling has to be learned -
+# the pass it takes the grid meter to show the peer cannot carry the house and the hold to be let go. A learned
+# ceiling expires after BALANCE_CEILING_EXPIRY_SECONDS, so a hold still wanted is retried, and learned again, once
+# every 30 minutes.
 DERATED_GRID_ALLOWANCE_KWH = 0.06
+DERATED_GRID_ALLOWANCE_PER_LEARNING_KWH = 0.045
 
 
 def run_derated_tests(my_predbat):
@@ -75,8 +79,10 @@ def run_derated_tests(my_predbat):
         result = run_scenario(my_predbat, scenario)
         results.append(result)
         excess = result["unserved_kwh"] - unavoidable_kwh(scenario)
-        if excess > DERATED_GRID_ALLOWANCE_KWH:
-            print("ERROR: {} left {}kWh to the grid beyond what the fleet cannot cover, allowance {}kWh".format(scenario.name, round(excess, 3), DERATED_GRID_ALLOWANCE_KWH))
+        learnings = 1 + (scenario.minutes - 1) // (BALANCE_CEILING_EXPIRY_SECONDS // 60)
+        allowance = DERATED_GRID_ALLOWANCE_PER_LEARNING_KWH * learnings
+        if excess > allowance:
+            print("ERROR: {} left {}kWh to the grid beyond what the fleet cannot cover, allowance {}kWh".format(scenario.name, round(excess, 3), allowance))
             failed = True
     print(format_step_report(results))
     return failed

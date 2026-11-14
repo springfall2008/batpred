@@ -634,6 +634,13 @@ Turn On **switch.predbat_balance_inverters_enable** to enable this feature. It i
 Equal SoC across the batteries is not in itself worth much, which is why the two SoC balancing switches are
 off by default. They remain fully functional if you want them.
 
+Once the cross-charge correction has stopped a battery charging from the others, it keeps that battery's charge
+held while the batteries are still discharging, so you may see its charge rate stay at 0 through the evening.
+Releasing it every minute would only let the battery's own control loop wind straight back into charging from
+its neighbours. The hold ends as soon as the batteries should be charging again (spare solar, or a charge slot) or
+stop discharging. The same applies the other way round, while the batteries soak up a solar surplus of at least
+1kW.
+
 If you turn on either SoC balancing switch, leave **switch.predbat_balance_inverters_crosscharge** on as well. SoC
 balancing holds one battery's charge (or discharge) back while the others carry on. Under broken cloud, when your
 solar is close to your house load, the site keeps tipping between surplus and deficit faster than Predbat's

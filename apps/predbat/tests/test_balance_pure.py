@@ -824,6 +824,44 @@ def test_learned_ceiling_caps_a_claimed_discharge_rate():
     assert intent[1]["discharge_rate"] == 2600, "the learned ceiling was bypassed by the claimed rate: {}".format(intent)
 
 
+def test_charge_latch_released_when_the_fleet_is_idle():
+    """
+    Every inverter reads a charge rate of 0 - left by a freeze-export slot, say - and nothing is moving: no battery
+    power and nothing on the grid meter, because grid_power is not configured or the site curtails PV to zero
+    export. That is not a fleet discharging, so the latch must let go; held, it rewrites charge 0 every pass and
+    the batteries take no PV for the rest of the day.
+    """
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, 0.0, charge_rate_now=0.0), make_snapshot(60.0, 0.0, charge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[0]["charge_rate"] is None and intent[1]["charge_rate"] is None, "an idle fleet kept the charge latch: {}".format(intent)
+
+
+def test_charge_latch_released_beside_a_full_peer():
+    """A held beside a full B, nothing moving: the latch must not outlive the discharge it was taken in."""
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, 0.0, charge_rate_now=0.0), make_snapshot(100.0, 0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[0]["charge_rate"] is None, "the charge latch outlived the discharge: {}".format(intent)
+
+
+def test_soc_guard_does_not_count_a_peer_just_held_from_discharging():
+    """
+    The fleet should be soaking up a small surplus, and B is discharging into it, so the cross-charge correction
+    holds B's discharge. A is low and already held from an earlier pass. The SoC discharge guard must not count B
+    as able to take over - it has just been stopped - or both are left held with only 100W of PV between the house
+    and the grid.
+    """
+    intent = make_intent(2)
+    snapshot = [
+        make_snapshot(40.0, 0.0, discharge_rate_now=0.0, rate_max=3000.0, grid_power=1600.0),
+        make_snapshot(80.0, 1500.0, rate_max=3000.0),
+    ]
+    balance_inverters(intent, snapshot, False, True, True, 1.0, 1.0)
+    assert intent[1]["discharge_rate"] == 0, "precondition: B discharging into the surplus is held: {}".format(intent)
+    assert intent[0]["discharge_rate"] is None, "A was held too, counting on B: {}".format(intent)
+
+
 def run_balance_pure_tests(my_predbat):
     """
     Run the pure balance_inverters tests.

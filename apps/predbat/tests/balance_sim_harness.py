@@ -36,6 +36,7 @@ the balancer sums are the site's, not double counted.
 """
 
 import contextlib
+from datetime import timedelta
 import io
 import random
 from dataclasses import dataclass, field
@@ -318,6 +319,7 @@ def run_scenario(my_predbat, scenario):
             "inverter_rate_intent",
             "inverter_balance_overridden",
             "inverters",
+            "now_utc",
         )
     }
     trace = []
@@ -349,8 +351,12 @@ def run_scenario(my_predbat, scenario):
                 my_predbat.inverter_rate_intent = {index: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand"} for index in range(count)}
             my_predbat.inverter_balance_overridden = {}
             with routed_to_sims(ha, sims, clock, scenario.rate_max):
+                start_utc = my_predbat.now_utc
                 for minute in range(scenario.minutes):
                     clock["s"] = max(clock["s"], minute * 60.0)
+                    # Predbat's own clock moves with the simulation, so anything it ages - a learned rate ceiling
+                    # expires after 30 minutes - ages as it would live
+                    my_predbat.now_utc = start_utc + timedelta(minutes=minute)
                     demand = scenario.demand_at(minute)
                     grid = step_house(sims, scenario, demand)
                     publish()

@@ -3161,8 +3161,8 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     so it can only make the SoC guards' job easier, and the two are applied together.
 
     A cross-charge hold is latched: an inverter held from charging while the fleet should discharge
-    reads back a charge rate of 0, and keeps that hold for as long as the fleet's direction stays the
-    same. Without the latch the hold went with the next pass - the held battery reads 0W, so it no
+    reads back a charge rate of 0, and keeps that hold for as long as the fleet is still visibly
+    discharging. Without the latch the hold went with the next pass - the held battery reads 0W, so it no
     longer looks like a cross-charger - and inverters whose loops disagree about the shared CT wound
     straight back into charging from their neighbours until caught again, a write every minute or two.
     The mirror, a discharge hold while the fleet soaks up PV, is latched only while the surplus is at
@@ -3292,10 +3292,14 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     # true zero through the prediction rate floor). Such a hold is kept while the fleet's direction is
     # unchanged - a held battery reads 0W, so on power alone it would be released every other pass and
     # wind straight back into cross-charging. It ends when the direction flips, as the rate the latch
-    # reads is then the other one. A latched discharge hold also needs a comfortable PV surplus - see
-    # BALANCE_LATCH_SURPLUS_W.
+    # reads is then the other one, or when the fleet stops visibly moving power that way. A latched
+    # discharge hold also needs a comfortable PV surplus - see BALANCE_LATCH_SURPLUS_W.
     if fleet_should_discharge:
-        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_charge[id] or charge_rates[id] == 0)]
+        # The charge latch also needs the fleet to be visibly discharging. A fleet sitting idle - every battery
+        # at 0W, nothing on the meter because grid_power is not configured or the site curtails PV to zero export
+        # - would otherwise keep a charge rate of 0 (left by a freeze-export slot, say) all day and take no PV.
+        fleet_discharging = total_battery_power >= 50.0
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_charge[id] or (charge_rates[id] == 0 and fleet_discharging))]
     else:
         against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_discharge[id] or (discharge_rates[id] == 0 and spare_pv >= BALANCE_LATCH_SURPLUS_W))]
 
@@ -3307,8 +3311,13 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
                 intent[id]["charge_rate"] = 0
             else:
                 intent[id]["discharge_rate"] = 0
-        # SoC balancing still runs: a cross-charge hold only removes draw (or supply) the rest of the
-        # fleet was providing, so it never leaves the SoC guards' capacity checks short.
+        # SoC balancing still runs. An inverter held here can no longer help in the direction it was held in,
+        # so the SoC guard below that needs that direction leaves it out of the capacity it counts on: one held
+        # from discharging into a surplus cannot take over the house, and one held from charging while the fleet
+        # discharges cannot soak up surplus.
+
+    cross_held_discharge = set(against_fleet) if (balance_crosscharge and not fleet_should_discharge) else set()
+    cross_held_charge = set(against_fleet) if (balance_crosscharge and fleet_should_discharge) else set()
 
     if not out_of_balance:
         return
@@ -3335,7 +3344,7 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # headroom" separately lets two different inverters answer them - a peer with energy
             # but no rate, and a peer with rate but sitting on its reserve - and holding this one
             # then leaves only unusable capacity behind, with the shortfall coming off the grid.
-            usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held)
+            usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held and other not in cross_held_discharge)
             if (usable - 200) < total_battery_power + stopped_charging:
                 continue
             if log_to:
@@ -3356,7 +3365,7 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # of the fleet it is implied, so it is not restated.
             # Same on the charge side: a battery already at 100% absorbs nothing, so its rate must
             # not be counted towards what is left to soak up the surplus.
-            usable = sum(effective_charge_rates[other] for other in range(num_inverters) if other != id and below_full[other] and other not in held)
+            usable = sum(effective_charge_rates[other] for other in range(num_inverters) if other != id and below_full[other] and other not in held and other not in cross_held_charge)
             if spare_pv > usable:
                 continue
             if log_to:

@@ -35,6 +35,7 @@ oven element cycling 40s on / 20s off, a washing machine heater cycling 15s / 15
 """
 
 import contextlib
+from datetime import timedelta
 import io
 import math
 import random
@@ -365,6 +366,7 @@ def run_ct_scenario(my_predbat, scenario):
             "inverter_rate_intent",
             "inverter_balance_overridden",
             "inverters",
+            "now_utc",
             "export_limits_best",
             "set_export_window",
             "set_export_low_power",
@@ -402,6 +404,7 @@ def run_ct_scenario(my_predbat, scenario):
                 my_predbat.export_limits_best = [scenario.export_limit]
                 my_predbat.set_export_window = True
                 my_predbat.set_export_low_power = True
+            start_utc = my_predbat.now_utc
             with routed_to_sims(ha, sims, clock, scenario.rate_max):
                 for t in range(seconds):
                     ct_import = -grid
@@ -427,6 +430,8 @@ def run_ct_scenario(my_predbat, scenario):
                         power_trace.append((t, [round(power) for power in battery], round(load[t]), round(grid)))
                     if t % 60 == 59:
                         clock["s"] = max(clock["s"], float(t))
+                        # Predbat's clock moves with the simulation, so a learned ceiling expires as it would live
+                        my_predbat.now_utc = start_utc + timedelta(seconds=t)
                         for index, sim in enumerate(sims):
                             suffix = entity_suffix(index)
                             ha.dummy_items["sensor.soc_percent" + suffix] = sim.soc_percent_reported()
@@ -490,7 +495,8 @@ def run_ct_scenario(my_predbat, scenario):
         "cross_over_1kw_s": cross_over[1000],
         "cross_over_2kw_s": cross_over[2000],
         "power_trace": power_trace,
-        # Balancer decisions by branch, from its own log lines: cross-charge holds, and SoC holds
+        # Balancer decisions by branch, from its own log lines: cross-chargers newly caught (a latched hold is not
+        # logged again, so this is not a count of passes holding), and SoC holds
         "cross_holds": sum(1 for line in log_lines if "working against the fleet" in str(line)),
         "soc_holds": sum(1 for line in log_lines if "holding its discharge" in str(line) or "holding its charge" in str(line)),
     }
