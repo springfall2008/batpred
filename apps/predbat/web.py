@@ -20,8 +20,10 @@ endpoints. Includes 50+ HTTP routes for monitoring and control.
 
 from aiohttp import web
 import asyncio
+import base64
 import os
 import os.path
+import secrets
 import sys
 import re
 from datetime import datetime, timedelta, timezone
@@ -85,6 +87,8 @@ from utils import (
     format_time_ago,
     get_override_time_from_string,
     history_attribute,
+    is_entity_id,
+    minute_data,
     prune_today,
     mask_secret_args,
     mask_secret_yaml_text,
@@ -457,6 +461,27 @@ def subtract_series(base, subtract, max_gap_seconds=300):
     return result
 
 
+# Pages that can change settings or expose configuration, which ask for the web login when web_username and
+# web_password are set (GH#6103): the WhatIf, Chat, Settings and Advanced menus plus their data/download endpoints.
+# Every write (POST etc.) is protected as well, whatever its path, so the data-viewing pages stay open.
+WEB_AUTH_PROTECTED_PREFIXES = (
+    "/annual",
+    "/chat",
+    "/apps",
+    "/config",
+    "/component",
+    "/discovery",
+    "/browse",
+    "/internals",
+    "/api/internals",
+    "/kraken_key",
+    "/download",
+    "/debug_",
+)
+# POST /api/login only hands a token to a reverse proxy as a cookie and checks nothing, so it needs no login
+WEB_AUTH_EXEMPT_PATHS = ("/api/login",)
+
+
 class WebInterface(ComponentBase):
     """Built-in web dashboard server using aiohttp.
 
@@ -465,16 +490,58 @@ class WebInterface(ComponentBase):
     endpoints. Supports plugin endpoint registration.
     """
 
-    def initialize(self, web_port):
+    def initialize(self, web_port, web_username=None, web_password=None, web_enable=True):
         self.default_page = "./dash"
         self.web_port = web_port
         self.default_log = "warnings"
+
+        # Optional HTTP Basic login for the pages that change settings (GH#6103). YAML can hand us an int
+        # for an all-digit password, so both are stringified; an empty value counts as not set.
+        self.web_username = str(web_username) if web_username not in (None, "") else ""
+        self.web_password = str(web_password) if web_password not in (None, "") else ""
 
         # Plugin registration system
         self.registered_endpoints = []
 
         self.annual_page = AnnualPage(self)
         self.chat_page = WebChat(self)
+
+    def web_auth_enabled(self):
+        """Return True when a web username or password is configured, so the login gate is active."""
+        return bool(self.web_username or self.web_password)
+
+    def web_auth_required(self, request):
+        """Return True if this request must carry the web login: any write, or a read of a settings/advanced page."""
+        if request.path in WEB_AUTH_EXEMPT_PATHS:
+            return False
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            return True
+        return request.path.startswith(WEB_AUTH_PROTECTED_PREFIXES)
+
+    def web_auth_valid(self, request):
+        """Check the request's HTTP Basic credentials against web_username and web_password in constant time."""
+        if not (self.web_username and self.web_password):
+            # Half configured: fail closed rather than quietly leaving the pages open
+            return False
+        header = request.headers.get("Authorization", "")
+        scheme, _, encoded = header.partition(" ")
+        if scheme.lower() != "basic":
+            return False
+        try:
+            username, _, password = base64.b64decode(encoded.strip(), validate=True).decode("utf-8").partition(":")
+        except (ValueError, UnicodeDecodeError):
+            return False
+        # Evaluate both comparisons so a wrong username takes as long to reject as a wrong password
+        username_ok = secrets.compare_digest(username.encode(), self.web_username.encode())
+        password_ok = secrets.compare_digest(password.encode(), self.web_password.encode())
+        return username_ok and password_ok
+
+    @web.middleware
+    async def auth_middleware(self, request, handler):
+        """Ask for the web login on protected requests, and pass everything else straight through."""
+        if self.web_auth_enabled() and self.web_auth_required(request) and not self.web_auth_valid(request):
+            return web.Response(status=401, text="Login required", headers={"WWW-Authenticate": 'Basic realm="Predbat", charset="UTF-8"'})
+        return await handler(request)
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -638,7 +705,12 @@ class WebInterface(ComponentBase):
 
     async def start(self):
         # Start the web server
-        app = web.Application()
+        if self.web_auth_enabled():
+            app = web.Application(middlewares=[self.auth_middleware])
+            if not (self.web_username and self.web_password):
+                self.log("Warn: web_username and web_password must both be set, until then the Web Interface refuses every protected request")
+        else:
+            app = web.Application()
         app.router.add_get("/", self.html_default)
         app.router.add_get("/plan", self.html_plan)
         app.router.add_get("/log", self.html_log)
@@ -1851,9 +1923,11 @@ class WebInterface(ComponentBase):
         self.update_success_timestamp()
         return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
 
-    def get_chart_series(self, name, results, chart_type, color):
+    def get_chart_series(self, name, results, chart_type, color, hidden=False):
         """
         Return HTML for a chart series
+
+        hidden: start the series switched off; clicking its legend entry shows it.
         """
         text = ""
         text += "   {\n"
@@ -1861,6 +1935,8 @@ class WebInterface(ComponentBase):
         text += "    type: '{}',\n".format(chart_type)
         if color:
             text += "    color: '{}',\n".format(color)
+        if hidden:
+            text += "    hidden: true,\n"
         text += "    data: [\n"
         first = True
         for key in results:
@@ -1959,12 +2035,13 @@ var options = {
             chart_type = series.get("chart_type", "line")
             color = series.get("color", "")
             unit_name = series.get("unit", yaxis_name) or ""
+            hidden = series.get("hidden", False)
 
             if results:
                 if not first:
                     text += ","
                 first = False
-                text += self.get_chart_series(name, results, chart_type, color)
+                text += self.get_chart_series(name, results, chart_type, color, hidden=hidden)
                 opacity.append(opacity_value)
                 stroke_width.append(stroke_width_value)
                 stroke_curve.append("'{}'".format(stroke_curve_value))
@@ -2035,6 +2112,10 @@ var options = {
                 axis_parts.append("      decimalsInFloat: {}".format(decimals))
                 if opposite:
                     axis_parts.append("      opposite: true")
+                if "min" in axis:
+                    axis_parts.append("      min: {}".format(axis["min"]))
+                if "max" in axis:
+                    axis_parts.append("      max: {}".format(axis["max"]))
                 if labels_formatter:
                     axis_parts.append("      labels: {{ formatter: function(val) {{ {} }} }}".format(labels_formatter))
 
@@ -2051,7 +2132,11 @@ var options = {
         text += "    formatter: function(seriesName, opts) {\n"
         text += "        var units = [{}];\n".format(units_array)
         text += "        var unit = units[opts.seriesIndex] !== undefined ? units[opts.seriesIndex] : '{}';\n".format(yaxis_name)
-        text += "        return [opts.w.globals.series[opts.seriesIndex].at(-1), ' ', unit, ' <br> ', seriesName]\n"
+        text += "        var last = opts.w.globals.series[opts.seriesIndex].at(-1);\n"
+        text += "        if (last === null || typeof last === 'undefined') {\n"
+        text += "            return seriesName;\n"
+        text += "        }\n"
+        text += "        return [last, ' ', unit, ' <br> ', seriesName]\n"
         text += "    }\n"
         text += "  },\n"
         text += "  annotations: {\n"
@@ -3330,6 +3415,60 @@ chart.render();
         # Redirect back to dashboard
         raise web.HTTPFound("./dash")
 
+    def get_inverter_soc_history(self):
+        """
+        Today's actual SoC of each inverter as a percentage of its own capacity, for the Battery chart,
+        as a list of (inverter id, {stamp: %}).
+
+        Each battery is on its own scale, so one can reach 100% while the fleet total is still short of full.
+        Empty for a single-inverter install, whose one line is already the chart's Actual.
+        Read from each inverter's own soc_percent sensor, or its soc_kw sensor converted to kWh and scaled
+        the way Inverter.update_status() scales it, and sampled on the same grid as the chart's Actual line.
+        There is no predicted SoC per inverter: the plan treats the batteries as one.
+        """
+        inverters = self.base.inverters
+        if len(inverters) <= 1:
+            return []
+        use_percent = "soc_percent" in self.base.args
+        now_str = self.now_utc.strftime(TIME_FORMAT)
+        results = []
+        for inverter in inverters:
+            sensor = self.base.get_arg("soc_percent" if use_percent else "soc_kw", indirect=False, index=inverter.id)
+            if not is_entity_id(sensor):
+                continue
+            if use_percent:
+                scale = 1.0
+            else:
+                if not inverter.soc_max:
+                    continue
+                scale = (inverter.battery_scaling or 1.0) * 100.0 / inverter.soc_max
+            history = self.get_history_wrapper(sensor, 1, required=False, tracked=False)
+            data = {}
+            if history:
+                # Keyed by minutes ago, like soc_kwh_history; required_unit converts a Wh sensor the way update_status() does
+                soc_history, _ = minute_data(
+                    history[0],
+                    1,
+                    self.now_utc,
+                    "state",
+                    "last_updated",
+                    backwards=True,
+                    clean_increment=False,
+                    smoothing=False,
+                    divide_by=1.0,
+                    scale=1.0,
+                    required_unit=None if use_percent else "kWh",
+                )
+                for minute in range(0, self.minutes_now, self.plan_interval_minutes):
+                    minutes_ago = self.minutes_now - minute
+                    if minutes_ago in soc_history:
+                        stamp = (self.midnight_utc + timedelta(minutes=minute)).strftime(TIME_FORMAT)
+                        data[stamp] = dp2(soc_history[minutes_ago] * scale)
+            if inverter.soc_percent is not None:
+                data[now_str] = inverter.soc_percent
+            results.append((inverter.id, data))
+        return results
+
     def get_chart(self, chart):
         """
         Return the HTML for a chart
@@ -3400,7 +3539,31 @@ chart.render();
                 {"name": "Best Export Limit", "data": best_export_limit_kw, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#15eb1c"},
                 {"name": "Record", "data": record, "opacity": "0.5", "stroke_width": "4", "stroke_curve": "stepline", "color": "#000000", "chart_type": "area"},
             ]
-            text += self.render_chart(series_data, "kWh", "Battery SoC Prediction", now_str)
+            # Multi-inverter installs: each battery's actual SoC in % of its own capacity, on a 0-100% axis
+            # of their own, off until picked in the legend
+            inverter_colors = ["#2ca02c", "#ff7f0e", "#17becf", "#8c564b", "#e377c2", "#bcbd22", "#7f7f7f", "#393b79"]
+            inverter_series_names = []
+            for inv_id, inv_soc in self.get_inverter_soc_history():
+                if not inv_soc:
+                    continue
+                name = "Actual Inverter {}".format(inv_id)
+                inverter_series_names.append(name)
+                series_data.append(
+                    {
+                        "name": name,
+                        "data": inv_soc,
+                        "opacity": "1.0",
+                        "stroke_width": "2",
+                        "stroke_curve": "smooth",
+                        "color": inverter_colors[inv_id % len(inverter_colors)],
+                        "unit": "%",
+                        "hidden": True,
+                    }
+                )
+            extra_yaxis = None
+            if inverter_series_names:
+                extra_yaxis = {"title": "Inverter SoC (%)", "series_names": inverter_series_names, "decimals": 0, "opposite": True, "min": 0, "max": 100}
+            text += self.render_chart(series_data, "kWh", "Battery SoC Prediction", now_str, extra_yaxis=extra_yaxis)
         elif chart == "Power":
             series_data = [
                 {"name": "battery", "data": battery_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},

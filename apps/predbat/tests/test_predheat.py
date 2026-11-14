@@ -476,6 +476,64 @@ def test_predheat_volume_temp(my_predbat):
     return failed
 
 
+def test_predheat_volume_temp_persistence(my_predbat):
+    """Check the persisted volume temperature survives a config reload across the range a wet heating system reaches."""
+    failed = False
+    item = my_predbat.config_index["next_volume_temp"]
+
+    old_enable = my_predbat.config_index["predheat_enable"].get("value")
+    old_next = item.get("value")
+    old_had_errors = my_predbat.had_errors
+    old_record_status = my_predbat.record_status
+    statuses = []
+
+    def record_status(message, *args, **kwargs):
+        """Capture each status message, then record it as normal."""
+        statuses.append(message)
+        return old_record_status(message, *args, **kwargs)
+
+    # The volume heats towards the flow temperature, so the value saved after a run sits well above
+    # room temperature. Anything beyond the boiling point of water is still clamped.
+    cases = [
+        ("flow temperature of an electric boiler", 55.5, 55.5, False),
+        ("flow temperature of a gas boiler", 72.25, 72.25, False),
+        ("declared maximum", 100, 100, False),
+        ("above the declared maximum", 150, 100, True),
+    ]
+
+    try:
+        # next_volume_temp is only accessible when Predheat is enabled.
+        my_predbat.expose_config("predheat_enable", True, force_ha=True)
+        my_predbat.record_status = record_status
+
+        for label, persisted, expected, expect_warning in cases:
+            print("Test: next_volume_temp reload with {}".format(label))
+
+            my_predbat.expose_config("next_volume_temp", persisted, force_ha=True)
+            my_predbat.had_errors = False
+            statuses.clear()
+            my_predbat.load_user_config()
+
+            got = my_predbat.get_arg("next_volume_temp")
+            if got is None or abs(float(got) - expected) > 0.001:
+                print("  ERROR: {} expected {} after reload, got {}".format(label, expected, got))
+                failed = True
+
+            warnings = [message for message in statuses if "next_volume_temp" in message]
+            if bool(warnings) != expect_warning or my_predbat.had_errors is not expect_warning:
+                print("  ERROR: {} expected warning {}, got {} with had_errors {}".format(label, expect_warning, warnings, my_predbat.had_errors))
+                failed = True
+
+    finally:
+        my_predbat.record_status = old_record_status
+        my_predbat.expose_config("next_volume_temp", old_next if old_next is not None else item.get("default"), force_ha=True)
+        my_predbat.expose_config("predheat_enable", bool(old_enable), force_ha=True)
+        my_predbat.load_user_config()
+        my_predbat.had_errors = old_had_errors
+
+    return failed
+
+
 def test_predheat_optional_energy_history(my_predbat):
     """Missing heating-energy history must not disable thermostat schedule history."""
     failed = False
@@ -532,5 +590,53 @@ def test_predheat_optional_energy_history(my_predbat):
             my_predbat.args.pop("predheat", None)
         else:
             my_predbat.args["predheat"] = original_args
+
+    return failed
+
+
+def _published_heat_to(predheat, volume_temp, heating_active):
+    """Run one simulation pass and return the published heat_to_temp state and results series.
+
+    The published state is captured as well as the attributes, unlike _make_simulation's
+    stub which only keeps the attributes.
+    """
+    predheat.published = {}
+    predheat.set_state = lambda entity_id, state=None, attributes=None: predheat.published.__setitem__(entity_id, {"state": state, "attributes": attributes or {}})
+    predheat.run_simulation(volume_temp, heating_active, save="best")
+    published = predheat.published[predheat.prefix + ".heat_to_temp"]
+    return published["state"], published["attributes"]["results"]
+
+
+def test_predheat_heat_to_temp_off_marker(my_predbat):
+    """Heating off must publish a distinct off marker for heat_to_temp, not 0 (#6078)."""
+    failed = False
+    print("**** Running Predheat heat_to_temp off-marker tests ****")
+
+    # ------------------------------------------------------------------
+    print("Test: heating off publishes 'unknown', not 0, for heat_to_temp")
+    # No heating period, inside and outside both at BASE_TEMP, so the heating never switches on.
+    predheat = _make_simulation(my_predbat, [], smart_thermostat=False)
+    predheat.external_temperature = {0: BASE_TEMP}
+    state, results = _published_heat_to(predheat, BASE_TEMP, False)
+    if state != "unknown":
+        print("  ERROR: heating off expected heat_to_temp state 'unknown', got {}".format(repr(state)))
+        failed = True
+    if any(value is not None for value in results.values()):
+        non_none = {stamp: value for stamp, value in results.items() if value is not None}
+        print("  ERROR: heating off expected every heat_to_temp result to be None, got {} non-None values, first: {}".format(len(non_none), list(non_none.items())[:3]))
+        failed = True
+
+    # ------------------------------------------------------------------
+    print("Test: heating to a real 0 C target still publishes 0")
+    predheat = _make_simulation(my_predbat, [(0, SIM_MINUTES, 0.0)], smart_thermostat=False)
+    predheat.internal_temperature = {0: -5.0}
+    state, results = _published_heat_to(predheat, BASE_TEMP, True)
+    first_stamp = predheat.midnight_utc.strftime(TIME_FORMAT)
+    if state != 0.0:
+        print("  ERROR: heating to 0 C expected heat_to_temp state 0.0, got {}".format(repr(state)))
+        failed = True
+    if results.get(first_stamp) != 0.0:
+        print("  ERROR: heating to 0 C expected the first heat_to_temp result to be 0.0, got {}".format(repr(results.get(first_stamp))))
+        failed = True
 
     return failed

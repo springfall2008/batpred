@@ -311,6 +311,7 @@ hadashboard
 hahistory
 hainterface
 halfhourly
+haléř
 hanchu
 hanchuess
 hanres
@@ -710,6 +711,7 @@ sunspec
 sunsynk
 supabase
 suptitle
+surrogatepass
 suspendedev
 suspendedevse
 synkctl

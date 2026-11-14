@@ -6593,13 +6593,13 @@ class Plan:
         plan = self.sort_window_by_time(plan)
         return plan
 
-    def car_charge_slot_kwh(self, minute_start, minute_end):
+    def car_charge_slot_kwh(self, minute_start, minute_end, car_n=None):
         """
-        Work out car charging amount in KWh for given self.plan_interval_minutes-minute slot
+        Work out car charging amount in KWh for given self.plan_interval_minutes-minute slot, for all cars or just car_n
         """
         car_charging_kwh = 0.0
         if self.num_cars > 0:
-            for car_n in range(self.num_cars):
+            for car_n in range(self.num_cars) if car_n is None else [car_n]:
                 for window in self.car_charging_slots[car_n]:
                     start = window["start"]
                     end = window["end"]

@@ -400,7 +400,7 @@ class PredHeat:
             heat_loss_current -= self.heat_gain_static * PREDICT_STEP / 60.0
 
             flow_temp = 0
-            heat_to = 0
+            heat_to = None
             heat_power_in = 0
             heat_power_out = 0
             if heating_on:
@@ -461,7 +461,7 @@ class PredHeat:
                 internal_temp_predict_stamp[stamp] = dp2(internal_temp)
                 external_temp_predict_stamp[stamp] = dp2(external_temp)
                 target_temp_predict_stamp[stamp] = dp2(target_temp)
-                heat_to_predict_stamp[stamp] = dp2(heat_to)
+                heat_to_predict_stamp[stamp] = dp2(heat_to) if heat_to is not None else None
                 heat_energy_predict_stamp[stamp] = dp2(heat_energy)
                 volume_temp_stamp[stamp] = dp2(volume_temp)
                 cost_stamp[stamp] = dp2(cost)
@@ -474,7 +474,7 @@ class PredHeat:
             # Store raw data
             target_temp_predict_minute[minute] = dp2(target_temp)
             internal_temp_predict_minute[minute] = dp2(internal_temp)
-            heat_to_predict_temperature[minute] = dp2(heat_to)
+            heat_to_predict_temperature[minute] = dp2(heat_to) if heat_to is not None else None
             heat_energy_predict_minute[minute] = dp2(heat_energy)
             cost_minute[minute] = dp2(cost)
 
@@ -495,7 +495,11 @@ class PredHeat:
             self.set_state(
                 self.prefix + ".target_temp", state=dp2(target_temp_predict_minute[0]), attributes={"results": target_temp_predict_stamp, "friendly_name": "Target Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "°C"}
             )
-            self.set_state(self.prefix + ".heat_to_temp", state=dp2(heat_to_predict_temperature[0]), attributes={"results": heat_to_predict_stamp, "friendly_name": "Predict heating to target", "state_class": "measurement", "unit_of_measurement": "°C"})
+            self.set_state(
+                self.prefix + ".heat_to_temp",
+                state=heat_to_predict_temperature[0] if heat_to_predict_temperature[0] is not None else "unknown",
+                attributes={"results": heat_to_predict_stamp, "friendly_name": "Predict heating to target", "state_class": "measurement", "unit_of_measurement": "°C"},
+            )
             self.set_state(self.prefix + ".internal_temp_h1", state=dp2(internal_temp_predict_minute[60]), attributes={"friendly_name": "Internal Temperature Predicted +1hr", "state_class": "measurement", "unit_of_measurement": "°C"})
             self.set_state(self.prefix + ".internal_temp_h2", state=dp2(internal_temp_predict_minute[60 * 2]), attributes={"friendly_name": "Internal Temperature Predicted +2hr", "state_class": "measurement", "unit_of_measurement": "°C"})
             self.set_state(self.prefix + ".internal_temp_h8", state=dp2(internal_temp_predict_minute[60 * 8]), attributes={"friendly_name": "Internal Temperature Predicted +8hrs", "state_class": "measurement", "unit_of_measurement": "°C"})

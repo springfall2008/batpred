@@ -41,7 +41,7 @@ def make_gateway(subscribed=True, acks_seen=True):
     gw._last_status = None
     gw._last_read_only = None
     gw._read_only_mismatch_logged = False
-    gw._loop = None
+    gw.component_loop = None
     gw._staged = {}
     gw._commit_inflight = set()
     gw._commit_tasks = set()
@@ -580,7 +580,7 @@ class TestGatewayCommit:
         self.stage(gw, "charge", "02:30:00", "03:05:00")
         loop = asyncio.new_event_loop()
         loop.close()
-        gw._loop = loop
+        gw.component_loop = loop
         gw._mqtt_connected = False
         self.press(gw)
         assert gw._published == []
@@ -742,7 +742,7 @@ class TestGatewayCommit:
         loop = asyncio.new_event_loop()
         thread = threading.Thread(target=loop.run_forever, daemon=True)
         thread.start()
-        gw._loop = loop
+        gw.component_loop = loop
         try:
             self.stage(gw, "charge", "02:30:00", "03:05:00")
             started = time.time()

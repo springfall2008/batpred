@@ -52,6 +52,10 @@ import ast
 import copy
 import math
 
+# Days of battery temperature history to fetch: predict_battery_temperature() looks back at most
+# 24 hours plus one step, so a longer window is only held in memory (about 3 MB at 22 days)
+BATTERY_TEMPERATURE_HISTORY_DAYS = 2
+
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
     "car_charging_planned",
@@ -79,6 +83,15 @@ REPLAY_INVERTER_FIELDS = (
     "battery_rate_max_charge",
     "battery_rate_max_discharge",
 )
+
+
+class LoadSourceMissing(ValueError):
+    """No load source (load_today or load_forecast) is configured yet, so there is no load data to plan with.
+
+    plan_once() treats it as a failed pre-condition and skips the cycle without a traceback. It is often temporary:
+    a component's automatic configuration sets load_today once it has started (#5092). A ValueError subclass, as
+    the bare ValueError it replaces was, so other callers of fetch_sensor_data() see no change.
+    """
 
 
 class Fetch:
@@ -1635,10 +1648,16 @@ class Fetch:
                     self.load_minutes_source = "load_forecast"
                     self.load_minutes_age = 0
                     self.load_last_period = 0
+                elif self.get_arg("load_forecast", None, indirect=False):
+                    # A forecast sensor is configured but gave nothing: it is unavailable. Load ML is not a
+                    # source here, as it trains on load_today and so cannot forecast without it
+                    self.log("Error: No load data: load_today is not set and the load forecast returned no data. Skipping this cycle")
+                    self.record_status(message="Error: No load data - load_today not set and the load forecast returned no data", had_errors=True)
+                    raise LoadSourceMissing("load_today is not set and the load forecast returned no data")
                 else:
-                    self.log("Error: You have not set load_today or load_forecast in apps.yaml, you will have no load data")
-                    self.record_status(message="Error: load_today not set correctly", had_errors=True)
-                    raise ValueError
+                    self.log("Error: No load data: load_today or load_forecast is not set. Set one in apps.yaml, or if your inverter component configures it automatically, wait for it to start. Skipping this cycle")
+                    self.record_status(message="Error: No load data - load_today not set (in apps.yaml, or by a component's automatic configuration)", had_errors=True)
+                    raise LoadSourceMissing("load_today or load_forecast is not set")
 
             # Load import today data
             if "import_today" in self.args:
@@ -1663,12 +1682,7 @@ class Fetch:
 
         # Battery temperature
         if "battery_temperature_history" in self.args:
-            self.battery_temperature_history = self.minute_data_import_export(self.max_days_previous, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
-            data = []
-            for minute in range(0, 24 * 60, 5):
-                data.append({minute: self.battery_temperature_history.get(minute, 0)})
-            self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
-            self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
+            self.fetch_battery_temperature()
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = self.load_car_energy(self.now_utc)
@@ -2819,6 +2833,17 @@ class Fetch:
 
         return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90
 
+    def fetch_battery_temperature(self):
+        """
+        Fetch the battery temperature history and predict the temperature forward from it.
+
+        Only BATTERY_TEMPERATURE_HISTORY_DAYS are fetched, not max_days_previous: the prediction looks
+        back at most 24 hours plus one step, so a longer per-minute window is only held in memory.
+        """
+        self.battery_temperature_history = self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
+        self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
+        self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
+
     def predict_battery_temperature(self, battery_temperature_history, step):
         """
         Given historical battery temperature data, predict the future temperature
@@ -3911,6 +3936,8 @@ class Fetch:
         """
         self.car_charging_planned = [False for c in range(self.num_cars)]
         self.car_charging_now = [False for c in range(self.num_cars)]
+        # True charging, False not charging, None no reading (no car_charging_now sensor, or unknown/unavailable)
+        self.car_charging_now_state = [None for c in range(self.num_cars)]
         self.car_charging_plan_smart = [False for c in range(self.num_cars)]
         self.car_charging_plan_max_price = [0 for c in range(self.num_cars)]
         self.car_charging_plan_time = ["07:00:00" for c in range(self.num_cars)]
@@ -3931,7 +3958,9 @@ class Fetch:
             self.car_charging_planned[car_n] = bool(self.car_plugged_in_now(car_n))
 
             # Car is charging now sensor - an on/off sensor, or a charging power sensor read in watts
-            self.car_charging_now[car_n] = bool(self.car_charging_now_value(self.get_arg("car_charging_now", "no", index=car_n, required_unit="W")))
+            # (no sensor configured reads None, so the state is None: no reading)
+            self.car_charging_now_state[car_n] = self.car_charging_now_value(self.get_arg("car_charging_now", None, index=car_n, required_unit="W"))
+            self.car_charging_now[car_n] = bool(self.car_charging_now_state[car_n])
 
             # Other car related configuration
             self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", True)
