@@ -142,6 +142,7 @@ BATTERY_TEMPERATURE_CURVE_MIN_MINUTES = 30  # Charging minutes a whole degree ne
 BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS = 30  # Weight of a day's samples halves every this many days, so a battery that ages or a heater that is re-set is followed
 BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS = 400  # Samples older than this are dropped, a little over a year so last winter is still known when the next one starts
 BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES = 60  # Minimum gap between history scans, the curve changes over days not minutes
+BATTERY_POWER_CURVE_RESCAN_MINUTES = 24 * 60  # battery_charge/discharge_power_curve: auto - gap between re-scans once a curve is known, so a newer full-rate cycle replaces it
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
 INVERTER_LIMIT_DEFAULT_W = 7500.0  # Standing inverter AC limit when the user has not configured inverter_limit

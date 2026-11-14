@@ -2887,8 +2887,12 @@ If you don't get such a message then Predbat didn't detect any charge/discharge 
 
 The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg) explains how the curve works and shows how Predbat automatically creates it.
 
-Setting this option to **auto** will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
-history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually configure the charge curve in `apps.yaml`.
+Setting this option to **auto** will cause the computed curve to be stored and used automatically.
+
+- The last curve found is saved in Predbat's cache, so it is used straight away after a restart.
+- Predbat looks for a newer curve once a day. A search that finds no full-power charge in the history keeps the curve it already has.
+- If you use low power charging mode, your history may contain few full power charges. The saved curve then stays in use, but it is only updated when one is seen, so you may still prefer to configure the charge curve manually in `apps.yaml`.
+- If you have a `battery_temperature_charge_curve` (or `battery_temperature_charge_curve_auto`), charges where that curve says a cold battery was limiting the rate are left out, so cold weather is not mistaken for a tail-off at high SoC.
 
 NB: For Predbat to calculate your charging curve it needs to have access to historical Home Assistant data for **status**, **battery_charge_rate**, **battery_power** and **soc_percent** or **soc_kw**.
 These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.
@@ -2940,6 +2944,7 @@ You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find
 The same fix applies to the discharge curve. There the old offset was SoC x (1 - battery_scaling), which at 5-20% SoC is small (one percentage point or less at battery_scaling 0.95), so a pasted discharge curve is much less affected.
 
 Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
+As with the charge curve, the last curve found is saved, re-checked once a day, and kept when no new full-power discharge is found. Discharges that `battery_temperature_discharge_curve` says were limited by a cold battery are left out.
 
 In the same way, as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for **status**, **battery_discharge_rate**, **battery_power** and **soc_percent** or **soc_kw**.
 These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.

@@ -756,6 +756,77 @@ def test_find_charge_curve_discharge_percent_with_battery_scaling(my_predbat):
     return False
 
 
+def test_find_charge_curve_skips_temperature_limited(my_predbat):
+    """
+    A cold battery held back by its BMS looks like a high-SoC taper, so charges the temperature curve says were
+    limited are left out of the learned SoC curve, while warm charges and installs with no temperature curve are not.
+    """
+    print("*** Running test: find_charge_curve_skips_temperature_limited ***")
+    failed = False
+    temp_sensor = "sensor.battery_temperature_curve_test"
+    saved_curve = my_predbat.battery_temperature_charge_curve
+    saved_arg = my_predbat.args.get("battery_temperature_history", None)
+
+    def install_temperature(temp):
+        """Add a constant battery temperature history to the mocked HA history."""
+        create_test_history_data(my_predbat, num_days=7)
+        base_get_history = my_predbat.ha_interface.get_history
+        base_time = my_predbat.midnight_utc - timedelta(days=7)
+        temp_history = [{"state": temp, "last_updated": (base_time + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S%z"), "attributes": {}} for minutes in range(0, 7 * 24 * 60, 5)]
+
+        def mock_get_history(entity_id, now=None, days=30):
+            """Serve the temperature history alongside the charge history."""
+            if entity_id == temp_sensor:
+                return [temp_history]
+            return base_get_history(entity_id, now=now, days=days)
+
+        my_predbat.ha_interface.get_history = mock_get_history
+
+    try:
+        inv = Inverter(my_predbat, 0)
+        inv.battery_rate_max_charge = 2600 / 60000
+        inv.battery_rate_max_discharge = 2600 / 60000
+        inv.soc_max = 10.0
+        inv.battery_scaling = 1.0
+        setup_predbat(my_predbat)
+        my_predbat.args["battery_temperature_history"] = temp_sensor
+        # 0.13 C of a 10 kWh battery is 1.3 kW, below the 2.6 kW the history charges at
+        my_predbat.battery_temperature_charge_curve = {5: 0.13, 25: 1.0}
+
+        install_temperature(5.5)
+        curve = inv.find_charge_curve(discharge=False)
+        if curve:
+            print("ERROR: a charge the temperature curve limits should not be learned as the SoC curve, got {}".format(curve))
+            failed = True
+
+        install_temperature(25.0)
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve or any(value != 1 for value in curve.values()):
+            print("ERROR: a warm charge should still be learned, got {}".format(curve))
+            failed = True
+
+        install_temperature(0)
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve:
+            print("ERROR: an exact 0 temperature is a missing reading and should not exclude the charge")
+            failed = True
+
+        install_temperature(5.5)
+        my_predbat.battery_temperature_charge_curve = {}
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve:
+            print("ERROR: with no temperature curve nothing should be excluded")
+            failed = True
+    finally:
+        my_predbat.battery_temperature_charge_curve = saved_curve
+        if saved_arg is None:
+            my_predbat.args.pop("battery_temperature_history", None)
+        else:
+            my_predbat.args["battery_temperature_history"] = saved_arg
+        remove_test_history_data(my_predbat)
+    return failed
+
+
 def run_find_charge_curve_tests(my_predbat):
     """
     Run all find_charge_curve tests
@@ -807,6 +878,10 @@ def run_find_charge_curve_tests(my_predbat):
     failed |= test_find_charge_curve_coarse_soc_steps(my_predbat)
     failed |= test_find_charge_curve_percent_with_battery_scaling(my_predbat)
     failed |= test_find_charge_curve_discharge_percent_with_battery_scaling(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_charge_curve_skips_temperature_limited(my_predbat)
     if failed:
         return failed
 

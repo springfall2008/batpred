@@ -669,6 +669,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_discharge_power_curve_auto = False
         self.computed_charge_curve = False
         self.computed_discharge_curve = False
+        self.battery_power_curve_loaded = {}  # "charge"/"discharge" -> True once the saved auto curve has been read from storage
+        self.battery_power_curve_last_scan = {}  # "charge"/"discharge" -> time of the last auto curve history scan
         self.isCharging = False
         self.isCharging_Target = 0
         self.isExporting = False

@@ -50,6 +50,7 @@ from const import (
     EXPORT_LIMIT_DEFAULT_W,
 )
 from control_ledger import generation_from_state, OWNED, UNOWNED
+from utils import find_battery_temperature_cap
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit, strptime_aware
 
 TIME_FORMAT_HMS = "%H:%M:%S"
@@ -1541,6 +1542,8 @@ class Inverter:
                 for minute in range(0, min_len):
                     soc_percent[minute] = calc_percent_limit(soc_kwh.get(minute, 0), self.soc_max)
 
+                temperature_limited = self.find_temperature_limited_minutes(discharge, min_len, max_power_scaled)
+
                 if discharge:
                     search_range = range(5, 20, 1)
                 else:
@@ -1584,6 +1587,9 @@ class Inverter:
                                 if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) >= 0):
                                     break
                                 if discharge and (predbat_status.get(target_minute, "") not in ["Exporting", "Discharging"] or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) <= 0):
+                                    break
+                                if target_minute in temperature_limited:
+                                    # A cold battery was holding the rate down, which is not the SoC curve
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
@@ -1730,6 +1736,59 @@ class Inverter:
             missing_settings = [setting for setting, entity_id in [(soc_label, soc_kwh_sensor), ("{}_rate".format(curve_type), charge_rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
             self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), {} not set in apps.yaml".format(self.id, curve_type, ", ".join(missing_settings)))
         return {}
+
+    def find_temperature_limited_minutes(self, discharge, min_len, max_power_scaled):
+        """
+        Find the minutes of history where the battery temperature curve says the battery could not run at its full rate.
+
+        find_charge_curve() learns the high-SoC taper from full-rate charges (or the low-SoC tail-off from full-rate
+        discharges), and a cold battery held back by its BMS looks exactly like a taper, so those minutes are left out.
+        A minute is limited when find_battery_temperature_cap() at its temperature, with the configured (or learned)
+        battery_temperature_charge_curve / battery_temperature_discharge_curve, is below max_power_scaled. Readings of
+        exactly 0 are treated as missing, as several integrations report a missing temperature as 0.
+
+        Args:
+            discharge: True to use the discharge temperature curve
+            min_len: minutes of history being searched
+            max_power_scaled: the rate in W a minute must reach to count as full rate
+
+        Returns:
+            A set of minute indexes (minutes before now); empty when there is no temperature curve or history.
+        """
+        temperature_curve = self.base.battery_temperature_discharge_curve if discharge else self.base.battery_temperature_charge_curve
+        temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False)
+        if not temperature_curve or not temperature_sensor or self.soc_max <= 0:
+            return set()
+        temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=self.base.max_days_previous, required=False)
+        if not temperature_data:
+            return set()
+        temperature, _ = minute_data(
+            temperature_data[0],
+            self.base.max_days_previous,
+            self.base.now_utc,
+            "state",
+            "last_updated",
+            backwards=True,
+            clean_increment=False,
+            smoothing=False,
+            divide_by=1.0,
+            scale=1.0,
+            can_modify_history=True,  # history is not accessed after this point
+        )
+        limited = set()
+        cap_cache = {}
+        for minute in range(0, min_len):
+            temp = temperature.get(minute, None)
+            if temp is None or temp == 0:
+                continue
+            temp_idx = int(min(max(temp, -20), 20))
+            if temp_idx not in cap_cache:
+                cap_cache[temp_idx] = find_battery_temperature_cap(temp_idx, temperature_curve, self.soc_max, float("inf")) * MINUTE_WATT
+            if cap_cache[temp_idx] < max_power_scaled:
+                limited.add(minute)
+        if limited:
+            self.log("Inverter {} Leaving {} temperature-limited minutes out of the battery {} curve".format(self.id, len(limited), "discharge" if discharge else "charge"))
+        return limited
 
     def find_battery_temperature_samples(self):
         """
