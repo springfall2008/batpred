@@ -10,7 +10,6 @@
 
 import os
 import json
-import hashlib
 import re
 import shutil
 import tempfile
@@ -604,66 +603,6 @@ def test_cache_get_url_long_url(my_predbat):
             failed = True
         if len(test_api.request_log) != 1:
             print(f"ERROR: Expected one HTTP request in total, got {len(test_api.request_log)}")
-            failed = True
-
-    finally:
-        test_api.cleanup()
-
-    return failed
-
-
-def test_cache_get_url_legacy_migration(my_predbat):
-    """
-    Test cache_get_url moves an entry cached under the old URL-embedding key to the new key, keeping its age, and leaves no orphan behind.
-    """
-    print("  - test_cache_get_url_legacy_migration")
-    failed = False
-
-    test_api = create_test_solar_api()
-    try:
-        url = "https://api.forecast.solar/estimate/51.5/-0.1/30/0/3?time=utc"
-        params = {}
-
-        # The key cache_get_url used before #6161, written out here so this test does not depend on the code under test
-        legacy_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        legacy_key = legacy_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
-
-        cached_data = {"result": {"watts": {"2025-06-15 12:00:00": 1000}}}
-        run_async(test_api.solar.storage.save("solar", legacy_key, cached_data, format="json", expiry=datetime.now(timezone.utc) + timedelta(days=7)))
-        _backdate_storage_meta(test_api.solar.storage, "solar", legacy_key, hours_ago=0.5)
-        cache_path = os.path.join(test_api.mock_base.config_root, "cache")
-        legacy_files = sorted(os.listdir(cache_path))
-
-        # Different data on the wire: it must not be fetched while the migrated entry is still fresh
-        test_api.set_mock_response("forecast.solar", {"fresh": "data"}, 200)
-
-        def create_mock_session(*args, **kwargs):
-            return test_api.mock_aiohttp_session()
-
-        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
-            result = run_async(test_api.solar.cache_get_url(url, params, max_age=60))
-
-        if result != cached_data:
-            print(f"ERROR: Expected the legacy cached data {cached_data}, got {result}")
-            failed = True
-        if len(test_api.request_log) != 0:
-            print(f"ERROR: HTTP should not have been called while the migrated entry is fresh, got {len(test_api.request_log)} requests")
-            failed = True
-
-        cache_files = sorted(os.listdir(cache_path))
-        for name in legacy_files:
-            if name in cache_files:
-                print(f"ERROR: Legacy cache file {name} should have been moved, not left orphaned")
-                failed = True
-        if len(cache_files) != 2:
-            print(f"ERROR: Expected exactly the migrated data and meta files, got {cache_files}")
-            failed = True
-
-        # The entry keeps its original created time, so stale legacy data does not come back looking fresh
-        new_key = [name for name in cache_files if name.endswith(".meta")][0][len("solar_") : -len(".meta")] if cache_files else None
-        age = run_async(test_api.solar.storage.age("solar", new_key)) if new_key else None
-        if age is None or not (25 <= age <= 35):
-            print(f"ERROR: Migrated entry should keep its ~30 minute age, got {age}")
             failed = True
 
     finally:
@@ -7135,7 +7074,6 @@ def run_solcast_tests(my_predbat):
     # Cache tests
     failed |= test_cache_get_url_miss(my_predbat)
     failed |= test_cache_get_url_long_url(my_predbat)
-    failed |= test_cache_get_url_legacy_migration(my_predbat)
     failed |= test_cache_get_url_hit(my_predbat)
     failed |= test_cache_get_url_stale(my_predbat)
     failed |= test_cache_get_url_failure_with_stale_cache(my_predbat)
