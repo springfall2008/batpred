@@ -1750,7 +1750,7 @@ This requires at least several days of historical data with charging periods of 
 - **soc_max_fallback** - Optional. The battery size in kWh (or an entity giving it) to plan with while `soc_max` is unset and Predbat has not yet estimated the size from charge history - without it Predbat uses 8 kWh. Unlike `soc_max` it is never treated as the battery's nominal size, so it does not constrain the estimate: once one exists it is used instead, however far it is from the fallback.
 Some inverter integrations (e.g. Sunsynk) set this automatically from a capacity the inverter reports but cannot be trusted.
 - **battery_size_power** - Optional. A battery power sensor (W, same sign convention and `battery_power_invert` as `battery_power`) used only for estimating the battery size from charge history, in place of `battery_power`. Set it when a more accurate battery-side reading exists for sustained charging than the one used for live power - Sunsynk sets it automatically to the battery management system's own power.
-- **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
+- **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value. Don't point it at the same entity as **reserve**: that entity holds whatever reserve Predbat last wrote, so Predbat ignores `battery_min_soc` in that case and logs a warning
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 Can also be set to a fixed percentage rather than an entity name for inverters that have no reserve register to point at -
 the supplied Huawei and Sofar templates do this. A fixed value tells Predbat what the inverter is set to so it can be modelled,
@@ -2838,9 +2838,18 @@ Default value 1.0. Used to scale the import & export kWh data from GivTCP if the
   inverter_battery_rate_min: watts
 ```
 
-One per inverter (optional), set in Watts, when set models a "bug" in the inverter firmware
+Optional, set in Watts, when set models a "bug" in the inverter firmware
 in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge.
 The recommended setting is 200 for Gen 1 hybrids with this issue.
+
+The value is per inverter, and Predbat adds them up across inverters. A single value applies to each inverter. With more than one
+inverter you can instead give one value per inverter as a list, which must have an entry for each inverter:
+
+```yaml
+  inverter_battery_rate_min:
+    - 200
+    - 100
+```
 
 ### Inverter reserve maximum
 
@@ -2850,6 +2859,15 @@ The recommended setting is 200 for Gen 1 hybrids with this issue.
 
 Global, sets the maximum reserve % that may be set to the inverter, the default is 98, as some Gen 2 & Gen 3 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set it to 100 if your inverter allows setting it to 100%.
+
+A single value applies to every inverter. With more than one inverter you can instead give one value per inverter as a list,
+which must have an entry for each inverter:
+
+```yaml
+  inverter_reserve_max:
+    - 100
+    - 98
+```
 
 ### Savings Max Charge Slots
 

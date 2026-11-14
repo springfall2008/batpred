@@ -372,6 +372,8 @@ class Inverter:
         # Set once an invalid battery_scaling read has been warned about, so a source that keeps
         # reading invalid warns once rather than every cycle (#5368); cleared by a valid read.
         self.battery_scaling_invalid_warned = False
+        # Set once battery_min_soc naming a reserve entity has been warned about (#4013); cleared when it no longer does
+        self.battery_min_soc_is_reserve_warned = False
         # Commit-once state, keyed by scope - see commit_needed(). Each entry is the last state that
         # scope actually committed to this inverter; a scope absent from the dict has committed
         # nothing yet in this run, so its next call commits once. commit_pending marks a scope whose
@@ -538,7 +540,8 @@ class Inverter:
             self.log("Note: Inverter {}: Using inverter type {} - not all features are available on all Inverter types".format(self.id, self.inverter_type))
 
         # Load inverter brand definitions
-        self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
+        # One value for every inverter (as documented) or a per-inverter list (#5369, single_value_ok)
+        self.reserve_max = self.base.get_arg("inverter_reserve_max", 100, index=self.id)
         self.inv_has_mqtt_api = INVERTER_DEF[self.inverter_type]["has_mqtt_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
@@ -682,6 +685,7 @@ class Inverter:
         self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_raw) / MINUTE_WATT
         inverter_limit_export = self.base.get_arg("inverter_limit_export", inverter_limit_discharge, index=self.id, required_unit="W")
         self.battery_rate_max_export = min(inverter_limit_export, self.battery_rate_max_raw) / MINUTE_WATT
+        # One value for every inverter (as documented) or a per-inverter list (#5369, single_value_ok)
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
 
         # Track and update battery size (if automatic)
@@ -738,7 +742,8 @@ class Inverter:
         self.reserve_min = int(self.base.get_arg("set_reserve_min" + reserve_min_postfix))
 
         # Min soc setting
-        battery_min_soc = self.base.get_arg("battery_min_soc", default=max(self.reserve_min, 4), index=self.id)
+        min_soc_is_reserve = self.battery_min_soc_is_reserve()
+        battery_min_soc = max(self.reserve_min, 4) if min_soc_is_reserve else self.base.get_arg("battery_min_soc", default=max(self.reserve_min, 4), index=self.id)
 
         # Get current reserve value. GivTCPComponent publishes the reserve entity's state straight
         # from Battery_Power_Reserve, so this reads the same number the REST snapshot used to carry
@@ -762,7 +767,8 @@ class Inverter:
         # Publish the floor as set_reserve_min's min too, so a UI driven by the entity's attributes stops
         # offering values the raise above reverts a cycle later (GH#5995). Unlike that raise it follows the
         # floor back down. Only a bound battery_min_soc counts here, as the default above is derived from reserve_min.
-        reserve_floor = max(self.base.get_arg("battery_min_soc", default=0, index=self.id), device_min or 0)
+        bound_min_soc = 0 if min_soc_is_reserve else self.base.get_arg("battery_min_soc", default=0, index=self.id)
+        reserve_floor = max(bound_min_soc, device_min or 0)
         self.base.expose_config_min("set_reserve_min" + reserve_min_postfix, reserve_floor)
         if (self.base.set_reserve_enable and self.inv_has_reserve_soc) or not self.inv_has_reserve_soc:
             self.reserve_percent = self.reserve_min
@@ -2138,6 +2144,43 @@ class Inverter:
                 self.base.log(
                     f"Inverter {self.id} Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
                 )
+
+    def battery_min_soc_is_reserve(self):
+        """
+        Return True, with a warning, when this inverter's battery_min_soc names a reserve entity.
+
+        battery_min_soc is a floor that refresh_config() raises set_reserve_min to and never lowers. If
+        it names a reserve entity, it reads back whatever Predbat last wrote to that reserve: a hold
+        writes the current SoC there, so every hold ratchets the floor up for good (GH#4013, where it
+        climbed from 8% to 97% over one overnight charge). That binding can never be a real floor, so
+        the caller treats battery_min_soc as unset. Any inverter's reserve counts, as a floor copied
+        across inverters reads back the first one's holds just the same - but only the reserve entries
+        of inverters that exist, as Predbat never writes the rest (older Growatt Solar Assistant
+        templates list a second reserve entity for one inverter, and point battery_min_soc at it).
+
+        Warns, on the status sensor too, on the first cycle only, then logs at Info, so a lasting
+        misconfiguration does not bury other warnings.
+        """
+        min_soc_entity = self.base.get_arg("battery_min_soc", indirect=False, index=self.id)
+        if not is_entity_id(min_soc_entity):
+            self.battery_min_soc_is_reserve_warned = False
+            return False
+        reserve_entities = self.base.get_arg("reserve", indirect=False)
+        if isinstance(reserve_entities, list):
+            reserve_entities = reserve_entities[: max(int(self.base.get_arg("num_inverters", 1)), 1)]
+        else:
+            reserve_entities = [reserve_entities]
+        if min_soc_entity.lower() not in [entity.lower() for entity in reserve_entities if isinstance(entity, str)]:
+            self.battery_min_soc_is_reserve_warned = False
+            return False
+        message = "Inverter {} battery_min_soc is set to {}, which is a reserve entity; ignoring battery_min_soc. Point it at a fixed minimum or remove it from apps.yaml, and lower set_reserve_min if it was raised".format(self.id, min_soc_entity)
+        if self.battery_min_soc_is_reserve_warned:
+            self.base.log("Info: " + message)
+        else:
+            self.base.log("Warn: " + message)
+            self.base.record_status("Warn: " + message, had_errors=True)
+        self.battery_min_soc_is_reserve_warned = True
+        return True
 
     def reserve_device_bounds(self):
         """
