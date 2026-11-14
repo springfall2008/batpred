@@ -189,6 +189,7 @@ def run_execute_test(
     export_limits_best=None,
     car_slot=None,
     car_charging_now=False,
+    car_cancelled_for_export=None,
     soc_kw=0,
     soc_max=10,
     soc_max_array=None,
@@ -282,6 +283,7 @@ def run_execute_test(
     my_predbat.set_read_only_axle = set_read_only_axle
     my_predbat.car_charging_slots = [car_slot]
     my_predbat.car_charging_now = [car_charging_now]
+    my_predbat.car_cancelled_for_export = car_cancelled_for_export or {}
     my_predbat.num_cars = 1
     my_predbat.inverter_hybrid = inverter_hybrid
     my_predbat.set_charge_low_power = set_charge_low_power
@@ -4543,6 +4545,56 @@ def run_execute_tests(my_predbat):
         assert_status="Demand",
         assert_pause_discharge=False,
         car_slot=charge_window_best_no_slot,
+        assert_immediate_soc_target=100,
+        car_charging_from_battery=False,
+    )
+    if failed:
+        return failed
+
+    # A slot cancelled for an export is a car that will not charge, so it does not hold the battery; a car
+    # really drawing power (car_charging_now) still does, and so does a slot that is not the cancelled one
+    failed |= run_execute_test(
+        my_predbat,
+        "car_slot_cancelled_no_hold",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Demand",
+        assert_pause_discharge=False,
+        car_slot=charge_window_best_slot,
+        car_cancelled_for_export={0: [(charge_window_best_slot[0]["start"], charge_window_best_slot[0]["end"])]},
+        car_charging_from_battery=False,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "car_slot_other_cancelled_holds",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        car_slot=charge_window_best_slot,
+        car_cancelled_for_export={0: [(charge_window_best_slot[0]["end"], charge_window_best_slot[0]["end"] + 30)]},
+        assert_immediate_soc_target=100,
+        car_charging_from_battery=False,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "car_now_hold_slot_cancelled",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        car_slot=charge_window_best_slot,
+        car_charging_now=True,
+        car_cancelled_for_export={0: [(charge_window_best_slot[0]["start"], charge_window_best_slot[0]["end"])]},
         assert_immediate_soc_target=100,
         car_charging_from_battery=False,
     )

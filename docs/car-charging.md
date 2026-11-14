@@ -620,6 +620,8 @@ Predbat then registers each charger on the account as a car and sets **car_charg
 
 See [Wallbox Charger](components.md#wallbox-charger-wallbox) for the entities it publishes and how Predbat-led charging behaves.
 
+Predbat can also hold a Wallbox off while a car charging slot is cancelled for an export (**car_charging_cancel_for_export**), even when Octopus Intelligent is the one charging the car. A charger run by an OCPP backend is switched off OCPP with `switch.predbat_wallbox_<id>_ocpp` and then paused, and switched back on at the end of the hold; see [Holding a charger off for an export](components.md#holding-a-charger-off-for-an-export-wallbox). Every Wallbox can be held this way.
+
 If you would rather use the Home Assistant Wallbox integration, see [Wallbox Pulsar](devices.md#wallbox-pulsar).
 
 ## Hypervolt car charger direct integration
@@ -1057,6 +1059,43 @@ mode: single
 
 Note: [Multiple cars](car-charging.md#multiple-electric-cars) can be planned with Predbat.
 
+### Cancelling a car slot for an export
+
+Some exports are worth far more than charging the car at the same time, an Octopus saving session being the usual example.
+With **switch.predbat_car_charging_from_battery** Off, Predbat never plans an export over a car charging slot.
+Turn on **switch.predbat_car_charging_cancel_for_export** (default Off) to let the plan export over a car slot instead; the car then does not charge in that slot.
+
+What a cancellation costs:
+
+- The plan values the car energy given up as if it had to be bought back at 1.1 times the highest base import rate in the forecast, which leaves out saving sessions, free sessions, Intelligent dispatches and rate overrides.
+A cancelled 10kWh slot with a 30p peak rate adds 10 x 33p = 330p to the plan's metric. The car no longer buying its 10kWh at the slot rate comes off the cost, so the export has to earn more than the difference.
+With a 7p slot and a 30p peak that is about 26p for each kWh the car gives up, so a saving session wins and a normal export rate does not.
+- Each cancelled slot is charged as if the car had charged at its full **car_charging_rate** for the whole slot, even when it was planned to take less: a 30-minute slot planned at 0.4kWh on a 7.4kW charger is charged as 3.7kWh.
+- The extra 10% and this minimum stop a slot from being cancelled for nothing. Without them, a slot already at the peak rate, or one planned to take very little, cost almost nothing to give up, and the plan could cancel it with an export of almost nothing just to stop the battery holding for the car for the whole slot.
+- Only the energy the car still has room for is counted: cancelling a slot in which a nearly full car would take 1kWh costs 1kWh at the buy-back rate.
+- The charge is part of the plan's metric only. It never shows in the predicted cost.
+- An Intelligent Octopus dispatch that is cancelled outside 23:30-05:30 is costed at the peak rate rather than the dispatch rate, see [Intelligent dispatches cancelled for an export](energy-rates.md#intelligent-dispatches-cancelled-for-an-export).
+
+Which slots can be cancelled:
+
+- Slots of a Predbat-led car, as Predbat's own car plan drives its charger and leaving the slot out is enough.
+- Slots of a car whose charger Predbat can hold off, whoever plans its slots (Octopus Intelligent included). Today that is a Wallbox, see [Holding a charger off for an export](components.md#holding-a-charger-off-for-an-export-wallbox).
+- Any other car keeps its slots, and no export is planned over them.
+- A car that is already charged to its limit is never cancelled, as giving up its slot would cost the plan nothing and any export would do it. A charger already holding it off still holds it until the hold ends.
+- An export that overlaps any part of a slot cancels the whole slot. Only a full export cancels: freeze export and idle windows never do.
+- The optimiser's levels pass and freeze export never cancel a slot; the detailed passes that follow can. Freeze export is never planned over a car slot, as it would hold the battery without cancelling the slot.
+- A slot added because **car_charging_now** reports the car charging with no slot planned is never cancelled, nor is a slot with no energy in it. Only the first 64 cancellable slots in the forecast can be cancelled.
+- The decision is made afresh every time the plan is calculated, so a cancellation that stops being worth it falls away by itself. The exception is a car a charger is already holding off: the hold is kept until the end of its slot, and the plan treats every slot of that car ending by then as cancelled meanwhile.
+A slot that runs on past the hold's end, for example a dispatch Octopus extends during the hold, is judged afresh like any other: the hold carries on into it only if the plan still exports over it, and otherwise ends on time so the car can charge.
+
+What a cancellation looks like:
+
+- **binary_sensor.predbat_car_charging_slot** (and **binary_sensor.predbat_car_charging_slot_1** etc. for further cars) leaves a cancelled slot out of its `planned` attribute and its `kwh` and `cost` totals, and lists it in a `cancelled_for_export` attribute instead, as a `start` and `end` in the same format as `planned`.
+The sensor stays off during a cancelled slot, so a Predbat-led charger does not start, and a charger that can hold the car off reads the attribute to do so.
+- The sensor is also refreshed when new data is fetched, just before the plan is calculated. That refresh only keeps cancellations the plan has already made: a slot whose times have changed since, such as a dispatch Octopus has re-cut or extended, is listed in `planned` until the plan has looked at it again.
+- The plan table shows the slot's car kWh as cancelled, with a "?".
+- Predbat does not hold the house battery for the car during a cancelled slot, as the car is not charging.
+
 ## Additional Car charging configurations
 
 - **switch.predbat_car_charging_from_battery** - When set to On the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
@@ -1067,6 +1106,8 @@ The home battery can still charge from the grid/solar in either case. Only use t
 e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
 
   *Note:* If **switch.predbat_car_energy_reported_load** is set to Off (car outside the CT clamp), this setting has no effect as the battery cannot supply the car directly. Predbat will automatically treat the car as being supplied from the grid/export.
+
+- **switch.predbat_car_charging_cancel_for_export** (default Off) - lets the plan export over a car charging slot, which cancels the slot, when the export is worth more than buying the car's energy back at the peak rate - see [Cancelling a car slot for an export](#cancelling-a-car-slot-for-an-export).
 
 - **input_number.predbat_car_charging_loss** gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
 A good setting is 0.08 which is 8%.

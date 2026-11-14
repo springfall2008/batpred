@@ -2042,6 +2042,7 @@ class Fetch:
         else:
             iog_entity_ids = []
 
+        self.car_planned_by_predbat = set()
         for car_n in range(self.num_cars):
             if self.octopus_intelligent_charging and car_n < len(iog_entity_ids) and iog_entity_ids[car_n]:
                 if self.car_charging_planned[car_n]:
@@ -2062,6 +2063,7 @@ class Fetch:
                 )
                 # The tariff's own windows: a car cannot export, so the plan's pre-event windows are no use to it
                 self.car_charging_slots[car_n] = self.plan_car_charging(car_n, self.low_rates_tariff)
+                self.car_planned_by_predbat.add(car_n)
             else:
                 self.log("Car {} charging is not planned as it is not plugged in".format(car_n))
 

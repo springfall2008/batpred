@@ -89,6 +89,7 @@ CALCULATE_PLAN_REBUILT = (
     "metric_cloud_coverage",
     "metric_load_divergence",
     "plan_last_duration_seconds",
+    "car_cancel_keys",
     "charge_keep_target",
 )
 

@@ -321,11 +321,15 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 
 - Sign-in works with `User-Agent: Predbat`. Capture: `wallbox.py --username <email> --raw`.
 - An OCPP-run charger (e.g. Octopus IOG) reports `operation_mode: "ocpp"` and sits in 209 Locked; unlock does nothing, and pause/resume 403/409 even for a super-admin, so a 403 does not prove missing rights. `held_by_lock()`/`held_by_ocpp()` keep control off it.
-- `GET v3/chargers/<id>/ocpp-configuration` returns the charge-point password: never paste `--get` output unredacted.
+- `GET v3/chargers/<id>/ocpp-configuration` returns the charge-point password: never paste `--get` output unredacted. A `POST` to the same path, writing the whole stored configuration back with only `type` changed (`set_ocpp_mode()`), switches OCPP off (`"wallbox"`) or on.
 - `locked` is 1/0 and `state_of_charge` always null. Charger N is car N through the append-only `car_order`.
 - Status ids (OCPP Pulsar Plus, Oct 2026): 209 no car; 210 just plugged in; 164/181 plugged in, including full; 161 brief no-car blips. 0 Disconnected means off Wallbox's cloud (even mid-charge), not unplugged.
 - On the shared `CarChargerControl` loop since PR #5798 (2026-10-28); records drop only on `EMPTY_STATUS_IDS` (161/162/165/209), no longer on 0. "Stayed paused after control was turned off": read `CarChargerControl`'s release path.
 - Unverified on hardware (Oct 2026): pause/resume on an unlocked non-OCPP charger, the charging/paused ids, 429s at a 120s poll.
+- Force hold (Pulsar Max on Intelligent Octopus over OCPP, live 31 Oct 2026): Octopus `updateDeviceSmartControl` SUSPEND does not stop the charger, so the hold is OCPP off then pause. A pause sent before a read shows OCPP really off is accepted but ignored, so `charger_control_force_pause()` sends only the switch until then; paused reads 182 at 0 W. PR #5900.
+- The cloud status lags the charger by minutes (Wallbox and HA both kept showing `Charging`): trust `last_sync`, and expect a repeated pause to answer 409.
+- Hand-back for an OCPP charger is the switch back on, then waiting for `connectionStatus` 4 (about 2.5 min); Octopus restarts the charge itself, so never send a resume. The switch answered 502 once while the paused charger had not synced; the retry worked.
+- By hand: `wallbox.py --ocpp on|off` and `--force-hold <minutes>` (Ctrl-C hands back). The CLI saves nothing, so recover a killed `--force-hold` with `--ocpp on`.
 
 ### Hypervolt (`hypervolt.py`)
 
@@ -597,6 +601,9 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - `octopus_charge_limit` as "% to add" was read as absolute SoC; fixed in PR #5822 (2026-10-29, GH#3034).
 - With `octopus_intelligent_consider_full` on, unneeded future dispatch minutes lose the cheap rate (`octopus_surplus_minutes()`, PR #5403, 2026-10-05): "cheap rate missing at the back of a dispatch".
 - Multi-charger index: myenergi sorts Zappis by serial, the Octopus component sorts Intelligent devices by device_id, never joined, so per-car `car_charging_planned`/`_now`/`_energy`/`_plugged` can read the wrong charger (GH#5726, open).
+- Cancelling a car slot for export (`car_charging_cancel_for_export`, PR #5905, open 2026-11): the cancelled kWh (at least `car_charging_rate` over the slot, capped by the room left in the car) × `rate_max_base` × `CAR_CANCEL_PENALTY_MARGIN` goes into `metric_keep`, and a cancelled dispatch reverts to `rate_max_base` outside 23:30-05:30, so ordinary export rates lose on purpose. The margin and per-slot floor stop a near-empty export cancelling a slot only to lift the car battery hold.
+- Only target-mode exports in the detailed and refinement passes can cancel (`hit_uncancellable_car_window()`); the levels pass (`export_window_allowed()`) and freeze export in `optimise_solar()` keep `hit_car_window()` by design.
+- Trap: an uncancellable slot is also protected by the car battery hold (`car_charging_from_battery` off), so a broken gate can look fine end to end. Test the gate directly (`test_gate_*` in `test_car_cancel.py`).
 - Tests: `./run_all -k octopus_`, `./run_all -k car_`
 
 ### Excluded load (`fetch.py`, `web.py`)
@@ -810,6 +817,7 @@ What a report or log shows, and where to start. Where a symptom belongs to one i
 - **Too many inverter writes or replans while the car charges, though the plan looks right** — hour-bucket `grep "write_and_poll_value: Wrote"`. Causes: `Dynamic load adjustment changed, will recompute the plan`, `watch_event()` refires, flat-band limit swings, low power rewrites, `disabled charge window while waiting for schedule`. (GH#5434, open)
 - **A car hold during a charge window blocks grid charging on GivEnergy** — fixed in PR #5470 (2026-10-13). Since PR #5543, `has_charge_enable_time` inverters get charge enable written off between windows, deliberately. (GH#5419, GH#5371)
 - **Freeze exporting plus a car hold on a timed-pause inverter drains the battery into the car** — fixed in PR #5640 (2026-10-24); after it, `timed pause is already pausing charge only` means discharge is not paused. `carHolding` also turns the charge-off write into a freeze. (GH#5612)
+- **Export never planned over the car slot: a saving session overlapping a car charging slot is left idle, or exported only around it** — check `car_charging_cancel_for_export` first; off (the default) keeps the hard block. With it on, `cancellable_slots()` admits only Predbat-led cars (`car_planned_by_predbat`) and cars a charger offers in `car_force_holdable` (Wallbox only), never `car_charging_now_slots`, 0 kWh or ended slots. If the gate passes and the plan still idles, it is the valuation; see the *Car charging* notes. (PR #5905, open)
 - **`Regular expression argument ... unable to match ... now will disable` on exactly `octopus_ready_time` + `octopus_charge_limit` with an Ohme charger** — configuration, not a matching bug: the Octopus Energy integration creates no charge-target number or target-time entity for an Ohme intelligent device, so Predbat disabling the unusable settings is correct; the docs now warn of it (PR #5934). Ohme-led Intelligent mode still works: `octopus_dispatch_sensor()` keeps an Octopus-owned sensor as the record of completed dispatches and takes planned slots from Ohme, so `octopus_intelligent_slot` can stay as it is. Auto-detect answers False whenever an active Intelligent device is on the account — even with Predbat's own Octopus component connected — so route the car plan through the explicit `ohme_automatic_octopus_intelligent: true` instead. (GH#5933; per-mode detail GH#5947)
 
 ### Inverter control and writes

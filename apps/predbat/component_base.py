@@ -696,6 +696,11 @@ class ComponentBase(ABC):
         """
         self.api_stop = True
         self.api_started = False
+        # A charger component (CarChargerControl) stops telling the planner which cars it can hold off. Looked up rather
+        # than declared here: a no-op on this class would come first in the charger components' MRO and hide the mixin's
+        charger_control_stopped = getattr(self, "charger_control_stopped", None)
+        if charger_control_stopped:
+            charger_control_stopped()
         await asyncio.sleep(0.1)  # Allow time for the main loop to exit
 
     def non_fatal_error_occurred(self):
