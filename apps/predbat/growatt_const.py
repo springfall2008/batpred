@@ -68,12 +68,14 @@ GROWATT_WRITE_UNKNOWN = "unknown"
 GROWATT_WRITE_BACKOFF_MAX = 10
 
 # Public documentation is inconsistent for getDeviceData: its endpoint page says one
-# request per minute per device, while Appendix E says one per ten seconds. Use the
-# stricter published limit until Growatt resolves the discrepancy.
+# request per minute per device, while Appendix E says one per ten seconds. A live SPH
+# polled every minute was rate limited (105) whenever a loop ran a little early, or anything
+# else on the same client polled the device, so poll at twice the stricter published limit:
+# the datalogger only uploads every five minutes, so nothing fresher is lost.
 GROWATT_TTL_STATIC = 8 * 60
-GROWATT_TTL_LIVE = 1
+GROWATT_TTL_LIVE = 2
 # Minutes without fresh telemetry before the software SoC gates stop trusting the last
-# reading. Polled every minute, but a live SPH's datalogger uploads a new sample only every
+# reading. Polled every two minutes, but a live SPH's datalogger uploads a new sample only every
 # five minutes (utcTime 21:06:37, then 21:11:37), so this allows two missed uploads; five
 # would trip whenever an upload was a few seconds late.
 GROWATT_TELEMETRY_STALE = 12
