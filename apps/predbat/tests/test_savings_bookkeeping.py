@@ -9,7 +9,6 @@
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
-
 TOTALS = ("savings_total_predbat", "savings_total_pvbat", "savings_total_actual", "savings_total_soc", "cost_total_car", "carbon_total")
 
 
