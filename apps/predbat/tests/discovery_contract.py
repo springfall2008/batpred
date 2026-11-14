@@ -122,7 +122,9 @@ def capture_automatic_config(component):
     """Run component.automatic_config() with set_arg/set_arg_auto recorded instead of applied; return {setting: value}.
 
     The two setters are replaced on the instance only and removed afterwards, so the class methods are
-    back in place whatever automatic_config() raised.
+    back in place whatever automatic_config() raised. So is allow_automatic_config(), answering False: what
+    is captured is always the component's own configuration with discovery_automatic off, never an opt-in
+    to the coordinator that would write nothing here.
     """
     captured = {}
 
@@ -130,8 +132,13 @@ def capture_automatic_config(component):
         """Remember the last value bound to each setting."""
         captured[arg] = value
 
+    def decline(*args, **kwargs):
+        """The switch-off answer: the component configures itself."""
+        return False
+
     component.set_arg = record
     component.set_arg_auto = record
+    component.allow_automatic_config = decline
     try:
         result = component.automatic_config()
         if inspect.isawaitable(result):
@@ -139,6 +146,7 @@ def capture_automatic_config(component):
     finally:
         del component.set_arg
         del component.set_arg_auto
+        del component.allow_automatic_config
     return captured
 
 

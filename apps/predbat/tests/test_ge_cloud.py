@@ -367,6 +367,20 @@ def test_ge_cloud(my_predbat=None):
         ("discovery_record_two_devices", _test_discovery_record_two_devices, "two devices give two agreeing records with distinct entities"),
         ("discovery_record_shared_ct", _test_discovery_record_shared_ct, "shared-CT records mirror the single-source binding"),
         ("discovery_record_ems", _test_discovery_record_ems, "EMS records rebuild the GEE row and agree"),
+        ("automatic_config_golden", _test_automatic_config_golden, "automatic configuration with discovery_automatic off is unchanged for every layout"),
+        ("legacy_bindings_is_pure", _test_legacy_bindings_is_pure, "_legacy_bindings() matches the automatic configuration and writes nothing"),
+        ("switch_on_writes_no_binding", _test_switch_on_opts_in_and_writes_no_binding, "discovery_automatic on: opts in, files the report, writes no binding"),
+        ("opt_in_options_follow_config", _test_opt_in_options_follow_config, "opt-in options follow ge_cloud_load_today_ignore and ge_cloud_automatic_split_pv"),
+        ("switch_on_control_registers", _test_switch_on_configures_before_control_registers, "discovery_automatic on: args configured before the control registers are read"),
+        ("checker_clean", _test_checker_clean, "check_automatic_config: matching args"),
+        ("checker_reports_difference", _test_checker_reports_difference, "check_automatic_config: a differing slot is a warning"),
+        ("checker_slot_offset", _test_checker_slot_offset, "check_automatic_config: compares at the coordinator's slot"),
+        ("checker_known_difference", _test_checker_known_difference_is_info, "check_automatic_config: a known difference is Info"),
+        ("checker_kept_and_skipped", _test_checker_kept_and_skipped_are_info, "check_automatic_config: kept and skipped settings are Info"),
+        ("checker_warns_once", _test_checker_warns_once, "check_automatic_config: a repeated warning is logged once"),
+        ("checker_never_raises", _test_checker_never_raises, "check_automatic_config: never raises"),
+        ("known_differences_are_real", _test_known_differences_are_real, "GE_CLOUD_KNOWN_DIFFERENCES holds only differences a coordinator run shows"),
+        ("checker_no_warnings_on_layouts", _test_checker_no_warnings_on_layouts, "discovery_automatic on: no checker warning on any layout"),
         ("discovery_record_gateway", _test_discovery_record_gateway, "gateway record rebuilds the GEC row and agrees"),
         ("discovery_record_percentage_rate", _test_discovery_record_percentage_rate, "percentage-rate model records charge_rate_percent"),
         ("discovery_record_export_limit", _test_discovery_record_export_limit_share, "export_limit rating is the published per-inverter share"),
@@ -6590,6 +6604,1499 @@ def _test_discovery_record_pv_only_carries_generation(my_predbat):
             assert len(captured["pv_power"]) == 1, "without split PV automatic_config binds the battery inverter only"
     print("PASS: PV-only record carries pv_power and pv_today, no inverter_type or capabilities")
     return 0
+
+
+# ---------------------------------------------------------------------------------------------
+# The automatic configuration with discovery_automatic off: pinned before the split into
+# _legacy_bindings() and the live remainder, so the refactor provably changes nothing
+# ---------------------------------------------------------------------------------------------
+
+# A battery without the power-rate, pause and discharge-target registers: it has only the percentage rates
+GEC_MIXED_REGISTERS = dict(
+    {key: register for key, register in GEC_FULL_REGISTERS.items() if register["name"] not in ("Battery_Charge_Power", "Battery_Discharge_Power", "Pause_Battery", "Pause_Battery_Start_Time", "DC_Discharge_1_Lower_SOC_Percent_Limit")},
+    reg13={"name": "Inverter_Charge_Power_Percentage"},
+    reg14={"name": "Inverter_Discharge_Power_Percentage"},
+)
+
+GEC_AC_INFO = {"info": {"model": "GIV-AC3.0", "max_charge_rate": 3000}}
+
+
+def _automatic_config_layouts():
+    """{name: (devices, settings, info, config, apps_yaml, site)}: the device layouts the automatic configuration golden test pins."""
+    full = dict(GEC_FULL_REGISTERS)
+
+    def two(meters, b1=None, b2=None, serials=("battery001", "battery002")):
+        """Two batteries with the given meter serial lists."""
+        first, second = serials
+        devices = {"ems": None, "gateway": None, "battery": [first, second], "pv": [], "battery_meters": {first: meters[0], second: meters[1]} if meters is not None else {}}
+        return devices, {first: dict(b1 or full), second: dict(b2 or full)}, {first: GEC_INFO, second: GEC_INFO}
+
+    single = ({"ems": None, "gateway": None, "battery": ["battery001"], "pv": [], "battery_meters": {"battery001": [1001]}}, {"battery001": dict(full)}, {"battery001": GEC_INFO})
+    pv_only = ({"ems": None, "gateway": None, "battery": ["battery001"], "pv": ["pv001"], "battery_meters": {"battery001": [1001]}}, {"battery001": dict(full)}, {"battery001": GEC_INFO, "pv001": {"info": {"model": "GIV-PV"}}})
+    gateway = ({"ems": None, "gateway": "gateway001", "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}}, {"gateway001": dict(full)}, {"battery001": GEC_AC_INFO, "battery002": GEC_AC_INFO})
+    ems = ({"ems": "ems001", "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}}, {"battery001": dict(full), "battery002": dict(full)}, {"battery001": GEC_INFO, "battery002": GEC_INFO})
+    full_power_eco = (single[0], single[1], {"battery001": dict(GEC_INFO, flags=["full-power-discharge-in-eco-mode"])})
+    site = (5000, ["battery001", "battery002"])
+    kept = {"inverter_mode": "switch.my_inverter_mode", "export_limit": 3600}
+    return {
+        "single": single + ({}, {}, None),
+        "two_meters": two(([1001], [1002])) + ({}, {}, None),
+        "mixed_registers": two(([1001], [1002]), b2=GEC_MIXED_REGISTERS) + ({}, {}, None),
+        "pv_only_split_off": pv_only + ({"ge_cloud_automatic_split_pv": False}, {}, None),
+        "pv_only_split_on": pv_only + ({"ge_cloud_automatic_split_pv": True}, {}, None),
+        "shared_meter": two(([9999], [9999])) + ({}, {}, None),
+        "different_serials": two(([1001], [1002]), serials=("SA2243G277", "SA2243G278")) + ({}, {}, None),
+        "no_meter_data": two(None) + ({}, {}, None),
+        "shared_ct_override": two(([1001], [1002])) + ({"ge_cloud_automatic_shared_ct": True}, {}, None),
+        "split_ct_override": two(([9999], [9999])) + ({"ge_cloud_automatic_split_ct": True}, {}, None),
+        "both_ct_overrides": two(([9999], [9999])) + ({"ge_cloud_automatic_split_ct": True, "ge_cloud_automatic_shared_ct": True}, {}, None),
+        "gateway": gateway + ({}, {}, None),
+        "ems": ems + ({}, {}, None),
+        "load_today_ignore": single + ({"ge_cloud_load_today_ignore": True}, {}, None),
+        "load_today_ignore_shared_ct": two(([9999], [9999])) + ({"ge_cloud_load_today_ignore": True}, {}, None),
+        "load_today_ignore_ems": ems + ({"ge_cloud_load_today_ignore": True}, {}, None),
+        "site_export_limit": two(([1001], [1002])) + ({}, {}, site),
+        "full_power_eco": full_power_eco + ({}, {}, None),
+        "apps_yaml_kept": single + (dict(kept), dict(kept), (5000, ["battery001"])),
+    }
+
+
+def _layout_component(layout):
+    """A test-local GE Cloud component holding one of _automatic_config_layouts()'s installs, with args and get_arg one dict as in Predbat."""
+    devices, settings, info, config, apps_yaml, site = layout
+    ge = _record_component(copy.deepcopy(devices), copy.deepcopy(settings), info=copy.deepcopy(info), config=copy.deepcopy(config))
+    ge.args = ge.config_args
+    ge.base.args_from_apps_yaml = copy.deepcopy(apps_yaml)
+    if site is not None:
+        ge.site_id = "site001"
+        ge.site_export_limit, ge.site_inverters = site[0], list(site[1])
+    return ge
+
+
+def _automatic_config_outcome(layout):
+    """
+    What the automatic configuration does with one layout, discovery_automatic off.
+
+    "captured": capture_automatic_config()'s {setting: last value}. Then a second, live run on a fresh
+    component records "auto" ({setting: overwrite} for every set_arg_auto call), "kept" (each final arg
+    that differs from the captured value, including the user's own kept ones and the config the layout
+    started with), "logs" and "hybrid" (the inverter_hybrid switch it set).
+    """
+    ge = _layout_component(layout)
+    captured = capture_automatic_config(ge)
+
+    ge = _layout_component(layout)
+    auto = {}
+    real_set_arg_auto = ge.set_arg_auto
+
+    def recording_set_arg_auto(arg, value, overwrite=True):
+        """Note each set_arg_auto key and its overwrite flag, then apply it."""
+        auto[arg] = overwrite
+        return real_set_arg_auto(arg, value, overwrite=overwrite)
+
+    ge.set_arg_auto = recording_set_arg_auto
+    run_async(ge.async_automatic_config(ge.devices_dict))
+    kept = {key: value for key, value in ge.config_args.items() if key not in captured or captured[key] != value}
+    return {"captured": captured, "auto": auto, "kept": kept, "logs": list(ge.log_messages), "hybrid": ge.base.ha_interface.external_states.get("switch.predbat_inverter_hybrid")}
+
+
+def _test_automatic_config_golden(my_predbat):
+    """With discovery_automatic off the automatic configuration binds, keeps, logs and switches exactly what it did before it was split, for every layout."""
+    failed = 0
+    layouts = _automatic_config_layouts()
+    assert sorted(layouts) == sorted(AUTOMATIC_CONFIG_GOLDEN), "every layout has a golden outcome"
+    for name, layout in layouts.items():
+        outcome = _automatic_config_outcome(layout)
+        expected = AUTOMATIC_CONFIG_GOLDEN[name]
+        for part in ("captured", "auto", "kept", "logs", "hybrid"):
+            if outcome[part] != expected[part]:
+                print("ERROR: layout {} {} differs:\n  got      {}\n  expected {}".format(name, part, outcome[part], expected[part]))
+                failed = 1
+    if not failed:
+        print("PASS: the automatic configuration is unchanged for {} layouts".format(len(layouts)))
+    return failed
+
+
+# Generated from the unmodified async_automatic_config() by _automatic_config_outcome() for each layout, before the split
+AUTOMATIC_CONFIG_GOLDEN = {
+    "single": {
+        "captured": {
+            "inverter_type": ["GEC"],
+            "num_inverters": 1,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "two_meters": {
+        "captured": {
+            "inverter_type": ["GEC", "GEC"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total", "sensor.predbat_gecloud_battery002_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total", "sensor.predbat_gecloud_battery002_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power", "number.predbat_gecloud_battery002_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate", "sensor.predbat_gecloud_battery002_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power", "number.predbat_gecloud_battery002_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power", "sensor.predbat_gecloud_battery002_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent", "sensor.predbat_gecloud_battery002_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size", "sensor.predbat_gecloud_battery002_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit", "number.predbat_gecloud_battery002_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time", "sensor.predbat_gecloud_battery002_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time", "select.predbat_gecloud_battery002_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time", "select.predbat_gecloud_battery002_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit", "number.predbat_gecloud_battery002_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time", "select.predbat_gecloud_battery002_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time", "select.predbat_gecloud_battery002_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge", "switch.predbat_gecloud_battery002_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature", "sensor.predbat_gecloud_battery002_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh", "sensor.predbat_gecloud_battery002_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate", "sensor.predbat_gecloud_battery002_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_battery002_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery", "select.predbat_gecloud_battery002_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time", "select.predbat_gecloud_battery002_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time", "select.predbat_gecloud_battery002_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_battery002_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Multiple inverters detected, using all inverters for grid and load measurements (meters are not duplicated)",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "mixed_registers": {
+        "captured": {
+            "inverter_type": ["GEC", "GEC"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total", "sensor.predbat_gecloud_battery002_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total", "sensor.predbat_gecloud_battery002_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power", None],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate", "sensor.predbat_gecloud_battery002_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power", None],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power", "sensor.predbat_gecloud_battery002_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent", "sensor.predbat_gecloud_battery002_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size", "sensor.predbat_gecloud_battery002_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit", "number.predbat_gecloud_battery002_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time", "sensor.predbat_gecloud_battery002_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time", "select.predbat_gecloud_battery002_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time", "select.predbat_gecloud_battery002_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit", "number.predbat_gecloud_battery002_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time", "select.predbat_gecloud_battery002_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time", "select.predbat_gecloud_battery002_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge", "switch.predbat_gecloud_battery002_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature", "sensor.predbat_gecloud_battery002_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh", "sensor.predbat_gecloud_battery002_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate", "sensor.predbat_gecloud_battery002_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_battery002_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery", "select.predbat_gecloud_battery002_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time", "select.predbat_gecloud_battery002_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time", "select.predbat_gecloud_battery002_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_battery002_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": [None, "number.predbat_gecloud_battery002_inverter_charge_power_percentage"],
+            "discharge_rate_percent": [None, "number.predbat_gecloud_battery002_inverter_discharge_power_percentage"],
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: True, discharge power percent: True, pause battery: True, pause start time: True, discharge target soc: True, force charge: " "True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Multiple inverters detected, using all inverters for grid and load measurements (meters are not duplicated)",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "pv_only_split_off": {
+        "captured": {
+            "inverter_type": ["GEC"],
+            "num_inverters": 1,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {"ge_cloud_automatic_split_pv": False},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force " "charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "pv_only_split_on": {
+        "captured": {
+            "inverter_type": ["GEC"],
+            "num_inverters": 1,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_pv001_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_pv001_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {"ge_cloud_automatic_split_pv": True},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force " "charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "shared_meter": {
+        "captured": {
+            "inverter_type": ["GEC", "GEC"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power", "number.predbat_gecloud_battery002_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate", "sensor.predbat_gecloud_battery002_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power", "number.predbat_gecloud_battery002_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power", 0],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power", 0],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent", "sensor.predbat_gecloud_battery002_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size", "sensor.predbat_gecloud_battery002_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit", "number.predbat_gecloud_battery002_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time", "sensor.predbat_gecloud_battery002_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time", "select.predbat_gecloud_battery002_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time", "select.predbat_gecloud_battery002_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit", "number.predbat_gecloud_battery002_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time", "select.predbat_gecloud_battery002_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time", "select.predbat_gecloud_battery002_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge", "switch.predbat_gecloud_battery002_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature", "sensor.predbat_gecloud_battery002_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh", "sensor.predbat_gecloud_battery002_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate", "sensor.predbat_gecloud_battery002_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_battery002_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery", "select.predbat_gecloud_battery002_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time", "select.predbat_gecloud_battery002_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time", "select.predbat_gecloud_battery002_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_battery002_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force charge: " "True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Multiple inverters sharing a single CT clamp detected (duplicate meter serials) — using first inverter only for grid and load measurements",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "different_serials": {
+        "captured": {
+            "inverter_type": ["GEC", "GEC"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_SA2243G277_enable_eco_mode", "switch.predbat_gecloud_SA2243G278_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_SA2243G277_consumption_total", "sensor.predbat_gecloud_SA2243G278_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_SA2243G277_grid_import_total", "sensor.predbat_gecloud_SA2243G278_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_SA2243G277_grid_export_total", "sensor.predbat_gecloud_SA2243G278_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_SA2243G277_battery_charge_power", "number.predbat_gecloud_SA2243G278_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_SA2243G277_max_charge_rate", "sensor.predbat_gecloud_SA2243G278_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_SA2243G277_battery_discharge_power", "number.predbat_gecloud_SA2243G278_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_SA2243G277_battery_power", "sensor.predbat_gecloud_SA2243G278_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_SA2243G277_consumption_power", "sensor.predbat_gecloud_SA2243G278_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_SA2243G277_grid_power", "sensor.predbat_gecloud_SA2243G278_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_SA2243G277_battery_percent", "sensor.predbat_gecloud_SA2243G278_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_SA2243G277_battery_size", "sensor.predbat_gecloud_SA2243G278_battery_size"],
+            "reserve": ["number.predbat_gecloud_SA2243G277_battery_reserve_percent_limit", "number.predbat_gecloud_SA2243G278_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_SA2243G277_time", "sensor.predbat_gecloud_SA2243G278_time"],
+            "charge_start_time": ["select.predbat_gecloud_SA2243G277_ac_charge_1_start_time", "select.predbat_gecloud_SA2243G278_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_SA2243G277_ac_charge_1_end_time", "select.predbat_gecloud_SA2243G278_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_SA2243G277_ac_charge_upper_percent_limit", "number.predbat_gecloud_SA2243G278_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_SA2243G277_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_SA2243G278_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_SA2243G277_dc_discharge_1_start_time", "select.predbat_gecloud_SA2243G278_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_SA2243G277_dc_discharge_1_end_time", "select.predbat_gecloud_SA2243G278_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_SA2243G277_enable_force_charge", "switch.predbat_gecloud_SA2243G278_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_SA2243G277_enable_dc_discharge", "switch.predbat_gecloud_SA2243G278_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_SA2243G277_battery_temperature", "sensor.predbat_gecloud_SA2243G278_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_SA2243G277_battery_dod_soh", "sensor.predbat_gecloud_SA2243G278_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_SA2243G277_max_inverter_rate", "sensor.predbat_gecloud_SA2243G278_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_SA2243G277_solar_total", "sensor.predbat_gecloud_SA2243G278_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_SA2243G277_solar_power", "sensor.predbat_gecloud_SA2243G278_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_SA2243G277_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_SA2243G277_pause_battery", "select.predbat_gecloud_SA2243G278_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_SA2243G277_pause_battery_start_time", "select.predbat_gecloud_SA2243G278_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_SA2243G277_pause_battery_end_time", "select.predbat_gecloud_SA2243G278_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_SA2243G277_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_SA2243G278_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "SA2243G277",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force " "charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Multiple inverters detected, using all inverters for grid and load measurements (meters are not duplicated)",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "no_meter_data": {
+        "captured": {
+            "inverter_type": ["GEC", "GEC"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total", "sensor.predbat_gecloud_battery002_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total", "sensor.predbat_gecloud_battery002_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power", "number.predbat_gecloud_battery002_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate", "sensor.predbat_gecloud_battery002_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power", "number.predbat_gecloud_battery002_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power", "sensor.predbat_gecloud_battery002_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent", "sensor.predbat_gecloud_battery002_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size", "sensor.predbat_gecloud_battery002_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit", "number.predbat_gecloud_battery002_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time", "sensor.predbat_gecloud_battery002_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time", "select.predbat_gecloud_battery002_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time", "select.predbat_gecloud_battery002_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit", "number.predbat_gecloud_battery002_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time", "select.predbat_gecloud_battery002_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time", "select.predbat_gecloud_battery002_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge", "switch.predbat_gecloud_battery002_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature", "sensor.predbat_gecloud_battery002_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh", "sensor.predbat_gecloud_battery002_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate", "sensor.predbat_gecloud_battery002_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_battery002_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery", "select.predbat_gecloud_battery002_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time", "select.predbat_gecloud_battery002_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time", "select.predbat_gecloud_battery002_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_battery002_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force charge: " "True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Multiple inverters detected, using all inverters for grid and load measurements (meters are not duplicated)",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "shared_ct_override": {
+        "captured": {
+            "inverter_type": ["GEC", "GEC"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power", "number.predbat_gecloud_battery002_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate", "sensor.predbat_gecloud_battery002_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power", "number.predbat_gecloud_battery002_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power", 0],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power", 0],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent", "sensor.predbat_gecloud_battery002_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size", "sensor.predbat_gecloud_battery002_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit", "number.predbat_gecloud_battery002_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time", "sensor.predbat_gecloud_battery002_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time", "select.predbat_gecloud_battery002_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time", "select.predbat_gecloud_battery002_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit", "number.predbat_gecloud_battery002_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time", "select.predbat_gecloud_battery002_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time", "select.predbat_gecloud_battery002_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge", "switch.predbat_gecloud_battery002_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature", "sensor.predbat_gecloud_battery002_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh", "sensor.predbat_gecloud_battery002_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate", "sensor.predbat_gecloud_battery002_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_battery002_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery", "select.predbat_gecloud_battery002_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time", "select.predbat_gecloud_battery002_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time", "select.predbat_gecloud_battery002_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_battery002_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {"ge_cloud_automatic_shared_ct": True},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force " "charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Multiple inverters sharing a single CT clamp detected (shared CT override) — using first inverter only for grid and load measurements",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "split_ct_override": {
+        "captured": {
+            "inverter_type": ["GEC", "GEC"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total", "sensor.predbat_gecloud_battery002_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total", "sensor.predbat_gecloud_battery002_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power", "number.predbat_gecloud_battery002_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate", "sensor.predbat_gecloud_battery002_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power", "number.predbat_gecloud_battery002_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power", "sensor.predbat_gecloud_battery002_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent", "sensor.predbat_gecloud_battery002_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size", "sensor.predbat_gecloud_battery002_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit", "number.predbat_gecloud_battery002_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time", "sensor.predbat_gecloud_battery002_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time", "select.predbat_gecloud_battery002_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time", "select.predbat_gecloud_battery002_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit", "number.predbat_gecloud_battery002_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time", "select.predbat_gecloud_battery002_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time", "select.predbat_gecloud_battery002_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge", "switch.predbat_gecloud_battery002_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature", "sensor.predbat_gecloud_battery002_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh", "sensor.predbat_gecloud_battery002_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate", "sensor.predbat_gecloud_battery002_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_battery002_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery", "select.predbat_gecloud_battery002_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time", "select.predbat_gecloud_battery002_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time", "select.predbat_gecloud_battery002_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_battery002_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {"ge_cloud_automatic_split_ct": True},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force " "charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Multiple inverters detected, using all inverters for grid and load measurements (split CT override)",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "both_ct_overrides": {
+        "captured": {
+            "inverter_type": ["GEC", "GEC"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total", "sensor.predbat_gecloud_battery002_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total", "sensor.predbat_gecloud_battery002_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power", "number.predbat_gecloud_battery002_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate", "sensor.predbat_gecloud_battery002_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power", "number.predbat_gecloud_battery002_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power", "sensor.predbat_gecloud_battery002_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent", "sensor.predbat_gecloud_battery002_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size", "sensor.predbat_gecloud_battery002_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit", "number.predbat_gecloud_battery002_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time", "sensor.predbat_gecloud_battery002_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time", "select.predbat_gecloud_battery002_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time", "select.predbat_gecloud_battery002_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit", "number.predbat_gecloud_battery002_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time", "select.predbat_gecloud_battery002_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time", "select.predbat_gecloud_battery002_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge", "switch.predbat_gecloud_battery002_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature", "sensor.predbat_gecloud_battery002_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh", "sensor.predbat_gecloud_battery002_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate", "sensor.predbat_gecloud_battery002_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_battery002_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery", "select.predbat_gecloud_battery002_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time", "select.predbat_gecloud_battery002_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time", "select.predbat_gecloud_battery002_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_battery002_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {"ge_cloud_automatic_split_ct": True, "ge_cloud_automatic_shared_ct": True},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force " "charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Multiple inverters detected, using all inverters for grid and load measurements (split CT override)",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "gateway": {
+        "captured": {
+            "inverter_type": ["GEC"],
+            "num_inverters": 1,
+            "inverter_mode": ["switch.predbat_gecloud_gateway001_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_gateway001_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_gateway001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_gateway001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_gateway001_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_gateway001_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_gateway001_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_gateway001_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_gateway001_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_gateway001_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_gateway001_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_gateway001_battery_size"],
+            "reserve": ["number.predbat_gecloud_gateway001_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_gateway001_time"],
+            "charge_start_time": ["select.predbat_gecloud_gateway001_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_gateway001_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_gateway001_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_gateway001_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_gateway001_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_gateway001_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_gateway001_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_gateway001_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_gateway001_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_gateway001_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_gateway001_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_gateway001_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_gateway001_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_gateway001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_gateway001_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_gateway001_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_gateway001_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_gateway001_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Detected inverter model GIV-AC3.0 indicates ac_coupled=True, setting switch.predbat_inverter_hybrid to off",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": False,
+    },
+    "ems": {
+        "captured": {
+            "inverter_type": ["GEE", "GEE"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_ems001_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_ems001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_ems001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power", "number.predbat_gecloud_battery002_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate", "sensor.predbat_gecloud_battery002_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power", "number.predbat_gecloud_battery002_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_ems001_battery_power", 0],
+            "load_power": ["sensor.predbat_gecloud_ems001_consumption_power", 0],
+            "grid_power": ["sensor.predbat_gecloud_ems001_grid_power", 0],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent", "sensor.predbat_gecloud_battery002_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size", "sensor.predbat_gecloud_battery002_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit", "number.predbat_gecloud_battery002_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time", "sensor.predbat_gecloud_battery002_time"],
+            "charge_start_time": ["select.predbat_gecloud_ems001_charge_start_time_slot_1", "select.predbat_gecloud_ems001_charge_start_time_slot_1"],
+            "charge_end_time": ["select.predbat_gecloud_ems001_charge_end_time_slot_1", "select.predbat_gecloud_ems001_charge_end_time_slot_1"],
+            "charge_limit": ["number.predbat_gecloud_ems001_charge_soc_percent_limit_1", "number.predbat_gecloud_ems001_charge_soc_percent_limit_1"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_ems001_export_start_time_slot_1", "select.predbat_gecloud_ems001_export_start_time_slot_1"],
+            "discharge_end_time": ["select.predbat_gecloud_ems001_export_end_time_slot_1", "select.predbat_gecloud_ems001_export_end_time_slot_1"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge", "switch.predbat_gecloud_battery002_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature", "sensor.predbat_gecloud_battery002_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh", "sensor.predbat_gecloud_battery002_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate", "sensor.predbat_gecloud_battery002_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_ems001_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_ems001_solar_power", 0],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery", "select.predbat_gecloud_battery002_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time", "select.predbat_gecloud_battery002_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time", "select.predbat_gecloud_battery002_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_battery002_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "ems001",
+            "ge_cloud_data": False,
+            "idle_start_time": ["select.predbat_gecloud_ems001_discharge_start_time_slot_1", "select.predbat_gecloud_ems001_discharge_start_time_slot_1"],
+            "idle_end_time": ["select.predbat_gecloud_ems001_discharge_end_time_slot_1", "select.predbat_gecloud_ems001_discharge_end_time_slot_1"],
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: EMS detected, using EMS for control",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "load_today_ignore": {
+        "captured": {
+            "inverter_type": ["GEC"],
+            "num_inverters": 1,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {"ge_cloud_load_today_ignore": True},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force " "charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "load_today_ignore_shared_ct": {
+        "captured": {
+            "inverter_type": ["GEC", "GEC"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power", "number.predbat_gecloud_battery002_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate", "sensor.predbat_gecloud_battery002_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power", "number.predbat_gecloud_battery002_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power", 0],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power", 0],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent", "sensor.predbat_gecloud_battery002_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size", "sensor.predbat_gecloud_battery002_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit", "number.predbat_gecloud_battery002_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time", "sensor.predbat_gecloud_battery002_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time", "select.predbat_gecloud_battery002_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time", "select.predbat_gecloud_battery002_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit", "number.predbat_gecloud_battery002_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time", "select.predbat_gecloud_battery002_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time", "select.predbat_gecloud_battery002_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge", "switch.predbat_gecloud_battery002_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature", "sensor.predbat_gecloud_battery002_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh", "sensor.predbat_gecloud_battery002_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate", "sensor.predbat_gecloud_battery002_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_battery002_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery", "select.predbat_gecloud_battery002_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time", "select.predbat_gecloud_battery002_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time", "select.predbat_gecloud_battery002_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_battery002_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {"ge_cloud_load_today_ignore": True},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, " "force charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Multiple inverters sharing a single CT clamp detected (duplicate meter serials) — using first inverter only for grid and load measurements",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "load_today_ignore_ems": {
+        "captured": {
+            "inverter_type": ["GEE", "GEE"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"],
+            "import_today": ["sensor.predbat_gecloud_ems001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_ems001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power", "number.predbat_gecloud_battery002_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate", "sensor.predbat_gecloud_battery002_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power", "number.predbat_gecloud_battery002_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_ems001_battery_power", 0],
+            "load_power": ["sensor.predbat_gecloud_ems001_consumption_power", 0],
+            "grid_power": ["sensor.predbat_gecloud_ems001_grid_power", 0],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent", "sensor.predbat_gecloud_battery002_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size", "sensor.predbat_gecloud_battery002_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit", "number.predbat_gecloud_battery002_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time", "sensor.predbat_gecloud_battery002_time"],
+            "charge_start_time": ["select.predbat_gecloud_ems001_charge_start_time_slot_1", "select.predbat_gecloud_ems001_charge_start_time_slot_1"],
+            "charge_end_time": ["select.predbat_gecloud_ems001_charge_end_time_slot_1", "select.predbat_gecloud_ems001_charge_end_time_slot_1"],
+            "charge_limit": ["number.predbat_gecloud_ems001_charge_soc_percent_limit_1", "number.predbat_gecloud_ems001_charge_soc_percent_limit_1"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_ems001_export_start_time_slot_1", "select.predbat_gecloud_ems001_export_start_time_slot_1"],
+            "discharge_end_time": ["select.predbat_gecloud_ems001_export_end_time_slot_1", "select.predbat_gecloud_ems001_export_end_time_slot_1"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge", "switch.predbat_gecloud_battery002_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature", "sensor.predbat_gecloud_battery002_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh", "sensor.predbat_gecloud_battery002_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate", "sensor.predbat_gecloud_battery002_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_ems001_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_ems001_solar_power", 0],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery", "select.predbat_gecloud_battery002_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time", "select.predbat_gecloud_battery002_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time", "select.predbat_gecloud_battery002_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_battery002_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "ems001",
+            "ge_cloud_data": False,
+            "idle_start_time": ["select.predbat_gecloud_ems001_discharge_start_time_slot_1", "select.predbat_gecloud_ems001_discharge_start_time_slot_1"],
+            "idle_end_time": ["select.predbat_gecloud_ems001_discharge_end_time_slot_1", "select.predbat_gecloud_ems001_discharge_end_time_slot_1"],
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {"ge_cloud_load_today_ignore": True},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force " "charge: True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: EMS detected, using EMS for control",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "site_export_limit": {
+        "captured": {
+            "inverter_type": ["GEC", "GEC"],
+            "num_inverters": 2,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total", "sensor.predbat_gecloud_battery002_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total", "sensor.predbat_gecloud_battery002_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power", "number.predbat_gecloud_battery002_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate", "sensor.predbat_gecloud_battery002_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power", "number.predbat_gecloud_battery002_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power", "sensor.predbat_gecloud_battery002_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent", "sensor.predbat_gecloud_battery002_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size", "sensor.predbat_gecloud_battery002_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit", "number.predbat_gecloud_battery002_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time", "sensor.predbat_gecloud_battery002_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time", "select.predbat_gecloud_battery002_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time", "select.predbat_gecloud_battery002_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit", "number.predbat_gecloud_battery002_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit", "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time", "select.predbat_gecloud_battery002_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time", "select.predbat_gecloud_battery002_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge", "switch.predbat_gecloud_battery002_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge", "switch.predbat_gecloud_battery002_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature", "sensor.predbat_gecloud_battery002_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh", "sensor.predbat_gecloud_battery002_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate", "sensor.predbat_gecloud_battery002_max_inverter_rate"],
+            "export_limit": ["sensor.predbat_gecloud_battery001_export_limit", "sensor.predbat_gecloud_battery002_export_limit"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_battery002_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery", "select.predbat_gecloud_battery002_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time", "select.predbat_gecloud_battery002_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time", "select.predbat_gecloud_battery002_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit", "number.predbat_gecloud_battery002_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False, "export_limit": False},
+        "kept": {},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force " "charge: True",
+            "GECloud: Auto-configured export_limit from site site001: 5000W shared across 2 logical inverter(s)",
+            "GECloud: Multiple inverters detected, using all inverters for grid and load measurements (meters are not duplicated)",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "full_power_eco": {
+        "captured": {
+            "inverter_type": ["GEC"],
+            "num_inverters": 1,
+            "inverter_mode": [None],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False},
+        "kept": {},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force charge: " "True",
+            "GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+    "apps_yaml_kept": {
+        "captured": {
+            "inverter_type": ["GEC"],
+            "num_inverters": 1,
+            "inverter_mode": ["switch.predbat_gecloud_battery001_enable_eco_mode"],
+            "load_today": ["sensor.predbat_gecloud_battery001_consumption_total"],
+            "import_today": ["sensor.predbat_gecloud_battery001_grid_import_total"],
+            "export_today": ["sensor.predbat_gecloud_battery001_grid_export_total"],
+            "charge_rate": ["number.predbat_gecloud_battery001_battery_charge_power"],
+            "battery_rate_max": ["sensor.predbat_gecloud_battery001_max_charge_rate"],
+            "discharge_rate": ["number.predbat_gecloud_battery001_battery_discharge_power"],
+            "battery_power": ["sensor.predbat_gecloud_battery001_battery_power"],
+            "load_power": ["sensor.predbat_gecloud_battery001_consumption_power"],
+            "grid_power": ["sensor.predbat_gecloud_battery001_grid_power"],
+            "soc_percent": ["sensor.predbat_gecloud_battery001_battery_percent"],
+            "soc_max": ["sensor.predbat_gecloud_battery001_battery_size"],
+            "reserve": ["number.predbat_gecloud_battery001_battery_reserve_percent_limit"],
+            "inverter_time": ["sensor.predbat_gecloud_battery001_time"],
+            "charge_start_time": ["select.predbat_gecloud_battery001_ac_charge_1_start_time"],
+            "charge_end_time": ["select.predbat_gecloud_battery001_ac_charge_1_end_time"],
+            "charge_limit": ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"],
+            "charge_limit_enable": ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit"],
+            "discharge_start_time": ["select.predbat_gecloud_battery001_dc_discharge_1_start_time"],
+            "discharge_end_time": ["select.predbat_gecloud_battery001_dc_discharge_1_end_time"],
+            "scheduled_charge_enable": ["switch.predbat_gecloud_battery001_enable_force_charge"],
+            "scheduled_discharge_enable": ["switch.predbat_gecloud_battery001_enable_dc_discharge"],
+            "battery_temperature": ["sensor.predbat_gecloud_battery001_battery_temperature"],
+            "battery_scaling": ["sensor.predbat_gecloud_battery001_battery_dod_soh"],
+            "inverter_limit": ["sensor.predbat_gecloud_battery001_max_inverter_rate"],
+            "export_limit": ["sensor.predbat_gecloud_battery001_export_limit"],
+            "pv_today": ["sensor.predbat_gecloud_battery001_solar_total"],
+            "pv_power": ["sensor.predbat_gecloud_battery001_solar_power"],
+            "battery_temperature_history": "sensor.predbat_gecloud_battery001_battery_temperature",
+            "pause_mode": ["select.predbat_gecloud_battery001_pause_battery"],
+            "pause_start_time": ["select.predbat_gecloud_battery001_pause_battery_start_time"],
+            "pause_end_time": ["select.predbat_gecloud_battery001_pause_battery_end_time"],
+            "discharge_target_soc": ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit"],
+            "charge_rate_percent": None,
+            "discharge_rate_percent": None,
+            "givtcp_rest": None,
+            "ge_cloud_serial": "battery001",
+        },
+        "auto": {"inverter_mode": False, "export_limit": False},
+        "kept": {"inverter_mode": "switch.my_inverter_mode", "export_limit": 3600},
+        "logs": [
+            "GECloud: Auto-configuring Predbat and not using apps.yaml entries for control",
+            "GECloud: detected features - charge rate: True, discharge rate: True, charge power percent: False, discharge power percent: False, pause battery: True, pause start time: True, discharge target soc: True, force charge: " "True",
+            "Info: apps.yaml sets 'inverter_mode: switch.my_inverter_mode' - keeping your apps.yaml setting rather than auto-discovering '['switch.predbat_gecloud_battery001_enable_eco_mode']'",
+            "Info: apps.yaml sets 'export_limit: 3600' - keeping your apps.yaml setting rather than auto-discovering '['sensor.predbat_gecloud_battery001_export_limit']'",
+            "GECloud: Auto-configured export_limit from site site001: 5000W shared across 1 logical inverter(s)",
+            "GECloud: Detected inverter model GIV-HY5.0 indicates ac_coupled=False, setting switch.predbat_inverter_hybrid to on",
+            "GECloud: Automatic configuration complete",
+        ],
+        "hybrid": True,
+    },
+}
+
+
+# ---------------------------------------------------------------------------------------------
+# discovery_automatic on: GE Cloud opts in, the coordinator configures, check_automatic_config() compares
+# ---------------------------------------------------------------------------------------------
+
+
+def _switch_on_component(layout, apps_yaml=None):
+    """
+    (ge, base) for one layout with discovery_automatic on: the component on a stub base carrying the real
+    Coordinator, registered as "GECloud", with args, get_arg and the component's own set_arg one dict.
+    apps_yaml, when given, is the snapshot and the starting args; otherwise both start as the layout's config.
+    """
+    from tests.test_discovery_automatic import _Base, _Components
+
+    ge = _layout_component(layout)
+    ha_interface = ge.base.ha_interface
+    start = dict(ge.config_args)
+    start.update(apps_yaml or layout[4] or {})
+    base = _Base(args=start, apps_yaml=dict(start, discovery_automatic=True))
+    base.ha_interface = ha_interface
+    ge.base = base
+    ge.config_args = base.args
+    ge.args = base.args
+    ge.component_name = "GECloud"
+    _Components(base, {"GECloud": ge})
+    return ge, base
+
+
+def _map_register_entities(ge):
+    """Fill register_entity_map as publish_registers() would, for every domain a register's entity could have."""
+    for device, registers in ge.settings.items():
+        for key, register in registers.items():
+            for domain in ("number", "switch", "select"):
+                ge.register_entity_map["{}.{}_gecloud_{}_{}".format(domain, ge.prefix, device, regname_to_ha(register["name"])).lower()] = {"device": device, "key": key}
+
+
+def _apply_legacy(ge, bound, manual=None):
+    """
+    Write _legacy_bindings() output into args as the coordinator would place it behind `manual` slots.
+
+    manual: {setting: value} for one manual slot 0 ahead of this component, or None for none. Per-slot
+    lists are shifted one slot along; summed lists get the manual entry first; scalars are written as they are.
+    """
+    from bindings import SUMMED_SETTINGS
+
+    for setting, value in bound.items():
+        if setting == "num_inverters":
+            continue
+        if manual is not None and isinstance(value, list):
+            value = [manual.get(setting)] + value if setting not in SUMMED_SETTINGS else ([manual[setting]] if setting in manual else []) + value
+        if value is None:
+            ge.config_args.pop(setting, None)
+        else:
+            ge.config_args[setting] = value
+
+
+def _checker_lines(ge, level):
+    """The checker's log lines at one level ("Warn" or "Info")."""
+    return [line for line in ge.log_messages if line.startswith("{}: GECloud: discovery".format(level))]
+
+
+def _test_legacy_bindings_is_pure(my_predbat):
+    """_legacy_bindings() returns what the automatic configuration binds, less the live settings, and writes, logs and switches nothing."""
+    failed = 0
+    for name, layout in _automatic_config_layouts().items():
+        ge = _layout_component(layout)
+        expected = {key: value for key, value in capture_automatic_config(ge).items() if key not in ("ge_cloud_serial", "ge_cloud_data")}
+        ge = _layout_component(layout)
+        before = copy.deepcopy(ge.config_args)
+
+        def refuse(*args, **kwargs):
+            """A pure function must not write."""
+            raise AssertionError("_legacy_bindings() wrote {}".format(args))
+
+        ge.set_arg = refuse
+        ge.set_arg_auto = refuse
+        bound = ge._legacy_bindings(ge.devices_dict)
+        if bound != expected:
+            print("ERROR: layout {} _legacy_bindings() differs:\n  got      {}\n  expected {}".format(name, bound, expected))
+            failed = 1
+        if ge.config_args != before or ge.log_messages or ge.base.ha_interface.external_states:
+            print("ERROR: layout {} _legacy_bindings() changed args, logged or switched: {} {} {}".format(name, ge.config_args, ge.log_messages, ge.base.ha_interface.external_states))
+            failed = 1
+    if _layout_component(_automatic_config_layouts()["single"])._legacy_bindings(None) != {}:
+        print("ERROR: no devices binds nothing")
+        failed = 1
+    if not failed:
+        print("PASS: _legacy_bindings() is pure and matches the automatic configuration")
+    return failed
+
+
+def _switch_on_stubbed(layout):
+    """
+    Run async_automatic_config() with allow_automatic_config() stubbed to opt in.
+
+    Returns (ge, written, calls): written is each setting set through set_arg or set_arg_auto, calls the
+    order of the allow_automatic_config / refresh_discovery calls with the options passed.
+    """
+    ge = _layout_component(layout)
+    written = []
+    calls = []
+    real_set_arg = ge.set_arg
+
+    def recording_set_arg(arg, value, *args, **kwargs):
+        """Note the setting, then apply it."""
+        written.append(arg)
+        return real_set_arg(arg, value)
+
+    def allow(**kwargs):
+        """Opt in, recording the options."""
+        calls.append(("allow", kwargs))
+        return True
+
+    def refresh():
+        """Record the report being filed."""
+        calls.append(("refresh", None))
+
+    ge.set_arg = recording_set_arg
+    ge.set_arg_auto = recording_set_arg
+    ge.allow_automatic_config = allow
+    ge.refresh_discovery = refresh
+    run_async(ge.async_automatic_config(ge.devices_dict))
+    return ge, written, calls
+
+
+def _test_switch_on_opts_in_and_writes_no_binding(my_predbat):
+    """With discovery_automatic on GE Cloud opts in, files its report at once and writes no binding, but still does its live work."""
+    from bindings import BINDING_SETTINGS
+
+    failed = 0
+    layouts = _automatic_config_layouts()
+    ge, written, calls = _switch_on_stubbed(layouts["single"])
+    bindings_written = [arg for arg in written if arg in BINDING_SETTINGS or arg in ("inverter_type", "num_inverters", "battery_temperature_history")]
+    if bindings_written:
+        print("ERROR: the switch-on path wrote bindings {}".format(bindings_written))
+        failed = 1
+    if ge.config_args.get("ge_cloud_serial") != "battery001" or "ge_cloud_serial" not in written:
+        print("ERROR: ge_cloud_serial is live and should be written, got {}".format(ge.config_args.get("ge_cloud_serial")))
+        failed = 1
+    if calls != [("allow", {"skip_settings": (), "keep_user_settings": ("inverter_mode", "export_limit"), "include_pv_only": False}), ("refresh", None)]:
+        print("ERROR: expected an opt-in with the default options and then the report filed, got {}".format(calls))
+        failed = 1
+    if ge.base.ha_interface.external_states.get("switch.predbat_inverter_hybrid") is not True or "GECloud: Automatic configuration complete" not in ge.log_messages:
+        print("ERROR: the hybrid switch and the log lines are live: {} {}".format(ge.base.ha_interface.external_states, ge.log_messages))
+        failed = 1
+
+    ge, written, calls = _switch_on_stubbed(layouts["ems"])
+    if [arg for arg in written if arg in BINDING_SETTINGS or arg in ("inverter_type", "num_inverters")]:
+        print("ERROR: the switch-on EMS path wrote bindings {}".format(written))
+        failed = 1
+    if ge.config_args.get("ge_cloud_serial") != "ems001" or ge.config_args.get("ge_cloud_data") is not False or not ge.ems_disabled_ge_cloud_data:
+        print("ERROR: the EMS serial and the ge_cloud_data toggle are live, got {}".format(ge.config_args))
+        failed = 1
+    if not failed:
+        print("PASS: the switch-on path opts in, files its report and writes no binding")
+    return failed
+
+
+def _test_opt_in_options_follow_config(my_predbat):
+    """ge_cloud_load_today_ignore skips load_today, and ge_cloud_automatic_split_pv lets the PV-only devices contribute."""
+    failed = 0
+    layouts = _automatic_config_layouts()
+    _, _, calls = _switch_on_stubbed(layouts["load_today_ignore"])
+    if calls[0][1]["skip_settings"] != ("load_today",) or calls[0][1]["include_pv_only"] is not False:
+        print("ERROR: ge_cloud_load_today_ignore should skip load_today only, got {}".format(calls[0][1]))
+        failed = 1
+    _, _, calls = _switch_on_stubbed(layouts["pv_only_split_on"])
+    if calls[0][1]["include_pv_only"] is not True or calls[0][1]["skip_settings"] != ():
+        print("ERROR: ge_cloud_automatic_split_pv should include the PV-only devices, got {}".format(calls[0][1]))
+        failed = 1
+    if not failed:
+        print("PASS: the opt-in options follow ge_cloud_load_today_ignore and ge_cloud_automatic_split_pv")
+    return failed
+
+
+def _test_switch_on_configures_before_control_registers(my_predbat):
+    """
+    With a real Coordinator, async_automatic_config() leaves args configured, so control_register_keys() -
+    read later in the same run() cycle - finds the same registers as with the switch off, and the checker
+    the coordinator calls logs no warning.
+    """
+    failed = 0
+    layout = _automatic_config_layouts()["single"]
+    ge_off = _layout_component(layout)
+    _map_register_entities(ge_off)
+    run_async(ge_off.async_automatic_config(ge_off.devices_dict))
+    keys_off = ge_off.control_register_keys("battery001")
+
+    ge_on, base = _switch_on_component(layout)
+    _map_register_entities(ge_on)
+    run_async(ge_on.async_automatic_config(ge_on.devices_dict))
+    if base.args.get("charge_rate") != ["number.predbat_gecloud_battery001_battery_charge_power"] or base.args.get("inverter_type") != ["GEC"] or base.args.get("num_inverters") != 1:
+        print("ERROR: the coordinator should have configured args by the end of async_automatic_config(), got {}".format(base.args))
+        failed = 1
+    keys_on = ge_on.control_register_keys("battery001")
+    if not keys_off or keys_on != keys_off:
+        print("ERROR: control registers differ: switch off {} switch on {}".format(sorted(keys_off), sorted(keys_on)))
+        failed = 1
+    if _checker_lines(ge_on, "Warn") or not any(line.startswith("Info: GECloud: discovery configuration matches") for line in ge_on.log_messages):
+        print("ERROR: the coordinator's check should match with no warning: {}".format(ge_on.log_messages))
+        failed = 1
+    if not failed:
+        print("PASS: the report is filed on opting in, so the control registers are read from configured args")
+    return failed
+
+
+def _test_checker_clean(my_predbat):
+    """Args exactly as _legacy_bindings() gives them: no difference, and one Info line saying so."""
+    ge = _layout_component(_automatic_config_layouts()["two_meters"])
+    _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict))
+    result = ge.check_automatic_config([0, 1])
+    assert result == [], result
+    assert len([line for line in ge.log_messages if line.startswith("Info: GECloud: discovery configuration matches")]) == 1, ge.log_messages
+    assert not _checker_lines(ge, "Warn"), ge.log_messages
+    print("PASS: the checker finds nothing to report on matching args")
+    return 0
+
+
+def _test_checker_reports_difference(my_predbat):
+    """A slot value that differs from the old configuration is one Warn line, returned and logged."""
+    ge = _layout_component(_automatic_config_layouts()["single"])
+    _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict))
+    ge.config_args["soc_percent"] = ["sensor.wrong"]
+    line = "Warn: GECloud: discovery set soc_percent[0] to sensor.wrong, the previous automatic configuration would set sensor.predbat_gecloud_battery001_battery_percent"
+    result = ge.check_automatic_config([0])
+    assert result == [line], result
+    assert _checker_lines(ge, "Warn") == [line], ge.log_messages
+    print("PASS: the checker reports a differing slot value")
+    return 0
+
+
+def _test_checker_slot_offset(my_predbat):
+    """The old configuration's inverter 0 is compared with the slot the coordinator gave it, behind a manual slot 0."""
+    ge = _layout_component(_automatic_config_layouts()["single"])
+    manual = {"inverter_type": "GE", "soc_percent": "sensor.givtcp_soc", "load_today": "sensor.givtcp_load_energy_today_kwh", "pv_power": "sensor.givtcp_pv_power"}
+    _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict), manual=manual)
+    result = ge.check_automatic_config([1])
+    assert result == [], result
+    assert not _checker_lines(ge, "Warn"), ge.log_messages
+    ge.config_args["soc_percent"][1] = "sensor.wrong"
+    assert ge.check_automatic_config([1]) == ["Warn: GECloud: discovery set soc_percent[1] to sensor.wrong, the previous automatic configuration would set sensor.predbat_gecloud_battery001_battery_percent"]
+    print("PASS: the checker compares at the coordinator's slot")
+    return 0
+
+
+def _test_checker_known_difference_is_info(my_predbat):
+    """A known difference - pause bound only where the device has the register - is Info with its reason, not a warning."""
+    from gecloud import GE_CLOUD_KNOWN_DIFFERENCES
+
+    ge = _layout_component(_automatic_config_layouts()["mixed_registers"])
+    _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict))
+    ge.config_args["pause_mode"] = ["select.predbat_gecloud_battery001_pause_battery", None]
+    result = ge.check_automatic_config([0, 1])
+    assert result == [], result
+    info = [line for line in ge.log_messages if line.startswith("Info: GECloud: discovery differs on pause_mode (")]
+    assert len(info) == 1 and GE_CLOUD_KNOWN_DIFFERENCES["pause_mode"] in info[0], ge.log_messages
+    assert not _checker_lines(ge, "Warn"), ge.log_messages
+    print("PASS: a known difference is logged at Info with its reason")
+    return 0
+
+
+def _test_checker_kept_and_skipped_are_info(my_predbat):
+    """A kept setting the user's apps.yaml holds, or a skipped one, is Info with its reason, never a warning."""
+    ge = _layout_component(_automatic_config_layouts()["site_export_limit"])
+    _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict))
+    ge.config_args["inverter_mode"] = "switch.my_inverter_mode"
+    ge.config_args["export_limit"] = [3600, None]
+    assert ge.check_automatic_config([0, 1]) == [], ge.log_messages
+    for setting in ("inverter_mode", "export_limit"):
+        assert any(line.startswith("Info: GECloud: discovery differs on {} (".format(setting)) for line in ge.log_messages), ge.log_messages
+
+    # load_today is skipped under ge_cloud_load_today_ignore and the old configuration binds none, so the user's value there is not a difference
+    ge = _layout_component(_automatic_config_layouts()["load_today_ignore"])
+    _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict))
+    ge.config_args["load_today"] = ["sensor.my_load_today"]
+    assert ge.check_automatic_config([0]) == [], ge.log_messages
+    assert not _checker_lines(ge, "Warn"), ge.log_messages
+    print("PASS: kept and skipped settings are Info")
+    return 0
+
+
+def _test_checker_warns_once(my_predbat):
+    """The same difference checked twice is returned both times but logged once."""
+    ge = _layout_component(_automatic_config_layouts()["single"])
+    _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict))
+    ge.config_args["soc_percent"] = ["sensor.wrong"]
+    first = ge.check_automatic_config([0])
+    second = ge.check_automatic_config([0])
+    assert first == second and len(first) == 1, (first, second)
+    assert len(_checker_lines(ge, "Warn")) == 1, ge.log_messages
+    print("PASS: a repeated difference is logged once")
+    return 0
+
+
+def _test_checker_never_raises(my_predbat):
+    """No devices, or settings it cannot read, give no warning and no exception."""
+    ge = _layout_component(_automatic_config_layouts()["single"])
+    ge.devices_dict = None
+    assert ge.check_automatic_config([0]) == []
+    ge = _layout_component(_automatic_config_layouts()["single"])
+    ge.settings = None
+    assert ge.check_automatic_config([0]) == []
+    ge.settings = {"battery001": dict(GEC_FULL_REGISTERS)}
+    assert ge.check_automatic_config(None) == []
+    assert not [line for line in ge.log_messages if line.startswith("Warn")], ge.log_messages
+    print("PASS: the checker never raises")
+    return 0
+
+
+def _slot_differences(ge, base, slots):
+    """{setting} where a per-slot list _legacy_bindings() gives differs from live args at the record's slot."""
+    from bindings import SUMMED_SETTINGS, slot_value
+
+    differing = set()
+    for setting, value in ge._legacy_bindings(ge.devices_dict).items():
+        if setting in SUMMED_SETTINGS or setting == "num_inverters" or not isinstance(value, list):
+            continue
+        for index, slot in enumerate(slots):
+            if slot_value(value, index) != slot_value(base.args.get(setting), slot):
+                differing.add(setting)
+    return differing
+
+
+def _test_known_differences_are_real(my_predbat):
+    """
+    Every GE_CLOUD_KNOWN_DIFFERENCES entry is a difference a real coordinator run shows: the pause and discharge
+    target settings on a fleet where one device lacks them, givtcp_rest on a manual slot the old code deletes.
+    The percentage rates are bound per device by both, so they are not differences.
+    """
+    from gecloud import GE_CLOUD_KNOWN_DIFFERENCES
+
+    layouts = _automatic_config_layouts()
+    ge, base = _switch_on_component(layouts["mixed_registers"])
+    run_async(ge.async_automatic_config(ge.devices_dict))
+    differing = _slot_differences(ge, base, [0, 1])
+    assert differing == {"pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc"}, differing
+    assert "charge_rate_percent" not in differing and "discharge_rate_percent" not in differing
+    assert not _checker_lines(ge, "Warn"), ge.log_messages
+    for setting in sorted(differing):
+        assert any(line.startswith("Info: GECloud: discovery differs on {} ({}".format(setting, GE_CLOUD_KNOWN_DIFFERENCES[setting])) for line in ge.log_messages), (setting, ge.log_messages)
+
+    # A manual GivTCP inverter in slot 0: the old code deletes givtcp_rest outright, the coordinator keeps it for slot 0
+    apps_yaml = {"num_inverters": 1, "inverter_type": ["GE"], "givtcp_rest": ["http://192.168.1.10:6345"]}
+    ge, base = _switch_on_component(layouts["single"], apps_yaml=apps_yaml)
+    run_async(ge.async_automatic_config(ge.devices_dict))
+    assert ge._legacy_bindings(ge.devices_dict)["givtcp_rest"] is None
+    assert base.args.get("givtcp_rest") in (["http://192.168.1.10:6345"], ["http://192.168.1.10:6345", None]), base.args.get("givtcp_rest")
+    assert base.args.get("inverter_type") == ["GE", "GEC"], base.args.get("inverter_type")
+    assert not _checker_lines(ge, "Warn"), ge.log_messages
+    assert any(line.startswith("Info: GECloud: discovery differs on givtcp_rest ({}".format(GE_CLOUD_KNOWN_DIFFERENCES["givtcp_rest"])) for line in ge.log_messages), ge.log_messages
+    assert sorted(GE_CLOUD_KNOWN_DIFFERENCES) == ["discharge_target_soc", "givtcp_rest", "pause_end_time", "pause_mode", "pause_start_time"], sorted(GE_CLOUD_KNOWN_DIFFERENCES)
+    print("PASS: every known difference is one a coordinator run really shows")
+    return 0
+
+
+def _test_checker_no_warnings_on_layouts(my_predbat):
+    """For every layout, a real coordinator run configures args the checker finds no unexpected difference in."""
+    failed = 0
+    for name, layout in _automatic_config_layouts().items():
+        ge, base = _switch_on_component(layout)
+        run_async(ge.async_automatic_config(ge.devices_dict))
+        warnings = [line for line in ge.log_messages + base.log_messages if line.startswith("Warn")]
+        checked = any(line.startswith("Info: GECloud: discovery configuration matches") for line in ge.log_messages)
+        if warnings or not checked:
+            print("ERROR: layout {} checked={} warnings {}".format(name, checked, warnings))
+            failed = 1
+    if not failed:
+        print("PASS: the checker finds no unexpected difference on any layout")
+    return failed
 
 
 def _test_discovery_write_and_poll_sleep(my_predbat):

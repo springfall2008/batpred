@@ -24,6 +24,7 @@ import math
 import json
 import random
 from component_base import ComponentBase, writes
+from bindings import SITE_SETTINGS, SUMMED_SETTINGS, slot_value
 from coordinator import charger_with_stub_car, inverter_record
 from mock_base import MockBase as SharedMockBase
 
@@ -339,6 +340,26 @@ GE_CLOUD_DUMMIED_SETTINGS = {
     "GEC": frozenset(),
     "GEE": frozenset({"scheduled_charge_enable", "scheduled_discharge_enable", "pause_mode", "inverter_mode"}),
 }
+
+# Settings where the user's own apps.yaml value wins over the automatic configuration: what async_automatic_config()
+# binds through set_arg_auto(..., overwrite=False), and what it passes the coordinator as keep_user_settings
+GE_CLOUD_KEEP_USER_SETTINGS = ("inverter_mode", "export_limit")
+
+# Where the configuration the coordinator builds from the discovery records knowingly differs from the one
+# _legacy_bindings() gives, with the reason. check_automatic_config() logs these at Info, never as a warning.
+# Only differences a coordinator run really shows belong here (test_ge_cloud.py _test_known_differences_are_real):
+# the percentage rate controls are bound per device by both, so they are not listed.
+GE_CLOUD_FLEET_GATED = "the previous automatic configuration binds it for every device when any device has the register, discovery only for a device that has it (spec D10)"
+GE_CLOUD_KNOWN_DIFFERENCES = {
+    "pause_mode": GE_CLOUD_FLEET_GATED,
+    "pause_start_time": GE_CLOUD_FLEET_GATED,
+    "pause_end_time": GE_CLOUD_FLEET_GATED,
+    "discharge_target_soc": GE_CLOUD_FLEET_GATED,
+    "givtcp_rest": "the previous automatic configuration deletes the whole key, discovery clears only its own inverter slots",
+}
+
+# Settings the old configuration deletes outright, so whatever another inverter's slot holds is a (known) difference
+GE_CLOUD_DELETED_SETTINGS = frozenset({"givtcp_rest"})
 
 # publish_registers() publishes every "date_format:H:i" register as a select whose options and state
 # are HH:MM:SS
@@ -740,6 +761,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # An EMS turns GE Cloud Data off; what it replaced is kept so it can be put back if the EMS leaves
         self.ems_disabled_ge_cloud_data = False
         self.ge_cloud_data_before_ems = None
+        # Every line check_automatic_config() has logged, so each is logged once for the life of the process
+        self.automatic_check_logged = set()
 
         # Customer account details, including the timezone the inverter register times are expressed in
         self.account = {}
@@ -1695,11 +1718,123 @@ class GECloudDirect(ComponentBase, CarChargerControl):
           - "ems": the EMS device serial
           - "gateway": the gateway serial
           - "battery": list of battery inverter serials (for battery-specific sensors)
+
+        The inverter bindings are _legacy_bindings(). With discovery_automatic off they are written here, as
+        they always were; with it on GE Cloud opts in to the coordinator, which configures them from this
+        component's discovery report, and none is written here. Either way the rest is live and done here:
+        ge_cloud_serial, the EMS's ge_cloud_data toggle and its restore, the inverter_hybrid switch and the log.
         """
         if not devices or not devices["battery"]:
             self.log("GECloud: Warn: No battery devices found, cannot auto-configure")
             return
 
+        bound, facts = self._legacy_plan(devices)
+        batteries_real = facts["batteries_real"]
+        batteries = facts["batteries"]
+        num_inverters = facts["num_inverters"]
+        features = facts["features"]
+
+        self.log("GECloud: Auto-configuring Predbat and not using apps.yaml entries for control")
+        self.log(
+            "GECloud: detected features - charge rate: {}, discharge rate: {}, charge power percent: {}, discharge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}, force charge: {}".format(
+                features["charge_rate"],
+                features["discharge_rate"],
+                features["charge_power_percent"],
+                features["discharge_power_percent"],
+                features["pause_battery"],
+                features["pause_start_time"],
+                features["discharge_target_soc"],
+                features["force_charge"],
+            )
+        )
+
+        skip_settings = ("load_today",) if self.get_arg("ge_cloud_load_today_ignore", default=False) else ()
+        include_pv_only = bool(self.get_arg("ge_cloud_automatic_split_pv", default=False))
+        if self.allow_automatic_config(skip_settings=skip_settings, keep_user_settings=GE_CLOUD_KEEP_USER_SETTINGS, include_pv_only=include_pv_only):
+            # The coordinator configures args when it has this component's report. File it now rather than at the
+            # end of the cycle: run() reads the control registers next, and finds them by the entities args name
+            self.refresh_discovery()
+        else:
+            for setting, value in bound.items():
+                if setting in GE_CLOUD_KEEP_USER_SETTINGS:
+                    self.set_arg_auto(setting, value, overwrite=False)
+                else:
+                    self.set_arg(setting, value)
+
+        # The site's grid export limit, published per inverter as its share of the site total. An
+        # export_limit the user wrote in apps.yaml wins, including a zero one, which set_arg_auto
+        # reports for us, and a site with no enabled limit leaves Predbat's own default in place.
+        if self.site_export_limit is not None:
+            self.log("GECloud: Auto-configured export_limit from site {}: {}W shared across {} logical inverter(s)".format(self.site_id, self.site_export_limit, num_inverters))
+        elif self.get_arg("export_limit", default=None, indirect=False) is None:
+            self.log("GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating")
+
+        # Use the first battery serial for the ge_cloud_serial (for status)
+        self.set_arg("ge_cloud_serial", devices["battery"][0])
+
+        shared_ct = facts["shared_ct"]
+        if shared_ct is not None:
+            has_shared_ct, reason = shared_ct
+            if has_shared_ct:
+                self.log("GECloud: Multiple inverters sharing a single CT clamp detected ({}) — using first inverter only for grid and load measurements".format(reason))
+            else:
+                self.log("GECloud: Multiple inverters detected, using all inverters for grid and load measurements ({})".format(reason))
+
+        # reconfigure for EMS
+        if devices["ems"]:
+            self.log("GECloud: EMS detected, using EMS for control")
+            ems = devices["ems"]
+            self.set_arg("ge_cloud_serial", ems)
+            if not self.ems_disabled_ge_cloud_data:
+                self.ge_cloud_data_before_ems = self.get_arg("ge_cloud_data", default=None, indirect=False)
+                self.ems_disabled_ge_cloud_data = True
+            self.set_arg("ge_cloud_data", False)
+        elif self.ems_disabled_ge_cloud_data:
+            # The EMS has left the account since it turned GE Cloud Data off, so put back what it replaced
+            self.set_arg("ge_cloud_data", self.ge_cloud_data_before_ems)
+            self.ems_disabled_ge_cloud_data = False
+
+        # Determine the model of the inverter, if at least one inverter has AC or AIO in the name then we assume AC coupled and turn off the hybrid switch
+        # First fetch "model"
+        ac_coupled = False
+        model_name = "Unknown"
+        for device_serial in batteries_real:
+            device = self.info.get(device_serial, {})
+            info = device.get("info", {}) or {}
+            model = info.get("model", "").lower()
+            if model:
+                model_name = info["model"]
+                if ("ac" in model) or ("aio" in model) or ("all-in-one" in model):
+                    ac_coupled = True
+                    break
+        entity_id = "switch.{}_inverter_hybrid".format(self.prefix)
+        self.log("GECloud: Detected inverter model {} indicates ac_coupled={}, setting {} to {}".format(model_name, ac_coupled, entity_id, "off" if ac_coupled else "on"))
+        await self.set_state_external(entity_id, not ac_coupled)
+
+        self.log("GECloud: Automatic configuration complete")
+
+    def _legacy_bindings(self, devices):
+        """
+        What the automatic configuration binds: {setting: value}, the last write winning, None meaning "delete the key". Pure - writes nothing.
+
+        The inverter bindings async_automatic_config() wrote before discovery_automatic, with its guards
+        (ge_cloud_load_today_ignore, the site export limit, the CT and split-PV options) and without the live
+        settings (ge_cloud_serial, ge_cloud_data) or any log line. {} when there is no battery device.
+        """
+        if not devices or not devices.get("battery"):
+            return {}
+        return self._legacy_plan(devices)[0]
+
+    def _legacy_plan(self, devices):
+        """
+        (bound, facts) for a devices dict with at least one battery: the old automatic configuration's bindings, and what its log reports.
+
+        bound is _legacy_bindings(), in the order the old code first wrote each setting. facts holds
+        batteries_real, batteries and num_inverters (the logical inverters), features (the fleet-wide register
+        sniff the "detected features" line logs) and shared_ct: None unless several inverters and no EMS, else
+        (shared, reason) for the CT clamp line. Reads settings, info, devices and config; writes nothing.
+        """
+        bound = {}
         batteries_real = devices["battery"]
         pvs = devices.get("pv", [])
         # Only use the gateway as main control if we have multiple batteries
@@ -1761,82 +1896,71 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 return None
             return entities
 
-        self.log("GECloud: Auto-configuring Predbat and not using apps.yaml entries for control")
-        self.log(
-            "GECloud: detected features - charge rate: {}, discharge rate: {}, charge power percent: {}, discharge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}, force charge: {}".format(
-                has_charge_rate, has_discharge_rate, has_charge_power_percent, has_discharge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc, has_force_charge
-            )
-        )
-
-        self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
-        self.set_arg("num_inverters", num_inverters)
+        bound["inverter_type"] = ["GEC" for _ in range(num_inverters)]
+        bound["num_inverters"] = num_inverters
         # An inverter GE Cloud flags as discharging at full power in eco mode exports with eco left on, so it gets no
         # inverter_mode: adjust_inverter_mode() then has nothing to turn off, and an export costs no eco writes. Eco is
         # held on for it by ensure_full_power_eco() instead. One without the flag needs eco off to export.
         eco_entities = build_entities("switch", ["enable_eco_mode"])
         if eco_entities is not None:
             eco_entities = [None if self.full_power_discharge_eco(device) else entity for device, entity in zip(batteries, eco_entities)]
-        self.set_arg_auto("inverter_mode", eco_entities, overwrite=False)
+        bound["inverter_mode"] = eco_entities
         if not self.get_arg("ge_cloud_load_today_ignore", default=False):
-            self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{device}_consumption_total" for device in batteries])
-        self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_total" for device in batteries])
-        self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_export_total" for device in batteries])
-        self.set_arg("charge_rate", build_entities("number", ["battery_charge_power"]))
-        self.set_arg("battery_rate_max", [f"sensor.{self.prefix}_gecloud_{device}_max_charge_rate" for device in batteries])
-        self.set_arg("discharge_rate", build_entities("number", ["battery_discharge_power"]))
-        self.set_arg("battery_power", [f"sensor.{self.prefix}_gecloud_{device}_battery_power" for device in batteries])
-        self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{device}_consumption_power" for device in batteries])
-        self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{device}_grid_power" for device in batteries])
-        self.set_arg("soc_percent", [f"sensor.{self.prefix}_gecloud_{device}_battery_percent" for device in batteries])
-        self.set_arg("soc_max", [f"sensor.{self.prefix}_gecloud_{device}_battery_size" for device in batteries])
-        self.set_arg("reserve", build_entities("number", ["battery_reserve_percent_limit", "battery_reserve_percent"]))
-        self.set_arg("inverter_time", [f"sensor.{self.prefix}_gecloud_{device}_time" for device in batteries])
-        self.set_arg("charge_start_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_start_time" for device in batteries])
-        self.set_arg("charge_end_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_end_time" for device in batteries])
-        self.set_arg("charge_limit", build_entities("number", ["ac_charge_upper_percent_limit", "ac_charge_1_upper_soc_percent_limit"]))
-        self.set_arg("charge_limit_enable", build_entities("switch", ["enable_ac_charge_upper_percent_limit", "enable_ac_charge_1_upper_soc_percent_limit"]))
-        self.set_arg("discharge_start_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_start_time" for device in batteries])
-        self.set_arg("discharge_end_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_end_time" for device in batteries])
+            bound["load_today"] = [f"sensor.{self.prefix}_gecloud_{device}_consumption_total" for device in batteries]
+        bound["import_today"] = [f"sensor.{self.prefix}_gecloud_{device}_grid_import_total" for device in batteries]
+        bound["export_today"] = [f"sensor.{self.prefix}_gecloud_{device}_grid_export_total" for device in batteries]
+        bound["charge_rate"] = build_entities("number", ["battery_charge_power"])
+        bound["battery_rate_max"] = [f"sensor.{self.prefix}_gecloud_{device}_max_charge_rate" for device in batteries]
+        bound["discharge_rate"] = build_entities("number", ["battery_discharge_power"])
+        bound["battery_power"] = [f"sensor.{self.prefix}_gecloud_{device}_battery_power" for device in batteries]
+        bound["load_power"] = [f"sensor.{self.prefix}_gecloud_{device}_consumption_power" for device in batteries]
+        bound["grid_power"] = [f"sensor.{self.prefix}_gecloud_{device}_grid_power" for device in batteries]
+        bound["soc_percent"] = [f"sensor.{self.prefix}_gecloud_{device}_battery_percent" for device in batteries]
+        bound["soc_max"] = [f"sensor.{self.prefix}_gecloud_{device}_battery_size" for device in batteries]
+        bound["reserve"] = build_entities("number", ["battery_reserve_percent_limit", "battery_reserve_percent"])
+        bound["inverter_time"] = [f"sensor.{self.prefix}_gecloud_{device}_time" for device in batteries]
+        bound["charge_start_time"] = [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_start_time" for device in batteries]
+        bound["charge_end_time"] = [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_end_time" for device in batteries]
+        bound["charge_limit"] = build_entities("number", ["ac_charge_upper_percent_limit", "ac_charge_1_upper_soc_percent_limit"])
+        bound["charge_limit_enable"] = build_entities("switch", ["enable_ac_charge_upper_percent_limit", "enable_ac_charge_1_upper_soc_percent_limit"])
+        bound["discharge_start_time"] = [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_start_time" for device in batteries]
+        bound["discharge_end_time"] = [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_end_time" for device in batteries]
         # On devices that expose both charge switches ("Enable AC Charge" and "Enable Force Charge")
         # it is Force Charge that gates the timed grid charge, so bind that as the per-slot control and
         # let enable_default_options hold AC Charge on as a static enable. Devices without a
         # enable_force_charge register keep their existing AC-charge binding (GH#5040).
-        self.set_arg("scheduled_charge_enable", build_entities("switch", ["enable_force_charge", "ac_charge_enable", "enable_ac_charge"]))
-        self.set_arg("scheduled_discharge_enable", build_entities("switch", ["enable_dc_discharge", "enable_force_discharge"]))
-        self.set_arg("battery_temperature", [f"sensor.{self.prefix}_gecloud_{device}_battery_temperature" for device in batteries])
-        self.set_arg("battery_scaling", [f"sensor.{self.prefix}_gecloud_{device}_battery_dod_soh" for device in batteries])
-        self.set_arg("inverter_limit", [f"sensor.{self.prefix}_gecloud_{device}_max_inverter_rate" for device in batteries])
+        bound["scheduled_charge_enable"] = build_entities("switch", ["enable_force_charge", "ac_charge_enable", "enable_ac_charge"])
+        bound["scheduled_discharge_enable"] = build_entities("switch", ["enable_dc_discharge", "enable_force_discharge"])
+        bound["battery_temperature"] = [f"sensor.{self.prefix}_gecloud_{device}_battery_temperature" for device in batteries]
+        bound["battery_scaling"] = [f"sensor.{self.prefix}_gecloud_{device}_battery_dod_soh" for device in batteries]
+        bound["inverter_limit"] = [f"sensor.{self.prefix}_gecloud_{device}_max_inverter_rate" for device in batteries]
 
-        # The site's grid export limit, published per inverter as its share of the site total. An
-        # export_limit the user wrote in apps.yaml wins, including a zero one, which set_arg_auto
-        # reports for us, and a site with no enabled limit leaves Predbat's own default in place.
+        # The site's grid export limit, published per inverter as its share of the site total; bound with
+        # overwrite=False (GE_CLOUD_KEEP_USER_SETTINGS), so an export_limit the user wrote in apps.yaml wins
         if self.site_export_limit is not None:
-            self.set_arg_auto("export_limit", [f"sensor.{self.prefix}_gecloud_{device}_export_limit" for device in batteries], overwrite=False)
-            self.log("GECloud: Auto-configured export_limit from site {}: {}W shared across {} logical inverter(s)".format(self.site_id, self.site_export_limit, num_inverters))
-        elif self.get_arg("export_limit", default=None, indirect=False) is None:
-            self.log("GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating")
+            bound["export_limit"] = [f"sensor.{self.prefix}_gecloud_{device}_export_limit" for device in batteries]
 
         pv_devices = batteries + pvs if self.get_arg("ge_cloud_automatic_split_pv", default=False) else batteries
-        self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{device}_solar_total" for device in pv_devices])
-        self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{device}_solar_power" for device in pv_devices])
+        bound["pv_today"] = [f"sensor.{self.prefix}_gecloud_{device}_solar_total" for device in pv_devices]
+        bound["pv_power"] = [f"sensor.{self.prefix}_gecloud_{device}_solar_power" for device in pv_devices]
 
         if len(batteries):
-            self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_gecloud_{batteries[0]}_battery_temperature")
+            bound["battery_temperature_history"] = f"sensor.{self.prefix}_gecloud_{batteries[0]}_battery_temperature"
 
         if has_pause_battery:
-            self.set_arg("pause_mode", [f"select.{self.prefix}_gecloud_{device}_pause_battery" for device in batteries])
+            bound["pause_mode"] = [f"select.{self.prefix}_gecloud_{device}_pause_battery" for device in batteries]
             if has_pause_start_time:
-                self.set_arg("pause_start_time", [f"select.{self.prefix}_gecloud_{device}_pause_battery_start_time" for device in batteries])
-                self.set_arg("pause_end_time", [f"select.{self.prefix}_gecloud_{device}_pause_battery_end_time" for device in batteries])
+                bound["pause_start_time"] = [f"select.{self.prefix}_gecloud_{device}_pause_battery_start_time" for device in batteries]
+                bound["pause_end_time"] = [f"select.{self.prefix}_gecloud_{device}_pause_battery_end_time" for device in batteries]
         else:
-            self.set_arg("pause_mode", None)
-            self.set_arg("pause_start_time", None)
-            self.set_arg("pause_end_time", None)
+            bound["pause_mode"] = None
+            bound["pause_start_time"] = None
+            bound["pause_end_time"] = None
 
         if has_discharge_target_soc:
-            self.set_arg("discharge_target_soc", [f"number.{self.prefix}_gecloud_{device}_dc_discharge_1_lower_soc_percent_limit" for device in batteries])
+            bound["discharge_target_soc"] = [f"number.{self.prefix}_gecloud_{device}_dc_discharge_1_lower_soc_percent_limit" for device in batteries]
         else:
-            self.set_arg("discharge_target_soc", None)
+            bound["discharge_target_soc"] = None
 
         # The percentage rate registers only win as the control when the direct power register is
         # absent. When both a power register and its percentage equivalent exist, the power register
@@ -1850,18 +1974,16 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 return None
             return entities
 
-        self.set_arg("charge_rate_percent", build_percent_entities("battery_charge_power", ["inverter_charge_power_percentage", "charge_power_rate"]))
-        self.set_arg("discharge_rate_percent", build_percent_entities("battery_discharge_power", ["inverter_discharge_power_percentage", "discharge_power_rate"]))
+        bound["charge_rate_percent"] = build_percent_entities("battery_charge_power", ["inverter_charge_power_percentage", "charge_power_rate"])
+        bound["discharge_rate_percent"] = build_percent_entities("battery_discharge_power", ["inverter_discharge_power_percentage", "discharge_power_rate"])
 
-        self.set_arg("givtcp_rest", None)
-
-        # Use the first battery serial for the ge_cloud_serial (for status)
-        self.set_arg("ge_cloud_serial", devices["battery"][0])
+        bound["givtcp_rest"] = None
 
         # Detect shared CT clamp: when multiple inverters share a single physical grid CT clamp
         # (no dedicated external meters, or duplicate meter serial numbers), grid and load
         # measurements are identical across all inverters and must not be summed.
         # Apply the same "single source + zeros" pattern used by the EMS path.
+        shared_ct = None
         if num_inverters > 1 and not devices.get("ems"):
             battery_meters = devices.get("battery_meters", {})
             all_meter_serials = []
@@ -1880,68 +2002,146 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             elif self.get_arg("ge_cloud_automatic_shared_ct", default=False):
                 has_shared_ct = True
                 reason = "shared CT override"
+            shared_ct = (has_shared_ct, reason)
             if has_shared_ct:
-                self.log("GECloud: Multiple inverters sharing a single CT clamp detected ({}) — using first inverter only for grid and load measurements".format(reason))
-                self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_power"] + [0 for _ in range(num_inverters - 1)])
-                self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
-                self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_import_total"])
-                self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_export_total"])
+                bound["grid_power"] = [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_power"] + [0 for _ in range(num_inverters - 1)]
+                bound["load_power"] = [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_power"] + [0 for _ in range(num_inverters - 1)]
+                bound["import_today"] = [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_import_total"]
+                bound["export_today"] = [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_export_total"]
                 if not self.get_arg("ge_cloud_load_today_ignore", default=False):
-                    self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_total"])
-            else:
-                self.log("GECloud: Multiple inverters detected, using all inverters for grid and load measurements ({})".format(reason))
+                    bound["load_today"] = [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_total"]
 
         # reconfigure for EMS
         if devices["ems"]:
-            self.log("GECloud: EMS detected, using EMS for control")
             ems = devices["ems"]
-            self.set_arg("inverter_type", ["GEE" for _ in range(num_inverters)])
-            self.set_arg("ge_cloud_serial", ems)
-            if not self.ems_disabled_ge_cloud_data:
-                self.ge_cloud_data_before_ems = self.get_arg("ge_cloud_data", default=None, indirect=False)
-                self.ems_disabled_ge_cloud_data = True
-            self.set_arg("ge_cloud_data", False)
+            bound["inverter_type"] = ["GEE" for _ in range(num_inverters)]
             if not self.get_arg("ge_cloud_load_today_ignore", default=False):
-                self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{ems}_consumption_total"])
-            self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{ems}_grid_import_total"])
-            self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{ems}_grid_export_total"])
-            self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{ems}_solar_total"])
-            self.set_arg("charge_start_time", [f"select.{self.prefix}_gecloud_{ems}_charge_start_time_slot_1" for _ in range(num_inverters)])
-            self.set_arg("charge_end_time", [f"select.{self.prefix}_gecloud_{ems}_charge_end_time_slot_1" for _ in range(num_inverters)])
-            self.set_arg("idle_start_time", [f"select.{self.prefix}_gecloud_{ems}_discharge_start_time_slot_1" for _ in range(num_inverters)])
-            self.set_arg("idle_end_time", [f"select.{self.prefix}_gecloud_{ems}_discharge_end_time_slot_1" for _ in range(num_inverters)])
-            self.set_arg("charge_limit", [f"number.{self.prefix}_gecloud_{ems}_charge_soc_percent_limit_1" for _ in range(num_inverters)])
-            self.set_arg("discharge_start_time", [f"select.{self.prefix}_gecloud_{ems}_export_start_time_slot_1" for _ in range(num_inverters)])
-            self.set_arg("discharge_end_time", [f"select.{self.prefix}_gecloud_{ems}_export_end_time_slot_1" for _ in range(num_inverters)])
+                bound["load_today"] = [f"sensor.{self.prefix}_gecloud_{ems}_consumption_total"]
+            bound["import_today"] = [f"sensor.{self.prefix}_gecloud_{ems}_grid_import_total"]
+            bound["export_today"] = [f"sensor.{self.prefix}_gecloud_{ems}_grid_export_total"]
+            bound["pv_today"] = [f"sensor.{self.prefix}_gecloud_{ems}_solar_total"]
+            bound["charge_start_time"] = [f"select.{self.prefix}_gecloud_{ems}_charge_start_time_slot_1" for _ in range(num_inverters)]
+            bound["charge_end_time"] = [f"select.{self.prefix}_gecloud_{ems}_charge_end_time_slot_1" for _ in range(num_inverters)]
+            bound["idle_start_time"] = [f"select.{self.prefix}_gecloud_{ems}_discharge_start_time_slot_1" for _ in range(num_inverters)]
+            bound["idle_end_time"] = [f"select.{self.prefix}_gecloud_{ems}_discharge_end_time_slot_1" for _ in range(num_inverters)]
+            bound["charge_limit"] = [f"number.{self.prefix}_gecloud_{ems}_charge_soc_percent_limit_1" for _ in range(num_inverters)]
+            bound["discharge_start_time"] = [f"select.{self.prefix}_gecloud_{ems}_export_start_time_slot_1" for _ in range(num_inverters)]
+            bound["discharge_end_time"] = [f"select.{self.prefix}_gecloud_{ems}_export_end_time_slot_1" for _ in range(num_inverters)]
 
             # EMS Produces the data for all inverters
-            self.set_arg("battery_power", [f"sensor.{self.prefix}_gecloud_{ems}_battery_power"] + [0 for _ in range(num_inverters - 1)])
-            self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{ems}_solar_power"] + [0 for _ in range(num_inverters - 1)])
-            self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{ems}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
-            self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{ems}_grid_power"] + [0 for _ in range(num_inverters - 1)])
-        elif self.ems_disabled_ge_cloud_data:
-            # The EMS has left the account since it turned GE Cloud Data off, so put back what it replaced
-            self.set_arg("ge_cloud_data", self.ge_cloud_data_before_ems)
-            self.ems_disabled_ge_cloud_data = False
+            bound["battery_power"] = [f"sensor.{self.prefix}_gecloud_{ems}_battery_power"] + [0 for _ in range(num_inverters - 1)]
+            bound["pv_power"] = [f"sensor.{self.prefix}_gecloud_{ems}_solar_power"] + [0 for _ in range(num_inverters - 1)]
+            bound["load_power"] = [f"sensor.{self.prefix}_gecloud_{ems}_consumption_power"] + [0 for _ in range(num_inverters - 1)]
+            bound["grid_power"] = [f"sensor.{self.prefix}_gecloud_{ems}_grid_power"] + [0 for _ in range(num_inverters - 1)]
 
-        # Determine the model of the inverter, if at least one inverter has AC or AIO in the name then we assume AC coupled and turn off the hybrid switch
-        # First fetch "model"
-        ac_coupled = False
-        model_name = "Unknown"
-        for device_serial in batteries_real:
-            device = self.info.get(device_serial, {})
-            info = device.get("info", {}) or {}
-            model = info.get("model", "").lower()
-            if model:
-                model_name = info["model"]
-                if ("ac" in model) or ("aio" in model) or ("all-in-one" in model):
-                    ac_coupled = True
-                    break
-        entity_id = "switch.{}_inverter_hybrid".format(self.prefix)
-        self.log("GECloud: Detected inverter model {} indicates ac_coupled={}, setting {} to {}".format(model_name, ac_coupled, entity_id, "off" if ac_coupled else "on"))
-        await self.set_state_external(entity_id, not ac_coupled)
+        features = {
+            "charge_rate": has_charge_rate,
+            "discharge_rate": has_discharge_rate,
+            "charge_power_percent": has_charge_power_percent,
+            "discharge_power_percent": has_discharge_power_percent,
+            "pause_battery": has_pause_battery,
+            "pause_start_time": has_pause_start_time,
+            "discharge_target_soc": has_discharge_target_soc,
+            "force_charge": has_force_charge,
+        }
+        facts = {"batteries_real": batteries_real, "batteries": batteries, "num_inverters": num_inverters, "features": features, "shared_ct": shared_ct}
+        return bound, facts
 
-        self.log("GECloud: Automatic configuration complete")
+    def check_automatic_config(self, slots):
+        """
+        Compare _legacy_bindings() with live args for these slots; log and return one line per unexpected difference.
+
+        Called by the coordinator after a configure pass that wrote one of this component's slots. slots is
+        the slot of each of this component's driven records in report order (None for one given no slot),
+        so legacy logical inverter i is compared with args at slots[i]. Per-slot lists are compared entry by
+        entry, a legacy None meaning every one of this component's slots is None or absent; SUMMED_SETTINGS
+        by order (the legacy entries, None left out, appear in the arg's list in the same order); scalars and
+        SITE_SETTINGS directly; num_inverters not at all. A difference on a skipped or kept setting, one the
+        GEE row dummies, or one in GE_CLOUD_KNOWN_DIFFERENCES is logged at Info with its reason; any other is
+        a Warn line, returned. Each distinct line is logged once for the life of the process.
+
+        Threading contract: the coordinator calls this holding its configure lock, possibly on the main thread
+        while this component's own thread is running. So it is synchronous, takes no lock, awaits nothing,
+        does no I/O, never calls report_discovery(), refresh_discovery() or allow_automatic_config(), and only
+        reads self.devices_dict, self.settings, self.info and args. It changes no configuration and no
+        component health, and never raises: a failure is logged at Info and gives [].
+        """
+        try:
+            return self._check_automatic_config(slots)
+        except Exception as e:
+            self._log_check_once("Info: GECloud: could not compare the discovery configuration with the previous automatic configuration: {}".format(e))
+            return []
+
+    def _log_check_once(self, line):
+        """Log one check_automatic_config() line the first time it is seen in this process."""
+        logged = getattr(self, "automatic_check_logged", None)
+        if logged is None:
+            logged = self.automatic_check_logged = set()
+        if line not in logged:
+            logged.add(line)
+            self.log(line)
+
+    def _check_automatic_config(self, slots):
+        """The body of check_automatic_config(), which catches anything it raises."""
+        devices = self.devices_dict
+        legacy = self._legacy_bindings(devices)
+        if not legacy:
+            return []
+        slots = list(slots)
+        args = getattr(self, "args", None) or {}
+        skipped = {"load_today"} if self.get_arg("ge_cloud_load_today_ignore", default=False) else set()
+        legacy_types = legacy.get("inverter_type") or []
+        warnings = []
+        known = []
+
+        def differs(setting, where, actual, expected, index=None):
+            """Classify and log one difference; index is the legacy logical inverter, when the setting is per slot."""
+            inverter_type = slot_value(legacy_types, index) if index is not None else None
+            if setting in skipped:
+                reason = "skipped at the user's request, so left as args hold it"
+            elif setting in GE_CLOUD_DUMMIED_SETTINGS.get(inverter_type, ()):
+                reason = "inverter.py replaces it with a dummy for {}, so the discovery record leaves it out".format(inverter_type)
+            elif setting in GE_CLOUD_KEEP_USER_SETTINGS:
+                reason = "an apps.yaml value for the slot is kept, as the previous automatic configuration kept it"
+            else:
+                reason = GE_CLOUD_KNOWN_DIFFERENCES.get(setting)
+            if reason is not None:
+                known.append(setting)
+                self._log_check_once("Info: GECloud: discovery differs on {} ({}): {} is {}, the previous automatic configuration would set {}".format(setting, reason, where, actual, expected))
+            else:
+                line = "Warn: GECloud: discovery set {} to {}, the previous automatic configuration would set {}".format(where, actual, expected)
+                warnings.append(line)
+                self._log_check_once(line)
+
+        for setting, value in legacy.items():
+            if setting == "num_inverters":
+                continue
+            live = args.get(setting)
+            if value is None:
+                for index, slot in enumerate(slots):
+                    if slot is not None and slot_value(live, slot) is not None:
+                        differs(setting, "{}[{}]".format(setting, slot), slot_value(live, slot), None, index)
+                if setting in GE_CLOUD_DELETED_SETTINGS:
+                    entries = live if isinstance(live, (list, tuple)) else [live]
+                    if any(entry is not None for position, entry in enumerate(entries) if position not in slots):
+                        differs(setting, setting, live, None)
+            elif setting in SITE_SETTINGS or not isinstance(value, list):
+                if live != value:
+                    differs(setting, setting, live, value)
+            elif setting in SUMMED_SETTINGS:
+                entries = iter(live if isinstance(live, (list, tuple)) else ([] if live is None else [live]))
+                # A subsequence: each legacy entry is found, in order, in what is left of the live list
+                if not all(any(entry == candidate for candidate in entries) for entry in value if entry is not None):
+                    differs(setting, setting, live, value)
+            else:
+                for index, expected in enumerate(value):
+                    slot = slots[index] if index < len(slots) else None
+                    if slot is not None and slot_value(live, slot) != expected:
+                        differs(setting, "{}[{}]".format(setting, slot), slot_value(live, slot), expected, index)
+
+        if not warnings:
+            self.log("Info: GECloud: discovery configuration matches the previous automatic configuration{}".format(" apart from {} known difference(s)".format(len(known)) if known else ""))
+        return warnings
 
     def _register_features(self, device):
         """
