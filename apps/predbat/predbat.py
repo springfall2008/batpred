@@ -18,6 +18,7 @@ single orchestrator that runs the main prediction/optimisation loop every 5 minu
 """
 
 import copy
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -35,10 +36,10 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.5.3"
+THIS_VERSION = "v9.7.10"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
-from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
+from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
 
 # Only do the self-install/self-update logic if we are NOT compiled.
@@ -96,6 +97,7 @@ from utils import (
     MALLOC_ARENA_LIMIT,
     export_limits_to_stored,
     export_limits_from_stored,
+    next_aligned_run,
 )
 from predheat import PredHeat
 from octopus import Octopus
@@ -105,7 +107,7 @@ from components import Components, COMPONENT_LIST
 from execute import Execute
 from marginal import Marginal
 from plan import Plan
-from fetch import Fetch
+from fetch import Fetch, LoadSourceMissing
 from output import Output
 from userinterface import UserInterface
 from compare import Compare
@@ -114,6 +116,12 @@ from github import GitHub
 from ha import run_async
 from control_ledger import ControlLedger
 from control_monitor import ControlMonitor
+
+# Unchanged execution flags are re-saved this often, so their saved_at tracks the last time they were seen to hold
+EXECUTION_STATE_RECONFIRM_MINUTES = 10
+# Saved flags older than this are not believed on load, and one dated further than the clock skew allowance ahead is not either
+EXECUTION_STATE_MAX_AGE_MINUTES = 30
+EXECUTION_STATE_MAX_FUTURE_MINUTES = 5
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
@@ -336,6 +344,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.fatal_error = False
         self.components = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
+        self.apply_currency_scale()
         self.comparison = None
         self.predheat = None
         self.predbat_mode = "Monitor"
@@ -360,7 +369,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.manual_freeze_charge_times = []
         self.manual_freeze_export_times = []
         self.manual_demand_times = []
-        self.manual_all_times = []
         self.manual_api = []
         self.manual_import_rates = {}
         self.manual_export_rates = {}
@@ -389,6 +397,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.plan_made_by_version = None
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
+        self.plan_version = 0
+        self.plan_version_content = None
         self.plugin_system = None
         self.calculate_plan_every = 5
         self.prediction_started = False
@@ -411,8 +421,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.predict_iboost_best = {}
+        self.predict_clipped_best = {}
+        self.predict_carbon_best = {}
         self.predict_car_hold_best = {}
         self.predict_metric_best = {}
+        # The final plan's SoC and metric under PV10 and PV90, shown beside the expected ones in the plan table (#5871)
+        self.predict_soc_best10 = {}
+        self.predict_metric_best10 = {}
+        self.predict_soc_best90 = {}
+        self.predict_metric_best90 = {}
         self.metric_min_improvement = 0.0
         self.metric_min_improvement_export = 0.1
         self.metric_min_improvement_export_freeze = 0.1
@@ -420,6 +437,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.export_more_solar = False
         self.export_more_solar_threshold = 1.0
         self.export_more_solar_warned_reason = None
+        self.battery_export_permitted = True
         self.metric_battery_cycle = 0.0
         self.metric_battery_value_scaling = 1.0
         self.metric_battery_value_export_scaling = 0.8
@@ -452,6 +470,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.carbon_today_sofar = 0
         self.octopus_free_slots = []
         self.octopus_saving_slots = []
+        self.octopus_saving_joined_events = []
         self.car_charging_slots = []
         self.car_charging_now_slots = []
         self.reserve = 0
@@ -490,6 +509,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_export_max = 0
         self.rate_export_max_minute = 0
         self.rate_export_max_forward = {}
+        # The export tariff's own minimum, before saving/Axle sessions - None until fetch builds it
+        self.rate_export_min_base = None
         self.rate_export_average = 0
         self.rate_gas_min = 0
         self.rate_gas_max = 0
@@ -520,6 +541,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.io_confirmed_active = False
         # One replan may take a same-cost plan once a run becomes boosted (should_replace_plan)
         self.io_confirmed_tiebreak = False
+        # Target % of the charge running when the planner started, kept by optimise_charge_limit (calculate_plan)
+        self.charge_keep_target = None
         # Repeated Intelligent slot lists are logged briefly between full logs (rate_add_io_slots)
         self.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
         self.current_charge_limit = 0.0
@@ -538,6 +561,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_soc = [0]
         self.car_charging_soc_next = [None]
         self.car_charging_rate = [7.4]
+        # Per-car cap on car_charging_rate from car_charging_max_rate (0 = no cap), see car_max_rate_cap()
+        self.car_charging_max_rate = []
+        self.car_charging_max_rate_held = {}  # car index -> last usable cap, held while its sensor is unknown/unavailable
+        self.car_charging_max_rate_warned = set()  # missing entities already warned about, so each is logged once
+        self.car_charging_max_rate_bad_warned = set()  # car indexes whose cap sensor read as non-numeric text, warned once
+        self.car_charging_max_rate_logged = {}  # car index -> the cap last logged, so a change is logged once
+        self.car_charging_max_rate_saved = None  # the held caps last written to storage, so a write only happens on a change
         self.car_charging_loss = 1.0
         self.export_window = []
         self.export_limits = []
@@ -577,6 +607,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_url_cache = {}
         self.dispatch_timeline_last = {}
         self.dispatch_timeline_pending = []
+        self.octopus_charge_target_base = {}
+        # car_n -> (target added, base SoC) last logged, so the charger-linked target is logged when it changes
+        self.octopus_charge_target_logged = {}
         self.dispatch_unconfirmed_last = {}
         self.ge_url_cache = {}
         self.github_url_cache = {}
@@ -598,9 +631,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dynamic_load_car_sensors = {}
         self.dynamic_load_car_effective = {}
         self.dynamic_load_car_stripped = 0
+        self.octopus_feed_covered = set()
+        self.octopus_feed_stripped = set()
+        self.octopus_feed_covered_saved = []  # the half hours last written to storage, so a write only happens on a change
+        self.predbat_branch_warned = set()
         self.octopus_surplus = set()
         self.octopus_slots_planned = {}
         self.octopus_slots_held = {}
+        self.octopus_slots_held_until = {}
+        self.octopus_slots_held_charged = {}
         self.octopus_slots_held_saved = {}
         self.dispatch_billing_warned = None
         self.battery_capacity_nominal = False
@@ -634,11 +673,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.isCharging_Target = 0
         self.isExporting = False
         self.isExporting_Target = 0
+        self.execution_state_saved = None
+        self.execution_state_saved_at = None
         self.savings_today_predbat = 0.0
         self.savings_today_predbat_soc = 0.0
         self.savings_today_pvbat = 0.0
         self.savings_today_actual = 0.0
         self.savings_last_updated = None
+        self.history_days_built_for = None
+        self.history_days_billing_mark = None
+        self.history_days_retry_at = None
+        self.yesterday_billing_mark = None
         self.cost_yesterday_car = 0.0
         self.cost_total_car = 0.0
         self.carbon_yesterday = 0.0
@@ -750,15 +795,28 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.config_root_p = self.config_root
         self.log("Config root is {}".format(self.config_root))
 
-    def update_time(self, print=True):
+    def update_time(self, print=True, now=None):
         """
         Update the current time/date
+
+        now, when given, is a timezone-aware datetime used in place of the wall clock - a host
+        that plans at an instant of its own choosing (see plan_once). It is converted to the
+        configured timezone and rounded down to PREDICT_STEP exactly as the clock is. The
+        clock_skew debug setting is not applied to it: the caller has already chosen the instant.
         """
         self.local_tz = pytz.timezone(self.args.get("timezone", "Europe/London"))
         skew = self.args.get("clock_skew", 0)
-        if skew:
-            self.log("Warn: Clock skew is set to {} minutes".format(skew))
-        self.now_utc_real = datetime.now(self.local_tz)
+        if now is not None:
+            if now.tzinfo is None or now.utcoffset() is None:
+                raise ValueError("update_time: now must be a timezone-aware datetime, got naive {}".format(now))
+            if skew:
+                self.log("Warn: Clock skew of {} minutes ignored as the plan time was given by the caller".format(skew))
+            skew = 0
+            self.now_utc_real = now.astimezone(self.local_tz)
+        else:
+            if skew:
+                self.log("Warn: Clock skew is set to {} minutes".format(skew))
+            self.now_utc_real = datetime.now(self.local_tz)
         now_utc = self.now_utc_real + timedelta(minutes=skew)
         now_utc = now_utc.replace(second=0, microsecond=0, minute=(now_utc.minute - (now_utc.minute % PREDICT_STEP)))
 
@@ -907,24 +965,126 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "plan_preclip": self.plan_preclip,
             "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
+            "plan_version": self.plan_version,
             "predbat_version": self.plan_made_by_version,
         }
         try:
-            # storage.load() checks expiry against real wall-clock time (datetime.now(timezone.utc)),
-            # the same convention every other expiry-bearing storage.save() call in the codebase
-            # uses (github.py, octopus.py, enphase.py, fox.py, kraken.py, solax.py, etc.) - self.now_utc
-            # is Predbat's own simulated/plan clock, which is deliberately not real time during a
-            # debug-file replay or a test, and can drift from it. Using it here made a freshly-saved
-            # plan look already-expired the instant it was written whenever that drift exceeded 8
-            # hours (#5079).
-            expiry = datetime.now(timezone.utc) + timedelta(hours=8)
-            run_async(storage.save("predbat", "plan", plan_data, format="json", expiry=expiry))
+            # No expiry: the plan is only re-saved when it changes, so an unchanged plan can be any age, and
+            # load_plan() restores it however old it is and decides itself whether it can be executed
+            run_async(storage.save("predbat", "plan", plan_data, format="json"))
             self.log("Saved plan to storage")
         except Exception as e:
             self.log("Warning: Failed to save plan: {}".format(e))
 
+    def plan_content(self):
+        """The current plan as a comparable string, without its timestamps - what one plan_version stands for."""
+        preclip = self.plan_preclip
+        if isinstance(preclip, (list, tuple)) and len(preclip) == 4:
+            preclip = [preclip[0], preclip[1], preclip[2], export_limits_to_stored(preclip[3])]
+        return json.dumps([self.charge_window_best, self.charge_limit_best, self.export_window_best, export_limits_to_stored(self.export_limits_best), preclip], sort_keys=True, default=str)
+
+    def save_plan_if_changed(self):
+        """
+        Advance plan_version and save the plan, only if it differs from the plan the current version was given to.
+
+        A recompute that lands on the same plan, or a run that reuses it, changes nothing; a head window dropped
+        as time moved on, or a new plan, does. Returns True when the plan was saved.
+        """
+        content = self.plan_content()
+        if content == self.plan_version_content:
+            return False
+        self.plan_version += 1
+        self.plan_version_content = content
+        self.save_plan()
+        return True
+
+    def execution_state_values(self):
+        """The four execution flags as a comparable tuple."""
+        return (bool(self.isCharging), self.isCharging_Target, bool(self.isExporting), self.isExporting_Target)
+
+    def save_execution_state(self):
+        """
+        Save whether the inverter is currently charging or exporting, apart from the plan.
+
+        Kept in its own storage item so that a change of flags is never mistaken for a change of plan:
+        it does not touch plan_version, plan_version_content or the saved plan. Only written when the
+        values differ from the last ones saved or loaded. Returns True when something was written.
+        """
+        values = self.execution_state_values()
+        now = datetime.now(timezone.utc)
+        # Unchanged values are re-confirmed now and then, so saved_at tracks the last time they were seen to hold
+        if values == self.execution_state_saved and self.execution_state_saved_at is not None and (now - self.execution_state_saved_at) < timedelta(minutes=EXECUTION_STATE_RECONFIRM_MINUTES):
+            return False
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return False
+        state = {
+            "is_charging": values[0],
+            "is_charging_target": values[1],
+            "is_exporting": values[2],
+            "is_exporting_target": values[3],
+            "saved_at": now.isoformat(),
+        }
+        try:
+            # Real clock for the expiry, as the storage layer compares against it
+            saved = run_async(storage.save("predbat", "execution_state", state, format="json", expiry=now + timedelta(hours=8)))
+        except Exception as e:
+            self.log("Warning: Failed to save execution state: {}".format(e))
+            return False
+        if saved is False:
+            # Storage reports failure by returning False rather than raising; nothing is marked saved, so the next run retries
+            self.log("Warning: Failed to save execution state: storage reported failure")
+            return False
+        self.execution_state_saved = values
+        self.execution_state_saved_at = now
+        return True
+
+    def load_execution_state(self):
+        """Restore the saved execution flags. A missing, expired or malformed item leaves the defaults."""
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        try:
+            state = run_async(storage.load("predbat", "execution_state"))
+        except Exception as e:
+            self.log("Warning: Failed to load execution state: {}".format(e))
+            return
+        if not isinstance(state, dict):
+            return
+        # Flags describe the inverter right now, so only a recent save is believed
+        max_age = timedelta(minutes=EXECUTION_STATE_MAX_AGE_MINUTES)
+        try:
+            saved_at = datetime.fromisoformat(state.get("saved_at"))
+        except (ValueError, TypeError):
+            self.log("Execution state has no valid timestamp, ignoring")
+            return
+        if saved_at.tzinfo is None:
+            self.log("Execution state timestamp has no timezone, ignoring")
+            return
+        now = datetime.now(timezone.utc)
+        age = now - saved_at
+        if age < -timedelta(minutes=EXECUTION_STATE_MAX_FUTURE_MINUTES):
+            self.log("Execution state is dated {:.0f} minutes in the future, ignoring".format(-age.total_seconds() / 60))
+            return
+        if age > max_age:
+            self.log("Execution state is {:.0f} minutes old, too old to trust, ignoring".format(age.total_seconds() / 60))
+            return
+        restored = False
+        for key, attr, kind in (("is_charging", "isCharging", bool), ("is_charging_target", "isCharging_Target", (int, float)), ("is_exporting", "isExporting", bool), ("is_exporting_target", "isExporting_Target", (int, float))):
+            value = state.get(key)
+            if isinstance(value, kind) and (kind is bool or not isinstance(value, bool)):
+                setattr(self, attr, value)
+                restored = True
+        if not restored:
+            return
+        self.execution_state_saved = self.execution_state_values()
+        self.execution_state_saved_at = min(saved_at, now)
+        self.log("Restored execution state: charging={} (target {}) exporting={} (target {})".format(self.isCharging, self.isCharging_Target, self.isExporting, self.isExporting_Target))
+
     def load_plan(self):
-        """Restore a previously saved plan from storage if it is recent enough."""
+        """Restore the previously saved plan from storage, however old it is."""
+        # The execution flags are stored apart from the plan, so they come back even when there is no plan to restore
+        self.load_execution_state()
         storage = self.components.get_component("storage") if self.components else None
         if not storage:
             self.log("Warning: Storage component unavailable, cannot load plan")
@@ -977,10 +1137,20 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.plan_preclip = None
         self.plan_last_updated = saved_dt
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
+        self.plan_version = plan_data.get("plan_version", 0)
         # Saves from before the version was recorded come back as made by an unknown version
         self.plan_made_by_version = plan_data.get("predbat_version")
-        self.plan_valid = True
-        self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
+        # The restored plan is the one its version stands for, so a recompute that remakes it is not a change
+        self.plan_version_content = self.plan_content()
+        # Window minutes count from the midnight of the day the plan was made. One made on an earlier day is
+        # kept, but invalid, so the first run recomputes it before anything executes it
+        midnight = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.plan_valid = saved_dt >= midnight
+        self.log(
+            "Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows{}".format(
+                age_minutes, len(self.charge_window_best), len(self.export_window_best), "" if self.plan_valid else ", made on an earlier day so it will be recomputed before use"
+            )
+        )
 
     def _debug_enable_auto_scope(self):
         """Write a raw debug.yaml this cycle if switch.predbat_debug_enable is on, and
@@ -1225,15 +1395,32 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if status is not None and self.current_status != status_before:
             self.record_status_under_warning(status, status_extra)
 
-    def update_pred(self, scheduled=True):
+    def plan_once(self, scheduled=True, plan_at=None):
         """
-        Update the prediction state, everything is called from here right now
+        Refresh input data and recompute the plan if required, without executing it.
+
+        Returns None when a pre-condition fails (template configuration, no load source configured
+        yet, inverter data unavailable or import rates all zero) - the error will already have been recorded.
+        Otherwise returns a plan artifact summary dict with keys recomputed, plan_valid,
+        plan_version and plan_last_updated. Passing scheduled=False forces a recompute.
+
+        plan_at, when given, is a timezone-aware datetime this run plans at instead of the
+        wall clock, so several processes gathering inputs for one site can agree on the
+        instant. It sets now_utc_real, now_utc, midnight_utc and minutes_now for the run (see
+        update_time). The default None plans at the wall clock as before. A naive datetime
+        raises ValueError before anything else runs.
+
+        plan_at should be at or behind the wall clock. The plan is stamped at plan_at, and a
+        later wall-clock run in the same process that sees a stamp in its future reads it as a
+        day wrap (calculate_plan's "start of day" check) and forces a recompute.
         """
+        if plan_at is not None and (plan_at.tzinfo is None or plan_at.utcoffset() is None):
+            raise ValueError("plan_once: plan_at must be a timezone-aware datetime, got naive {}".format(plan_at))
+
         recompute = False
-        status_extra = ""
         self.reset_run_status()
 
-        self.update_time()
+        self.update_time(now=plan_at)
         self.save_current_config()
 
         # Check our version, don't check for cloud version which can't update directly
@@ -1244,11 +1431,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.is_template_mode():
             self.log("Error: You have not completed editing the apps.yaml template, Predbat cannot run. Please comment out 'Template: True' line in apps.yaml to start Predbat running")
             self.record_status("Error: Template Configuration, remove 'Template: True' line in apps.yaml to start predbat running", had_errors=True)
-            return
+            return None
 
         self.expose_config("active", True)
         self.fetch_config_options()
-        sensor_force_replan = self.fetch_sensor_data()
+        try:
+            sensor_force_replan = self.fetch_sensor_data()
+        except LoadSourceMissing:
+            # Already logged and recorded; often a component that has not set load_today yet, so try again next cycle (#5092)
+            return None
 
         # Check if any sensor changes require a replan
         if sensor_force_replan:
@@ -1266,7 +1457,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if not self.fetch_inverter_data():
             self.log("Error: Failed to fetch inverter data, not able to compute a plan")
             self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
-            return
+            return None
         self.check_export_more_solar_effective()
         self.log_replay_state()
         self.log_replay_inverter()
@@ -1275,7 +1466,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.rate_min == self.rate_max == 0:
             self.log("Error: Import rates are all zero, not able to compute a plan")
             self.record_status("Error: Import rates are all zero, not able to compute a plan", had_errors=True)
-            return
+            return None
 
         if self.dynamic_load():
             self.log("Dynamic load adjustment changed, will recompute the plan")
@@ -1286,31 +1477,96 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             recompute = True
         else:
             plan_age = self.now_utc - self.plan_last_updated
-            plan_age_minutes = plan_age.seconds / 60.0
+            plan_age_minutes = plan_age.total_seconds() / 60.0
             self.log("Plan was last updated on {} and is now {} minutes old".format(self.plan_last_updated, dp1(plan_age_minutes)))
 
         # Calculate the new plan (or re-use existing)
         recompute = self.calculate_plan(recompute=recompute)
 
-        # Persist the plan so it can be restored immediately on next startup
-        if recompute and self.plan_valid:
-            self.save_plan()
+        # Persist the plan so it can be restored immediately on next startup, if a recompute or an expired head window changed it
+        if self.plan_valid:
+            self.save_plan_if_changed()
 
         # Publish rate data
         self.publish_rate_and_threshold()
+        self.publish_rate_overrides()
 
-        # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
-        if recompute:
+        return {
+            "recomputed": recompute,
+            "plan_valid": self.plan_valid,
+            "plan_last_updated": self.plan_last_updated,
+            "plan_version": self.plan_version,
+        }
+
+    def execute_once(self, refetch_inverter=True):
+        """
+        Execute the current plan against the inverters.
+
+        When refetch_inverter is True the inverter data is re-read first, as time passes
+        during plan calculations. Returns None if the inverter data could not be fetched
+        (the error will already have been recorded), otherwise the (status, status_extra)
+        tuple from execute_plan().
+        """
+        if refetch_inverter:
             if not self.fetch_inverter_data():
                 self.log("Error: Failed to fetch inverter data, not able to execute the plan")
                 self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
-                return
-        status, status_extra = self.execute_plan()
+                return None
+        result = self.execute_plan()
+        # The flags are only copied across at the end of a run that completed, so save only then. Saved apart from the plan,
+        # so a change here is never a new plan version
+        try:
+            self.save_execution_state()
+        except Exception as e:
+            self.log("Warning: Failed to save execution state: {}".format(e))
+        return result
+
+    def update_pred(self, scheduled=True, plan_at=None, *, scheduled_bookkeeping=None, timings=None):
+        """
+        Update the prediction state, everything is called from here right now
+
+        plan_at, when given, is passed to plan_once and follows its rules (timezone-aware, at or
+        behind the wall clock, naive raises ValueError). plan_at sets the planning clock (now_utc,
+        midnight_utc, minutes_now) for the cycle, including the late recompute of an ageing plan
+        below. Wall-clock bookkeeping (control ledger pruning, inverter fetch timestamps, latency
+        monitors) stays on the real clock. The late-recompute check assumes the next call comes
+        about RUN_EVERY minutes later. The default None uses the wall clock.
+
+        scheduled_bookkeeping defaults to scheduled. An embedding host that restores accounting
+        values from an external snapshot can pass False to leave scheduled accumulators alone,
+        while still reusing a fresh plan. It does not change execution or the read-only gate.
+        timings, if supplied, accumulates plan_s and execute_s seconds, including failed stages.
+        plan_s includes plan persistence; execute_s includes post-run bookkeeping (plugin hooks,
+        savings, status recording and cleanup), not just physical execution.
+        Returns None if planning is refused, otherwise {recomputed, executed}. A refused execution
+        returns executed=False and does not run bookkeeping. Existing timer callers ignore it.
+        """
+
+        def timed(stage, call, *args, **kwargs):
+            """Accumulate a stage's elapsed time, including an early return or exception."""
+            if timings is None:
+                return call(*args, **kwargs)
+            began = time.perf_counter()
+            try:
+                return call(*args, **kwargs)
+            finally:
+                timings[stage] = timings.get(stage, 0.0) + time.perf_counter() - began
+
+        plan = timed("plan_s", self.plan_once, scheduled=scheduled, plan_at=plan_at)
+        if plan is None:
+            return None
+        recompute = plan["recomputed"]
+
+        # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
+        executed = timed("execute_s", self.execute_once, refetch_inverter=recompute)
+        if executed is None:
+            return {"recomputed": recompute, "executed": False}
+        status, status_extra = executed
 
         # If the plan was not updated, and the time has expired lets update it now
         if not recompute:
             plan_age = self.now_utc - self.plan_last_updated
-            plan_age_minutes = plan_age.seconds / 60.0
+            plan_age_minutes = plan_age.total_seconds() / 60.0
 
             if (plan_age_minutes + RUN_EVERY) > self.calculate_plan_every:
                 recompute = True
@@ -1321,103 +1577,26 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     self.log("Adding a random delay of {:.1f} seconds before recalculating the plan....".format(delay))
                     time.sleep(delay)
                 # Calculate an updated plan, fetch the inverter data again and execute the plan
-                self.calculate_plan(recompute=True)
-                if not self.fetch_inverter_data():
-                    self.log("Error: Failed to fetch inverter data, not able to execute the plan")
-                    self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
-                    return
-                status, status_extra = self.execute_plan()
+                timed("plan_s", self.calculate_plan, recompute=True)
+                if self.plan_valid:
+                    timed("plan_s", self.save_plan_if_changed)
+                executed = timed("execute_s", self.execute_once, refetch_inverter=True)
+                if executed is None:
+                    return {"recomputed": recompute, "executed": False}
+                status, status_extra = executed
             else:
                 self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(dp1(plan_age_minutes), self.calculate_plan_every))
 
-        # Notify listeners that plan has been executed (consumed by gateway, plugins, etc.)
-        if self.plugin_system:
-            self.plugin_system.call_hooks(
-                "on_plan_executed",
-                charge_windows=self.charge_window_best,
-                charge_limits=self.charge_limit_best,
-                export_windows=self.export_window_best,
-                export_limits=self.export_limits_best,
-                charge_rate_w=int(self.battery_rate_max_charge * MINUTE_WATT),
-                discharge_rate_w=int(self.battery_rate_max_discharge * MINUTE_WATT),
-                soc_max=self.soc_max,
-                reserve=self.reserve,
-                timezone=str(self.local_tz),
-            )
+        bookkeeping = scheduled if scheduled_bookkeeping is None else scheduled_bookkeeping
+        timed("execute_s", self._post_run_bookkeeping, status, status_extra, bookkeeping, recompute)
+        return {"recomputed": recompute, "executed": True}
 
-        # iBoost solar diverter model update state, only on 5 minute intervals
-        if self.iboost_enable and scheduled:
-            if self.iboost_energy_today:
-                # If we have a realtime sensor just use that data
-                self.iboost_next = self.iboost_today
-            elif recompute and (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every):
-                # Reset at midnight
-                self.iboost_next = 0
-            # Save next iBoost model value
-            self.expose_config("iboost_today", self.iboost_next)
-            self.log("iBoost model today updated to {}".format(self.iboost_next))
+    def update_savings_totals(self, scheduled):
+        """Publish savings totals, advancing the daily ledger only when scheduled and eligible.
 
-        # Update register writes counter
-        previous_inverter_writes = self.load_previous_value_from_ha(self.prefix + ".inverter_register_writes")
-        try:
-            previous_inverter_writes = int(previous_inverter_writes)
-        except (ValueError, TypeError):
-            previous_inverter_writes = 0
-        for id in self.count_inverter_writes.keys():
-            previous_inverter_writes += self.count_inverter_writes[id]
-            self.count_inverter_writes[id] = 0
-
-        self.dashboard_item(
-            self.prefix + ".inverter_register_writes",
-            state=dp2(previous_inverter_writes),
-            attributes={
-                "friendly_name": "Total register writes (all inverters)",
-                "state_class": "measurement",
-                "unit_of_measurement": "writes",
-                "icon": "mdi:counter",
-            },
-        )
-        self.log("Total inverter register writes now {}".format(previous_inverter_writes))
-
-        # Control interference detection. Restored once per process from the entity's own
-        # attributes so the 24h window survives a pod restart - without this "3 in 24h"
-        # silently means "3 since the last restart".
-        now_ts = time.time()
-        if not self.control_ledger_restored:
-            self.control_ledger.restore(self.load_previous_value_from_ha(self.prefix + ".control_conflicts", attribute="events"))
-            self.control_ledger_restored = True
-        # prune() and recent_events() are NOT the same filter and neither can stand in for the
-        # other. prune() maintains the durable store, dropping only what has genuinely aged out;
-        # a future-dated event (a clock behind NTP) stays, because the clock corrects and the
-        # history must survive until it does. recent_events() is what can be JUDGED right now, so
-        # it is what the count and the sustained list are built from. The "events" attribute
-        # publishes the stored list, because that attribute IS the store restore() reads back -
-        # publishing only the events it can judge would delete the rest on the next run.
-        self.control_ledger.prune(now_ts)
-        conflict_events = self.control_ledger.recent_events(now_ts)
-        sustained = self.control_ledger.sustained_controls(conflict_events)
-        self.dashboard_item(
-            self.prefix + ".control_conflicts",
-            state=len(conflict_events),
-            attributes={
-                "friendly_name": "Settings changed outside Predbat (24h)",
-                "state_class": "measurement",
-                "unit_of_measurement": "changes",
-                "icon": "mdi:account-alert",
-                # Newest 20, but explicitly NOT purely by time - see newest_events(). This
-                # attribute is the durable store restore() reads back, and on a pod whose clock is
-                # behind, the event just detected carries a small "at" and looks like the oldest
-                # thing here, so any by-time cap would discard exactly the one that cannot be
-                # recovered from anywhere else.
-                "events": self.control_ledger.newest_events(20),
-                "sustained": sustained,
-            },
-        )
-        if conflict_events:
-            self.log("Control interference: {} change(s) in the last 24h, sustained on {}".format(len(conflict_events), sustained or "nothing"))
-
-        self.publish_control_failures(now_ts)
-
+        Uses the same state reads and last_updated marker as the complete update cycle.
+        Unrelated scheduled housekeeping is not run here.
+        """
         if self.calculate_savings:
             # Get current totals
             savings_total_predbat = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat")
@@ -1562,6 +1741,105 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     },
                 )
 
+    def _post_run_bookkeeping(self, status, status_extra, scheduled, recompute):
+        """
+        Post-run bookkeeping shared by every successful update cycle: plugin hooks, iBoost model
+        state, register-write counters, control interference, savings totals, car SoC, holiday
+        countdown, debug capture, status recording, component health, tariff comparison and
+        memory cleanup.
+        """
+
+        # Notify listeners that plan has been executed (consumed by gateway, plugins, etc.)
+        if self.plugin_system:
+            self.plugin_system.call_hooks(
+                "on_plan_executed",
+                charge_windows=self.charge_window_best,
+                charge_limits=self.charge_limit_best,
+                export_windows=self.export_window_best,
+                export_limits=self.export_limits_best,
+                charge_rate_w=int(self.battery_rate_max_charge * MINUTE_WATT),
+                discharge_rate_w=int(self.battery_rate_max_discharge * MINUTE_WATT),
+                soc_max=self.soc_max,
+                reserve=self.reserve,
+                best_soc_min=self.best_soc_min,
+                timezone=str(self.local_tz),
+            )
+
+        # iBoost solar diverter model update state, only on 5 minute intervals
+        if self.iboost_enable and scheduled:
+            if self.iboost_energy_today:
+                # If we have a realtime sensor just use that data
+                self.iboost_next = self.iboost_today
+            elif recompute and (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every):
+                # Reset at midnight
+                self.iboost_next = 0
+            # Save next iBoost model value
+            self.expose_config("iboost_today", self.iboost_next)
+            self.log("iBoost model today updated to {}".format(self.iboost_next))
+
+        # Update register writes counter
+        previous_inverter_writes = self.load_previous_value_from_ha(self.prefix + ".inverter_register_writes")
+        try:
+            previous_inverter_writes = int(previous_inverter_writes)
+        except (ValueError, TypeError):
+            previous_inverter_writes = 0
+        for id in self.count_inverter_writes.keys():
+            previous_inverter_writes += self.count_inverter_writes[id]
+            self.count_inverter_writes[id] = 0
+
+        self.dashboard_item(
+            self.prefix + ".inverter_register_writes",
+            state=dp2(previous_inverter_writes),
+            attributes={
+                "friendly_name": "Total register writes (all inverters)",
+                "state_class": "measurement",
+                "unit_of_measurement": "writes",
+                "icon": "mdi:counter",
+            },
+        )
+        self.log("Total inverter register writes now {}".format(previous_inverter_writes))
+
+        # Control interference detection. Restored once per process from the entity's own
+        # attributes so the 24h window survives a pod restart - without this "3 in 24h"
+        # silently means "3 since the last restart".
+        now_ts = time.time()
+        if not self.control_ledger_restored:
+            self.control_ledger.restore(self.load_previous_value_from_ha(self.prefix + ".control_conflicts", attribute="events"))
+            self.control_ledger_restored = True
+        # prune() and recent_events() are NOT the same filter and neither can stand in for the
+        # other. prune() maintains the durable store, dropping only what has genuinely aged out;
+        # a future-dated event (a clock behind NTP) stays, because the clock corrects and the
+        # history must survive until it does. recent_events() is what can be JUDGED right now, so
+        # it is what the count and the sustained list are built from. The "events" attribute
+        # publishes the stored list, because that attribute IS the store restore() reads back -
+        # publishing only the events it can judge would delete the rest on the next run.
+        self.control_ledger.prune(now_ts)
+        conflict_events = self.control_ledger.recent_events(now_ts)
+        sustained = self.control_ledger.sustained_controls(conflict_events)
+        self.dashboard_item(
+            self.prefix + ".control_conflicts",
+            state=len(conflict_events),
+            attributes={
+                "friendly_name": "Settings changed outside Predbat (24h)",
+                "state_class": "measurement",
+                "unit_of_measurement": "changes",
+                "icon": "mdi:account-alert",
+                # Newest 20, but explicitly NOT purely by time - see newest_events(). This
+                # attribute is the durable store restore() reads back, and on a pod whose clock is
+                # behind, the event just detected carries a small "at" and looks like the oldest
+                # thing here, so any by-time cap would discard exactly the one that cannot be
+                # recovered from anywhere else.
+                "events": self.control_ledger.newest_events(20),
+                "sustained": sustained,
+            },
+        )
+        if conflict_events:
+            self.log("Control interference: {} change(s) in the last 24h, sustained on {}".format(len(conflict_events), sustained or "nothing"))
+
+        self.publish_control_failures(now_ts)
+
+        self.update_savings_totals(scheduled)
+
         # Car SoC increment
         if scheduled:
             self.update_car_manual_soc()
@@ -1633,7 +1911,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
 
         selected_tag = version.split(" ")[0] if version else ""
-        if selected_tag == "main":
+        branch = parse_predbat_branch_option(version)
+        download_version = version
+        if branch is not None:
+            # 'branch: <name>' installs that branch from the predbat_repository, or the default repository if that is not set.
+            # The branch name is the version used for the download, as the git ref and the staged file suffix.
+            if not is_valid_predbat_branch(branch):
+                self.log("Warn: Predbat update not performed, branch '{}' is not valid, it can only contain letters, numbers, '.', '_', '-' and '/'".format(branch))
+                return False
+            repository = self.get_predbat_repository()
+            download_version = branch
+        elif selected_tag == "main":
             repository = self.get_predbat_repository()
         else:
             repository = DEFAULT_PREDBAT_REPOSITORY
@@ -1641,7 +1929,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.log("Update Predbat to version {} from repository {}".format(version, repository))
         self.expose_config("version", True, force=True, in_progress=True)
 
-        files = predbat_update_download(version, repository=repository)
+        files = predbat_update_download(download_version, repository=repository)
         if files:
             # Notify before killing threads so the WebSocket is still healthy
             if self.get_arg("set_system_notify"):
@@ -1653,7 +1941,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             # Perform the update
             self.log("Perform the update.....")
-            if predbat_update_move(version, files):
+            if predbat_update_move(download_version, files):
                 self.log("Update to version {} completed".format(version))
                 return True
             else:
@@ -1946,6 +2234,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                     # Allow fixed string values
                                     continue
 
+                                if sensor is None and spec.get("blank_entries", False):
+                                    # A blank list entry, for an item whose runtime reads it as "not set" for that slot
+                                    continue
                                 if not isinstance(sensor, str):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a valid entity_id (must be a string)".format(name, sensor))
                                     self.arg_errors[name] = "Invalid entity_id in element {}".format(sensor)
@@ -1960,8 +2251,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 if spec.get("modify", False):
                                     prefix = sensor.split(".")[0]
                                     if prefix not in ["switch", "select", "input_number", "number", "time", "input_number", "input_datetime"]:
-                                        if sensor.startswith("sensor.predbat_"):
-                                            # We can ignore predbat generated sensors as they are control placeholders
+                                        if sensor.startswith(("sensor.predbat_", "sensor.{}_".format(self.prefix))):
+                                            # We can ignore predbat generated sensors as they are control placeholders,
+                                            # named with this instance's prefix (#5242)
                                             pass
                                         else:
                                             self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} which cannot be modified".format(name, sensor))
@@ -2045,7 +2337,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
 
         if apps_yaml_path is None:
-            apps_yaml_path = hass.resolve_apps_yaml_path()
+            apps_yaml_path = hass.resolve_apps_yaml_path(self.apps_file)
         if not os.path.exists(apps_yaml_path):
             return
 
@@ -2157,9 +2449,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return False
         return True
 
-    def initialize(self):
-        """
-        Setup the app, called once each time the app starts
+    def initialize_state(self):
+        """Reset a new engine before attaching host-owned state, storage and component adapters.
+
+        Shared by normal startup and headless hosts. Call once per build, never between warm
+        cycles: reset discards the plan and run state. The host then attaches its adapters,
+        calls initialize_config(), completes discovery, calls finalize_config() and load_plan().
+        Populate args and provide log() before calling this method; update_time() logs during
+        state preparation. This method starts no components, plugins, timers or connections.
         """
         # Snapshot of apps.yaml exactly as the user wrote it, before Predbat's own defaulting
         # (auto_config/load_user_config) or any component's automatic_config() touches self.args -
@@ -2170,22 +2467,44 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # copy of apps.yaml can never carry a real secret regardless of how it's later dumped.
         self.args_from_apps_yaml = mask_secret_args(self.args)
         self.apps_yaml_override_warned = set()  # {arg} already warned about via set_arg_auto()
+        self.update_time(print=False)
+        self.started_time = self.now_utc_real
+        self.reset()
+        self.update_time(print=False)
+
+    def initialize_config(self, quiet=False):
+        """Load initial configuration after state/storage adapters are ready, before discovery."""
+        self.auto_config()
+        self.load_user_config(quiet=quiet, register=False, load_config=True)
+
+    def finalize_config(self, quiet=False, *, before_validate=None, schedule_retry=True):
+        """Register settings after discovery, apply host overrides, then finalise and validate.
+
+        before_validate, if supplied, receives this engine after registration and before final
+        auto-configuration. Headless hosts can disable timer-based validation retries and use
+        the returned validation result. Plan restoration stays explicit, after host policy.
+        """
+        self.load_user_config(quiet=quiet, register=True)
+        if before_validate is not None:
+            before_validate(self)
+        self.auto_config(final=True)
+        valid = self.validate_config()
+        if schedule_retry:
+            self.validate_config_schedule_retry(valid)
+        return valid
+
+    def initialize(self):
+        """
+        Setup the app, called once each time the app starts
+        """
         self.log("Predbat: Startup {}".format(__name__))
         # Cap glibc's per-thread malloc arenas before the component threads exist to be given one each
         if limit_malloc_arenas():
             self.log("Limited malloc arenas to {}".format(MALLOC_ARENA_LIMIT))
-        self.update_time(print=False)
-        self.started_time = self.now_utc_real
         run_every = RUN_EVERY * 60
-        # The host's naive clock, deliberately not now_utc: the run times below are handed to
-        # run_every(), and hass.py's timer_tick compares them against datetime.now(). This is the
-        # only place that needs it, so it stays local rather than living on the instance.
-        host_now = datetime.now()
-        host_midnight = host_now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         try:
-            self.reset()
-            self.update_time(print=False)
+            self.initialize_state()
 
             # Start all sub-components
             self.components = Components(self)
@@ -2226,14 +2545,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("Config root is {} and printable config_root_p is now {}".format(self.config_root, self.config_root_p))
 
             self.ha_interface.update_states()
-            self.auto_config()
-            self.load_user_config(quiet=False, register=False, load_config=True)
+            self.initialize_config()
             self.comparison = Compare(self)
 
             self.components.initialize(phase=1)
             if not self.components.start(phase=1):
                 self.log("Error: Some components failed to start (phase 1)")
                 self.record_status("Error: Some components failed to start (phase 1)", had_errors=True)
+
+            # Each car's own maximum charge rate, before Load ML (phase 2) first reads it
+            self.car_max_rate_startup()
 
             self.components.initialize(phase=2)
             if not self.components.start(phase=2):
@@ -2248,9 +2569,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             except Exception as e:
                 self.log("Warn: Failed to assemble the discovery catalogue: {}".format(e))
 
-            self.load_user_config(quiet=False, register=True)
-            self.auto_config(final=True)
-            self.validate_config_schedule_retry(self.validate_config())
+            self.finalize_config()
 
             # Restore the last saved plan so it is immediately active before the first calculation
             self.load_plan()
@@ -2258,6 +2577,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.dynamic_load_car_load()
             # And the half hours Octopus Intelligent dispatches ran in, so they keep the dispatch rate
             self.octopus_held_load()
+            # And the half hours a dispatch was seen covering, so a stale rate feed is still checked after a restart
+            self.octopus_feed_load()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
@@ -2268,13 +2589,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Started
         self.publish_last_started()
 
-        # Run every N minutes aligned to the minute
-        seconds_now = (host_now - host_midnight).seconds
-
-        # Calculate next run time to exactly align with the run_every time
-        seconds_offset = seconds_now % run_every
-        seconds_next = seconds_now + (run_every - seconds_offset)
-        next_time = host_midnight + timedelta(seconds=seconds_next)
+        # Run every N minutes aligned to the host's wall clock, using the real clock rather than
+        # now_utc; the scheduler in hass.py keeps the time in UTC
+        next_time = next_aligned_run(run_every)
         self.log("Predbat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
 
         # First run is now
@@ -2283,7 +2600,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # And then every N minutes
         if not INVERTER_TEST:
             self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
-            self.run_every(self.update_time_loop, datetime.now(), 15, random_start=0, random_end=0)
+            self.run_every(self.update_time_loop, datetime.now(timezone.utc), 15, random_start=0, random_end=0)
         else:
             self.update_time_loop(None)
 

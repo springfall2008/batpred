@@ -1,8 +1,11 @@
 """Hub slot windows stage in the gateway and are sent when the schedule write switch is pressed."""
 
 import asyncio
+import contextlib
 import functools
 import json
+import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytz
@@ -38,7 +41,7 @@ def make_gateway(subscribed=True, acks_seen=True):
     gw._last_status = None
     gw._last_read_only = None
     gw._read_only_mismatch_logged = False
-    gw._loop = None
+    gw.component_loop = None
     gw._staged = {}
     gw._commit_inflight = set()
     gw._commit_tasks = set()
@@ -85,15 +88,83 @@ def make_status(inv_type=pb.INVERTER_TYPE_GIVENERGY, charge=(130, 430), discharg
     return status
 
 
+RUN_WATCHDOG_SECONDS = 10
+
+
 def run(coro):
-    """Run a coroutine synchronously."""
-    return asyncio.run(coro)
+    """Run a coroutine synchronously, failing if it is still going after RUN_WATCHDOG_SECONDS of real time.
+
+    Every wait under test goes through the component's clock, so nothing here should take real time; a
+    run that does has a sleep that bypassed the clock.
+    """
+
+    async def _guarded():
+        try:
+            return await asyncio.wait_for(coro, RUN_WATCHDOG_SECONDS)
+        except asyncio.TimeoutError:
+            raise AssertionError("still running after {}s of real time: a sleep bypassed the component's clock".format(RUN_WATCHDOG_SECONDS))
+
+    return asyncio.run(_guarded())
 
 
-def clock():
-    """A controllable gateway._monotonic clock."""
+class _SleepBudgetExceeded(BaseException):
+    """Raised by DictClock after too many sleeps; a BaseException so the component's except handlers cannot swallow it."""
+
+
+DICT_CLOCK_SLEEP_BUDGET = 10000
+
+
+class DictClock:
+    """A base.component_clock whose monotonic reading is now["now"], so a test moves time by assigning to the dict.
+
+    sleep() calls the pause coroutine function when there is one (a simulated Hub answering), else moves
+    the clock on by the requested seconds; with pause set to None and real_sleep True it really waits.
+    """
+
+    def __init__(self, now, pause=None, real_sleep=False):
+        """Read time from the now dict; pause is an async callable run for every sleep."""
+        self.now = now
+        self.pause = pause
+        self.real_sleep = real_sleep
+        self.sleep_count = 0
+
+    def monotonic(self):
+        """The test's controllable reading."""
+        return self.now["now"]
+
+    def time(self):
+        """Real wall-clock time (nothing under test reads it)."""
+        return time.time()
+
+    async def sleep(self, seconds):
+        """Run the pause, really wait, or advance the clock; fail once a loop has clearly stopped ending."""
+        self.sleep_count += 1
+        if self.sleep_count > DICT_CLOCK_SLEEP_BUDGET:
+            raise _SleepBudgetExceeded("the test clock was asked to sleep more than {} times: a loop never ended".format(DICT_CLOCK_SLEEP_BUDGET))
+        if self.pause is not None:
+            await self.pause()
+        elif self.real_sleep:
+            await asyncio.sleep(seconds)
+        else:
+            self.now["now"] += seconds
+
+
+@contextlib.contextmanager
+def _clock_on(gw, clock_obj):
+    """Install clock_obj as gw.base.component_clock for the block, then remove it."""
+    if getattr(gw, "base", None) is None:
+        gw.base = SimpleNamespace()
+    gw.base.component_clock = clock_obj
+    try:
+        yield
+    finally:
+        del gw.base.component_clock
+
+
+def clock(gw, pause=None):
+    """A controllable monotonic clock on the gateway's own base: returns the now dict and a context manager that installs it."""
     now = {"now": 1000.0}
-    return now, patch("gateway._monotonic", lambda: now["now"])
+    return now, _clock_on(gw, DictClock(now, pause))
 
 
 def inject(gw, status):
@@ -119,7 +190,7 @@ class TestGatewayStaging:
         """A status frame keeps showing the staged start; the side with nothing staged follows telemetry."""
         gw = make_gateway()
         gw.cache[SLOT_END] = "04:30:00"
-        now, patcher = clock()
+        now, patcher = clock(gw)
         with patcher:
             run(gw.select_event(SLOT_START, "02:30:00"))
             inject(gw, make_status(charge=(130, 430)))
@@ -145,7 +216,7 @@ class TestGatewayStaging:
         """A staged value nobody writes to the Hub reverts to telemetry after ten minutes."""
         gw = make_gateway()
         gw.cache[SLOT_END] = "04:30:00"
-        now, patcher = clock()
+        now, patcher = clock(gw)
         with patcher:
             run(gw.select_event(SLOT_START, "02:30:00"))
             now["now"] += 601
@@ -250,17 +321,14 @@ class TestGatewayCommit:
     def setup_hub(self, status=None, responder=applies, **kwargs):
         """A gateway with telemetry injected, a controllable clock and a fake Hub answering acks."""
         gw = make_gateway(**kwargs)
-        now, clock_patch = clock()
+        now = {"now": 1000.0}
         hub = FakeHub(gw, now, responder)
-        patches = [clock_patch, patch("gateway._commit_pause", hub.pause)]
-        for active in patches:
-            active.start()
-        self._patches = patches
+        gw.base.component_clock = DictClock(now, hub.pause)
         inject(gw, status or make_status())
         return gw, hub
 
     def tearDown(self):
-        """Stop the clock and pause patches."""
+        """Stop the patches a test started itself."""
         for active in getattr(self, "_patches", []):
             active.stop()
         self._patches = []
@@ -512,7 +580,7 @@ class TestGatewayCommit:
         self.stage(gw, "charge", "02:30:00", "03:05:00")
         loop = asyncio.new_event_loop()
         loop.close()
-        gw._loop = loop
+        gw.component_loop = loop
         gw._mqtt_connected = False
         self.press(gw)
         assert gw._published == []
@@ -666,16 +734,15 @@ class TestGatewayCommit:
         import time
 
         gw, hub = self.setup_hub(responder=lambda command, kwargs: None)
-        for active in self._patches[1:]:
-            active.stop()  # real ack waits on the gateway's own loop
-        self._patches = self._patches[:1]
+        gw.base.component_clock = DictClock(hub.now, real_sleep=True)  # real ack waits on the gateway's own loop
         # ...but polled faster than the real 0.5s, so the commit sees the ack without the test sitting out a whole tick
         poll_patch = patch("gateway._COMMIT_POLL_SECONDS", 0.01)
         poll_patch.start()
+        self._patches = [poll_patch]
         loop = asyncio.new_event_loop()
         thread = threading.Thread(target=loop.run_forever, daemon=True)
         thread.start()
-        gw._loop = loop
+        gw.component_loop = loop
         try:
             self.stage(gw, "charge", "02:30:00", "03:05:00")
             started = time.time()
@@ -699,3 +766,4 @@ class TestGatewayCommit:
             thread.join(timeout=2)
             loop.close()
             poll_patch.stop()
+            self._patches = []

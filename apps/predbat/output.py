@@ -19,7 +19,7 @@ schedules, rate window sensors, and financial metric summaries.
 import math
 import copy
 from html import escape as escape_html
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from predbat import THIS_VERSION_DISPLAY
 from const import (
     TIME_FORMAT,
@@ -38,8 +38,26 @@ from const import (
     RUN_STATE_NAMES,
     STATUS_STATE_MAX_LENGTH,
 )
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
+from utils import (
+    local_day_end_minute,
+    start_of_local_day,
+    dp0,
+    dp1,
+    dp2,
+    dp3,
+    calc_percent_limit,
+    minute_data,
+    minute_data_state,
+    find_charge_rate,
+    export_mode_of,
+    export_target_of,
+    export_power_of,
+    export_limit_sort_key,
+    pack_export_limit,
+    export_limit_from_stored,
+)
 from prediction import Prediction
+from billing import attach_billing, billing_entity_id, parse_axle_events, parse_saving_events, saving_session_events, BILLING_DAYS, BILLING_EVENT_LABELS, BILLING_SLOT_FORMAT
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
 # rendered client-side (web_helper.py) by substituting {placeholder} names against the row's
@@ -72,6 +90,13 @@ REASON_TEMPLATES = {
     "mixed_slot_states": "This slot did not hold one state throughout - Predbat was in: {states}. The cell shows the most significant of them.",
     "status_warning": "Predbat reported a problem during this slot: {warnings}",
 }
+
+# The plan is scored against the expected forecast and its PV10 and PV90 alternatives, but the table shows only
+# the expected one (#5871). A row carries the other scenarios' values as positional lists in this order, with the
+# order and the scenario names published once per plan rather than repeated on every row.
+PLAN_SCENARIO_FIELDS = ["soc_percent", "pv_forecast", "load_forecast", "cost_change", "total_cost"]
+# PV10 is the low solar, high use case and PV90 the high solar, low use one
+PLAN_SCENARIO_NAMES = {"10": "Pessimistic", "90": "Optimistic"}
 
 
 def yesterday_slot_is_exporting(slot_status):
@@ -207,6 +232,44 @@ def dominant_slot_status(minute_counts, precedence):
         if minutes == most_minutes:
             dominant = more_active_slot_status(dominant, status, precedence)
     return dominant
+
+
+# How long after building no older days the History view tries again
+HISTORY_DAYS_RETRY_MINUTES = 180
+# The longest local day, at a clock change: older History days are rebuilt once in each
+HISTORY_DAY_MINUTES = 25 * 60
+# The event entities whose recorded on/off history marks the History view's rows, and the event tag each records
+HISTORY_EVENT_ENTITIES = (("octopus_saving_session", "saving"), ("octopus_free_electricity", "free"), ("axle_session", "axle"))
+# The rate tags that are a user's override: a manual rate (manual) or an apps.yaml rates_import/export_override (user, increment)
+RATE_OVERRIDE_TAGS = ("manual", "user", "increment")
+
+# Plan state build_history_days() winds back to each older day and puts back afterwards
+HISTORY_DAY_FAKED_STATE = (
+    "minutes_now",
+    "midnight_utc",
+    "forecast_minutes",
+    "rate_import",
+    "rate_export",
+    "rate_import_replicated",
+    "rate_export_replicated",
+    "cost_today_sofar",
+    "import_today_now",
+    "export_today_now",
+    "carbon_today_sofar",
+    "pv_today_now",
+    "load_minutes_now",
+    "car_charging_hold",
+    "iboost_energy_subtract",
+    "iboost_enable",
+    "plan_debug",
+    "carbon_enable",
+    "predict_soc_best",
+    "predict_soc",
+    "predict_metric_best",
+    "predict_clipped_best",
+    "predict_iboost_best",
+    "predict_carbon_best",
+)
 
 
 class Output:
@@ -1049,6 +1112,23 @@ class Output:
         sentence_clean = "<ul>\n" + sentence_clean + "</ul>\n"
         return sentence_clean
 
+    def car_charging_now_sentence(self):
+        """
+        The plan-details line about the car right now (GH#3017)
+
+        A car that reports charging (car_charging_now) is charging, and so is a car the plan charges in the current slot -
+        unless every car planned now has a car_charging_now reading of not charging (not plugged in yet, or the charger
+        not started), when the charge is described as planned rather than happening. Without a reading (no sensor, or
+        unknown/unavailable) there is no evidence against the plan, so its word stands.
+        """
+        charging_now = any(self.car_charging_now_active(car_n) for car_n in range(self.num_cars))
+        planned_cars = [car_n for car_n in range(min(self.num_cars, len(self.car_charging_slots))) if self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + PREDICT_STEP, car_n=car_n) > 0]
+        if not charging_now and not planned_cars:
+            return ""
+        if not charging_now and all(car_n < len(self.car_charging_now_state) and self.car_charging_now_state[car_n] is False for car_n in planned_cars):
+            return "- Your car is planned to charge now.\n"
+        return "- Your car is currently charging.\n"
+
     def short_textual_plan(self, soc_min, soc_min_minute, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True):
         """
         The short textual plan gives a summary in text format of the current plan
@@ -1138,9 +1218,7 @@ class Output:
             else:
                 sentence += "- You will reach a minimum of {}% battery in {}.\n".format(soc_min_percent, self.duration_string(soc_min_minute - self.minutes_now))
 
-        car_charging_kwh = self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + 5)
-        if car_charging_kwh > 0:
-            sentence += "- Your car is currently charging.\n"
+        sentence += self.car_charging_now_sentence()
 
         charge_window_n_next = self.get_next_charge_window(self.minutes_now)
         export_window_n_next = self.get_next_export_window(self.minutes_now)
@@ -1175,7 +1253,8 @@ class Output:
         Work out the actual planned charge rate (kW) for a charge_window_best slot. Unlike export,
         which stores a fixed reduced rate in the fractional part of export_limits_best, low power
         charging (set_charge_low_power) throttles the rate dynamically minute-by-minute, so it has
-        to be recomputed the same way the prediction engine works it out (find_charge_rate()).
+        to be recomputed the same way the prediction engine works it out (find_charge_rate()), and
+        then capped at the inverter limit as the prediction does (GH#5394).
         """
         window = self.charge_window_best[charge_window_n]
         soc = self.predict_soc_best.get(minute_relative_start, self.soc_kw)
@@ -1203,11 +1282,76 @@ class Output:
             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
             solar_full_rate=self.set_charge_low_power_solar_full_rate,
         )
+        # The prediction then clamps the grid side of the charge at the inverter limit (less inverter
+        # losses); a hybrid can add DC-coupled PV on top of that, an AC-coupled inverter cannot.
+        charge_rate_limit = self.inverter_limit * self.inverter_loss
+        if self.inverter_hybrid:
+            charge_rate_limit += pv_forecast_minute_step.get(minute_relative_start, 0.0) / PREDICT_STEP
+        charge_rate_now_curve = min(charge_rate_now_curve, charge_rate_limit)
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None):
+    def plan_scenario_sources(self):
+        """
+        The final plan's PV10 and PV90 runs to show beside the expected one (#5871), keyed by scenario.
+
+        Each entry is (soc by minute, metric by minute, PV step, load step). The PV and load come from the same step
+        arrays the plan's scenario runs used, not the caller's, so a row never pairs a scenario's SoC with PV it
+        wasn't simulated against. A scenario the plan is not scored
+        against is left out: PV10 at a zero weight (its run is still made, for the Best10 chart), and PV90 at a zero
+        weight, when it is not run and its SoC series is empty.
+        """
+        sources = {}
+        if self.predict_soc_best10 and self.pv_metric10_weight > 0:
+            sources["10"] = (self.predict_soc_best10, self.predict_metric_best10, self.pv_forecast_minute10_step, self.load_minutes_step10)
+        if self.predict_soc_best90:
+            sources["90"] = (self.predict_soc_best90, self.predict_metric_best90, self.pv_forecast_minute90_step, self.load_minutes_step90)
+        return sources
+
+    def plan_row_scenarios(self, scenario_sources, minute_relative_start, minute_relative_slot_end, expected):
+        """
+        A plan row's values under each other scenario, in PLAN_SCENARIO_FIELDS order (#5871).
+
+        expected is the row's own values in the same order. A scenario whose values all match them, at the
+        precision the table shows, is left out, so rows where the scenarios agree carry nothing extra.
+        Returns a dict keyed by scenario, or None when every scenario matches.
+        """
+        result = {}
+        for key, (soc, metric, pv_step, load_step) in scenario_sources.items():
+            pv = 0.0
+            load = 0.0
+            for offset in range(minute_relative_start, minute_relative_slot_end, PREDICT_STEP):
+                pv += pv_step.get(offset, 0.0)
+                load += load_step.get(offset, 0.0)
+            metric_start = metric.get(minute_relative_start, 0.0)
+            metric_end = metric.get(minute_relative_slot_end, metric_start)
+            # + 0.0 turns a rounded -0.0 into 0.0, so it compares equal and reads cleanly
+            values = [calc_percent_limit(soc.get(minute_relative_start, 0.0), self.soc_max), dp2(pv) + 0.0, dp2(load) + 0.0, dp2((metric_end - metric_start) / 100.0) + 0.0, dp2(metric_start / 100.0) + 0.0]
+            if values != expected:
+                result[key] = values
+        return result or None
+
+    def plan_scenario_soc_title(self, soc_percent, row_scenarios):
+        """
+        A title attribute listing a plan row's SoC in every scenario, one per line (#5871).
+
+        Returns "" when the row carries no scenarios or every scenario shows the same SoC. The web UI builds the same
+        tooltip, and those for the PV, load, cost and total cells, with scenarioTitle() in web_helper.py.
+        """
+        if not row_scenarios:
+            return ""
+        socs = [("Expected", soc_percent)] + [(PLAN_SCENARIO_NAMES[key], scenario[0]) for key, scenario in sorted(row_scenarios.items())]
+        if all(value == soc_percent for _, value in socs):
+            return ""
+        # One scenario per line - &#10; is a line break inside a title attribute
+        return ' title="' + "&#10;".join("{} {}%".format(label, value) for label, value in socs) + '"'
+
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None, show_scenarios=False):
         """
         Publish the current plan in HTML format
+
+        show_scenarios adds the final plan's PV10 and PV90 outcomes to each row: a SoC tooltip in the HTML, and
+        per-row lists in the JSON that the web UI turns into tooltips (#5871). Only the live plan passes it - the History, compare and debug-pass
+        tables have no matching scenario runs.
 
         car_hold_minutes, when given, is the set of plan minutes whose recorded status was "Hold for car":
         the Yesterday actual-history table shows measured SoC, so its car icon comes from what happened
@@ -1242,6 +1386,10 @@ class Output:
         car_total = 0
         raw_plan = {}
         raw_plan["rows"] = []
+        scenario_sources = self.plan_scenario_sources() if show_scenarios else {}
+        if scenario_sources:
+            raw_plan["scenario_fields"] = PLAN_SCENARIO_FIELDS
+            raw_plan["scenario_names"] = {key: PLAN_SCENARIO_NAMES[key] for key in scenario_sources}
 
         import_cost_threshold = self.rate_import_cost_threshold
         export_cost_threshold = self.rate_export_cost_threshold
@@ -1362,7 +1510,8 @@ class Output:
 
             in_alert = self.alert_active_keep.get(minute, 0) > 0
             in_manual_soc = self.manual_soc_keep.get(minute, 0) > 0
-            in_manual_soc_max = self.manual_soc_max_keep.get(minute, 0) > 0
+            # A 0% ceiling is a real target (empty the battery), so mark by presence rather than value
+            in_manual_soc_max = minute in self.manual_soc_max_keep
 
             pv_forecast = 0
             load_forecast = 0
@@ -1418,6 +1567,10 @@ class Output:
             metric_start = self.predict_metric_best.get(minute_relative_start, 0.0)
             metric_end = self.predict_metric_best.get(minute_relative_slot_end, metric_start)
             metric_change = metric_end - metric_start
+            row_scenarios = None
+            if scenario_sources:
+                row_expected = [soc_percent, raw_pv_forecast, raw_load_forecast, dp2(metric_change / 100.0), dp2(metric_start / 100.0)]
+                row_scenarios = self.plan_row_scenarios(scenario_sources, minute_relative_start, minute_relative_slot_end, row_expected)
 
             # Raw state for raw plan
             raw_state = "Demand"
@@ -1880,7 +2033,9 @@ class Output:
                 html += "<td id=car bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             if self.iboost_enable:
                 html += "<td bgcolor=" + iboost_color + ">" + iboost_amount_str + " </td>"
-            html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
+            # Only the SoC cell carries the scenario tooltip in the HTML, where it is repeated on every row; the web
+            # UI builds tooltips for the other cells from the row's JSON (#5871)
+            html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + self.plan_scenario_soc_title(soc_percent, row_scenarios) + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "<td id=cost bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
             html += "<td id=total_cost bgcolor=#FFFFFF>" + str(total_str) + "</td>"
             if self.carbon_enable:
@@ -1977,6 +2132,8 @@ class Output:
             json_row["soc_sym"] = soc_sym
             json_row["cost_change"] = dp2(metric_change / 100.0)
             json_row["total_cost"] = dp2(metric_start / 100.0)
+            if row_scenarios:
+                json_row["scenarios"] = row_scenarios
             if self.carbon_enable:
                 json_row["carbon_intensity"] = carbon_intensity
                 json_row["carbon_change"] = carbon_change
@@ -2119,6 +2276,32 @@ class Output:
             )
         return rates
 
+    def over_cap_premium(self, over_cap_minutes, minute, car_energy):
+        """
+        The extra cost of the car's charging in minute when it is beyond the Octopus Intelligent cap: the gap from the
+        house rate to the peak rate, on the energy the car sensor measured, or on the dispatch's own energy for the
+        minute without one (car_energy None). Only energy already charged is costed, never what is still planned.
+        """
+        if minute not in over_cap_minutes:
+            return 0.0
+        energy = over_cap_minutes[minute] if car_energy is None else car_energy
+        return max(0.0, self.rate_max_base - self.rate_import.get(minute, 0)) * energy
+
+    def car_outside_clamp_energy(self, energy_import, energy_export, load_energy, car_energy):
+        """
+        A minute's import, export and load as the supply meter sees them, and the car energy imported from the grid.
+
+        With the charger outside the CT clamp (car_energy_reported_load off) the import and load sensors miss the car,
+        but the meter bills it. The car sits between the clamp and the meter, so what the clamp counts as export goes
+        into the car first, as the prediction treats it, and only the rest is imported. Inside the clamp the sensors
+        already have the car, so they are returned as they are and all the car's energy counts as imported.
+        """
+        if self.car_energy_reported_load or car_energy <= 0:
+            return energy_import, energy_export, load_energy, car_energy
+        car_from_export = min(car_energy, energy_export)
+        car_import = car_energy - car_from_export
+        return energy_import + car_import, energy_export - car_from_export, load_energy + car_energy, car_import
+
     def today_cost(self, import_today, export_today, car_today, load_today, save=True):
         """
         Work out energy costs today (approx)
@@ -2157,7 +2340,7 @@ class Output:
         # Work out change in battery value
         battery_level_now = self.soc_kwh_history.get(0, 0)
         battery_level_hour = self.soc_kwh_history.get(60, 0)
-        battery_level_midnight = self.soc_kwh_history.get(self.minutes_now, 0)
+        battery_level_midnight = self.soc_kwh_history.get(self.minutes_since_day_start(), 0)
         battery_change_hour = battery_level_now - battery_level_hour
         battery_change_midnight = battery_level_now - battery_level_midnight
         # Shared with the planner's own metric so the reported battery value matches the plan it
@@ -2174,6 +2357,13 @@ class Output:
                 )
             )
 
+        # Car charging beyond the Octopus Intelligent cap is billed at the peak rate while the house keeps its own,
+        # so the minutes gone beyond it carry the difference on top of the house rate the loops below charge
+        over_cap_minutes = {}
+        for car_n in range(min(self.num_cars, len(self.octopus_slots))):
+            for minute, kwh in self.octopus_over_cap_minutes(car_n, self.octopus_slots[car_n]).items():
+                over_cap_minutes[minute] = over_cap_minutes.get(minute, 0.0) + kwh
+
         for minute_back in range(60):
             minute = self.minutes_now - minute_back
             energy_import = self.get_from_incrementing(import_today, minute_back)
@@ -2189,6 +2379,8 @@ class Output:
             else:
                 energy_export = 0
 
+            energy_import, energy_export, load_energy, car_import = self.car_outside_clamp_energy(energy_import, energy_export, load_energy, energy_car)
+
             hour_energy += energy_import - energy_export
             hour_energy_import += energy_import
             hour_energy_export += energy_export
@@ -2200,6 +2392,9 @@ class Output:
                 hour_cost += self.rate_import.get(minute, 0) * energy_import
                 hour_cost_import += self.rate_import.get(minute, 0) * energy_import
                 hour_cost_car += self.rate_import.get(minute, 0) * energy_car
+                premium = self.over_cap_premium(over_cap_minutes, minute, car_import if car_today else None)
+                hour_cost_car += premium
+                hour_cost += premium
 
             if self.rate_export:
                 hour_cost -= self.rate_export.get(minute, 0) * energy_export
@@ -2229,11 +2424,14 @@ class Output:
                 )
             )
 
-        for minute in range(self.minutes_now):
-            # Add in standing charge
-            if (minute % (24 * 60)) == 0:
-                day_cost += self.metric_standing_charge
-
+        # Today runs from the real start of the day. On a clock-change day that is not minute 0 of this plan-aligned loop
+        # (whose history reads line up with the rate tables), but the change away from it: an hour earlier after the autumn
+        # change, later after the spring one. Starting at 0 dropped today's first hour or counted yesterday's last (GH#5760)
+        day_start_minute = self.clock_change_minutes_today()
+        # Add in standing charge, from the run at the reset itself too, so cost_today never reads 0 at midnight
+        if self.minutes_now >= day_start_minute:
+            day_cost += self.metric_standing_charge
+        for minute in range(day_start_minute, self.minutes_now):
             minute_back = self.minutes_now - minute - 1
             energy = 0
             car_energy = 0
@@ -2247,6 +2445,7 @@ class Output:
                 energy_export = self.get_from_incrementing(export_today, minute_back)
             else:
                 energy_export = 0
+            energy, energy_export, load_energy, car_import = self.car_outside_clamp_energy(energy, energy_export, load_energy, car_energy)
             day_energy += energy
             day_energy_export += energy_export
             day_energy_total += energy - energy_export
@@ -2259,6 +2458,10 @@ class Output:
                 day_cost_import += self.rate_import.get(minute, 0) * energy
                 day_cost_nosc += self.rate_import.get(minute, 0) * energy
                 day_cost_car += self.rate_import.get(minute, 0) * car_energy
+                premium = self.over_cap_premium(over_cap_minutes, minute, car_import if car_today else None)
+                day_cost_car += premium
+                day_cost += premium
+                day_cost_nosc += premium
 
             day_export += energy_export
             if self.rate_export:
@@ -2278,23 +2481,6 @@ class Output:
                 day_cost_time_import[stamp] = dp2(day_cost_import)
                 day_cost_time_export[stamp] = dp2(day_cost_export)
                 day_carbon_time[stamp] = dp2(carbon_g)
-
-        # Add beyond-cap IOG rate premium for day and hour car cost.
-        # The per-minute loops above charged car energy at house import rate (correct base).
-        # For IOG slots where average > house rate (beyond cap), add the difference.
-        for car_n in range(self.num_cars):
-            for slot in self.car_charging_slots[car_n]:
-                house_rate = self.rate_import.get(slot["start"], 0)
-                premium = max(0, slot.get("average", 0) - house_rate) * slot.get("kwh", 0)
-                if premium > 0:
-                    slot_start = slot["start"]
-                    if 0 <= slot_start < self.minutes_now:
-                        day_cost_car += premium
-                        day_cost += premium
-                        day_cost_nosc += premium
-                    if self.minutes_now - 60 <= slot_start < self.minutes_now:
-                        hour_cost_car += premium
-                        hour_cost += premium
 
         day_pkwh = self.rate_import.get(0, 0)
         day_car_pkwh = self.rate_import.get(0, 0)
@@ -2995,7 +3181,17 @@ class Output:
         total_forecast_value_pred = 0
         total_forecast_value_pred_now = 0
 
-        for minute in range(0, 24 * 60, step):
+        # The day runs from its real start, which on a clock-change day is the change away from minute 0 of this plan-aligned
+        # loop: today then lasts 25 hours (autumn) or 23 (spring), and starting at 0 dropped its first hour or counted
+        # yesterday's last (GH#5760). The history reads below stay aligned with the plan minutes
+        day_start_minute = self.clock_change_minutes_today()
+        day_end_minute = local_day_end_minute(self.now_utc, self.local_tz)
+        for minute in range(day_start_minute, day_end_minute, step):
+            # Just before an autumn change the day's extra hour can reach beyond a day ahead of now, where a same-time-yesterday
+            # read has no data and would wrap round to two days back, so those rows are left out (GH#5760)
+            if minute + step - 1 - minutes_now > 24 * 60:
+                continue
+
             import_value_today = 0
             load_value_today = 0
             load_value_today_raw = 0
@@ -3005,11 +3201,12 @@ class Output:
                     import_value_today += self.get_from_incrementing(import_minutes, minutes_now - minute - offset - 1)
                     load_value_today, load_value_today_raw = self.get_filtered_load_minute(load_minutes, minutes_now - minute - 1, historical=False, step=step)
 
-            import_value_pred = 0
             forecast_value_pred = 0
             for offset in range(step):
-                import_value_pred += self.get_historical(import_minutes, minute - minutes_now + offset)
-                forecast_value_pred += self.get_from_incrementing(load_forecast, minute + offset, backwards=False)
+                # The load forecast starts at midnight_utc; before it (today's first hour after an autumn change) there is
+                # none, and a negative index would wrap round to tonight's forecast
+                if minute + offset >= 0:
+                    forecast_value_pred += self.get_from_incrementing(load_forecast, minute + offset, backwards=False)
 
             if self.load_forecast_only:
                 load_value_pred, load_value_pred_raw = (0, 0)
@@ -3098,12 +3295,15 @@ class Output:
 
         # Fetch yesterday's in-day adjustment factor from history
         yesterday_adjustment = 1.0
-        yesterday_adjustment_data = self.get_history_wrapper(entity_id=self.prefix + ".load_inday_adjustment", days=1, required=False)
+        # Yesterday's last minute is more than a day back late on an autumn clock-change day (a 25-hour day), so fetch two
+        # days of history then (GH#5760)
+        yesterday_adjustment_days = 2 if minutes_now - day_start_minute + 1 > 24 * 60 else 1
+        yesterday_adjustment_data = self.get_history_wrapper(entity_id=self.prefix + ".load_inday_adjustment", days=yesterday_adjustment_days, required=False)
         if yesterday_adjustment_data:
             # Extract yesterday's final adjustment value at midnight position
             yesterday_data, _ = minute_data(
                 yesterday_adjustment_data[0],
-                1,
+                yesterday_adjustment_days,
                 self.now_utc,
                 "state",
                 "last_updated",
@@ -3113,7 +3313,10 @@ class Output:
                 divide_by=1.0,
                 scale=1.0,
             )
-            minutes_back = minutes_now + 1
+            # minute_data() keys history by real minutes back from now, and minutes_now counts from midnight_utc, which on a
+            # clock-change day is not the real start of the day - without the correction the lookup lands an hour off
+            # yesterday's final value (GH#5760)
+            minutes_back = minutes_now - day_start_minute + 1
             yesterday_adjustment_pct = yesterday_data.get(minutes_back, 100.0)
             yesterday_adjustment = yesterday_adjustment_pct / 100.0  # Convert from percentage to factor
 
@@ -3122,7 +3325,8 @@ class Output:
             yesterday_adjustment = min(yesterday_adjustment, 2.0)
 
         difference = 1.0
-        if minutes_now >= 180 and actual_total_now >= 1.0 and actual_total_today > 0.0:
+        # Three hours of today's data, counted in real minutes since the day began (GH#5760)
+        if minutes_now - day_start_minute >= 180 and actual_total_now >= 1.0 and actual_total_today > 0.0:
             # Make a ratio only if we have enough data to consider the outcome
             difference = 1.0 + ((actual_total_today - load_total_pred) / actual_total_today)
 
@@ -3413,6 +3617,12 @@ class Output:
         """The longest the plan history should go between rebuilds: a slot, the run it waits, and up to one re-plan interval."""
         return self.plan_interval_minutes + RUN_EVERY + self.calculate_plan_every
 
+    def history_day_refresh_minutes(self):
+        """The longest an older History day should go between rebuilds: calculate_history_days() rebuilds them at least once a local
+        day, on a re-plan that can land a slot, a run and a re-plan interval later than the day before, so the web page's stale
+        warning on one means the daily rebuild has stopped."""
+        return HISTORY_DAY_MINUTES + self.history_refresh_minutes()
+
     def calculate_yesterday(self):
         """
         Calculate the base plan for yesterday
@@ -3424,8 +3634,11 @@ class Output:
         # slots since it in neither view. Each rebuild takes under a second, and it waits one run past the boundary
         # (see history_slot) so the boundary run's own writes are recorded. A day rolling over rebuilds straight away,
         # on the midnight re-plan, so the *_yesterday sensors move on to the day just ended without waiting a re-plan.
-        if self.savings_last_updated and self.savings_last_updated.date() == self.now_utc.date() and self.history_slot(self.savings_last_updated) == self.history_slot(self.now_utc):
+        # New billing (any half-hour arriving, import or export) rebuilds it too, so the Billed column fills in without waiting for the slot
+        billing_mark = self.history_billing_mark(self.history_billing())
+        if self.savings_last_updated and self.savings_last_updated.date() == self.now_utc.date() and self.history_slot(self.savings_last_updated) == self.history_slot(self.now_utc) and billing_mark == self.yesterday_billing_mark:
             return
+        self.yesterday_billing_mark = billing_mark
 
         # Everything below is anchored on yesterday's recorded cost, so fetch that before doing any of
         # the expensive work - when Home Assistant isn't recording predbat.cost_today there is nothing
@@ -3461,7 +3674,14 @@ class Output:
             yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         finally:
             self.forecast_minutes = forecast_minutes_before_yesterday_step
-        minutes_back = self.minutes_now + 1
+        # How far back yesterday's last minute is in the history below. minute_data() keys history by real minutes back from
+        # now, and minutes_now counts from midnight_utc, which on a clock-change day is not the real start of the day: without
+        # the correction the autumn lookup lands an hour into today (reading today's standing charge as yesterday's cost) and
+        # the spring one an hour before yesterday ended (GH#5760)
+        minutes_back = self.minutes_since_day_start() + 1
+        # The per-minute arrays below stay on the History view's own axis - minute m is midnight_utc - 1 day + m, the axis
+        # load, PV, rates, status and billing are all built on - so they keep the uncorrected offset
+        minutes_back_axis = self.minutes_now + 1
 
         # Get yesterday's SoC
         try:
@@ -3531,17 +3751,13 @@ class Output:
         if carbon_today_data:
             carbon_data, _ = minute_data(carbon_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
             carbon_yesterday = carbon_data.get(minutes_back, 0.0)
-        cost_yesterday_array = {}
-        for minute in range(0, end_record + self.minutes_now):
-            cost_value = cost_data.get(minutes_back + 24 * 60 - minute - 5, 0.0)  # -5 gives 4 minutes into new data to allow for reset
-            # After midnight (minute >= end_record), add the final cost from yesterday to make
-            # the cost cumulative across the midnight boundary. Without this adjustment, the
-            # cost_today sensor reset would cause incorrect negative deltas in the plan display
-            # (e.g., -376p instead of the actual slot cost like +26p) because metric_change
-            # is calculated as metric_end - metric_start in publish_html_plan.
-            if minute >= end_record:
-                cost_value += cost_yesterday
-            cost_yesterday_array[minute] = cost_value
+        # The Cost column's running total, carried across each local midnight where cost_today resets so that
+        # metric_end - metric_start in publish_html_plan never goes negative there (e.g. -376p instead of +26p).
+        # On the day after a clock change a midnight sits an hour off a multiple of 1440 on this axis, and the view
+        # can hold one of the day before's last hour, so the midnights are found from real instants
+        view_minutes = end_record + self.minutes_now
+        midnight_rows = self.history_day_boundaries(self.midnight_utc - timedelta(days=1), view_minutes)
+        cost_yesterday_array = self.history_cumulative_array(cost_data, self.minutes_now + 24 * 60, view_minutes - 1, midnight_rows)
 
         # Get battery level yesterday - prefer the already-fetched in-memory history, fall back to HA query
         battery_data = self.soc_kwh_history
@@ -3555,7 +3771,7 @@ class Output:
         battery_soc_yesterday = battery_data.get(minutes_back, soc_yesterday)
         battery_soc_yesterday_array = {}
         for minute in range(0, end_record + self.minutes_now):
-            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute - 5, soc_yesterday)  # -5 gives 4 minutes into new data to allow for reset
+            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back_axis + 24 * 60 - minute - 5, soc_yesterday)  # -5 gives 4 minutes into new data to allow for reset
 
         # Get status history
         predbat_status_data = self.get_history_wrapper(entity_id=self.prefix + ".status", days=2, required=False)
@@ -3670,159 +3886,43 @@ class Output:
         plan_html_baseline, plan_json_baseline = self.plan_write_debug(True, None, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record, prediction=self.prediction)
         plan_json_baseline["refresh_minutes"] = self.history_refresh_minutes()
 
-        # Now try to show what really happened yesterday
-        self.charge_limit_best = []
-        self.charge_window_best = []
-        self.export_limits_best = []
-        self.export_window_best = []
-        self.predict_soc_best = battery_soc_yesterday_array
-        self.predict_soc = battery_soc_yesterday_array
-        self.predict_metric_best = cost_yesterday_array
-
-        # Fake charge/export windows based on previous predbat status
-        car_hold_minutes = set()
-        status_warnings = {}
-        if predbat_status_data:
-            predbat_status = minute_data_state(predbat_status_data[0], 2, self.now_utc, "state", "last_updated")
-            for minute in predbat_status:
-                status, warning = split_status_warning(predbat_status[minute])
-                if "," in status:
-                    # If there are multiple statuses take the first one
-                    status = status.split(",")[0].strip()
-                predbat_status[minute] = status
-                if warning:
-                    # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago.
-                    # minute_data_state() holds each recorded status until the next one, so across a gap in
-                    # the recorder the warning is held along with the state it arrived with - the flag
-                    # stays with the state the slot shows, which is rebuilt from the same held value.
-                    status_warnings[minutes_now + end_record - minute] = warning
-            # The car icon on this table follows the recorded "Hold for car" status, as its SoC is measured.
-            # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago.
-            car_hold_minutes = {minutes_now + end_record - minutes_ago for minutes_ago, status in predbat_status.items() if status.lower() == "hold for car"}
-            # Ignore the first and last edge_minutes of each slot when they don't hold one state
-            # throughout - Predbat's reported status can lag a slot boundary by a minute or two while
-            # it catches up to a replan, and that leftover from the previous (or next) slot must not
-            # be mistaken for a real part of this one. A status occupying the *whole* edge window,
-            # though, is indistinguishable from a genuine replan landing right at the boundary, so it
-            # is trusted like any interior minute rather than discarded on principle.
-            edge_minutes = 5
-            for minute in range(0, end_record + minutes_now, self.plan_interval_minutes):
-                minute_offset = minutes_now + end_record - minute
-
-                # predbat_status is keyed by minutes AGO, so the status for plan-minute
-                # (minute + slot_offset) lives at (minute_offset - slot_offset).
-                slot_statuses = [predbat_status.get(minute_offset - slot_offset, "").lower() for slot_offset in range(self.plan_interval_minutes)]
-                tally_start = 0 if len(set(slot_statuses[:edge_minutes])) == 1 else edge_minutes
-                tally_end = self.plan_interval_minutes if len(set(slot_statuses[-edge_minutes:])) == 1 else self.plan_interval_minutes - edge_minutes
-
-                # A warning in an edge window the tally does not trust came in with the previous (or
-                # next) slot's leftover status, so it must not flag this slot either - the flag names
-                # a problem that ran alongside the minutes this slot's state was rebuilt from.
-                for slot_offset in list(range(0, tally_start)) + list(range(tally_end, self.plan_interval_minutes)):
-                    status_warnings.pop(minute + slot_offset, None)
-
-                charge_start_minute = None
-                charge_end_minute = None
-                export_start_minute = None
-                export_end_minute = None
-
-                # Walk exactly the minutes the tally below trusts. The two must agree: the tally
-                # decides *whether* a slot rebuilds a charge or export window and this walk decides
-                # *where* that window starts, so a state the tally counts but this walk never sees
-                # produces a window with start/end still None, and in_charge_window() then compares
-                # an int against None and takes down the whole update_pred() cycle (regression from #4872).
-                # A state found anywhere in the slot's leading edge window still snaps back to the
-                # slot boundary, as it always has - a state already running that early reads as
-                # having opened the slot, and the History view renders whole slots regardless.
-                for slot_offset in range(tally_start, tally_end):
-                    slot_status = slot_statuses[slot_offset]
-                    real_minute = minute if slot_offset <= edge_minutes else minute + slot_offset
-
-                    # Cross-charging genuinely straddles both sides - track it as both an exporting
-                    # and a charging slot (its name contains "charging" but not "exporting"), so
-                    # these are independent "if"s rather than "if/elif".
-                    # One side starting *later* than the other ends the earlier one - the slot hands
-                    # off mid-way. Starting at the same minute is not a handoff but an overlap: both
-                    # run the whole slot, which is exactly what cross-charging is. Ending the earlier
-                    # side at the later one's start would then close it at its own start minute, and
-                    # a zero-width window renders as nothing at all - which is how the export half of
-                    # a cross-charging slot went missing again after #4466 restored it.
-                    if yesterday_slot_is_exporting(slot_status) and export_start_minute is None:
-                        export_start_minute = real_minute
-                        if charge_start_minute is not None and charge_start_minute < export_start_minute:
-                            charge_end_minute = export_start_minute
-                    if "charging" in slot_status and charge_start_minute is None:
-                        charge_start_minute = real_minute
-                        if export_start_minute is not None and export_start_minute < charge_start_minute:
-                            export_end_minute = charge_start_minute
-
-                # Assume slots end at end of period if not found
-                if export_end_minute is None and export_start_minute is not None:
-                    export_end_minute = minute + self.plan_interval_minutes
-                if charge_end_minute is None and charge_start_minute is not None:
-                    charge_end_minute = minute + self.plan_interval_minutes
-
-                # Tally how many trusted minutes each status held, so the cell can show whichever one
-                # actually dominated the slot rather than whichever the scan above happened to detect
-                # first (#4843).
-                export_minute_counts = {}
-                charge_minute_counts = {}
-                for slot_offset in range(tally_start, tally_end):
-                    slot_status = slot_statuses[slot_offset]
-                    if yesterday_slot_is_exporting(slot_status):
-                        export_minute_counts[slot_status] = export_minute_counts.get(slot_status, 0) + 1
-                    if "charging" in slot_status:
-                        charge_minute_counts[slot_status] = charge_minute_counts.get(slot_status, 0) + 1
-
-                export_during_slot = dominant_slot_status(export_minute_counts, EXPORT_STATE_PRECEDENCE)
-                charge_during_slot = dominant_slot_status(charge_minute_counts, CHARGE_STATE_PRECEDENCE)
-
-                if yesterday_slot_is_exporting(export_during_slot):
-                    # Assume exporting at this time
-                    export_window = {"start": export_start_minute, "end": export_end_minute}
-                    if len(export_minute_counts) > 1:
-                        export_window["mixed"] = list(export_minute_counts.keys())
-                    self.export_window_best.append(export_window)
-                    if "freeze" in export_during_slot:
-                        # Assume freeze export
-                        self.export_limits_best.append(pack_export_limit(EXPORT_MODE_FREEZE))
-                    else:
-                        soc_was = battery_soc_yesterday_array.get(export_end_minute, 0.0)
-                        soc_percent = calc_percent_limit(soc_was, self.soc_max)
-                        # A target instruction, not the bare percentage this used to append. A bare
-                        # number still decodes through the legacy path, but only by accident, and
-                        # not at the top of the range: a slot that ended at 99% read back as a
-                        # freeze and one at 100% as an idle window, dropping it from the History
-                        # view entirely.
-                        self.export_limits_best.append(pack_export_limit(EXPORT_MODE_TARGET, soc_percent))
-
-                if "charging" in charge_during_slot:
-                    # Assume charging at this time
-                    charge_window = {"start": charge_start_minute, "end": charge_end_minute}
-                    if len(charge_minute_counts) > 1:
-                        charge_window["mixed"] = list(charge_minute_counts.keys())
-                    self.charge_window_best.append(charge_window)
-                    if "freeze" in charge_during_slot:
-                        # Assume freeze charge
-                        self.charge_limit_best.append(self.reserve)
-                    else:
-                        self.charge_limit_best.append(battery_soc_yesterday_array.get(charge_end_minute, 0.0))
-
-        # Simulate yesterday with actual charge/export windows
-        self.forecast_minutes = end_record + minutes_now
-        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(
-            yesterday_pv_step,
-            yesterday_pv_step,
-            yesterday_load_step,
-            yesterday_load_step,
-            end_record + minutes_now,
-            publish=False,
+        # Now show what really happened yesterday (and today so far)
+        plan_html_yesterday, plan_json_yesterday = self.replay_history_day(
+            view_minutes=end_record + minutes_now,
+            status_offset=minutes_now + end_record,
+            pv_step=yesterday_pv_step,
+            load_step=yesterday_load_step,
+            soc_array=battery_soc_yesterday_array,
+            cost_array=cost_yesterday_array,
+            status_data=predbat_status_data,
             prediction=self.prediction,
-            car_hold_minutes=car_hold_minutes,
-            status_warnings=status_warnings,
+            refresh_minutes=self.history_refresh_minutes(),
         )
-        plan_json_yesterday["refresh_minutes"] = self.history_refresh_minutes()
         self.forecast_minutes = end_record
+
+        # Events recorded on the event entities, which outlast the rates' own tags (a restart clears those)
+        events = self.history_events(rate_import_replicated, rate_export_replicated, 24 * 60)
+        recorded_events, event_labels = self.history_events_in_view(self.history_recorded_events(2), midnight_utc - timedelta(days=1), end_record + minutes_now)
+        events.update(recorded_events)
+        if event_labels:
+            plan_json_yesterday["history_events"] = event_labels
+
+        # Put what the supplier actually billed beside each slot, where it has been published
+        billing = self.history_billing()
+        if billing:
+            import_cost_data = None
+            if (billing.get("legs") or {}).get("export") is None:
+                import_cost_data = self.history_minute_data(".cost_today_import", 2)
+            self.attach_history_billing(
+                plan_json_yesterday,
+                billing,
+                midnight_utc - timedelta(days=1),
+                end_record + minutes_now,
+                minutes_now + end_record,
+                cost_data,
+                import_cost_data,
+                events,
+            )
 
         # Restore state
         self.charge_limit_best = previous_charge_limit_best
@@ -4027,6 +4127,574 @@ class Output:
 
         # Update timestamp
         self.savings_last_updated = self.now_utc
+
+    def replay_history_day(self, view_minutes, status_offset, pv_step, load_step, soc_array, cost_array, status_data, prediction, refresh_minutes):
+        """
+        Render a past day for the History view from what was recorded rather than simulated.
+
+        The plan table is drawn from the recorded SoC (soc_array) and cost (cost_array), with the
+        charge and export windows rebuilt from the recorded predbat.status history. view_minutes is how
+        many minutes the view covers from its midnight, and status_offset is how many minutes before now
+        the view's minute 0 was, which is how status_data (keyed by minutes ago) lines up with it.
+        refresh_minutes is how long the view may go before it is rebuilt, for the web page's stale warning.
+
+        Must be called with the plan state already wound back to the day being shown (minutes_now 0,
+        midnight_utc and the rates for that day), as calculate_yesterday() does. The charge/export
+        windows and forecast_minutes it changes are put back before it returns; predict_soc_best,
+        predict_soc and predict_metric_best are left holding the replay, as they always have been.
+
+        Returns (plan_html, plan_json).
+        """
+        previous_charge_limit_best = self.charge_limit_best
+        previous_charge_window_best = self.charge_window_best
+        previous_export_limits_best = self.export_limits_best
+        previous_export_window_best = self.export_window_best
+        previous_forecast_minutes = self.forecast_minutes
+        self.charge_limit_best = []
+        self.charge_window_best = []
+        self.export_limits_best = []
+        self.export_window_best = []
+        self.predict_soc_best = soc_array
+        self.predict_soc = soc_array
+        self.predict_metric_best = cost_array
+
+        # Fake charge/export windows based on previous predbat status
+        car_hold_minutes = set()
+        status_warnings = {}
+        if status_data:
+            predbat_status = minute_data_state(status_data[0], max(2, -(-status_offset // (24 * 60))), self.now_utc, "state", "last_updated")
+            for minute in predbat_status:
+                status, warning = split_status_warning(predbat_status[minute])
+                if "," in status:
+                    # If there are multiple statuses take the first one
+                    status = status.split(",")[0].strip()
+                predbat_status[minute] = status
+                if warning:
+                    # predbat_status is keyed by minutes ago; plan-minute m is (status_offset - m) ago.
+                    # minute_data_state() holds each recorded status until the next one, so across a gap in
+                    # the recorder the warning is held along with the state it arrived with - the flag
+                    # stays with the state the slot shows, which is rebuilt from the same held value.
+                    status_warnings[status_offset - minute] = warning
+            # The car icon on this table follows the recorded "Hold for car" status, as its SoC is measured.
+            # predbat_status is keyed by minutes ago; plan-minute m is (status_offset - m) ago.
+            car_hold_minutes = {status_offset - minutes_ago for minutes_ago, status in predbat_status.items() if status.lower() == "hold for car"}
+            # Ignore the first and last edge_minutes of each slot when they don't hold one state
+            # throughout - Predbat's reported status can lag a slot boundary by a minute or two while
+            # it catches up to a replan, and that leftover from the previous (or next) slot must not
+            # be mistaken for a real part of this one. A status occupying the *whole* edge window,
+            # though, is indistinguishable from a genuine replan landing right at the boundary, so it
+            # is trusted like any interior minute rather than discarded on principle.
+            edge_minutes = 5
+            for minute in range(0, view_minutes, self.plan_interval_minutes):
+                minute_offset = status_offset - minute
+
+                # predbat_status is keyed by minutes AGO, so the status for plan-minute
+                # (minute + slot_offset) lives at (minute_offset - slot_offset).
+                slot_statuses = [predbat_status.get(minute_offset - slot_offset, "").lower() for slot_offset in range(self.plan_interval_minutes)]
+                tally_start = 0 if len(set(slot_statuses[:edge_minutes])) == 1 else edge_minutes
+                tally_end = self.plan_interval_minutes if len(set(slot_statuses[-edge_minutes:])) == 1 else self.plan_interval_minutes - edge_minutes
+
+                # A warning in an edge window the tally does not trust came in with the previous (or
+                # next) slot's leftover status, so it must not flag this slot either - the flag names
+                # a problem that ran alongside the minutes this slot's state was rebuilt from.
+                for slot_offset in list(range(0, tally_start)) + list(range(tally_end, self.plan_interval_minutes)):
+                    status_warnings.pop(minute + slot_offset, None)
+
+                charge_start_minute = None
+                charge_end_minute = None
+                export_start_minute = None
+                export_end_minute = None
+
+                # Walk exactly the minutes the tally below trusts. The two must agree: the tally
+                # decides *whether* a slot rebuilds a charge or export window and this walk decides
+                # *where* that window starts, so a state the tally counts but this walk never sees
+                # produces a window with start/end still None, and in_charge_window() then compares
+                # an int against None and takes down the whole update_pred() cycle (regression from #4872).
+                # A state found anywhere in the slot's leading edge window still snaps back to the
+                # slot boundary, as it always has - a state already running that early reads as
+                # having opened the slot, and the History view renders whole slots regardless.
+                for slot_offset in range(tally_start, tally_end):
+                    slot_status = slot_statuses[slot_offset]
+                    real_minute = minute if slot_offset <= edge_minutes else minute + slot_offset
+
+                    # Cross-charging genuinely straddles both sides - track it as both an exporting
+                    # and a charging slot (its name contains "charging" but not "exporting"), so
+                    # these are independent "if"s rather than "if/elif".
+                    # One side starting *later* than the other ends the earlier one - the slot hands
+                    # off mid-way. Starting at the same minute is not a handoff but an overlap: both
+                    # run the whole slot, which is exactly what cross-charging is. Ending the earlier
+                    # side at the later one's start would then close it at its own start minute, and
+                    # a zero-width window renders as nothing at all - which is how the export half of
+                    # a cross-charging slot went missing again after #4466 restored it.
+                    if yesterday_slot_is_exporting(slot_status) and export_start_minute is None:
+                        export_start_minute = real_minute
+                        if charge_start_minute is not None and charge_start_minute < export_start_minute:
+                            charge_end_minute = export_start_minute
+                    if "charging" in slot_status and charge_start_minute is None:
+                        charge_start_minute = real_minute
+                        if export_start_minute is not None and export_start_minute < charge_start_minute:
+                            export_end_minute = charge_start_minute
+
+                # Assume slots end at end of period if not found
+                if export_end_minute is None and export_start_minute is not None:
+                    export_end_minute = minute + self.plan_interval_minutes
+                if charge_end_minute is None and charge_start_minute is not None:
+                    charge_end_minute = minute + self.plan_interval_minutes
+
+                # Tally how many trusted minutes each status held, so the cell can show whichever one
+                # actually dominated the slot rather than whichever the scan above happened to detect
+                # first (#4843).
+                export_minute_counts = {}
+                charge_minute_counts = {}
+                for slot_offset in range(tally_start, tally_end):
+                    slot_status = slot_statuses[slot_offset]
+                    if yesterday_slot_is_exporting(slot_status):
+                        export_minute_counts[slot_status] = export_minute_counts.get(slot_status, 0) + 1
+                    if "charging" in slot_status:
+                        charge_minute_counts[slot_status] = charge_minute_counts.get(slot_status, 0) + 1
+
+                export_during_slot = dominant_slot_status(export_minute_counts, EXPORT_STATE_PRECEDENCE)
+                charge_during_slot = dominant_slot_status(charge_minute_counts, CHARGE_STATE_PRECEDENCE)
+
+                if yesterday_slot_is_exporting(export_during_slot):
+                    # Assume exporting at this time
+                    export_window = {"start": export_start_minute, "end": export_end_minute}
+                    if len(export_minute_counts) > 1:
+                        export_window["mixed"] = list(export_minute_counts.keys())
+                    self.export_window_best.append(export_window)
+                    if "freeze" in export_during_slot:
+                        # Assume freeze export
+                        self.export_limits_best.append(pack_export_limit(EXPORT_MODE_FREEZE))
+                    else:
+                        soc_was = soc_array.get(export_end_minute, 0.0)
+                        soc_percent = calc_percent_limit(soc_was, self.soc_max)
+                        # A target instruction, not the bare percentage this used to append. A bare
+                        # number still decodes through the legacy path, but only by accident, and
+                        # not at the top of the range: a slot that ended at 99% read back as a
+                        # freeze and one at 100% as an idle window, dropping it from the History
+                        # view entirely.
+                        self.export_limits_best.append(pack_export_limit(EXPORT_MODE_TARGET, soc_percent))
+
+                if "charging" in charge_during_slot:
+                    # Assume charging at this time
+                    charge_window = {"start": charge_start_minute, "end": charge_end_minute}
+                    if len(charge_minute_counts) > 1:
+                        charge_window["mixed"] = list(charge_minute_counts.keys())
+                    self.charge_window_best.append(charge_window)
+                    if "freeze" in charge_during_slot:
+                        # Assume freeze charge
+                        self.charge_limit_best.append(self.reserve)
+                    else:
+                        self.charge_limit_best.append(soc_array.get(charge_end_minute, 0.0))
+
+        # Render the day with the charge/export windows it actually ran
+        self.forecast_minutes = view_minutes
+        plan_html, plan_json = self.publish_html_plan(
+            pv_step,
+            pv_step,
+            load_step,
+            load_step,
+            view_minutes,
+            publish=False,
+            prediction=prediction,
+            car_hold_minutes=car_hold_minutes,
+            status_warnings=status_warnings,
+        )
+        plan_json["refresh_minutes"] = refresh_minutes
+
+        self.charge_limit_best = previous_charge_limit_best
+        self.charge_window_best = previous_charge_window_best
+        self.export_limits_best = previous_export_limits_best
+        self.export_window_best = previous_export_window_best
+        self.forecast_minutes = previous_forecast_minutes
+        return plan_html, plan_json
+
+    def history_billing(self):
+        """The sensor.predbat_billing attributes the History view needs, or None when there is no billing to show."""
+        entity = billing_entity_id(self.prefix)
+        slots = self.get_state_wrapper(entity_id=entity, attribute="slots", default=None)
+        if not isinstance(slots, dict) or not slots.get("import"):
+            return None
+        return {
+            "slots": slots,
+            "legs": self.get_state_wrapper(entity_id=entity, attribute="legs", default=None) or {},
+            "complete_until": self.get_state_wrapper(entity_id=entity, attribute="complete_until", default=None),
+            "supplier": self.get_state_wrapper(entity_id=entity, attribute="supplier", default=None),
+            "credit_events": self.get_state_wrapper(entity_id=entity, attribute="credit_events", default=None) or [],
+            # Axle VPP events, current and past, which Axle pays separately from the bill
+            "axle_events": list(self.axle_sessions or []),
+            # Joined Octopus saving sessions, current and past, priced as fetch_octopus_sessions() prices them; Octopus rewards them in points
+            "saving_events": saving_session_events(
+                self.octopus_saving_joined_events,
+                self.get_arg("octopus_saving_session_octopoints_per_penny", 8),
+                self.get_arg("octopus_saving_session_rate", 0.0),
+                # fetch_octopus_sessions() only adds a session to the export rate when the export tariff pays
+                on_export=self.rate_export_max > 0,
+            ),
+        }
+
+    @staticmethod
+    def history_billing_mark(billing):
+        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a credited event or its credit changes, or an Axle event or saving session changes; None without billing."""
+        slots = (billing or {}).get("slots") or {}
+        mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] for leg in ("import", "export")]
+        mark.append([[event.get("start"), event.get("credit")] for event in (billing or {}).get("credit_events") or []])
+        # Only Axle events over the billed half-hours: a managed price curve adds future ones every few minutes and an old one ages out every
+        # half-hour, neither of which changes a billed row
+        # (compared as slot keys, which sort as UTC times, so a key that can't be read changes nothing)
+        keys = sorted(set(slots.get("import") or {}) | set(slots.get("export") or {}))
+        if keys:
+            spans = [(start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), direction, pence) for start, end, direction, pence in parse_axle_events((billing or {}).get("axle_events"))]
+            mark.append([list(span) for span in spans if span[0] <= keys[-1] and span[1] > keys[0]])
+            # ... and the saving sessions over them, with every field attach_billing() reads (its points rate, an award being posted, or
+            # becoming expected or not, included)
+            sessions = [(start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)) + tuple(rest) for start, end, *rest in parse_saving_events((billing or {}).get("saving_events"))]
+            mark.append([list(span) for span in sessions if span[0] <= keys[-1] and span[1] > keys[0]])
+        return mark if mark[0][0] else None
+
+    def history_minute_data(self, suffix, days):
+        """Read a Predbat entity's recorded state history as minute data keyed by minutes ago, or None when there is none.
+
+        Minutes from before the first recorded point are dropped, so a missing key really means "not recorded".
+        """
+        history = self.get_history_wrapper(entity_id=self.prefix + suffix, days=days, required=False)
+        if not history or not history[0]:
+            return None
+        data, _ = minute_data(history[0], days, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+        reach = None
+        for point in history[0]:
+            try:
+                first = datetime.fromisoformat(str(point.get("last_updated")).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            if first.tzinfo is not None:
+                reach = int((self.now_utc - first).total_seconds() // 60)
+                break
+        if data and reach is not None:
+            data = {minute: value for minute, value in data.items() if minute <= reach}
+        return data or None
+
+    def history_day_boundaries(self, view_midnight, view_minutes):
+        """The view minutes (from 0 up to view_minutes) at which a local midnight falls, from real instants.
+
+        A day is 23 or 25 hours long when the clocks change, and the yesterday + today view can start an hour
+        either side of a midnight, so these are never assumed to be multiples of 1440.
+        """
+        start = view_midnight.astimezone(timezone.utc)
+        end = start + timedelta(minutes=view_minutes)
+        boundaries = []
+        day = start.astimezone(self.local_tz).date()
+        while True:
+            midnight = self.local_midnight_utc(day).astimezone(timezone.utc)
+            if midnight > end:
+                break
+            minute = int((midnight - start).total_seconds() // 60)
+            if minute >= 0:
+                boundaries.append(minute)
+            day += timedelta(days=1)
+        return boundaries
+
+    @staticmethod
+    def history_cumulative_array(data, status_offset, view_minutes, boundaries):
+        """Turn a per-day running total that resets at local midnight (keyed by minutes ago) into one running total from the view's minute 0.
+
+        Read 4 minutes into each minute's data, and at each midnight in boundaries carry the day's final value
+        across the reset. Used for both the older days and the yesterday + today view's Cost column.
+
+        At a midnight the new day's total is taken as 0 rather than read. Before today_cost() added the standing charge
+        on the run at the reset itself, cost_today was published as 0 there and took in the charge with the next full
+        update, often more than 4 minutes later, and the recorder still holds those days. Pinning it to 0 puts the standing
+        charge in the row that starts at midnight either way, as long as it is recorded within that first row.
+        """
+        array = {}
+        carry = 0.0
+        resets = set(boundaries)
+        for minute in range(0, view_minutes + 1):
+            if minute in resets:
+                if minute > 0:
+                    carry += data.get(status_offset - minute + 1, 0.0)
+                array[minute] = carry
+            else:
+                array[minute] = data.get(status_offset - minute - 4, 0.0) + carry
+        return array
+
+    def history_row_costs(self, cost_array, view_minutes, standing_pence, boundaries):
+        """Predbat's cost for each History row, in pence, from a running cost array, without the standing charge.
+
+        The running array starts each day at 0 at its midnight (history_cumulative_array()), so the row that starts at
+        (or spans) a midnight in boundaries carries that day's standing charge, and it is taken off there.
+        """
+        costs = {}
+        for minute in range(0, view_minutes, self.plan_interval_minutes):
+            start = cost_array.get(minute, 0.0)
+            end_minute = min(minute + self.plan_interval_minutes, view_minutes)
+            cost = cost_array.get(end_minute, start) - start
+            cost -= standing_pence * sum(1 for boundary in boundaries if minute <= boundary < end_minute)
+            costs[minute] = cost
+        return costs
+
+    def history_row_meter_kwh(self, status_offset, view_minutes):
+        """Predbat's recorded import and export kWh for each History row as the supply meter saw them, or None for one with no sensor.
+
+        A car outside the CT clamp is added from its own sensor the way today_cost() costs it (car_outside_clamp_energy()),
+        so the rows match the supplier's metered kWh, which include the car.
+        """
+        if not self.import_today:
+            return None, None
+        car_today = self.car_charging_energy if self.num_cars > 0 else None
+        import_rows = {}
+        export_rows = {}
+        for minute in range(0, view_minutes, self.plan_interval_minutes):
+            import_kwh = 0.0
+            export_kwh = 0.0
+            for offset in range(minute, min(minute + self.plan_interval_minutes, view_minutes)):
+                index = status_offset - offset - 1
+                energy_import = self.get_from_incrementing(self.import_today, index)
+                energy_export = self.get_from_incrementing(self.export_today, index) if self.export_today else 0.0
+                car_energy = self.get_from_incrementing(car_today, index) if car_today else 0.0
+                energy_import, energy_export, _, _ = self.car_outside_clamp_energy(energy_import, energy_export, 0.0, car_energy)
+                import_kwh += energy_import
+                export_kwh += energy_export
+            import_rows[minute] = import_kwh
+            export_rows[minute] = export_kwh
+        return import_rows, export_rows if self.export_today else None
+
+    @staticmethod
+    def history_events(rate_import_replicated, rate_export_replicated, offset):
+        """The rate tags (saving event, manual rate...) for a History view, keyed by its own minutes; offset maps a rate minute onto the view."""
+        events = {}
+        for tags in (rate_export_replicated or {}, rate_import_replicated or {}):
+            for minute, tag in tags.items():
+                events[minute + offset] = tag
+        return events
+
+    @staticmethod
+    def history_slot_floor(when):
+        """when rounded down to the start of its half-hour, in UTC."""
+        when = when.astimezone(timezone.utc)
+        return when.replace(minute=(when.minute // 30) * 30, second=0, microsecond=0)
+
+    def history_recorded_events(self, days):
+        """The saving session, free electricity, Axle and rate override events recorded over the last days, as [(start_utc, end_utc, tag)].
+
+        Read from the on/off history of the entities octopus_saving_session, octopus_free_electricity and axle_session
+        point at, and of Predbat's own import/export rate override sensors. The sensors change a few minutes after an event does and events run on half-hours, so each change is
+        rounded down to its half-hour; an event still on is taken to run to now.
+        """
+        sources = []
+        for arg, tag in HISTORY_EVENT_ENTITIES:
+            entity_id = self.get_arg(arg, None, indirect=False) if arg in self.args else None
+            if entity_id and isinstance(entity_id, str):
+                sources.append((entity_id, tag))
+        sources.append(("binary_sensor." + self.prefix + "_rate_override_import", "manual"))
+        sources.append(("binary_sensor." + self.prefix + "_rate_override_export", "manual"))
+        spans = []
+        for entity_id, default_tag in sources:
+            # tracked=False: read only when the History view is rebuilt. Tracking would add these rarely-changing
+            # entities to HAHistory's 2-minute refresh, which re-reads a day (or the whole window, while empty) each time
+            history = self.get_history_wrapper(entity_id=entity_id, days=days, required=False, tracked=False)
+            if not history or not history[0]:
+                continue
+            on_since = None
+            on_tag = None
+            for point in history[0]:
+                try:
+                    when = datetime.fromisoformat(str(point.get("last_changed") or point.get("last_updated")).replace("Z", "+00:00"))
+                except (TypeError, ValueError):
+                    continue
+                if when.tzinfo is None:
+                    continue
+                active = str(point.get("state")).lower() in ("on", "true")
+                # The rate override sensors say which kind of override in their tag attribute
+                tag = (point.get("attributes") or {}).get("tag")
+                tag = tag if tag in BILLING_EVENT_LABELS else default_tag
+                if on_since is not None and (not active or tag != on_tag):
+                    spans.append((on_since, max(self.history_slot_floor(when), on_since + timedelta(minutes=30)), on_tag))
+                    on_since = None
+                if active and on_since is None:
+                    on_since = self.history_slot_floor(when)
+                    on_tag = tag
+            if on_since is not None:
+                spans.append((on_since, max(self.now_utc.astimezone(timezone.utc), on_since + timedelta(minutes=30)), on_tag))
+        return spans
+
+    @staticmethod
+    def history_events_in_view(spans, view_midnight, view_minutes):
+        """Map recorded event spans onto one History view: ({view minute: tag}, [the labels of the events in it])."""
+        events = {}
+        for start, end, tag in spans:
+            first = max(0, int((start - view_midnight).total_seconds() // 60))
+            last = min(view_minutes, int((end - view_midnight).total_seconds() // 60))
+            for minute in range(first, last):
+                events[minute] = tag
+        labels = sorted({BILLING_EVENT_LABELS[tag] for tag in events.values() if tag in BILLING_EVENT_LABELS})
+        return events, labels
+
+    def attach_history_billing(self, plan_json, billing, view_midnight_utc, view_minutes, status_offset, cost_data, import_cost_data, events):
+        """Attach the billing to one History view's plan JSON.
+
+        cost_data and import_cost_data are the recorded cost_today / cost_today_import histories (minute data
+        keyed by minutes ago). With no export meter being read, Billed is import-only and is compared with
+        Predbat's import cost rather than its net cost, which counts export earnings the bill would not. With an
+        export meter, a row whose export billing hasn't arrived (or failed to read) shows its import charge, flagged as
+        waiting for export, with no Diff and left out of the summary. Without the history
+        it needs nothing is shown.
+        """
+        import_only = (billing.get("legs") or {}).get("export") is None
+        data = import_cost_data if import_only else cost_data
+        if not data:
+            return
+        boundaries = self.history_day_boundaries(view_midnight_utc, view_minutes)
+        array = self.history_cumulative_array(data, status_offset, view_minutes, boundaries)
+        costs = self.history_row_costs(array, view_minutes, 0.0 if import_only else self.metric_standing_charge, boundaries)
+        import_kwh, export_kwh = self.history_row_meter_kwh(status_offset, view_minutes)
+        attach_billing(
+            plan_json,
+            billing,
+            view_midnight_utc,
+            self.plan_interval_minutes,
+            costs,
+            self.metric_standing_charge,
+            events,
+            import_only,
+            import_kwh,
+            None if import_only else export_kwh,
+            billing.get("axle_events"),
+            billing.get("saving_events"),
+        )
+
+    def local_midnight_utc(self, day):
+        """Local midnight at the start of date day, as a local-time aware datetime like self.midnight_utc (the plan table shows its times as they are)."""
+        return start_of_local_day(day, self.local_tz)
+
+    def calculate_history_days(self):
+        """Build the History view for the days before yesterday, for the day picker, and publish them as predbat.plan_history.
+
+        Rebuilt once per local date, or sooner when new billing has been published (its complete_until moves on).
+        Only days the loaded load history reaches (max_days_previous) and the recorded rates cover are built.
+        """
+        today = self.now_utc.astimezone(self.local_tz).date()
+        billing = self.history_billing()
+        billing_mark = self.history_billing_mark(billing)
+        retry_due = self.history_days_retry_at is not None and self.now_utc >= self.history_days_retry_at
+        if self.history_days_built_for == today and self.history_days_billing_mark == billing_mark and not retry_due:
+            return
+        self.history_days_built_for = today
+        self.history_days_billing_mark = billing_mark
+        self.history_days_retry_at = None
+        days = {}
+        days_back_max = min(BILLING_DAYS, self.max_days_previous - 1)
+        if days_back_max >= 2:
+            try:
+                days = self.build_history_days(today, days_back_max, billing)
+            except (KeyError, TypeError, ValueError, IndexError, AttributeError, ZeroDivisionError) as error:
+                # The older days are a view; a failure here must never stop the plan
+                self.log("Warn: History: could not build the older days for the History view: {}".format(error))
+                days = {}
+            if not days:
+                # History not readable yet (just started, recorder slow): try again in a few hours rather than tomorrow
+                self.history_days_retry_at = self.now_utc + timedelta(minutes=HISTORY_DAYS_RETRY_MINUTES)
+        self.dashboard_item(self.prefix + ".plan_history", state=len(days), attributes={"friendly_name": "Plan history days", "icon": "mdi:history", "days": days})
+
+    def build_history_days(self, today, days_back_max, billing):
+        """Replay each day from 2 to days_back_max days back; returns {"YYYY-MM-DD": plan_json}."""
+        history_days = days_back_max + 2
+        cost_data = self.history_minute_data(".cost_today", history_days)
+        rates_data = self.history_minute_data(".rates", history_days)
+        if not cost_data or not rates_data:
+            return {}
+        rates_export_data = self.history_minute_data(".rates_export", history_days) or {}
+        soc_data = self.history_minute_data(".soc_kw_h0", history_days) or self.soc_kwh_history
+        status_data = self.get_history_wrapper(entity_id=self.prefix + ".status", days=history_days, required=False)
+        import_cost_data = self.history_minute_data(".cost_today_import", history_days) if billing and (billing.get("legs") or {}).get("export") is None else None
+        event_spans = self.history_recorded_events(history_days)
+
+        saved = {name: getattr(self, name) for name in HISTORY_DAY_FAKED_STATE}
+        saved["car_charging_slots"] = copy.deepcopy(self.car_charging_slots)
+        now_utc = self.now_utc
+        minutes_now = self.minutes_now
+        days = {}
+        try:
+            for days_back in range(2, days_back_max + 1):
+                day = today - timedelta(days=days_back)
+                view_midnight = self.local_midnight_utc(day)
+                view_minutes = int((self.local_midnight_utc(day + timedelta(days=1)) - view_midnight).total_seconds() // 60)
+                status_offset = int((now_utc - view_midnight).total_seconds() // 60)
+                # Leave out a day the recorded rates or costs don't cover, rather than show it at 0p
+                if any((status_offset - view_minutes + 1) not in data or status_offset not in data for data in (rates_data, cost_data)):
+                    continue
+
+                self.minutes_now = minutes_now
+                self.forecast_minutes = max(saved["forecast_minutes"], view_minutes)
+                load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=status_offset)
+                pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=status_offset)
+
+                cost_array = self.history_cumulative_array(cost_data, status_offset, view_minutes, self.history_day_boundaries(view_midnight, view_minutes))
+                soc_array = {minute: soc_data.get(status_offset - minute - 4, 0.0) for minute in range(0, view_minutes + 1)}
+
+                self.minutes_now = 0
+                self.midnight_utc = view_midnight
+                self.rate_import = {minute: rates_data.get(status_offset - minute, 0.0) for minute in range(0, view_minutes + self.plan_interval_minutes)}
+                self.rate_export = {minute: rates_export_data.get(status_offset - minute, 0.0) for minute in range(0, view_minutes + self.plan_interval_minutes)}
+                self.rate_import_replicated = {}
+                self.rate_export_replicated = {}
+                self.cost_today_sofar = 0
+                self.import_today_now = 0
+                self.export_today_now = 0
+                self.carbon_today_sofar = 0
+                self.pv_today_now = 0
+                self.load_minutes_now = 0
+                self.car_charging_hold = False
+                self.iboost_energy_subtract = False
+                self.iboost_enable = False
+                self.plan_debug = False
+                self.carbon_enable = False
+                self.car_charging_slots = [[] for _ in range(self.num_cars)]
+                # Simulated values with no recorded history behind them: show nothing rather than another day's
+                self.predict_clipped_best = {}
+                self.predict_iboost_best = {}
+                self.predict_carbon_best = {}
+
+                plan_html, plan_json = self.replay_history_day(
+                    view_minutes=view_minutes,
+                    status_offset=status_offset,
+                    pv_step=pv_step,
+                    load_step=load_step,
+                    soc_array=soc_array,
+                    cost_array=cost_array,
+                    status_data=status_data,
+                    prediction=None,
+                    # Rebuilt once a day rather than once a slot, as the rolling History view is
+                    refresh_minutes=self.history_day_refresh_minutes(),
+                )
+                # The renderer adds minutes to a fixed-offset midnight; label each row in the local time it really was
+                if hasattr(self.local_tz, "normalize"):
+                    for row in plan_json.get("rows") or []:
+                        if row.get("slot_minute") is not None:
+                            row["time"] = self.local_tz.normalize(view_midnight + timedelta(minutes=row["slot_minute"])).strftime(TIME_FORMAT)
+                events, event_labels = self.history_events_in_view(event_spans, view_midnight, view_minutes)
+                if event_labels:
+                    plan_json["history_events"] = event_labels
+                if billing:
+                    self.minutes_now = minutes_now
+                    self.attach_history_billing(plan_json, billing, view_midnight, view_minutes, status_offset, cost_data, import_cost_data, events)
+                days[day.isoformat()] = plan_json
+        finally:
+            for name in HISTORY_DAY_FAKED_STATE:
+                setattr(self, name, saved[name])
+            self.car_charging_slots = saved["car_charging_slots"]
+        return days
+
+    def publish_rate_overrides(self):
+        """Publish whether the current slot's import and export rates are a user override, so the History view can mark them later from the recorded history."""
+        for direction, tags in (("import", self.rate_import_replicated), ("export", self.rate_export_replicated)):
+            tag = (tags or {}).get(self.minutes_now)
+            tag = tag if tag in RATE_OVERRIDE_TAGS else None
+            self.dashboard_item(
+                "binary_sensor." + self.prefix + "_rate_override_" + direction,
+                state="on" if tag else "off",
+                attributes={"friendly_name": "Predbat {} rate override".format(direction), "icon": "mdi:cash-edit", "tag": tag},
+            )
 
     def publish_rate_and_threshold(self):
         """

@@ -104,6 +104,13 @@ COMPARE_PLAN_STATE = (
     "rate_best_cost_threshold_charge",
     "rate_best_cost_threshold_export",
     "io_confirmed_tiebreak",
+    # The live plan's PV10 and PV90 series behind its scenario tooltips (#5871). calculate_plan() replaces them only on a
+    # publishing run or a debug-mode pass, and a comparison makes neither, so this is a safeguard - listed because
+    # calculate_plan() assigns them, which the compare tests require to be accounted for
+    "predict_soc_best10",
+    "predict_metric_best10",
+    "predict_soc_best90",
+    "predict_metric_best90",
 )
 # Battery and inverter values a tariff can override, reset after each tariff as well as at the end
 COMPARE_HARDWARE_STATE = ("soc_max", "battery_rate_max_charge", "battery_rate_max_charge_dc", "battery_rate_max_discharge", "battery_rate_max_export", "inverter_limit")
@@ -119,7 +126,6 @@ COMPARE_RESTORED_STATE = (
         "manual_freeze_charge_times",
         "manual_freeze_export_times",
         "manual_demand_times",
-        "manual_all_times",
         "cost_today_sofar",
         "carbon_today_sofar",
         "iboost_today",
@@ -225,6 +231,9 @@ class Compare:
             entity_id = pb.resolve_arg("metric_octopus_import", tariff["metric_octopus_import"], indirect=False)
             if entity_id:
                 pb.rate_import = pb.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
+                # As fetch_sensor_data() does, so a feed still discounting a withdrawn dispatch matches the live rates
+                if pb.rate_import:
+                    pb.rate_import = pb.octopus_strip_withdrawn_feed_rates(pb.rate_import, save=False)
                 import_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Octopus entity id {}".format(tariff.get("id", ""), entity_id))
@@ -306,6 +315,13 @@ class Compare:
         if pb.rate_import:
             pb.rate_scan(pb.rate_import, print=False)
             pb.rate_import, pb.rate_import_replicated = pb.rate_replicate(pb.rate_import, pb.io_adjusted, is_import=True, use_future=import_future)
+            # The replacement cost of a stored kWh, built before any session as fetch_sensor_data() does. This
+            # tariff's own rates carry no session; live rates already do, so they keep the live cycle's value,
+            # which must be put back as an earlier tariff in the run may have replaced it.
+            if import_replaced:
+                pb.rate_min_forward = pb.rate_min_forward_calc(pb.rate_import)
+            else:
+                pb.rate_min_forward = dict(live_saving.get("import_min_forward", pb.rate_min_forward))
             if "rates_import_override" in tariff:
                 # A kept pre-saving snapshot must carry the same override, as fetch_sensor_data()'s does
                 if pb.rate_import_saving_minutes and pb.rate_import_pre_saving:
@@ -317,6 +333,14 @@ class Compare:
         if pb.rate_export:
             pb.rate_scan_export(pb.rate_export, print=False)
             pb.rate_export, pb.rate_export_replicated = pb.rate_replicate(pb.rate_export, is_import=False, use_future=export_future)
+            # battery_value_rate's export terms, from the tariff before any session as fetch_sensor_data() builds
+            # them - this tariff's own rates, or the live cycle's values put back for live rates (see rate_min_forward)
+            if export_replaced:
+                pb.rate_export_max_forward = pb.rate_export_max_forward_calc(pb.rate_export)
+                pb.rate_export_min_base = pb.rate_minmax(pb.rate_export)[0]
+            else:
+                pb.rate_export_max_forward = dict(live_saving.get("export_max_forward", pb.rate_export_max_forward))
+                pb.rate_export_min_base = live_saving.get("export_min_base", pb.rate_export_min_base)
             if "rates_export_override" in tariff:
                 if pb.rate_export_saving_minutes and pb.rate_export_pre_saving:
                     pb.rate_export_pre_saving = pb.override_session_rates(pb.rate_export, pb.rate_export_pre_saving, pb.rate_export_saving_minutes, tariff["rates_export_override"], "rates_export_override", {}, False, include_manual_api=False)
@@ -572,7 +596,6 @@ class Compare:
         my_predbat.manual_freeze_charge_times = []
         my_predbat.manual_freeze_export_times = []
         my_predbat.manual_demand_times = []
-        my_predbat.manual_all_times = []
         my_predbat.octopus_intelligent_charging = False
 
         self.recompute_iboost()
@@ -772,10 +795,13 @@ class Compare:
             "export_minutes": set(self.pb.rate_export_saving_minutes),
             "import_pre_saving": dict(self.pb.rate_import_pre_saving),
             "export_pre_saving": dict(self.pb.rate_export_pre_saving),
+            "import_min_forward": dict(self.pb.rate_min_forward),
+            "export_max_forward": dict(self.pb.rate_export_max_forward),
+            "export_min_base": self.pb.rate_export_min_base,
         }
 
         # Midnight SOC fallback for tariffs with no prior result
-        soc_midnight_fallback = my_predbat.soc_kwh_history.get(my_predbat.minutes_now, my_predbat.soc_kw)
+        soc_midnight_fallback = my_predbat.soc_kwh_history.get(my_predbat.minutes_since_day_start(), my_predbat.soc_kw)
         today_date = datetime.now().strftime("%Y-%m-%d")
 
         # Snapshot config values for all keys that any tariff may override via fetch_config().

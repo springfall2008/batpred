@@ -7,7 +7,7 @@ Octopus tariff period.
 
 from datetime import datetime, timedelta
 import hashlib
-import requests
+from http_sync import http_get
 import json
 import copy
 
@@ -20,8 +20,9 @@ TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
 # AgilePredict (https://agilepredict.com) forecasts Octopus Agile prices per region for up to 14 days
 AGILEPREDICT_DEFAULT_URL = "https://prices.fly.dev/api/"
 AGILEPREDICT_REGIONS = "ABCDEFGHJKLMNP"
-# AgilePredict publishes new forecasts four times a day, so a 30 minute cache is plenty fresh
-AGILEPREDICT_CACHE_MINUTES = 30
+# AgilePredict publishes new forecasts four times a day (at least five hours apart), so a three hour
+# cache keeps the load on this free community service low while never being more than one update behind
+AGILEPREDICT_CACHE_MINUTES = 180
 # Always ask for the same span so that every user of a shared cache asks for the same URL
 AGILEPREDICT_DAYS = 5
 
@@ -70,12 +71,24 @@ class FutureRate:
             best_diff_add_peak = 12.0
             best_diff_add_all = 0
             mult_range = [x / 100 for x in range(180, 240, 2)]
+
+            # Take into account the flat-rate 3.34p/kWh discount applied to energy prices after discounting green levies and policy costs
+            #
+            # This needs to be ex VAT
+            discount = 3.34
+
         else:
             best_diff_multiply = 0.95
             best_diff_add_peak = 1.0
             best_diff_add_all = 5.0
             mult_range = [x / 100 for x in range(90, 120, 2)]
-        vat = 1.05
+
+            # Assume no flat-rate discount for export rates
+            discount = 0
+
+        # VAT multiplier for electricity prices.
+        # Used to be 1.05 (5% VAT), now 1.0 (0% VAT)
+        vat = 1.0
 
         best_diff_diff = 9999999
         if real_mdata:
@@ -83,6 +96,7 @@ class FutureRate:
                 diff = 0
                 for minute in real_mdata:
                     minute_mod = minute % (24 * 60)
+
                     rate_real = real_mdata[minute]
                     rate_nord = mdata.get(minute, None)
                     if minute_mod >= peak_start_minutes and minute_mod < peak_end_minutes:
@@ -92,7 +106,9 @@ class FutureRate:
                         rate_nord *= correlate_multiply
 
                         if is_import:
-                            rate_nord = min(rate_nord, 95)  # Cap
+                            # Apply the discount before the price cap
+                            rate_nord -= discount
+                            rate_nord = min(rate_nord, 95.23)  # Cap
                         else:
                             rate_nord = max(rate_nord, 0)
 
@@ -111,6 +127,7 @@ class FutureRate:
                 diff = 0
                 for minute in real_mdata:
                     minute_mod = minute % (24 * 60)
+
                     rate_real = real_mdata[minute]
                     rate_nord = mdata.get(minute, None)
 
@@ -122,7 +139,9 @@ class FutureRate:
                             continue
 
                         if is_import:
-                            rate_nord = min(rate_nord, 95)  # Cap
+                            # Apply the discount before the price cap
+                            rate_nord -= discount
+                            rate_nord = min(rate_nord, 95.23)  # Cap
                         else:
                             rate_nord = max(rate_nord, 0)
 
@@ -137,6 +156,7 @@ class FutureRate:
                 diff = 0
                 for minute in real_mdata:
                     minute_mod = minute % (24 * 60)
+
                     rate_real = real_mdata[minute]
                     rate_nord = mdata.get(minute, None)
                     if rate_nord is not None:
@@ -146,7 +166,9 @@ class FutureRate:
                             rate_nord += correlate_add
 
                         if is_import:
-                            rate_nord = min(rate_nord, 95)  # Cap
+                            # Apply the discount before the price cap
+                            rate_nord -= discount
+                            rate_nord = min(rate_nord, 95.23)  # Cap
                         else:
                             rate_nord = max(rate_nord, 0)
 
@@ -168,8 +190,11 @@ class FutureRate:
             if minute_mod >= peak_start_minutes and minute_mod < peak_end_minutes:
                 rate_nord += best_diff_add_peak
             rate_nord += best_diff_add_all
+
             if is_import:
-                rate_nord = min(rate_nord, 95)  # Cap
+                # Apply the discount before capping the price
+                rate_nord -= discount
+                rate_nord = min(rate_nord, 95.23)  # Cap
             else:
                 rate_nord = max(rate_nord, 0)
 
@@ -488,7 +513,7 @@ class FutureRate:
         the plan falls back to copying the previous day's rates.
         """
         try:
-            r = requests.get(url, timeout=60)
+            r = http_get(url, timeout=60)
         except Exception as e:  # pylint: disable=broad-except
             self.log("Warn: Error downloading AgilePredict data from URL {}, request exception {}".format(url, e))
             return None
@@ -583,7 +608,7 @@ class FutureRate:
 
     def download_futurerate_data_func(self, url):
         try:
-            r = requests.get(url, timeout=120)
+            r = http_get(url, timeout=120)
         except Exception as e:
             self.log("Warn: Error downloading futurerate data from URL {}, request exception {}".format(url, e))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
@@ -599,7 +624,7 @@ class FutureRate:
 
         try:
             struct = json.loads(r.text)
-        except requests.exceptions.JSONDecodeError:
+        except ValueError:
             self.log("Warn: Error downloading futurerate data from URL {}".format(url))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}

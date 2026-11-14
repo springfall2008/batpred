@@ -29,7 +29,7 @@ def test_hainterface_initialize_ha_only(my_predbat=None):
     ha_interface.api_started = False
     ha_interface.api_stop = False
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, [{"domain": "test"}])
         ha_interface.initialize("http://test", "test_key", False, False, False)
 
@@ -123,7 +123,7 @@ def test_hainterface_initialize_api_check_failed(my_predbat=None):
     ha_interface.api_started = False
     ha_interface.api_stop = False
 
-    with patch("ha.requests.get") as mock_get, patch("ha.time.monotonic", side_effect=[0, 601]), patch("ha.time.sleep"):
+    with patch("ha.http_get") as mock_get, patch("ha.time.monotonic", side_effect=[0, 601]), patch("ha.time.sleep"):
         mock_get.return_value = create_mock_requests_response(500, None)
 
         try:
@@ -158,7 +158,7 @@ def test_hainterface_initialize_retries_transient_statuses(my_predbat=None):
     ha_interface = _make_uninitialized_ha_interface(mock_base)
     responses = [create_mock_requests_response(status, {}) for status in (503, 408, 429)]
     responses.append(create_mock_requests_response(200, [{"domain": "test"}]))
-    with patch("ha.requests.get", side_effect=responses) as mock_get, patch("ha.time.sleep") as mock_sleep:
+    with patch("ha.http_get", side_effect=responses) as mock_get, patch("ha.time.sleep") as mock_sleep:
         ha_interface.initialize("http://test", "test_key", False, False, False)
     if mock_get.call_count != 4 or mock_sleep.call_count != 3 or ha_interface.ha_key != "test_key":
         print("ERROR: expected transient startup responses to retry through success")
@@ -172,7 +172,7 @@ def test_hainterface_initialize_rejects_non_retryable_status(my_predbat=None):
     mock_base = MockBase()
     ha_interface = _make_uninitialized_ha_interface(mock_base)
     responses = [create_mock_requests_response(401, {})]
-    with patch("ha.requests.get", side_effect=responses) as mock_get, patch("ha.time.sleep") as mock_sleep:
+    with patch("ha.http_get", side_effect=responses) as mock_get, patch("ha.time.sleep") as mock_sleep:
         try:
             ha_interface.initialize("http://test", "test_key", False, False, False)
         except ValueError:
@@ -191,7 +191,7 @@ def test_hainterface_initialize_retry_deadline(my_predbat=None):
     """The retry loop exits and clears the key when its deadline expires."""
     mock_base = MockBase()
     ha_interface = _make_uninitialized_ha_interface(mock_base)
-    with patch("ha.requests.get", return_value=create_mock_requests_response(503, {})) as mock_get, patch("ha.time.monotonic", side_effect=[0, 601]), patch("ha.time.sleep") as mock_sleep:
+    with patch("ha.http_get", return_value=create_mock_requests_response(503, {})) as mock_get, patch("ha.time.monotonic", side_effect=[0, 601]), patch("ha.time.sleep") as mock_sleep:
         try:
             ha_interface.initialize("http://test", "test_key", False, False, False)
         except ValueError:
@@ -263,7 +263,7 @@ def test_hainterface_initialize_db_mirror(my_predbat=None):
     ha_interface.api_started = False
     ha_interface.api_stop = False
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         mock_get.return_value = create_mock_requests_response(200, [{"domain": "test"}])
         ha_interface.initialize("http://test", "test_key", True, True, False)
 
@@ -422,7 +422,7 @@ def test_hainterface_get_slug(my_predbat=None):
     ha_interface.api_started = False
     ha_interface.api_stop = False
 
-    with patch("ha.requests.get") as mock_get:
+    with patch("ha.http_get") as mock_get:
         # Mock app info response
         def mock_get_side_effect(url, *args, **kwargs):
             # HA changed terminology from 'addons' to 'apps' in HA 2026.2 but retained the old service calls for transition

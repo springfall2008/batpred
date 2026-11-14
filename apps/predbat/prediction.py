@@ -18,7 +18,7 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import KEEP_TARGET_MIN_RATE, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
 from utils import (
     remove_intersecting_windows,
@@ -226,6 +226,8 @@ class Prediction(PredictionBatch):
         # Outside the `if base:` block on purpose: a Prediction built without a base is still a valid
         # object and its first enqueue_prediction would otherwise raise AttributeError
         self.pending_batch = []
+        # Trials prepared for the pending batch, shared by the scenarios of each trial - see PredictionBatch.shared_trial
+        self.trial_memo = {}
         self.batch_threads = 1
         # Window-end SoCs for cached results that were asked for them, keyed on the same hash as
         # prediction_cache (whose entries drop the SoC series)
@@ -249,6 +251,16 @@ class Prediction(PredictionBatch):
         else:
             try_charge_limit[window_n] = try_soc
         return try_charge_limit
+
+    def _prepare_charge_queued(self, try_soc, window_n, charge_limit, all_n):
+        """_prepare_charge for a queued trial: prepared once per batch and shared by the trial's scenarios (see shared_trial)"""
+        key = ("charge", id(charge_limit), try_soc, window_n, tuple(all_n) if all_n else None)
+        return self.shared_trial(key, (charge_limit,), lambda: self._prepare_charge(try_soc, window_n, charge_limit, all_n))
+
+    def _prepare_export_queued(self, this_export_limit, start, window_n, export_window, export_limits, all_n):
+        """_prepare_export for a queued trial: prepared once per batch and shared by the trial's scenarios (see shared_trial)"""
+        key = ("export", id(export_window), id(export_limits), this_export_limit, start, window_n, tuple(all_n) if all_n else None)
+        return self.shared_trial(key, (export_window, export_limits), lambda: self._prepare_export(this_export_limit, start, window_n, export_window, export_limits, all_n))
 
     def thread_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
         """Run one single-scenario prediction now and return its result.
@@ -338,7 +350,7 @@ class Prediction(PredictionBatch):
         The window lists and dicts are read at flush time, not now, so the caller must not mutate
         anything it passed in before calling get() on the returned handle.
         """
-        try_charge_limit = self._prepare_charge(try_soc, window_n, charge_limit, all_n)
+        try_charge_limit = self._prepare_charge_queued(try_soc, window_n, charge_limit, all_n)
         return self.enqueue_prediction(try_charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, PREDICT_STEP, self.prediction_cache_enable)
 
     def scan_soc_range(self, predict_soc, window):
@@ -419,7 +431,7 @@ class Prediction(PredictionBatch):
         The window lists and dicts are read at flush time, not now, so the caller must not mutate
         anything it passed in before calling get() on the returned handle.
         """
-        try_charge_limit = self._prepare_charge(try_soc, window_n, charge_limit, all_n)
+        try_charge_limit = self._prepare_charge_queued(try_soc, window_n, charge_limit, all_n)
         range_window = None if all_n else charge_window[window_n]
         return self.enqueue_prediction(try_charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, PREDICT_STEP, False, want_range=True, range_window=range_window)
 
@@ -483,7 +495,7 @@ class Prediction(PredictionBatch):
         The window lists and dicts are read at flush time, not now, so the caller must not mutate
         anything it passed in before calling get() on the returned handle.
         """
-        export_window, export_limits = self._prepare_export(this_export_limit, start, window_n, export_window, export_limits, all_n)
+        export_window, export_limits = self._prepare_export_queued(this_export_limit, start, window_n, export_window, export_limits, all_n)
         return self.enqueue_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, PREDICT_STEP, self.prediction_cache_enable, want_export_end_soc=want_export_end_soc)
 
     def find_charge_window_optimised(self, charge_windows, charge_limit, is_export=False):
@@ -515,9 +527,13 @@ class Prediction(PredictionBatch):
             self.prediction_cache_export_end[key] = end_socs
         return end_socs
 
-    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, cache=False, export_floor=True):
+    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, cache=False, export_floor=True, series=True):
         """
         Run a prediction scenario given a charge limit, return the results
+
+        Pass series=False when the per-step SoC series (field 11 of the result) will not be read. It
+        then comes back as an empty dict, from either engine, and the kernel skips producing it,
+        which is the larger part of what a single kernel run costs.
 
         PARITY RULE: The hot loop below is mirrored by the C++ kernel in prediction_kernel.cpp
         for the scenarios it supports. Any behavioural change here MUST be mirrored there,
@@ -556,7 +572,7 @@ class Prediction(PredictionBatch):
         # Try the C++ prediction kernel first; unsupported scenarios fall through to the Python engine.
         # The kernel understands all three pv_scenario values (see PkScenario.pv_scenario, ABI 3).
         if kernel_supported(self, save, step):
-            kernel_result = run_prediction_kernel(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, export_floor_soc=export_floor_soc)
+            kernel_result = run_prediction_kernel(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, export_floor_soc=export_floor_soc, series=series)
             if kernel_result is not None:
                 if sim_hash is not None:
                     # Store in cache without the SoC/car data to save memory, mirroring the Python engine
@@ -681,14 +697,17 @@ class Prediction(PredictionBatch):
         inverter_hybrid = self.inverter_hybrid
         inverter_loss_recp = 1 / inverter_loss
 
-        enable_standing_charge = save and (save in ["best", "base", "base10", "best10", "test", "yesterday", "yesterday10"])
+        enable_standing_charge = save and (save in ["best", "base", "base10", "best10", "best90", "test", "yesterday", "yesterday10"])
         enable_save_stats = save and (save in ["best", "test", "compare", "yesterday"])
+        # The final plan's PV10 and PV90 runs keep only their per-minute SoC and metric, for the plan table's
+        # scenario tooltips (#5871) - car holds and the other per-minute stats stay the expected run's alone
+        enable_save_scenario = save and (save in ["best10", "best90"])
         car_enable = self.num_cars > 0
         car_energy_reported_load = self.car_energy_reported_load
         inverter_limit = self.inverter_limit * step
         export_limit = self.export_limit * step
         pv_ac_limit = self.pv_ac_limit * step
-        set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
+        set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "best90", "test"])
         carbon_enable = self.carbon_enable
         reserve = self.reserve
         soc_max = self.soc_max
@@ -764,6 +783,13 @@ class Prediction(PredictionBatch):
             import_rate = rate_import.get(minute_absolute, 0)
             dispatch_rate = import_rate
             dispatch_gone = io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30
+            dispatch_risk = 0
+            if dispatch_gone and io_confirmed_credit.get(minute_absolute, 0):
+                # The car is charging in this run (io_confirmed_credit_update()), so a dispatch that goes away is seen
+                # within a Predbat cycle: the dispatch is kept, and the house and battery pay RUN_EVERY minutes of each
+                # half hour at the worst-case rate (dispatch_risk, added to their import below)
+                dispatch_gone = False
+                dispatch_risk = (max(self.rate_max, import_rate) - import_rate) * RUN_EVERY / 30
             if dispatch_gone:
                 # Worst case the slot goes away: the tariff's highest rate, or the slot's own if an event makes it dearer
                 import_rate = max(self.rate_max, import_rate)
@@ -851,9 +877,10 @@ class Prediction(PredictionBatch):
                     predict_car_soc_time[car_n][stamp] = round(car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0, 2)
                 predict_iboost[stamp] = iboost_today_kwh
                 record_time[stamp] = 0 if record else soc_max
-                if enable_save_stats:
+                if enable_save_stats or enable_save_scenario:
                     self.predict_soc_best[minute] = round(soc, 3)
                     self.predict_metric_best[minute] = round(metric, 3)
+                if enable_save_stats:
                     self.predict_iboost_best[minute] = round(iboost_today_kwh, 2)
                     self.predict_carbon_best[minute] = round(carbon_g, 0)
                     self.predict_clipped_best[minute] = round(clipped_today, 2)
@@ -1395,11 +1422,14 @@ class Prediction(PredictionBatch):
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if best_soc_keep > 0 and soc <= best_soc_keep:
-                metric_keep += (best_soc_keep - soc) * import_rate * keep_minute_scaling * step / 60.0
+                # A manual or alert floor still costs something to miss at a free or negative rate (#5162)
+                keep_rate = max(import_rate, KEEP_TARGET_MIN_RATE) if alert_keep > 0 else import_rate
+                metric_keep += (best_soc_keep - soc) * keep_rate * keep_minute_scaling * step / 60.0
 
             # Metric keep max - pretend the excess above the ceiling should have been exported instead of held
             if best_soc_max >= 0 and soc >= best_soc_max:
-                metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0
+                # Likewise a ceiling still costs something to break at a free or negative export rate (#5162)
+                metric_keep += (soc - best_soc_max) * max(export_rate, KEEP_TARGET_MIN_RATE) * keep_minute_scaling * step / 60.0
 
             if diff > 0:
                 # Import
@@ -1420,6 +1450,9 @@ class Prediction(PredictionBatch):
                 # but it can't be more than we actually imported from the grid.
                 car_amount_premium = min(diff, car_amount_premium)
                 metric += import_rate * diff + car_rate_premium * car_amount_premium
+                if dispatch_risk:
+                    # Not on the car's share: the car stops with its dispatch
+                    metric += dispatch_risk * (diff - car_amount_premium)
                 if car_gone_kwh:
                     # The car's share of the import is paid at its own rate, not the worst-case rate
                     metric -= min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh)
@@ -1581,7 +1614,7 @@ class Prediction(PredictionBatch):
             round(final_metric_keep, 4),
             round(final_iboost_kwh, 4),
             round(final_carbon_g, 4),
-            predict_soc,
+            predict_soc if series else {},
             car_charging_soc_next,
             iboost_next,
             iboost_running,

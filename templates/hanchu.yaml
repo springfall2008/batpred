@@ -4,9 +4,11 @@
 # This is the NATIVE Predbat cloud integration - Predbat talks to the Hanchu cloud
 # directly and needs no Home Assistant integration and no bridge script.
 #
-# If you would rather drive the inverter through the hanchu-ess-ha HACS integration
-# and a Home Assistant script, use templates/hanchu_cloud.yaml instead; that is a
-# different, service-API setup and the two are alternatives, not layers.
+# The older setup that drove the inverter through the hanchu-ess-ha integration and
+# a Home Assistant bridge script is a different, service-API setup; its guide and
+# template now live in that integration's repository
+# (https://github.com/upton68/hanchu-ess-ha/blob/main/docs/predbat-bridge.md).
+# The two are alternatives, not layers.
 # ------------------------------------------------------------------
 ---
 pred_bat:
@@ -90,6 +92,7 @@ pred_bat:
   # published rate limit, so this default is deliberately mild.
   #hanchu_api_delay: 1
   #hanchu_min_write_interval: 60
+  #hanchu_write_debounce: 10
 
   # Every API request and response is logged by default, because that is what is needed
   # to look into a problem with your inverter. It writes thousands of long lines a day:
@@ -468,7 +471,4 @@ pred_bat:
   #  - '{octopus_intelligent_slot}'
   #  - '{octopus_ready_time}'
   #  - '{octopus_charge_limit}'
-  #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
-  #  - '+[car_charging_soc]'
-  #  - '{car_charging_now}'

@@ -19,9 +19,9 @@ compensation curves, and thermal models to predict heating energy
 requirements and costs for heat pump systems.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytz
-from utils import str2time, dp2, dp3, minute_data, minutes_since_midnight
+from utils import str2time, dp2, dp3, minute_data, minutes_since_midnight, next_aligned_run, clock_change_minutes
 
 from const import TIME_FORMAT
 
@@ -128,6 +128,8 @@ class PredHeat:
         self.delta_correction = DELTA_CORRECTION.copy()
         self.weather_compensation = {}
         self.weather_compensation_enabled = False
+        # Plan-axis minute of the real start of today: 0 except on a clock-change day (GH#5760), set by update_pred()
+        self.day_start_minute = 0
         self.hysteresis_on = abs(self.get_arg("hysteresis", 0.5, domain="predheat"))
         self.hysteresis_off = abs(self.get_arg("hysteresis_off", 0.1, domain="predheat"))
 
@@ -396,7 +398,7 @@ class PredHeat:
             heat_loss_current -= self.heat_gain_static * PREDICT_STEP / 60.0
 
             flow_temp = 0
-            heat_to = 0
+            heat_to = None
             heat_power_in = 0
             heat_power_out = 0
             if heating_on:
@@ -457,7 +459,7 @@ class PredHeat:
                 internal_temp_predict_stamp[stamp] = dp2(internal_temp)
                 external_temp_predict_stamp[stamp] = dp2(external_temp)
                 target_temp_predict_stamp[stamp] = dp2(target_temp)
-                heat_to_predict_stamp[stamp] = dp2(heat_to)
+                heat_to_predict_stamp[stamp] = dp2(heat_to) if heat_to is not None else None
                 heat_energy_predict_stamp[stamp] = dp2(heat_energy)
                 volume_temp_stamp[stamp] = dp2(volume_temp)
                 cost_stamp[stamp] = dp2(cost)
@@ -470,7 +472,7 @@ class PredHeat:
             # Store raw data
             target_temp_predict_minute[minute] = dp2(target_temp)
             internal_temp_predict_minute[minute] = dp2(internal_temp)
-            heat_to_predict_temperature[minute] = dp2(heat_to)
+            heat_to_predict_temperature[minute] = dp2(heat_to) if heat_to is not None else None
             heat_energy_predict_minute[minute] = dp2(heat_energy)
             cost_minute[minute] = dp2(cost)
 
@@ -491,7 +493,11 @@ class PredHeat:
             self.set_state(
                 self.prefix + ".target_temp", state=dp2(target_temp_predict_minute[0]), attributes={"results": target_temp_predict_stamp, "friendly_name": "Target Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "°C"}
             )
-            self.set_state(self.prefix + ".heat_to_temp", state=dp2(heat_to_predict_temperature[0]), attributes={"results": heat_to_predict_stamp, "friendly_name": "Predict heating to target", "state_class": "measurement", "unit_of_measurement": "°C"})
+            self.set_state(
+                self.prefix + ".heat_to_temp",
+                state=heat_to_predict_temperature[0] if heat_to_predict_temperature[0] is not None else "unknown",
+                attributes={"results": heat_to_predict_stamp, "friendly_name": "Predict heating to target", "state_class": "measurement", "unit_of_measurement": "°C"},
+            )
             self.set_state(self.prefix + ".internal_temp_h1", state=dp2(internal_temp_predict_minute[60]), attributes={"friendly_name": "Internal Temperature Predicted +1hr", "state_class": "measurement", "unit_of_measurement": "°C"})
             self.set_state(self.prefix + ".internal_temp_h2", state=dp2(internal_temp_predict_minute[60 * 2]), attributes={"friendly_name": "Internal Temperature Predicted +2hr", "state_class": "measurement", "unit_of_measurement": "°C"})
             self.set_state(self.prefix + ".internal_temp_h8", state=dp2(internal_temp_predict_minute[60 * 8]), attributes={"friendly_name": "Internal Temperature Predicted +8hrs", "state_class": "measurement", "unit_of_measurement": "°C"})
@@ -523,14 +529,15 @@ class PredHeat:
             self.log("Predheat: No import data for today")
             return 0
 
-        for minute in range(0, self.minutes_now):
+        # From the real start of the day, which on a clock-change day is not minute 0 of this plan-aligned loop (GH#5760)
+        for minute in range(self.day_start_minute, self.minutes_now):
             minute_back = self.minutes_now - minute - 1
             energy = 0
             energy = self.get_from_incrementing(import_today, minute_back)
             day_energy += energy
 
             if self.rate_import:
-                day_cost += self.rate_import[minute] * energy
+                day_cost += self.rate_import.get(minute, 0) * energy
 
             if (minute % 10) == 0:
                 minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
@@ -569,6 +576,9 @@ class PredHeat:
         # Measured against now_utc like the rest of Predbat, rather than a second naive clock
         # taken from the host's timezone - see update_time() in predbat.py, which shares this helper.
         self.minutes_now = minutes_since_midnight(now_utc, self.midnight_utc)
+        # On a clock-change day midnight_utc (now's clock set to 00:00) is not the real start of the day, which sits this
+        # many minutes from it; history keyed by real minutes back from now has to be read back to there (GH#5760)
+        self.day_start_minute = clock_change_minutes(now_utc, local_tz)
         self.metric_future_rate_offset_import = 0
 
         self.log("Predheat: update at {}".format(now_utc))
@@ -584,9 +594,14 @@ class PredHeat:
         self.internal_temperature, age_internal = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True)
         self.target_temperature, age_target = self.minute_data_entity(now_utc, "target_temperature")
         self.heating_energy, age_energy = self.minute_data_entity(now_utc, "heating_energy", incrementing=True, smoothing=True, scaling=self.heating_energy_scaling)
-        self.minute_data_age = min(age_external, age_internal, age_target, age_energy)
+        # Heating energy history is optional; without it, valid temperature and
+        # thermostat histories should still drive the forecast schedule.
+        history_ages = [age_external, age_internal, age_target]
+        if self.heating_energy:
+            history_ages.append(age_energy)
+        self.minute_data_age = min(history_ages)
 
-        self.heat_energy_today = self.heating_energy.get(0, 0) - self.heating_energy.get(self.minutes_now, 0)
+        self.heat_energy_today = self.heating_energy.get(0, 0) - self.heating_energy.get(self.minutes_now - self.day_start_minute, 0)
 
         self.mode = self.get_arg("mode", "pump", domain="predheat")
         self.flow_temp = self.get_arg("flow_temp", 40.0, domain="predheat")
@@ -607,7 +622,7 @@ class PredHeat:
         self.smart_thermostat = self.get_arg("smart_thermostat", False, domain="predheat")
         self.smart_thermostat_max_minutes = self.get_smart_thermostat_max_minutes()
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
-        self.next_volume_temp = self.get_arg("volume_temp", self.get_arg("next_volume_temp", self.internal_temperature[0]))
+        self.next_volume_temp = self.get_arg("volume_temp", self.get_arg("next_volume_temp", self.internal_temperature[0]), domain="predheat")
 
         self.log("Predheat: Hysteresis On {} off {} heat loss {} W heat loss {} W per degree".format(self.hysteresis_on, self.hysteresis_off, self.heat_loss_watts, self.heat_loss_degrees))
         self.log(
@@ -652,21 +667,14 @@ class PredHeat:
             raise e
 
         run_every = self.get_arg("run_every", 5, domain="predheat") * 60
-        now = datetime.now()
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        seconds_now = (now - midnight).seconds
-
-        # Calculate next run time to exactly align with the run_every time
-        seconds_offset = seconds_now % run_every
-        seconds_next = seconds_now + (run_every - seconds_offset)
-        next_time = midnight + timedelta(seconds=seconds_next)
+        next_time = next_aligned_run(run_every)
         self.log("Predheat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
 
         self.update_pending = True
 
         # And then every N minutes
         self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
-        self.run_every(self.update_time_loop, datetime.now(), 5, random_start=0, random_end=0)
+        self.run_every(self.update_time_loop, datetime.now(timezone.utc), 5, random_start=0, random_end=0)
 
     def is_enabled(self):
         """
