@@ -2892,9 +2892,13 @@ Setting this option to **auto** (the default when it is not set) will cause the 
 
 - The last curve found is saved in Predbat's cache, so it is used straight away after a restart.
 - Until a curve has been found, Predbat looks for one every hour (using `battery_charge_power_curve_default` meanwhile, if you set one).
+- Each SoC point needs full-power charging seen on at least two different days (and at least 5 minutes of it), and the curve must reach 95% SoC, so a single charge cannot set it.
+- The curve is used as learned rather than rescaled to 1.0. If your battery only ever charges at, say, 65% of its maximum rate, the curve says 0.65 where that was seen, rather than full rate until the tail-off.
+  Below the first SoC point learned the curve claims no limit; a learned `battery_temperature_charge_curve` covers the rate there.
 - Once it has a curve, Predbat looks for a newer one once a day. A search that finds no full-power charge in the history keeps the curve it already has.
 - If you use low power charging mode, your history may contain few full power charges. The saved curve then stays in use, but it is only updated when one is seen, so you may still prefer to configure the charge curve manually in `apps.yaml`.
-- If you have a `battery_temperature_charge_curve` (or `battery_temperature_charge_curve_auto`), charges where that curve says a cold battery was limiting the rate are left out, so cold weather is not mistaken for a tail-off at high SoC.
+- If you have a `battery_temperature_charge_curve` (or `battery_temperature_charge_curve_auto`), minutes where the battery was charging at the rate that curve allows for its temperature are left out,
+  so cold weather is not mistaken for a tail-off at high SoC. Minutes charging clearly below that rate are kept, as there the SoC, not the temperature, was holding it back.
 
 NB: For Predbat to calculate your charging curve it needs to have access to historical Home Assistant data for **status**, **battery_charge_rate**, **battery_power** and **soc_percent** or **soc_kw**.
 These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.
@@ -2948,6 +2952,7 @@ The same fix applies to the discharge curve. There the old offset was SoC x (1 -
 Unlike the charge curve, the discharge curve is not calculated automatically by default.
 Setting this option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
 As with the charge curve, the last curve found is saved, looked for every hour until one is found and then re-checked once a day, and kept when no new full-power discharge is found.
+Each SoC point needs full-power discharging seen on at least two different days, and the curve must reach 10% SoC, and the curve is used as learned rather than rescaled to 1.0.
 Discharges that `battery_temperature_discharge_curve` says were limited by a cold battery are left out.
 
 If you set **export_limit**, exports where the grid export (from **grid_power**) reached the limit are left out too, as there the inverter turned the battery down to stay under the limit
@@ -3044,7 +3049,8 @@ Your battery's maximum charge and discharge rate can be impacted by cold weather
 An example for GivEnergy Gen2 battery is below.
 
 *Note* You must adjust the curve for your system.
-gaps in the curve above 20 will use 20 degrees, and gaps below 0 will use 0 degrees. Do not leave gaps in the curve between 20 and 0.
+Degrees from -20 to 30 can be set; a reading warmer than 30 uses 30. A positive degree the curve does not set uses the 20 entry (or full rate if there is no 20 entry),
+and gaps below 0 will use 0 degrees. Do not leave gaps in the curve between 20 and 0.
 
 ```yaml
   # Battery temperature charge adjustment curve
@@ -3092,6 +3098,7 @@ When **battery_temperature_charge_curve_auto** is True, Predbat looks back over 
 - the battery was below 80% SoC, so the normal tail-off near full (see `battery_charge_power_curve`) is not mistaken for a cold battery.
 
 The rate the battery actually took in those minutes is recorded against the battery temperature (to the whole degree) and turned into a rate in C, exactly as `battery_temperature_charge_curve` is written.
+If you have set **input_number.battery_rate_max_scaling**, the rate is divided by it, as Predbat applies that scaling on top of the curve.
 
 - A degree is only used once it has at least 30 minutes of charging behind it.
 - Recent charges count for more than old ones, so the curve follows a battery as it ages.
@@ -3099,7 +3106,10 @@ The rate the battery actually took in those minutes is recorded against the batt
 - The learned curve replaces your **battery_temperature_charge_curve** over the whole range it covers, from the coldest to the warmest degree learned. A degree in that range with no data of its own is filled in proportionally from the learned degrees either side.
 - Outside that range your own curve still applies, so it is a good starting point: Predbat starts from your curve and replaces it as your battery is seen charging at more temperatures.
 - Below the coldest learned degree (down to 1 degree), any degree your curve does not set uses the coldest learned rate.
-- 20 degrees and above, and 0 degrees, are never learned. 20 is used for all warmer temperatures and must stay uncapped. An exact 0 is how several integrations report a missing reading.
+- Degrees up to 30 are learned; a warmer reading counts as 30. Many batteries still limit charging at 20-25 degrees, and the temperature a battery reports is often warmer than its coldest cell, which is the one its BMS goes by.
+- When the warmest degree learned is 20 or above, every warmer degree up to 30 that your curve does not set uses its rate. This is also how a battery that never reaches its rated charge rate at any temperature
+  (a BMS or inverter limit below **battery_rate_max**) ends up planned at the rate it really charges at, below 80% SoC.
+- 0 degrees is never learned: an exact 0 is how several integrations report a missing reading.
 
 The entity **predbat.battery_temperature_charge_curve** shows how many degrees have been learned, with the learned and combined curves (and the minutes behind each degree) in its attributes.
 

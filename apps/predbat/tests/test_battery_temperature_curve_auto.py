@@ -24,18 +24,19 @@ TEMP_SENSOR = "sensor.battery_temperature"
 HISTORY_DAYS = 3
 
 # Hour of day -> (status, charge_rate W, battery_power W, soc %, temperature C) for each test day.
-# Only hours 1 and 2 are clean full-rate charges below 80% SoC; every other charging hour is one the learner must ignore.
+# Hours 1, 2, 6 and 11 are clean full-rate charges below 80% SoC; every other charging hour is one the learner must ignore.
 HOUR_PLAN = {
     1: ("Charging", 2600, -1300, 30, 5.4),  # cold: learned as 1.3 kW / 10 kWh = 0.13 C at 5 degrees
     2: ("Charging", 2600, -2600, 50, 12.7),  # warmer: learned as 0.26 C at 12 degrees
     3: ("Charging", 2600, -1000, 85, 7.0),  # above 80% SoC, the SoC taper not the temperature
     4: ("Charging", 1000, -1000, 50, 8.0),  # rate written below the maximum (low power mode)
     5: ("Charging", 2600, -2600, 50, 0.0),  # an exact 0 is a missing reading
-    6: ("Charging", 2600, -2600, 50, 21.0),  # 20 and above is never learned
+    6: ("Charging", 2600, -2600, 50, 21.0),  # warm: learned as 0.26 C at 21 degrees (degrees up to 30 are learned)
     7: ("Exporting", 2600, 2600, 50, 7.0),  # not charging
     8: ("Charging", 2600, -10, 50, 9.0),  # charge finished, almost no power
     9: ("Charging", 2600, -2600, 50, 0.4),  # truncates to 0, the bin that is never learned
     10: ("Charging", 2600, -2600, 50, -0.6),  # also truncates to 0
+    11: ("Charging", 2600, -2000, 50, 34.0),  # hotter than 30: learned at 30, the warmest degree looked up, as 0.2 C
 }
 IDLE = ("Idle", 0, 0, 50, 15.0)
 
@@ -111,8 +112,8 @@ def _test_pure_helpers():
     today = date(2026, 11, 14)
 
     print("Test 1: samples read back from storage are cleaned")
-    cleaned = clean_battery_temperature_samples({"2026-11-13": {"5": [1.3, 10], "0": [0.5, 10], "x": [1, 1], "6": "junk", "7": [1.0, 0], "25": [1.0, 5]}, "not-a-day": {"5": [1, 1]}, "2026-11-12": "junk"})
-    failed |= _check("t1 cleaned", cleaned == {"2026-11-13": {5: [1.3, 10]}}, cleaned)
+    cleaned = clean_battery_temperature_samples({"2026-11-13": {"5": [1.3, 10], "0": [0.5, 10], "x": [1, 1], "6": "junk", "7": [1.0, 0], "25": [1.0, 5], "31": [1.0, 5], "-21": [1.0, 5]}, "not-a-day": {"5": [1, 1]}, "2026-11-12": "junk"})
+    failed |= _check("t1 cleaned", cleaned == {"2026-11-13": {5: [1.3, 10], 25: [1.0, 5]}}, cleaned)
     failed |= _check("t1 junk", clean_battery_temperature_samples(["junk"]) == {} and clean_battery_temperature_samples(None) == {})
 
     print("Test 2: a scanned day replaces a stored one only when it holds at least as many minutes; old days are dropped")
@@ -148,6 +149,26 @@ def _test_pure_helpers():
     failed |= _check("t4 zero not interpolated", 0 not in curve and curve[-1] == 0.07 and curve[1] == 0.09, curve)
     # The cap the prediction uses follows the learned value: 0.13 C of 10 kWh is 1.3 kW
     failed |= _check("t4 cap", abs(find_battery_temperature_cap(5.4, overlay_battery_temperature_curve({}, {5: 0.13}), 10.0, 1.0) * 60 - 1.3) < 1e-6)
+
+    print("Test 4b: a warmest learned degree of 20 or more fills every warmer degree up to 30 the configured curve does not set")
+    curve = overlay_battery_temperature_curve({25: 0.5, 3: 0.04}, {18: 0.2, 22: 0.24})
+    failed |= _check("t4b interpolated across 20", curve[20] == 0.22, curve)
+    failed |= _check("t4b warm filled", curve[23] == 0.24 and curve[26] == 0.24 and curve[30] == 0.24 and 31 not in curve, curve)
+    failed |= _check("t4b configured warm degree kept", curve[25] == 0.5, curve)
+    curve = overlay_battery_temperature_curve({}, {5: 0.13, 12: 0.26})
+    failed |= _check("t4b cold-only learning fills nothing warmer", 13 not in curve and 20 not in curve, curve)
+
+    print("Test 4c: the cap looks degrees up to 30 up, and a degree the curve does not set still falls back to 20, then uncapped")
+
+    def cap_c(temp, curve):
+        """The temperature cap in C for a 10 kWh battery with no other limit."""
+        return round(find_battery_temperature_cap(temp, curve, 10.0, float("inf")) * 60 / 10.0, 3)
+
+    failed |= _check("t4c warm degree honoured", cap_c(25.5, {25: 0.4, 20: 0.3}) == 0.4)
+    failed |= _check("t4c missing degree uses 20", cap_c(27, {25: 0.4, 20: 0.3}) == 0.3)
+    failed |= _check("t4c no 20 entry is uncapped", cap_c(25, {19: 0.27}) == 1.0 and cap_c(40, {19: 0.27}) == 1.0)
+    failed |= _check("t4c hotter than 30 uses 30", cap_c(40, {30: 0.6}) == 0.6)
+    failed |= _check("t4c a curve that only sets 20 still caps every warmer reading", cap_c(35, {20: 0.3}) == 0.3)
     return failed
 
 
@@ -162,16 +183,23 @@ def _test_scan(my_predbat):
     if failed:
         return failed
     temps = {temp for day_bins in samples.values() for temp in day_bins}
-    failed |= _check("t5 only clean degrees", temps == {5, 12}, temps)
+    failed |= _check("t5 only clean degrees", temps == {5, 12, 21, 30}, temps)
     curve, minutes = learn_battery_temperature_curve(samples, my_predbat.now_utc.date())
-    failed |= _check("t5 rates", curve == {5: 0.13, 12: 0.26}, curve)
+    failed |= _check("t5 rates", curve == {5: 0.13, 12: 0.26, 21: 0.26, 30: 0.2}, curve)
     failed |= _check("t5 minutes", minutes.get(5, 0) >= (HISTORY_DAYS - 1) * 60, minutes)
+
+    print("Test 5b: the learned rate is divided by battery_rate_max_scaling, which the plan multiplies the cap by")
+    saved_scaling = my_predbat.battery_rate_max_scaling
+    my_predbat.battery_rate_max_scaling = 0.5
+    curve, _ = learn_battery_temperature_curve(inv.find_battery_temperature_samples(), my_predbat.now_utc.date())
+    my_predbat.battery_rate_max_scaling = saved_scaling
+    failed |= _check("t5b scaled", curve.get(5) == 0.26 and curve.get(30) == 0.4, curve)
 
     print("Test 6a: a percent SoC is not rescaled by battery_scaling (#6183), so the taper above 80% stays out")
     inv.battery_scaling = 0.8  # 85% would read 68% if it were rescaled, and hour 3's taper would be learned at 7 degrees
     samples = inv.find_battery_temperature_samples()
     temps = {temp for day_bins in samples.values() for temp in day_bins}
-    failed |= _check("t6a scaling", temps == {5, 12}, temps)
+    failed |= _check("t6a scaling", temps == {5, 12, 21, 30}, temps)
     inv.battery_scaling = 1.0
 
     print("Test 6: battery_power_invert is honoured")
@@ -213,10 +241,11 @@ def _test_update(my_predbat):
         my_predbat.battery_temperature_charge_curve = {15: 0.2, 3: 0.04}
         my_predbat.battery_temperature_curve_auto_update(inv)
         curve = my_predbat.battery_temperature_charge_curve
-        failed |= _check("t8 curve", curve.get(5) == 0.13 and curve.get(12) == 0.26 and curve.get(15) == 0.2 and curve.get(3) == 0.04 and curve.get(1) == 0.13, curve)
+        # 15 lies inside the learned 5-30 range, so the learned neighbours (12 and 21, both 0.26) replace the configured 0.2
+        failed |= _check("t8 curve", curve.get(5) == 0.13 and curve.get(12) == 0.26 and curve.get(15) == 0.26 and curve.get(30) == 0.2 and curve.get(3) == 0.04 and curve.get(1) == 0.13, curve)
         state = my_predbat.get_state_wrapper(my_predbat.prefix + ".battery_temperature_charge_curve")
         attributes = my_predbat.get_state_wrapper(my_predbat.prefix + ".battery_temperature_charge_curve", attribute="learned")
-        failed |= _check("t8 published", str(state) == "2" and attributes == {"5": 0.13, "12": 0.26}, "{} {}".format(state, attributes))
+        failed |= _check("t8 published", str(state) == "4" and attributes == {"5": 0.13, "12": 0.26, "21": 0.26, "30": 0.2}, "{} {}".format(state, attributes))
         saved = run_async(storage.load("predbat", "battery_temperature_curve"))
         failed |= _check("t8 saved", isinstance(saved, dict) and clean_battery_temperature_samples(saved.get("samples")) == my_predbat.battery_temperature_samples, saved)
 

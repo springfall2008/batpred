@@ -136,7 +136,9 @@ BATTERY_SIZE_RETRY_MINUTES = 60  # Gap between retries of a battery size estimat
 
 # battery_temperature_charge_curve_auto - learning the charge rate a cold battery accepts from history
 BATTERY_TEMPERATURE_CURVE_SOC_MAX = 80  # Only learn from minutes below this SoC%, above it the SoC taper (battery_charge_power_curve) limits the rate instead
-BATTERY_TEMPERATURE_CURVE_TEMP_MAX = 20  # Never learn at or above this temperature: 20 is the curve's fallback for every warmer reading, so it must stay uncapped
+BATTERY_TEMPERATURE_CURVE_TEMP_MAX = 30  # Warmest degree battery_temperature_*_curve is looked up (and learned) at; a warmer reading uses this degree. Fox fleet BMS limits still rise up to ~25-30 degrees
+BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK = 20  # A positive degree the curve does not set falls back to this entry (then to uncapped), as it did when 20 was the warmest degree looked up
+BATTERY_TEMPERATURE_CURVE_BINDING_MARGIN = 0.95  # A minute delivering at least this fraction of the temperature cap was held at the cap, so it says nothing about the SoC taper
 BATTERY_TEMPERATURE_CURVE_MIN_POWER = 0.02  # Ignore charging minutes below this fraction of the maximum rate, the charge has finished rather than been limited
 BATTERY_TEMPERATURE_CURVE_MIN_MINUTES = 30  # Charging minutes a whole degree needs before its learned rate is used
 BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS = 30  # Weight of a day's samples halves every this many days, so a battery that ages or a heater that is re-set is followed
@@ -145,6 +147,10 @@ BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES = 60  # Minimum gap between history scans
 BATTERY_POWER_CURVE_RESCAN_MINUTES = 24 * 60  # battery_charge/discharge_power_curve: auto - gap between re-scans once a curve is known, so a newer full-rate cycle replaces it
 BATTERY_POWER_CURVE_RETRY_MINUTES = 60  # battery_charge/discharge_power_curve: auto - gap between re-scans while no curve has been found, so installs that never charge to 100% at full rate do not re-read the history every cycle
 BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN = 0.95  # A discharge minute whose grid export is at or above this fraction of export_limit was held back by the export limit, not the battery
+BATTERY_POWER_CURVE_MIN_DAYS = 2  # A learned SoC curve point needs full-rate data from at least this many different days, so one odd charge or export cannot set it
+BATTERY_POWER_CURVE_MIN_MINUTES = 5  # ... and at least this many minutes of it (a 1% step at full rate takes only ~2 minutes on a 10 kWh battery, and a 5% step is shared between 5 points)
+BATTERY_POWER_CURVE_CHARGE_TOP = 95  # A learned charge curve needs evidence at or above this SoC%, into the taper, rather than extrapolating up to it (not higher: installs that cap their charge below 100% would never learn one)
+BATTERY_POWER_CURVE_DISCHARGE_BOTTOM = 10  # A learned discharge curve needs evidence at or below this SoC% (not lower: a reserve keeps many batteries above 5%)
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
 INVERTER_LIMIT_DEFAULT_W = 7500.0  # Standing inverter AC limit when the user has not configured inverter_limit

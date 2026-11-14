@@ -21,12 +21,18 @@ BatteryCurve is a mixin of Inverter, so the scanners read the inverter's own set
 from datetime import datetime, timedelta
 
 from const import (
+    BATTERY_POWER_CURVE_CHARGE_TOP,
+    BATTERY_POWER_CURVE_DISCHARGE_BOTTOM,
     BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN,
+    BATTERY_POWER_CURVE_MIN_DAYS,
+    BATTERY_POWER_CURVE_MIN_MINUTES,
     BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS,
     BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS,
     BATTERY_TEMPERATURE_CURVE_MIN_MINUTES,
     BATTERY_TEMPERATURE_CURVE_MIN_POWER,
     BATTERY_TEMPERATURE_CURVE_SOC_MAX,
+    BATTERY_TEMPERATURE_CURVE_BINDING_MARGIN,
+    BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK,
     BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
     EXPORT_LIMIT_DEFAULT_W,
     MINUTE_WATT,
@@ -70,7 +76,7 @@ def clean_battery_temperature_samples(data):
                 rate_sum, minutes = float(entry[0]), int(entry[1])
             except (ValueError, TypeError, IndexError, KeyError):
                 continue
-            if minutes > 0 and rate_sum >= 0 and temp != 0 and temp < BATTERY_TEMPERATURE_CURVE_TEMP_MAX:
+            if minutes > 0 and rate_sum >= 0 and temp != 0 and -20 <= temp <= BATTERY_TEMPERATURE_CURVE_TEMP_MAX:
                 clean_bins[temp] = [rate_sum, minutes]
         if clean_bins:
             cleaned[str(day)] = clean_bins
@@ -151,6 +157,12 @@ def overlay_battery_temperature_curve(configured, learned):
     falls back to the 20 degree value and plans an uncapped charge in the cold - a colder battery is never expected
     to charge faster. 0 is never filled, because an exact 0 is how several integrations report a missing reading.
 
+    When the warmest learned degree is 20 or above, every warmer degree up to BATTERY_TEMPERATURE_CURVE_TEMP_MAX that
+    the configured curve does not set takes its rate too. A warmer battery is not expected to charge slower, so this is
+    at worst cautious until warmer charges are seen, and it is how a battery that never reaches its rated charge rate
+    at any temperature (a BMS or inverter limit below battery_rate_max) is modelled below 80% SoC. Below 20 nothing is
+    filled upwards, as a cold-weather rate says nothing about how fast the battery charges once warm.
+
     Args:
         configured: battery_temperature_charge_curve from apps.yaml, {int: float}
         learned: {int: float} from learn_battery_temperature_curve()
@@ -172,6 +184,11 @@ def overlay_battery_temperature_curve(configured, learned):
             if temp != 0:
                 fraction = (temp - lower) / (upper - lower)
                 curve[temp] = round(learned[lower] + (learned[upper] - learned[lower]) * fraction, 2)
+    warmest = temps[-1]
+    if warmest >= BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK:
+        for temp in range(warmest + 1, BATTERY_TEMPERATURE_CURVE_TEMP_MAX + 1):
+            if temp not in configured:
+                curve[temp] = learned[warmest]
     return curve
 
 
@@ -180,7 +197,22 @@ class BatteryCurve:
 
     def find_charge_curve(self, discharge):
         """
-        Find expected charge curve
+        Learn the battery charge (or discharge) power curve, the rate against SoC%, from full-rate cycles in the history.
+
+        Each SoC point is the mean power over the minutes the SoC spent there, while Predbat was Charging (Exporting) with
+        the rate written at 95% or more of the maximum. Minutes held at the temperature cap, or for discharge at the
+        export limit, are left out. A point needs data from BATTERY_POWER_CURVE_MIN_DAYS days and
+        BATTERY_POWER_CURVE_MIN_MINUTES minutes, and the curve must reach BATTERY_POWER_CURVE_CHARGE_TOP% (charge) or
+        BATTERY_POWER_CURVE_DISCHARGE_BOTTOM% (discharge); otherwise nothing is returned.
+
+        In auto mode the curve is returned as learned, relative to the rated maximum and the battery_rate_max_scaling the
+        plan applies; otherwise it is rescaled to a maximum of 1.0 for apps.yaml, with the scaling logged to set alongside.
+
+        Args:
+            discharge: True for the discharge curve
+
+        Returns:
+            {soc_percent: fraction of the maximum rate}, or {} when no curve could be learned
         """
         curve_type = "charge"
         if discharge:
@@ -209,6 +241,8 @@ class BatteryCurve:
 
         final_curve = {}
         final_curve_count = {}
+        final_curve_days = {}
+        final_curve_minutes = {}
 
         if discharge:
             max_power = int(self.battery_rate_max_discharge * MINUTE_WATT)
@@ -307,7 +341,7 @@ class BatteryCurve:
                 for minute in range(0, min_len):
                     soc_percent[minute] = calc_percent_limit(soc_kwh.get(minute, 0), self.soc_max)
 
-                temperature_limited = self.find_temperature_limited_minutes(discharge, min_len, max_power_scaled)
+                temperature_limited = self.find_temperature_limited_minutes(discharge, min_len, max_power_scaled, battery_power)
                 if discharge:
                     export_limited = self.find_export_limited_minutes(min_len, max_power_scaled)
                     if export_limited is None:
@@ -398,6 +432,9 @@ class BatteryCurve:
                                     else:
                                         store_range = range(this_soc, previous_point)
 
+                                    # Evidence behind each point: the days it was seen on, and its share of the step's minutes
+                                    step_day = (self.base.now_utc - timedelta(minutes=minute)).strftime("%Y-%m-%d")
+                                    step_minutes = total_count / max(len(store_range), 1)
                                     for point in store_range:
                                         if point not in final_curve:
                                             final_curve[point] = charge_curve
@@ -405,6 +442,8 @@ class BatteryCurve:
                                         else:
                                             final_curve[point] += charge_curve
                                             final_curve_count[point] += 1
+                                        final_curve_days.setdefault(point, set()).add(step_day)
+                                        final_curve_minutes[point] = final_curve_minutes.get(point, 0) + step_minutes
 
                                     break
                                 else:
@@ -421,7 +460,25 @@ class BatteryCurve:
 
                     self.log("Inverter {} {} curve before adjustment is: {}".format(self.id, curve_type, final_curve))
 
+                    # Minimum evidence: a point seen on one day only, or for a few minutes, is one charge's (or export's)
+                    # noise, and the curve is kept and reused once learned, so such points are dropped. The curve must then
+                    # still reach the end it describes, the steepest part, rather than extrapolate up (or down) to it.
+                    weak = sorted(point for point in final_curve if len(final_curve_days.get(point, ())) < BATTERY_POWER_CURVE_MIN_DAYS or final_curve_minutes.get(point, 0) < BATTERY_POWER_CURVE_MIN_MINUTES)
+                    for point in weak:
+                        del final_curve[point]
+                    if weak:
+                        self.log("Inverter {} {} curve: dropped SoC points {} with data from fewer than {} days or under {} minutes".format(self.id, curve_type, weak, BATTERY_POWER_CURVE_MIN_DAYS, BATTERY_POWER_CURVE_MIN_MINUTES))
+                    reaches_end = bool(final_curve) and (min(final_curve) <= BATTERY_POWER_CURVE_DISCHARGE_BOTTOM if discharge else max(final_curve) >= BATTERY_POWER_CURVE_CHARGE_TOP)
+                    if not reaches_end:
+                        self.log(
+                            "Info: Inverter {} Not enough evidence for the battery {} curve yet: it needs full-rate data on {} or more days {} {}% SoC - this is normal in cost-optimised operation".format(
+                                self.id, curve_type, BATTERY_POWER_CURVE_MIN_DAYS, "down to" if discharge else "up to", BATTERY_POWER_CURVE_DISCHARGE_BOTTOM if discharge else BATTERY_POWER_CURVE_CHARGE_TOP
+                            )
+                        )
+                        return {}
+
                     # Find info for gap filling
+                    auto = self.base.battery_discharge_power_curve_auto if discharge else self.base.battery_charge_power_curve_auto
                     found_required = False
                     if discharge:
                         fill_range = range(4, 21, 1)
@@ -435,6 +492,10 @@ class BatteryCurve:
                         if point in final_curve:
                             value = final_curve[point]
                             break
+                    if auto and not discharge:
+                        # Auto mode claims a limit only where one was seen: below the first learned point the charge was either
+                        # not seen at full rate or held at the temperature cap, which battery_temperature_charge_curve models
+                        value = 1.0
 
                     # Fill gaps
                     for point in fill_range:
@@ -445,15 +506,19 @@ class BatteryCurve:
                             value = final_curve[point]
 
                     if found_required:
-                        # Scale curve to 1.0
-                        rate_scaling = 0
-
                         # Work out the maximum power to use as a scale factor
-                        for index in final_curve:
-                            rate_scaling = max(final_curve[index], rate_scaling)
+                        rate_scaling = max(final_curve.values()) if final_curve else 0
 
-                        # Scale the curve
-                        if rate_scaling > 0:
+                        if rate_scaling > 0 and auto:
+                            # Auto mode uses the curve as learned, relative to the rated maximum (and the scaling the plan already
+                            # applies), not rescaled to its own maximum: a battery that only ever reaches 65% of its rated rate is
+                            # then planned at 65% rather than told it charges at full rate until the taper (#6189)
+                            user_scaling = self.base.battery_rate_max_scaling_discharge if discharge else self.base.battery_rate_max_scaling
+                            user_scaling = user_scaling if user_scaling > 0 else 1.0
+                            for index in final_curve:
+                                final_curve[index] = round(min(final_curve[index] / user_scaling, 1.0), 2)
+                        elif rate_scaling > 0:
+                            # Scale curve to 1.0, for entering in apps.yaml together with the battery_rate_max_scaling logged below
                             for index in final_curve:
                                 final_curve[index] = round(final_curve[index] / rate_scaling, 2)
 
@@ -470,10 +535,10 @@ class BatteryCurve:
                                 if (final_curve[key] < 1.0 or first) and final_curve[key] > 0.0:
                                     text += "    {} : {}\n".format(key, final_curve[key])
                                     first = False
-                            if self.base.battery_discharge_power_curve_auto if discharge else self.base.battery_charge_power_curve_auto:
+                            if auto:
                                 self.log("Info: Inverter {} curve automatically computed as:\n".format(self.id) + text)
-                            else:
-                                self.log("Info: Inverter {} {} curve can be entered into apps.yaml or set to auto:\n".format(self.id, curve_type) + text)
+                                return final_curve
+                            self.log("Info: Inverter {} {} curve can be entered into apps.yaml or set to auto:\n".format(self.id, curve_type) + text)
                             rate_scaling = round(rate_scaling, 2)
                             if discharge:
                                 if rate_scaling != self.base.battery_rate_max_scaling_discharge:
@@ -507,20 +572,27 @@ class BatteryCurve:
             self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), {} not set in apps.yaml".format(self.id, curve_type, ", ".join(missing_settings)))
         return {}
 
-    def find_temperature_limited_minutes(self, discharge, min_len, max_power_scaled):
+    def find_temperature_limited_minutes(self, discharge, min_len, max_power_scaled, battery_power):
         """
-        Find the minutes of history where the battery temperature curve says the battery could not run at its full rate.
+        Find the minutes of history where the battery was held at its temperature cap.
 
         find_charge_curve() learns the high-SoC taper from full-rate charges (or the low-SoC tail-off from full-rate
         discharges), and a cold battery held back by its BMS looks exactly like a taper, so those minutes are left out.
         A minute is limited when find_battery_temperature_cap() at its temperature, with the configured (or learned)
-        battery_temperature_charge_curve / battery_temperature_discharge_curve, is below max_power_scaled. Readings of
-        exactly 0 are treated as missing, as several integrations report a missing temperature as 0.
+        battery_temperature_charge_curve / battery_temperature_discharge_curve, is below max_power_scaled AND the
+        battery was delivering at that cap (within BATTERY_TEMPERATURE_CURVE_BINDING_MARGIN). A minute delivering
+        clearly less than the cap was held back by something else - the SoC taper this is learning - so it is kept,
+        which matters once warm degrees are learned: a battery that never reaches its rated rate has a cap below full
+        rate at every temperature, and testing the cap alone would leave nothing to learn the taper from.
+        The cap is compared in the units battery_power is recorded in (multiplied by battery_loss and the
+        battery_rate_max_scaling the plan applies to it). Readings of exactly 0 are treated as missing, as several
+        integrations report a missing temperature as 0.
 
         Args:
             discharge: True to use the discharge temperature curve
             min_len: minutes of history being searched
             max_power_scaled: the rate in W a minute must reach to count as full rate
+            battery_power: {minute: W} as find_charge_curve() read it (sign already corrected)
 
         Returns:
             A set of minute indexes (minutes before now); empty when there is no temperature curve or history.
@@ -545,16 +617,20 @@ class BatteryCurve:
             scale=1.0,
             can_modify_history=True,  # history is not accessed after this point
         )
+        battery_loss = self.base.battery_loss if self.base.battery_loss > 0 else 1.0
+        rate_scaling = self.base.battery_rate_max_scaling_discharge if discharge else self.base.battery_rate_max_scaling
+        rate_scaling = rate_scaling if rate_scaling > 0 else 1.0
         limited = set()
         cap_cache = {}
         for minute in range(0, min_len):
             temp = temperature.get(minute, None)
             if temp is None or temp == 0:
                 continue
-            temp_idx = int(min(max(temp, -20), 20))
+            temp_idx = int(min(max(temp, -20), BATTERY_TEMPERATURE_CURVE_TEMP_MAX))
             if temp_idx not in cap_cache:
-                cap_cache[temp_idx] = find_battery_temperature_cap(temp_idx, temperature_curve, self.soc_max, float("inf")) * MINUTE_WATT
-            if cap_cache[temp_idx] < max_power_scaled:
+                cap_cache[temp_idx] = find_battery_temperature_cap(temp_idx, temperature_curve, self.soc_max, float("inf")) * MINUTE_WATT * battery_loss * rate_scaling
+            cap_w = cap_cache[temp_idx]
+            if cap_w < max_power_scaled and abs(battery_power.get(minute, 0)) >= cap_w * BATTERY_TEMPERATURE_CURVE_BINDING_MARGIN:
                 limited.add(minute)
         if limited:
             self.log("Inverter {} Leaving {} temperature-limited minutes out of the battery {} curve".format(self.id, len(limited), "discharge" if discharge else "charge"))
@@ -627,7 +703,11 @@ class BatteryCurve:
         A minute counts when Predbat was Charging, the charge rate was written at (nearly) its maximum, the battery
         was taking charge and the SoC was below BATTERY_TEMPERATURE_CURVE_SOC_MAX, so the high-SoC taper (which
         battery_charge_power_curve models) cannot be mistaken for a cold battery. The rate the battery actually
-        took is recorded in C (kW per kWh of soc_max), the unit battery_temperature_charge_curve uses.
+        took is recorded in C (kW per kWh of soc_max), the unit battery_temperature_charge_curve uses, divided by
+        battery_rate_max_scaling: the plan multiplies the temperature cap by that scaling, so without the division a
+        battery with a scaling below 1.0 would be planned at the learned rate times the scaling, not the learned rate.
+        Degrees up to BATTERY_TEMPERATURE_CURVE_TEMP_MAX are learned, a warmer reading counting as that degree, as the
+        cap looks it up.
 
         Returns:
             {day: {temperature: [sum_of_c, minutes]}} keyed by the UTC date (YYYY-MM-DD) and the whole degree
@@ -687,6 +767,7 @@ class BatteryCurve:
         min_charge_rate = max_power * 0.95
         min_battery_power = max(max_power * BATTERY_TEMPERATURE_CURVE_MIN_POWER, 1.0)
         battery_loss = self.base.battery_loss if self.base.battery_loss > 0 else 1.0
+        rate_scaling = self.base.battery_rate_max_scaling if self.base.battery_rate_max_scaling > 0 else 1.0
         samples = {}
         for minute in range(0, min(len(soc), len(charge_rate), len(battery_power), len(temperature), len(status))):
             this_status = status.get(minute, "")
@@ -710,12 +791,12 @@ class BatteryCurve:
             temp = temperature.get(minute, None)
             if temp is None:
                 continue
-            temp = int(max(temp, -20))
-            if temp == 0 or temp >= BATTERY_TEMPERATURE_CURVE_TEMP_MAX:
+            temp = int(min(max(temp, -20), BATTERY_TEMPERATURE_CURVE_TEMP_MAX))
+            if temp == 0:
                 # The 0 entry is the fallback for every reading at or below 0, including the exact 0 several integrations
                 # report for a missing reading, so it is never learned (anything between -1 and 1 truncates to it)
                 continue
-            rate_c = abs(power) / 1000.0 / battery_loss / self.soc_max
+            rate_c = abs(power) / 1000.0 / battery_loss / self.soc_max / rate_scaling
             day = (self.base.now_utc - timedelta(minutes=minute)).strftime("%Y-%m-%d")
             day_bins = samples.setdefault(day, {})
             entry = day_bins.setdefault(temp, [0.0, 0])
