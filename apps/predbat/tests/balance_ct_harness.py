@@ -113,28 +113,64 @@ class House:
     pv_w: float = 0.0
     # (start s, end s, fraction of pv_w): clouds
     clouds: list = field(default_factory=list)
+    # Broken cloud: random dips, each drawn from these (min, max) ranges - clear sky between them, how long the
+    # dip lasts, the fraction of PV it takes away, and how long the edge takes to pass. A maximum gap of 0 turns
+    # it off. irradiance_noise adds a slow wander on top, as a fraction of pv_w.
+    cloud_gap_s: tuple = (0.0, 0.0)
+    cloud_duration_s: tuple = (10.0, 90.0)
+    cloud_depth: tuple = (0.25, 0.75)
+    cloud_ramp_s: tuple = (2.0, 8.0)
+    irradiance_noise: float = 0.0
     seed: int = 7
+
+    def sky(self, seconds, rng):
+        """
+        The fraction of clear-sky PV reaching the panels, one value per second, from the broken-cloud settings.
+        """
+        sky = [1.0] * seconds
+        if self.cloud_gap_s[1] <= 0:
+            return sky
+        t = rng.uniform(*self.cloud_gap_s)
+        while t < seconds:
+            duration = rng.uniform(*self.cloud_duration_s)
+            depth = rng.uniform(*self.cloud_depth)
+            ramp = rng.uniform(*self.cloud_ramp_s)
+            for second in range(int(t), min(int(t + duration + 2 * ramp), seconds)):
+                into = second - t
+                if into < ramp:
+                    cover = depth * into / ramp
+                elif into < ramp + duration:
+                    cover = depth
+                else:
+                    cover = depth * max(0.0, 1.0 - (into - ramp - duration) / ramp)
+                sky[second] = min(sky[second], 1.0 - cover)
+            t += duration + 2 * ramp + rng.uniform(*self.cloud_gap_s)
+        return sky
 
     def build(self, seconds):
         """
         Return (load, pv) lists, one value per second.
         """
         rng = random.Random(self.seed)
+        sky = self.sky(seconds, random.Random(self.seed + 1))
         load = []
         pv = []
         noise = 0.0
+        wander = 0.0
         alpha = 1.0 / self.noise_tau_s
         for t in range(seconds):
+            if self.irradiance_noise:
+                wander += -wander / 30.0 + self.irradiance_noise * math.sqrt(2 / 30.0) * rng.gauss(0.0, 1.0)
             noise += -alpha * noise + self.noise_w * math.sqrt(2 * alpha) * rng.gauss(0.0, 1.0)
             watts = max(self.base_w + noise, 50.0)
             for start, end, power, on_s, off_s in self.appliances:
                 if start <= t < end and (off_s == 0 or (t - start) % (on_s + off_s) < on_s):
                     watts += power
             load.append(watts)
-            sun = self.pv_w
+            sun = self.pv_w * max(sky[t] + wander, 0.0)
             for start, end, fraction in self.clouds:
                 if start <= t < end:
-                    sun = self.pv_w * fraction
+                    sun = min(sun, self.pv_w * fraction)
             pv.append(sun)
         return load, pv
 
@@ -151,6 +187,23 @@ def busy_evening():
             (1500, 1590, 1200.0, 90, 0),  # microwave
             (2700, 3300, 2000.0, 15, 15),  # washing machine heater
         ],
+    )
+
+
+def broken_cloud_midday(pv_w=5000.0, base_w=350.0):
+    """
+    Midday under broken cumulus: a dip of a quarter to three quarters of the PV every 10-90 seconds, each lasting
+    10-90 seconds with edges of a few seconds, and irradiance wandering on top - faster than the inverters' loops
+    and far faster than Predbat's 60s pass, so the fleet keeps flipping between soaking up a surplus and covering
+    a deficit. A light load with the washing machine on.
+    """
+    return House(
+        base_w=base_w,
+        appliances=[(600, 1500, 2000.0, 15, 15), (2000, 2150, 2800.0, 150, 0)],
+        pv_w=pv_w,
+        cloud_gap_s=(10.0, 90.0),
+        irradiance_noise=0.03,
+        seed=11,
     )
 
 
@@ -185,6 +238,11 @@ class CTScenario:
     minutes: int = 60
     threshold: float = 1.0
     seed: int = 1
+    # The share of the house PV on each inverter's own DC side, or None for PV that is AC-coupled at the site.
+    # A hybrid's own PV goes through its own AC output, which is capped at ac_limit_w: whatever will not fit has
+    # to go into its battery, or is clipped - which is what a charge hold on that inverter can cost.
+    pv_split: list = None
+    ac_limit_w: float = 5000.0
 
     @property
     def direction(self):
@@ -201,14 +259,18 @@ class CTInverter:
     One inverter's control loop on top of a SimInverter's battery and registers.
     """
 
-    def __init__(self, sim, dynamics):
+    def __init__(self, sim, dynamics, pv_share=0.0, ac_limit_w=5000.0):
         """
-        Wrap the battery with a control loop starting at rest.
+        Wrap the battery with a control loop starting at rest. pv_share is the fraction of the house PV on this
+        inverter's own DC side, and ac_limit_w caps its AC output.
         """
         self.sim = sim
         self.dynamics = dynamics
+        self.pv_share = pv_share
+        self.ac_limit_w = ac_limit_w
         self.target = 0.0
         self.power = 0.0
+        self.pv_w = 0.0
 
     def limits(self):
         """
@@ -232,15 +294,28 @@ class CTInverter:
                 self.target = self.power + dynamics.gain * seen
         self.target = min(max(self.target, -charge_limit), discharge_limit)
 
-    def respond(self):
+    def respond(self, pv_total=0.0):
         """
-        Move the output one second towards the target, within what the registers and SoC allow right now.
+        Move the battery one second towards the target, within what the registers and SoC allow right now, and
+        return (AC output, PV clipped) in W.
+
+        The inverter's own PV and its battery share one AC output capped at ac_limit_w. When its PV alone would
+        exceed that, the battery has to take the excess whatever the loop wants - and if its charge is held, the
+        excess is clipped.
         """
         charge_limit, discharge_limit = self.limits()
+        self.pv_w = pv_total * self.pv_share
         self.power += (self.target - self.power) * min(1.0 / max(self.dynamics.response_s, 1.0), 1.0)
         self.power = min(max(self.power, -charge_limit), discharge_limit)
+        # The AC output may not exceed the limit in either direction
+        self.power = min(self.power, max(self.ac_limit_w - self.pv_w, -charge_limit))
+        self.power = max(self.power, -self.ac_limit_w - self.pv_w)
+        ac_output = self.pv_w + self.power
+        clipped = max(ac_output - self.ac_limit_w, 0.0)
+        ac_output -= clipped
         self.sim.battery_power = self.power
         self.sim.soc_kwh = min(max(self.sim.soc_kwh - self.power / 3600.0 / 1000.0, 0.0), self.sim.soc_max)
+        return ac_output, clipped
 
 
 def run_ct_scenario(my_predbat, scenario):
@@ -254,7 +329,9 @@ def run_ct_scenario(my_predbat, scenario):
     dynamics = scenario.dynamics or staggered(count)
     fleet = [FleetInverter(scenario.soc_max, rate_max=scenario.rate_max, inverter_limit=max(5000, scenario.rate_max), rate_min=scenario.rate_min) for _ in range(count)]
     sims = [SimInverter(scenario.soc_max, scenario.rate_max, scenario.soc[index], behaviours[index], rng) for index in range(count)]
-    loops = [CTInverter(sim, dynamics[index]) for index, sim in enumerate(sims)]
+    pv_split = scenario.pv_split or [0.0] * count
+    site_pv_share = max(1.0 - sum(pv_split), 0.0)
+    loops = [CTInverter(sim, dynamics[index], pv_share=pv_split[index], ac_limit_w=scenario.ac_limit_w) for index, sim in enumerate(sims)]
     seconds = scenario.minutes * 60
     load, pv = scenario.house.build(seconds)
     clock = {"s": 0.0}
@@ -276,7 +353,7 @@ def run_ct_scenario(my_predbat, scenario):
             "inverters",
         )
     }
-    flows = {"import_kwh": 0.0, "export_kwh": 0.0, "cross_kwh": 0.0, "battery_out_kwh": 0.0, "battery_in_kwh": 0.0}
+    flows = {"import_kwh": 0.0, "export_kwh": 0.0, "cross_kwh": 0.0, "battery_out_kwh": 0.0, "battery_in_kwh": 0.0, "clipped_kwh": 0.0}
     # Instantaneous cross-charging: the worst second, and how long it ran above 1kW and 2kW - a fleet stuck with
     # one battery charging hard from another looks very different from small hunting, though both add up to kWh
     cross_peak = {"w": 0.0, "t": 0, "powers": []}
@@ -309,10 +386,10 @@ def run_ct_scenario(my_predbat, scenario):
                     ct_import = -grid
                     for loop in loops:
                         loop.control(t, ct_import, scenario.mode)
-                    for loop in loops:
-                        loop.respond()
+                    outputs = [loop.respond(pv[t]) for loop in loops]
                     battery = [loop.power for loop in loops]
-                    grid = pv[t] + sum(battery) - load[t]
+                    grid = pv[t] * site_pv_share + sum(ac for ac, _clipped in outputs) - load[t]
+                    flows["clipped_kwh"] += sum(clipped for _ac, clipped in outputs) / 3600000.0
                     flows["import_kwh"] += max(-grid, 0.0) / 3600000.0
                     flows["export_kwh"] += max(grid, 0.0) / 3600000.0
                     out = sum(power for power in battery if power > 0)
@@ -335,7 +412,7 @@ def run_ct_scenario(my_predbat, scenario):
                             ha.dummy_items["sensor.battery_power" + suffix] = sim.battery_power_reported()
                             ha.dummy_items["sensor.grid_power" + suffix] = round(grid, 1) if index == 0 else 0
                             ha.dummy_items["sensor.load_power" + suffix] = round(load[t], 1) if index == 0 else 0
-                            ha.dummy_items["sensor.pv_power" + suffix] = round(pv[t], 1) if index == 0 else 0
+                            ha.dummy_items["sensor.pv_power" + suffix] = round(loops[index].pv_w + (pv[t] * site_pv_share if index == 0 else 0.0), 1)
                             ha.dummy_items["number.reserve" + suffix] = sim.reserve_percent
                         my_predbat.fetch_inverter_data(quick=True)
                         my_predbat.rebalance_inverter_rates()
@@ -360,6 +437,7 @@ def run_ct_scenario(my_predbat, scenario):
         "cross_kwh": round(flows["cross_kwh"], 3),
         "battery_out_kwh": round(flows["battery_out_kwh"], 3),
         "battery_in_kwh": round(flows["battery_in_kwh"], 3),
+        "clipped_kwh": round(flows["clipped_kwh"], 3),
         "spread_start": round(max(scenario.soc) - min(scenario.soc), 2),
         "spread_end": round(spread[-1], 2) if spread else None,
         "held_minutes": held,
@@ -420,3 +498,37 @@ def format_ct_report(results):
             )
         )
     return "\n".join(lines)
+
+
+def cloud_matrix():
+    """
+    Midday under broken cloud, the case that keeps flipping the fleet between charging and discharging. PV is
+    either AC-coupled at the site or split across the inverters' own DC sides; the last scenario puts a large
+    array on the FULLER inverter, so a charge hold on it has to clip PV once the array exceeds its AC limit.
+    """
+    scenarios = []
+    for count in (2, 3):
+        soc = [70, 80] if count == 2 else [70, 75, 80]
+        split = [0.4, 0.6] if count == 2 else [0.3, 0.3, 0.4]
+        big = [0.25, 0.75] if count == 2 else [0.15, 0.15, 0.7]
+        for label, house, pv_split in (
+            ("broken cloud, AC-coupled PV", broken_cloud_midday(), None),
+            ("broken cloud, DC PV", broken_cloud_midday(), split),
+            ("broken cloud, big array on fullest", broken_cloud_midday(pv_w=9000.0), big),
+            # PV close to the house load, so every cloud tips the site between surplus and deficit
+            ("broken cloud, PV close to load", broken_cloud_midday(pv_w=2200.0, base_w=900.0), split),
+        ):
+            for loops_name, loops in (("mixed loops", mixed), ("CT disagree", disagreeing)):
+                for balance in (False, True):
+                    scenarios.append(
+                        CTScenario(
+                            name="{} inv, {}, {}, balance {}".format(count, label, loops_name, "on" if balance else "off"),
+                            mode="eco",
+                            soc=soc,
+                            house=house,
+                            dynamics=loops(count),
+                            balance=balance,
+                            pv_split=pv_split,
+                        )
+                    )
+    return scenarios

@@ -9,7 +9,7 @@
 import random
 
 from const import BALANCE_CEILING_EXPIRY_SECONDS
-from utils import balance_inverters, learn_rate_ceilings
+from utils import BALANCE_LATCH_SURPLUS_W, balance_inverters, learn_rate_ceilings
 
 
 def make_snapshot(soc_percent, battery_power, charge_rate_now=2600.0, discharge_rate_now=2600.0, reserve_percent=4.0, pv_power=0.0, rate_max=2600.0, in_calibration=False, grid_power=0.0):
@@ -214,6 +214,27 @@ def test_cross_charge_latch_ends_when_the_fleet_turns():
     snapshot = [make_snapshot(50.0, -1500.0, grid_power=1500.0), make_snapshot(50.0, 0.0, charge_rate_now=0.0)]
     balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
     assert intent[1]["charge_rate"] is None, "the charge hold must end once the fleet should charge: {}".format(intent)
+
+
+def test_discharge_latch_kept_with_a_large_surplus():
+    """While the fleet soaks up a comfortable PV surplus, a battery held from discharging into it stays held."""
+    surplus = BALANCE_LATCH_SURPLUS_W + 500.0
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, -1500.0, grid_power=surplus - 1500.0), make_snapshot(50.0, 0.0, discharge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[1]["discharge_rate"] == 0, "the latched discharge hold was released: {}".format(intent)
+
+
+def test_discharge_latch_released_with_a_small_surplus():
+    """
+    A small surplus becomes a deficit as soon as a cloud passes, and a battery still held from discharging would
+    leave that to the grid until the next pass, so the latch lets go below BALANCE_LATCH_SURPLUS_W.
+    """
+    surplus = BALANCE_LATCH_SURPLUS_W - 400.0
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, -1500.0, grid_power=surplus - 1500.0), make_snapshot(50.0, 0.0, discharge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[1]["discharge_rate"] is None, "the discharge latch must let go on a small surplus: {}".format(intent)
 
 
 def test_cross_charge_latch_needs_the_correction_on():

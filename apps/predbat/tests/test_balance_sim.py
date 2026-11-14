@@ -15,7 +15,7 @@ the number of BAD releases - a balancing hold dropped while the inverter is stil
 could still carry the house - plus convergence and the capacity guard.
 """
 
-from tests.balance_ct_harness import CTScenario, busy_evening, cloudy_midday, disagreeing, mixed, run_ct_scenario
+from tests.balance_ct_harness import CTScenario, broken_cloud_midday, busy_evening, cloudy_midday, disagreeing, mixed, run_ct_scenario
 from tests.balance_sim_harness import derated_scenarios, format_report, format_step_report, load_step_scenarios, run_scenario, standard_scenarios
 
 # Scenarios whose bad releases come from a cause other than the status-refresh floor, so they are reported
@@ -147,6 +147,25 @@ def run_ct_tests(my_predbat):
         if on["cross_over_1kw_s"] > 120 or on["cross_kwh"] > off["cross_kwh"] / 4:
             print("ERROR: {} inv CT disagree: balancing left {}kWh of cross-charging, {}s above 1kW".format(count, on["cross_kwh"], on["cross_over_1kw_s"]))
             failed = True
+        # Broken cloud with PV close to the house load: every cloud tips the site between surplus and deficit,
+        # faster than Predbat's pass. Balancing still has to stop the cross-charging, without holding a battery
+        # from discharging into a deficit the next cloud brings (that cost 0.29-0.34 kWh/h of import when the
+        # discharge hold was latched on any surplus, against 0.17-0.20 kWh/h on main)
+        for loops_name, loops in (("mixed loops", mixed), ("CT disagree", disagreeing)):
+            split = [0.4, 0.6] if count == 2 else [0.3, 0.3, 0.4]
+            cloud = {"mode": "eco", "soc": socs["midday"], "dynamics": loops(count), "pv_split": split}
+            cloud_off = run_ct_scenario(my_predbat, CTScenario(name="off", house=broken_cloud_midday(pv_w=2200.0, base_w=900.0), balance=False, **cloud))
+            cloud_on = run_ct_scenario(my_predbat, CTScenario(name="on", house=broken_cloud_midday(pv_w=2200.0, base_w=900.0), balance=True, **cloud))
+            print("{} inv broken cloud, PV close to load, {}: off cross {}kWh | on cross {}kWh import {}kWh writes {}".format(count, loops_name, cloud_off["cross_kwh"], cloud_on["cross_kwh"], cloud_on["import_kwh"], cloud_on["writes"]))
+            if cloud_on["cross_kwh"] > cloud_off["cross_kwh"] / 4:
+                print("ERROR: {} inv broken cloud {}: balancing left {}kWh of {}kWh cross-charging".format(count, loops_name, cloud_on["cross_kwh"], cloud_off["cross_kwh"]))
+                failed = True
+            if cloud_on["import_kwh"] > 0.25:
+                print("ERROR: {} inv broken cloud {}: {}kWh imported - a hold is keeping a battery from covering the deficit a cloud brings".format(count, loops_name, cloud_on["import_kwh"]))
+                failed = True
+            if cloud_on["writes"] > 120:
+                print("ERROR: {} inv broken cloud {}: {} rate writes in an hour".format(count, loops_name, cloud_on["writes"]))
+                failed = True
         # The cross-charge hold is latched, so it is written once rather than taken and released every minute or two
         if on["writes"] > 40:
             print("ERROR: {} inv CT disagree: {} rate writes in an hour - the cross-charge hold is not latching".format(count, on["writes"]))

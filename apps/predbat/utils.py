@@ -3132,6 +3132,12 @@ def limit_malloc_arenas(max_arenas=MALLOC_ARENA_LIMIT):
 # Matches the +-50W floor already used to decide whether an inverter is doing anything at all.
 PV_SURPLUS_THRESHOLD = 50.0
 
+# A discharge hold latched while the fleet soaks up PV surplus is kept only while that surplus is at least this
+# large (W). Under broken cloud a smaller surplus turns into a deficit long before the next pass, and a battery
+# still held from discharging then leaves it to the grid: in the CT simulator, latching on any surplus added
+# about 0.1 kWh/h of import with PV close to the house load, more than the cross-charging it saved.
+BALANCE_LATCH_SURPLUS_W = 1000.0
+
 
 def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None):
     """
@@ -3156,10 +3162,12 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
 
     A cross-charge hold is latched: an inverter held from charging while the fleet should discharge
     reads back a charge rate of 0, and keeps that hold for as long as the fleet's direction stays the
-    same (mirrored for discharge while the fleet should charge). Without the latch the hold went with
-    the next pass - the held battery reads 0W, so it no longer looks like a cross-charger - and
-    inverters whose loops disagree about the shared CT wound straight back into charging from their
-    neighbours until caught again, a write every minute or two.
+    same. Without the latch the hold went with the next pass - the held battery reads 0W, so it no
+    longer looks like a cross-charger - and inverters whose loops disagree about the shared CT wound
+    straight back into charging from their neighbours until caught again, a write every minute or two.
+    The mirror, a discharge hold while the fleet soaks up PV, is latched only while the surplus is at
+    least BALANCE_LATCH_SURPLUS_W, because a passing cloud turns a small surplus into a deficit that a
+    battery held from discharging cannot help cover until the next pass.
 
     Args:
         intent (dict): inverter id -> rate intent, mutated in place
@@ -3280,11 +3288,12 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     # true zero through the prediction rate floor). Such a hold is kept while the fleet's direction is
     # unchanged - a held battery reads 0W, so on power alone it would be released every other pass and
     # wind straight back into cross-charging. It ends when the direction flips, as the rate the latch
-    # reads is then the other one.
+    # reads is then the other one. A latched discharge hold also needs a comfortable PV surplus - see
+    # BALANCE_LATCH_SURPLUS_W.
     if fleet_should_discharge:
         against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_charge[id] or charge_rates[id] == 0)]
     else:
-        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_discharge[id] or discharge_rates[id] == 0)]
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_discharge[id] or (discharge_rates[id] == 0 and spare_pv >= BALANCE_LATCH_SURPLUS_W))]
 
     if balance_crosscharge:
         for id in against_fleet:
