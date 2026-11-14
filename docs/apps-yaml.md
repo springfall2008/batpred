@@ -756,6 +756,9 @@ solar + import - export + battery discharge - battery charge. Solar still comes 
 With **gateway_shared_ct** the grid power of the first inverter is used; without it the grid power of every inverter is added together.
 These figures return to zero at midnight and also restart from zero if Predbat is restarted during the day.
 
+The Predbat Gateway used to move only the displayed **switch.predbat_inverter_hybrid**; Predbat's discovery now sets the value the planner uses from the models the Gateway reports
+(for example an All-in-One behind a hub turns it off) - see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting). A value you set by hand is put back on the next changed report (including after every restart).
+
 - **ge_cloud_automatic_split_pv** - Optional, defaults to false. When set to `true`, Predbat will also include any standalone PV-only inverters (e.g. a GivEnergy AC-coupled PV inverter with no battery attached) in **pv_today** and **pv_power**, in addition to the battery inverters.
 Use this if you have a separate PV-only inverter alongside your battery inverter(s) and want its solar generation included in Predbat's totals. Leave this off (the default) if your battery inverters already report all of your solar generation, to avoid duplicating or including unwanted readings.
 
@@ -1978,7 +1981,7 @@ so you can name them by hand - or point an individual setting at a sensor of you
 With `givtcp_automatic` on (the default) Predbat's discovery also sets **switch.predbat_inverter_hybrid** from each inverter's
 `Invertor_Type`: off for an AC-coupled or All-in-One model, on for a hybrid, and left alone when the type is unknown (see
 [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). GivTCP did not set this switch before. A value you set by hand is put
-back on the next changed report; set `givtcp_automatic: false` to manage the switch yourself.
+back on the next changed report (including after every restart); set `givtcp_automatic: false` to manage the switch yourself.
 
 Note that Predbat will always retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
 

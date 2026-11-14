@@ -274,8 +274,11 @@ the inverters that decided it:
 Coordinator: inverter_hybrid set off - gecloud:fd2445g166 reports it is not a hybrid inverter
 ```
 
-If you turn the switch back yourself, the next change in a report sets it again. A write that fails is
-logged as `Warn: Coordinator: could not set inverter_hybrid: <reason>` and tried again on the next
+If you turn the switch back yourself, the next change in a report sets it again (including after every restart,
+since each restart files a fresh report).
+An inverter whose report stops giving `hybrid` keeps the last value it gave while its component still reports it,
+so a reply that briefly lacks the model does not flip the switch; an inverter that leaves the report no longer counts.
+A write that fails is logged as `Warn: Coordinator: could not set inverter_hybrid: <reason>` and tried again on the next
 change.
 
 Discovery is the only writer: the components that used to set `inverter_hybrid` themselves (GE Cloud,
@@ -297,10 +300,10 @@ evidence it has:
 | Deye, Sunsynk | none - their APIs give no signal | unknown |
 
 A component counts only while its automatic configuration is on, so with GE Cloud, GivTCP, Hanchu,
-Enphase, SolaX, Solis, Fox or Growatt in automatic mode the inverter now sets `inverter_hybrid` - from its
-model, or for Hanchu its AC-coupled field. GivTCP's automatic configuration (`givtcp_automatic`) is on by
+Enphase, SolaX, Solis, Fox or Growatt in automatic mode, or the Predbat Gateway (unless `gateway_display_only` is set),
+the inverter now sets `inverter_hybrid` - from its model, or for Hanchu its AC-coupled field. GivTCP's automatic configuration (`givtcp_automatic`) is on by
 default, so a GivTCP install now has the switch set from its `Invertor_Type`. A value you set by hand is put
-back on the next changed report; turn that component's automatic configuration off to manage the switch
+back on the next changed report (including after every restart); turn that component's automatic configuration off to manage the switch
 yourself.
 
 ### The invert settings
@@ -329,7 +332,7 @@ GE Cloud no longer sets `ge_cloud_serial` or changes `ge_cloud_data`. The GE Clo
   which is the battery the old configuration chose. It looks the serial up
   before each download, so a GE Cloud report that arrives after GE Cloud Data starts is still used.
   Only when there is neither your setting nor a serial from GE Cloud after its first ten minutes does
-  it log `ge_cloud_serial is not set`.
+  it log `GE Cloud Data has no serial to download history for`.
 - **When GivEnergy Cloud Direct reports a GivEnergy EMS** (a GE Cloud record with `composition: ems`) it
   declines to run, logging
   `GECloud: GE Cloud Data is not used behind a GivEnergy EMS - skipping the history download` once,
