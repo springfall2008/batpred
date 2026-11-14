@@ -697,6 +697,37 @@ def test_find_charge_curve_coarse_soc_steps(my_predbat):
     return failed
 
 
+def test_find_charge_curve_percent_with_battery_scaling(my_predbat):
+    """
+    A soc_percent sensor is already relative to usable capacity, so battery_scaling must not
+    rescale it: the curve has to be learned at the SoC it is applied at (#6183). The slow
+    fixture halves the charge power above 90%, so the taper must start at 91% whatever the
+    scaling. Before the fix, 0.95 learned the taper from 87% and 0.8 learned no curve at all.
+    Returns True on failure.
+    """
+    print("*** Running test: find_charge_curve_percent_with_battery_scaling ***")
+    failed = False
+    for scaling in [0.8, 0.95]:
+        inv = create_curve_test_inverter(my_predbat)
+        inv.battery_scaling = scaling
+        create_test_history_data(my_predbat, num_days=7, slow=True)
+        try:
+            charge_curve = inv.find_charge_curve(discharge=False)
+        finally:
+            remove_test_history_data(my_predbat)
+        if not charge_curve:
+            print("ERROR: No charge curve found with battery_scaling {}".format(scaling))
+            failed = True
+            continue
+        print("Charge curve found with battery_scaling {}: {}".format(scaling, charge_curve))
+        for soc in range(85, 101):
+            expected = 0.5 if soc > 90 else 1.0
+            if charge_curve.get(soc) != expected:
+                print("ERROR: battery_scaling {}: expected {} at {}%, got {}".format(scaling, expected, soc, charge_curve.get(soc)))
+                failed = True
+    return failed
+
+
 def run_find_charge_curve_tests(my_predbat):
     """
     Run all find_charge_curve tests
@@ -746,6 +777,7 @@ def run_find_charge_curve_tests(my_predbat):
     failed |= test_find_charge_curve_zero_soc_glitch(my_predbat)
     failed |= test_find_charge_curve_missing_soc_minute(my_predbat)
     failed |= test_find_charge_curve_coarse_soc_steps(my_predbat)
+    failed |= test_find_charge_curve_percent_with_battery_scaling(my_predbat)
     if failed:
         return failed
 
