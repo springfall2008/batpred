@@ -243,12 +243,14 @@ def _manual_entries(apps_yaml, args, candidate_serials):
 
 
 def _place(slots, target, entry, matched, warnings):
-    """Put entry in slot target, warning on a manual slot taken over and clearing every other manual slot that names the record."""
+    """Put entry in slot target, warning on a manual slot taken over and clearing every other manual slot that names the record.
+
+    target is only ever a manual slot that matches the entry by serial, so the takeover warning always has a shared serial to name.
+    """
     entry["slot"] = target
     current = slots[target]
     if current["origin"] == "manual":
-        common = sorted(set(current["serials"]) & set(entry["serials"]))
-        serial = (common or entry["serials"] or [entry["device_id"]])[0]
+        serial = sorted(set(current["serials"]) & set(entry["serials"]))[0]
         warnings.append("Inverter slot {}: {} inverter {} is also configured manually in apps.yaml - discovery is taking over this slot".format(target, entry["source"], serial))
     slots[target] = entry
     for other in matched:
@@ -259,10 +261,15 @@ def _place(slots, target, entry, matched, warnings):
 
 
 def _allocate(slots, placements, warnings):
-    """Step 3: place each (entry, sticky slot) in order - a sticky slot first, then the lowest matching manual slot, then the lowest free slot."""
+    """Step 3: place each (entry, sticky slot) in order - a sticky slot first, then the lowest matching manual slot, then the lowest free slot.
+
+    A sticky slot is honoured only when it is free, or manual and matching the entry by serial: a manual inverter
+    that shares no serial with a discovered one is never changed. Otherwise the entry - fresh or retained - takes
+    the normal path, and with no slot left it is dropped with the no-room warning.
+    """
     for entry, sticky in placements:
         matched = [slot for slot in slots if slot["origin"] == "manual" and set(slot["serials"]) & set(entry["serials"])]
-        if sticky is not None and sticky < len(slots) and slots[sticky]["origin"] != "discovered":
+        if sticky is not None and sticky < len(slots) and (slots[sticky]["origin"] == "free" or any(slot is slots[sticky] for slot in matched)):
             target = sticky
         elif matched:
             target = matched[0]["slot"]
@@ -322,6 +329,7 @@ def build_bindings(apps_yaml: dict, args: dict, sources: list[dict], previous: d
     previous_slots = slot_map(previous)
 
     fresh = []
+    seen_device_ids = set()
     driven_sources = set()
     for source in sorted(sources, key=lambda item: item["name"]):
         driven = [record for record in source.get("records") or [] if _is_driven(record)]
@@ -329,7 +337,11 @@ def build_bindings(apps_yaml: dict, args: dict, sources: list[dict], previous: d
             warnings.append("{} reported no inverter to configure - keeping its existing slots".format(source["name"]))
             continue
         driven_sources.add(source["name"])
-        fresh.extend((source, record) for record in driven)
+        for record in driven:
+            # Nothing upstream stops a report repeating a device_id: the first record is placed, any later one ignored
+            if record["device_id"] not in seen_device_ids:
+                seen_device_ids.add(record["device_id"])
+                fresh.append((source, record))
     retained = [copy.deepcopy(entry) for entry in previous_entries if entry.get("source") not in driven_sources]
 
     candidate_serials = sorted({serial for _, record in fresh for serial in _record_serials(record)} | {serial for entry in retained for serial in entry.get("serials", [])})

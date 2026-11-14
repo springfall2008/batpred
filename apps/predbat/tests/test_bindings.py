@@ -272,6 +272,40 @@ def test_build_retained_absent_source():
     return 0
 
 
+def test_build_sticky_never_overrides_unrelated_manual():
+    """A previous slot now held by a manual inverter sharing no serial is left alone: the record moves, with no takeover warning."""
+    first, _ = build_bindings({}, {}, [_src([_rec("a11111", {"charge_rate": _rw("number.a_rate")})])], None)
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    manual = {"slot": 0, "origin": "manual", "source": None, "device_id": None, "inverter_type": "GE", "serials": [], "settings": {"charge_rate": {"entity_id": "number.givtcp_sa9999s999_charge_rate"}}}
+    # (a) the source reports the record again
+    b, w = build_bindings(apps, copy.deepcopy(apps), [_src([_rec("a11111", {"charge_rate": _rw("number.a_rate")})])], first)
+    assert _layout(b) == [("manual", None, 0), ("discovered", "gecloud:a11111", 1)], _layout(b)
+    assert b["inverters"][0] == manual, b["inverters"][0]
+    assert w == [], w
+    # (b) the source is absent: the retained entry moves to the lowest free slot, otherwise unchanged
+    b, w = build_bindings(apps, copy.deepcopy(apps), [], first)
+    assert _layout(b) == [("manual", None, 0), ("discovered", "gecloud:a11111", 1)], _layout(b)
+    assert b["inverters"][0] == manual and b["inverters"][1] == dict(first["inverters"][0], slot=1), b["inverters"]
+    assert w == [], w
+    # A retained entry with no slot left is dropped with the no-room warning
+    apps = _manual_apps("number.a_charge_rate", "number.b_charge_rate", "number.c_charge_rate", "number.d_charge_rate")
+    b, w = build_bindings(apps, copy.deepcopy(apps), [], first)
+    assert _layout(b) == [("manual", None, 0), ("manual", None, 1), ("manual", None, 2), ("manual", None, 3)], _layout(b)
+    assert w == ["gecloud inverter gecloud:a11111 cannot be configured - all {} inverter slots are in use".format(MAX_INVERTERS)], w
+    print("PASS: sticky slot never overrides an unrelated manual inverter")
+    return 0
+
+
+def test_build_duplicate_device_id():
+    """Within one pass the first record with a device_id is placed and a later one with the same device_id is ignored."""
+    b, w = build_bindings({}, {}, [_src([_rec("a11111", {"charge_rate": _rw("number.first")}), _rec("b11111"), _rec("a11111", {"charge_rate": _rw("number.second")})])], None)
+    assert _layout(b) == [("discovered", "gecloud:a11111", 0), ("discovered", "gecloud:b11111", 1)], _layout(b)
+    assert b["inverters"][0]["settings"] == {"charge_rate": _rw("number.first")}, b["inverters"][0]
+    assert w == [], w
+    print("PASS: duplicate device_id ignored")
+    return 0
+
+
 def test_build_hole_warns():
     """A free slot below a configured one, with nothing to fill it, is warned about."""
     apps = _manual_apps("number.a_charge_rate", "number.b_charge_rate", "number.c_charge_rate", types=["GE", "", "GE"])
@@ -400,6 +434,8 @@ def test_bindings_all(my_predbat=None):
     failures += test_build_release()
     failures += test_build_no_release_on_empty_report()
     failures += test_build_retained_absent_source()
+    failures += test_build_sticky_never_overrides_unrelated_manual()
+    failures += test_build_duplicate_device_id()
     failures += test_build_hole_warns()
     failures += test_build_site_setting()
     failures += test_build_pv_only()
