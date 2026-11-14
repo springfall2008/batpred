@@ -2634,6 +2634,42 @@ def test_build_discovery_shape(my_predbat=None):
     return 0
 
 
+def test_build_discovery_reports_hybrid_from_the_inverter_type(my_predbat=None):
+    """
+    The record's hybrid comes from GivTCP's readable Invertor_Type, by the same model rule as GE Cloud (utils.givenergy_model_is_hybrid).
+
+    raw.invertor.model is a numeric code on GivTCP v3 ('2' on the captured system), so it is never read: an inverter
+    reporting only that code has no known model and its record leaves hybrid out. GivTCP never writes the
+    inverter_hybrid switch itself - discovery does, from these records.
+    """
+    cases = [
+        ("Gen 1 Hybrid", None, True),
+        ("Gen2 Hybrid", "2", True),
+        ("Ac", None, False),
+        ("AC", "2", False),
+        ("All-in-One", None, False),
+        (None, "2", "absent"),
+        ("", "2", "absent"),
+    ]
+    failed = False
+    for invertor_type, raw_model, expected in cases:
+        base, component = _make_component(rest_urls=["http://a:6345"])
+        component.rest[0].inverter.rest_data = _typed_blob(invertor_type, raw_model)
+        _mark_discovered(component)
+        run_async(component.publish_data())
+        record = validated_inverters(component.build_discovery())[0]
+        got = record.get("hybrid", "absent")
+        if got != expected:
+            print("ERROR: Invertor_Type {!r} with raw model {!r} should report hybrid {}, got {}".format(invertor_type, raw_model, expected, got))
+            failed = True
+        if any("inverter_hybrid" in str(entity_id) for entity_id in base.entities):
+            print("ERROR: GivTCP published an inverter_hybrid entity itself: {}".format(sorted(base.entities)))
+            failed = True
+    if not failed:
+        print("PASS: GivTCP records report hybrid from Invertor_Type")
+    return 1 if failed else 0
+
+
 def test_build_discovery_uses_device_rate_max(my_predbat=None):
     """The descriptor carries the inverter's own maximum rate, not the generic 20kW ceiling."""
     base, component = _make_component(rest_urls=["http://a:6345"])
@@ -3366,6 +3402,7 @@ def test_givtcp_component(my_predbat=None):
         ("fleet_grows", test_automatic_config_still_grows_the_fleet, "num_inverters still grows past apps.yaml"),
         ("fleet_tail_untouched", test_automatic_config_leaves_the_undiscovered_slot_untouched, "slots past discovery are left as configured"),
         ("discovery_shape", test_build_discovery_shape, "build_discovery record shape"),
+        ("discovery_hybrid", test_build_discovery_reports_hybrid_from_the_inverter_type, "build_discovery reports hybrid from Invertor_Type"),
         ("discovery_rate_max", test_build_discovery_uses_device_rate_max, "build_discovery uses the per-device rate max"),
         ("discovery_only_discovered", test_build_discovery_only_discovered_endpoints, "build_discovery reports only discovered endpoints"),
         ("discovery_regardless_of_automatic", test_build_discovery_reports_regardless_of_automatic, "build_discovery reports with automatic off"),

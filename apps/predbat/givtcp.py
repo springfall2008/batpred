@@ -38,7 +38,7 @@ import re
 
 from component_base import ComponentBase
 from coordinator import inverter_record
-from utils import dp4
+from utils import dp4, givenergy_model_is_hybrid
 from givtcp_rest import GivTCPRest, InverterRestState
 
 # Every minute of the day, matching GivTCP's own slot resolution. This has to be the full 1440
@@ -1201,7 +1201,10 @@ class GivTCPComponent(ComponentBase):
         (GivTCP v3, which the pause and export-target controls need) and reports_soh (battery state
         of health reported, which battery_scaling needs). ratings use Predbat's setting names:
         soc_max (the design capacity in kWh, only as GivTCP reports it), battery_rate_max and
-        inverter_limit (W).
+        inverter_limit (W). hybrid comes from the readable Invertor_Type (rest.inverter_type(), the model
+        `info` reports) by GE Cloud's rule (utils.givenergy_model_is_hybrid), and is left out when GivTCP
+        reports no type: raw.invertor.model is a numeric code on v3, so it is never read for this. The
+        discovery coordinator sets inverter_hybrid from it; GivTCP never writes the switch itself.
 
         Reporting is independent of self.automatic: the catalogue records what hardware is
         physically there, not whether this component wired Predbat's apps.yaml to it - that
@@ -1260,6 +1263,7 @@ class GivTCPComponent(ComponentBase):
                     info=info,
                     ratings=ratings,
                     entities=entities,
+                    hybrid=givenergy_model_is_hybrid(model),
                 )
             )
 

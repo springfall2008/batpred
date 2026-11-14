@@ -15,7 +15,7 @@ from gecloud import EVCCommandFailed, GECloudTerminalError, SITE_MAX_AGE_MINUTES
 from gecloud import CONTROL_SETTINGS_REFRESH_SECONDS, DEVICE_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
 from gecloud import DEVICE_HOLD_INITIAL_SECONDS, DEVICE_HOLD_MAX_SECONDS, DEVICE_TIMEOUT_ATTEMPTS
 from gecloud import GE_CLOUD_CONFIGURATION_SETTINGS, GE_CLOUD_KEEP_USER_SETTINGS, apply_legacy_bindings, discovery_review_lines
-from utils import dp4
+from utils import dp4, givenergy_model_is_hybrid
 import asyncio
 import copy
 import json
@@ -25,7 +25,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, validated_inverters
-from coordinator import inverter_definition
+from coordinator import Coordinator, inverter_definition
 from storage import StorageLocalFiles
 
 
@@ -420,7 +420,8 @@ def test_ge_cloud(my_predbat=None):
         ("publish_evc_device", _test_publish_evc_device, "Publish EVC device status"),
         ("automatic_config_evc", _test_async_automatic_config_evc, "Automatic config for EV chargers"),
         ("evc_control", _test_evc_control, "EV charger control from the car plan"),
-        ("hybrid_detection", _test_hybrid_detection, "Hybrid inverter detection"),
+        ("givenergy_model_is_hybrid", _test_givenergy_model_is_hybrid, "GivEnergy model name to hybrid"),
+        ("hybrid_detection", _test_hybrid_detection, "Records report hybrid from the model; no inverter_hybrid write"),
         ("enable_defaults", _test_enable_default_options, "Enable default options"),
         ("enable_defaults_skip_target", _test_enable_default_options_skips_discharge_target, "Enable defaults skips the discharge target register"),
         ("force_charge_control", _test_force_charge_control, "Force charge is the scheduled charge control when both charge switches exist"),
@@ -6738,19 +6739,40 @@ def _automatic_config_outcome(layout):
     user's apps.yaml value priority over (GE_CLOUD_KEEP_USER_SETTINGS, set_arg_auto(..., overwrite=False)).
     "kept": each arg that differs from the captured value once the bindings are applied by those rules to
     what the live run left (apply_legacy_bindings()), including the user's own kept ones and the config the
-    layout started with. "logs" and "hybrid" (the inverter_hybrid switch) are the live run's. The run must
-    write no inverter binding itself.
+    layout started with. "logs" are the live run's. "hybrid" is the inverter_hybrid value the report's records
+    decide (_records_hybrid()), which the golden switch value pins now that discovery, not GE Cloud, writes the
+    switch. The run must write no inverter binding and no switch itself.
     """
     ge = _layout_component(layout)
     run_async(ge.async_automatic_config(ge.devices_dict))
     _assert_no_binding_written(ge)
+    assert ge.base.ha_interface.external_states == {}, "GE Cloud wrote {} itself".format(ge.base.ha_interface.external_states)
     bound = ge._legacy_bindings(ge.devices_dict)
     captured = dict(bound)
     captured.update({name: ge.config_args.get(name) for name in ge.set_arg_names})
     auto = {setting: False for setting in bound if setting in GE_CLOUD_KEEP_USER_SETTINGS}
     final = apply_legacy_bindings(bound, ge.config_args, ge.base.args_from_apps_yaml)
     kept = {key: value for key, value in final.items() if key not in captured or captured[key] != value}
-    return {"captured": captured, "auto": auto, "kept": kept, "logs": list(ge.log_messages), "hybrid": ge.base.ha_interface.external_states.get("switch.predbat_inverter_hybrid")}
+    return {"captured": captured, "auto": auto, "kept": kept, "logs": list(ge.log_messages), "hybrid": _records_hybrid(ge)}
+
+
+def _records_hybrid(ge):
+    """
+    The inverter_hybrid value GE Cloud's records decide, through the real Coordinator's rule (hybrid_decision()).
+
+    The report is filed as automatic on a thin coordinator (a log only, so it configures and writes nothing): the
+    value is what discovery would set the switch to from these records, None when they leave it alone.
+    """
+
+    class _ThinBase:
+        """A base with a log only: the coordinator stores reports but cannot configure or write."""
+
+        def log(self, message):
+            """Discard the coordinator's log."""
+
+    coordinator = Coordinator(_ThinBase())
+    coordinator.report("GECloud", dict(ge.build_discovery(), automatic=True))
+    return coordinator.hybrid_decision()[0]
 
 
 # The golden logs' first line, and the line async_automatic_config() logs in its place now that discovery configures the inverters
@@ -6760,20 +6782,24 @@ GOLDEN_HEADER_NOW = "GECloud: Discovery configures the inverters from this compo
 # set_arg_auto's note that the user's own apps.yaml value is kept
 KEPT_NOTE_PREFIX = "Info: apps.yaml sets '"
 
+# The golden logs' line for GE Cloud's own inverter_hybrid write, which discovery now makes instead
+GOLDEN_HYBRID_LOG_PREFIX = "GECloud: Detected inverter model "
+
 
 def _live_logs(golden_logs):
     """
     The golden log lines as the live run on a base with no coordinator gives them now.
 
-    Exactly three changes, each following from GE Cloud configuring only through discovery (maintainer's
+    Exactly four changes, each following from GE Cloud configuring only through discovery (maintainer's
     decision, 14 Nov 2026): the first line is reworded, the no-coordinator warning follows the detected-features
-    line, and set_arg_auto's "keeping your apps.yaml setting" notes are left out - with no coordinator nothing
-    is configured, so nothing is kept. Those notes are still pinned, word for word, on a coordinator run
-    (_test_automatic_config_golden). Every other line, and the order, is the golden one.
+    line, set_arg_auto's "keeping your apps.yaml setting" notes are left out - with no coordinator nothing
+    is configured, so nothing is kept - and the "Detected inverter model" line is gone, since discovery sets the
+    inverter_hybrid switch from the records and logs that itself. The kept notes are still pinned, word for word,
+    on a coordinator run (_test_automatic_config_golden). Every other line, and the order, is the golden one.
     """
     lines = []
     for line in golden_logs:
-        if line.startswith(KEPT_NOTE_PREFIX):
+        if line.startswith(KEPT_NOTE_PREFIX) or line.startswith(GOLDEN_HYBRID_LOG_PREFIX):
             continue
         lines.append(GOLDEN_HEADER_NOW if line == GOLDEN_HEADER_BEFORE else line)
         if line.startswith("GECloud: detected features - "):
@@ -6782,7 +6808,7 @@ def _live_logs(golden_logs):
 
 
 def _test_automatic_config_golden(my_predbat):
-    """The previous automatic configuration's bindings, and GE Cloud's live writes, switch and log order, are unchanged for every layout; GE Cloud itself writes no binding."""
+    """The previous automatic configuration's bindings, and GE Cloud's live writes, log order and (from its records) switch value, are unchanged for every layout; GE Cloud itself writes no binding."""
     failed = 0
     layouts = _automatic_config_layouts()
     assert sorted(layouts) == sorted(AUTOMATIC_CONFIG_GOLDEN), "every layout has a golden outcome"
@@ -7966,8 +7992,8 @@ def _test_switch_on_opts_in_and_writes_no_binding(my_predbat):
     if calls != [("allow", {"skip_settings": (), "keep_user_settings": ("inverter_mode", "export_limit"), "include_pv_only": False}), ("refresh", None)]:
         print("ERROR: expected an opt-in with the default options and then the report filed, got {}".format(calls))
         failed = 1
-    if ge.base.ha_interface.external_states.get("switch.predbat_inverter_hybrid") is not True or "GECloud: Automatic configuration complete" not in ge.log_messages:
-        print("ERROR: the hybrid switch and the log lines are live: {} {}".format(ge.base.ha_interface.external_states, ge.log_messages))
+    if ge.base.ha_interface.external_states or "GECloud: Automatic configuration complete" not in ge.log_messages:
+        print("ERROR: the log lines are live and GE Cloud writes no inverter_hybrid switch (discovery does): {} {}".format(ge.base.ha_interface.external_states, ge.log_messages))
         failed = 1
 
     ge, written, calls = _switch_on_stubbed(layouts["ems"])
@@ -7992,7 +8018,7 @@ def _test_no_coordinator_configures_nothing(my_predbat):
     _assert_no_binding_written(ge)
     assert ge.log_messages.count(NO_COORDINATOR_WARNING) == 1, ge.log_messages
     assert ge.config_args.get("ge_cloud_serial") == "ems001" and ge.config_args.get("ge_cloud_data") is False, ge.config_args
-    assert ge.base.ha_interface.external_states.get("switch.predbat_inverter_hybrid") is True, ge.base.ha_interface.external_states
+    assert ge.base.ha_interface.external_states == {}, "the inverter_hybrid switch is discovery's to write: {}".format(ge.base.ha_interface.external_states)
     assert not [line for line in ge.log_messages if line.startswith(KEPT_NOTE_PREFIX)], ge.log_messages
     print("PASS: with no coordinator GE Cloud warns once and configures nothing")
     return 0
@@ -8732,53 +8758,69 @@ def _test_evc_control(my_predbat):
     return run_async(test())
 
 
+def _test_givenergy_model_is_hybrid(my_predbat):
+    """utils.givenergy_model_is_hybrid(): False for an AC, AIO or All-in-One model, True for any other model, None when there is no model."""
+    cases = [
+        ("GIV-HY5.0", True),
+        ("GIV-HY3.6", True),
+        ("Hybrid HV Gen3", True),
+        ("GIV-AC3.0", False),
+        ("GIV-AC3.0-RACK", False),
+        ("AC 3ph", False),
+        ("GIV-AIO", False),
+        ("GIV-AIO3.6", False),
+        ("All-in-One", False),
+        ("", None),
+        (None, None),
+        (5, None),
+    ]
+    for model, expected in cases:
+        got = givenergy_model_is_hybrid(model)
+        assert got is expected, "givenergy_model_is_hybrid({!r}) should be {}, got {}".format(model, expected, got)
+    print("PASS: givenergy_model_is_hybrid")
+    return 0
+
+
 def _test_hybrid_detection(my_predbat):
-    """Test hybrid vs AC-coupled inverter detection in async_automatic_config"""
+    """Each driven record reports hybrid from its own device's model, and async_automatic_config() no longer writes the inverter_hybrid switch itself."""
 
-    async def test():
-        hybrid_entity = "switch.predbat_inverter_hybrid"
+    def records_for(batteries_info, gateway=None, pv=None):
+        """(ge, {device_id: hybrid or "absent"}) for an install of batteries {serial: model}, optionally behind a gateway, with PV-only devices {serial: model}."""
+        info = {serial: {"info": {"model": model}} for serial, model in dict(batteries_info, **(pv or {})).items()}
+        devices = {"ems": None, "gateway": gateway, "battery": list(batteries_info), "pv": list(pv or {}), "battery_meters": {}}
+        settings = {serial: {} for serial in batteries_info}
+        if gateway:
+            settings[gateway] = {}
+        ge = _record_component(devices, settings, info=info)
+        records = validated_inverters(ge.build_discovery())
+        return ge, {record["device_id"]: record.get("hybrid", "absent") for record in records}
 
-        # Helper to run auto_config with given battery info and return the entity state
-        async def run(batteries_info):
-            ge = MockGECloudDirect()
-            ge.settings = {serial: {} for serial in batteries_info}
-            ge.info = {serial: {"info": {"model": model}} for serial, model in batteries_info.items()}
-            devices = {"ems": None, "gateway": None, "battery": list(batteries_info.keys())}
-            await ge.async_automatic_config(devices)
-            _assert_no_binding_written(ge)
-            return ge.base.ha_interface.external_states.get(hybrid_entity)
+    # Each device's own model decides its own record
+    assert records_for({"INV001": "GIV-HY3.6"})[1] == {"gecloud:INV001": True}
+    assert records_for({"INV001": "GIV-AC3.0"})[1] == {"gecloud:INV001": False}
+    assert records_for({"INV001": "GIV-AIO3.6"})[1] == {"gecloud:INV001": False}
+    assert records_for({"INV001": "GIV-AC3.0-RACK"})[1] == {"gecloud:INV001": False}
+    assert records_for({"INV001": "GIV-HY3.6", "INV002": "GIV-AC3.0"})[1] == {"gecloud:INV001": True, "gecloud:INV002": False}
+    # No model: unknown, so the record leaves hybrid out
+    assert records_for({"INV001": ""})[1] == {"gecloud:INV001": "absent"}
+    # A PV-only record carries no hybrid, whatever its model
+    assert records_for({"INV001": "GIV-HY3.6"}, pv={"PV001": "GIV-PV"})[1] == {"gecloud:INV001": True, "gecloud:PV001": "absent"}
+    # A gateway record: False when any fronted battery is not hybrid, True when every known one is, else left out
+    assert records_for({"INV001": "GIV-AIO", "INV002": "GIV-AIO"}, gateway="GW001")[1] == {"gecloud:GW001": False}
+    assert records_for({"INV001": "GIV-HY5.0", "INV002": "GIV-AC3.0"}, gateway="GW001")[1] == {"gecloud:GW001": False}
+    assert records_for({"INV001": "GIV-HY5.0", "INV002": "GIV-HY5.0"}, gateway="GW001")[1] == {"gecloud:GW001": True}
+    assert records_for({"INV001": "GIV-HY5.0", "INV002": ""}, gateway="GW001")[1] == {"gecloud:GW001": True}
+    assert records_for({"INV001": "", "INV002": ""}, gateway="GW001")[1] == {"gecloud:GW001": "absent"}
 
-        # Standard hybrid inverter (no 'ac' or 'aio') -> switch ON (not ac_coupled)
-        state = await run({"INV001": "GIV-HY3.6"})
-        assert state is True, "Hybrid (GIV-HY3.6) should set inverter_hybrid ON, got {}".format(state)
-
-        # AC-coupled inverter ('ac' in model name) -> switch OFF
-        state = await run({"INV001": "GIV-AC3.0"})
-        assert state is False, "AC-coupled model should set inverter_hybrid OFF, got {}".format(state)
-
-        # All-In-One inverter ('aio' substring in model) -> switch OFF
-        state = await run({"INV001": "GIV-AIO3.6"})
-        assert state is False, "AIO model should set inverter_hybrid OFF, got {}".format(state)
-
-        # Mixed fleet: first is hybrid, second is AC-coupled -> detects AC-coupled (breaks early)
-        state = await run({"INV001": "GIV-HY3.6", "INV002": "GIV-AC3.0"})
-        # INV001 is hybrid (no ac/aio), INV002 has 'ac'. Loop hits INV001 first with no match,
-        # then INV002 triggers ac_coupled=True — result depends on iteration order.
-        # The dict preserves insertion order in Python 3.7+, so INV001 runs first without break,
-        # then INV002 triggers ac_coupled and breaks -> False.
-        assert state is False, "Fleet with an AC model should set inverter_hybrid OFF, got {}".format(state)
-
-        # Unknown/missing model (empty string) -> no match, stays hybrid
-        state = await run({"INV001": ""})
-        assert state is True, "Unknown/empty model should default to hybrid (ON), got {}".format(state)
-
-        # Model string is case-insensitive: uppercase 'AC' should still flag ac_coupled
-        state = await run({"INV001": "GIV-AC3.0-RACK"})
-        assert state is False, "Model with uppercase AC should set inverter_hybrid OFF, got {}".format(state)
-
-        return 0
-
-    return run_async(test())
+    # async_automatic_config() writes no inverter_hybrid switch and logs no model detection: discovery owns the switch
+    for model in ("GIV-HY3.6", "GIV-AC3.0", ""):
+        ge, _ = records_for({"INV001": model})
+        run_async(ge.async_automatic_config(ge.devices_dict))
+        _assert_no_binding_written(ge)
+        assert ge.base.ha_interface.external_states == {}, "GE Cloud wrote {} itself".format(ge.base.ha_interface.external_states)
+        assert not [line for line in ge.log_messages if "Detected inverter model" in line], ge.log_messages
+    print("PASS: records report hybrid from the device model and GE Cloud writes no inverter_hybrid switch")
+    return 0
 
 
 def _test_force_charge_control(my_predbat):

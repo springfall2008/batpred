@@ -2081,7 +2081,7 @@ class TestDiscovery:
         assert gw._pv_only_serials == ("PD0000A002",)
         report = gw.build_discovery()
         pv = next(record for record in report["inverters"] if record["device_id"] == "gateway:PD0000A002")
-        assert pv["functions"] == ["solar"] and "inverter_type" not in pv and "capabilities" not in pv, pv
+        assert pv["functions"] == ["solar"] and "inverter_type" not in pv and "capabilities" not in pv and "hybrid" not in pv, pv
         assert pv["entities"] == {"pv_power": {"entity_id": "sensor.predbat_gateway_00a002_pv_power", "access": "r", "unit": "W"}}, "only its pv_power is counted without a serial list"
 
     def test_run_refreshes_discovery_every_cycle(self):
@@ -5477,27 +5477,60 @@ class TestGatewayUnitControlBinding:
         """The set_state_wrapper calls that targeted the inverter_hybrid switch."""
         return [c for c in gw.base.set_state_wrapper.call_args_list if c.args and c.args[0] == "switch.predbat_inverter_hybrid"]
 
-    def test_hybrid_switch_off_for_ac_coupled_model(self):
-        """An AC / AIO / All-in-One model turns the hybrid switch off (AC-coupled)."""
-        for model in ("All-in-One", "AC 3ph"):
-            gw = self._make_gateway()
-            gw._last_status = self._aio_status_with_model(model)
-            gw.automatic_config()
-            gw.base.set_state_wrapper.assert_any_call("switch.predbat_inverter_hybrid", "off", attributes={}, required_unit=None)
-
-    def test_hybrid_switch_on_for_hybrid_model(self):
-        """A Hybrid / HV model turns the hybrid switch on (DC-coupled)."""
+    def _record_hybrid(self, model):
+        """The configured single-AIO gateway reporting *model*, and its record's hybrid ("absent" when left out)."""
         gw = self._make_gateway()
-        gw._last_status = self._aio_status_with_model("Hybrid HV Gen3")
+        gw._last_status = self._aio_status_with_model(model)
         gw.automatic_config()
-        gw.base.set_state_wrapper.assert_any_call("switch.predbat_inverter_hybrid", "on", attributes={}, required_unit=None)
+        record = gw.build_discovery()["inverters"][0]
+        return gw, record.get("hybrid", "absent")
 
-    def test_hybrid_switch_untouched_when_model_absent(self):
-        """Older firmware that omits the model leaves the hybrid switch alone."""
-        gw = self._make_gateway()
-        gw._last_status = self._aio_status_with_model("")  # no model reported
-        gw.automatic_config()
+    def test_record_not_hybrid_for_ac_coupled_model(self):
+        """An AC / AIO / All-in-One model is reported not hybrid (AC-coupled), and the gateway writes no hybrid switch itself."""
+        for model in ("All-in-One", "AC 3ph", "GIV-AIO"):
+            gw, hybrid = self._record_hybrid(model)
+            assert hybrid is False, (model, hybrid)
+            assert self._hybrid_switch_calls(gw) == []
+            assert not [c for c in gw.log.call_args_list if "inverter_hybrid" in str(c)], gw.log.call_args_list
+
+    def test_record_hybrid_for_hybrid_model(self):
+        """A Hybrid / HV model is reported hybrid (DC-coupled), and the gateway writes no hybrid switch itself."""
+        gw, hybrid = self._record_hybrid("Hybrid HV Gen3")
+        assert hybrid is True
         assert self._hybrid_switch_calls(gw) == []
+
+    def test_record_hybrid_absent_when_model_absent(self):
+        """Older firmware that omits the model: the record leaves hybrid out, and the switch is left alone."""
+        gw, hybrid = self._record_hybrid("")
+        assert hybrid == "absent"
+        assert self._hybrid_switch_calls(gw) == []
+
+    def test_coordinator_record_hybrid_from_the_units_it_fronts(self):
+        """A Gateway or EMS record takes hybrid from the battery units it fronts: False when any is not hybrid, True when every known one is, else left out."""
+        cases = [
+            (("All-in-One", "All-in-One"), False),
+            (("Hybrid HV Gen3", "AC 3ph"), False),
+            (("Hybrid HV Gen3", "Hybrid HV Gen3"), True),
+            (("Hybrid HV Gen3", ""), True),
+            (("", ""), "absent"),
+        ]
+        for build in (self._gateway_plus_aios_status, self._status_with_ems):
+            for models, expected in cases:
+                status = build(["CH2414G318", "CH9999G999"])
+                for inv in status.inverters:
+                    if inv.serial == "CH2414G318":
+                        inv.model = models[0]
+                    elif inv.serial == "CH9999G999":
+                        inv.model = models[1]
+                    else:
+                        inv.model = "Gateway"
+                gw = self._make_gateway()
+                gw._last_status = status
+                gw.automatic_config()
+                records = gw.build_discovery()["inverters"]
+                assert len(records) == 1 and records[0]["composition"] in ("gateway", "ems"), records
+                assert records[0].get("hybrid", "absent") == expected, (build.__name__, models, records[0].get("hybrid", "absent"))
+                assert self._hybrid_switch_calls(gw) == []
 
 
 class TestCheckInverterResets:

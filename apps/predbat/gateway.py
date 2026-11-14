@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 import traceback
-from utils import calc_percent_limit, export_mode_of, export_target_of, export_power_of, parse_car_plan_windows, in_car_plan_window, strptime_aware
+from utils import calc_percent_limit, export_mode_of, export_target_of, export_power_of, parse_car_plan_windows, in_car_plan_window, strptime_aware, givenergy_model_is_hybrid
 from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, MINUTE_WATT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_MONITOR
 import pytz as _pytz
 
@@ -2316,6 +2316,11 @@ class GatewayMQTT(ComponentBase):
         record listing the battery units it fronts. A battery-less unit counted for PV gets a solar-only
         record with its generation and no inverter type (spec D12).
 
+        Each driven record reports `hybrid` from inv.model by GE Cloud's rule (utils.givenergy_model_is_hybrid):
+        a direct unit's own model, an "ems" or "gateway" record's fronted units (False when any is not hybrid,
+        True when every known one is). It is left out when no model is known (older hub firmware reports none),
+        and the solar-only records carry none. The discovery coordinator sets inverter_hybrid from it.
+
         Every OCPP EV charger the hub reports is a chargers record with a stub car (the charger knows
         nothing about the vehicle), keyed "gateway:evc:{charge point id}", whether or not
         gateway_evc_automatic wires it (_discovery_ev_records()).
@@ -2351,6 +2356,9 @@ class GatewayMQTT(ComponentBase):
                 info["vendor"] = "GivEnergy"
             if inv.model:
                 info["model"] = inv.model
+            # hybrid from inv.model: a Gateway or EMS's own model says nothing about the batteries it fronts, so theirs decide
+            models = [units[serial].model for serial in fronted if serial in units] if composition != "direct" else [inv.model]
+            known = [value for value in (givenergy_model_is_hybrid(model) for model in models) if value is not None]
             inverters.append(
                 inverter_record(
                     "gateway:{}".format(inv.serial),
@@ -2363,6 +2371,7 @@ class GatewayMQTT(ComponentBase):
                     info=info,
                     ratings=self._discovery_ratings(inv),
                     entities=self._discovery_entities(inv, index, len(driven)),
+                    hybrid=all(known) if known else None,
                 )
             )
         for serial in sorted(pv_only):
@@ -2704,23 +2713,8 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("ge_cloud_data", False)
         self.set_arg("ge_cloud_direct", False)
 
-        # AC-coupled vs hybrid: mirror gecloud — if any battery inverter reports an
-        # AC / AIO / All-in-One model, the system is AC-coupled, so turn the PredBat
-        # hybrid switch off; a Hybrid/HV unit turns it on. Needs the gateway firmware
-        # to report inv.model; left untouched on older firmware that omits it (empty).
-        ac_coupled = False
-        model_name = ""
-        for inv in candidate_aios:
-            model = (inv.model or "").lower()
-            if model:
-                model_name = inv.model
-                if ("ac" in model) or ("aio" in model) or ("all-in-one" in model):
-                    ac_coupled = True
-                    break
-        if model_name:
-            hybrid_entity = f"switch.{self.prefix}_inverter_hybrid"
-            self.set_state_wrapper(hybrid_entity, "off" if ac_coupled else "on")
-            self.log(f"Info: GatewayMQTT: model '{model_name}' -> ac_coupled={ac_coupled}, set {hybrid_entity} {'off' if ac_coupled else 'on'}")
+        # AC-coupled vs hybrid is not set here: build_discovery() reports hybrid on each record from
+        # inv.model and the discovery coordinator sets the inverter_hybrid switch from the records
 
         # Register the gateway's OCPP EV charger as a PredBat car (opt-in). Done after the
         # inverter config so a failure here never blocks battery control.

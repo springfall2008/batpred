@@ -17,7 +17,7 @@ import re
 import aiohttp
 import pytz
 from datetime import timedelta, datetime, timezone
-from utils import str2time, dp1, dp2, dp4
+from utils import str2time, dp1, dp2, dp4, givenergy_model_is_hybrid
 from car_charger_control import CarChargerControl, parse_control_setting
 from predbat_metrics import record_api_call
 import asyncio
@@ -1825,14 +1825,14 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         configures the inverters from this component's discovery report, and check_automatic_config() then
         compares that with _legacy_bindings(). With no coordinator (a bare base) it logs one warning and
         configures nothing. The rest is live and done here: ge_cloud_serial, the EMS's ge_cloud_data toggle and
-        its restore, the inverter_hybrid switch and the log.
+        its restore, and the log. The inverter_hybrid switch is discovery's: the records report hybrid from each
+        device's model (build_discovery()) and the coordinator sets the switch from them.
         """
         if not devices or not devices["battery"]:
             self.log("GECloud: Warn: No battery devices found, cannot auto-configure")
             return
 
         bound, facts = self._legacy_plan(devices)
-        batteries_real = facts["batteries_real"]
         batteries = facts["batteries"]
         num_inverters = facts["num_inverters"]
         features = facts["features"]
@@ -1895,22 +1895,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             self.set_arg("ge_cloud_data", self.ge_cloud_data_before_ems)
             self.ems_disabled_ge_cloud_data = False
 
-        # Determine the model of the inverter, if at least one inverter has AC or AIO in the name then we assume AC coupled and turn off the hybrid switch
-        # First fetch "model"
-        ac_coupled = False
-        model_name = "Unknown"
-        for device_serial in batteries_real:
-            device = self.info.get(device_serial, {})
-            info = device.get("info", {}) or {}
-            model = info.get("model", "").lower()
-            if model:
-                model_name = info["model"]
-                if ("ac" in model) or ("aio" in model) or ("all-in-one" in model):
-                    ac_coupled = True
-                    break
-        entity_id = "switch.{}_inverter_hybrid".format(self.prefix)
-        self.log("GECloud: Detected inverter model {} indicates ac_coupled={}, setting {} to {}".format(model_name, ac_coupled, entity_id, "off" if ac_coupled else "on"))
-        await self.set_state_external(entity_id, not ac_coupled)
+        # The inverter_hybrid switch is not set here: each record reports hybrid from its device's model
+        # (build_discovery()) and the discovery coordinator sets the switch from the records
 
         self.log("GECloud: Automatic configuration complete")
 
@@ -2518,6 +2504,17 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             return None
         return "gecloud:meter:{}".format(meter_serial)
 
+    def _device_hybrid(self, serials):
+        """
+        Whether the battery devices `serials` make a hybrid record, from each one's own model (utils.givenergy_model_is_hybrid).
+
+        A direct or EMS record passes its own device; a gateway record passes the batteries it fronts, since the
+        gateway's own model says nothing about them. False when any is not hybrid, True when every one whose model is
+        known is hybrid, None (the record leaves hybrid out) when no model is known.
+        """
+        known = [value for value in (givenergy_model_is_hybrid(((self.info.get(serial, {}) or {}).get("info", {}) or {}).get("model")) for serial in serials) if value is not None]
+        return all(known) if known else None
+
     def build_discovery(self):
         """
         Describe the discovered GE Cloud devices for the discovery catalogue.
@@ -2552,6 +2549,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         generation, pv_power and pv_today, as read-only entities: the ids async_automatic_config()
         binds for them under ge_cloud_automatic_split_pv, reported whether or not that is set
         (spec D11, D12).
+
+        Each controlled record reports `hybrid` from the model (_device_hybrid()): its own device's, or for a
+        gateway record the batteries it fronts; the discovery coordinator sets inverter_hybrid from it. PV-only
+        records carry none.
 
         Reporting is independent of self.automatic: the catalogue records what hardware GE Cloud
         found, not whether this component wired Predbat's apps.yaml to it - that distinction is
@@ -2598,6 +2599,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     info=info,
                     ratings=ratings,
                     entities=self._device_entities(devices, controlled, index, inverter_type),
+                    hybrid=self._device_hybrid(fronted_serials or [device]),
                 )
             )
 
