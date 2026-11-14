@@ -351,6 +351,14 @@ class ComponentBase(ABC):
             return None
         return self.set_arg(arg, value)
 
+    def apps_yaml_value(self, arg):
+        """The raw value the user's apps.yaml gives arg - the snapshot set_arg_auto() decides by - or None.
+
+        None when apps.yaml does not set it, and on an instance with no base or a base with no snapshot. Read only.
+        """
+        raw_args = getattr(getattr(self, "base", None), "args_from_apps_yaml", None) or {}
+        return raw_args.get(arg)
+
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
         Retrieve a configuration argument from the base system.

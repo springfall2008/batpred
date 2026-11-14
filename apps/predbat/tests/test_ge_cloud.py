@@ -7990,14 +7990,31 @@ def _test_checker_known_difference_is_info(my_predbat):
 
 
 def _test_checker_kept_and_skipped_are_info(my_predbat):
-    """A kept setting the user's apps.yaml holds, or a skipped one, is Info with its reason, never a warning."""
+    """A kept setting is Info only where the user's apps.yaml gives it a value at that slot; with none there, the same difference is a warning. A skipped one is never a warning."""
     ge = _layout_component(_automatic_config_layouts()["site_export_limit"])
     _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict))
-    ge.config_args["inverter_mode"] = "switch.my_inverter_mode"
-    ge.config_args["export_limit"] = [3600, None]
+    ge.base.args_from_apps_yaml = {"inverter_mode": "switch.my_inverter_mode", "export_limit": [3600]}
+    ge.config_args["inverter_mode"] = ["switch.my_inverter_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"]
+    ge.config_args["export_limit"] = [3600, "sensor.predbat_gecloud_battery002_export_limit"]
     assert ge.check_automatic_config([0, 1]) == [], ge.log_messages
     for setting in ("inverter_mode", "export_limit"):
         assert any(line.startswith("Info: GECloud: discovery differs on {} (".format(setting)) for line in ge.log_messages), ge.log_messages
+    assert not _checker_lines(ge, "Warn"), ge.log_messages
+
+    # The same differences with no apps.yaml value at the slot are real findings: a Warn line each, returned
+    ge = _layout_component(_automatic_config_layouts()["site_export_limit"])
+    _apply_legacy(ge, ge._legacy_bindings(ge.devices_dict))
+    ge.base.args_from_apps_yaml = {"export_limit": [None, 5000]}
+    ge.config_args["inverter_mode"] = ["switch.my_inverter_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"]
+    ge.config_args["export_limit"] = [3600, "sensor.predbat_gecloud_battery002_export_limit"]
+    expected = [
+        "Warn: GECloud: discovery set inverter_mode[0] to switch.my_inverter_mode, the previous automatic configuration would set switch.predbat_gecloud_battery001_enable_eco_mode",
+        "Warn: GECloud: discovery set export_limit[0] to 3600, the previous automatic configuration would set sensor.predbat_gecloud_battery001_export_limit",
+    ]
+    result = ge.check_automatic_config([0, 1])
+    assert result == expected, result
+    assert _checker_lines(ge, "Warn") == expected, ge.log_messages
+    assert not [line for line in ge.log_messages if line.startswith("Info: GECloud: discovery differs")], ge.log_messages
 
     # load_today is skipped under ge_cloud_load_today_ignore and the old configuration binds none, so the user's value there is not a difference
     ge = _layout_component(_automatic_config_layouts()["load_today_ignore"])

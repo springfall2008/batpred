@@ -2056,14 +2056,14 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         so legacy logical inverter i is compared with args at slots[i]. Per-slot lists are compared entry by
         entry, a legacy None meaning every one of this component's slots is None or absent; SUMMED_SETTINGS
         by order (the legacy entries, None left out, appear in the arg's list in the same order); scalars and
-        SITE_SETTINGS directly; num_inverters not at all. A difference on a skipped or kept setting, one the
-        GEE row dummies, or one in GE_CLOUD_KNOWN_DIFFERENCES is logged at Info with its reason; any other is
-        a Warn line, returned. Each distinct line is logged once for the life of the process.
+        SITE_SETTINGS directly; num_inverters not at all. A difference on a skipped setting, one the GEE row
+        dummies, a kept setting where the user's apps.yaml gives that slot a value, or one in
+        GE_CLOUD_KNOWN_DIFFERENCES is logged at Info with its reason; any other is a Warn line, returned. Each distinct line is logged once for the life of the process.
 
         Threading contract: the coordinator calls this holding its configure lock, possibly on the main thread
         while this component's own thread is running. So it is synchronous, takes no lock, awaits nothing,
         does no I/O, never calls report_discovery(), refresh_discovery() or allow_automatic_config(), and only
-        reads self.devices_dict, self.settings, self.info and args. It changes no configuration and no
+        reads self.devices_dict, self.settings, self.info, args and the apps.yaml snapshot (apps_yaml_value()). It changes no configuration and no
         component health, and never raises: a failure is logged at Info and gives [].
         """
         try:
@@ -2094,15 +2094,16 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         warnings = []
         known = []
 
-        def differs(setting, where, actual, expected, index=None):
-            """Classify and log one difference; index is the legacy logical inverter, when the setting is per slot."""
+        def differs(setting, where, actual, expected, index=None, slot=None):
+            """Classify and log one difference; index is the legacy logical inverter and slot its args slot, when the setting is per slot."""
             inverter_type = slot_value(legacy_types, index) if index is not None else None
             if setting in skipped:
                 reason = "skipped at the user's request, so left as args hold it"
             elif setting in GE_CLOUD_DUMMIED_SETTINGS.get(inverter_type, ()):
                 reason = "inverter.py replaces it with a dummy for {}, so the discovery record leaves it out".format(inverter_type)
-            elif setting in GE_CLOUD_KEEP_USER_SETTINGS:
-                reason = "an apps.yaml value for the slot is kept, as the previous automatic configuration kept it"
+            elif setting in GE_CLOUD_KEEP_USER_SETTINGS and slot is not None and slot_value(self.apps_yaml_value(setting), slot) is not None:
+                # Kept only where apps.yaml gives the slot a value, as the coordinator keeps it; with none there it is a real finding
+                reason = "the user's apps.yaml value for the slot is kept"
             else:
                 reason = GE_CLOUD_KNOWN_DIFFERENCES.get(setting)
             if reason is not None:
@@ -2120,7 +2121,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             if value is None:
                 for index, slot in enumerate(slots):
                     if slot is not None and slot_value(live, slot) is not None:
-                        differs(setting, "{}[{}]".format(setting, slot), slot_value(live, slot), None, index)
+                        differs(setting, "{}[{}]".format(setting, slot), slot_value(live, slot), None, index, slot)
                 if setting in GE_CLOUD_DELETED_SETTINGS:
                     entries = live if isinstance(live, (list, tuple)) else [live]
                     if any(entry is not None for position, entry in enumerate(entries) if position not in slots):
@@ -2137,7 +2138,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                 for index, expected in enumerate(value):
                     slot = slots[index] if index < len(slots) else None
                     if slot is not None and slot_value(live, slot) != expected:
-                        differs(setting, "{}[{}]".format(setting, slot), slot_value(live, slot), expected, index)
+                        differs(setting, "{}[{}]".format(setting, slot), slot_value(live, slot), expected, index, slot)
 
         if not warnings:
             self.log("Info: GECloud: discovery configuration matches the previous automatic configuration{}".format(" apart from {} known difference(s)".format(len(known)) if known else ""))
