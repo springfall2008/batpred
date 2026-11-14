@@ -12,8 +12,8 @@ docs/superpowers/specs/2026-11-14-discovery-automatic-inverter-config-design.md.
 """
 
 import copy
+from functools import lru_cache
 
-from config import APPS_SCHEMA
 from utils import is_entity_id
 
 # Slots the coordinator will allocate; a record with no slot left below this is not configured
@@ -94,8 +94,18 @@ BINDING_SETTINGS = frozenset(
     }
 )
 
-# APPS_SCHEMA settings Predbat writes to: a bound entity on one of these gives a slot a control method
-MODIFY_SETTINGS = tuple(sorted(name for name, schema in APPS_SCHEMA.items() if schema.get("modify")))
+
+@lru_cache(maxsize=None)
+def modify_settings() -> tuple[str, ...]:
+    """The APPS_SCHEMA settings Predbat writes to, sorted: a bound entity on one of these gives a slot a control method.
+
+    config is imported here, not at module level: config imports predbat, which imports config, so a module-level
+    import meant this module - and coordinator and every reporter importing it - could not be imported first in a
+    fresh process, which is how the standalone component CLIs start. By the time a pass calls this, Predbat is loaded.
+    """
+    from config import APPS_SCHEMA
+
+    return tuple(sorted(name for name, schema in APPS_SCHEMA.items() if schema.get("modify")))
 
 
 def slot_value(value, index):
@@ -115,7 +125,7 @@ def _num_inverters(apps_yaml):
 
 def _has_control_method(apps_yaml, index):
     """Whether the snapshot gives inverter `index` a way to be controlled: a writable entity, a givtcp_rest URL or a control service."""
-    for setting in MODIFY_SETTINGS:
+    for setting in modify_settings():
         value = slot_value(apps_yaml.get(setting), index)
         if isinstance(value, str) and (is_entity_id(value) or value.startswith("re:")):
             return True

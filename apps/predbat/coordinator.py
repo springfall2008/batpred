@@ -426,10 +426,12 @@ class Coordinator:
         self.slot_map = slot_map(bindings)
         # Committed: from here on a failure leaves this pass's writes in place, matching the bindings just stored
         before.clear()
+        # Every pass, not only one that wrote: a component not opted in never triggers a pass, so one that reports
+        # after the opted-in components are configured is only seen here; _warn_once keeps a repeat silent
+        self._warn_unconverted(reports, automatic)
         if not written:
             return
 
-        self._warn_unconverted(reports, automatic)
         for index in sorted(changed_slots):
             entry = bindings["inverters"][index]
             self.log("Coordinator: inverter slot {} configured from {} ({})".format(index, entry["source"], entry["device_id"]))

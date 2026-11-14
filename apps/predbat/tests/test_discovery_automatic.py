@@ -7,6 +7,9 @@ seen through the recorded set_arg calls.
 """
 
 import copy
+import os
+import subprocess
+import sys
 import threading
 import time
 
@@ -308,6 +311,38 @@ def test_unconverted_component_warns():
     return 0
 
 
+def test_late_unconverted_component_warns():
+    """A component reporting automatic inverters after the opted-in one is configured is warned about on the next pass, once."""
+    base, registry, coordinator = _setup(components={"gecloud": _GECloud(), "fox": object()})
+    coordinator.allow_automatic("gecloud")
+    coordinator.report("gecloud", _report(["ce1111g111"]))
+    calls = list(base.set_calls)
+    coordinator.report("fox", {"automatic": True, "inverters": [{"device_id": "fox:f11111", "inverter_type": "FoxCloud", "hardware_ids": {"serial": "f11111"}}]})
+    coordinator.configure()
+    warning = "Warn: Coordinator: fox configures inverters itself and is not yet handled by discovery - running it alongside gecloud is not supported"
+    assert base.log_messages.count(warning) == 1, base.log_messages
+    assert base.set_calls == calls, base.set_calls[len(calls):]  # the pass that warned wrote nothing
+    lines = len(base.log_messages)
+    coordinator.configure()
+    assert base.log_messages[lines:] == [], base.log_messages[lines:]
+    print("PASS: late unconverted component warns")
+    return 0
+
+
+def test_modules_import_standalone():
+    """bindings, coordinator and the reporters that import them each import in a fresh process, as the standalone CLIs do."""
+    predbat_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    failures = 0
+    for module in ("bindings", "coordinator", "components", "gecloud", "fox"):
+        result = subprocess.run([sys.executable, "-c", "import " + module], cwd=predbat_dir, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            print("ERROR: import {} in a fresh process exited {}:\n{}".format(module, result.returncode, result.stderr))
+            failures += 1
+    assert failures == 0, "{} module(s) failed to import standalone".format(failures)
+    print("PASS: modules import standalone")
+    return 0
+
+
 def test_unconverted_without_automatic_is_quiet():
     """A component reporting inverters with automatic false, or reporting no driven inverter, is not warned about."""
     base, registry, coordinator = _setup(components={"gecloud": _GECloud()})
@@ -584,6 +619,8 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_checker_called_only_on_change()
     failures += test_checker_failure_is_logged()
     failures += test_unconverted_component_warns()
+    failures += test_late_unconverted_component_warns()
+    failures += test_modules_import_standalone()
     failures += test_unconverted_without_automatic_is_quiet()
     failures += test_stop_keeps_slots()
     failures += test_configure_never_raises()
