@@ -99,8 +99,6 @@ class MockGECloudDirect(GECloudDirect):
         self.settings_from_cache = False
         self.default_options_stamp = None
         self.pending_default_options = set()
-        self.ems_disabled_ge_cloud_data = False
-        self.ge_cloud_data_before_ems = None
         self._read_only = False
         self.local_tz = pytz.timezone("Europe/London")
         self.account = {}
@@ -213,6 +211,8 @@ class MockGECloudData(GECloudData):
         self.ge_url_cache = {}
         self.ge_cloud_data = True
         self.mdata = []
+        self.ems_skip_logged = False
+        self.serial_missing_logged = False
         self.requests_total = 0
         self.failures_total = 0
         self.oldest_data_time = None
@@ -334,7 +334,7 @@ def test_ge_cloud(my_predbat=None):
         ("rediscover_ems_change_rearms_warning", _test_apply_devices_ems_change_rearms_slot_warning, "A new EMS re-arms the slot override warning"),
         ("rediscover_drops_unpolled_state", _test_apply_devices_drops_unpolled_state, "State for unpolled devices is dropped"),
         ("settings_cache_drops_departed", _test_settings_cache_drops_departed_devices, "Settings cache keeps only devices found at startup"),
-        ("automatic_config_restores_ge_cloud_data", _test_automatic_config_restores_ge_cloud_data_after_ems, "ge_cloud_data restored when the EMS goes"),
+        ("automatic_config_leaves_ge_cloud_data", _test_automatic_config_leaves_ge_cloud_data_across_ems, "ge_cloud_data left alone as the EMS comes and goes"),
         ("settings_refetch_failed_register_list", _test_inverter_settings_refetch_after_failed_register_list, "Failed register list fetch is retried"),
         ("settings_saved_to_storage", _test_settings_saved_to_storage, "Settings saved to storage after poll"),
         ("settings_restored_from_cache", _test_settings_restored_from_fresh_cache, "Settings restored from fresh storage cache"),
@@ -442,6 +442,13 @@ def test_ge_cloud(my_predbat=None):
         ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
         ("enable_defaults_after_read_only", _test_run_enables_reset_after_read_only, "Enable defaults on first non-read-only run"),
         ("enable_defaults_24h", _test_run_enables_reset_after_24h, "Enable defaults re-runs after 24 hours"),
+        ("cloud_data_serial_from_apps_yaml", _test_cloud_data_serial_from_apps_yaml, "GE Cloud Data: the user's ge_cloud_serial wins over discovery"),
+        ("cloud_data_serial_from_record", _test_cloud_data_serial_from_record, "GE Cloud Data: serial from a direct GE Cloud record"),
+        ("cloud_data_serial_from_gateway", _test_cloud_data_serial_from_gateway, "GE Cloud Data: serial from a gateway record's first battery"),
+        ("cloud_data_serial_lowest_slot", _test_cloud_data_serial_lowest_slot, "GE Cloud Data: serial from the record in the lowest slot"),
+        ("cloud_data_serial_arrives_late", _test_cloud_data_serial_arrives_late, "GE Cloud Data: a GE Cloud report that arrives late is picked up"),
+        ("cloud_data_ems_comes_and_goes", _test_cloud_data_ems_comes_and_goes, "GE Cloud Data: declines behind an EMS and resumes when it goes"),
+        ("gecloud_sets_neither", _test_gecloud_sets_neither, "GE Cloud writes neither ge_cloud_serial nor ge_cloud_data"),
         ("download_single", _test_download_ge_data_single_day, "Download single day"),
         ("download_multi", _test_download_ge_data_multi_day, "Download multi-day"),
         ("download_pagination", _test_download_ge_data_pagination, "Download pagination"),
@@ -3831,8 +3838,8 @@ def _test_default_options_restore_full_power_eco(my_predbat):
     return run_async(test())
 
 
-def _test_automatic_config_restores_ge_cloud_data_after_ems(my_predbat):
-    """An EMS turns GE Cloud Data off; once the EMS has gone the value it had before is put back (#5295 review)"""
+def _test_automatic_config_leaves_ge_cloud_data_across_ems(my_predbat):
+    """An EMS arriving, staying and leaving never changes the user's ge_cloud_data: GE Cloud Data declines behind the EMS itself (_test_cloud_data_ems_comes_and_goes)"""
 
     async def test():
         for before in (True, None):
@@ -3841,16 +3848,19 @@ def _test_automatic_config_restores_ge_cloud_data_after_ems(my_predbat):
             ge.settings = {"battery001": {}, "battery002": {}}
 
             await ge.async_automatic_config({"ems": "ems001", "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}})
-            if ge.config_args.get("ge_cloud_data") is not False:
-                print("ERROR: an EMS should turn GE Cloud Data off, got {}".format(ge.config_args.get("ge_cloud_data")))
+            if ge.config_args.get("ge_cloud_data") != before:
+                print("ERROR: an EMS should leave ge_cloud_data at the user's {}, got {}".format(before, ge.config_args.get("ge_cloud_data")))
                 return 1
 
-            # Re-running with the EMS still there must not lose the value it replaced
+            # Re-running with the EMS still there, then with it gone, leaves it alone too
             await ge.async_automatic_config({"ems": "ems001", "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}})
 
             await ge.async_automatic_config({"ems": None, "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}})
             if ge.config_args.get("ge_cloud_data") != before:
-                print("ERROR: with the EMS gone ge_cloud_data should be back to {}, got {}".format(before, ge.config_args.get("ge_cloud_data")))
+                print("ERROR: with the EMS gone ge_cloud_data should still be the user's {}, got {}".format(before, ge.config_args.get("ge_cloud_data")))
+                return 1
+            if "ge_cloud_data" in ge.set_arg_names or "ge_cloud_serial" in ge.set_arg_names:
+                print("ERROR: GE Cloud wrote {}".format(ge.set_arg_names))
                 return 1
             _assert_no_binding_written(ge)
 
@@ -5458,7 +5468,7 @@ def _test_async_automatic_config(my_predbat):
         # Verify basic configuration
         assert bound.get("inverter_type") == ["GEC"], "inverter_type should be set to GEC"
         assert bound.get("num_inverters") == 1, "num_inverters should be 1"
-        assert ge.config_args.get("ge_cloud_serial") == "battery001", "ge_cloud_serial should be first battery"
+        assert "ge_cloud_serial" not in ge.config_args, "ge_cloud_serial is not written: GE Cloud Data takes its serial from discovery"
         assert bound.get("givtcp_rest") is None, "givtcp_rest should be None"
 
         # Verify eco mode toggle is configured as inverter_mode
@@ -5694,8 +5704,8 @@ def _test_async_automatic_config(my_predbat):
         bound = _legacy_args(ge, devices)
 
         assert bound.get("inverter_type") == ["GEE"], "inverter_type should be GEE for EMS"
-        assert ge.config_args.get("ge_cloud_serial") == "ems001", "ge_cloud_serial should be EMS"
-        assert ge.config_args.get("ge_cloud_data") is False, "ge_cloud_data should be False for EMS"
+        assert "ge_cloud_serial" not in ge.config_args and "ge_cloud_data" not in ge.config_args, "neither is written for an EMS: GE Cloud Data declines behind it from discovery"
+        assert "GECloud: EMS detected, using EMS for control" in ge.log_messages, "the EMS is still logged"
 
         # EMS-specific controls
         assert bound.get("charge_start_time") == ["select.predbat_gecloud_ems001_charge_start_time_slot_1"]
@@ -6734,8 +6744,8 @@ def _automatic_config_outcome(layout):
     What the automatic configuration does with one layout, on a base with no discovery coordinator.
 
     "captured": the previous automatic configuration's {setting: value} (_legacy_bindings(), which this
-    golden test now pins) with each live setting the run still writes itself (ge_cloud_serial, ge_cloud_data)
-    at the value it was left at. "auto": {setting: False} for each bound setting the old rules gave the
+    golden test now pins) with any setting the run still writes itself at the value it was left at - none now:
+    the golden's ge_cloud_serial and ge_cloud_data are no longer GE Cloud's to write (GOLDEN_RETIRED_SETTINGS). "auto": {setting: False} for each bound setting the old rules gave the
     user's apps.yaml value priority over (GE_CLOUD_KEEP_USER_SETTINGS, set_arg_auto(..., overwrite=False)).
     "kept": each arg that differs from the captured value once the bindings are applied by those rules to
     what the live run left (apply_legacy_bindings()), including the user's own kept ones and the config the
@@ -6747,6 +6757,8 @@ def _automatic_config_outcome(layout):
     run_async(ge.async_automatic_config(ge.devices_dict))
     _assert_no_binding_written(ge)
     assert ge.base.ha_interface.external_states == {}, "GE Cloud wrote {} itself".format(ge.base.ha_interface.external_states)
+    retired = [name for name in ge.set_arg_names if name in GOLDEN_RETIRED_SETTINGS]
+    assert not retired, "GE Cloud Data reads these from discovery; GE Cloud wrote {}".format(retired)
     bound = ge._legacy_bindings(ge.devices_dict)
     captured = dict(bound)
     captured.update({name: ge.config_args.get(name) for name in ge.set_arg_names})
@@ -6785,6 +6797,15 @@ KEPT_NOTE_PREFIX = "Info: apps.yaml sets '"
 # The golden logs' line for GE Cloud's own inverter_hybrid write, which discovery now makes instead
 GOLDEN_HYBRID_LOG_PREFIX = "GECloud: Detected inverter model "
 
+# The settings the golden "captured" holds that are not bindings and that GE Cloud no longer writes: GE Cloud Data
+# takes its serial, and whether the site is behind an EMS, from GE Cloud's discovery records
+GOLDEN_RETIRED_SETTINGS = ("ge_cloud_serial", "ge_cloud_data")
+
+
+def _live_captured(golden_captured):
+    """The golden "captured" as the live run gives it now: without GOLDEN_RETIRED_SETTINGS, which GE Cloud no longer writes; every binding is the golden one."""
+    return {key: value for key, value in golden_captured.items() if key not in GOLDEN_RETIRED_SETTINGS}
+
 
 def _live_logs(golden_logs):
     """
@@ -6808,13 +6829,13 @@ def _live_logs(golden_logs):
 
 
 def _test_automatic_config_golden(my_predbat):
-    """The previous automatic configuration's bindings, and GE Cloud's live writes, log order and (from its records) switch value, are unchanged for every layout; GE Cloud itself writes no binding."""
+    """The previous automatic configuration's bindings, log order and (from its records) switch value are unchanged for every layout; GE Cloud itself writes no binding, nor ge_cloud_serial or ge_cloud_data."""
     failed = 0
     layouts = _automatic_config_layouts()
     assert sorted(layouts) == sorted(AUTOMATIC_CONFIG_GOLDEN), "every layout has a golden outcome"
     for name, layout in layouts.items():
         outcome = _automatic_config_outcome(layout)
-        expected = dict(AUTOMATIC_CONFIG_GOLDEN[name], logs=_live_logs(AUTOMATIC_CONFIG_GOLDEN[name]["logs"]))
+        expected = dict(AUTOMATIC_CONFIG_GOLDEN[name], captured=_live_captured(AUTOMATIC_CONFIG_GOLDEN[name]["captured"]), logs=_live_logs(AUTOMATIC_CONFIG_GOLDEN[name]["logs"]))
         for part in ("captured", "auto", "kept", "logs", "hybrid"):
             if outcome[part] != expected[part]:
                 print("ERROR: layout {} {} differs:\n  got      {}\n  expected {}".format(name, part, outcome[part], expected[part]))
@@ -7915,8 +7936,8 @@ def _test_legacy_bindings_is_pure(my_predbat):
     failed = 0
     for name, layout in _automatic_config_layouts().items():
         ge = _layout_component(layout)
-        # The golden capture of the previous automatic configuration's writes, less the settings that are still live
-        expected = {key: value for key, value in AUTOMATIC_CONFIG_GOLDEN[name]["captured"].items() if key not in ("ge_cloud_serial", "ge_cloud_data")}
+        # The golden capture of the previous automatic configuration's writes, less the settings that are not bindings
+        expected = _live_captured(AUTOMATIC_CONFIG_GOLDEN[name]["captured"])
         ge = _layout_component(layout)
         before = copy.deepcopy(ge.config_args)
 
@@ -7976,7 +7997,7 @@ def _switch_on_stubbed(layout):
 
 
 def _test_switch_on_opts_in_and_writes_no_binding(my_predbat):
-    """GE Cloud opts in, files its report at once and writes no binding, but still does its live work."""
+    """GE Cloud opts in, files its report at once and writes no binding, nor ge_cloud_serial or ge_cloud_data, but still logs."""
     from bindings import BINDING_SETTINGS
 
     failed = 0
@@ -7986,8 +8007,8 @@ def _test_switch_on_opts_in_and_writes_no_binding(my_predbat):
     if bindings_written:
         print("ERROR: the opt-in path wrote bindings {}".format(bindings_written))
         failed = 1
-    if ge.config_args.get("ge_cloud_serial") != "battery001" or "ge_cloud_serial" not in written:
-        print("ERROR: ge_cloud_serial is live and should be written, got {}".format(ge.config_args.get("ge_cloud_serial")))
+    if "ge_cloud_serial" in ge.config_args or "ge_cloud_serial" in written:
+        print("ERROR: GE Cloud Data takes its serial from discovery, so ge_cloud_serial should not be written, got {}".format(ge.config_args.get("ge_cloud_serial")))
         failed = 1
     if calls != [("allow", {"skip_settings": (), "keep_user_settings": ("inverter_mode", "export_limit"), "include_pv_only": False}), ("refresh", None)]:
         print("ERROR: expected an opt-in with the default options and then the report filed, got {}".format(calls))
@@ -8000,8 +8021,11 @@ def _test_switch_on_opts_in_and_writes_no_binding(my_predbat):
     if [arg for arg in written if arg in BINDING_SETTINGS or arg in ("inverter_type", "num_inverters")]:
         print("ERROR: the opt-in EMS path wrote bindings {}".format(written))
         failed = 1
-    if ge.config_args.get("ge_cloud_serial") != "ems001" or ge.config_args.get("ge_cloud_data") is not False or not ge.ems_disabled_ge_cloud_data:
-        print("ERROR: the EMS serial and the ge_cloud_data toggle are live, got {}".format(ge.config_args))
+    if [arg for arg in written if arg in ("ge_cloud_serial", "ge_cloud_data")] or "ge_cloud_serial" in ge.config_args or "ge_cloud_data" in ge.config_args:
+        print("ERROR: behind an EMS GE Cloud Data declines from discovery, so neither ge_cloud_serial nor ge_cloud_data should be written, got {} {}".format(written, ge.config_args))
+        failed = 1
+    if "GECloud: EMS detected, using EMS for control" not in ge.log_messages:
+        print("ERROR: the EMS should still be logged, got {}".format(ge.log_messages))
         failed = 1
     if not failed:
         print("PASS: GE Cloud opts in, files its report and writes no binding")
@@ -8009,7 +8033,7 @@ def _test_switch_on_opts_in_and_writes_no_binding(my_predbat):
 
 
 def _test_no_coordinator_configures_nothing(my_predbat):
-    """With no coordinator to opt in to, GE Cloud warns once, binds nothing itself and still does its live work."""
+    """With no coordinator to opt in to, GE Cloud warns once, binds nothing itself, writes neither ge_cloud_serial nor ge_cloud_data and still logs."""
     layouts = _automatic_config_layouts()
     ge = _layout_component(layouts["ems"])
     assert ge.allow_automatic_config() is False, "a bare mock base has no coordinator"
@@ -8017,7 +8041,8 @@ def _test_no_coordinator_configures_nothing(my_predbat):
     run_async(ge.async_automatic_config(ge.devices_dict))
     _assert_no_binding_written(ge)
     assert ge.log_messages.count(NO_COORDINATOR_WARNING) == 1, ge.log_messages
-    assert ge.config_args.get("ge_cloud_serial") == "ems001" and ge.config_args.get("ge_cloud_data") is False, ge.config_args
+    assert "ge_cloud_serial" not in ge.config_args and "ge_cloud_data" not in ge.config_args, ge.config_args
+    assert ge.log_messages.count("GECloud: EMS detected, using EMS for control") == 2, ge.log_messages
     assert ge.base.ha_interface.external_states == {}, "the inverter_hybrid switch is discovery's to write: {}".format(ge.base.ha_interface.external_states)
     assert not [line for line in ge.log_messages if line.startswith(KEPT_NOTE_PREFIX)], ge.log_messages
     print("PASS: with no coordinator GE Cloud warns once and configures nothing")
@@ -9979,6 +10004,198 @@ def _test_run_enables_reset_after_24h(my_predbat):
         return 0
 
     return run_async(test())
+
+
+# =============================================================================
+# GECloudData serial from discovery and the EMS
+# =============================================================================
+
+# What GECloudData logs, once per EMS episode, while GE Cloud's records say the site is behind an EMS
+CLOUD_DATA_EMS_SKIP = "GECloud: GE Cloud Data is not used behind a GivEnergy EMS - skipping the history download"
+# What GECloudData logs when it has no serial from apps.yaml and GE Cloud has reported nothing
+CLOUD_DATA_NO_SERIAL = "Error: GECloudDirect has been enabled in apps.yaml but ge_cloud_serial is not set to your serial number"
+
+
+class _CloudDataBase:
+    """A base holding only a real Coordinator under components, the way GECloudData reads discovery in Predbat."""
+
+    class _Components:
+        """The components registry, holding the coordinator only."""
+
+        def __init__(self, coordinator):
+            """Hold the coordinator."""
+            self.coordinator = coordinator
+
+    def __init__(self):
+        """A coordinator on this base, logging nowhere: it stores reports but cannot configure or write."""
+        self.components = self._Components(Coordinator(self))
+
+    def log(self, message):
+        """Discard the coordinator's log."""
+
+
+def _report_gecloud(ge_data, devices):
+    """File GE Cloud's discovery report for `devices` with ge_data's coordinator, as GECloudDirect's run() does; None files an empty report."""
+    ge = _record_component(devices or {}, {serial: dict(GEC_FULL_REGISTERS) for serial in (devices or {}).get("battery", []) + [(devices or {}).get("gateway")] if serial})
+    ge_data.base.components.coordinator.report("gecloud", dict(ge.build_discovery(), automatic=True))
+
+
+def _cloud_data(devices=None, config=None):
+    """A MockGECloudData with no serial of its own, on a base whose coordinator holds GE Cloud's report for `devices` (None: GE Cloud has not reported)."""
+    ge_data = MockGECloudData()
+    ge_data.ge_cloud_serial = None
+    ge_data.config_args = dict(config or {})
+    ge_data.base = _CloudDataBase()
+    if devices is not None:
+        _report_gecloud(ge_data, devices)
+    return ge_data
+
+
+def _record_downloads(ge_data):
+    """Replace ge_data.download_ge_data with a recorder: returns the list of serials each download was asked for."""
+    downloads = []
+
+    async def download(now_utc):
+        """Note the serial this download would fetch."""
+        downloads.append(ge_data.ge_cloud_serial)
+        return True
+
+    ge_data.download_ge_data = download
+    return downloads
+
+
+def _direct_devices(*batteries):
+    """A GE Cloud device list of directly driven batteries, no gateway or EMS."""
+    return {"ems": None, "gateway": None, "battery": list(batteries), "pv": [], "battery_meters": {}}
+
+
+def _test_cloud_data_serial_from_apps_yaml(my_predbat):
+    """The user's ge_cloud_serial wins over what discovery reports, and is the serial downloaded."""
+    ge_data = _cloud_data(_direct_devices("ce1111g111"), config={"ge_cloud_serial": "user001"})
+    downloads = _record_downloads(ge_data)
+    assert ge_data.resolve_serial() == "user001", ge_data.resolve_serial()
+    assert run_async(ge_data.run(0, True)) is True
+    assert downloads == ["user001"], downloads
+    print("PASS: ge_cloud_serial from apps.yaml wins")
+    return 0
+
+
+def _test_cloud_data_serial_from_record(my_predbat):
+    """With no ge_cloud_serial the serial is a direct GE Cloud record's own hardware serial."""
+    ge_data = _cloud_data(_direct_devices("ce1111g111"))
+    records = ge_data.discovery_inverter_records("gecloud")
+    assert [record["device_id"] for record in records] == ["gecloud:ce1111g111"], records
+    assert ge_data.resolve_serial() == "ce1111g111", ge_data.resolve_serial()
+    # No GE Cloud report and no apps.yaml value: no serial
+    assert _cloud_data().resolve_serial() is None
+    print("PASS: serial from a direct GE Cloud record")
+    return 0
+
+
+def _test_cloud_data_serial_from_gateway(my_predbat):
+    """A gateway record gives the first battery it fronts, as the old ge_cloud_serial write did."""
+    ge_data = _cloud_data({"ems": None, "gateway": "gw001", "battery": ["b1", "b2"], "pv": [], "battery_meters": {}})
+    records = ge_data.discovery_inverter_records("gecloud")
+    assert [(record["device_id"], record.get("serials")) for record in records] == [("gecloud:gw001", ["b1", "b2"])], records
+    assert ge_data.resolve_serial() == "b1", ge_data.resolve_serial()
+    print("PASS: serial from a gateway record's first fronted battery")
+    return 0
+
+
+def _test_cloud_data_serial_lowest_slot(my_predbat):
+    """Of several GE Cloud records the one in the lowest slot gives the serial; with no slots, the first reported."""
+    ge_data = _cloud_data(_direct_devices("a1", "b1"))
+    assert ge_data.resolve_serial() == "a1", "no slots yet: report order, got {}".format(ge_data.resolve_serial())
+    ge_data.base.components.coordinator.slot_map = {"gecloud:b1": 0, "gecloud:a1": 1}
+    assert ge_data.resolve_serial() == "b1", ge_data.resolve_serial()
+    # A record the coordinator gave no slot comes after every slotted one
+    ge_data.base.components.coordinator.slot_map = {"gecloud:b1": 1}
+    assert ge_data.resolve_serial() == "b1", ge_data.resolve_serial()
+    print("PASS: serial from the GE Cloud record in the lowest slot")
+    return 0
+
+
+def _test_cloud_data_serial_arrives_late(my_predbat):
+    """A GE Cloud report that lands after GE Cloud Data starts is picked up; until then nothing is downloaded and the error is not logged every cycle."""
+    ge_data = _cloud_data()
+    downloads = _record_downloads(ge_data)
+
+    # The first run, before GE Cloud has reported: no download, no error, and the run still succeeds
+    assert run_async(ge_data.run(0, True)) is True
+    assert downloads == [], downloads
+    assert CLOUD_DATA_NO_SERIAL not in ge_data.log_messages, ge_data.log_messages
+    # Still nothing after the first 10 minutes: the error is logged, once, however many cycles pass
+    for seconds in (600, 1200, 1800):
+        assert run_async(ge_data.run(seconds, False)) is True
+    assert downloads == [], downloads
+    assert ge_data.log_messages.count(CLOUD_DATA_NO_SERIAL) == 1, ge_data.log_messages
+
+    # GE Cloud reports: the next download cycle fetches that serial
+    _report_gecloud(ge_data, _direct_devices("battery001"))
+    assert run_async(ge_data.run(2400, False)) is True
+    assert downloads == ["battery001"], downloads
+    assert ge_data.log_messages.count(CLOUD_DATA_NO_SERIAL) == 1, ge_data.log_messages
+
+    # A report filed within the first 10 minutes: no error at all
+    ge_data = _cloud_data()
+    downloads = _record_downloads(ge_data)
+    run_async(ge_data.run(0, True))
+    _report_gecloud(ge_data, _direct_devices("battery002"))
+    run_async(ge_data.run(600, False))
+    assert downloads == ["battery002"], downloads
+    assert CLOUD_DATA_NO_SERIAL not in ge_data.log_messages, ge_data.log_messages
+    print("PASS: a serial that arrives late is picked up")
+    return 0
+
+
+def _test_cloud_data_ems_comes_and_goes(my_predbat):
+    """Behind an EMS GE Cloud Data skips the download and says so once; it resumes by itself when the EMS goes; ge_cloud_data is never written."""
+    ems = {"ems": "ems001", "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}}
+    for config in ({"ge_cloud_data": True}, {}):
+        ge_data = _cloud_data(ems, config=config)
+        downloads = _record_downloads(ge_data)
+        assert ge_data.behind_ems() is True
+
+        for seconds in (0, 600, 1200):
+            assert run_async(ge_data.run(seconds, seconds == 0)) is True
+        assert downloads == [], downloads
+        assert ge_data.log_messages.count(CLOUD_DATA_EMS_SKIP) == 1, ge_data.log_messages
+
+        # The EMS leaves the account: downloads resume with the first battery
+        _report_gecloud(ge_data, _direct_devices("battery001", "battery002"))
+        assert ge_data.behind_ems() is False
+        run_async(ge_data.run(1800, False))
+        assert downloads == ["battery001"], downloads
+
+        # It comes back: a new episode, logged once more
+        _report_gecloud(ge_data, ems)
+        run_async(ge_data.run(2400, False))
+        run_async(ge_data.run(3000, False))
+        assert downloads == ["battery001"], downloads
+        assert ge_data.log_messages.count(CLOUD_DATA_EMS_SKIP) == 2, ge_data.log_messages
+        assert ge_data.config_args == config, "ge_cloud_data is the user's, never written: {}".format(ge_data.config_args)
+
+    # No GE Cloud report is not an EMS
+    assert _cloud_data().behind_ems() is False
+    print("PASS: GE Cloud Data declines behind an EMS and resumes when it goes")
+    return 0
+
+
+def _test_gecloud_sets_neither(my_predbat):
+    """GE Cloud's automatic configuration writes neither ge_cloud_serial nor ge_cloud_data, with or without an EMS; the EMS log line stays."""
+    for devices in (_direct_devices("battery001"), {"ems": "ems001", "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}}):
+        for config in ({}, {"ge_cloud_data": True}):
+            ge = MockGECloudDirect()
+            ge.config_args.update(config)
+            ge.settings = {serial: {} for serial in devices["battery"]}
+            run_async(ge.async_automatic_config(devices))
+            written = [name for name in ge.set_arg_names if name in ("ge_cloud_serial", "ge_cloud_data")]
+            assert not written, "GE Cloud wrote {}".format(written)
+            assert ge.config_args.get("ge_cloud_data") == config.get("ge_cloud_data") and "ge_cloud_serial" not in ge.config_args, ge.config_args
+            assert ("GECloud: EMS detected, using EMS for control" in ge.log_messages) == bool(devices["ems"]), ge.log_messages
+            assert not hasattr(ge, "ems_disabled_ge_cloud_data") and not hasattr(ge, "ge_cloud_data_before_ems"), "the EMS ge_cloud_data state is gone"
+    print("PASS: GE Cloud sets neither ge_cloud_serial nor ge_cloud_data")
+    return 0
 
 
 # =============================================================================

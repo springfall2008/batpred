@@ -858,9 +858,6 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # Devices found by the periodic device check still waiting for their default options, kept across
         # cycles so a device found while read only is set up once read only ends
         self.pending_default_options = set()
-        # An EMS turns GE Cloud Data off; what it replaced is kept so it can be put back if the EMS leaves
-        self.ems_disabled_ge_cloud_data = False
-        self.ge_cloud_data_before_ems = None
         # Every line check_automatic_config() has logged, so each is logged once for the life of the process
         self.automatic_check_logged = set()
         # Whether async_automatic_config() has warned that there is no discovery coordinator to configure the inverters
@@ -1824,8 +1821,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         GE Cloud never writes an inverter binding itself: it opts in to the discovery coordinator, which
         configures the inverters from this component's discovery report, and check_automatic_config() then
         compares that with _legacy_bindings(). With no coordinator (a bare base) it logs one warning and
-        configures nothing. The rest is live and done here: ge_cloud_serial, the EMS's ge_cloud_data toggle and
-        its restore, and the log. The inverter_hybrid switch is discovery's: the records report hybrid from each
+        configures nothing. The rest is the log. ge_cloud_serial and ge_cloud_data are not written: GE Cloud Data
+        takes its serial, and whether the site is behind an EMS, from this component's discovery records
+        (GECloudData.resolve_serial() / behind_ems()). The inverter_hybrid switch is discovery's: the records report hybrid from each
         device's model (build_discovery()) and the coordinator sets the switch from them.
         """
         if not devices or not devices["battery"]:
@@ -1870,9 +1868,6 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         elif self.get_arg("export_limit", default=None, indirect=False) is None:
             self.log("GECloud: No site grid export limit found and none configured; set export_limit explicitly if your grid connection is capped below the inverter rating")
 
-        # Use the first battery serial for the ge_cloud_serial (for status)
-        self.set_arg("ge_cloud_serial", devices["battery"][0])
-
         shared_ct = facts["shared_ct"]
         if shared_ct is not None:
             has_shared_ct, reason = shared_ct
@@ -1881,19 +1876,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             else:
                 self.log("GECloud: Multiple inverters detected, using all inverters for grid and load measurements ({})".format(reason))
 
-        # reconfigure for EMS
+        # GE Cloud Data reads the EMS (composition "ems") and its serial from this component's discovery records
+        # itself (GECloudData.behind_ems() / resolve_serial()), so neither ge_cloud_data nor ge_cloud_serial is written here
         if devices["ems"]:
             self.log("GECloud: EMS detected, using EMS for control")
-            ems = devices["ems"]
-            self.set_arg("ge_cloud_serial", ems)
-            if not self.ems_disabled_ge_cloud_data:
-                self.ge_cloud_data_before_ems = self.get_arg("ge_cloud_data", default=None, indirect=False)
-                self.ems_disabled_ge_cloud_data = True
-            self.set_arg("ge_cloud_data", False)
-        elif self.ems_disabled_ge_cloud_data:
-            # The EMS has left the account since it turned GE Cloud Data off, so put back what it replaced
-            self.set_arg("ge_cloud_data", self.ge_cloud_data_before_ems)
-            self.ems_disabled_ge_cloud_data = False
 
         # The inverter_hybrid switch is not set here: each record reports hybrid from its device's model
         # (build_discovery()) and the discovery coordinator sets the switch from the records
@@ -1925,7 +1911,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         The previous automatic configuration, kept only so check_automatic_config() can compare against it; to
         be removed once discovery is trusted. These are the inverter bindings async_automatic_config() used to
         write itself, with its guards (ge_cloud_load_today_ignore, the site export limit, the CT and split-PV
-        options) and without the live settings (ge_cloud_serial, ge_cloud_data) or any log line. {} when there
+        options) and without the settings it also wrote that are not bindings (ge_cloud_serial, ge_cloud_data) or any log line. {} when there
         is no battery device. apply_legacy_bindings() applies it to args with the rules it was written by.
         """
         if not devices or not devices.get("battery"):
@@ -4166,6 +4152,9 @@ class GECloudData(ComponentBase):
         self.ge_url_cache = {}
         self.ge_cloud_data = ge_cloud_data
         self.mdata = []
+        # Whether run() has logged the current EMS episode's skip, and the missing serial error, so each is logged once
+        self.ems_skip_logged = False
+        self.serial_missing_logged = False
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -4177,7 +4166,6 @@ class GECloudData(ComponentBase):
         Run the client
         """
 
-        # Component can be disabled if GECloud detects an EMS system (see async_automatic_config)
         ge_cloud_data = self.get_arg("ge_cloud_data", default=self.ge_cloud_data)
         if not ge_cloud_data:
             self.update_success_timestamp()
@@ -4185,16 +4173,59 @@ class GECloudData(ComponentBase):
 
         if first:
             self.max_days_previous = max(self.days_previous) + 1
-            # Resolve any templated values
-            self.ge_cloud_serial = self.get_arg(self.ge_cloud_serial_config_item, default="")
-            self.log("GECloud: Starting up with max_days_previous {} and serial {}".format(self.max_days_previous, self.ge_cloud_serial))
+            self.log("GECloud: Starting up with max_days_previous {} and serial {}".format(self.max_days_previous, self.resolve_serial() or "from discovery"))
 
         if seconds % (10 * 60) == 0:
-            now_utc = self.now_utc_exact
-            await self.download_ge_data(now_utc)
+            if self.behind_ems():
+                # GE Cloud's records say the site is behind an EMS: decline, once per episode, and resume when it goes
+                if not self.ems_skip_logged:
+                    self.log("GECloud: GE Cloud Data is not used behind a GivEnergy EMS - skipping the history download")
+                    self.ems_skip_logged = True
+            else:
+                self.ems_skip_logged = False
+                serial = self.resolve_serial()
+                if serial:
+                    if serial != self.ge_cloud_serial:
+                        self.log("GECloud: GE Cloud Data downloading history for serial {}".format(serial))
+                    self.ge_cloud_serial = serial
+                    self.serial_missing_logged = False
+                    now_utc = self.now_utc_exact
+                    await self.download_ge_data(now_utc)
+                elif seconds >= 10 * 60 and not self.serial_missing_logged and not self.discovery_inverter_records("gecloud"):
+                    # Neither the user's ge_cloud_serial nor any GE Cloud report after the first 10 minutes; until then wait quietly for one
+                    self.log("Error: GECloudDirect has been enabled in apps.yaml but ge_cloud_serial is not set to your serial number")
+                    self.serial_missing_logged = True
 
         self.update_success_timestamp()
         return True
+
+    def resolve_serial(self):
+        """
+        The serial whose history GE Cloud Data downloads, or None while there is none yet.
+
+        The user's ge_cloud_serial when set (it may be templated, so it is read each time). Otherwise discovery's: of
+        GE Cloud's driven inverter records (PV-only records drive nothing), the one in the lowest slot the
+        coordinator gave - a record with no slot after every slotted one, ties in report order - and from it the
+        first battery it fronts (structural serials, a gateway record), else its own hardware serial. That is the
+        first battery GE Cloud used to write into ge_cloud_serial. Called before every download, so a GE Cloud report
+        that lands after this component starts is picked up.
+        """
+        serial = self.get_arg(self.ge_cloud_serial_config_item, default="")
+        if serial:
+            return serial
+        records = [record for record in self.discovery_inverter_records("gecloud") if isinstance(record.get("inverter_type"), str) and record["inverter_type"].strip()]
+        if not records:
+            return None
+        slots = self.discovery_slot_map()
+        record = min(records, key=lambda record: (slots.get(record["device_id"]) is None, slots.get(record["device_id"]) or 0))
+        fronted = record.get("serials") or []
+        if fronted:
+            return fronted[0]
+        return (record.get("hardware_ids") or {}).get("serial") or None
+
+    def behind_ems(self):
+        """Whether GE Cloud's discovery records say the site is behind a GivEnergy EMS (any record with composition "ems"); False when GE Cloud has not reported."""
+        return any(record.get("composition") == "ems" for record in self.discovery_inverter_records("gecloud"))
 
     def clean_ge_url_cache(self, now_utc):
         """

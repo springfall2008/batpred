@@ -398,6 +398,17 @@ class ComponentBase(ABC):
             return []
         return coordinator.inverter_records(source)
 
+    def discovery_slot_map(self):
+        """A copy of the coordinator's {device_id: slot} from its last automatic configuration pass (see Coordinator.slot_map).
+
+        {} when there is no coordinator, as for discovery_inverter_records(), or before any pass has given a slot.
+        """
+        components = getattr(getattr(self, "base", None), "components", None)
+        coordinator = getattr(components, "coordinator", None) if components else None
+        if not coordinator:
+            return {}
+        return dict(getattr(coordinator, "slot_map", None) or {})
+
     def allow_automatic_config(self, skip_settings=(), keep_user_settings=(), include_pv_only=False):
         """Ask the coordinator to configure this component's inverters; returns whether it will (see Coordinator.allow_automatic()).
 

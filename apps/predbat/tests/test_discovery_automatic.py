@@ -17,7 +17,7 @@ import time
 import coordinator as coordinator_module
 from bindings import BINDING_SETTINGS, COMPACT_SETTINGS, SITE_SETTINGS, slot_value
 from coordinator import Coordinator
-from gecloud import DEVICE_REFRESH_SECONDS, GE_CLOUD_DUMMIED_SETTINGS, apply_legacy_bindings
+from gecloud import DEVICE_REFRESH_SECONDS, GE_CLOUD_DUMMIED_SETTINGS, GECloudData, apply_legacy_bindings
 from tests.test_ge_cloud import GEC_FULL_REGISTERS, GEC_INFO, GEC_MIXED_REGISTERS, MockGECloudDirect, _gec_devices, _make_rediscovery_ge_cloud
 from tests.test_infra import run_async
 
@@ -1312,7 +1312,7 @@ def test_accept_gateway():
 
 
 def test_accept_ems():
-    """An EMS with two batteries: type GEE, the EMS's entities, power sensors on the first slot only and GE Cloud data off."""
+    """An EMS with two batteries: type GEE, the EMS's entities, power sensors on the first slot only, and GE Cloud Data declining from the records with ge_cloud_data untouched."""
     old, new, log = run_old_and_new(*_two_batteries(None, ems="ems001"))
     known = {
         setting: ([_entity(domain, "battery001", suffix), _entity(domain, "battery002", suffix)], None)
@@ -1328,8 +1328,13 @@ def test_accept_ems():
     assert new["inverter_type"] == ["GEE", "GEE"], new["inverter_type"]
     assert new["battery_power"] == [_entity("sensor", "ems001", "battery_power"), 0], new["battery_power"]
     assert new["charge_start_time"] == [_entity("select", "ems001", "charge_start_time_slot_1")] * 2, new["charge_start_time"]
-    # ge_cloud_data is live, written by the real run only: the previous configuration's plan holds no live setting
-    assert "ge_cloud_data" not in old and new["ge_cloud_data"] is False, (old.get("ge_cloud_data"), new.get("ge_cloud_data"))
+    # Neither run writes ge_cloud_data or ge_cloud_serial: GE Cloud Data declines behind the EMS from GE Cloud's records itself
+    for setting in ("ge_cloud_data", "ge_cloud_serial"):
+        assert setting not in old and setting not in new, (setting, old.get(setting), new.get(setting))
+    _, base = _automatic_run(*_two_batteries(None, ems="ems001"), _starting_args())
+    cloud_data = GECloudData.__new__(GECloudData)
+    cloud_data.base = base
+    assert cloud_data.behind_ems() is True, cloud_data.discovery_inverter_records("gecloud")
     print("PASS: accept EMS")
     return 0
 
