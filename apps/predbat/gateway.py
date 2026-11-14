@@ -99,6 +99,11 @@ _COMMIT_POLL_SECONDS = 0.5
 # loop is stuck or gone: the caller is Predbat's control thread, which must not be held there.
 _PUBLISH_HANDOVER_SECONDS = 30
 
+# How long enabling read-only on the Hub waits for reset_inverter() to write the safe state first
+# (seconds). The reset runs at the next plan execution; one that never comes (Predbat stuck, plan
+# failing) must not leave the Hub writable indefinitely, so after this the command is sent anyway.
+_READ_ONLY_HANDOVER_WAIT_SECONDS = 15 * 60
+
 
 def _split_same_day_plan_entries(entries):
     """Split native EMS windows into same-day pieces on the plan's absolute timeline.
@@ -562,6 +567,9 @@ class GatewayMQTT(ComponentBase):
         # Latch so a gateway whose reported read-only state disagrees with what PredBat
         # requested is logged once per transition, not on every status cycle
         self._read_only_mismatch_logged = False
+        # Monotonic time enabling read-only was first held back for a pending handover reset
+        # (None when nothing is held back), bounding the wait to _READ_ONLY_HANDOVER_WAIT_SECONDS
+        self._read_only_held_since = None
 
         # Set once the first MQTT connection attempt has completed (success or failure)
         self._first_connection_attempted = False
@@ -3005,21 +3013,59 @@ class GatewayMQTT(ComponentBase):
         least every 30 minutes even when unchanged. The command is gateway-wide, so it
         carries no inverter serial. Gated only on an active MQTT connection — it does not
         depend on auto-config, so the state is established as early as possible.
+
+        Enabling read-only is held back while the switch's handover reset is still pending (see
+        _hold_read_only_for_reset), because the Hub rejects writes once it is read-only and the
+        reset's safe-state writes would never land. Disabling is never held back. If a new handover
+        reset is pending while the Hub is already read-only (the switch went off and on between two
+        cycles, so no change was seen), read-only is first disabled to reopen the Hub, then held.
         """
         if not self._mqtt_connected:
             # Force a re-send after reconnect (command is not retained).
             self._last_read_only = None
             return
         read_only = bool(self.get_arg("set_read_only", False))
+        reset_pending = getattr(self.base, "inverter_needs_reset_force", "") == "set_read_only"
+        if not read_only or not reset_pending:
+            self._read_only_held_since = None
         now = self.monotonic()
+        if read_only and reset_pending and self._last_read_only and self._read_only_held_since is None:
+            # The switch went off and on again between two cycles, so the Hub is still read-only from the
+            # earlier enable and would reject the new handover reset's writes: reopen it, then hold as usual.
+            await self.publish_command("set_read_only", enable=False)
+            self._last_read_only = False
+            self._last_read_only_sent_time = now
+            self.log("Info: GatewayMQTT: set_read_only command sent (read_only=False) so the inverter can be reset to a safe state")
         changed = read_only != self._last_read_only
         stale = not self._last_read_only_sent_time or now - self._last_read_only_sent_time >= 30 * 60
         if not changed and not stale:
+            return
+        if read_only and self._hold_read_only_for_reset(now):
             return
         await self.publish_command("set_read_only", enable=read_only)
         self._last_read_only = read_only
         self._last_read_only_sent_time = now
         self.log(f"Info: GatewayMQTT: set_read_only command sent (read_only={read_only})")
+
+    def _hold_read_only_for_reset(self, now):
+        """True while enabling read-only on the Hub should wait for reset_inverter()'s safe-state writes.
+
+        Turning the switch on arms inverter_needs_reset_force = "set_read_only", and reset_inverter()
+        clears it once it has written the safe state at the next plan execution. Until then the Hub
+        must stay writable. The wait is bounded by _READ_ONLY_HANDOVER_WAIT_SECONDS so a reset that
+        never runs does not leave the Hub writable indefinitely: after that this returns False even
+        though the reset is still pending.
+        """
+        if getattr(self.base, "inverter_needs_reset_force", "") != "set_read_only":
+            self._read_only_held_since = None
+            return False
+        if self._read_only_held_since is None:
+            self._read_only_held_since = now
+            self.log("Info: GatewayMQTT: set_read_only held back until the inverter has been reset to a safe state")
+        if now - self._read_only_held_since < _READ_ONLY_HANDOVER_WAIT_SECONDS:
+            return True
+        self.log(f"Warn: GatewayMQTT: inverter reset for read-only not done after {_READ_ONLY_HANDOVER_WAIT_SECONDS // 60} minutes, sending set_read_only anyway")
+        return False
 
     def _check_read_only_mismatch(self, reported):
         """Warn when the gateway's enforced read-only state differs from what PredBat asked for.
