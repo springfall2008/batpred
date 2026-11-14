@@ -1915,12 +1915,17 @@ class SigenergyAPI(ComponentBase):
         period message also reports its own ceilings, inverterMaxFeedInActivePowerW (exporting, so the
         "discharge" direction) and inverterMaxAbsorptionActivePowerW (importing, "charge"), which can be
         higher: an EC 6.0 SP is rated 6.0 kW but reports, and delivers, 6.6 kW (#5784). They are kept in
-        self.inverter_ceilings, which is cached across restarts (see _handle_mqtt_period). The higher of the
-        nameplate and the reported ceiling is used, so a reported figure only ever raises the limit, and a
+        self.inverter_ceilings, which is cached across restarts (see _store_inverter_ceilings). The higher of
+        the nameplate and the reported ceiling is used, so a reported figure only ever raises the limit, and a
         figure more than SIGENERGY_INVERTER_CEILING_MAX_RATIO times the rating is taken as a bad reading.
         A system with no rating to compare against (no Inverter device in its list) ignores the reports.
-        With no direction this is inverter_limit, which Predbat applies to the inverter's AC output (PV
-        plus battery), so it takes the feed-in ceiling; charging is bounded by the battery's own rates.
+
+        With no direction this is inverter_limit, which takes the feed-in ceiling. The plan applies
+        inverter_limit to the inverter's AC output (PV plus battery), so the absorption figure, if higher,
+        would let it plan exports the plant cannot make. The cost falls on charging: the plan also clips
+        grid charging at inverter_limit (Prediction.run_prediction), so on a plant whose absorption ceiling
+        is above its feed-in ceiling the plan charges at the feed-in figure, even though the charge rate
+        published for inverter_limit_charge and the charge rate control's range use the absorption figure.
         """
         power = 0.0
         for device in self.devices.get(system_id, []):
@@ -2006,20 +2011,17 @@ class SigenergyAPI(ComponentBase):
         Args:
             system_id: Sigenergy system identifier extracted from the MQTT topic.
             value_dict: ``value`` sub-dict from the parsed MQTT payload (string→string).
+
+        Returns:
+            True when the message changed the inverter's stored power ceilings (see _store_inverter_ceilings),
+            so the caller knows the rate controls' range has moved and must be republished.
         """
         # The broker only sends fields that changed, so merge onto the last known
         # raw values rather than treating an absent field as 0.
         raw = self.mqtt_period_raw.setdefault(system_id, {})
         raw.update(value_dict)
 
-        # The inverter's own power ceilings, kept apart from the raw fields so they can be cached: a
-        # fixed ceiling is not necessarily sent again after a restart. Read from the merged state, so a
-        # ceiling that arrived in a message too stale to process is still picked up by the next one.
-        # Only a usable figure is kept.
-        for name, field in SIGENERGY_INVERTER_CEILING_FIELDS.items():
-            ceiling_w = _safe_float(raw.get(field, None), None)
-            if ceiling_w is not None and math.isfinite(ceiling_w) and ceiling_w > 0:
-                self.inverter_ceilings.setdefault(system_id, {})[name] = ceiling_w
+        ceilings_changed = self._store_inverter_ceilings(system_id)
 
         # A field the broker has *never* sent is still absent from the merged state, and defaulting
         # it to 0 here would overwrite a good value the REST poll already put in energy_flow with a
@@ -2071,6 +2073,30 @@ class SigenergyAPI(ComponentBase):
                 system_id, flow["batterySoc"], bat_power_kw, pv_power_kw, grid_power_kw, flow["loadPower"]
             )
         )
+        return ceilings_changed
+
+    def _store_inverter_ceilings(self, system_id):
+        """Copy the inverter's reported power ceilings from the merged period state into self.inverter_ceilings.
+
+        They are kept apart from the raw fields so they can be cached: a fixed ceiling is not necessarily sent
+        again after a restart. They are read from the merged state, and are taken from a period message too
+        stale for its live readings to be used, because a ceiling is a fixed plant figure rather than a reading.
+        Only a usable (finite, positive) figure is kept; the plausibility check against the rating is left to
+        _get_inverter_max_power_kw, which also has to apply it to a figure restored from the cache.
+
+        Returns:
+            True when a stored figure was added or changed.
+        """
+        raw = self.mqtt_period_raw.get(system_id, {})
+        changed = False
+        for name, field in SIGENERGY_INVERTER_CEILING_FIELDS.items():
+            ceiling_w = _safe_float(raw.get(field, None), None)
+            if ceiling_w is not None and math.isfinite(ceiling_w) and ceiling_w > 0:
+                stored = self.inverter_ceilings.setdefault(system_id, {})
+                if stored.get(name) != ceiling_w:
+                    stored[name] = ceiling_w
+                    changed = True
+        return changed
 
     def _handle_mqtt_change(self, system_id, value_dict):
         """Handle a Sigenergy ``openapi/change`` MQTT message.
@@ -2330,9 +2356,15 @@ class SigenergyAPI(ComponentBase):
                                             entry_sid, lag / 60, datetime.fromtimestamp(statistics_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                                         )
                                     )
+                                    # The power ceiling is a fixed figure, not a reading, so a stale message's still counts
+                                    if self._store_inverter_ceilings(entry_sid) and self.api_started:
+                                        await self.publish_controls(entry_sid)
                                     continue
-                                self._handle_mqtt_period(entry_sid, value_dict)
+                                ceilings_changed = self._handle_mqtt_period(entry_sid, value_dict)
                                 if self.api_started:
+                                    # The rate controls' max follows the ceiling, and publish_controls() is not on the poll cadence
+                                    if ceilings_changed:
+                                        await self.publish_controls(entry_sid)
                                     await self.publish_system_entities(entry_sid)
                             elif msg_type == "change":
                                 self._handle_mqtt_change(entry_sid, value_dict)

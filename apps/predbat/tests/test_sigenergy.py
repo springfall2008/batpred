@@ -1639,7 +1639,7 @@ def test_sigenergy_save_cache_settings_expiry(my_predbat):
     storage = FakeStorage()
     api._mock_storage = storage
 
-    for key in ("energy_flow", "grid_export", "device_cutoffs"):
+    for key in ("energy_flow", "grid_export", "device_cutoffs", "inverter_ceilings"):
         run_async(api._save_cache(key, {"SIG001": {}}))
     now = datetime.now(timezone.utc)
 
@@ -1650,6 +1650,8 @@ def test_sigenergy_save_cache_settings_expiry(my_predbat):
     assert 0.99 < days_left("energy_flow") <= 1.0, "poll data expires after a day, got {:.2f}".format(days_left("energy_flow"))
     assert 27.99 < days_left("grid_export") <= 28.0, "export limit kept for 28 days, got {:.2f}".format(days_left("grid_export"))
     assert 27.99 < days_left("device_cutoffs") <= 28.0, "SoC cut-offs kept for 28 days, got {:.2f}".format(days_left("device_cutoffs"))
+    # A reported power ceiling may never be sent again after a restart, so it is kept like the plant settings (#5784)
+    assert 27.99 < days_left("inverter_ceilings") <= 28.0, "inverter ceilings kept for 28 days, got {:.2f}".format(days_left("inverter_ceilings"))
 
     return failed
 
@@ -2901,11 +2903,13 @@ def _run_listener_with_messages(api, messages):
             run_async(api._mqtt_listener_loop())
 
 
-def _period_payload(sid, soc, statistics_time=None):
-    """Build an MQTT period payload as the broker sends it, optionally with its statisticsTime envelope field."""
+def _period_payload(sid, soc, statistics_time=None, extra=None):
+    """Build an MQTT period payload as the broker sends it, optionally with its statisticsTime envelope field and extra value fields."""
     import json as _json
 
     entry = {"deviceType": "system", "systemId": sid, "snCode": sid, "value": {"storageSOC%": str(soc), "storageChargeDischargePowerW": "-8804.0", "PV power": "0.0", "gridActivePowerW": "-4861.0"}}
+    if extra:
+        entry["value"].update(extra)
     if statistics_time is not None:
         entry["statisticsTime"] = statistics_time
     return _json.dumps([entry]).encode()
@@ -2955,6 +2959,79 @@ def test_sigenergy_mqtt_listener_applies_fresh_period(my_predbat):
     assert abs(api.energy_flow[sid]["batterySoc"] - 61.3) < 0.01, "fresh MQTT SOC applied, got {}".format(api.energy_flow[sid]["batterySoc"])
     assert api.mqtt_data_lag.get(sid, 999) < 60, "small lag recorded, got {}".format(api.mqtt_data_lag.get(sid))
     assert not [m for m in api.log_messages if "minutes old" in m], "no staleness warning for fresh data"
+    return failed
+
+
+def test_sigenergy_mqtt_listener_republishes_controls_on_new_ceiling(my_predbat):
+    """A period message that changes the inverter's reported power ceiling republishes the controls, so the charge and
+    export rate numbers' max follows it (#5784). publish_controls() is otherwise only run on the first tick, a change
+    message or a control write, so on a cold cache the sliders stayed at the nameplate. A stale message's ceiling is
+    taken too, since it is a fixed figure, not a live reading, and the broker may lag for hours."""
+    failed = False
+    sid = "SIG001"
+    topic = "openapi/period/test_app_key/{}".format(sid)
+    ceiling = {"inverterMaxFeedInActivePowerW": "6600.0", "inverterMaxAbsorptionActivePowerW": "6600.0"}
+
+    def make_api():
+        """A started API for one 6.0 kW system with the publishers mocked."""
+        api = MockSigenergyAPI()
+        api.access_token = "tok"
+        api.token_expires_at = 9_999_999_999
+        api.systems[sid] = {"systemName": "Test"}
+        api.devices[sid] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 6.0}}]
+        api.energy_flow[sid] = {"batterySoc": 7.0, "batteryPower": 0.0, "pvPower": 0.0, "gridPower": 0.0, "loadPower": 0.0, "evPower": 0.0}
+        api.api_stop = False
+        api.api_started = True
+        api.publish_controls = AsyncMock()
+        api.publish_system_entities = AsyncMock()
+        return api
+
+    # Fresh messages: the first ceiling republishes the controls, a repeat of the same figure or a message without it does not
+    api = make_api()
+    fresh = int(time.time()) - 20
+    _run_listener_with_messages(
+        api,
+        [
+            (topic, _period_payload(sid, 50.0, statistics_time=fresh, extra=ceiling)),
+            (topic, _period_payload(sid, 51.0, statistics_time=fresh, extra=ceiling)),
+            (topic, _period_payload(sid, 52.0, statistics_time=fresh)),
+        ],
+    )
+    if [c.args for c in api.publish_controls.call_args_list] != [(sid,)]:
+        print("ERROR: a new ceiling should republish the controls once for {}, got {}".format(sid, api.publish_controls.call_args_list))
+        failed = True
+    if abs(api._get_inverter_max_power_kw(sid) - 6.6) > 1e-9:
+        print("ERROR: the reported ceiling should be used, got {}".format(api._get_inverter_max_power_kw(sid)))
+        failed = True
+
+    # A changed figure republishes again
+    api.api_stop = False
+    _run_listener_with_messages(api, [(topic, _period_payload(sid, 53.0, statistics_time=fresh, extra={"inverterMaxFeedInActivePowerW": "6500.0"}))])
+    if api.publish_controls.call_count != 2:
+        print("ERROR: a changed ceiling should republish the controls, got {} calls".format(api.publish_controls.call_count))
+        failed = True
+
+    # A stale message: its live readings are not applied, but the ceiling is stored and the controls republished
+    api = make_api()
+    _run_listener_with_messages(api, [(topic, _period_payload(sid, 61.3, statistics_time=int(time.time()) - 7020, extra=ceiling))])
+    if api.energy_flow[sid]["batterySoc"] != 7.0:
+        print("ERROR: a stale message's SOC must not be applied, got {}".format(api.energy_flow[sid]["batterySoc"]))
+        failed = True
+    if abs(api._get_inverter_max_power_kw(sid) - 6.6) > 1e-9:
+        print("ERROR: a stale message's ceiling should be stored, got {}".format(api._get_inverter_max_power_kw(sid)))
+        failed = True
+    if [c.args for c in api.publish_controls.call_args_list] != [(sid,)]:
+        print("ERROR: a stale message's new ceiling should republish the controls, got {}".format(api.publish_controls.call_args_list))
+        failed = True
+
+    # Before the component has started nothing is published; the first-tick publish_controls() picks the ceiling up
+    api = make_api()
+    api.api_started = False
+    _run_listener_with_messages(api, [(topic, _period_payload(sid, 50.0, statistics_time=fresh, extra=ceiling))])
+    if api.publish_controls.call_count != 0:
+        print("ERROR: nothing should be published before the component has started, got {}".format(api.publish_controls.call_args_list))
+        failed = True
+
     return failed
 
 
@@ -6300,6 +6377,7 @@ def run_sigenergy_tests(my_predbat):
         ("mqtt_listener_loop", test_sigenergy_mqtt_listener_loop),
         ("mqtt_listener_loop_ignores_other_systems", test_sigenergy_mqtt_listener_loop_ignores_other_systems),
         ("mqtt_listener_ignores_stale_period", test_sigenergy_mqtt_listener_ignores_stale_period),
+        ("mqtt_listener_republishes_controls_on_new_ceiling", test_sigenergy_mqtt_listener_republishes_controls_on_new_ceiling),
         ("mqtt_listener_applies_fresh_period", test_sigenergy_mqtt_listener_applies_fresh_period),
         ("run_polls_rest_when_mqtt_lagging", test_sigenergy_run_polls_rest_when_mqtt_lagging),
         ("run_mqtt_fresh_window_covers_cadence_jitter", test_sigenergy_run_mqtt_fresh_window_covers_cadence_jitter),
