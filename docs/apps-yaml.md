@@ -2674,6 +2674,9 @@ sets how long to wait between each retry - the default is 1 minute. Retries only
 re-checked early. Set **validate_config_retries** to 0 to disable retries entirely and revert to the previous behaviour (a failed validation
 persists until the next restart or config change).
 
+An empty or mis-indented [custom inverter definition](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) under `inverter:` is also
+reported as a configuration error; it will not clear on a retry, only once `apps.yaml` is corrected.
+
 ## Workarounds
 
 There are a number of different configuration items in `apps.yaml` that can be used to tweak the way Predbat operates and workaround

@@ -3843,6 +3843,12 @@ The following template can be used as a starting point:
     option: "Maximize Self Consumption"
 ```
 
+Every setting of the custom definition must be indented one level deeper than `inverter:` itself. If `inverter:` is left empty, or set to
+anything other than a dictionary of settings (or a list of them, one per inverter), Predbat ignores it and uses the built-in definition for
+`inverter_type` - GivEnergy defaults for a custom type. This is reported as an `apps.yaml` configuration error against `inverter`,
+naming any inverter settings found at the top level of `apps.yaml` instead of under `inverter:` (the usual sign that a pasted template lost an
+indent level). An inverter setting at the top level next to a valid `inverter:` block is ignored and only logged as a warning.
+
 ## Inverter control options
 
 The following options are supported per inverter:

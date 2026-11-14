@@ -80,6 +80,7 @@ from const import (
     DEBUG_ENABLE_MAX_HOURS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
+from inverter import describe_inverter_definition_problem, find_misplaced_inverter_keys
 import debug_history
 from utils import (
     convert_temperature,
@@ -2313,6 +2314,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     self.log("Warn: Validation of apps.yaml found configuration item '{}' is not of type '{}' value was {}".format(name, expected_type, value))
                     self.arg_errors[name] = "Invalid type, expected {}".format(expected_type)
                     errors += 1
+        errors += self.validate_inverter_definition()
         if errors:
             self.log("Error: Validation of apps.yaml found {} configuration errors".format(errors))
         else:
@@ -2321,6 +2323,27 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.check_apps_yaml_secrets()
 
         return errors
+
+    def validate_inverter_definition(self):
+        """
+        Flag an apps.yaml 'inverter:' block that cannot be applied in arg_errors, naming any inverter definition
+        settings stranded at the top level beside it. 'inverter:' is not in APPS_SCHEMA, so without this a template
+        merged one indent level too shallow is only a per-cycle log line while the inverter runs on GivEnergy
+        defaults (#6113). Returns the number of errors found.
+
+        A stranded setting next to a usable (or absent) 'inverter:' is only logged: it is inert there, and a shipped
+        template already carries one (tesla_powerwall.yaml's charge_control_immediate), so making it an error would
+        turn the red banner on for installs that run correctly.
+        """
+        problem = describe_inverter_definition_problem(self.args)
+        if problem:
+            self.log("Warn: Validation of apps.yaml found {}".format(problem))
+            self.arg_errors["inverter"] = problem
+            return 1
+        misplaced = find_misplaced_inverter_keys(self.args)
+        if misplaced:
+            self.log("Warn: Validation of apps.yaml found inverter definition settings at the top level, where they are ignored - they belong under 'inverter:': {}".format(", ".join(misplaced)))
+        return 0
 
     def check_apps_yaml_secrets(self, apps_yaml_path=None):
         """

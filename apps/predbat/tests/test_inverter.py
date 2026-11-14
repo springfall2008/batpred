@@ -1462,6 +1462,44 @@ def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
     return failed
 
 
+def test_empty_inverter_def_names_cause(test_name, my_predbat, ha):
+    """
+    A custom inverter type whose 'inverter:' block is empty because the settings under it lost an indent level runs on
+    GivEnergy defaults; the per-cycle log must say so and name the stranded settings, not just "not a dictionary" (#6113).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    orig_log = my_predbat.log
+    log_messages = []
+    try:
+        my_predbat.args["inverter_type"] = ["CUSTOM6113"]
+        my_predbat.args["inverter"] = None
+        my_predbat.args["has_rest_api"] = False
+        my_predbat.args["charge_time_format"] = "S"
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        inv = Inverter(my_predbat, 0, quiet=True)
+        if inv.inv_charge_time_format != INVERTER_DEF["GE"]["charge_time_format"]:
+            print("ERROR: {} expected the GivEnergy charge_time_format, got {}".format(test_name, inv.inv_charge_time_format))
+            failed = True
+        problem = [msg for msg in log_messages if "inverter definition is not a dictionary" in msg]
+        if not problem:
+            print("ERROR: {} no log line for the empty inverter definition: {}".format(test_name, log_messages))
+            failed = True
+        elif not (problem[0].startswith("Error:") and "GivEnergy defaults" in problem[0] and "charge_time_format, has_rest_api" in problem[0] and "CUSTOM6113" in problem[0]):
+            print("ERROR: {} log line does not name the cause: {}".format(test_name, problem[0]))
+            failed = True
+    finally:
+        my_predbat.log = orig_log
+        INVERTER_DEF.pop("CUSTOM6113", None)
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
 def test_rate_control_is_per_inverter(test_name, my_predbat, ha):
     """
     An inverter reads and writes its rate through the control its own entry is bound to, whichever settings exist
@@ -6211,6 +6249,7 @@ def run_inverter_tests(my_predbat_dummy):
     # #5324: GivEnergy stores the rate as a whole percent of capacity, so 1300W reads back 1206W
     failed |= test_rate_tolerances("rate_tolerances", inv)
     failed |= test_custom_inverter_def_drops_rate_step("custom_inverter_def_drops_rate_step", my_predbat, ha)
+    failed |= test_empty_inverter_def_names_cause("empty_inverter_def_names_cause", my_predbat, ha)
     failed |= test_hub_midnight_capability_from_entity("hub_midnight_capability_from_entity", my_predbat, ha)
     failed |= test_rate_step_from_charge_rate_entity("rate_step_from_charge_rate_entity", my_predbat, ha)
     failed |= test_grid_charge_only_disables_discharge_freeze("grid_charge_only_disables_discharge_freeze", my_predbat, ha)

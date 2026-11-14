@@ -2693,6 +2693,11 @@ INVERTER_DEF = {
     },
 }
 
+# Every setting a built-in inverter definition holds, captured before an apps.yaml 'inverter:' block is
+# merged into INVERTER_DEF at runtime. None of these is a top-level apps.yaml key, so finding one beside
+# 'inverter:' rather than under it means the block lost an indent level (#6113).
+INVERTER_DEF_KEYS = frozenset(key for definition in INVERTER_DEF.values() for key in definition)
+
 # Control modes for Solax inverters
 SOLAX_SOLIS_MODES = {
     "Selfuse - No Grid Charging": 1,
