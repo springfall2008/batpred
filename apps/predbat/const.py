@@ -139,6 +139,7 @@ BATTERY_TEMPERATURE_CURVE_SOC_MAX = 80  # Only learn from minutes below this SoC
 BATTERY_TEMPERATURE_CURVE_TEMP_MAX = 30  # Warmest degree battery_temperature_*_curve is looked up (and learned) at; a warmer reading uses this degree. Fox fleet BMS limits still rise up to ~25-30 degrees
 BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK = 20  # A positive degree the curve does not set falls back to this entry (then to uncapped), as it did when 20 was the warmest degree looked up
 BATTERY_TEMPERATURE_CURVE_BINDING_MARGIN = 0.95  # A minute delivering at least this fraction of the temperature cap was held at the cap, so it says nothing about the SoC taper
+BATTERY_TEMPERATURE_CURVE_LIMIT_FRACTION = 0.9  # A temperature cap only counts as limiting below this fraction of the rated rate; a learned warm rate a few % under it (losses, noise) is full rate
 BATTERY_TEMPERATURE_CURVE_MIN_POWER = 0.02  # Ignore charging minutes below this fraction of the maximum rate, the charge has finished rather than been limited
 BATTERY_TEMPERATURE_CURVE_MIN_MINUTES = 30  # Charging minutes a whole degree needs before its learned rate is used
 BATTERY_TEMPERATURE_CURVE_MIN_DAYS = 2  # ... from at least this many different days, so one night whose recorded charge rate was wrong (seen in the fleet) cannot set it

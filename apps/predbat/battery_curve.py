@@ -27,6 +27,7 @@ from const import (
     BATTERY_POWER_CURVE_MIN_DAYS,
     BATTERY_POWER_CURVE_MIN_MINUTES,
     BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS,
+    BATTERY_TEMPERATURE_CURVE_LIMIT_FRACTION,
     BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS,
     BATTERY_TEMPERATURE_CURVE_MIN_DAY_MINUTES,
     BATTERY_TEMPERATURE_CURVE_MIN_DAYS,
@@ -605,8 +606,10 @@ class BatteryCurve:
         find_charge_curve() learns the high-SoC taper from full-rate charges (or the low-SoC tail-off from full-rate
         discharges), and a cold battery held back by its BMS looks exactly like a taper, so those minutes are left out.
         A minute is limited when find_battery_temperature_cap() at its temperature, with the configured (or learned)
-        battery_temperature_charge_curve / battery_temperature_discharge_curve, is below max_power_scaled AND the
-        battery was delivering at that cap (within BATTERY_TEMPERATURE_CURVE_BINDING_MARGIN). A minute delivering
+        battery_temperature_charge_curve / battery_temperature_discharge_curve, is below
+        BATTERY_TEMPERATURE_CURVE_LIMIT_FRACTION of the rated rate AND the battery was delivering at that cap (within
+        BATTERY_TEMPERATURE_CURVE_BINDING_MARGIN). A cap just under the rated rate - a learned warm rate a few percent
+        short of it from losses or noise - is not a limit, or every full-rate minute would be left out. A minute delivering
         clearly less than the cap was held back by something else - the SoC taper this is learning - so it is kept,
         which matters once warm degrees are learned: a battery that never reaches its rated rate has a cap below full
         rate at every temperature, and testing the cap alone would leave nothing to learn the taper from.
@@ -617,7 +620,7 @@ class BatteryCurve:
         Args:
             discharge: True to use the discharge temperature curve
             min_len: minutes of history being searched
-            max_power_scaled: the rate in W a minute must reach to count as full rate
+            max_power_scaled: the rate in W a minute must reach to count as full rate (95% of the rated rate)
             battery_power: {minute: W} as find_charge_curve() read it (sign already corrected)
 
         Returns:
@@ -646,6 +649,7 @@ class BatteryCurve:
         battery_loss = self.base.battery_loss if self.base.battery_loss > 0 else 1.0
         rate_scaling = self.base.battery_rate_max_scaling_discharge if discharge else self.base.battery_rate_max_scaling
         rate_scaling = rate_scaling if rate_scaling > 0 else 1.0
+        limit_w = (self.battery_rate_max_discharge if discharge else self.battery_rate_max_charge) * MINUTE_WATT * BATTERY_TEMPERATURE_CURVE_LIMIT_FRACTION
         limited = set()
         cap_cache = {}
         for minute in range(0, min_len):
@@ -656,7 +660,7 @@ class BatteryCurve:
             if temp_idx not in cap_cache:
                 cap_cache[temp_idx] = find_battery_temperature_cap(temp_idx, temperature_curve, self.soc_max, float("inf")) * MINUTE_WATT * battery_loss * rate_scaling
             cap_w = cap_cache[temp_idx]
-            if cap_w < max_power_scaled and abs(battery_power.get(minute, 0)) >= cap_w * BATTERY_TEMPERATURE_CURVE_BINDING_MARGIN:
+            if cap_w < limit_w and abs(battery_power.get(minute, 0)) >= cap_w * BATTERY_TEMPERATURE_CURVE_BINDING_MARGIN:
                 limited.add(minute)
         if limited:
             self.log("Inverter {} Leaving {} temperature-limited minutes out of the battery {} curve".format(self.id, len(limited), "discharge" if discharge else "charge"))

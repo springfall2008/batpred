@@ -805,6 +805,15 @@ def test_find_charge_curve_skips_temperature_limited(my_predbat):
             print("ERROR: a warm charge should still be learned, got {}".format(curve))
             failed = True
 
+        # A learned warm rate a few percent under the rated one (0.25 C = 2.5 kW of 2.6 kW) is full rate, not a limit
+        my_predbat.battery_temperature_charge_curve = {5: 0.25}
+        install_temperature(5.5)
+        curve = inv.find_charge_curve(discharge=False)
+        if not curve or any(value != 1 for value in curve.values()):
+            print("ERROR: a cap within 10% of the rated rate should not leave the charges out, got {}".format(curve))
+            failed = True
+        my_predbat.battery_temperature_charge_curve = {5: 0.13, 25: 1.0}
+
         install_temperature(0)
         curve = inv.find_charge_curve(discharge=False)
         if not curve:
