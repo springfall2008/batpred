@@ -926,7 +926,12 @@ class PredHeat:
         self.internal_temperature, _ = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True, temperature=True)
         # Historical lookups use the target schedule, so its history alone sets the lookback.
         self.target_temperature, self.minute_data_age = self.minute_data_entity(now_utc, "target_temperature", temperature=True)
-        self.load_target_schedule(self.midnight_utc + timedelta(minutes=self.minutes_now))
+        schedule_start = now_utc.replace(
+            minute=now_utc.minute - now_utc.minute % PREDICT_STEP,
+            second=0,
+            microsecond=0,
+        )
+        self.load_target_schedule(schedule_start)
         self.heating_energy, _ = self.minute_data_entity(now_utc, "heating_energy", incrementing=True, smoothing=True, scaling=self.heating_energy_scaling)
 
         self.heat_energy_today = self.heating_energy.get(0, 0) - self.heating_energy.get(self.minutes_now - self.day_start_minute, 0)

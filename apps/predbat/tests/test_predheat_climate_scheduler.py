@@ -447,6 +447,27 @@ def test_predheat_climate_scheduler(my_predbat):
         assert heat.schedule_change_minutes == [7.0, 1447.0]
         assert captured == [[22.0, 22.0, 18.0]] * 2, captured
 
+        # Check schedule origin on both UK clock-change days. The new origin
+        # must use the actual local UTC offset, not an offset reconstructed
+        # from midnight. Also verify that seconds are rounded down.
+        schedule_starts = []
+        original_load_target_schedule = heat.load_target_schedule
+
+        def capture_schedule_start(start):
+            schedule_starts.append(start)
+            return original_load_target_schedule(start)
+
+        heat.load_target_schedule = capture_schedule_start
+        for current, expected in (
+            (local(2026, 3, 29, 10, 17).replace(second=30), local(2026, 3, 29, 10, 15)),
+            (local(2026, 10, 25, 10, 17).replace(second=30), local(2026, 10, 25, 10, 15)),
+        ):
+            schedule_starts.clear()
+            with patch("predheat.datetime", wraps=datetime) as clock:
+                clock.now.return_value = current
+                heat.update_pred(scheduled=False)
+            assert schedule_starts == [expected], "DST schedule origin: expected {}, got {}".format(expected, schedule_starts)
+
     def simulation():
         # Verify that the simulation itself uses the new targets, not just the helper.
         heat = _make_simulation(my_predbat, [], smart_thermostat=False)
