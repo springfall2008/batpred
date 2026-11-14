@@ -358,7 +358,11 @@ def test_predheat_climate_scheduler(my_predbat):
         energy = heat.published[heat.prefix + ".heat_energy"]["results"]
         stamp = lambda minute: (heat.midnight_utc + timedelta(minutes=minute)).strftime(TIME_FORMAT)
         assert heating[stamp(10)] > 0, "heating should initially run"
-        assert heating[stamp(80)] == "unknown", "preheat must respect HVAC-off"
+        off_energy = [energy[stamp(m)] for m in range(30, 90, 5)]
+        assert all(e == off_energy[0] for e in off_energy), "HVAC-off interval must consume no energy: {}".format(off_energy)
+        energy = heat.published[heat.prefix + ".heat_energy"]["results"]
+        assert energy[stamp(70)] == energy[stamp(80)], "heating must consume no energy while HVAC is off"
+        assert energy[stamp(90)] > energy[stamp(80)], "heating must resume when HVAC is enabled"
         assert heating[stamp(100)] > 0, "heating should restart after heat mode resumes"
         assert energy[stamp(80)] == energy[stamp(70)], "off interval must use no heat-source energy"
 
@@ -373,8 +377,12 @@ def test_predheat_climate_scheduler(my_predbat):
         heat.schedule_mode_enabled = [True]
         first_pass = {minute: BASE_TEMP for minute in range(0, heat.forecast_days * 1440, 5)}
         heat.run_simulation(BASE_TEMP, False, last_predict_minute=first_pass)
+        energy = heat.published[heat.prefix + ".heat_energy"]["results"]
         heating = heat.published[heat.prefix + ".heat_to_temp"]["results"]
-        assert heating[stamp(80)] == 0, "preheat must respect HVAC-off"
+        heat.run_simulation(BASE_TEMP, False, last_predict_minute=first_pass)
+        heating = heat.published[heat.prefix + ".heat_to_temp"]["results"]
+        assert energy[stamp(70)] == energy[stamp(80)], "preheat must not consume energy while HVAC is off"
+        assert energy[stamp(90)] > energy[stamp(80)], "heating must resume after HVAC is enabled"
         assert heating[stamp(100)] > 0, "preheat may run once heating is enabled"
 
     def update_pred_wiring():
