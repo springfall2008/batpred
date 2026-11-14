@@ -58,6 +58,12 @@ class Dynamics:
     response_s: float = 8.0
     deadband_w: float = 25.0
     gain: float = 1.0
+    # How this inverter's own reading of the shared CT differs from the truth: an offset in W (+ve reads more
+    # import than there is) and a gain error. Each inverter reads the clamp through its own input, so they never
+    # quite agree - and integrating loops that disagree about where zero is cannot all settle: the one that reads
+    # import winds up to full discharge and the one that reads export winds down until it is charging from it.
+    ct_offset_w: float = 0.0
+    ct_gain: float = 1.0
 
 
 def staggered(count, period=5.0, response=8.0):
@@ -79,6 +85,18 @@ def mixed(count):
         Dynamics(sample_period_s=5.0, sample_phase_s=4.0, response_s=10.0, deadband_w=80.0, gain=0.7),
     ]
     return loops[:count]
+
+
+def disagreeing(count, offsets=(45.0, -40.0, 15.0), gains=(1.02, 0.98, 1.0)):
+    """
+    The mixed loops, each reading the shared CT a little differently - tens of watts of offset and a couple of
+    percent of gain, which is ordinary for separate current inputs on one clamp.
+    """
+    loops = mixed(count)
+    for index, loop in enumerate(loops):
+        loop.ct_offset_w = offsets[index]
+        loop.ct_gain = gains[index]
+    return loops
 
 
 @dataclass
@@ -209,8 +227,9 @@ class CTInverter:
             self.target = discharge_limit
         else:
             dynamics = self.dynamics
-            if (t - dynamics.sample_phase_s) % dynamics.sample_period_s < 1.0 and abs(ct_import) > dynamics.deadband_w:
-                self.target = self.power + dynamics.gain * ct_import
+            seen = ct_import * dynamics.ct_gain + dynamics.ct_offset_w
+            if (t - dynamics.sample_phase_s) % dynamics.sample_period_s < 1.0 and abs(seen) > dynamics.deadband_w:
+                self.target = self.power + dynamics.gain * seen
         self.target = min(max(self.target, -charge_limit), discharge_limit)
 
     def respond(self):
@@ -258,6 +277,11 @@ def run_ct_scenario(my_predbat, scenario):
         )
     }
     flows = {"import_kwh": 0.0, "export_kwh": 0.0, "cross_kwh": 0.0, "battery_out_kwh": 0.0, "battery_in_kwh": 0.0}
+    # Instantaneous cross-charging: the worst second, and how long it ran above 1kW and 2kW - a fleet stuck with
+    # one battery charging hard from another looks very different from small hunting, though both add up to kWh
+    cross_peak = {"w": 0.0, "t": 0, "powers": []}
+    cross_over = {1000: 0, 2000: 0}
+    power_trace = []
     held = [0] * count
     held_edges = [0] * count
     previous_held = [False] * count
@@ -296,6 +320,13 @@ def run_ct_scenario(my_predbat, scenario):
                     flows["battery_out_kwh"] += out / 3600000.0
                     flows["battery_in_kwh"] += into / 3600000.0
                     flows["cross_kwh"] += min(out, into) / 3600000.0
+                    cross_now = min(out, into)
+                    if cross_now > cross_peak["w"]:
+                        cross_peak.update(w=cross_now, t=t, powers=[round(power) for power in battery])
+                    for level in cross_over:
+                        cross_over[level] += 1 if cross_now > level else 0
+                    if t % 10 == 0:
+                        power_trace.append((t, [round(power) for power in battery], round(load[t]), round(grid)))
                     if t % 60 == 59:
                         clock["s"] = max(clock["s"], float(t))
                         for index, sim in enumerate(sims):
@@ -334,6 +365,12 @@ def run_ct_scenario(my_predbat, scenario):
         "held_minutes": held,
         "holds": held_edges,
         "writes": sum(sim.writes[kind] for sim in sims for kind in RATE_KINDS),
+        "cross_peak_w": round(cross_peak["w"]),
+        "cross_peak_at_s": cross_peak["t"],
+        "cross_peak_powers": cross_peak["powers"],
+        "cross_over_1kw_s": cross_over[1000],
+        "cross_over_2kw_s": cross_over[2000],
+        "power_trace": power_trace,
         # Balancer decisions by branch, from its own log lines: cross-charge holds, and SoC holds
         "cross_holds": sum(1 for line in log_lines if "working against the fleet" in str(line)),
         "soc_holds": sum(1 for line in log_lines if "holding its discharge" in str(line) or "holding its charge" in str(line)),
@@ -358,7 +395,7 @@ def ct_matrix():
             ("forced export, busy evening", "export", low_high, busy_evening),
         ]
         for label, mode, soc, house in modes:
-            for loops_name, loops in (("same loops", staggered), ("mixed loops", mixed)):
+            for loops_name, loops in (("same loops", staggered), ("mixed loops", mixed), ("CT disagree", disagreeing)):
                 for balance in (False, True):
                     scenarios.append(CTScenario(name="{} inv, {}, {}, balance {}".format(count, label, loops_name, "on" if balance else "off"), mode=mode, soc=soc, house=house(), dynamics=loops(count), balance=balance))
     return scenarios

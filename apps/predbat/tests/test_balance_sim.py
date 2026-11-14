@@ -15,7 +15,7 @@ the number of BAD releases - a balancing hold dropped while the inverter is stil
 could still carry the house - plus convergence and the capacity guard.
 """
 
-from tests.balance_ct_harness import CTScenario, busy_evening, cloudy_midday, mixed, run_ct_scenario
+from tests.balance_ct_harness import CTScenario, busy_evening, cloudy_midday, disagreeing, mixed, run_ct_scenario
 from tests.balance_sim_harness import derated_scenarios, format_report, format_step_report, load_step_scenarios, run_scenario, standard_scenarios
 
 # Scenarios whose bad releases come from a cause other than the status-refresh floor, so they are reported
@@ -131,4 +131,20 @@ def run_ct_tests(my_predbat):
             if label != "eco midday" and on["spread_end"] > 5.0:
                 print("ERROR: {} inv {}: balancing left a {}% spread".format(count, label, on["spread_end"]))
                 failed = True
+        # Inverters that disagree about where zero is on the shared CT latch into one charging hard from another -
+        # the case cross-charge balancing exists for. The model has to show it, and balancing has to stop it.
+        soc = socs["eco"]
+        off = run_ct_scenario(my_predbat, CTScenario(name="off", mode="eco", soc=soc, house=busy_evening(), dynamics=disagreeing(count), balance=False))
+        on = run_ct_scenario(my_predbat, CTScenario(name="on", mode="eco", soc=soc, house=busy_evening(), dynamics=disagreeing(count), balance=True))
+        print(
+            "{} inv CT disagree: off cross {}kWh, >1kW for {}s, peak {}W {} | on cross {}kWh, >1kW for {}s, writes {}".format(
+                count, off["cross_kwh"], off["cross_over_1kw_s"], off["cross_peak_w"], off["cross_peak_powers"], on["cross_kwh"], on["cross_over_1kw_s"], on["writes"]
+            )
+        )
+        if off["cross_over_1kw_s"] < 600:
+            print("ERROR: {} inv CT disagree: the model no longer latches into cross-charging ({}s above 1kW)".format(count, off["cross_over_1kw_s"]))
+            failed = True
+        if on["cross_over_1kw_s"] > 120 or on["cross_kwh"] > off["cross_kwh"] / 4:
+            print("ERROR: {} inv CT disagree: balancing left {}kWh of cross-charging, {}s above 1kW".format(count, on["cross_kwh"], on["cross_over_1kw_s"]))
+            failed = True
     return failed
