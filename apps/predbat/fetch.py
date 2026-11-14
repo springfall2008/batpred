@@ -20,7 +20,7 @@ dictionaries for use by the prediction engine.
 
 from datetime import datetime, timedelta
 from utils import clock_change_minutes, minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
-from battery_curve import clean_battery_temperature_samples, merge_battery_temperature_samples, learn_battery_temperature_curve, overlay_battery_temperature_curve
+from battery_curve import charge_day, clean_battery_temperature_samples, clean_power_curve_samples, learn_battery_temperature_curve, merge_battery_temperature_samples, merge_daily_samples, overlay_battery_temperature_curve
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -47,6 +47,7 @@ from const import (
     BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES,
     BATTERY_POWER_CURVE_RESCAN_MINUTES,
     BATTERY_POWER_CURVE_RETRY_MINUTES,
+    BATTERY_POWER_CURVE_MAX_AGE_DAYS,
 )
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -4136,12 +4137,14 @@ class Fetch:
         Not in auto mode and no curve configured: the curve is computed once (as before), falling back to
         battery_charge_power_curve_default.
 
-        battery_charge_power_curve: auto (the default for the charge curve) - the last curve found is kept in
-        storage, so it is in use from the first plan after a restart rather than only once a full-rate charge to
-        100% is back in the history window. The history is re-scanned every BATTERY_POWER_CURVE_RETRY_MINUTES while
-        no curve has been found (the default curve does not count), then every BATTERY_POWER_CURVE_RESCAN_MINUTES,
-        and a scan that finds nothing (no full-rate cycle in the window, or only temperature- or export-limited
-        ones) leaves the curve as it was rather than replacing it.
+        battery_charge_power_curve: auto (the default for the charge curve) - each scan's per-day samples are kept in
+        storage for BATTERY_POWER_CURVE_MAX_AGE_DAYS with the curve learned from them, so the evidence builds up over
+        weeks (a weekly full charge counts) while each scan reads only the history window, and the curve is in use from
+        the first plan after a restart. The history is re-scanned every BATTERY_POWER_CURVE_RETRY_MINUTES while no curve
+        has been found (the default curve does not count), then every BATTERY_POWER_CURVE_RESCAN_MINUTES. When the stored
+        samples no longer make a curve, the charge curve is kept as it was (low-power charging can mean months without
+        a full-rate charge, and the taper changes slowly), while the discharge curve, learned from rarer and noisier
+        deep exports, stops being used once its last evidence has aged out.
 
         Args:
             inverter: the Inverter whose history is scanned
@@ -4172,14 +4175,16 @@ class Fetch:
         storage = self.components.get_component("storage") if self.components else None
         if not self.battery_power_curve_loaded.get(kind):
             self.battery_power_curve_loaded[kind] = True
-            if storage and not curve:
+            data = None
+            if storage:
                 try:
                     data = run_async(storage.load("predbat", name))
                 except Exception as e:
                     self.log("Warn: {}: failed to load the saved curve: {}".format(name, e))
-                    data = None
-                stored = data.get("curve") if isinstance(data, dict) else None
-                if isinstance(stored, dict) and stored:
+            if isinstance(data, dict):
+                self.battery_power_curve_samples[kind] = clean_power_curve_samples(data.get("samples"))
+                stored = data.get("curve")
+                if not curve and isinstance(stored, dict) and stored:
                     curve = self.validate_curve(stored, name)
                     if curve:
                         self.log("Restored the saved battery {} power curve".format(kind))
@@ -4192,23 +4197,41 @@ class Fetch:
             return
         self.battery_power_curve_last_scan[kind] = self.now_utc
 
-        found = inverter.find_charge_curve(discharge=discharge)
+        stored_samples = self.battery_power_curve_samples.get(kind, {})
+        samples = stored_samples
+        scanned = inverter.find_charge_curve_samples(discharge=discharge)
+        if scanned is not None:
+            # None means the settings or history were missing this time: the stored samples are left alone, not aged out
+            today = datetime.strptime(charge_day(self.now_utc, 0, self.local_tz), "%Y-%m-%d").date()
+            samples = merge_daily_samples(stored_samples, scanned, today, BATTERY_POWER_CURVE_MAX_AGE_DAYS)
+            self.battery_power_curve_samples[kind] = samples
+
+        found = inverter.learn_charge_curve(samples, discharge=discharge) if samples else {}
+        new_curve = curve
         if found:
             if found != curve:
                 self.log("Saved computed battery {} power curve".format(kind))
-                if storage:
-                    try:
-                        if not run_async(storage.save("predbat", name, {"curve": {str(soc): value for soc, value in found.items()}}, format="json")):
-                            self.log("Warn: {}: failed to save the computed curve".format(name))
-                    except Exception as e:
-                        self.log("Warn: {}: failed to save the computed curve: {}".format(name, e))
-            setattr(self, name, found)
-            setattr(self, computed_name, True)
-        elif not curve and default:
+            new_curve = found
+        elif discharge and curve and curve != default:
+            self.log("Battery discharge power curve: its evidence is over {} days old, no longer used".format(BATTERY_POWER_CURVE_MAX_AGE_DAYS))
+            new_curve = {}
+
+        if not new_curve and default:
             # The default is not saved, so a curve learned later is never mistaken for it
-            setattr(self, name, default)
+            if curve != default:
+                self.log("Using default battery {} power curve".format(kind))
+            new_curve = default
+        saved_curve = {} if new_curve == default and not found else new_curve
+        if storage and (samples != stored_samples or new_curve != curve):
+            try:
+                payload = {"curve": {str(soc): value for soc, value in saved_curve.items()}, "samples": {day: {str(point): entry for point, entry in day_points.items()} for day, day_points in samples.items()}}
+                if not run_async(storage.save("predbat", name, payload, format="json")):
+                    self.log("Warn: {}: failed to save the computed curve".format(name))
+            except Exception as e:
+                self.log("Warn: {}: failed to save the computed curve: {}".format(name, e))
+        setattr(self, name, new_curve)
+        if new_curve:
             setattr(self, computed_name, True)
-            self.log("Using default battery {} power curve".format(kind))
 
     def battery_temperature_curve_auto_update(self, inverter):
         """

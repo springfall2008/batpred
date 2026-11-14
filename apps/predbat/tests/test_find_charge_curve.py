@@ -10,9 +10,9 @@
 
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
-import inverter as inverter_module
+import battery_curve as curve_module  # find_charge_curve() lives here, so patch minute_data where it is looked up
 from inverter import Inverter
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 
 def setup_predbat(my_predbat):
@@ -654,7 +654,7 @@ def test_find_charge_curve_missing_soc_minute(my_predbat):
     inv = create_curve_test_inverter(my_predbat)
     gap_time = create_stepped_history_data(my_predbat)
     gap_minute = int((my_predbat.now_utc - gap_time).total_seconds() / 60)
-    original_minute_data = inverter_module.minute_data
+    original_minute_data = curve_module.minute_data
 
     def minute_data_with_gap(*args, **kwargs):
         """
@@ -665,11 +665,11 @@ def test_find_charge_curve_missing_soc_minute(my_predbat):
             data.pop(gap_minute, None)
         return data, io_adjusted
 
-    inverter_module.minute_data = minute_data_with_gap
+    curve_module.minute_data = minute_data_with_gap
     try:
         return check_glitch_free_curve(inv.find_charge_curve(discharge=False))
     finally:
-        inverter_module.minute_data = original_minute_data
+        curve_module.minute_data = original_minute_data
         remove_test_history_data(my_predbat)
 
 
@@ -959,6 +959,19 @@ def test_find_charge_curve_needs_evidence(my_predbat):
         if not inv.find_charge_curve(discharge=False):
             print("ERROR: two days of clean charges should be enough for the charge curve")
             failed = True
+        # Two one-day scans, kept as auto mode keeps them (a weekly full charge, say), add up to the evidence one scan lacks
+        create_test_history_data(my_predbat, num_days=1)
+        scanned = inv.find_charge_curve_samples(discharge=False)
+        if not scanned or len(scanned) != 1:
+            print("ERROR: a one-day scan should give one day of samples, got {}".format(scanned))
+            failed = True
+        else:
+            day = next(iter(scanned))
+            earlier = (datetime.strptime(day, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
+            stored = {earlier: scanned[day]}
+            if inv.learn_charge_curve(scanned, discharge=False) or not inv.learn_charge_curve(dict(stored, **scanned), discharge=False):
+                print("ERROR: one stored day plus one scanned day should learn a curve that either alone does not")
+                failed = True
         # Charges that stop at 92% never reach the taper, so no curve is claimed for it
         create_stepped_history_data(my_predbat, start_soc=80)
         for record in my_predbat.ha_interface.get_history("sensor.soc_percent")[0]:

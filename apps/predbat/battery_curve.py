@@ -24,6 +24,7 @@ from const import (
     BATTERY_POWER_CURVE_CHARGE_TOP,
     BATTERY_POWER_CURVE_DISCHARGE_BOTTOM,
     BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN,
+    BATTERY_POWER_CURVE_HALF_LIFE_DAYS,
     BATTERY_POWER_CURVE_MIN_DAYS,
     BATTERY_POWER_CURVE_MIN_MINUTES,
     BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS,
@@ -105,6 +106,58 @@ def clean_battery_temperature_samples(data):
     return cleaned
 
 
+def clean_power_curve_samples(data):
+    """
+    Turn battery power curve samples read back from storage into {day: {int soc_percent: [float sum, int steps, float minutes]}}.
+
+    As for the temperature samples, anything malformed is dropped rather than trusted.
+    """
+    cleaned = {}
+    if not isinstance(data, dict):
+        return cleaned
+    for day, day_points in data.items():
+        try:
+            datetime.strptime(str(day), "%Y-%m-%d")
+        except ValueError:
+            continue
+        if not isinstance(day_points, dict):
+            continue
+        clean_points = {}
+        for point, entry in day_points.items():
+            try:
+                point = int(point)
+                value_sum, steps, minutes = float(entry[0]), int(entry[1]), float(entry[2])
+            except (ValueError, TypeError, IndexError, KeyError):
+                continue
+            if 0 <= point <= 100 and steps > 0 and value_sum >= 0 and minutes >= 0:
+                clean_points[point] = [value_sum, steps, minutes]
+        if clean_points:
+            cleaned[str(day)] = clean_points
+    return cleaned
+
+
+def merge_daily_samples(stored, scanned, today, max_age_days):
+    """
+    Merge {day: {key: [sum, count, ...]}} samples from a fresh history scan into the stored ones, dropping days over max_age_days old.
+
+    Each scan re-reads the whole history window, so a day is replaced rather than added to - adding would count
+    the same minutes again every scan. The oldest day of a window is only partly covered (the window starts part way
+    through it), so a scanned day only replaces a stored one when it holds at least as much (the count, entry[1]).
+
+    Returns:
+        A new merged dictionary; stored and scanned are not modified.
+    """
+    merged = {day: {key: list(entry) for key, entry in day_bins.items()} for day, day_bins in stored.items()}
+    for day, day_bins in scanned.items():
+        if day not in merged or _temperature_sample_minutes(day_bins) >= _temperature_sample_minutes(merged[day]):
+            merged[day] = {key: list(entry) for key, entry in day_bins.items()}
+    for day in list(merged.keys()):
+        age = (today - datetime.strptime(day, "%Y-%m-%d").date()).days
+        if age > max_age_days:
+            del merged[day]
+    return merged
+
+
 def merge_battery_temperature_samples(stored, scanned, today, max_age_days=BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS):
     """
     Merge the samples from a fresh history scan into the stored samples, and drop days older than max_age_days.
@@ -122,15 +175,7 @@ def merge_battery_temperature_samples(stored, scanned, today, max_age_days=BATTE
     Returns:
         A new merged dictionary; stored and scanned are not modified.
     """
-    merged = {day: {temp: list(entry) for temp, entry in day_bins.items()} for day, day_bins in stored.items()}
-    for day, day_bins in scanned.items():
-        if day not in merged or _temperature_sample_minutes(day_bins) >= _temperature_sample_minutes(merged[day]):
-            merged[day] = {temp: list(entry) for temp, entry in day_bins.items()}
-    for day in list(merged.keys()):
-        age = (today - datetime.strptime(day, "%Y-%m-%d").date()).days
-        if age > max_age_days:
-            del merged[day]
-    return merged
+    return merge_daily_samples(stored, scanned, today, max_age_days)
 
 
 def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, half_life_days=BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS, min_days=BATTERY_TEMPERATURE_CURVE_MIN_DAYS):
@@ -224,22 +269,38 @@ class BatteryCurve:
 
     def find_charge_curve(self, discharge):
         """
-        Learn the battery charge (or discharge) power curve, the rate against SoC%, from full-rate cycles in the history.
+        Learn the battery charge (or discharge) power curve, the rate against SoC%, from full-rate cycles in the history window.
 
-        Each SoC point is the mean power over the minutes the SoC spent there, while Predbat was Charging (Exporting) with
-        the rate written at 95% or more of the maximum. Minutes held at the temperature cap, or for discharge at the
-        export limit, are left out. A point needs data from BATTERY_POWER_CURVE_MIN_DAYS days and
-        BATTERY_POWER_CURVE_MIN_MINUTES minutes, and the curve must reach BATTERY_POWER_CURVE_CHARGE_TOP% (charge) or
-        BATTERY_POWER_CURVE_DISCHARGE_BOTTOM% (discharge); otherwise nothing is returned.
-
-        In auto mode the curve is returned as learned, relative to the rated maximum and the battery_rate_max_scaling the
-        plan applies; otherwise it is rescaled to a maximum of 1.0 for apps.yaml, with the scaling logged to set alongside.
+        find_charge_curve_samples() scans the history and learn_charge_curve() turns what it found into a curve; auto mode
+        keeps the scanned samples in storage between scans (Fetch.battery_power_curve_update), so its evidence builds up
+        over weeks rather than only the history window.
 
         Args:
             discharge: True for the discharge curve
 
         Returns:
             {soc_percent: fraction of the maximum rate}, or {} when no curve could be learned
+        """
+        samples = self.find_charge_curve_samples(discharge)
+        if not samples:
+            return {}
+        return self.learn_charge_curve(samples, discharge)
+
+    def find_charge_curve_samples(self, discharge):
+        """
+        Scan the history window for full-rate charge (or discharge) steps through each SoC%.
+
+        Each SoC step is the mean power over the minutes the SoC spent there, while Predbat was Charging (Exporting) with
+        the rate written at 95% or more of the maximum, as a fraction of the maximum (after battery_loss). Minutes held at
+        the temperature cap, or for discharge at the export limit, are left out.
+
+        Args:
+            discharge: True for the discharge curve
+
+        Returns:
+            {day: {soc_percent: [sum of the step fractions, steps, minutes]}} keyed by charge_day(); {} when the history
+            holds no full-rate cycle; None when the settings or their history are missing, or the export limit cannot be
+            told apart (so stored samples are left as they are).
         """
         curve_type = "charge"
         if discharge:
@@ -266,10 +327,7 @@ class BatteryCurve:
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
         battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
 
-        final_curve = {}
-        final_curve_count = {}
-        final_curve_days = {}
-        final_curve_minutes = {}
+        samples = {}
 
         if discharge:
             max_power = int(self.battery_rate_max_discharge * MINUTE_WATT)
@@ -372,7 +430,7 @@ class BatteryCurve:
                 if discharge:
                     export_limited = self.find_export_limited_minutes(min_len, max_power_scaled)
                     if export_limited is None:
-                        return {}
+                        return None
                     temperature_limited = temperature_limited | export_limited
 
                 if discharge:
@@ -459,18 +517,15 @@ class BatteryCurve:
                                     else:
                                         store_range = range(this_soc, previous_point)
 
-                                    # Evidence behind each point: the days it was seen on, and its share of the step's minutes
+                                    # Evidence behind each point: the day it was seen on, and its share of the step's minutes
                                     step_day = charge_day(self.base.now_utc, minute, getattr(self.base, "local_tz", None))
                                     step_minutes = total_count / max(len(store_range), 1)
+                                    day_points = samples.setdefault(step_day, {})
                                     for point in store_range:
-                                        if point not in final_curve:
-                                            final_curve[point] = charge_curve
-                                            final_curve_count[point] = 1
-                                        else:
-                                            final_curve[point] += charge_curve
-                                            final_curve_count[point] += 1
-                                        final_curve_days.setdefault(point, set()).add(step_day)
-                                        final_curve_minutes[point] = final_curve_minutes.get(point, 0) + step_minutes
+                                        entry = day_points.setdefault(point, [0.0, 0, 0.0])
+                                        entry[0] += charge_curve
+                                        entry[1] += 1
+                                        entry[2] += step_minutes
 
                                     break
                                 else:
@@ -479,111 +534,18 @@ class BatteryCurve:
                                     # reading at the single minute the step was triggered on
                                     total_power += abs(battery_power.get(target_minute, 0))
                                     total_count += 1
-                if final_curve:
-                    # Average the data points
-                    for index in final_curve:
-                        if final_curve_count[index] > 0:
-                            final_curve[index] = dp2(final_curve[index] / final_curve_count[index])
-
-                    self.log("Inverter {} {} curve before adjustment is: {}".format(self.id, curve_type, final_curve))
-
-                    # Minimum evidence: a point seen on one day only, or for a few minutes, is one charge's (or export's)
-                    # noise, and the curve is kept and reused once learned, so such points are dropped. The curve must then
-                    # still reach the end it describes, the steepest part, rather than extrapolate up (or down) to it.
-                    weak = sorted(point for point in final_curve if len(final_curve_days.get(point, ())) < BATTERY_POWER_CURVE_MIN_DAYS or final_curve_minutes.get(point, 0) < BATTERY_POWER_CURVE_MIN_MINUTES)
-                    for point in weak:
-                        del final_curve[point]
-                    if weak:
-                        self.log("Inverter {} {} curve: dropped SoC points {} with data from fewer than {} days or under {} minutes".format(self.id, curve_type, weak, BATTERY_POWER_CURVE_MIN_DAYS, BATTERY_POWER_CURVE_MIN_MINUTES))
-                    reaches_end = bool(final_curve) and (min(final_curve) <= BATTERY_POWER_CURVE_DISCHARGE_BOTTOM if discharge else max(final_curve) >= BATTERY_POWER_CURVE_CHARGE_TOP)
-                    if not reaches_end:
-                        self.log(
-                            "Info: Inverter {} Not enough evidence for the battery {} curve yet: it needs full-rate data on {} or more days {} {}% SoC - this is normal in cost-optimised operation".format(
-                                self.id, curve_type, BATTERY_POWER_CURVE_MIN_DAYS, "down to" if discharge else "up to", BATTERY_POWER_CURVE_DISCHARGE_BOTTOM if discharge else BATTERY_POWER_CURVE_CHARGE_TOP
-                            )
-                        )
-                        return {}
-
-                    # Find info for gap filling
-                    auto = self.base.battery_discharge_power_curve_auto if discharge else self.base.battery_charge_power_curve_auto
-                    found_required = False
-                    if discharge:
-                        fill_range = range(4, 21, 1)
-                        value = min(final_curve.values())
-                    else:
-                        value = max(final_curve.values())
-                        fill_range = range(85, 101)
-
-                    # Pick the first value point for fill below
-                    for point in fill_range:
-                        if point in final_curve:
-                            value = final_curve[point]
-                            break
-                    if auto and not discharge:
-                        # Auto mode claims a limit only where one was seen: below the first learned point the charge was either
-                        # not seen at full rate or held at the temperature cap, which battery_temperature_charge_curve models
-                        value = 1.0
-
-                    # Fill gaps
-                    for point in fill_range:
-                        if point not in final_curve:
-                            final_curve[point] = value
-                            found_required = True
-                        else:
-                            value = final_curve[point]
-
-                    if found_required:
-                        # Work out the maximum power to use as a scale factor
-                        rate_scaling = max(final_curve.values()) if final_curve else 0
-
-                        if rate_scaling > 0 and auto:
-                            # Auto mode uses the curve as learned, relative to the rated maximum (and the scaling the plan already
-                            # applies), not rescaled to its own maximum: a battery that only ever reaches 65% of its rated rate is
-                            # then planned at 65% rather than told it charges at full rate until the taper (#6189)
-                            user_scaling = self.base.battery_rate_max_scaling_discharge if discharge else self.base.battery_rate_max_scaling
-                            user_scaling = user_scaling if user_scaling > 0 else 1.0
-                            for index in final_curve:
-                                final_curve[index] = round(min(final_curve[index] / user_scaling, 1.0), 2)
-                        elif rate_scaling > 0:
-                            # Scale curve to 1.0, for entering in apps.yaml together with the battery_rate_max_scaling logged below
-                            for index in final_curve:
-                                final_curve[index] = round(final_curve[index] / rate_scaling, 2)
-
-                        # If we have the correct data then output it
-                        if rate_scaling > 0:
-                            if discharge:
-                                text = "  battery_discharge_power_curve:\n"
-                            else:
-                                text = "  battery_charge_power_curve:\n"
-                            keys = sorted(final_curve.keys())
-                            keys.reverse()
-                            first = True
-                            for key in keys:
-                                if (final_curve[key] < 1.0 or first) and final_curve[key] > 0.0:
-                                    text += "    {} : {}\n".format(key, final_curve[key])
-                                    first = False
-                            if auto:
-                                self.log("Info: Inverter {} curve automatically computed as:\n".format(self.id) + text)
-                                return final_curve
-                            self.log("Info: Inverter {} {} curve can be entered into apps.yaml or set to auto:\n".format(self.id, curve_type) + text)
-                            rate_scaling = round(rate_scaling, 2)
-                            if discharge:
-                                if rate_scaling != self.base.battery_rate_max_scaling_discharge:
-                                    self.log("Info: Inverter {} Consider setting in HA: input_number.battery_rate_max_scaling_discharge: {} - currently {}".format(self.id, rate_scaling, self.base.battery_rate_max_scaling_discharge))
-                            else:
-                                if rate_scaling != self.base.battery_rate_max_scaling:
-                                    self.log("Info: Inverter {} Consider setting in HA: input_number.battery_rate_max_scaling: {} - currently {}".format(self.id, rate_scaling, self.base.battery_rate_max_scaling))
-                            return final_curve
-                        else:
-                            self.log("Info: Inverter {} Found incorrect battery {} curve (was 0), maybe try again when you have more data.".format(self.id, curve_type))
-                    else:
-                        self.log("Warn: Inverter {} Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(self.id, curve_type))
-                else:
-                    self.log(
-                        "Info: Cannot find battery {} curve (no full rate {} cycle to {} found in history), battery may not have been fully charged/discharged at max rate recently - this is normal in cost-optimised operation".format(
-                            curve_type, curve_type, curve_label
-                        )
+                if samples:
+                    for day_points in samples.values():
+                        for entry in day_points.values():
+                            entry[0] = dp4(entry[0])
+                            entry[2] = dp2(entry[2])
+                    return samples
+                self.log(
+                    "Info: Cannot find battery {} curve (no full rate {} cycle to {} found in history), battery may not have been fully charged/discharged at max rate recently - this is normal in cost-optimised operation".format(
+                        curve_type, curve_type, curve_label
                     )
+                )
+                return {}
             else:
                 history_checks = [
                     (soc_label, soc_kwh_sensor, soc_kwh_data),
@@ -597,6 +559,136 @@ class BatteryCurve:
         else:
             missing_settings = [setting for setting, entity_id in [(soc_label, soc_kwh_sensor), ("{}_rate".format(curve_type), charge_rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
             self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), {} not set in apps.yaml".format(self.id, curve_type, ", ".join(missing_settings)))
+        return None
+
+    def learn_charge_curve(self, samples, discharge):
+        """
+        Turn charge (or discharge) curve samples - from one scan, or built up in storage - into a curve.
+
+        Each SoC point is the mean of its steps, each day weighted down by its age (halving every
+        BATTERY_POWER_CURVE_HALF_LIFE_DAYS). A point needs data from BATTERY_POWER_CURVE_MIN_DAYS days and
+        BATTERY_POWER_CURVE_MIN_MINUTES minutes, and the curve must reach BATTERY_POWER_CURVE_CHARGE_TOP% (charge) or
+        BATTERY_POWER_CURVE_DISCHARGE_BOTTOM% (discharge); otherwise nothing is returned.
+
+        In auto mode the curve is returned as learned, relative to the rated maximum and the battery_rate_max_scaling the
+        plan applies; otherwise it is rescaled to a maximum of 1.0 for apps.yaml, with the scaling logged to set alongside.
+
+        Args:
+            samples: {day: {soc_percent: [sum of the step fractions, steps, minutes]}}
+            discharge: True for the discharge curve
+
+        Returns:
+            {soc_percent: fraction of the maximum rate}, or {} when no curve could be learned
+        """
+        curve_type = "discharge" if discharge else "charge"
+        today = datetime.strptime(charge_day(self.base.now_utc, 0, getattr(self.base, "local_tz", None)), "%Y-%m-%d").date()
+        weighted_sum = {}
+        weighted_count = {}
+        final_curve_days = {}
+        final_curve_minutes = {}
+        for day, day_points in samples.items():
+            age = max((today - datetime.strptime(day, "%Y-%m-%d").date()).days, 0)
+            weight = 0.5 ** (age / BATTERY_POWER_CURVE_HALF_LIFE_DAYS)
+            for point, (value_sum, count, minutes) in day_points.items():
+                weighted_sum[point] = weighted_sum.get(point, 0.0) + value_sum * weight
+                weighted_count[point] = weighted_count.get(point, 0.0) + count * weight
+                final_curve_days[point] = final_curve_days.get(point, 0) + 1
+                final_curve_minutes[point] = final_curve_minutes.get(point, 0) + minutes
+        final_curve = {point: dp2(weighted_sum[point] / weighted_count[point]) for point in weighted_sum if weighted_count[point] > 0}
+        if final_curve:
+            self.log("Inverter {} {} curve before adjustment is: {} ({} days of samples)".format(self.id, curve_type, final_curve, len(samples)))
+
+            # Minimum evidence: a point seen on one day only, or for a few minutes, is one charge's (or export's)
+            # noise, and the curve is kept and reused once learned, so such points are dropped. The curve must then
+            # still reach the end it describes, the steepest part, rather than extrapolate up (or down) to it.
+            weak = sorted(point for point in final_curve if final_curve_days.get(point, 0) < BATTERY_POWER_CURVE_MIN_DAYS or final_curve_minutes.get(point, 0) < BATTERY_POWER_CURVE_MIN_MINUTES)
+            for point in weak:
+                del final_curve[point]
+            if weak:
+                self.log("Inverter {} {} curve: dropped SoC points {} with data from fewer than {} days or under {} minutes".format(self.id, curve_type, weak, BATTERY_POWER_CURVE_MIN_DAYS, BATTERY_POWER_CURVE_MIN_MINUTES))
+            reaches_end = bool(final_curve) and (min(final_curve) <= BATTERY_POWER_CURVE_DISCHARGE_BOTTOM if discharge else max(final_curve) >= BATTERY_POWER_CURVE_CHARGE_TOP)
+            if not reaches_end:
+                self.log(
+                    "Info: Inverter {} Not enough evidence for the battery {} curve yet: it needs full-rate data on {} or more days {} {}% SoC - this is normal in cost-optimised operation".format(
+                        self.id, curve_type, BATTERY_POWER_CURVE_MIN_DAYS, "down to" if discharge else "up to", BATTERY_POWER_CURVE_DISCHARGE_BOTTOM if discharge else BATTERY_POWER_CURVE_CHARGE_TOP
+                    )
+                )
+                return {}
+
+            # Find info for gap filling
+            auto = self.base.battery_discharge_power_curve_auto if discharge else self.base.battery_charge_power_curve_auto
+            found_required = False
+            if discharge:
+                fill_range = range(4, 21, 1)
+                value = min(final_curve.values())
+            else:
+                value = max(final_curve.values())
+                fill_range = range(85, 101)
+
+            # Pick the first value point for fill below
+            for point in fill_range:
+                if point in final_curve:
+                    value = final_curve[point]
+                    break
+            if auto and not discharge:
+                # Auto mode claims a limit only where one was seen: below the first learned point the charge was either
+                # not seen at full rate or held at the temperature cap, which battery_temperature_charge_curve models
+                value = 1.0
+
+            # Fill gaps
+            for point in fill_range:
+                if point not in final_curve:
+                    final_curve[point] = value
+                    found_required = True
+                else:
+                    value = final_curve[point]
+
+            if found_required:
+                # Work out the maximum power to use as a scale factor
+                rate_scaling = max(final_curve.values()) if final_curve else 0
+
+                if rate_scaling > 0 and auto:
+                    # Auto mode uses the curve as learned, relative to the rated maximum (and the scaling the plan already
+                    # applies), not rescaled to its own maximum: a battery that only ever reaches 65% of its rated rate is
+                    # then planned at 65% rather than told it charges at full rate until the taper (#6189)
+                    user_scaling = self.base.battery_rate_max_scaling_discharge if discharge else self.base.battery_rate_max_scaling
+                    user_scaling = user_scaling if user_scaling > 0 else 1.0
+                    for index in final_curve:
+                        final_curve[index] = round(min(final_curve[index] / user_scaling, 1.0), 2)
+                elif rate_scaling > 0:
+                    # Scale curve to 1.0, for entering in apps.yaml together with the battery_rate_max_scaling logged below
+                    for index in final_curve:
+                        final_curve[index] = round(final_curve[index] / rate_scaling, 2)
+
+                # If we have the correct data then output it
+                if rate_scaling > 0:
+                    if discharge:
+                        text = "  battery_discharge_power_curve:\n"
+                    else:
+                        text = "  battery_charge_power_curve:\n"
+                    keys = sorted(final_curve.keys())
+                    keys.reverse()
+                    first = True
+                    for key in keys:
+                        if (final_curve[key] < 1.0 or first) and final_curve[key] > 0.0:
+                            text += "    {} : {}\n".format(key, final_curve[key])
+                            first = False
+                    if auto:
+                        self.log("Info: Inverter {} curve automatically computed as:\n".format(self.id) + text)
+                        return final_curve
+                    self.log("Info: Inverter {} {} curve can be entered into apps.yaml or set to auto:\n".format(self.id, curve_type) + text)
+                    rate_scaling = round(rate_scaling, 2)
+                    if discharge:
+                        if rate_scaling != self.base.battery_rate_max_scaling_discharge:
+                            self.log("Info: Inverter {} Consider setting in HA: input_number.battery_rate_max_scaling_discharge: {} - currently {}".format(self.id, rate_scaling, self.base.battery_rate_max_scaling_discharge))
+                    else:
+                        if rate_scaling != self.base.battery_rate_max_scaling:
+                            self.log("Info: Inverter {} Consider setting in HA: input_number.battery_rate_max_scaling: {} - currently {}".format(self.id, rate_scaling, self.base.battery_rate_max_scaling))
+                    return final_curve
+                else:
+                    self.log("Info: Inverter {} Found incorrect battery {} curve (was 0), maybe try again when you have more data.".format(self.id, curve_type))
+            else:
+                self.log("Warn: Inverter {} Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(self.id, curve_type))
         return {}
 
     def find_temperature_limited_minutes(self, discharge, min_len, max_power_scaled, battery_power):
