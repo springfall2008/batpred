@@ -544,6 +544,13 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
 
+With `ge_cloud_automatic` on and the `apps.yaml` switch [`discovery_automatic`](apps-yaml.md#discovery_automatic) set to `true`, GE Cloud
+hands its inverter configuration to Predbat's discovery instead of writing it itself: each inverter it finds takes an inverter slot after
+any you configured by hand, keeps that slot while Predbat runs, and takes over a manual slot that names the same serial (with a warning).
+The options above still apply - `ge_cloud_load_today_ignore` leaves `load_today` alone, your own `inverter_mode` and `export_limit` are
+kept, and `ge_cloud_automatic_split_pv` adds the PV-only inverters - and GE Cloud logs whether the result matches what it would have written
+itself. GE Cloud is the only component converted so far. See [Automatic configuration](discovery-catalogue.md#automatic-configuration-discovery_automatic).
+
 #### Register reads (gecloud)
 
 GivEnergy limits how many API calls an account can make each month, and the GE Cloud API reads an inverter's settings one

@@ -14,7 +14,11 @@ import threading
 import time
 
 import coordinator as coordinator_module
+from bindings import BINDING_SETTINGS, COMPACT_SETTINGS, SITE_SETTINGS, slot_value
 from coordinator import Coordinator
+from gecloud import DEVICE_REFRESH_SECONDS, GE_CLOUD_DUMMIED_SETTINGS
+from tests.test_ge_cloud import GEC_FULL_REGISTERS, GEC_INFO, GEC_MIXED_REGISTERS, MockGECloudDirect, _gec_devices, _make_rediscovery_ge_cloud
+from tests.test_infra import run_async
 
 
 class _Base:
@@ -626,6 +630,428 @@ def test_allow_automatic_config_wrapper():
     return 0
 
 
+# ---------------------------------------------------------------------------------------------
+# Acceptance: GE Cloud's automatic configuration, discovery_automatic off and on, from the same args
+# ---------------------------------------------------------------------------------------------
+
+# What the comparison covers: the whole inverter configuration
+CONFIGURATION_SETTINGS = ("num_inverters", "inverter_type") + tuple(sorted(BINDING_SETTINGS | SITE_SETTINGS))
+
+# The per-slot settings: every binding setting but the compact summed lists, whose index is not a slot
+SLOT_SETTINGS = ("inverter_type",) + tuple(sorted(BINDING_SETTINGS - set(COMPACT_SETTINGS)))
+
+
+def _attach(ge, base, name="gecloud"):
+    """Put a MockGECloudDirect on a _Base: base.args is its args, set_arg and log go through the base, and the base gains the mock base's stand-ins."""
+    for attribute, value in vars(ge.base).items():
+        if not hasattr(base, attribute):
+            setattr(base, attribute, value)
+    ge.base = base
+    ge.config_args = base.args
+    ge.args = base.args
+    ge.component_name = name
+    ge.set_arg = base.set_arg
+
+    def log(message):
+        """Record the line on the component and in the base's log, which the coordinator writes to as well."""
+        ge.log_messages.append(message)
+        base.log(message)
+
+    ge.log = log
+
+
+class _AutoGECloud(MockGECloudDirect):
+    """The real GECloudDirect on a _Base: only the HTTP and Home Assistant layers are MockGECloudDirect's stand-ins."""
+
+    def __init__(self, base):
+        """Build the mock and attach it to base as the "gecloud" component."""
+        super().__init__()
+        _attach(self, base)
+
+
+def _entity(domain, device, suffix):
+    """A GE Cloud entity id."""
+    return "{}.predbat_gecloud_{}_{}".format(domain, device, suffix)
+
+
+def _automatic_run(devices, settings, info, start, switch):
+    """
+    One GE Cloud automatic configuration from args `start` (also the apps.yaml snapshot), with discovery_automatic `switch`.
+
+    A real Coordinator is registered either way, so the switch-off run is the real switch-off path. Runs the
+    real async_automatic_config(), then the real refresh_discovery(), as run() does in one cycle. Returns (ge, base).
+    """
+    base = _Base(args=start, apps_yaml=start, switch=switch)
+    ge = _AutoGECloud(base)
+    ge.devices_dict = copy.deepcopy(devices)
+    ge.settings = copy.deepcopy(settings)
+    ge.info = copy.deepcopy(info or {})
+    _Components(base, {"gecloud": ge})
+    run_async(ge.async_automatic_config(ge.devices_dict))
+    ge.refresh_discovery()
+    return ge, base
+
+
+def _starting_args(config=None, apps_yaml=None):
+    """The args both runs start from: the component's config settings, then the user's apps.yaml entries."""
+    start = copy.deepcopy(config or {})
+    start.update(copy.deepcopy(apps_yaml or {}))
+    return start
+
+
+def run_new(devices, settings, info=None, config=None, apps_yaml=None):
+    """Run GE Cloud's automatic configuration with discovery_automatic on only, and return (new_args, new_run_log)."""
+    ge, base = _automatic_run(devices, settings, info, _starting_args(config, apps_yaml), switch=True)
+    return base.args, list(base.log_messages)
+
+
+def run_old_and_new(devices, settings, info=None, config=None, apps_yaml=None) -> tuple[dict, dict, list[str]]:
+    """Run GE Cloud's automatic configuration twice from the same starting args - switch off, then on with a real Coordinator - and return (old_args, new_args, new_run_log)."""
+    start = _starting_args(config, apps_yaml)
+    _, old_base = _automatic_run(devices, settings, info, copy.deepcopy(start), switch=False)
+    _, new_base = _automatic_run(devices, settings, info, copy.deepcopy(start), switch=True)
+    return old_base.args, new_base.args, list(new_base.log_messages)
+
+
+def _normal(value):
+    """An args value as the comparison sees it: trailing None entries dropped, and absent, None or all-None all None."""
+    if isinstance(value, (list, tuple)):
+        value = list(value)
+        while value and value[-1] is None:
+            value.pop()
+        return value or None
+    return value
+
+
+def compare_configuration(old_args, new_args, known=()) -> list[str]:
+    """Every difference in num_inverters, inverter_type, BINDING_SETTINGS and SITE_SETTINGS, except the settings named in `known`. Trailing None entries and an all-None key against an absent key are equal."""
+    differences = []
+    for setting in CONFIGURATION_SETTINGS:
+        if setting in known:
+            continue
+        old, new = _normal(old_args.get(setting)), _normal(new_args.get(setting))
+        if old != new:
+            differences.append("{}: old {!r} new {!r}".format(setting, old, new))
+    return differences
+
+
+def _assert_new_run_clean(log):
+    """The new run's checker ran and logged no unexpected difference, and the coordinator warned about nothing."""
+    assert not [line for line in log if line.startswith("Warn: GECloud: discovery set")], log
+    assert any(line.startswith("Info: GECloud: discovery configuration matches") for line in log), log
+    assert not [line for line in log if line.startswith("Warn: Coordinator")], log
+
+
+def _assert_accepted(old, new, log, known=None):
+    """
+    The old and new configurations are equal apart from `known` ({setting: (old value, new value)}), each of
+    which must differ in exactly that way, and the new run is clean.
+    """
+    known = known or {}
+    differences = compare_configuration(old, new, known=tuple(known))
+    assert differences == [], "\n".join(differences)
+    for setting, (old_value, new_value) in known.items():
+        assert _normal(old_value) != _normal(new_value), "{} is listed as known but the expected values do not differ".format(setting)
+        assert _normal(old.get(setting)) == _normal(old_value), "{}: old run {!r}, documented {!r}".format(setting, old.get(setting), old_value)
+        assert _normal(new.get(setting)) == _normal(new_value), "{}: new run {!r}, documented {!r}".format(setting, new.get(setting), new_value)
+    _assert_new_run_clean(log)
+
+
+def _one_battery(pv=None):
+    """(devices, settings, info) for battery001 with every control register and a meter, plus PV-only devices."""
+    devices = _gec_devices(battery=["battery001"], pv=pv, meters={"battery001": [1001]})
+    info = {"battery001": GEC_INFO}
+    info.update({device: {"info": {"model": "GIV-PV"}} for device in pv or []})
+    return devices, {"battery001": dict(GEC_FULL_REGISTERS)}, info
+
+
+def _two_batteries(meters, second=None, gateway=None, ems=None):
+    """(devices, settings, info) for battery001 and battery002 with the given meter serial lists; second is battery002's registers."""
+    devices = _gec_devices(battery=["battery001", "battery002"], meters={"battery001": meters[0], "battery002": meters[1]} if meters else None, gateway=gateway, ems=ems)
+    settings = {"battery001": dict(GEC_FULL_REGISTERS), "battery002": dict(second or GEC_FULL_REGISTERS)}
+    return devices, settings, {"battery001": GEC_INFO, "battery002": GEC_INFO}
+
+
+def test_accept_single():
+    """One battery inverter: the base case."""
+    old, new, log = run_old_and_new(*_one_battery())
+    _assert_accepted(old, new, log)
+    assert new["num_inverters"] == 1 and new["inverter_type"] == ["GEC"], (new.get("num_inverters"), new.get("inverter_type"))
+    print("PASS: accept single")
+    return 0
+
+
+def test_accept_two_inverters():
+    """Two battery inverters with a meter each: the per-slot lists line up."""
+    old, new, log = run_old_and_new(*_two_batteries(([1001], [1002])))
+    _assert_accepted(old, new, log)
+    assert new["num_inverters"] == 2
+    for setting in SLOT_SETTINGS + COMPACT_SETTINGS:
+        value = new.get(setting)
+        if value is not None:
+            assert isinstance(value, list) and len(value) == 2, (setting, value)
+    print("PASS: accept two inverters")
+    return 0
+
+
+def test_accept_mixed_registers():
+    """One battery with the power rates, pause and discharge target; one with only the percentage rates: the per-device rule and its named exceptions."""
+    old, new, log = run_old_and_new(*_two_batteries(([1001], [1002]), second=GEC_MIXED_REGISTERS))
+    known = {
+        setting: ([_entity(domain, "battery001", suffix), _entity(domain, "battery002", suffix)], [_entity(domain, "battery001", suffix), None])
+        for setting, domain, suffix in (
+            ("pause_mode", "select", "pause_battery"),
+            ("pause_start_time", "select", "pause_battery_start_time"),
+            ("pause_end_time", "select", "pause_battery_end_time"),
+            ("discharge_target_soc", "number", "dc_discharge_1_lower_soc_percent_limit"),
+        )
+    }
+    _assert_accepted(old, new, log, known)
+    assert isinstance(slot_value(new["pause_mode"], 0), str) and slot_value(new["pause_mode"], 1) is None, new["pause_mode"]
+    assert all(isinstance(entry, str) for entry in old["pause_mode"]) and len(old["pause_mode"]) == 2, old["pause_mode"]
+    # The percentage rates are per device in both runs, so they are compared, not known
+    assert _normal(new["charge_rate"]) == [_entity("number", "battery001", "battery_charge_power")], new["charge_rate"]
+    assert _normal(new["charge_rate_percent"]) == [None, _entity("number", "battery002", "inverter_charge_power_percentage")], new["charge_rate_percent"]
+    assert _normal(new["discharge_rate_percent"]) == [None, _entity("number", "battery002", "inverter_discharge_power_percentage")], new["discharge_rate_percent"]
+    print("PASS: accept mixed registers")
+    return 0
+
+
+def test_accept_pv_only_split_off():
+    """A PV-only device with ge_cloud_automatic_split_pv off adds nothing."""
+    old, new, log = run_old_and_new(*_one_battery(pv=["pv001"]))
+    _assert_accepted(old, new, log)
+    assert new["pv_power"] == [_entity("sensor", "battery001", "solar_power")], new["pv_power"]
+    assert new["pv_today"] == [_entity("sensor", "battery001", "solar_total")], new["pv_today"]
+    assert new["num_inverters"] == 1
+    print("PASS: accept PV-only split off")
+    return 0
+
+
+def test_accept_pv_only_split_on():
+    """ge_cloud_automatic_split_pv on: pv_power and pv_today gain the PV-only device, num_inverters stays 1."""
+    old, new, log = run_old_and_new(*_one_battery(pv=["pv001"]), config={"ge_cloud_automatic_split_pv": True})
+    _assert_accepted(old, new, log)
+    assert new["pv_power"] == [_entity("sensor", "battery001", "solar_power"), _entity("sensor", "pv001", "solar_power")], new["pv_power"]
+    assert new["pv_today"] == [_entity("sensor", "battery001", "solar_total"), _entity("sensor", "pv001", "solar_total")], new["pv_today"]
+    assert new["num_inverters"] == 1
+    print("PASS: accept PV-only split on")
+    return 0
+
+
+def _assert_shared_ct(new):
+    """Grid and load from the first inverter, zeros after, and one entry in each summed energy list."""
+    assert new["grid_power"] == [_entity("sensor", "battery001", "grid_power"), 0], new["grid_power"]
+    assert new["load_power"] == [_entity("sensor", "battery001", "consumption_power"), 0], new["load_power"]
+    assert new["import_today"] == [_entity("sensor", "battery001", "grid_import_total")], new["import_today"]
+    assert new["export_today"] == [_entity("sensor", "battery001", "grid_export_total")], new["export_today"]
+    assert new["load_today"] == [_entity("sensor", "battery001", "consumption_total")], new["load_today"]
+
+
+def _assert_separate_ct(new):
+    """Every inverter contributes grid, load and the summed energy lists."""
+    assert new["grid_power"] == [_entity("sensor", "battery001", "grid_power"), _entity("sensor", "battery002", "grid_power")], new["grid_power"]
+    assert new["load_power"] == [_entity("sensor", "battery001", "consumption_power"), _entity("sensor", "battery002", "consumption_power")], new["load_power"]
+    assert new["import_today"] == [_entity("sensor", "battery001", "grid_import_total"), _entity("sensor", "battery002", "grid_import_total")], new["import_today"]
+
+
+def test_accept_ct_shared_detected():
+    """Two inverters reporting the same meter serial share one CT clamp."""
+    old, new, log = run_old_and_new(*_two_batteries(([9999], [9999])))
+    _assert_accepted(old, new, log)
+    _assert_shared_ct(new)
+    print("PASS: accept CT shared detected")
+    return 0
+
+
+def test_accept_ct_separate_detected():
+    """Two inverters with different meter serials each contribute."""
+    old, new, log = run_old_and_new(*_two_batteries(([1001], [1002])))
+    _assert_accepted(old, new, log)
+    _assert_separate_ct(new)
+    print("PASS: accept CT separate detected")
+    return 0
+
+
+def test_accept_ct_shared_override():
+    """ge_cloud_automatic_shared_ct forces a shared CT over different meter serials."""
+    old, new, log = run_old_and_new(*_two_batteries(([1001], [1002])), config={"ge_cloud_automatic_shared_ct": True})
+    _assert_accepted(old, new, log)
+    _assert_shared_ct(new)
+    print("PASS: accept CT shared override")
+    return 0
+
+
+def test_accept_ct_split_override():
+    """ge_cloud_automatic_split_ct forces separate CTs over a shared meter serial, and wins when both overrides are set."""
+    for config in ({"ge_cloud_automatic_split_ct": True}, {"ge_cloud_automatic_split_ct": True, "ge_cloud_automatic_shared_ct": True}):
+        old, new, log = run_old_and_new(*_two_batteries(([9999], [9999])), config=config)
+        _assert_accepted(old, new, log)
+        _assert_separate_ct(new)
+    print("PASS: accept CT split override")
+    return 0
+
+
+def test_accept_gateway():
+    """A gateway in front of two batteries is one logical inverter, bound to the gateway's entities."""
+    devices, _, info = _two_batteries(None, gateway="gw001")
+    old, new, log = run_old_and_new(devices, {"gw001": dict(GEC_FULL_REGISTERS)}, info)
+    _assert_accepted(old, new, log)
+    assert new["num_inverters"] == 1 and new["inverter_type"] == ["GEC"], (new["num_inverters"], new["inverter_type"])
+    bound = [entry for setting in CONFIGURATION_SETTINGS if setting not in ("num_inverters", "inverter_type") for entry in (new.get(setting) if isinstance(new.get(setting), list) else [new.get(setting)]) if isinstance(entry, str)]
+    assert bound and all("_gw001_" in entry for entry in bound), bound
+    assert new["charge_rate"] == [_entity("number", "gw001", "battery_charge_power")], new["charge_rate"]
+    print("PASS: accept gateway")
+    return 0
+
+
+def test_accept_ems():
+    """An EMS with two batteries: type GEE, the EMS's entities, power sensors on the first slot only and GE Cloud data off."""
+    old, new, log = run_old_and_new(*_two_batteries(None, ems="ems001"))
+    known = {
+        setting: ([_entity(domain, "battery001", suffix), _entity(domain, "battery002", suffix)], None)
+        for setting, domain, suffix in (
+            ("scheduled_charge_enable", "switch", "enable_force_charge"),
+            ("scheduled_discharge_enable", "switch", "enable_dc_discharge"),
+            ("pause_mode", "select", "pause_battery"),
+            ("inverter_mode", "switch", "enable_eco_mode"),
+        )
+    }
+    assert sorted(known) == sorted(GE_CLOUD_DUMMIED_SETTINGS["GEE"]), sorted(known)
+    _assert_accepted(old, new, log, known)
+    assert new["inverter_type"] == ["GEE", "GEE"], new["inverter_type"]
+    assert new["battery_power"] == [_entity("sensor", "ems001", "battery_power"), 0], new["battery_power"]
+    assert new["charge_start_time"] == [_entity("select", "ems001", "charge_start_time_slot_1")] * 2, new["charge_start_time"]
+    assert old["ge_cloud_data"] is False and new["ge_cloud_data"] is False, (old.get("ge_cloud_data"), new.get("ge_cloud_data"))
+    print("PASS: accept EMS")
+    return 0
+
+
+def test_accept_opt_outs():
+    """ge_cloud_load_today_ignore and the user's own inverter_mode and export_limit survive in both runs."""
+    apps_yaml = {"load_today": ["sensor.mine"], "inverter_mode": ["select.mine"], "export_limit": [3600]}
+    old, new, log = run_old_and_new(*_one_battery(), config={"ge_cloud_load_today_ignore": True}, apps_yaml=apps_yaml)
+    _assert_accepted(old, new, log)
+    for setting, value in apps_yaml.items():
+        assert old[setting] == value and new[setting] == value, (setting, old.get(setting), new.get(setting))
+    print("PASS: accept opt-outs")
+    return 0
+
+
+def test_accept_manual_plus_discovered():
+    """A manual inverter of another type keeps slot 0 unchanged; the GE Cloud inverter lands in slot 1, bound as in the single run."""
+    apps_yaml = {"num_inverters": 1, "inverter_type": ["SolisCloud"], "charge_rate": ["number.solis_charge"], "soc_percent": ["sensor.solis_soc"]}
+    single, _ = run_new(*_one_battery())
+    new, log = run_new(*_one_battery(), apps_yaml=apps_yaml)
+    assert new["num_inverters"] == 2, new["num_inverters"]
+    assert new["inverter_type"] == ["SolisCloud", "GEC"], new["inverter_type"]
+    for setting in SLOT_SETTINGS:
+        assert slot_value(new.get(setting), 0) == slot_value(apps_yaml.get(setting), 0), (setting, new.get(setting))
+        assert slot_value(new.get(setting), 1) == slot_value(single.get(setting), 0), (setting, new.get(setting), single.get(setting))
+    for setting in COMPACT_SETTINGS + tuple(sorted(SITE_SETTINGS)):
+        assert _normal(new.get(setting)) == _normal(single.get(setting)), (setting, new.get(setting), single.get(setting))
+    assert not [line for line in log if "taking over" in line], log
+    assert "Coordinator: inverter slot 1 configured from gecloud (gecloud:battery001)" in log, log
+    _assert_new_run_clean(log)
+    print("PASS: accept manual plus discovered")
+    return 0
+
+
+def _template_apps_yaml(serial):
+    """The inverter bindings of templates/givenergy_cloud.yaml with geserial resolved, for one inverter."""
+    return {
+        "num_inverters": 1,
+        "inverter_type": ["GEC"],
+        "load_today": ["sensor.ge_inverter_{}_consumption_today".format(serial)],
+        "import_today": ["sensor.ge_inverter_{}_grid_import_today".format(serial)],
+        "export_today": ["sensor.ge_inverter_{}_grid_export_today".format(serial)],
+        "pv_today": ["sensor.ge_inverter_{}_solar_today".format(serial)],
+        "charge_rate": ["number.ge_inverter_{}_battery_charge_power".format(serial)],
+        "discharge_rate": ["number.ge_inverter_{}_battery_discharge_power".format(serial)],
+        "battery_power": ["sensor.ge_inverter_{}_battery_power".format(serial)],
+        "pv_power": ["sensor.ge_inverter_{}_solar_power".format(serial)],
+        "load_power": ["sensor.ge_inverter_{}_consumption_power".format(serial)],
+        "grid_power": ["sensor.ge_inverter_{}_grid_power".format(serial)],
+        "soc_percent": ["sensor.ge_inverter_{}_battery_soc".format(serial)],
+        "soc_max": ["sensor.ge_inverter_{}_battery_size".format(serial)],
+        "reserve": ["number.ge_inverter_{}_battery_reserve_limit".format(serial)],
+        "inverter_time": ["sensor.ge_inverter_{}_inverter_time".format(serial)],
+        "charge_start_time": ["select.ge_inverter_{}_ac_charge_1_start_time".format(serial)],
+        "charge_end_time": ["select.ge_inverter_{}_ac_charge_1_end_time".format(serial)],
+        "charge_limit": ["number.ge_inverter_{}_ac_charge_upper_limit".format(serial)],
+        "discharge_start_time": ["select.ge_inverter_{}_dc_discharge_1_start_time".format(serial)],
+        "discharge_end_time": ["select.ge_inverter_{}_dc_discharge_1_end_time".format(serial)],
+        "scheduled_charge_enable": ["switch.ge_inverter_{}_ac_charge_enable".format(serial)],
+        "scheduled_discharge_enable": ["switch.ge_inverter_{}_enable_dc_discharge".format(serial)],
+        "pause_mode": ["select.ge_inverter_{}_pause_battery".format(serial)],
+        "pause_start_time": ["select.ge_inverter_{}_pause_battery_start_time".format(serial)],
+        "pause_end_time": ["select.ge_inverter_{}_pause_battery_end_time".format(serial)],
+        "inverter_limit": [3600],
+        "inverter_battery_rate_min": [200],
+        "battery_scaling": [1.0],
+    }
+
+
+def test_accept_template_takeover():
+    """The givenergy_cloud.yaml bindings naming the same serial: discovery takes the slot over and the result is the single run's."""
+    takeover = "Warn: Coordinator: Inverter slot 0: gecloud inverter battery001 is also configured manually in apps.yaml - discovery is taking over this slot"
+    single, _ = run_new(*_one_battery())
+    new, log = run_new(*_one_battery(), apps_yaml=_template_apps_yaml("battery001"))
+    differences = compare_configuration(single, new)
+    assert differences == [], "\n".join(differences)
+    assert takeover in log, log
+    assert not [line for line in log if line.startswith("Warn: GECloud: discovery set")], log
+
+    # A template that sets inverter_mode keeps the user's value; everything else is still the single run's
+    apps_yaml = dict(_template_apps_yaml("battery001"), inverter_mode=["switch.my_eco_mode"])
+    new, log = run_new(*_one_battery(), apps_yaml=apps_yaml)
+    assert new["inverter_mode"] == ["switch.my_eco_mode"], new["inverter_mode"]
+    assert single["inverter_mode"] == [_entity("switch", "battery001", "enable_eco_mode")], single["inverter_mode"]
+    differences = compare_configuration(single, new, known=("inverter_mode",))
+    assert differences == [], "\n".join(differences)
+    assert takeover in log, log
+    assert not [line for line in log if line.startswith("Warn: GECloud: discovery set")], log
+    print("PASS: accept template takeover")
+    return 0
+
+
+def test_accept_run_loop_incremental():
+    """The real run() with the switch on: a battery added to the account later takes slot 1, and slot 0 is never written again."""
+    base = _Base(args={}, switch=True)
+    ge, api, calls = _make_rediscovery_ge_cloud(_gec_devices(battery=["battery001"]))
+    _attach(ge, base)
+    # The real automatic configuration, not the helper's recording stand-in
+    del ge.async_automatic_config
+
+    async def get_settings(device, first, previous):
+        """Every control register, as the API would report them."""
+        return dict(GEC_FULL_REGISTERS)
+
+    ge.async_get_inverter_settings = get_settings
+    _Components(base, {"gecloud": ge})
+    coordinator = base.components.coordinator
+
+    assert run_async(ge.run(seconds=0, first=True)) is True
+    assert coordinator.slot_map == {"gecloud:battery001": 0}, coordinator.slot_map
+    assert base.args["charge_rate"] == [_entity("number", "battery001", "battery_charge_power")], base.args.get("charge_rate")
+    assert calls["automatic"] == [], calls["automatic"]
+    slot0 = {setting: slot_value(base.args.get(setting), 0) for setting in SLOT_SETTINGS + COMPACT_SETTINGS}
+    mark = len(base.set_calls)
+
+    api["devices"] = _gec_devices(battery=["battery001", "battery002"])
+    assert run_async(ge.run(seconds=DEVICE_REFRESH_SECONDS, first=False)) is True
+    assert coordinator.slot_map == {"gecloud:battery001": 0, "gecloud:battery002": 1}, coordinator.slot_map
+    written = base.set_calls[mark:]
+    assert [call for call in written if call[0] == "inverter_type"], written
+    assert not [call for call in written if call[2] == 0], written
+    assert {setting: slot_value(base.args.get(setting), 0) for setting in slot0} == slot0
+    assert base.args["num_inverters"] == 2 and base.args["inverter_type"] == ["GEC", "GEC"], base.args
+    assert base.args["charge_rate"] == [_entity("number", "battery001", "battery_charge_power"), _entity("number", "battery002", "battery_charge_power")], base.args["charge_rate"]
+    assert not [line for line in base.log_messages if line.startswith("Warn: GECloud: discovery set")], base.log_messages
+    print("PASS: accept run loop incremental")
+    return 0
+
+
 def test_discovery_automatic_all(my_predbat=None):
     """Run every automatic configuration test, returning the number of failures."""
     failures = 0
@@ -652,4 +1078,20 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_summed_lists_keep_resolved_patterns()
     failures += test_bare_base_is_inert()
     failures += test_allow_automatic_config_wrapper()
+    # Acceptance: discovery against the old automatic configuration
+    failures += test_accept_single()
+    failures += test_accept_two_inverters()
+    failures += test_accept_mixed_registers()
+    failures += test_accept_pv_only_split_off()
+    failures += test_accept_pv_only_split_on()
+    failures += test_accept_ct_shared_detected()
+    failures += test_accept_ct_separate_detected()
+    failures += test_accept_ct_shared_override()
+    failures += test_accept_ct_split_override()
+    failures += test_accept_gateway()
+    failures += test_accept_ems()
+    failures += test_accept_opt_outs()
+    failures += test_accept_manual_plus_discovered()
+    failures += test_accept_template_takeover()
+    failures += test_accept_run_loop_incremental()
     return failures
