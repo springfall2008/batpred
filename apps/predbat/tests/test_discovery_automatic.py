@@ -1,6 +1,6 @@
 # fmt: off
 # pylint: disable=line-too-long
-"""Unit tests for the coordinator's automatic inverter configuration: the discovery_automatic switch, opting in, configure() and its triggers.
+"""Unit tests for the coordinator's automatic inverter configuration: opting in, configure() and its triggers, and GE Cloud's acceptance against its previous automatic configuration.
 
 The coordinator is real; the base and the component registry are small stubs, so every write to args is
 seen through the recorded set_arg calls.
@@ -16,7 +16,7 @@ import time
 import coordinator as coordinator_module
 from bindings import BINDING_SETTINGS, COMPACT_SETTINGS, SITE_SETTINGS, slot_value
 from coordinator import Coordinator
-from gecloud import DEVICE_REFRESH_SECONDS, GE_CLOUD_DUMMIED_SETTINGS
+from gecloud import DEVICE_REFRESH_SECONDS, GE_CLOUD_DUMMIED_SETTINGS, apply_legacy_bindings
 from tests.test_ge_cloud import GEC_FULL_REGISTERS, GEC_INFO, GEC_MIXED_REGISTERS, MockGECloudDirect, _gec_devices, _make_rediscovery_ge_cloud
 from tests.test_infra import run_async
 
@@ -24,11 +24,9 @@ from tests.test_infra import run_async
 class _Base:
     """Stand-in for PredBat: args, the apps.yaml snapshot, a recording log and Fetch.set_arg semantics."""
 
-    def __init__(self, args=None, apps_yaml=None, switch=True):
-        """Seed args (and the snapshot, a copy of args unless given); switch sets discovery_automatic."""
+    def __init__(self, args=None, apps_yaml=None):
+        """Seed args (and the snapshot, a copy of args unless given)."""
         self.args = copy.deepcopy(args or {})
-        if switch is not None:
-            self.args["discovery_automatic"] = switch
         self.args_from_apps_yaml = copy.deepcopy(apps_yaml if apps_yaml is not None else self.args)
         self.apps_yaml_override_warned = set()
         self.prefix = "predbat"
@@ -140,9 +138,9 @@ def _report(serials, automatic=True):
     return {"automatic": automatic, "inverters": [_record(serial) for serial in serials]}
 
 
-def _setup(args=None, apps_yaml=None, switch=True, components=None):
+def _setup(args=None, apps_yaml=None, components=None):
     """(base, registry, coordinator) with gecloud registered unless components says otherwise."""
-    base = _Base(args=args, apps_yaml=apps_yaml, switch=switch)
+    base = _Base(args=args, apps_yaml=apps_yaml)
     registry = _Components(base, components if components is not None else {"gecloud": _GECloud()})
     return base, registry, registry.coordinator
 
@@ -150,43 +148,6 @@ def _setup(args=None, apps_yaml=None, switch=True, components=None):
 def _pairs(calls):
     """set_arg calls as (setting, index) pairs."""
     return [(arg, index) for arg, _, index in calls]
-
-
-def test_switch_off_is_inert():
-    """discovery_automatic unset: nothing opts in and nothing writes."""
-    base, registry, coordinator = _setup(switch=None)
-    assert coordinator.allow_automatic("gecloud") is False
-    assert coordinator.automatic == {}
-    coordinator.report("gecloud", _report(["ce1111g111"]))
-    coordinator.configure()
-    assert base.set_calls == [], base.set_calls
-    assert coordinator.bindings is None and coordinator.slot_map == {}
-    assert "inverter_type" not in base.args
-    # Switched off explicitly behaves the same
-    base, registry, coordinator = _setup(switch=False)
-    assert coordinator.allow_automatic("gecloud") is False
-    coordinator.report("gecloud", _report(["ce1111g111"]))
-    coordinator.configure()
-    assert base.set_calls == [], base.set_calls
-    print("PASS: switch off is inert")
-    return 0
-
-
-def test_switch_string_value(my_predbat):
-    """A string switch value is read through Predbat's real get_arg, which turns it into a bool: "true" is on, "false" off."""
-    present, saved = "discovery_automatic" in my_predbat.args, my_predbat.args.get("discovery_automatic")
-    try:
-        for value, expected in (("false", False), ("true", True), ("on", True), ("off", False)):
-            my_predbat.args["discovery_automatic"] = value
-            coordinator = Coordinator(my_predbat)
-            assert coordinator._automatic_enabled() is expected, (value, expected)
-    finally:
-        if present:
-            my_predbat.args["discovery_automatic"] = saved
-        else:
-            my_predbat.args.pop("discovery_automatic", None)
-    print("PASS: switch string value")
-    return 0
 
 
 def test_configures_on_report():
@@ -205,12 +166,13 @@ def test_configures_on_report():
 
 
 def test_not_opted_in_is_not_configured():
-    """With the switch on, a component that never opted in is not configured."""
+    """A component that never opted in is not configured: with nothing opted in a pass does not even run."""
     base, registry, coordinator = _setup()
     coordinator.report("gecloud", _report(["ce1111g111"]))
     coordinator.configure()
     assert base.set_calls == [], base.set_calls
-    assert coordinator.slot_map == {}
+    assert coordinator.bindings is None and coordinator.slot_map == {}
+    assert "inverter_type" not in base.args
     print("PASS: not opted in is not configured")
     return 0
 
@@ -610,7 +572,7 @@ def test_baseline_drops_unresolved_patterns():
 
 
 def test_slot_is_empty():
-    """A slot a released device left below a used one is empty, and says so; nothing else is, and it is safe with no bindings or the switch off."""
+    """A slot a released device left below a used one is empty, and says so; nothing else is, and it is safe with no bindings."""
     base, registry, coordinator = _setup()
     assert coordinator.slot_is_empty(0) is False  # no bindings yet
     coordinator.allow_automatic("gecloud")
@@ -620,8 +582,6 @@ def test_slot_is_empty():
     assert base.args["num_inverters"] == 2 and base.args["inverter_type"] == [None, "GEC"], (base.args["num_inverters"], base.args["inverter_type"])
     assert "Warn: Coordinator: Inverter slot 0 is empty below a configured inverter - it has no inverter_type and Predbat will stop on it" in base.log_messages, base.log_messages
     assert coordinator.slot_is_empty(0) is True and coordinator.slot_is_empty(1) is False and coordinator.slot_is_empty(2) is False and coordinator.slot_is_empty(-1) is False
-    base.args["discovery_automatic"] = False
-    assert coordinator.slot_is_empty(0) is False
     # A hole in the user's own apps.yaml, with nothing discovered, is not one discovery left
     apps = {"num_inverters": 3, "inverter_type": ["GE", "", "GE"], "charge_rate": ["number.a_charge_rate", "number.b_charge_rate", "number.c_charge_rate"]}
     base, registry, coordinator = _setup(args=apps)
@@ -647,7 +607,7 @@ class _Bare:
 
     def __init__(self):
         """Nothing but a log list and args."""
-        self.args = {"discovery_automatic": True}
+        self.args = {"num_inverters": 1}
         self.messages = []
 
     def log(self, message):
@@ -659,18 +619,23 @@ def test_bare_base_is_inert():
     """On a base with no get_arg, args_from_apps_yaml or components, nothing is configured and nothing raises (amendment 4)."""
     base = _Bare()
     coordinator = Coordinator(base)
-    assert coordinator.allow_automatic("gecloud") is False
+    assert coordinator.allow_automatic("gecloud") is False  # a pass could not configure this base, so it is not accepted
+    assert coordinator.automatic == {}
     coordinator.report("gecloud", _report(["ce1111g111"]))
     coordinator.configure()
-    assert base.args == {"discovery_automatic": True}
+    assert base.args == {"num_inverters": 1}
     assert not [line for line in base.messages if "failed" in line], base.messages
-    # get_arg present and on, but no snapshot, no set_arg and no registry: still nothing
+    # get_arg present, but no snapshot, no set_arg and no registry: still nothing
     base.get_arg = lambda name, default=None, **kwargs: base.args.get(name, default)
-    assert coordinator.allow_automatic("gecloud") is True
+    assert coordinator.allow_automatic("gecloud") is False
     coordinator.report("gecloud", _report(["ce1111g111", "ce2222g222"]))
     coordinator.configure()
-    assert base.args == {"discovery_automatic": True}
+    assert base.args == {"num_inverters": 1}
     assert coordinator.bindings is None
+    # Opted in by hand on that base, a pass still finds nothing to configure with and neither writes nor raises
+    coordinator.automatic["gecloud"] = {"skip_settings": frozenset(), "keep_user_settings": frozenset(), "include_pv_only": False}
+    coordinator.configure()
+    assert base.args == {"num_inverters": 1} and coordinator.bindings is None
     assert not [line for line in base.messages if "failed" in line], base.messages
     print("PASS: bare base is inert")
     return 0
@@ -700,7 +665,7 @@ def test_allow_automatic_config_wrapper():
 
 
 # ---------------------------------------------------------------------------------------------
-# Acceptance: GE Cloud's automatic configuration, discovery_automatic off and on, from the same args
+# Acceptance: GE Cloud's previous automatic configuration against discovery's, from the same args
 # ---------------------------------------------------------------------------------------------
 
 # What the comparison covers: the whole inverter configuration
@@ -743,16 +708,15 @@ def _entity(domain, device, suffix):
     return "{}.predbat_gecloud_{}_{}".format(domain, device, suffix)
 
 
-def _automatic_run(devices, settings, info, start, switch):
+def _automatic_run(devices, settings, info, start):
     """
-    One GE Cloud automatic configuration from args `start` (also the apps.yaml snapshot), with discovery_automatic `switch`.
+    One GE Cloud automatic configuration through a real Coordinator from args `start` (also the apps.yaml snapshot).
 
-    A real Coordinator is registered either way, so the switch-off run is the real switch-off path. Runs the
-    real async_automatic_config(), then the real refresh_discovery(), as run() does in one cycle. Then two more
-    configure() passes, as Predbat runs after phase 1 and at the startup barrier, which must write nothing:
-    a pass that rebuilds from args an earlier pass rewrote must reach the same configuration. Returns (ge, base).
+    Runs the real async_automatic_config(), then the real refresh_discovery(), as run() does in one cycle. Then
+    two more configure() passes, as Predbat runs after phase 1 and at the startup barrier, which must write
+    nothing: a pass that rebuilds from args an earlier pass rewrote must reach the same configuration. Returns (ge, base).
     """
-    base = _Base(args=start, apps_yaml=start, switch=switch)
+    base = _Base(args=start, apps_yaml=start)
     ge = _AutoGECloud(base)
     ge.devices_dict = copy.deepcopy(devices)
     ge.settings = copy.deepcopy(settings)
@@ -777,17 +741,26 @@ def _starting_args(config=None, apps_yaml=None):
 
 
 def run_new(devices, settings, info=None, config=None, apps_yaml=None):
-    """Run GE Cloud's automatic configuration with discovery_automatic on only, and return (new_args, new_run_log)."""
-    ge, base = _automatic_run(devices, settings, info, _starting_args(config, apps_yaml), switch=True)
+    """Run GE Cloud's automatic configuration through a real Coordinator, and return (new_args, new_run_log)."""
+    ge, base = _automatic_run(devices, settings, info, _starting_args(config, apps_yaml))
     return base.args, list(base.log_messages)
 
 
+def _legacy_run(devices, settings, info, start):
+    """The previous automatic configuration from args `start` (also the apps.yaml snapshot): _legacy_bindings() applied to a copy of start by the rules it was written with."""
+    ge = _AutoGECloud(_Base(args=start, apps_yaml=start))
+    ge.devices_dict = copy.deepcopy(devices)
+    ge.settings = copy.deepcopy(settings)
+    ge.info = copy.deepcopy(info or {})
+    return apply_legacy_bindings(ge._legacy_bindings(ge.devices_dict), start, start)
+
+
 def run_old_and_new(devices, settings, info=None, config=None, apps_yaml=None) -> tuple[dict, dict, list[str]]:
-    """Run GE Cloud's automatic configuration twice from the same starting args - switch off, then on with a real Coordinator - and return (old_args, new_args, new_run_log)."""
+    """GE Cloud's configuration twice from the same starting args - the previous automatic configuration, then the real one through a Coordinator - as (old_args, new_args, new_run_log)."""
     start = _starting_args(config, apps_yaml)
-    _, old_base = _automatic_run(devices, settings, info, copy.deepcopy(start), switch=False)
-    _, new_base = _automatic_run(devices, settings, info, copy.deepcopy(start), switch=True)
-    return old_base.args, new_base.args, list(new_base.log_messages)
+    old_args = _legacy_run(devices, settings, info, copy.deepcopy(start))
+    _, new_base = _automatic_run(devices, settings, info, copy.deepcopy(start))
+    return old_args, new_base.args, list(new_base.log_messages)
 
 
 def _normal(value):
@@ -999,7 +972,8 @@ def test_accept_ems():
     assert new["inverter_type"] == ["GEE", "GEE"], new["inverter_type"]
     assert new["battery_power"] == [_entity("sensor", "ems001", "battery_power"), 0], new["battery_power"]
     assert new["charge_start_time"] == [_entity("select", "ems001", "charge_start_time_slot_1")] * 2, new["charge_start_time"]
-    assert old["ge_cloud_data"] is False and new["ge_cloud_data"] is False, (old.get("ge_cloud_data"), new.get("ge_cloud_data"))
+    # ge_cloud_data is live, written by the real run only: the previous configuration's plan holds no live setting
+    assert "ge_cloud_data" not in old and new["ge_cloud_data"] is False, (old.get("ge_cloud_data"), new.get("ge_cloud_data"))
     print("PASS: accept EMS")
     return 0
 
@@ -1147,8 +1121,8 @@ def test_accept_givtcp_rest_manual():
 
 
 def test_accept_run_loop_incremental():
-    """The real run() with the switch on: a battery added to the account later takes slot 1, and slot 0 is never written again."""
-    base = _Base(args={}, switch=True)
+    """The real run() through a coordinator: a battery added to the account later takes slot 1, and slot 0 is never written again."""
+    base = _Base(args={})
     ge, api, calls = _make_rediscovery_ge_cloud(_gec_devices(battery=["battery001"]))
     _attach(ge, base)
     # The real automatic configuration, not the helper's recording stand-in
@@ -1187,8 +1161,6 @@ def test_accept_run_loop_incremental():
 def test_discovery_automatic_all(my_predbat=None):
     """Run every automatic configuration test, returning the number of failures."""
     failures = 0
-    failures += test_switch_off_is_inert()
-    failures += test_switch_string_value(my_predbat)
     failures += test_configures_on_report()
     failures += test_not_opted_in_is_not_configured()
     failures += test_unchanged_report_writes_nothing()

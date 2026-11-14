@@ -10,11 +10,10 @@ programmes as plain dicts during their first successful run. The coordinator val
 assembles and redacts them into a catalogue published in the debug YAML dump, so real user
 topologies can be read - see docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md.
 
-With the apps.yaml switch discovery_automatic on, the coordinator also configures the inverters of
-components that opt in (allow_automatic()): configure() builds per-slot bindings from their reports and
-replays them into args. bindings.py makes every decision about slots and values; this module holds the
-state, the triggers and the orchestration. With the switch off nothing here writes to args - see
-docs/superpowers/specs/2026-11-14-discovery-automatic-inverter-config-design.md.
+The coordinator also configures the inverters of components that opt in (allow_automatic()): configure()
+builds per-slot bindings from their reports and replays them into args. bindings.py makes every decision
+about slots and values; this module holds the state, the triggers and the orchestration. Until a component
+opts in nothing here writes to args - see docs/superpowers/specs/2026-11-14-discovery-automatic-inverter-config-design.md.
 
 Safety comes from typed containers rather than from enumerating every field: a record is a
 few structural fields plus containers that each declare what they accept and what happens
@@ -371,27 +370,20 @@ class Coordinator:
         if opted_in and changed:
             self.configure()
 
-    def _automatic_enabled(self):
-        """Whether the apps.yaml switch discovery_automatic is on. False on a base without get_arg (the CLI harnesses)."""
-        get_arg = getattr(self.base, "get_arg", None)
-        if not callable(get_arg):
-            return False
-        try:
-            value = get_arg("discovery_automatic", False, indirect=False)
-        except Exception:
-            return False
-        # get_arg() turns a string into a bool itself when the default is one
-        return value is True
+    def _can_configure(self):
+        """Whether the base has what a configure pass needs: the apps.yaml snapshot, args and set_arg. False on a thin base (the bare test doubles)."""
+        base = self.base
+        return isinstance(getattr(base, "args_from_apps_yaml", None), dict) and isinstance(getattr(base, "args", None), dict) and callable(getattr(base, "set_arg", None))
 
     def allow_automatic(self, component_name, skip_settings=(), keep_user_settings=(), include_pv_only=False):
         """Opt a component in to automatic configuration by the coordinator; returns whether the coordinator will configure it.
 
-        False, recording nothing, while discovery_automatic is off - the component then configures itself as
-        before. Otherwise the options are stored under the component's name and a pass runs at once.
-        skip_settings are left exactly as args hold them; keep_user_settings yield to an apps.yaml value at the
-        slot; include_pv_only lets records with no inverter_type contribute pv_power and pv_today.
+        The options are stored under the component's name and a pass runs at once. False, recording nothing, only
+        on a base a pass cannot configure (no apps.yaml snapshot, args or set_arg). skip_settings are left exactly
+        as args hold them; keep_user_settings yield to an apps.yaml value at the slot; include_pv_only lets records
+        with no inverter_type contribute pv_power and pv_today.
         """
-        if not self._automatic_enabled():
+        if not self._can_configure():
             return False
         options = {"skip_settings": frozenset(skip_settings or ()), "keep_user_settings": frozenset(keep_user_settings or ()), "include_pv_only": bool(include_pv_only)}
         with self.lock:
@@ -402,9 +394,9 @@ class Coordinator:
     def configure(self):
         """One automatic configuration pass: build the bindings, replay what differs into args, then check. Never raises.
 
-        A no-op while discovery_automatic is off, or on a base without the apps.yaml snapshot, args or set_arg.
-        Runs on whichever thread triggered it, under configure_lock for the whole pass. A pass with nothing new
-        writes nothing and logs nothing.
+        A no-op until a component has opted in (allow_automatic()), and on a base without the apps.yaml snapshot,
+        args or set_arg. Runs on whichever thread triggered it, under configure_lock for the whole pass. A pass
+        with nothing new writes nothing and logs nothing.
 
         The first pass keeps a baseline: a copy of the live binding settings and inverter_type, before anything is
         replayed (capture_baseline()). Every pass scans it for a manual slot's serials - replay rewrites the live entries at
@@ -415,7 +407,9 @@ class Coordinator:
         A failure is logged as a warning and the writes the pass had already made are undone, so args are as they
         were before it; the bindings stay as the last good pass left them.
         """
-        if not self._automatic_enabled():
+        with self.lock:
+            opted_in = bool(self.automatic)
+        if not opted_in:
             return
         with self.configure_lock:
             before = {}
@@ -469,11 +463,9 @@ class Coordinator:
         """Whether inverter slot `index` is an empty slot inside the current bindings: free, below the slot count, among discovered slots.
 
         A slot a discovered device held is left like this when the device stops being reported while a higher
-        slot is still in use - slots are not compacted until a restart. Read-only; False with the switch off,
-        with no bindings yet, and for a layout with no discovered slot (any hole there is the user's own).
+        slot is still in use - slots are not compacted until a restart. Read-only; False with no bindings yet,
+        and for a layout with no discovered slot (any hole there is the user's own).
         """
-        if not self._automatic_enabled():
-            return False
         bindings = self.bindings
         entries = (bindings or {}).get("inverters", [])
         if not isinstance(index, int) or index < 0 or index >= len(entries):

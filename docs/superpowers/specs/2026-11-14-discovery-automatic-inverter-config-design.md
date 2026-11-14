@@ -92,6 +92,8 @@ Trefor picked A.
 
 ### The switch (my call, not yet confirmed by Trefor)
 
+> 14 Nov 2026: the switch and GE Cloud's old write path were removed by the maintainer's decision; GE Cloud configures only through discovery, and its old automatic configuration survives only as check_automatic_config().
+
 A new `apps.yaml` boolean `discovery_automatic`, default `False`, added to `APPS_SCHEMA`.
 
 - Off: `allow_automatic()` returns `False`, GE Cloud runs its existing code unchanged, the coordinator

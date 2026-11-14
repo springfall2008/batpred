@@ -123,8 +123,9 @@ def capture_automatic_config(component):
 
     The two setters are replaced on the instance only and removed afterwards, so the class methods are
     back in place whatever automatic_config() raised. So is allow_automatic_config(), answering False: what
-    is captured is always the component's own configuration with discovery_automatic off, never an opt-in
-    to the coordinator that would write nothing here.
+    is captured is always the component's own configuration, never an opt-in to the coordinator that would
+    write nothing here. GE Cloud configures only through the coordinator, so its tests capture its previous
+    automatic configuration from _legacy_bindings() instead (test_ge_cloud.py _capture_legacy()).
     """
     captured = {}
 

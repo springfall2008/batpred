@@ -389,9 +389,9 @@ class ComponentBase(ABC):
     def allow_automatic_config(self, skip_settings=(), keep_user_settings=(), include_pv_only=False):
         """Ask the coordinator to configure this component's inverters; returns whether it will (see Coordinator.allow_automatic()).
 
-        False when there is no coordinator - the standalone CLI harnesses, and test doubles built without
-        ComponentBase.__init__, which may have no base at all - or while discovery_automatic is off. On False
-        the component configures itself as it always has.
+        False when there is no coordinator - the standalone CLI harnesses with no CoordinatorHarness, and test
+        doubles built without ComponentBase.__init__, which may have no base at all - or when the coordinator's
+        base cannot be configured. On False nothing configures this component's inverters.
         """
         components = getattr(getattr(self, "base", None), "components", None)
         coordinator = getattr(components, "coordinator", None) if components else None

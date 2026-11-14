@@ -12,8 +12,8 @@ components can each see part of the same physical setup (a GivEnergy inverter vi
 GivTCP and GE Cloud, say), or claim the same car slot, and today those situations are resolved
 silently by whichever component happens to run first. The catalogue does not change that behaviour
 
-- **nothing about it writes to your configuration, or changes anything Predbat does**, unless you
-turn on `discovery_automatic` (see [Automatic configuration](#automatic-configuration-discovery_automatic)). It only
+- **nothing about it writes to your configuration, or changes anything Predbat does**, except for the
+inverters of a component that hands their configuration to it (see [Automatic configuration](#automatic-configuration)). It only
 makes what was already happening visible, so a maintainer reading a bug report can see the whole
 picture at a glance instead of reconstructing it from log lines, and so a genuine ambiguity (two
 components both claiming the same inverter) is recorded as an observation rather than staying an
@@ -114,7 +114,7 @@ extra top-level sections describe the fleet as a whole rather than any one devic
   component: `conflicts` (see below), `resulting_config`, the handful of apps.yaml keys
   (`num_inverters`, `num_cars`, `inverter_type`) discovery can be compared against, and, once
   automatic configuration has run, `bindings` (see
-  [Automatic configuration](#automatic-configuration-discovery_automatic))
+  [Automatic configuration](#automatic-configuration))
 
 ### Conflicts
 
@@ -128,14 +128,14 @@ happened to run first - the catalogue observes them, it does not resolve them:
 | `multiple_import_meters` | More than one component reports an import meter |
 | `contested_car_slots` | A car is reported by a component that reports no charger, alongside a component that reports both a charger and a car - two components with a different idea of what should occupy a car slot |
 
-## Automatic configuration (discovery_automatic)
+## Automatic configuration
 
-With the `apps.yaml` switch `discovery_automatic: true` (default off), discovery stops being only an
-observer: it configures the inverters of the components that hand that job to it, from their
-inverter records. Only **GE Cloud** (`ge_cloud_automatic`) does so far. Every other component with
-an automatic option still configures itself as before, and running one of them alongside GE Cloud
-with the switch on is not supported - Predbat logs a warning naming both. With the switch off
-nothing here runs, and GE Cloud configures your inverters exactly as it always has.
+Discovery is more than an observer for the components that hand their inverter configuration to it:
+it configures their inverters from their inverter records. Only **GE Cloud** (`ge_cloud_automatic`)
+does so far, and it no longer writes any inverter setting itself. Every other component with an
+automatic option still configures itself as before, and running one of them alongside GE Cloud is not
+supported - Predbat logs a warning naming both. Until a component hands its configuration over, nothing
+here runs.
 
 ### Slots
 

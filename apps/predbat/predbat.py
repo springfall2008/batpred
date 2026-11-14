@@ -2551,7 +2551,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             if not self.components.start(phase=1):
                 self.log("Error: Some components failed to start (phase 1)")
                 self.record_status("Error: Some components failed to start (phase 1)", had_errors=True)
-            # An ordinary automatic configuration pass (a no-op unless discovery_automatic is on); it never raises
+            # An ordinary automatic configuration pass (a no-op until a component has opted in); it never raises
             self.components.coordinator.configure()
 
             # Each car's own maximum charge rate, before Load ML (phase 2) first reads it
@@ -2563,9 +2563,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 self.record_status("Error: Some components failed to start (phase 2)", had_errors=True)
 
             # Discovery barrier: every component has now started or timed out, so assemble what
-            # they reported into the catalogue. With discovery_automatic on, configure() first replays
-            # any change in the opted-in components' inverters into args; with it off it does nothing
-            # and the catalogue stays observe-only.
+            # they reported into the catalogue. configure() first replays any change in the opted-in
+            # components' inverters into args; with no component opted in it does nothing and the
+            # catalogue stays observe-only.
             try:
                 self.components.coordinator.configure()
                 self.components.coordinator.assemble()

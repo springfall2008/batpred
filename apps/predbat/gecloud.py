@@ -12,6 +12,7 @@ status monitoring, meter data collection, and inverter control settings
 management via the GivEnergy Cloud REST API.
 """
 
+import copy
 import re
 import aiohttp
 import pytz
@@ -24,7 +25,7 @@ import math
 import json
 import random
 from component_base import ComponentBase, writes
-from bindings import SITE_SETTINGS, SUMMED_SETTINGS, slot_value
+from bindings import BINDING_SETTINGS, SITE_SETTINGS, SUMMED_SETTINGS, slot_value
 from coordinator import charger_with_stub_car, inverter_record
 from mock_base import MockBase as SharedMockBase
 
@@ -369,6 +370,31 @@ GE_CLOUD_TIME_SELECT_FORMAT = "HH:MM:SS"
 # ("2025-02-09T15:00:03Z") unchanged. The GEC/GEE rows keep "%H:%M:%S" for installs that do not use
 # this component (spec D13), so the discovery record describes the sensor, not the row.
 GE_CLOUD_CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+
+# The whole inverter configuration: num_inverters, inverter_type and every binding and site setting
+GE_CLOUD_CONFIGURATION_SETTINGS = ("num_inverters", "inverter_type") + tuple(sorted(BINDING_SETTINGS | SITE_SETTINGS))
+
+
+def apply_legacy_bindings(bound, args, apps_yaml):
+    """
+    A copy of args with _legacy_bindings() output applied by the rules the previous automatic configuration wrote it with.
+
+    A GE_CLOUD_KEEP_USER_SETTINGS setting is left alone where apps_yaml (the snapshot) sets it to something else,
+    as set_arg_auto(..., overwrite=False) did; every other setting is written as set_arg() did, None deleting the
+    key. Pure: neither args nor bound is changed.
+    """
+    result = copy.deepcopy(args or {})
+    snapshot = apps_yaml or {}
+    for setting, value in bound.items():
+        if setting in GE_CLOUD_KEEP_USER_SETTINGS:
+            raw_value = snapshot.get(setting)
+            if raw_value is not None and raw_value != value:
+                continue
+        if value is None:
+            result.pop(setting, None)
+        else:
+            result[setting] = copy.deepcopy(value)
+    return result
 
 
 def ge_code_message(data, code):
@@ -763,6 +789,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.ge_cloud_data_before_ems = None
         # Every line check_automatic_config() has logged, so each is logged once for the life of the process
         self.automatic_check_logged = set()
+        # Whether async_automatic_config() has warned that there is no discovery coordinator to configure the inverters
+        self.automatic_unavailable_warned = False
 
         # Customer account details, including the timezone the inverter register times are expressed in
         self.account = {}
@@ -1719,10 +1747,11 @@ class GECloudDirect(ComponentBase, CarChargerControl):
           - "gateway": the gateway serial
           - "battery": list of battery inverter serials (for battery-specific sensors)
 
-        The inverter bindings are _legacy_bindings(). With discovery_automatic off they are written here, as
-        they always were; with it on GE Cloud opts in to the coordinator, which configures them from this
-        component's discovery report, and none is written here. Either way the rest is live and done here:
-        ge_cloud_serial, the EMS's ge_cloud_data toggle and its restore, the inverter_hybrid switch and the log.
+        GE Cloud never writes an inverter binding itself: it opts in to the discovery coordinator, which
+        configures the inverters from this component's discovery report, and check_automatic_config() then
+        compares that with _legacy_bindings(). With no coordinator (a bare base) it logs one warning and
+        configures nothing. The rest is live and done here: ge_cloud_serial, the EMS's ge_cloud_data toggle and
+        its restore, the inverter_hybrid switch and the log.
         """
         if not devices or not devices["battery"]:
             self.log("GECloud: Warn: No battery devices found, cannot auto-configure")
@@ -1734,7 +1763,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         num_inverters = facts["num_inverters"]
         features = facts["features"]
 
-        self.log("GECloud: Auto-configuring Predbat and not using apps.yaml entries for control")
+        self.log("GECloud: Discovery configures the inverters from this component's report; apps.yaml inverter entries are replaced")
         self.log(
             "GECloud: detected features - charge rate: {}, discharge rate: {}, charge power percent: {}, discharge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}, force charge: {}".format(
                 features["charge_rate"],
@@ -1751,19 +1780,17 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         skip_settings = ("load_today",) if self.get_arg("ge_cloud_load_today_ignore", default=False) else ()
         include_pv_only = bool(self.get_arg("ge_cloud_automatic_split_pv", default=False))
         if self.allow_automatic_config(skip_settings=skip_settings, keep_user_settings=GE_CLOUD_KEEP_USER_SETTINGS, include_pv_only=include_pv_only):
+            self._note_kept_user_settings(bound)
             # The coordinator configures args when it has this component's report. File it now rather than at the
             # end of the cycle: run() reads the control registers next, and finds them by the entities args name
             self.refresh_discovery()
-        else:
-            for setting, value in bound.items():
-                if setting in GE_CLOUD_KEEP_USER_SETTINGS:
-                    self.set_arg_auto(setting, value, overwrite=False)
-                else:
-                    self.set_arg(setting, value)
+        elif not getattr(self, "automatic_unavailable_warned", False):
+            self.automatic_unavailable_warned = True
+            self.log("Warn: GECloud: automatic configuration needs the discovery coordinator, which is not available - no inverter is configured")
 
         # The site's grid export limit, published per inverter as its share of the site total. An
-        # export_limit the user wrote in apps.yaml wins, including a zero one, which set_arg_auto
-        # reports for us, and a site with no enabled limit leaves Predbat's own default in place.
+        # export_limit the user wrote in apps.yaml wins, including a zero one (the coordinator keeps it and
+        # _note_kept_user_settings() says so), and a site with no enabled limit leaves Predbat's own default in place.
         if self.site_export_limit is not None:
             self.log("GECloud: Auto-configured export_limit from site {}: {}W shared across {} logical inverter(s)".format(self.site_id, self.site_export_limit, num_inverters))
         elif self.get_arg("export_limit", default=None, indirect=False) is None:
@@ -1813,13 +1840,33 @@ class GECloudDirect(ComponentBase, CarChargerControl):
 
         self.log("GECloud: Automatic configuration complete")
 
+    def _note_kept_user_settings(self, bound):
+        """
+        Log, once per setting, that the user's apps.yaml value of a GE_CLOUD_KEEP_USER_SETTINGS setting is kept.
+
+        The note set_arg_auto(..., overwrite=False) logged when GE Cloud still wrote its own bindings, given the
+        same way now that the coordinator keeps that value (keep_user_settings): only where apps.yaml sets the
+        setting to something other than what GE Cloud would bind, and sharing set_arg_auto's once-per-key record.
+        """
+        warned = getattr(self.base, "apps_yaml_override_warned", None)
+        for setting in GE_CLOUD_KEEP_USER_SETTINGS:
+            if setting not in bound:
+                continue
+            raw_value = self.apps_yaml_value(setting)
+            if raw_value is None or raw_value == bound[setting] or warned is None or setting in warned:
+                continue
+            warned.add(setting)
+            self.log(f"Info: apps.yaml sets '{setting}: {raw_value}' - keeping your apps.yaml setting rather than auto-discovering '{bound[setting]}'")
+
     def _legacy_bindings(self, devices):
         """
-        What the automatic configuration binds: {setting: value}, the last write winning, None meaning "delete the key". Pure - writes nothing.
+        What the previous automatic configuration bound: {setting: value}, the last write winning, None meaning "delete the key". Pure - writes nothing.
 
-        The inverter bindings async_automatic_config() wrote before discovery_automatic, with its guards
-        (ge_cloud_load_today_ignore, the site export limit, the CT and split-PV options) and without the live
-        settings (ge_cloud_serial, ge_cloud_data) or any log line. {} when there is no battery device.
+        The previous automatic configuration, kept only so check_automatic_config() can compare against it; to
+        be removed once discovery is trusted. These are the inverter bindings async_automatic_config() used to
+        write itself, with its guards (ge_cloud_load_today_ignore, the site export limit, the CT and split-PV
+        options) and without the live settings (ge_cloud_serial, ge_cloud_data) or any log line. {} when there
+        is no battery device. apply_legacy_bindings() applies it to args with the rules it was written by.
         """
         if not devices or not devices.get("battery"):
             return {}
@@ -1829,6 +1876,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         """
         (bound, facts) for a devices dict with at least one battery: the old automatic configuration's bindings, and what its log reports.
 
+        The previous automatic configuration, kept only so check_automatic_config() can compare against it; to
+        be removed once discovery is trusted. async_automatic_config() still reads facts for its log lines.
         bound is _legacy_bindings(), in the order the old code first wrote each setting. facts holds
         batteries_real, batteries and num_inverters (the logical inverters), features (the fleet-wide register
         sniff the "detected features" line logs) and shared_ct: None unless several inverters and no EMS, else

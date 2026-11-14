@@ -1255,22 +1255,6 @@ Predbat can talk to Fox ESS inverters directly through the Fox Cloud API, config
 These include `fox_poll_seconds`, which sets how often the live data such as battery SoC is fetched (default `300`).
 See [Components - Fox ESS API](components.md#fox-ess-api-fox) for the full list of settings and what each one does.
 
-### discovery_automatic
-
-Optional, defaults to false. When set to `true`, a component that configures your inverters automatically hands that job to Predbat's
-discovery instead: each inverter the component finds is given an inverter slot, and its settings (**inverter_type**, **num_inverters**
-and the inverter's entities) are written into that slot. A slot is kept for as long as Predbat runs, so a second inverter appearing later
-is added in the next slot and the first is left alone. An inverter you have also configured by hand in `apps.yaml` is taken over by
-discovery, with a warning in the log naming the serial and the slot; any other inverter you configured by hand is left as you wrote it.
-
-Only GE Cloud (**ge_cloud_automatic**) works this way so far. Any other component with its own `*_automatic` option still configures
-itself as before, and running one of them alongside GE Cloud with this switch on is not supported (Predbat logs a warning).
-Leave the switch off, the default, and nothing changes: GE Cloud configures your inverters exactly as it always has.
-
-```yaml
-  discovery_automatic: true
-```
-
 ### num_inverters
 
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities

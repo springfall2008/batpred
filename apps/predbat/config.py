@@ -2819,7 +2819,6 @@ APPS_SCHEMA = {
     "ge_cloud_automatic_shared_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_pv": {"type": "boolean"},
-    "discovery_automatic": {"type": "boolean"},
     "num_inverters": {"type": "integer", "zero": False},
     "validate_config_retries": {"type": "integer", "zero": True},
     "validate_config_retry_minutes": {"type": "integer", "zero": True},
