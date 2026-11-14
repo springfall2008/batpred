@@ -157,6 +157,43 @@ def _run(my_predbat, storage):
     my_predbat.battery_power_curve_update(inv, discharge=False)
     failed |= _check("t9 junk", my_predbat.battery_charge_power_curve == {}, my_predbat.battery_charge_power_curve)
 
+    print("Test 11: not auto, no curve in apps.yaml - the computed or default curve survives fetch_config_options() every cycle")
+    saved_args = {key: my_predbat.args.get(key) for key in ("battery_charge_power_curve", "battery_charge_power_curve_default")}
+    try:
+        for key in saved_args:
+            my_predbat.args.pop(key, None)
+        _restart(my_predbat, auto=False)
+        inv.result[False] = CURVE_A
+        my_predbat.battery_power_curve_update(inv, discharge=False)
+        my_predbat.fetch_config_options()
+        my_predbat.battery_power_curve_update(inv, discharge=False)
+        failed |= _check("t11 computed kept", my_predbat.battery_charge_power_curve == CURVE_A, my_predbat.battery_charge_power_curve)
+
+        my_predbat.args["battery_charge_power_curve_default"] = {str(soc): value for soc, value in DEFAULT.items()}
+        _restart(my_predbat, auto=False, default=DEFAULT)
+        inv.result[False] = {}
+        my_predbat.battery_power_curve_update(inv, discharge=False)
+        my_predbat.fetch_config_options()
+        failed |= _check("t11 default kept", my_predbat.battery_charge_power_curve == DEFAULT, my_predbat.battery_charge_power_curve)
+
+        my_predbat.args["battery_charge_power_curve"] = {"100": 0.3}
+        my_predbat.fetch_config_options()
+        failed |= _check("t11 apps.yaml curve wins", my_predbat.battery_charge_power_curve == {100: 0.3}, my_predbat.battery_charge_power_curve)
+
+        my_predbat.args.pop("battery_charge_power_curve")
+        my_predbat.args.pop("battery_charge_power_curve_default")
+        _restart(my_predbat, auto=False)
+        my_predbat.battery_charge_power_curve = {100: 0.3}
+        my_predbat.fetch_config_options()
+        failed |= _check("t11 not yet computed resets", my_predbat.battery_charge_power_curve == {}, my_predbat.battery_charge_power_curve)
+    finally:
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+        my_predbat.fetch_config_options()
+
     print("Test 10: with no storage auto mode still learns")
     my_predbat.components = MockStorageComponents(None)
     _restart(my_predbat)

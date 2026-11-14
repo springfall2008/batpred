@@ -4913,7 +4913,11 @@ class Fetch:
             self.battery_charge_power_curve_auto = True
         else:
             self.battery_charge_power_curve_auto = False
-            self.battery_charge_power_curve = self.validate_curve(self.args.get("battery_charge_power_curve", {}), "battery_charge_power_curve")
+            configured_curve = self.validate_curve(self.args.get("battery_charge_power_curve", {}), "battery_charge_power_curve")
+            # With no curve in apps.yaml, keep the one battery_power_curve_update() computed from history (or the default):
+            # it is only computed once, so resetting it here every cycle threw it away after the first plan
+            if configured_curve or not self.computed_charge_curve:
+                self.battery_charge_power_curve = configured_curve
         self.battery_charge_power_curve_default = self.validate_curve(self.args.get("battery_charge_power_curve_default", {}), "battery_charge_power_curve_default")
 
         # Discharge curve
@@ -4921,7 +4925,9 @@ class Fetch:
             self.battery_discharge_power_curve_auto = True
         else:
             self.battery_discharge_power_curve_auto = False
-            self.battery_discharge_power_curve = self.validate_curve(self.args.get("battery_discharge_power_curve", {}), "battery_discharge_power_curve")
+            configured_curve = self.validate_curve(self.args.get("battery_discharge_power_curve", {}), "battery_discharge_power_curve")
+            if configured_curve or not self.computed_discharge_curve:
+                self.battery_discharge_power_curve = configured_curve
         self.battery_discharge_power_curve_default = self.validate_curve(self.args.get("battery_discharge_power_curve_default", {}), "battery_discharge_power_curve_default")
 
         # Temperature curve charge/discharge
