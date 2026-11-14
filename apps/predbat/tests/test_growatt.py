@@ -1414,6 +1414,10 @@ def test_growatt_export_limit_parsing():
     """The live answer, its JSON-string form, and anything else as unknown; only an enabled 0..100% is a limit."""
     assert parse_export_limit({"percentage": 0, "exportLimitEnabled": 1}) == (True, 0.0)
     assert parse_export_limit(json.dumps({"percentage": 20, "exportLimitEnabled": 0})) == (False, 20.0)
+    # The undocumented envelope is walked the way parse_dispatch_slots() walks it
+    assert parse_export_limit({"value": {"percentage": 30, "exportLimitEnabled": 1}}) == (True, 30.0)
+    assert parse_export_limit({"data": json.dumps({"percentage": 40, "exportLimitEnabled": 1})}) == (True, 40.0)
+    assert parse_export_limit({"a": {"b": {"c": {"d": {"e": {"percentage": 0, "exportLimitEnabled": 1}}}}}}) is None
     for unknown in (None, "", "not json", [], {"percentage": 0}, {"exportLimitEnabled": 1}, {"percentage": "x", "exportLimitEnabled": 1}):
         assert parse_export_limit(unknown) is None, unknown
     assert export_limit_watts(True, 0, 3600) == 0
@@ -1486,6 +1490,62 @@ def test_growatt_disabled_or_unknown_export_limit_is_not_bound():
     assert client._export_limit_due(sn)
 
 
+def test_growatt_failed_export_limit_read_after_a_good_one_is_retried_sooner():
+    """A failed read keeps the known setting, is retried once in the same run, and is due again in minutes, not hours."""
+    client, sn = _export_limit_client({"percentage": 0, "exportLimitEnabled": 1})
+    assert run_async_local(client.refresh_export_limit(sn))
+    assert not client._export_limit_due(sn)
+
+    reads = []
+
+    async def read_dispatch(serial, set_type):
+        """The device is busy (READ_DEVICE_PARAM_FAIL)."""
+        reads.append(set_type)
+        return False, None
+
+    client.read_dispatch = read_dispatch
+    client.last_write_time[sn] = 0
+    assert not run_async_local(client.refresh_export_limit(sn))
+    assert len(reads) == GROWATT_READ_ATTEMPTS
+    assert client.export_limit_w(sn) == 0
+    assert any("export limit read failed" in message for message in client.log_messages)
+    client._tier_refreshed["export_limit:{}".format(sn)] = time.time() - 11 * 60
+    assert client._export_limit_due(sn)
+
+    # A good read restores the long TTL
+    client.read_dispatch = AsyncMock(return_value=(True, {"percentage": 0, "exportLimitEnabled": 1}))
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.refresh_export_limit(sn))
+    client._tier_refreshed["export_limit:{}".format(sn)] = time.time() - 11 * 60
+    assert not client._export_limit_due(sn)
+
+
+def test_growatt_reclaimed_control_releases_without_waiting_out_an_old_back_off():
+    """A release that failed, then a successful write when read-only was turned off, does not delay the next release."""
+    client, sn = _ready_client()
+    client.control_claimed.add(sn)
+    client.control_enabled.add(sn)
+    held = [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+    client.applied_slots[sn] = list(held)
+    calls = _recording_dispatch(client, result=False, enable=1)
+    calls.table = [dict(slot) for slot in held] + [dict(GROWATT_UNUSED_SLOT) for _ in range(15)]
+    assert not run_async_local(client.release_control(sn))
+    assert not client.tier_expired("release:{}".format(sn), 10)
+
+    # Read-only off: Predbat writes its table again
+    client.local_schedule[sn] = _schedule()
+    _recording_dispatch(client, enable=1)
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+
+    # Read-only back on: released at once, not after the old back-off
+    client.last_write_time[sn] = 0
+    calls = _recording_dispatch(client, enable=1)
+    assert run_async_local(client.release_control(sn))
+    assert calls == [(sn, GROWATT_SET_TIME_SLOTS, [dict(GROWATT_UNUSED_SLOT) for _ in range(16)])]
+    assert client.control_claimed == set()
+
+
 def test_growatt_export_limit_read_after_automatic_config_is_bound_then():
     """An export limit first read after automatic configuration is bound on a later run."""
     client, sn = _export_limit_client({"percentage": 0, "exportLimitEnabled": 1})
@@ -1548,6 +1608,8 @@ def run_growatt_tests(my_predbat):
         ("partial_export_limit", test_growatt_partial_export_limit_scales_nominal_power),
         ("export_limit_not_bound", test_growatt_disabled_or_unknown_export_limit_is_not_bound),
         ("export_limit_late_bind", test_growatt_export_limit_read_after_automatic_config_is_bound_then),
+        ("export_limit_failed_reread", test_growatt_failed_export_limit_read_after_a_good_one_is_retried_sooner),
+        ("reclaim_resets_release_backoff", test_growatt_reclaimed_control_releases_without_waiting_out_an_old_back_off),
         ("zero_capacity_soc_max", test_growatt_zero_capacity_leaves_soc_max_unset),
         ("cli_merge_args", test_growatt_cli_merge_args),
         ("cli_single_cycle", test_growatt_cli_single_cycle),

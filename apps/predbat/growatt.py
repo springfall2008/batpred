@@ -173,6 +173,9 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         # The inverter's own export limit as last read, (enabled, percentage); a serial absent from
         # it has not been read yet, which is not the same as having no limit
         self.export_limit_setting = {}
+        # Serials whose last export limit read failed, so the next read is due sooner even when a
+        # setting from an earlier read is still known
+        self.export_limit_read_failed = set()
         # Whether automatic configuration has run, so an export limit first read after it is bound then
         self._automatic_configured = False
         self._export_limit_bound = False
@@ -439,19 +442,25 @@ class GrowattAPI(ComponentBase, OAuthMixin):
     async def refresh_export_limit(self, sn):
         """Read the inverter's own export limit (never written) and log it when it changes.
 
-        Shares the dispatch pacing, so it waits for the next run when a write has just gone out.
-        A failed read leaves the last known setting in place and is retried sooner.
+        Shares the dispatch pacing, so it waits for the next run when a write has just gone out,
+        and retries a busy device as the slot reads do. A failed read - before or after the first
+        successful one - leaves the last known setting in place and is retried after
+        GROWATT_TTL_EXPORT_LIMIT_RETRY minutes rather than hours.
         """
         async with self._write_lock:
             if self._pacing_wait(sn) > 0:
                 return False
-            ok, data = await self._paced(sn, lambda: self.read_dispatch(sn, GROWATT_SET_EXPORT_LIMIT))
+            ok, data = await self.read_dispatch_retry(sn, GROWATT_SET_EXPORT_LIMIT)
         self.mark_refreshed("export_limit:{}".format(sn))
         setting = parse_export_limit(data) if ok else None
         if setting is None:
+            self.export_limit_read_failed.add(sn)
             if ok:
                 self.log("Warn: Growatt {} export limit read-back was not understood: {}".format(sn, json.dumps(self.redact(data), default=str)[:300]))
+            else:
+                self.log("Warn: Growatt {} export limit read failed ({}), retrying in {} minutes".format(sn, self.last_api_error, GROWATT_TTL_EXPORT_LIMIT_RETRY))
             return False
+        self.export_limit_read_failed.discard(sn)
         previous = self.export_limit_setting.get(sn)
         self.export_limit_setting[sn] = setting
         if setting != previous:
@@ -466,7 +475,9 @@ class GrowattAPI(ComponentBase, OAuthMixin):
         return True
 
     def _export_limit_due(self, sn):
-        ttl = GROWATT_TTL_EXPORT_LIMIT if sn in self.export_limit_setting else GROWATT_TTL_EXPORT_LIMIT_RETRY
+        """True when the export limit should be read again: hours after a good read, minutes after a failed one."""
+        known = sn in self.export_limit_setting and sn not in self.export_limit_read_failed
+        ttl = GROWATT_TTL_EXPORT_LIMIT if known else GROWATT_TTL_EXPORT_LIMIT_RETRY
         return self.tier_expired("export_limit:{}".format(sn), ttl)
 
     def _bind_export_limit(self, again=False):
@@ -964,6 +975,9 @@ class GrowattAPI(ComponentBase, OAuthMixin):
                 self.applied_slots[sn] = list(slots)
                 self.unverified_slots.pop(sn, None)
                 self._clear_write_failure(sn)
+                # Predbat's table is live again, so an earlier failed release's back-off no longer
+                # applies: the next read-only run must release straight away
+                self._tier_refreshed.pop("release:{}".format(sn), None)
                 self.log("Info: Growatt wrote {} UTC charge/discharge slot(s) for {}, confirmed by read-back".format(len(slots), sn))
             else:
                 # What the device holds is now unknown, so the known table is dropped

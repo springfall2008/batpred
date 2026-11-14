@@ -279,18 +279,29 @@ def parse_dispatch_slots(data, _depth=0):
     return None
 
 
-def parse_export_limit(data):
+def parse_export_limit(data, _depth=0):
     """Read readDeviceDispatch's export_limit answer as (enabled, percentage), or None when it is not understood.
 
-    A live SPH answered {"percentage": 0, "exportLimitEnabled": 1}. The answer is also accepted
-    encoded as a JSON string, as parse_dispatch_slots() allows for the slot table.
+    A live SPH answered with the bare {"percentage": 0, "exportLimitEnabled": 1}. As for the slot
+    table (see parse_dispatch_slots), Growatt does not document the envelope, so the answer is
+    also accepted encoded as a JSON string or nested in a dict under "value" or any other key.
     """
+    if _depth > 3:
+        return None
     if isinstance(data, str):
         try:
             data = json.loads(data)
         except ValueError:
             return None
-    if not isinstance(data, dict) or "exportLimitEnabled" not in data or "percentage" not in data:
+    if not isinstance(data, dict):
+        return None
+    if "exportLimitEnabled" not in data or "percentage" not in data:
+        keys = ["value"] + [key for key in data if key != "value"]
+        for key in keys:
+            if key in data:
+                found = parse_export_limit(data[key], _depth + 1)
+                if found is not None:
+                    return found
         return None
     try:
         enabled = int(data["exportLimitEnabled"]) == 1
