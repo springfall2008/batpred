@@ -8,8 +8,13 @@
 Components report inverters, chargers, cars, meters, forecast providers and flexibility
 programmes as plain dicts during their first successful run. The coordinator validates,
 assembles and redacts them into a catalogue published in the debug YAML dump, so real user
-topologies can be read. Nothing here allocates anything or writes to self.args - see
-docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md.
+topologies can be read - see docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md.
+
+With the apps.yaml switch discovery_automatic on, the coordinator also configures the inverters of
+components that opt in (allow_automatic()): configure() builds per-slot bindings from their reports and
+replays them into args. bindings.py makes every decision about slots and values; this module holds the
+state, the triggers and the orchestration. With the switch off nothing here writes to args - see
+docs/superpowers/specs/2026-11-14-discovery-automatic-inverter-config-design.md.
 
 Safety comes from typed containers rather than from enumerating every field: a record is a
 few structural fields plus containers that each declare what they accept and what happens
@@ -17,14 +22,25 @@ to them when shared. A container taking only numbers cannot leak a name or a cre
 however the catalogue grows, so components add facts freely by choosing a container.
 """
 
+import copy
 import re
 import threading
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
+from bindings import BINDING_SETTINGS, COMPACT_SETTINGS, SUMMED_SETTINGS, build_bindings, replay_bindings, slot_map, slot_value
 from utils import is_secret_key
 
 SCHEMA_VERSION = 2
+
+# The strings get_arg() reads as True for a boolean setting (userinterface.py)
+TRUE_STRINGS = ("on", "true", "yes", "enabled", "enable", "connected")
+
+# Settings indexed by slot, so a whole-value write to one can be traced to the slots whose entry changed
+SLOT_INDEXED_SETTINGS = (BINDING_SETTINGS - set(COMPACT_SETTINGS)) | {"inverter_type"}
+
+# Marks a setting that was absent from args before a pass wrote it, so a failed pass can delete it again
+_ABSENT = object()
 
 MAX_STRING = 64
 VOCAB_RE = re.compile(r"^[a-z0-9_]{1,32}$")
@@ -281,6 +297,12 @@ class Coordinator:
 
     Thread-safe: components report from their own threads while assembly runs on the main
     thread at startup.
+
+    Two locks, always taken in this order and never the other way round: configure_lock (an RLock,
+    held for a whole configure() pass - build, replay and check) and then lock (held only briefly, to
+    read or replace the stored reports and opt-ins). report() and allow_automatic() release lock before
+    they call configure(), so a component thread reporting while another thread is part way through a
+    pass waits for that pass to finish and then runs its own.
     """
 
     def __init__(self, base):
@@ -288,6 +310,16 @@ class Coordinator:
         self.base = base
         self.log = base.log
         self.lock = threading.Lock()
+        self.configure_lock = threading.RLock()
+        # Automatic configuration: component name -> its allow_automatic() options, the last bindings
+        # built (None before the first pass) and their device_id -> slot map
+        self.automatic = {}
+        self.bindings = None
+        self.slot_map = {}
+        # The live SUMMED_SETTINGS values on the first pass, after auto_config() resolved their re:
+        # patterns and before anything was replayed - stands in for the snapshot's raw entries (see configure())
+        self.summed_baseline = None
+        self.warned = set()
         self.reports = {}
         # UTC ISO-8601 timestamp of the last report(), by component name - surfaced as
         # "reported_at" for a status "ok" component in _component_status(). Kept apart from
@@ -304,10 +336,207 @@ class Coordinator:
         """Validate and store one component's discovery report, replacing any previous one."""
         cleaned = validate_report(report, component_name, self.log)
         with self.lock:
+            changed = self.reports.get(component_name) != cleaned
             self.reports[component_name] = cleaned
             self.reported_at[component_name] = datetime.now(timezone.utc).isoformat()
+            opted_in = component_name in self.automatic
         counts = ", ".join("{} {}".format(len(cleaned.get(section, [])), section) for section in SECTION_SPEC if cleaned.get(section))
         self.log("Coordinator: {} reported {}".format(component_name, counts or "nothing"))
+        # Outside lock: configure() takes configure_lock first and lock only briefly inside it
+        if opted_in and changed:
+            self.configure()
+
+    def _automatic_enabled(self):
+        """Whether the apps.yaml switch discovery_automatic is on. False on a base without get_arg (the CLI harnesses)."""
+        get_arg = getattr(self.base, "get_arg", None)
+        if not callable(get_arg):
+            return False
+        try:
+            value = get_arg("discovery_automatic", False, indirect=False)
+        except Exception:
+            return False
+        if isinstance(value, str):
+            return value.strip().lower() in TRUE_STRINGS
+        return value is True
+
+    def allow_automatic(self, component_name, skip_settings=(), keep_user_settings=(), include_pv_only=False):
+        """Opt a component in to automatic configuration by the coordinator; returns whether the coordinator will configure it.
+
+        False, recording nothing, while discovery_automatic is off - the component then configures itself as
+        before. Otherwise the options are stored under the component's name and a pass runs at once.
+        skip_settings are left exactly as args hold them; keep_user_settings yield to an apps.yaml value at the
+        slot; include_pv_only lets records with no inverter_type contribute pv_power and pv_today.
+        """
+        if not self._automatic_enabled():
+            return False
+        options = {"skip_settings": frozenset(skip_settings or ()), "keep_user_settings": frozenset(keep_user_settings or ()), "include_pv_only": bool(include_pv_only)}
+        with self.lock:
+            self.automatic[component_name] = options
+        self.configure()
+        return True
+
+    def configure(self):
+        """One automatic configuration pass: build the bindings, replay what differs into args, then check. Never raises.
+
+        A no-op while discovery_automatic is off, or on a base without the apps.yaml snapshot, args or set_arg.
+        Runs on whichever thread triggered it, under configure_lock for the whole pass. A pass with nothing new
+        writes nothing and logs nothing.
+
+        bindings.py reads a manual inverter's SUMMED_SETTINGS entries from the snapshot it is given, but
+        args_from_apps_yaml is taken before Predbat resolves re: patterns. So the first pass keeps a copy of those
+        settings' live values (resolved by then, nothing yet replayed) and every pass hands bindings.py the snapshot
+        with that copy in place of its own summed entries.
+
+        A failure is logged as a warning and the writes the pass had already made are undone, so args are as they
+        were before it; the bindings stay as the last good pass left them.
+        """
+        if not self._automatic_enabled():
+            return
+        with self.configure_lock:
+            before = {}
+            try:
+                self._configure_pass(before)
+            except Exception as e:
+                self.log("Warn: Coordinator: automatic configuration failed: {}".format(e))
+                self._undo(before)
+
+    def _configure_pass(self, before):
+        """The body of configure(): build, replay, then log and check what changed. `before` collects each written setting's prior value."""
+        base = self.base
+        snapshot = getattr(base, "args_from_apps_yaml", None)
+        args = getattr(base, "args", None)
+        if not isinstance(snapshot, dict) or not isinstance(args, dict) or not callable(getattr(base, "set_arg", None)):
+            return
+        if self.summed_baseline is None:
+            self.summed_baseline = {setting: copy.deepcopy(args[setting]) for setting in SUMMED_SETTINGS if setting in args}
+        apps_yaml = {key: value for key, value in snapshot.items() if key not in SUMMED_SETTINGS}
+        apps_yaml.update(copy.deepcopy(self.summed_baseline))
+
+        with self.lock:
+            automatic = dict(self.automatic)
+            reports = dict(self.reports)
+        sources = [dict(automatic[name], name=name, records=list(reports.get(name, {}).get("inverters", []))) for name in sorted(automatic)]
+
+        bindings, warnings = build_bindings(apps_yaml, args, sources, self.bindings)
+        for warning in warnings:
+            self._warn_once(warning)
+        written = replay_bindings(bindings, apps_yaml, args, self._recording_set_arg(before))
+        changed_slots = self._changed_slots(written, before, bindings)
+        self.bindings = bindings
+        self.slot_map = slot_map(bindings)
+        # Committed: from here on a failure leaves this pass's writes in place, matching the bindings just stored
+        before.clear()
+        if not written:
+            return
+
+        self._warn_unconverted(reports, automatic)
+        for index in sorted(changed_slots):
+            entry = bindings["inverters"][index]
+            self.log("Coordinator: inverter slot {} configured from {} ({})".format(index, entry["source"], entry["device_id"]))
+        self._check(written, bindings, sources)
+
+    def _warn_once(self, text):
+        """Log a warning the first time its text is seen in this coordinator's life; passes repeat them while the situation lasts."""
+        if text not in self.warned:
+            self.warned.add(text)
+            self.log("Warn: Coordinator: " + text)
+
+    def _recording_set_arg(self, before):
+        """base.set_arg, recording each setting's value before this pass first writes it into `before`."""
+        args = self.base.args
+        set_arg = self.base.set_arg
+
+        def record(arg, value, index=None):
+            """Note arg's prior value once, then write through to base.set_arg."""
+            if arg not in before:
+                before[arg] = copy.deepcopy(args[arg]) if arg in args else _ABSENT
+            if index is None:
+                set_arg(arg, value)
+            else:
+                set_arg(arg, value, index=index)
+
+        return record
+
+    def _undo(self, before):
+        """Put back the args a failed pass wrote, directly rather than through set_arg, which may be what failed."""
+        try:
+            for arg, value in before.items():
+                if value is _ABSENT:
+                    self.base.args.pop(arg, None)
+                else:
+                    self.base.args[arg] = value
+            # What set_arg itself would have done after changing args (userinterface.py)
+            invalidate = getattr(self.base, "_invalidate_log_secret_pattern", None)
+            if before and callable(invalidate):
+                invalidate()
+        except Exception as e:
+            self.log("Warn: Coordinator: could not undo a failed automatic configuration pass: {}".format(e))
+
+    def _changed_slots(self, written, before, bindings):
+        """The discovered slots this pass wrote: an indexed write's slot, and for a whole-value write to a slot-indexed setting each slot whose entry changed.
+
+        A compact summed list (load_today and the like) leaves unbound slots out, so its index is not a slot
+        and its writes name no slot here.
+        """
+        entries = bindings.get("inverters", [])
+        slots = set()
+        for setting, index in written:
+            if setting in COMPACT_SETTINGS:
+                continue
+            if index is not None:
+                candidates = [index]
+            elif setting in SLOT_INDEXED_SETTINGS:
+                old = before.get(setting)
+                old = None if old is _ABSENT else old
+                new = self.base.args.get(setting)
+                candidates = [slot for slot in range(len(entries)) if slot_value(old, slot) != slot_value(new, slot)]
+            else:
+                candidates = []
+            slots.update(slot for slot in candidates if slot < len(entries) and entries[slot].get("origin") == "discovered")
+        return slots
+
+    def _warn_unconverted(self, reports, automatic):
+        """Warn about a component that configures inverters itself (automatic, with a driven inverter) alongside the opted-in ones."""
+        if not automatic:
+            return
+        opted_in = ", ".join(sorted(automatic))
+        for name in sorted(reports):
+            report = reports[name]
+            if name in automatic or not report.get("automatic"):
+                continue
+            if any(isinstance(record.get("inverter_type"), str) and record["inverter_type"].strip() for record in report.get("inverters", [])):
+                self._warn_once("{} configures inverters itself and is not yet handled by discovery - running it alongside {} is not supported".format(name, opted_in))
+
+    def _check(self, written, bindings, sources):
+        """Call check_automatic_config(slots) on each opted-in component a write was attributed to, if it is running and defines one.
+
+        A write at index i is attributed to the source of slot i. A whole-value write, or one to a compact summed
+        list (whose index is not a slot), is attributed to every opted-in source. slots is the slot of each of the
+        component's records with an inverter_type, in report order, None for one that got no slot. A checker that
+        raises is logged and the pass stands.
+        """
+        entries = bindings.get("inverters", [])
+        names = set()
+        for setting, index in written:
+            if index is None or setting in COMPACT_SETTINGS:
+                names.update(source["name"] for source in sources)
+            elif index < len(entries) and entries[index].get("source"):
+                names.add(entries[index]["source"])
+        get_component = getattr(getattr(self.base, "components", None), "get_component", None)
+        if not callable(get_component):
+            return
+        for source in sources:
+            if source["name"] not in names:
+                continue
+            component = get_component(source["name"])
+            checker = getattr(component, "check_automatic_config", None) if component is not None else None
+            if not callable(checker):
+                continue
+            slots = [self.slot_map.get(record["device_id"]) for record in source["records"] if isinstance(record.get("inverter_type"), str) and record["inverter_type"].strip()]
+            try:
+                checker(slots)
+            except Exception as e:
+                self.log("Warn: Coordinator: {} automatic configuration check failed: {}".format(source["name"], e))
 
     def assemble(self):
         """Merge every report into one catalogue, with a status per component and the observation layer.
@@ -322,6 +551,9 @@ class Coordinator:
         with self.lock:
             reports = {name: report for name, report in self.reports.items()}
             reported_at = dict(self.reported_at)
+        # Read once: configure() replaces both attributes rather than changing them in place
+        bindings = self.bindings
+        slots = self.slot_map
         catalogue = {"schema_version": SCHEMA_VERSION, "generated": datetime.now(timezone.utc).isoformat(), "components": self._component_status(reports, reported_at)}
         for section in SECTION_SPEC:
             merged = []
@@ -329,9 +561,13 @@ class Coordinator:
                 for record in reports[name].get(section, []):
                     entry = {"source": name}
                     entry.update(record)
+                    if section == "inverters" and entry.get("device_id") in slots:
+                        entry["slot"] = slots[entry["device_id"]]
                     merged.append(entry)
             catalogue[section] = merged
         catalogue["observations"] = {"conflicts": self._conflicts(catalogue), "resulting_config": self._resulting_config()}
+        if bindings is not None:
+            catalogue["observations"]["bindings"] = copy.deepcopy(bindings)
         self.assembled = catalogue
         return catalogue
 

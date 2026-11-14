@@ -370,6 +370,7 @@ from tests.test_coordinator import test_coordinator_all
 from tests.test_bindings import test_bindings_all
 from tests.test_discovery_contract import run_discovery_contract_tests
 from tests.test_discovery_catalogue import test_discovery_catalogue_all
+from tests.test_discovery_automatic import test_discovery_automatic_all
 from tests.test_mock_base import test_mock_base_all
 from tests.test_solis import run_solis_tests
 from tests.test_load_ml import test_load_ml
@@ -929,6 +930,7 @@ def main():
         ("bindings", test_bindings_all, "Discovery bindings: manual slots, allocation and replay", False),
         ("discovery_contract", run_discovery_contract_tests, "Discovery reporter contract checks", False),
         ("discovery_catalogue", test_discovery_catalogue_all, "End-to-end discovery catalogue assembly and the observe-only invariant", False),
+        ("discovery_automatic", test_discovery_automatic_all, "Discovery automatic inverter configuration: triggers and GE Cloud acceptance", False),
         # Shared MockBase tests
         ("mock_base", test_mock_base_all, "Shared CLI-harness MockBase tests", False),
         # Solis Cloud API unit tests
