@@ -284,12 +284,13 @@ SOLIS_AC_COUPLED_MACHINE_PATTERN = re.compile(r"^(?:S\d+-EA\dP|RAI-)", re.IGNORE
 
 def solis_machine_hybrid(machine):
     """The discovery hybrid value an inverterDetail machine name states: True for a hybrid range, False for an AC-coupled one, else None."""
-    machine = str(machine or "")
+    machine = str(machine or "").strip()
     if SOLIS_HYBRID_MACHINE_PATTERN.match(machine):
         return True
     if SOLIS_AC_COUPLED_MACHINE_PATTERN.match(machine):
         return False
     return None
+
 
 def parse_cid_int(value, default=None):
     """Convert a CID register value to an int, returning default when it is missing or not numeric.

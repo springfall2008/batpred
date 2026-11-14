@@ -10026,7 +10026,7 @@ def _test_run_enables_reset_after_24h(my_predbat):
 # What GECloudData logs, once per EMS episode, while GE Cloud's records say the site is behind an EMS
 CLOUD_DATA_EMS_SKIP = "GECloud: GE Cloud Data is not used behind a GivEnergy EMS - skipping the history download"
 # What GECloudData logs when it has no serial from apps.yaml and GE Cloud has reported nothing
-CLOUD_DATA_NO_SERIAL = "Error: GECloudDirect has been enabled in apps.yaml but ge_cloud_serial is not set to your serial number"
+CLOUD_DATA_NO_SERIAL = "Error: GECloud: GE Cloud Data has no serial to download history for - set ge_cloud_serial, or enable GivEnergy Cloud Direct so it can report one"
 
 
 class _CloudDataBase:

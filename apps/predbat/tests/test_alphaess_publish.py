@@ -249,7 +249,7 @@ def test_alphaess_record_reports_hybrid_only_on_agreeing_evidence():
     partial.device_values[decided]["ppv_detail_all_null"] = False
     partial.device_values[pending]["ppv_detail_all_null"] = True
     partial.device_detail[pending] = dict(partial.device_detail[pending], popv=9.0)
-    run_async_local(partial.apply_hybrid_verdict())
+    run_async_local(partial.log_undecided_hybrid())
     undecided_lines = [message for message in partial.log_messages if "could not yet tell hybrid" in message]
     if len(undecided_lines) != 1 or pending not in undecided_lines[0] or decided in undecided_lines[0] or "by hand" in undecided_lines[0]:
         print(f"ERROR: a partly decided fleet should name only {pending}, without by-hand advice: {partial.log_messages}")

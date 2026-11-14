@@ -1648,16 +1648,19 @@ class Fetch:
                     self.load_minutes_source = "load_forecast"
                     self.load_minutes_age = 0
                     self.load_last_period = 0
-                elif self.get_arg("load_forecast", None, indirect=False):
-                    # A forecast sensor is configured but gave nothing: it is unavailable. Load ML is not a
-                    # source here, as it trains on load_today and so cannot forecast without it
-                    self.log("Error: No load data: load_today is not set and the load forecast returned no data. Skipping this cycle")
-                    self.record_status(message="Error: No load data - load_today not set and the load forecast returned no data", had_errors=True)
-                    raise LoadSourceMissing("load_today is not set and the load forecast returned no data")
                 else:
-                    self.log("Error: No load data: load_today or load_forecast is not set. Set one in apps.yaml, or if your inverter component configures it automatically, wait for it to start. Skipping this cycle")
-                    self.record_status(message="Error: No load data - load_today not set (in apps.yaml, or by a component's automatic configuration)", had_errors=True)
-                    raise LoadSourceMissing("load_today or load_forecast is not set")
+                    # ge_cloud_data on but GE Cloud Data declining behind a GivEnergy EMS (use_ge_cloud_data()): say so, as it is why load_today is needed
+                    ge_cloud_data = self.components.get_component("gecloud_data") if self.components and self.get_arg("ge_cloud_data", False) else None
+                    ems_hint = ". GE Cloud Data is not used behind a GivEnergy EMS - set load_today" if ge_cloud_data and not ge_cloud_data.active() else ""
+                    if self.get_arg("load_forecast", None, indirect=False):
+                        # A forecast sensor is configured but gave nothing: it is unavailable. Load ML is not a
+                        # source here, as it trains on load_today and so cannot forecast without it
+                        self.log("Error: No load data: load_today is not set and the load forecast returned no data{}. Skipping this cycle".format(ems_hint))
+                        self.record_status(message="Error: No load data - load_today not set and the load forecast returned no data{}".format(ems_hint), had_errors=True)
+                        raise LoadSourceMissing("load_today is not set and the load forecast returned no data{}".format(ems_hint))
+                    self.log("Error: No load data: load_today or load_forecast is not set{}. Set one in apps.yaml, or if your inverter component configures it automatically, wait for it to start. Skipping this cycle".format(ems_hint))
+                    self.record_status(message="Error: No load data - load_today not set (in apps.yaml, or by a component's automatic configuration){}".format(ems_hint), had_errors=True)
+                    raise LoadSourceMissing("load_today or load_forecast is not set{}".format(ems_hint))
 
             # Load import today data
             if "import_today" in self.args:

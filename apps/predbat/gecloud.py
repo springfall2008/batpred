@@ -4212,7 +4212,7 @@ class GECloudData(ComponentBase):
                     await self.download_ge_data(now_utc)
                 elif seconds >= 10 * 60 and not self.serial_missing_logged:
                     # No serial from the user's ge_cloud_serial or GE Cloud's records after the first 10 minutes; until then wait quietly for one
-                    self.log("Error: GECloudDirect has been enabled in apps.yaml but ge_cloud_serial is not set to your serial number")
+                    self.log("Error: GECloud: GE Cloud Data has no serial to download history for - set ge_cloud_serial, or enable GivEnergy Cloud Direct so it can report one")
                     self.serial_missing_logged = True
 
         self.update_success_timestamp()
@@ -4354,7 +4354,7 @@ class GECloudData(ComponentBase):
         gekey = self.ge_cloud_key
 
         if not geserial:
-            self.log("Error: GECloudDirect has been enabled in apps.yaml but ge_cloud_serial is not set to your serial number")
+            # run() only downloads once resolve_serial() has given a serial, and reports a missing one itself
             return False
         if not gekey:
             self.log("Error: GECloudDirect has been enabled in apps.yaml but ge_cloud_key is not set to your API key")

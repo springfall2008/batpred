@@ -1131,7 +1131,7 @@ class SigenergyAPI(ComponentBase):
             return True
         return None
 
-    async def apply_hybrid_verdict(self):
+    async def log_undecided_hybrid(self):
         """Say when the hybrid-versus-AC-coupled verdict is still undecided for some system.
 
         Sigenergy no longer writes switch.predbat_inverter_hybrid: each record reports hybrid as
@@ -2805,7 +2805,7 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("discharge_rate", ["number.{}_sigenergy_{}_export_rate".format(self.prefix, s) for s in slugs])
         self.set_arg("reserve", ["number.{}_sigenergy_{}_reserve".format(self.prefix, s) for s in slugs])
 
-        await self.apply_hybrid_verdict()
+        await self.log_undecided_hybrid()
 
         self.log("SigenergyAPI: automatic_config complete")
 

@@ -757,7 +757,7 @@ class AlphaESSAPI(ComponentBase):
         """Return True (AC-coupled), False (hybrid) or None (undecided) for one serial.
 
         Two signals must AGREE before an AC-coupled verdict is returned, because the errors
-        are not symmetric - see apply_hybrid_verdict. This reads the current telemetry only;
+        are not symmetric - see log_undecided_hybrid. This reads the current telemetry only;
         the discovery record uses hybrid_verdict(), which holds the last decided answer.
         """
         detail = self.device_detail.get(sn, {})
@@ -794,7 +794,7 @@ class AlphaESSAPI(ComponentBase):
         held = self._hybrid_verdict.get(sn)
         return held if isinstance(held, bool) else None
 
-    async def apply_hybrid_verdict(self):
+    async def log_undecided_hybrid(self):
         """Log which systems are still undecided between hybrid and AC coupling.
 
         AlphaESS no longer writes switch.predbat_inverter_hybrid: each record reports hybrid
@@ -903,7 +903,7 @@ class AlphaESSAPI(ComponentBase):
         self.set_arg_auto("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
         self.set_arg_auto("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
-        await self.apply_hybrid_verdict()
+        await self.log_undecided_hybrid()
 
     def _discovery_entities(self, sn):
         """The settings automatic_config() binds for one system, as discovery entity descriptors.

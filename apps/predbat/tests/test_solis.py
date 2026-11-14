@@ -1376,6 +1376,8 @@ def test_solis_catalogue_reports_hybrid_from_the_machine_name():
         ("EA AC-coupled storage", "S6-EA1P5K-L", False),
         ("EA in lower case", "s6-ea1p5k-l", False),
         ("RAI AC-coupled retrofit", "RAI-3K-48ES-5G", False),
+        ("EH padded with whitespace", "  S6-EH1P5K-L ", True),
+        ("RAI padded with whitespace", " RAI-3K-48ES-5G\t", False),
         ("grid-tied GR", "S6-GR1P6K", "absent"),
         ("EH only later in the name", "S6-GR1P-EH1P", "absent"),
         ("EA only later in the name", "S6-GR1P-EA1P", "absent"),

@@ -13,6 +13,7 @@ Data component exists and is active(); behind a GivEnergy EMS it declines, and t
 as if ge_cloud_data were off.
 """
 
+from fetch import LoadSourceMissing
 from tests.test_ge_cloud import _cloud_data, _direct_devices
 
 
@@ -35,10 +36,13 @@ class _Components:
 EMS_DEVICES = {"ems": "ems001", "gateway": None, "battery": ["battery001", "battery002"], "pv": [], "battery_meters": {}}
 
 
-def _load_source(my_predbat, ge_cloud_data, args):
+def _load_source(my_predbat, ge_cloud_data, args, outcome=None):
     """
     Run the real fetch_sensor_data() with the given args and GE Cloud Data component, and return (source, logs):
     source is "ge_cloud" or "load_today", whichever the fetch chose, stopped there. Restores the instance and its args.
+
+    With outcome (a dict) the recorded status messages are collected in outcome["statuses"] and a LoadSourceMissing
+    is caught into outcome["raised"] rather than raised.
     """
     saved_state = dict(my_predbat.__dict__)
     saved_args = dict(my_predbat.args)
@@ -66,10 +70,18 @@ def _load_source(my_predbat, ge_cloud_data, args):
 
         my_predbat.download_ge_data = download
         my_predbat.fetch_load_today = load_today
+        if outcome is not None:
+            outcome["statuses"] = []
+            outcome["raised"] = None
+            my_predbat.record_status = lambda message, **k: outcome["statuses"].append(message)
         try:
             my_predbat.fetch_sensor_data(save=False)
         except _LoadSourceChosen:
             pass
+        except LoadSourceMissing as e:
+            if outcome is None:
+                raise
+            outcome["raised"] = e
     finally:
         my_predbat.args.clear()
         my_predbat.args.update(saved_args)
@@ -116,5 +128,30 @@ def test_fetch_ge_cloud_load_source(my_predbat):
     if source != "load_today":
         print("ERROR: ge_cloud_data off: expected the load_today path, got {}".format(source))
         failed = 1
+
+    # Behind an EMS with no load_today either: LoadSourceMissing, and the error says why GE Cloud Data is not the source
+    hint = "GE Cloud Data is not used behind a GivEnergy EMS - set load_today"
+    outcome = {}
+    source, logs = _load_source(my_predbat, _cloud_data(EMS_DEVICES), {"ge_cloud_data": True}, outcome=outcome)
+    if not isinstance(outcome["raised"], LoadSourceMissing) or hint not in str(outcome["raised"]):
+        print("ERROR: behind an EMS with no load_today: expected LoadSourceMissing naming the EMS, got {!r}".format(outcome["raised"]))
+        failed = 1
+    if not outcome["statuses"] or hint not in outcome["statuses"][-1]:
+        print("ERROR: behind an EMS with no load_today: status {} does not contain {!r}".format(outcome["statuses"], hint))
+        failed = 1
+    if not [line for line in logs if line.startswith("Error:") and hint in line]:
+        print("ERROR: behind an EMS with no load_today: no Error line naming the EMS: {}".format(logs))
+        failed = 1
+
+    # Not declining (ge_cloud_data off, or GE Cloud Data not running): the error says nothing about an EMS
+    for name, ge_cloud_data, args in (("ge_cloud_data off", _cloud_data(EMS_DEVICES), {"ge_cloud_data": False}), ("no GE Cloud Data component", None, {"ge_cloud_data": True})):
+        outcome = {}
+        source, logs = _load_source(my_predbat, ge_cloud_data, args, outcome=outcome)
+        if not isinstance(outcome["raised"], LoadSourceMissing):
+            print("ERROR: {}: expected LoadSourceMissing, got {!r}".format(name, outcome["raised"]))
+            failed = 1
+        if "EMS" in str(outcome["raised"]) or any("EMS" in status for status in outcome["statuses"]) or any("behind a GivEnergy EMS" in line for line in logs):
+            print("ERROR: {}: the error should not mention an EMS: {!r} {} {}".format(name, outcome["raised"], outcome["statuses"], logs))
+            failed = 1
 
     return failed

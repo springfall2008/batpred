@@ -3236,7 +3236,7 @@ def test_sigenergy_record_reports_hybrid_from_the_ac_coupled_verdict(my_predbat)
     site only skips the PV->battery conversion loss. So hybrid False needs clear evidence of AC
     coupling (third-party PV with no native PV), native PV is a hybrid, and anything else says
     nothing. The coordinator, not Sigenergy, sets inverter_hybrid from the records, so neither
-    apply_hybrid_verdict() nor automatic_config() writes the switch.
+    log_undecided_hybrid() nor automatic_config() writes the switch.
     """
     failed = False
     entity = "switch.predbat_inverter_hybrid"
@@ -3266,7 +3266,7 @@ def test_sigenergy_record_reports_hybrid_from_the_ac_coupled_verdict(my_predbat)
                 print("ERROR: {}: {} functions should stay {}, got {}".format(label, sid, want, functions[sid]))
                 failed = True
         api.log_messages = []
-        run_async(api.apply_hybrid_verdict())
+        run_async(api.log_undecided_hybrid())
         undecided_logged = any("could not yet tell hybrid from AC coupling" in message for message in api.log_messages)
         if undecided_logged != ("absent" in expected.values()):
             print("ERROR: {}: the undecided log should appear only while a system is undecided, got {}".format(label, api.log_messages))
