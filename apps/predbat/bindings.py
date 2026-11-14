@@ -157,9 +157,8 @@ def slot_serials(slot: int, apps_yaml: dict, args: dict, serials: list[str]) -> 
 
     The strings are every per-inverter setting's entry at this slot in `args` - build_bindings passes
     the args it scans, which the coordinator gives as its first-pass baseline (re: patterns resolved,
-    nothing yet replayed) - plus ge_cloud_serial for slot 0 as the apps.yaml snapshot has it, never the
-    live value, which GE Cloud sets to its own first battery. Serials shorter than MIN_SERIAL_LENGTH
-    are ignored.
+    nothing yet replayed) - plus ge_cloud_serial for slot 0, and only its apps.yaml snapshot value is
+    scanned. Serials shorter than MIN_SERIAL_LENGTH are ignored.
 
     SUMMED_SETTINGS are not scanned: those lists are not indexed by slot (the compact ones leave unbound
     slots out, and all of them can carry the user's extras), so their entry at this index may belong to

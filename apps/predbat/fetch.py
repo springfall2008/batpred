@@ -1621,7 +1621,7 @@ class Fetch:
         self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc, load_ml_forecast)
 
         # Load previous load data
-        if self.get_arg("ge_cloud_data", False):
+        if self.use_ge_cloud_data():
             self.download_ge_data(self.now_utc)
 
             if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
@@ -2883,6 +2883,18 @@ class Fetch:
             },
         )
         return predicted_temp
+
+    def use_ge_cloud_data(self):
+        """
+        Whether load history comes from GE Cloud Data rather than the load_today path.
+
+        Only when ge_cloud_data is on and the GE Cloud Data component exists and is active(): behind a GivEnergy EMS it
+        declines, and Predbat then uses load_today exactly as if ge_cloud_data were off. ge_cloud_data itself is never changed.
+        """
+        if not self.get_arg("ge_cloud_data", False):
+            return False
+        ge_cloud_data = self.components.get_component("gecloud_data") if self.components else None
+        return bool(ge_cloud_data) and ge_cloud_data.active()
 
     def download_ge_data(self, now_utc):
         """

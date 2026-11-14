@@ -4181,6 +4181,9 @@ class GECloudData(ComponentBase):
                 if not self.ems_skip_logged:
                     self.log("GECloud: GE Cloud Data is not used behind a GivEnergy EMS - skipping the history download")
                     self.ems_skip_logged = True
+                    # A new episode: drop what was downloaded before the EMS, so stale history is never served
+                    self.mdata = []
+                    self.oldest_data_time = None
             else:
                 self.ems_skip_logged = False
                 serial = self.resolve_serial()
@@ -4191,8 +4194,8 @@ class GECloudData(ComponentBase):
                     self.serial_missing_logged = False
                     now_utc = self.now_utc_exact
                     await self.download_ge_data(now_utc)
-                elif seconds >= 10 * 60 and not self.serial_missing_logged and not self.discovery_inverter_records("gecloud"):
-                    # Neither the user's ge_cloud_serial nor any GE Cloud report after the first 10 minutes; until then wait quietly for one
+                elif seconds >= 10 * 60 and not self.serial_missing_logged:
+                    # No serial from the user's ge_cloud_serial or GE Cloud's records after the first 10 minutes; until then wait quietly for one
                     self.log("Error: GECloudDirect has been enabled in apps.yaml but ge_cloud_serial is not set to your serial number")
                     self.serial_missing_logged = True
 
@@ -4226,6 +4229,10 @@ class GECloudData(ComponentBase):
     def behind_ems(self):
         """Whether GE Cloud's discovery records say the site is behind a GivEnergy EMS (any record with composition "ems"); False when GE Cloud has not reported."""
         return any(record.get("composition") == "ems" for record in self.discovery_inverter_records("gecloud"))
+
+    def active(self):
+        """Whether GE Cloud Data serves load history: False while it declines behind a GivEnergy EMS, when Predbat uses the load_today path exactly as if ge_cloud_data were off (Fetch.use_ge_cloud_data())."""
+        return not self.behind_ems()
 
     def clean_ge_url_cache(self, now_utc):
         """

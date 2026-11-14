@@ -10144,6 +10144,24 @@ def _test_cloud_data_serial_arrives_late(my_predbat):
     run_async(ge_data.run(600, False))
     assert downloads == ["battery002"], downloads
     assert CLOUD_DATA_NO_SERIAL not in ge_data.log_messages, ge_data.log_messages
+
+    # GE Cloud reports, but only a PV-only device, which gives no serial: the error is still logged, once
+    ge_data = _cloud_data({"ems": None, "gateway": None, "battery": [], "pv": ["pv001"], "battery_meters": {}})
+    downloads = _record_downloads(ge_data)
+    assert ge_data.discovery_inverter_records("gecloud") and ge_data.resolve_serial() is None
+    for seconds in (0, 600, 1200):
+        run_async(ge_data.run(seconds, seconds == 0))
+    assert downloads == [], downloads
+    assert ge_data.log_messages.count(CLOUD_DATA_NO_SERIAL) == 1, ge_data.log_messages
+
+    # Found, then lost: the error is re-armed
+    _report_gecloud(ge_data, _direct_devices("battery003"))
+    run_async(ge_data.run(1800, False))
+    _report_gecloud(ge_data, {"ems": None, "gateway": None, "battery": [], "pv": ["pv001"], "battery_meters": {}})
+    run_async(ge_data.run(2400, False))
+    run_async(ge_data.run(3000, False))
+    assert downloads == ["battery003"], downloads
+    assert ge_data.log_messages.count(CLOUD_DATA_NO_SERIAL) == 2, ge_data.log_messages
     print("PASS: a serial that arrives late is picked up")
     return 0
 
@@ -10154,16 +10172,20 @@ def _test_cloud_data_ems_comes_and_goes(my_predbat):
     for config in ({"ge_cloud_data": True}, {}):
         ge_data = _cloud_data(ems, config=config)
         downloads = _record_downloads(ge_data)
-        assert ge_data.behind_ems() is True
+        assert ge_data.behind_ems() is True and ge_data.active() is False
+        # History downloaded before the EMS appeared is dropped when the episode begins, so it is never served
+        ge_data.mdata = [{"last_updated": "2024-12-17T10:00:00Z", "consumption": 1.5, "import": 0.5, "export": 0.0, "pv": 2.0}]
+        ge_data.oldest_data_time = datetime(2024, 12, 17, 10, 0, 0, tzinfo=timezone.utc)
 
         for seconds in (0, 600, 1200):
             assert run_async(ge_data.run(seconds, seconds == 0)) is True
         assert downloads == [], downloads
         assert ge_data.log_messages.count(CLOUD_DATA_EMS_SKIP) == 1, ge_data.log_messages
+        assert ge_data.get_data() == ([], None), ge_data.get_data()
 
         # The EMS leaves the account: downloads resume with the first battery
         _report_gecloud(ge_data, _direct_devices("battery001", "battery002"))
-        assert ge_data.behind_ems() is False
+        assert ge_data.behind_ems() is False and ge_data.active() is True
         run_async(ge_data.run(1800, False))
         assert downloads == ["battery001"], downloads
 
@@ -10176,7 +10198,7 @@ def _test_cloud_data_ems_comes_and_goes(my_predbat):
         assert ge_data.config_args == config, "ge_cloud_data is the user's, never written: {}".format(ge_data.config_args)
 
     # No GE Cloud report is not an EMS
-    assert _cloud_data().behind_ems() is False
+    assert _cloud_data().behind_ems() is False and _cloud_data().active() is True
     print("PASS: GE Cloud Data declines behind an EMS and resumes when it goes")
     return 0
 
