@@ -986,6 +986,56 @@ def test_hybrid_scheduled_from_a_running_loop():
     return 0
 
 
+def test_hybrid_lost_value_keeps_last_known():
+    """A mixed fleet whose not-hybrid record loses its value on alternate reports: one write (off) and no flapping."""
+    base, coordinator, ha = _hybrid_setup(current=True)
+    for rai in (False, None, False, None, False, None):
+        coordinator.report("solis", _hybrid_report([("solis:A", True, "SolisCloud"), ("solis:B", rai, "SolisCloud")]))
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    assert base.args["inverter_hybrid"] is False
+    assert coordinator.hybrid_decision() == (False, ["solis:B"]), coordinator.hybrid_decision()
+    assert _hybrid_lines(base) == ["Coordinator: inverter_hybrid set off - solis:B reports it is not a hybrid inverter"], base.log_messages
+    print("PASS: hybrid lost value keeps last known")
+    return 0
+
+
+def test_hybrid_removed_device_forgotten():
+    """A device no longer in its source's report stops counting: with only the hybrid device left the switch goes on, and the removed one does not come back."""
+    base, coordinator, ha = _hybrid_setup(current=True)
+    coordinator.report("solis", _hybrid_report([("solis:A", True, "SolisCloud"), ("solis:B", False, "SolisCloud")]))
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    coordinator.report("solis", _hybrid_report([("solis:A", True, "SolisCloud")]))
+    assert ha.calls == [(HYBRID_ENTITY, False), (HYBRID_ENTITY, True)], ha.calls
+    assert coordinator.hybrid_decision() == (True, ["solis:A"]), coordinator.hybrid_decision()
+    # Back without a value: it was forgotten when it left, so it is unknown and the switch stays on
+    coordinator.report("solis", _hybrid_report([("solis:A", True, "SolisCloud"), ("solis:B", None, "SolisCloud")]))
+    assert ha.calls == [(HYBRID_ENTITY, False), (HYBRID_ENTITY, True)], ha.calls
+    assert coordinator.hybrid_decision() == (True, ["solis:A"]), coordinator.hybrid_decision()
+    # The same device_id under another source is a different device: one source's memory is not another's
+    coordinator.report("solis", _hybrid_report([("solis:A", True, "SolisCloud"), ("solis:B", False, "SolisCloud")]))
+    coordinator.report("solis", _hybrid_report([("solis:A", True, "SolisCloud")]))
+    coordinator.report("other", _hybrid_report([("solis:B", None, "SolisCloud")]))
+    assert coordinator.hybrid_decision() == (True, ["solis:A"]), coordinator.hybrid_decision()
+    print("PASS: hybrid removed device forgotten")
+    return 0
+
+
+def test_hybrid_never_known_stays_unknown():
+    """A device whose value was never known stays unknown beside one that is; a report without automatic still feeds nothing into the decision."""
+    base, coordinator, ha = _hybrid_setup(current=False)
+    for _ in range(3):
+        coordinator.report("solis", _hybrid_report([("solis:A", True, "SolisCloud"), ("solis:B", None, "SolisCloud")]))
+    assert ha.calls == [(HYBRID_ENTITY, True)], ha.calls
+    assert coordinator.hybrid_decision() == (True, ["solis:A"]), coordinator.hybrid_decision()
+    # A report with automatic false still decides nothing, with a remembered value or without
+    base, coordinator, ha = _hybrid_setup(current=True)
+    coordinator.report("solis", _hybrid_report([("solis:B", False, "SolisCloud")], automatic=False))
+    coordinator.report("solis", _hybrid_report([("solis:B", None, "SolisCloud")], automatic=False))
+    assert ha.calls == [] and coordinator.hybrid_decision() == (None, []), (ha.calls, coordinator.hybrid_decision())
+    print("PASS: hybrid never known stays unknown")
+    return 0
+
+
 def test_inverter_records_copy():
     """Coordinator.inverter_records() is a deep copy of one source's validated records; ComponentBase.discovery_inverter_records() wraps it, [] without a coordinator."""
     from component_base import ComponentBase
@@ -1633,6 +1683,9 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_hybrid_log_line()
     failures += test_hybrid_thin_base_inert()
     failures += test_hybrid_scheduled_from_a_running_loop()
+    failures += test_hybrid_lost_value_keeps_last_known()
+    failures += test_hybrid_removed_device_forgotten()
+    failures += test_hybrid_never_known_stays_unknown()
     failures += test_inverter_records_copy()
     # Acceptance: discovery against the old automatic configuration
     failures += test_accept_single()

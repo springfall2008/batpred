@@ -322,6 +322,24 @@ class Redactor:
         return EMAIL_RE.sub(EMAIL_PLACEHOLDER, text)
 
 
+def remembered_hybrid(report, previous):
+    """The hybrid memory for one source after it files report: device_id -> last bool, from previous (that source's memory before).
+
+    A record carrying a bool hybrid gives that value; a record without one keeps its device's previous value, if any;
+    a device that is not in this report is dropped, so a removed inverter no longer counts.
+    """
+    known = {}
+    for record in report.get("inverters", []):
+        device_id = record.get("device_id")
+        if not isinstance(device_id, str):
+            continue
+        if isinstance(record.get("hybrid"), bool):
+            known[device_id] = record["hybrid"]
+        elif isinstance(previous.get(device_id), bool):
+            known[device_id] = previous[device_id]
+    return known
+
+
 class Coordinator:
     """Collects component discovery reports and assembles them into one catalogue.
 
@@ -352,6 +370,9 @@ class Coordinator:
         self.warned = set()
         # The inverter_hybrid value apply_hybrid() last scheduled a write of, until the setting holds it (None: nothing pending)
         self.hybrid_pending = None
+        # The last bool each reported inverter record gave for hybrid, by component name then device_id: a record whose
+        # hybrid goes missing keeps its last value while its source still reports it (see hybrid_decision())
+        self.hybrid_known = {}
         self.reports = {}
         # UTC ISO-8601 timestamp of the last report(), by component name - surfaced as
         # "reported_at" for a status "ok" component in _component_status(). Kept apart from
@@ -370,6 +391,7 @@ class Coordinator:
         with self.lock:
             changed = self.reports.get(component_name) != cleaned
             self.reports[component_name] = cleaned
+            self.hybrid_known[component_name] = remembered_hybrid(cleaned, self.hybrid_known.get(component_name, {}))
             self.reported_at[component_name] = datetime.now(timezone.utc).isoformat()
             opted_in = component_name in self.automatic
         counts = ", ".join("{} {}".format(len(cleaned.get(section, [])), section) for section in SECTION_SPEC if cleaned.get(section))
@@ -442,21 +464,24 @@ class Coordinator:
 
         Only reports whose automatic is true count (a component the user has not asked to configure automatically
         does not change Predbat's settings), and only their driven records (with an inverter_type; PV-only records do
-        not count). Any record saying hybrid False -> (False, those device_ids); otherwise any saying True -> (True,
-        those device_ids); otherwise (None, []), which leaves the switch alone. Reports are read in component-name
-        order, records in report order.
+        not count). A record's value is its hybrid, or when that is missing the last bool the same device gave in an
+        earlier report from the same source (hybrid_known): a component that loses the value on one reply does not
+        flip the switch, while a device that has left its source's report is forgotten. Any record saying hybrid
+        False -> (False, those device_ids); otherwise any saying True -> (True, those device_ids); otherwise
+        (None, []), which leaves the switch alone. Reports are read in component-name order, records in report order.
         """
         with self.lock:
-            reports = [self.reports[name] for name in sorted(self.reports)]
+            reports = [(self.reports[name], dict(self.hybrid_known.get(name, {}))) for name in sorted(self.reports)]
         found = {False: [], True: []}
-        for report in reports:
+        for report, known in reports:
             if not report.get("automatic"):
                 continue
             for record in report.get("inverters", []):
                 if not (isinstance(record.get("inverter_type"), str) and record["inverter_type"].strip()):
                     continue
-                if isinstance(record.get("hybrid"), bool):
-                    found[record["hybrid"]].append(record["device_id"])
+                value = record.get("hybrid") if isinstance(record.get("hybrid"), bool) else known.get(record.get("device_id"))
+                if isinstance(value, bool):
+                    found[value].append(record["device_id"])
         for value in (False, True):
             if found[value]:
                 return value, found[value]
