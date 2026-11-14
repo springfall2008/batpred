@@ -64,6 +64,7 @@ def test_alphaess_cache_round_trip():
     client.device_config = {"AL70": {"charge": {"gridCharge": 1}}}
     client._periodic_ok = {"AL70": False}
     client._live_ok = {"AL70": False}
+    client._hybrid_verdict = {"AL70": False}
     client.control_active = {"AL70"}
     client._unbind_done = {"AL99"}
     client.applied_payload = {"AL70": {"charge": {"sysSn": "AL70", "gridCharge": 1}}}
@@ -112,6 +113,9 @@ def test_alphaess_cache_round_trip():
         failed = True
     if restored._live_ok.get("AL70") is not False:
         print(f"ERROR: live verdict not restored: {restored._live_ok}")
+        failed = True
+    if restored._hybrid_verdict != {"AL70": False}:
+        print(f"ERROR: held hybrid verdict not restored: {restored._hybrid_verdict}")
         failed = True
     if "AL70" not in restored.control_active:
         print(f"ERROR: control_active not restored: {restored.control_active}")

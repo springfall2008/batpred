@@ -1141,13 +1141,9 @@ class SigenergyAPI(ComponentBase):
         plan past inverter_limit, on for an AC-coupled site merely skips the PV->battery
         conversion loss - which is why AC coupling needs third-party PV with no native PV.
         """
-        system_ids = list(self.systems.keys())
-        if not system_ids:
-            return
-        verdicts = [self.detect_ac_coupled(sid) for sid in system_ids]
-        entity = "switch.{}_inverter_hybrid".format(self.prefix)
-        if any(verdict is None for verdict in verdicts):
-            self.log("Info: SigenergyAPI: could not determine hybrid versus AC coupling for system(s) {} yet; leaving {} at its current value".format(", ".join(system_ids), entity))
+        undecided = [str(sid) for sid in self.systems if self.detect_ac_coupled(sid) is None]
+        if undecided:
+            self.log("Info: SigenergyAPI: could not yet tell hybrid from AC coupling for system(s) {}, so their records do not say whether they are hybrid".format(", ".join(undecided)))
 
     async def fetch_daily_summary(self, system_id):
         """Fetch daily/lifetime generation summary for a system.

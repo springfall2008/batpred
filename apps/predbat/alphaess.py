@@ -179,6 +179,11 @@ class AlphaESSAPI(ComponentBase):
         # cannot observe - getOneDayPowerBySn carries a charger POWER but no fitted/absent
         # signal, so a serial that starts life demoted would otherwise never learn it.
         self._ev_present = {}
+        # Per-serial hybrid verdict for the discovery record: the last True/False hybrid_verdict() saw from
+        # detect_ac_coupled(), absent until one is seen. Held, and cached with _ev_present, because the
+        # evidence comes and goes with live telemetry (a payload without ppvDetail, pv_today resetting at
+        # midnight) and the record must not change - nor the switch flap - each time it does.
+        self._hybrid_verdict = {}
         self._unbind_done = set()
         self._tier_refreshed = {}
         self._cache_restored = False
@@ -489,9 +494,11 @@ class AlphaESSAPI(ComponentBase):
         # should therefore report nulls, while a hybrid at NIGHT reports zeros. Null versus
         # zero is the discriminator, and unlike a PV-power threshold it works at any hour.
         # Applying the pevDetail convention to ppvDetail is inference - VERIFY@FIELD.
+        # A payload without ppvDetail (or with an empty one) says nothing about the strings, so it is
+        # None - undecided - rather than False, which detect_ac_coupled() reads as "DC strings reported".
         pv_detail = payload.get("ppvDetail") or {}
         strings = [pv_detail.get("ppv{}".format(index)) for index in range(1, 5)]
-        values["ppv_detail_all_null"] = bool(pv_detail) and all(value is None for value in strings)
+        values["ppv_detail_all_null"] = all(value is None for value in strings) if pv_detail else None
         # Same null-for-absent convention, but here it is DOCUMENTED rather than inferred:
         # a non-null ev*Power means a charger is fitted. Only ever set to True, never back to
         # False from a later poll, because pevDetail can legitimately be absent from a
@@ -747,8 +754,8 @@ class AlphaESSAPI(ComponentBase):
         """Return True (AC-coupled), False (hybrid) or None (undecided) for one serial.
 
         Two signals must AGREE before an AC-coupled verdict is returned, because the errors
-        are not symmetric - see apply_hybrid_verdict. build_discovery() reports the inverse
-        as the record's hybrid value, and leaves it out while this is None.
+        are not symmetric - see apply_hybrid_verdict. This reads the current telemetry only;
+        the discovery record uses hybrid_verdict(), which holds the last decided answer.
         """
         detail = self.device_detail.get(sn, {})
         if str(detail.get("minv", "")) in ALPHAESS_AC_COUPLED_MODELS:
@@ -768,13 +775,28 @@ class AlphaESSAPI(ComponentBase):
             return False
         return None
 
+    def hybrid_verdict(self, sn):
+        """Return the discovery record's hybrid value for one serial: True, False, or None while never decided.
+
+        The inverse of detect_ac_coupled(sn), held per serial in _hybrid_verdict: a True/False reading
+        replaces the held value, while an undecided one (a payload without ppvDetail, a history-path poll,
+        pv_today back at zero after midnight) leaves it as it was. So a decided system's record does not
+        change with each poll, and refresh_discovery() does not re-file it - nor the coordinator move the
+        switch - every time the evidence briefly goes away.
+        """
+        ac_coupled = self.detect_ac_coupled(sn)
+        if isinstance(ac_coupled, bool):
+            self._hybrid_verdict[sn] = not ac_coupled
+        held = self._hybrid_verdict.get(sn)
+        return held if isinstance(held, bool) else None
+
     async def apply_hybrid_verdict(self):
-        """Advise the user when the hybrid-versus-AC-coupled verdict is still undecided.
+        """Log which systems are still undecided between hybrid and AC coupling.
 
         AlphaESS no longer writes switch.predbat_inverter_hybrid: each record reports hybrid
-        as the inverse of detect_ac_coupled() (build_discovery()) and the discovery
-        coordinator sets the switch from the records. While any system is undecided its
-        record says nothing, so this says what was seen and how to set the switch by hand.
+        (hybrid_verdict(), from detect_ac_coupled()) and the discovery coordinator sets the
+        switch from the records. An undecided system's record says nothing, which this logs;
+        when no AlphaESS system has been decided it adds how to set the switch by hand.
 
         The two errors are NOT symmetric. inverter_hybrid False on an actually-hybrid
         system stops PV counting against inverter_limit, so Predbat plans charge-plus-PV
@@ -784,11 +806,14 @@ class AlphaESSAPI(ComponentBase):
         """
         if not self.device_list:
             return
-        verdicts = [self.detect_ac_coupled(sn) for sn in self.device_list]
-        entity = "switch.{}_inverter_hybrid".format(self.prefix)
-        if any(verdict is None for verdict in verdicts):
-            models = ", ".join(str(self.device_detail.get(sn, {}).get("minv", "unknown")) for sn in self.device_list)
-            self.log("Info: AlphaESS could not determine hybrid versus AC coupling for model(s) {}; leaving {} at its current value. If this is an AC-coupled retrofit, turn that switch off by hand.".format(models, entity))
+        undecided = [sn for sn in self.device_list if self.hybrid_verdict(sn) is None]
+        if not undecided:
+            return
+        models = ", ".join(str(self.device_detail.get(sn, {}).get("minv", "unknown")) for sn in undecided)
+        message = "Info: AlphaESS could not yet tell hybrid from AC coupling for system(s) {} (model(s) {}), so their records do not say whether they are hybrid.".format(", ".join(undecided), models)
+        if len(undecided) == len(self.device_list):
+            message += " If this is an AC-coupled retrofit, turn {} off by hand.".format("switch.{}_inverter_hybrid".format(self.prefix))
+        self.log(message)
 
     async def automatic_config(self):
         """Register every discovered inverter as an AlphaESSCloud Predbat inverter."""
@@ -957,11 +982,13 @@ class AlphaESSAPI(ComponentBase):
         - firmware: the AlphaESS Open API exposes none.
         - account_ids: the API has no station, plant or site identifier; every endpoint is keyed by
           sysSn alone.
-        hybrid is the inverse of detect_ac_coupled(sn): False when both signals agree the system
-        is AC coupled, True when DC strings are reported, left out while undecided. It is inferred
-        from live telemetry (ALPHAESS_AC_COUPLED_MODELS ships empty on purpose), so a record built
-        before the first telemetry poll leaves it out and the next report carries it. The discovery
-        coordinator sets inverter_hybrid from it; AlphaESS no longer writes that switch itself.
+        hybrid is hybrid_verdict(sn), the inverse of detect_ac_coupled(sn): False when both signals
+        agree the system is AC coupled, True when DC strings are reported, left out until either has
+        been seen. It is inferred from live telemetry (ALPHAESS_AC_COUPLED_MODELS ships empty on
+        purpose), so a record built before the first telemetry poll leaves it out and a later report
+        carries it; once decided it is held, so a reading that is undecided again (a payload without
+        ppvDetail, pv_today reset at midnight) does not change the record. The discovery coordinator
+        sets inverter_hybrid from it; AlphaESS no longer writes that switch itself.
 
         An EV charger is reported as a flag only when _ev_present says True. That verdict comes from
         live telemetry alone, so a charger not yet seen reports nothing either way rather than a
@@ -998,7 +1025,6 @@ class AlphaESSAPI(ComponentBase):
                 ratings["soc_max"] = battery_kwh
 
             flags = ["ev_charger"] if self._ev_present.get(sn) is True else []
-            ac_coupled = self.detect_ac_coupled(sn)
 
             inverters.append(
                 inverter_record(
@@ -1012,7 +1038,7 @@ class AlphaESSAPI(ComponentBase):
                     info=info,
                     ratings=ratings,
                     entities=self._discovery_entities(sn),
-                    hybrid=None if ac_coupled is None else not ac_coupled,
+                    hybrid=self.hybrid_verdict(sn),
                 )
             )
 
@@ -2057,7 +2083,7 @@ class AlphaESSAPI(ComponentBase):
 
     async def save_ratings(self):
         """Persist the live-telemetry capability verdicts."""
-        await self.save_cache(ALPHAESS_CACHE_RATINGS, {"live_ok": self._live_ok, "ev_present": self._ev_present})
+        await self.save_cache(ALPHAESS_CACHE_RATINGS, {"live_ok": self._live_ok, "ev_present": self._ev_present, "hybrid_verdict": self._hybrid_verdict})
 
     async def save_control(self):
         """Persist the control state that must survive a restart.
@@ -2095,6 +2121,7 @@ class AlphaESSAPI(ComponentBase):
         ratings = await self.load_cache(ALPHAESS_CACHE_RATINGS)
         self._live_ok = dict(ratings.get("live_ok") or {})
         self._ev_present = dict(ratings.get("ev_present") or {})
+        self._hybrid_verdict = {sn: verdict for sn, verdict in dict(ratings.get("hybrid_verdict") or {}).items() if isinstance(verdict, bool)}
         control = await self.load_cache(ALPHAESS_CACHE_CONTROL)
         self.local_schedule = dict(control.get("local_schedule") or {})
         self.applied_payload = dict(control.get("applied_payload") or {})

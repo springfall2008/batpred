@@ -71,6 +71,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.battery_export_permitted = True
         self._battery_export_warned = False
         self._battery_export_reported = None
+        self._hybrid_reported = None
         self._last_export_permission_check = 0
         self.battery_type = None
         self.powerwall_3 = False
@@ -2527,6 +2528,20 @@ def _teslemetry_hybrid_record(site_info, override=None):
     return record.get("hybrid", "absent"), api
 
 
+def _hybrid_reason_lines(api):
+    """The log lines that give the record's hybrid value and its reason."""
+    return [message for message in api.log_messages if "inverter_hybrid" in message]
+
+
+def test_teslemetry_hybrid_reason_logged_once():
+    """The reason is logged when site_info first decides the value, not again on a later read that keeps it."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_EXPANSION
+    assert run_async(api.fetch_site_info()) is True
+    assert run_async(api.fetch_site_info()) is True
+    assert _hybrid_reason_lines(api) == ["Info: Teslemetry reports inverter_hybrid on to discovery (auto: Powerwall 3)"], api.log_messages
+
+
 def test_teslemetry_record_hybrid_off_for_an_ac_powerwall():
     """An AC-coupled Powerwall 2 (battery_type ac_powerwall) reports hybrid False, so discovery turns inverter_hybrid off.
 
@@ -2538,6 +2553,7 @@ def test_teslemetry_record_hybrid_off_for_an_ac_powerwall():
     hybrid, api = _teslemetry_hybrid_record(SITE_INFO_AC_POWERWALL)
     assert hybrid is False, hybrid
     assert "switch.predbat_inverter_hybrid" not in api.external_states, api.external_states
+    assert _hybrid_reason_lines(api) == ["Info: Teslemetry reports inverter_hybrid off to discovery (auto: AC-coupled Powerwall)"], api.log_messages
 
 
 def test_teslemetry_record_hybrid_on_for_powerwall_3():
@@ -2546,6 +2562,7 @@ def test_teslemetry_record_hybrid_on_for_powerwall_3():
     hybrid, api = _teslemetry_hybrid_record(SITE_INFO_PW3_EXPANSION)
     assert hybrid is True, hybrid
     assert "switch.predbat_inverter_hybrid" not in api.external_states, api.external_states
+    assert _hybrid_reason_lines(api) == ["Info: Teslemetry reports inverter_hybrid on to discovery (auto: Powerwall 3)"], api.log_messages
 
 
 def test_teslemetry_record_hybrid_needs_a_powerwall_3_gateway():
@@ -2557,6 +2574,7 @@ def test_teslemetry_record_hybrid_needs_a_powerwall_3_gateway():
     hybrid, api = _teslemetry_hybrid_record(powerwall_plus)
     assert hybrid is False, hybrid
     assert "switch.predbat_inverter_hybrid" not in api.external_states, api.external_states
+    assert _hybrid_reason_lines(api) == ["Info: Teslemetry reports inverter_hybrid off to discovery (auto: solar_powerwall without a Powerwall 3 gateway)"], api.log_messages
 
 
 def test_teslemetry_record_hybrid_off_when_the_model_is_unknown():
@@ -2569,6 +2587,7 @@ def test_teslemetry_record_hybrid_off_when_the_model_is_unknown():
     assert api.battery_type is None and api.powerwall_3 is False, "the fixture must leave the model unknown"
     assert hybrid is False, hybrid
     assert "switch.predbat_inverter_hybrid" not in api.external_states, api.external_states
+    assert _hybrid_reason_lines(api) == ["Info: Teslemetry reports inverter_hybrid off to discovery (auto: Powerwall model unknown)"], api.log_messages
     unread = MockTeslemetryAPI()
     assert unread.build_discovery() is None
     run_async(unread.automatic_config())
@@ -2582,6 +2601,7 @@ def test_teslemetry_hybrid_override_from_apps_yaml():
         hybrid, api = _teslemetry_hybrid_record(site_info, override=override)
         assert hybrid is override, (hybrid, override)
         assert "switch.predbat_inverter_hybrid" not in api.external_states, api.external_states
+        assert _hybrid_reason_lines(api) == ["Info: Teslemetry reports inverter_hybrid {} to discovery (teslemetry_hybrid in apps.yaml)".format("on" if override else "off")], api.log_messages
 
 
 def test_teslemetry_initialize_sets_hybrid_override():
@@ -3838,6 +3858,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_record_hybrid_on_for_powerwall_3()
     test_teslemetry_record_hybrid_needs_a_powerwall_3_gateway()
     test_teslemetry_record_hybrid_off_when_the_model_is_unknown()
+    test_teslemetry_hybrid_reason_logged_once()
     test_teslemetry_hybrid_override_from_apps_yaml()
     test_teslemetry_initialize_sets_hybrid_override()
     test_teslemetry_hybrid_registered_as_an_optional_apps_yaml_key()

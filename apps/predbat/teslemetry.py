@@ -237,6 +237,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.battery_export_permitted = True  # Until site_info says otherwise, set by update_battery_export_permitted
         self._battery_export_warned = False
         self._battery_export_reported = None  # The value last logged, so the Info line appears on each change only
+        self._hybrid_reported = None  # The hybrid value last logged by _log_hybrid_reason(), for the same reason
         self._last_export_permission_check = 0
         self.battery_type = None  # components.battery_type from site_info: solar_powerwall (PW3) or ac_powerwall (PW2)
         self.powerwall_3 = False  # battery_type solar_powerwall AND a "Powerwall 3" gateway, set by fetch_site_info
@@ -518,6 +519,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.battery_type = components.get("battery_type")
         # battery_type alone is not trusted to mean a Powerwall 3 - a Powerwall+ might report solar_powerwall too
         self.powerwall_3 = self.battery_type == "solar_powerwall" and any(gateway.get("part_name") == "Powerwall 3" for gateway in components.get("gateways") or [])
+        self._log_hybrid_reason()
         self.update_battery_export_permitted(components)
         nameplate_wh = response.get("nameplate_energy", 0)
         gateway_kwh = self.gateway_energy_kwh(response)
@@ -1142,9 +1144,25 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         the model is unknown, as the AC-coupled Powerwall is the common case (GH#5275). teslemetry_hybrid overrides
         either way, e.g. for a Powerwall 3 beside an existing string inverter, which site_info cannot tell apart.
         """
+        return self._hybrid_reason()[0]
+
+    def _hybrid_reason(self):
+        """Return (hybrid, reason): _discovery_hybrid()'s value and the words that explain it in the log."""
         if self.hybrid_override is not None:
-            return self.hybrid_override
-        return bool(self.powerwall_3)
+            return self.hybrid_override, "teslemetry_hybrid in apps.yaml"
+        if self.powerwall_3:
+            return True, "auto: Powerwall 3"
+        if self.battery_type == "solar_powerwall":
+            return False, "auto: solar_powerwall without a Powerwall 3 gateway"
+        return False, "auto: AC-coupled Powerwall" if self.battery_type else "auto: Powerwall model unknown"
+
+    def _log_hybrid_reason(self):
+        """Log the record's hybrid value and its reason once, and again only if site_info changes it."""
+        hybrid, reason = self._hybrid_reason()
+        if hybrid == self._hybrid_reported:
+            return
+        self._hybrid_reported = hybrid
+        self.log("Info: Teslemetry reports inverter_hybrid {} to discovery ({})".format("on" if hybrid else "off", reason))
 
     def build_discovery(self):
         """

@@ -3265,7 +3265,15 @@ def test_sigenergy_record_reports_hybrid_from_the_ac_coupled_verdict(my_predbat)
             if functions[sid] != want:
                 print("ERROR: {}: {} functions should stay {}, got {}".format(label, sid, want, functions[sid]))
                 failed = True
+        api.log_messages = []
         run_async(api.apply_hybrid_verdict())
+        undecided_logged = any("could not yet tell hybrid from AC coupling" in message for message in api.log_messages)
+        if undecided_logged != ("absent" in expected.values()):
+            print("ERROR: {}: the undecided log should appear only while a system is undecided, got {}".format(label, api.log_messages))
+            failed = True
+        if any("current value" in message for message in api.log_messages):
+            print("ERROR: {}: the log must not claim the switch is left alone - discovery decides it: {}".format(label, api.log_messages))
+            failed = True
         run_async(api.automatic_config())
         if entity in getattr(api, "external_state", {}):
             print("ERROR: {}: Sigenergy wrote {}, which is discovery's to set: {}".format(label, entity, api.external_state))

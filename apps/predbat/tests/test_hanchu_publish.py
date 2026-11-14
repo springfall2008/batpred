@@ -418,6 +418,8 @@ def test_hanchu_discovery_record_reports_hybrid_from_the_ac_coupled_field():
     cases = [
         ("AC-coupled", 1, False),
         ("AC-coupled as a string", "1", False),
+        ("AC-coupled as a float", 1.0, False),
+        ("present but empty", "", True),
         ("DC-coupled", 0, True),
         ("DC-coupled as a string", "0", True),
         ("not sent", None, "absent"),

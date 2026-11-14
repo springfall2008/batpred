@@ -234,10 +234,80 @@ def test_alphaess_record_reports_hybrid_only_on_agreeing_evidence():
             failed = True
 
     # Undecided: the advice to set the switch by hand on an AC-coupled retrofit is still given.
-    if not any("inverter_hybrid" in message for message in mixed.log_messages):
+    if not any("inverter_hybrid" in message and "by hand" in message for message in mixed.log_messages):
         print(f"ERROR: no advisory log on an undecided verdict, got {mixed.log_messages}")
         failed = True
+    # Never a claim that the switch is left alone: another system's record may decide it.
+    for label, client in (("mixed", mixed), ("unread", unread)):
+        if any("current value" in message for message in client.log_messages):
+            print(f"ERROR: {label}: the log must not claim the switch is left at its current value: {client.log_messages}")
+            failed = True
+
+    # One decided and one undecided system: the undecided one is named, with no by-hand advice, since the other decides.
+    partial = _ready_client()
+    decided, pending = partial.device_list
+    partial.device_values[decided]["ppv_detail_all_null"] = False
+    partial.device_values[pending]["ppv_detail_all_null"] = True
+    partial.device_detail[pending] = dict(partial.device_detail[pending], popv=9.0)
+    run_async_local(partial.apply_hybrid_verdict())
+    undecided_lines = [message for message in partial.log_messages if "could not yet tell hybrid" in message]
+    if len(undecided_lines) != 1 or pending not in undecided_lines[0] or decided in undecided_lines[0] or "by hand" in undecided_lines[0]:
+        print(f"ERROR: a partly decided fleet should name only {pending}, without by-hand advice: {partial.log_messages}")
+        failed = True
     assert not failed, "test_alphaess_record_reports_hybrid_only_on_agreeing_evidence"
+
+
+def test_alphaess_record_holds_a_decided_hybrid_verdict():
+    """Once decided, the record's hybrid survives readings that are undecided again, so the report is not re-filed.
+
+    A live payload without ppvDetail, pv_today back at zero after midnight and a poll on the history
+    path all leave detect_ac_coupled() undecided. Without the hold an AC-coupled system would read as
+    a hybrid on the first (turning inverter_hybrid on until the next full payload) and drop its verdict
+    on the second, re-filing the report and undoing a user's manual change twice a day.
+    """
+    failed = False
+    ac_strings = {"soc": 50, "ppvDetail": {"ppv1": None, "ppv2": None, "ppv3": None, "ppv4": None}}
+    dc_strings = {"soc": 50, "ppvDetail": {"ppv1": 0.0, "ppv2": 0.0, "ppv3": None, "ppv4": None}}
+
+    client = _ready_client()
+    first, second = client.device_list
+    reports = []
+    client.report_discovery = reports.append
+    client.device_detail[first] = dict(client.device_detail[first], popv=0.0)
+    client.device_detail[second] = dict(client.device_detail[second], popv=9.0)
+    client._apply_live_payload(first, dict(ac_strings))
+    # The second system never decides: strings null but a PV nameplate, so the two signals disagree
+    client._apply_live_payload(second, dict(ac_strings))
+    client.refresh_discovery()
+    if _hybrid_by_serial(client) != {first: False, second: "absent"}:
+        print(f"ERROR: expected the AC-coupled system decided and the other undecided, got {_hybrid_by_serial(client)}")
+        failed = True
+
+    steps = (
+        ("a live payload without ppvDetail", lambda sn: client._apply_live_payload(sn, {"soc": 50})),
+        ("pv_today reset to zero at midnight", lambda sn: (client._apply_live_payload(sn, dict(ac_strings)), client.device_energy[sn].update(pv_today=0.0))),
+        ("a poll on the history path", lambda sn: client._apply_history_payload(sn, [{"cbat": 50}])),
+    )
+    for label, step in steps:
+        for sn in (first, second):
+            step(sn)
+        if client.detect_ac_coupled(first) is not None:
+            print(f"ERROR: {label}: the fixture must leave detect_ac_coupled() undecided, got {client.detect_ac_coupled(first)}")
+            failed = True
+        client.refresh_discovery()
+        if _hybrid_by_serial(client) != {first: False, second: "absent"}:
+            print(f"ERROR: {label}: the held verdict changed: {_hybrid_by_serial(client)}")
+            failed = True
+    if len(reports) != 1:
+        print(f"ERROR: the report must be filed once and never re-filed across undecided readings, got {len(reports)} filings")
+        failed = True
+
+    # A decided reading still replaces the held one: DC strings seen later make it a hybrid
+    client._apply_live_payload(first, dict(dc_strings))
+    if _hybrid_by_serial(client)[first] is not True:
+        print(f"ERROR: a later decided reading should replace the held verdict, got {_hybrid_by_serial(client)}")
+        failed = True
+    assert not failed, "test_alphaess_record_holds_a_decided_hybrid_verdict"
 
 
 def test_alphaess_args_only_mapped_when_every_inverter_reports_them():
@@ -405,6 +475,7 @@ def run_alphaess_publish_tests(my_predbat):
         ("export_limit_not_guessed", test_alphaess_export_limit_is_not_guessed),
         ("battery_min_soc_not_mapped", test_alphaess_battery_min_soc_is_not_mapped),
         ("hybrid_verdict", test_alphaess_record_reports_hybrid_only_on_agreeing_evidence),
+        ("hybrid_verdict_held", test_alphaess_record_holds_a_decided_hybrid_verdict),
         ("map_only_when_all_report", test_alphaess_args_only_mapped_when_every_inverter_reports_them),
         ("ev_charger_detection", test_alphaess_ev_charger_detected_from_pev_detail),
         ("car_charging_energy_mapping", test_alphaess_car_charging_energy_mapped_only_for_serials_with_a_charger),
