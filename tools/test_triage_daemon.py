@@ -2199,6 +2199,12 @@ class IsBotCommentTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertTrue(triage_daemon.is_bot_comment({"body": body}))
 
+    def test_recognises_the_attachment_nudge(self):
+        """The nudge from the issue-attachment-nudge workflow is long and mentions .log and .yaml, so it must not be taken for a me-too post."""
+        import issue_attachment_nudge
+
+        self.assertTrue(triage_daemon.is_bot_comment({"body": issue_attachment_nudge.render(issue_attachment_nudge.REASON_OFFER)}))
+
     def test_an_ordinary_comment_is_not_the_bots(self):
         self.assertFalse(triage_daemon.is_bot_comment({"body": "Same here, my battery stopped charging too."}))
 
