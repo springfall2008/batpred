@@ -1311,14 +1311,13 @@ class Output:
         """
         The instant minute real minutes after midnight_utc, in the configured timezone
 
-        midnight_utc keeps the UTC offset it had at midnight, so midnight_utc + timedelta(minutes=minute) prints that offset's
-        wall clock all day. On a clock-change night every slot after the change was labelled an hour out (GH#1566): adding
-        the minutes in UTC and converting back gives the wall clock the slot really has.
+        midnight_utc carries the UTC offset of the run that built it (now with the clock set to 00:00), so
+        midnight_utc + timedelta(minutes=minute) prints that one offset's wall clock for every slot. Across a clock change
+        the slots on the other side were labelled an hour out (GH#1566): adding the minutes in UTC and converting back gives
+        the wall clock the slot really has. The UTC add is right even after the change, when midnight_utc is an hour away
+        from the real start of the day, because the minute keys count from the same midnight_utc anchor.
         """
-        local_tz = getattr(self, "local_tz", None)
-        if local_tz is None:
-            return self.midnight_utc + timedelta(minutes=minute)
-        return (self.midnight_utc.astimezone(timezone.utc) + timedelta(minutes=minute)).astimezone(local_tz)
+        return (self.midnight_utc.astimezone(timezone.utc) + timedelta(minutes=minute)).astimezone(self.local_tz)
 
     def plan_row_scenarios(self, scenario_sources, minute_relative_start, minute_relative_slot_end, expected):
         """
