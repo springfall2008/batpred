@@ -4308,12 +4308,15 @@ def test_sigenergy_axle_event_skips_controls(my_predbat):
     failed = False
     sid = "SIG001"
 
+    # automatic on, so the controls are bound and only the Axle event can be what skips them
     api = _make_contended_api(sid, SIGENERGY_MODE_VPP, axle_control=True, axle_event="on")
+    api.automatic = True
     api._manage_vpp_registration = AsyncMock(return_value=False)
     run_async(api.run(seconds=60, first=False))
     api.apply_controls.assert_not_awaited()
 
     api_off = _make_contended_api(sid, SIGENERGY_MODE_VPP, axle_control=True, axle_event="off")
+    api_off.automatic = True
     api_off._manage_vpp_registration = AsyncMock(return_value=True)
     run_async(api_off.run(seconds=60, first=False))
     api_off.apply_controls.assert_awaited_once_with(sid)
@@ -6000,6 +6003,84 @@ def test_sigenergy_final_waits_for_subscription_recovery(my_predbat):
     return False
 
 
+def test_sigenergy_run_unbound_controls_send_nothing(my_predbat):
+    """With automatic off and no inverter control arg naming the component's entities, run() sends no command (GH#4894).
+
+    Unbound, the controls sit at their defaults (export enable off), so apply_controls() would send
+    self-consumption every minute and override whatever else drives the plant, while Predbat's plan
+    writes land somewhere else entirely. Binding one control entity, or automatic on, sends commands again.
+    """
+    failed = False
+    sid = "SIG001"
+
+    def _make_api(automatic=False, args=None):
+        """Build an API in VPP mode with default controls, ready for a non-first run()."""
+        api = _make_api_with_system(sid)
+        api.automatic = automatic
+        api.args.update(args or {})
+        api.current_mode[sid] = SIGENERGY_MODE_VPP
+        api.system_id_filter = {sid}
+        task = MagicMock()
+        task.done = MagicMock(return_value=False)
+        api._mqtt_task = task
+        api._manage_vpp_registration = AsyncMock(return_value=True)
+        api.fetch_energy_flow = AsyncMock(return_value=True)
+        api.fetch_inverter_realtime = AsyncMock(return_value=True)
+        api.fetch_daily_summary = AsyncMock(return_value=True)
+        api.fetch_history_totals = AsyncMock(return_value=True)
+        api.publish_system_entities = AsyncMock()
+        api.get_access_token = AsyncMock(return_value="tok")
+        run_async(api.fetch_controls(sid))
+        return api
+
+    def _commands(api):
+        """MQTT battery commands published so far."""
+        return [payload for topic, payload in getattr(api, "mqtt_publishes", []) if "command" in topic]
+
+    def _warnings(api):
+        """Unbound-controls warnings logged so far."""
+        return [m for m in api.log_messages if "no inverter control in apps.yaml uses its control entities" in m]
+
+    # Unbound: Predbat's export window went to the local entities, never to the component
+    api = _make_api(args={"scheduled_discharge_enable": ["switch.sigen_plant_remote_ems"], "discharge_start_time": ["select.predbat_SIG_0_discharge_start_time"]})
+    run_async(api.run(seconds=60, first=False))
+    run_async(api.run(seconds=120, first=False))
+    if _commands(api):
+        print("ERROR: unbound controls must send no command, got {}".format(_commands(api)))
+        failed = True
+    if len(_warnings(api)) != 1:
+        print("ERROR: expected one unbound-controls warning across two runs, got {}".format(_warnings(api)))
+        failed = True
+
+    slug = api._system_slug(sid)
+
+    # The reserve is read-only on Sigenergy, so naming only it does not carry the plan
+    api = _make_api(args={"reserve": ["number.predbat_sigenergy_{}_reserve".format(slug)]})
+    run_async(api.run(seconds=60, first=False))
+    if _commands(api) or len(_warnings(api)) != 1:
+        print("ERROR: a reserve-only binding must count as unbound, got commands {} warnings {}".format(_commands(api), _warnings(api)))
+        failed = True
+
+    # Bound by hand: one control entity named in apps.yaml is enough
+    api = _make_api(args={"scheduled_discharge_enable": ["switch.predbat_sigenergy_{}_export_enable".format(slug)]})
+    run_async(api.run(seconds=60, first=False))
+    if not _commands(api):
+        print("ERROR: a bound control entity must let commands through")
+        failed = True
+    if _warnings(api):
+        print("ERROR: bound controls must not warn, got {}".format(_warnings(api)))
+        failed = True
+
+    # automatic on: automatic_config() binds them, so nothing in apps.yaml is needed
+    api = _make_api(automatic=True)
+    run_async(api.run(seconds=60, first=False))
+    if not _commands(api):
+        print("ERROR: automatic on must let commands through")
+        failed = True
+
+    return failed
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -6158,6 +6239,7 @@ def run_sigenergy_tests(my_predbat):
         ("discover_systems_403_end_to_end", test_sigenergy_discover_systems_403_end_to_end),
         ("onboard_systems_ignores_stale_api_code", test_sigenergy_onboard_systems_ignores_stale_api_code),
         ("run_first_reads_device_list_once", test_sigenergy_run_first_reads_device_list_once),
+        ("run_unbound_controls_send_nothing", test_sigenergy_run_unbound_controls_send_nothing),
         ("system_status_from_inverter_device", test_sigenergy_system_status_from_inverter_device),
         ("fetch_system_list_does_not_log_other_systems", test_sigenergy_fetch_system_list_does_not_log_other_systems),
         ("rate_limit_last_attempt_does_not_claim_to_wait", test_sigenergy_rate_limit_last_attempt_does_not_claim_to_wait),

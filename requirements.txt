@@ -9,5 +9,4 @@ prometheus-client
 protobuf
 pyjwt
 pytz
-requests
 ruamel.yaml

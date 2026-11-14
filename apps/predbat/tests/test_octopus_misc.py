@@ -895,11 +895,31 @@ async def test_octopus_saving_sessions_partial_errors(my_predbat):
     saving_with_empty = {"customerFlexibilityCampaignEvents": {"edges": [{"node": None}] + saving_answer["customerFlexibilityCampaignEvents"]["edges"]}}
     api.async_graphql_query = AsyncMock(side_effect=lambda query, context, **kwargs: saving_with_empty if context == "get-flexibility-saving-sessions" else None)
     result = await api.async_get_flexibility_events("test-account")
-    if result.get("account", {}).get("joinedEvents") != [{"eventId": "SAVE-1", "startAt": "2026-10-26T17:00:00+00:00", "endAt": "2026-10-26T18:00:00+00:00", "rewardGivenInOctoPoints": None}]:
+    if result.get("account", {}).get("joinedEvents") != [{"eventId": "SAVE-1", "startAt": "2026-10-26T17:00:00+00:00", "endAt": "2026-10-26T18:00:00+00:00"}]:
         print(f"ERROR: Expected the flexibility saving event as joined, got {result}")
         failed += 1
     else:
         print("PASS: Flexibility API saving events are taken as joined")
+
+    # The flexibility API can't report awards, so its sessions are published without rewarded_octopoints, and the History view
+    # doesn't wait for one; the legacy feed's null award is published as null, still to come
+    print("\n*** Only a feed that reports awards publishes rewarded_octopoints ***")
+    from billing import saving_session_events
+
+    published = []
+    for joined in (result["account"]["joinedEvents"], [{"eventId": 7, "startAt": "2026-10-26T17:00:00+00:00", "endAt": "2026-10-26T18:00:00+00:00", "rewardGivenInOctoPoints": None}]):
+        api = make_api()
+        api.dashboard_item = MagicMock()
+        api.expose_config = MagicMock()
+        api.saving_sessions = {"events": [], "account": {"hasJoinedCampaign": True, "joinedEvents": joined}}
+        published.append(api.get_saving_session_data()[1])
+    flexibility, legacy_joined = published
+    expected = [event["award_expected"] for event in saving_session_events(flexibility + legacy_joined, 8, 0.0)]
+    if len(flexibility) != 1 or "rewarded_octopoints" in flexibility[0] or legacy_joined[0].get("rewarded_octopoints", "missing") is not None or expected != [False, True]:
+        print(f"ERROR: Expected the flexibility session without rewarded_octopoints and the legacy one with it null, got {flexibility} {legacy_joined} {expected}")
+        failed += 1
+    else:
+        print("PASS: Flexibility sessions are published without an award to wait for")
 
     return failed
 

@@ -22,6 +22,9 @@ from fox import (
     FOX_CACHE_KEYS,
     FOX_REFRESH_SETTINGS,
     FOX_REFRESH_REALTIME,
+    FOX_POLL_SECONDS_MIN,
+    FOX_POLL_SECONDS_MAX,
+    fox_poll_minutes,
     OPTIONS_WORK_MODE,
     FOX_SETTINGS_CACHE_VERSION,
     SCHEDULER_READ_STALE_SECONDS,
@@ -101,6 +104,7 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.fdsoc_min = {}
         self.device_scheduler_count = {}
         self.data_age = {}
+        self.realtime_refresh_minutes = FOX_REFRESH_REALTIME
         self.local_tz = pytz.timezone("Europe/London")
         self.inverter_sn_filter = []
 
@@ -4716,6 +4720,73 @@ def test_run_realtime_refresh_after_cache_expires(my_predbat):
     return False
 
 
+def test_fox_poll_seconds_clamped(my_predbat):
+    """
+    Test fox_poll_seconds is rounded to whole minutes and clamped, defaults to the old fixed
+    5 minutes, and is wired from apps.yaml through the component registry and schema
+    """
+    print("  - test_fox_poll_seconds_clamped")
+
+    from components import COMPONENT_LIST
+    from config import APPS_SCHEMA
+
+    assert fox_poll_minutes(300) == 5
+    assert fox_poll_minutes(120) == 2
+    assert fox_poll_minutes("120") == 2
+    assert fox_poll_minutes(90) == 2
+    assert fox_poll_minutes(5) == FOX_POLL_SECONDS_MIN // 60
+    assert fox_poll_minutes(99999) == FOX_POLL_SECONDS_MAX // 60
+    assert fox_poll_minutes("junk") == FOX_REFRESH_REALTIME
+    assert fox_poll_minutes(None) == FOX_REFRESH_REALTIME
+    assert fox_poll_minutes(float("nan")) == FOX_REFRESH_REALTIME
+
+    assert FoxAPI(my_predbat, key="test_key", automatic=False).realtime_refresh_minutes == FOX_REFRESH_REALTIME
+    assert FoxAPI(my_predbat, key="test_key", automatic=False, poll_seconds=120).realtime_refresh_minutes == 2
+
+    arg = COMPONENT_LIST["fox"]["args"]["poll_seconds"]
+    assert arg["config"] == "fox_poll_seconds"
+    assert arg["default"] == FOX_REFRESH_REALTIME * 60, "The registry default must keep the existing 5 minute refresh"
+    assert APPS_SCHEMA["fox_poll_seconds"]["type"] == "integer"
+
+    return False
+
+
+def test_run_realtime_refresh_follows_poll_seconds(my_predbat):
+    """
+    Test the real time refresh fires at the fox_poll_seconds interval, while the settings,
+    production and static data keep their own fixed intervals
+    """
+    print("  - test_run_realtime_refresh_follows_poll_seconds")
+
+    from datetime import datetime, timedelta, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+    fox.realtime_refresh_minutes = fox_poll_minutes(120)
+
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    # 90 seconds old: younger than the 2 minute interval, so it is left alone
+    fox.data_age["device_values"] = now - timedelta(seconds=90)
+    assert run_async(fox.run(60, first=False)) is True
+    assert "get_real_time_data:TEST123" not in fox.method_calls
+
+    # 150 seconds old: past the 2 minute interval but well inside the default 5 minutes
+    fox.method_calls = []
+    fox.data_age["device_values"] = now - timedelta(seconds=150)
+    assert run_async(fox.run(120, first=False)) is True
+    assert "get_real_time_data:TEST123" in fox.method_calls
+
+    # Only the real time stream polls faster - nothing else is re-fetched
+    assert "get_device_settings:TEST123" not in fox.method_calls
+    assert "get_device_detail:TEST123" not in fox.method_calls
+    assert not any(call.startswith("get_device_production_month") for call in fox.method_calls)
+
+    return False
+
+
 def test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat):
     """
     Test that a failed device list poll does not reset the refresh timer, so the next run
@@ -8315,6 +8386,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_run_settings_refresh_forced_by_stale_cache_version(my_predbat)
         failed |= test_run_stale_cache_version_not_cleared_without_scheduler_success(my_predbat)
         failed |= test_run_realtime_refresh_after_cache_expires(my_predbat)
+        failed |= test_fox_poll_seconds_clamped(my_predbat)
+        failed |= test_run_realtime_refresh_follows_poll_seconds(my_predbat)
         failed |= test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat)
         failed |= test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat)
         failed |= test_run_new_device_invalidates_detail_cache(my_predbat)

@@ -24,13 +24,13 @@ from aiohttp import WSMsgType
 import array
 import bisect
 import json
-import requests
 import traceback
 import threading
 import time
 from utils import str2time, strptime_aware
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
+from http_sync import http_get, http_post, HttpJSONDecodeError, HttpTimeout, HttpConnectionError, run_async, RunThread  # noqa: F401 (run_async and RunThread are imported from here by other modules)
 
 # Maximum days of history fetched per request. Long windows are split so only one chunk's
 # response body, decoded string and parsed objects are resident at a time.
@@ -45,30 +45,10 @@ HISTORY_REFRESH_OVERLAP_SECONDS = 15 * 60
 # A tracked entity whose history read came back empty (a read that worked, not one that failed)
 # is cached as empty and asked again only this often
 HISTORY_EMPTY_RECHECK_SECONDS = 30 * 60
-
-
-class RunThread(threading.Thread):
-    def __init__(self, coro):
-        self.coro = coro
-        self.result = None
-        super().__init__()
-
-    def run(self):
-        self.result = asyncio.run(self.coro)
-
-
-def run_async(coro):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    if loop and loop.is_running():
-        thread = RunThread(coro)
-        thread.start()
-        thread.join()
-        return thread.result
-    else:
-        return asyncio.run(coro)
+# State attributes holding a list of at least this many strings are stored as one shared copy per
+# distinct list (see HAInterface.share_long_lists), and the share cache is reset at this many lists
+SHARED_LIST_MIN_LENGTH = 64
+SHARED_LIST_CACHE_MAX = 256
 
 
 class EntityHistory:
@@ -493,6 +473,7 @@ class HAInterface(ComponentBase):
         self.last_success_timestamp = None
 
         self.state_data = {}
+        self.shared_attribute_lists = {}
         self.slug = None
 
         # Websocket command queue infrastructure
@@ -934,12 +915,43 @@ class HAInterface(ComponentBase):
         if item:
             self.update_state_item(item, entity_id)
 
+    def share_long_lists(self, attributes):
+        """
+        Return attributes with each long list of strings replaced by one shared copy.
+
+        GivTCP publishes dozens of time-slot selects whose 'options' are the same 1440 time strings,
+        and every state fetch or event decodes a fresh copy (about 84 KB each). Storing one copy per
+        distinct list keeps the state cache from holding dozens of identical ones.
+
+        The caller's dict and lists are never modified or kept: a new dict is returned when anything
+        is shared, and the shared list is the cache's own copy. A shared list that no longer matches
+        its content (something changed it in place) is replaced rather than handed out.
+        """
+        if not isinstance(attributes, dict):
+            return attributes
+        cache = self.shared_attribute_lists
+        shared_attributes = None
+        for name, value in attributes.items():
+            if not isinstance(value, list) or len(value) < SHARED_LIST_MIN_LENGTH or not all(isinstance(entry, str) for entry in value):
+                continue
+            key = tuple(value)
+            shared = cache.get(key)
+            if shared is None or shared != value:
+                if len(cache) >= SHARED_LIST_CACHE_MAX:
+                    cache.clear()
+                shared = list(key)
+                cache[key] = shared
+            if shared_attributes is None:
+                shared_attributes = dict(attributes)
+            shared_attributes[name] = shared
+        return attributes if shared_attributes is None else shared_attributes
+
     def update_state_item(self, item, entity_id, nodb=False):
         """
         Update state table for item
         """
         entity_id = entity_id.lower()
-        attributes = item.get("attributes", {})
+        attributes = self.share_long_lists(item.get("attributes", {}))
         last_changed = item.get("last_changed", item.get("last_updated", None))
         if "state" in item:
             state = item["state"]
@@ -1227,27 +1239,27 @@ class HAInterface(ComponentBase):
         try:
             if post:
                 if data_in:
-                    response = requests.post(url, headers=headers, json=data_in, timeout=TIMEOUT)
+                    response = http_post(url, headers=headers, json=data_in, timeout=TIMEOUT)
                 else:
-                    response = requests.post(url, headers=headers, timeout=TIMEOUT)
+                    response = http_post(url, headers=headers, timeout=TIMEOUT)
             else:
                 if data_in:
-                    response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
+                    response = http_get(url, headers=headers, params=data_in, timeout=TIMEOUT)
                 else:
-                    response = requests.get(url, headers=headers, timeout=TIMEOUT)
+                    response = http_get(url, headers=headers, timeout=TIMEOUT)
             data = response.json()
             self.api_errors = 0
-        except requests.exceptions.JSONDecodeError:
+        except HttpJSONDecodeError:
             if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
                 self.log("Warn: Failed to decode response {} from {}".format(response, url))
                 self.api_errors += 1
 
             data = None
-        except (requests.Timeout, requests.exceptions.ReadTimeout):
+        except HttpTimeout:
             self.log("Warn: Timeout from {}".format(url))
             self.api_errors += 1
             data = None
-        except requests.exceptions.ConnectionError as e:
+        except HttpConnectionError as e:
             if not silent:
                 self.log("Warn: Connection error from {}: {}".format(url, e))
             self.api_errors += 1

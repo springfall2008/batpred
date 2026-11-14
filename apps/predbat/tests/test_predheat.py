@@ -450,6 +450,64 @@ def test_predheat_volume_temp(my_predbat):
     return failed
 
 
+def test_predheat_volume_temp_persistence(my_predbat):
+    """Check the persisted volume temperature survives a config reload across the range a wet heating system reaches."""
+    failed = False
+    item = my_predbat.config_index["next_volume_temp"]
+
+    old_enable = my_predbat.config_index["predheat_enable"].get("value")
+    old_next = item.get("value")
+    old_had_errors = my_predbat.had_errors
+    old_record_status = my_predbat.record_status
+    statuses = []
+
+    def record_status(message, *args, **kwargs):
+        """Capture each status message, then record it as normal."""
+        statuses.append(message)
+        return old_record_status(message, *args, **kwargs)
+
+    # The volume heats towards the flow temperature, so the value saved after a run sits well above
+    # room temperature. Anything beyond the boiling point of water is still clamped.
+    cases = [
+        ("flow temperature of an electric boiler", 55.5, 55.5, False),
+        ("flow temperature of a gas boiler", 72.25, 72.25, False),
+        ("declared maximum", 100, 100, False),
+        ("above the declared maximum", 150, 100, True),
+    ]
+
+    try:
+        # next_volume_temp is only accessible when Predheat is enabled.
+        my_predbat.expose_config("predheat_enable", True, force_ha=True)
+        my_predbat.record_status = record_status
+
+        for label, persisted, expected, expect_warning in cases:
+            print("Test: next_volume_temp reload with {}".format(label))
+
+            my_predbat.expose_config("next_volume_temp", persisted, force_ha=True)
+            my_predbat.had_errors = False
+            statuses.clear()
+            my_predbat.load_user_config()
+
+            got = my_predbat.get_arg("next_volume_temp")
+            if got is None or abs(float(got) - expected) > 0.001:
+                print("  ERROR: {} expected {} after reload, got {}".format(label, expected, got))
+                failed = True
+
+            warnings = [message for message in statuses if "next_volume_temp" in message]
+            if bool(warnings) != expect_warning or my_predbat.had_errors is not expect_warning:
+                print("  ERROR: {} expected warning {}, got {} with had_errors {}".format(label, expect_warning, warnings, my_predbat.had_errors))
+                failed = True
+
+    finally:
+        my_predbat.record_status = old_record_status
+        my_predbat.expose_config("next_volume_temp", old_next if old_next is not None else item.get("default"), force_ha=True)
+        my_predbat.expose_config("predheat_enable", bool(old_enable), force_ha=True)
+        my_predbat.load_user_config()
+        my_predbat.had_errors = old_had_errors
+
+    return failed
+
+
 def test_predheat_optional_energy_history(my_predbat):
     """Missing heating-energy history must not disable thermostat schedule history."""
     failed = False

@@ -265,6 +265,21 @@ SIGENERGY_CACHE_EXPIRY_DAYS = 1
 SIGENERGY_SETTINGS_CACHE_KEYS = ["grid_export", "device_cutoffs"]
 SIGENERGY_SETTINGS_CACHE_EXPIRY_DAYS = 28
 
+# Inverter args automatic_config() binds to the component's control entities. With sigenergy_automatic
+# off, the component sends commands only if at least one of these names one of them (GH#4894).
+SIGENERGY_CONTROL_ARGS = (
+    "charge_start_time",
+    "charge_end_time",
+    "charge_limit",
+    "scheduled_charge_enable",
+    "charge_rate",
+    "discharge_start_time",
+    "discharge_end_time",
+    "discharge_target_soc",
+    "scheduled_discharge_enable",
+    "discharge_rate",
+)
+
 # Sentinel returned by _request() when the API responds with code=0 but an empty/null data field.
 # Distinguishes "success with no payload" from None which always means "request failed".
 _SIGENERGY_OK = object()
@@ -494,6 +509,8 @@ class SigenergyAPI(ComponentBase):
         self.client_key = client_key or self.get_arg("sigenergy_client_key", None)
         self.automatic = automatic
         self.enable_controls = enable_controls
+        # Systems already warned that no inverter control arg points at their control entities
+        self._unbound_controls_warned = set()
 
         # Normalise system_id filter to a set (empty = all systems)
         if system_id is None:
@@ -2903,6 +2920,38 @@ class SigenergyAPI(ComponentBase):
                 state = _safe_int(self.device_cutoffs[system_id]["discharge"], default=default)
             self.controls[system_id][field] = state
 
+    def _controls_bound(self, system_id):
+        """Whether Predbat's inverter control args point at this system's control entities.
+
+        The plan only reaches the component through its own control entities: Predbat writes a
+        window to switch.predbat_sigenergy_<slug>_export_enable and friends, and the component
+        turns what it receives into a command. automatic_config() binds them, so with automatic
+        on they are bound by construction. With automatic off they are bound only if apps.yaml
+        names them; when it doesn't, the plan's writes land elsewhere, the controls sit at their
+        defaults, and apply_controls() would send self-consumption every minute, overriding
+        whatever else is driving the plant (GH#4894).
+
+        Args:
+            system_id: System ID string.
+
+        Returns:
+            True if at least one control arg names one of this system's control entities.
+        """
+        if self.automatic:
+            return True
+        own_entities = set()
+        for direction in ("charge", "export"):
+            for field in ("start_time", "end_time", "enable", "target_soc", "rate"):
+                own_entities.add(self._control_info(system_id, direction, field)[1])
+        # The reserve is left out: it is read-only on Sigenergy, and inverter.py replaces a SIGCLOUD reserve arg
+        # with its own dummy (has_reserve_soc False), so naming it neither carries the plan nor survives startup
+        for arg in SIGENERGY_CONTROL_ARGS:
+            value = self.get_arg(arg, None, indirect=False)
+            values = value if isinstance(value, list) else [value]
+            if any(isinstance(item, str) and item in own_entities for item in values):
+                return True
+        return False
+
     async def publish_controls(self, system_id=None):
         """Publish control entity states to the HA dashboard.
 
@@ -3780,6 +3829,15 @@ class SigenergyAPI(ComponentBase):
                                 )
                             )
                         continue
+                    if not self._controls_bound(sid):
+                        if sid not in self._unbound_controls_warned:
+                            self._unbound_controls_warned.add(sid)
+                            self.log(
+                                "Warn: SigenergyAPI: System {} has controls enabled but no inverter control in apps.yaml uses its control entities, so Predbat's plan cannot reach it - "
+                                "no battery commands will be sent (VPP mode is still kept). Set sigenergy_automatic: true (recommended), or turn on the system's offboard switch to hand it to another controller".format(sid)
+                            )
+                        continue
+                    self._unbound_controls_warned.discard(sid)
                     await self.apply_controls(sid)
         else:
             if first:
