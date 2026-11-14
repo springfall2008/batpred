@@ -13,7 +13,7 @@ GE Cloud API budget harness: one simulated day of a GE Cloud inverter, counting 
 
 GivEnergy is introducing a monthly API call limit, so this measures what Predbat really spends. A real
 PredBat and a real GECloudDirect run against FakeGECloud (tests/gecloud_fake_cloud.py) on a simulated
-clock. gecloud cold-starts and ge_cloud_automatic wires the inverter, a random scenario is planned once
+clock. gecloud cold-starts and ge_cloud_automatic wires the inverter through a real discovery coordinator, a random scenario is planned once
 at midnight, and the plan is then advanced 5 minutes at a time - gecloud's own loop each minute, then
 fetch, calculate_plan(recompute=False) and execute_plan - with execute's writes reaching gecloud through
 the same HA service events a real install uses.
@@ -28,13 +28,14 @@ from unittest.mock import patch
 
 from gecloud import GECloudDirect
 from inverter import Inverter
+from mock_base import CoordinatorHarness
 from tests.gecloud_fake_cloud import CALL_CONTEXT, FakeGECloud
 from tests.component_sim_harness import ComponentRoutingHAInterface, MemoryStorage, no_sleep, reset_config_to_defaults  # noqa: F401 - MemoryStorage is re-exported for the budget tests
 from tests.test_infra import reset_inverter, run_async
 from tests.test_random_scenarios import RANDOM_TEMPLATE, apply_scenario_to_predbat, expand_load_minutes, expand_pv_forecast
 
-# Inverter entity args the GivTCP template carries. async_automatic_config sets most of them again, but
-# any it leaves alone would point execute at a mock entity whose writes never reach the fake cloud.
+# Inverter entity args the GivTCP template carries. The coordinator GE Cloud opts in to sets most of them again,
+# but any it leaves alone would point execute at a mock entity whose writes never reach the fake cloud.
 TEMPLATE_INVERTER_ARGS = [
     "battery_power",
     "battery_rate_max",
@@ -313,8 +314,15 @@ class GECloudBudgetHarness:
         self.fake.scenario_id = self.scenario["id"]
         self.fake.soc_percent = battery["initial_soc_percent"]
         self.fake.read_timeouts = set(self.read_timeouts)
+        # GE Cloud configures the inverter only through discovery: give the cold start a real coordinator and the
+        # apps.yaml snapshot it decides by, then put Predbat's own registry and log back for the rest of the day
+        my_predbat.args_from_apps_yaml = copy.deepcopy(my_predbat.args)
+        real_components, real_log = my_predbat.components, my_predbat.log
+        coordinator_harness = CoordinatorHarness(my_predbat)
         # The apps.yaml settings components.py would pass to the component
         self.gecloud = HarnessGECloud(my_predbat, ge_cloud_direct=True, api_key="harness-key", automatic=True, poll_settings=my_predbat.args.get("ge_cloud_poll_settings", False))
+        self.gecloud.component_name = "gecloud"
+        coordinator_harness.register("gecloud", self.gecloud)
         self.gecloud.sim_now = self.midnight
         self.gecloud.test_storage = self.test_storage
         ha_interface.gecloud = self.gecloud
@@ -325,6 +333,7 @@ class GECloudBudgetHarness:
                 run_async(self.gecloud.run(0, True))
             finally:
                 CALL_CONTEXT.reset(token)
+                my_predbat.components, my_predbat.log = real_components, real_log
             self.startup_calls = list(self.fake.calls)
             self.fake.calls.clear()
 

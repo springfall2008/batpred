@@ -351,6 +351,14 @@ class ComponentBase(ABC):
             return None
         return self.set_arg(arg, value)
 
+    def apps_yaml_value(self, arg):
+        """The raw value the user's apps.yaml gives arg - the snapshot set_arg_auto() decides by - or None.
+
+        None when apps.yaml does not set it, and on an instance with no base or a base with no snapshot. Read only.
+        """
+        raw_args = getattr(getattr(self, "base", None), "args_from_apps_yaml", None) or {}
+        return raw_args.get(arg)
+
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
         Retrieve a configuration argument from the base system.
@@ -377,6 +385,20 @@ class ComponentBase(ABC):
         coordinator = getattr(components, "coordinator", None) if components else None
         if coordinator:
             coordinator.report(self.component_name or type(self).__name__, report)
+
+    def allow_automatic_config(self, skip_settings=(), keep_user_settings=(), include_pv_only=False):
+        """Ask the coordinator to configure this component's inverters; returns whether it will (see Coordinator.allow_automatic()).
+
+        False when there is no coordinator - the standalone CLI harnesses with no CoordinatorHarness, and test
+        doubles built without ComponentBase.__init__, which may have no base at all - or when the coordinator's
+        base cannot be configured. On False nothing configures this component's inverters.
+        """
+        components = getattr(getattr(self, "base", None), "components", None)
+        coordinator = getattr(components, "coordinator", None) if components else None
+        if not coordinator:
+            return False
+        name = getattr(self, "component_name", None) or type(self).__name__
+        return coordinator.allow_automatic(name, skip_settings=skip_settings, keep_user_settings=keep_user_settings, include_pv_only=include_pv_only)
 
     def refresh_discovery(self):
         """Rebuild this component's discovery report and file it if it has moved on.

@@ -1229,56 +1229,6 @@ class Components:
         """The display names of every active inverter component, for user-facing messages."""
         return [COMPONENT_LIST[name]["name"] for name, component in self.components.items() if component and COMPONENT_LIST.get(name, {}).get("inverter", False) and serves_inverter(component)]
 
-    def inverter_source_status(self):
-        """
-        Every configured inverter component paired with whether it is currently healthy.
-
-        The name of an inverter type is not much help when nobody chose it: with inverter_type
-        absent from apps.yaml the only thing Predbat can name is the assumed GE default, which on
-        the Solis install in #4990 read as "check the GivEnergy credentials". What the user needs
-        instead is which inverter components they actually have configured and which of those is
-        failing, so a component-level fault is reported as a component-level fault.
-
-        Components that failed to construct are included even though they are inactive, and so
-        absent from inverter_source_names(): a component that never loaded is precisely the one
-        worth telling the user about.
-
-        Current health comes from is_alive() - the same test the dashboard's health reporting
-        already consumes - because count_errors is a lifetime counter that nothing resets (a
-        component that needed retries at boot and then polled cleanly for a week would otherwise
-        be reported "in error" forever), and api_started answers "did run() ever return truthy"
-        rather than "is this serving data now" - the gateway declares itself started on a
-        successful run() with no inverter args set, so it would read OK with no data ever
-        delivered. The lifetime counter is demoted to secondary detail, and only consulted when
-        the component is not currently alive: a retrying startup has counted errors and never
-        started, while api_started-but-stale reads as "not responding". getattr keeps the
-        api_started fallback working for components that predate the flag.
-        """
-        status = []
-        for name, component_info in COMPONENT_LIST.items():
-            if not component_info.get("inverter", False):
-                continue
-            load_error = self.load_error(name)
-            component = self.components.get(name, None)
-            if component and not serves_inverter(component):
-                continue
-            if load_error is not None:
-                state = "failed to start: {}".format(load_error)
-            elif not component:
-                continue
-            elif self.is_alive(name):
-                state = "OK"
-            else:
-                errors = self.get_error_count(name) or 0
-                if errors:
-                    state = "in error, {} error{} so far".format(errors, "s" if errors != 1 else "")
-                elif not getattr(component, "api_started", True):
-                    state = "still starting, no data yet"
-                else:
-                    state = "not responding"
-            status.append("{} ({})".format(component_info["name"], state))
-        return status
-
     def get_all(self):
         all_components = [name for name in self.components.keys()]
         return all_components

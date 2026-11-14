@@ -3199,15 +3199,12 @@ def test_window_warning_names_components_when_type_unset(test_name, my_predbat, 
     """
     Issue #4990: a Solis Cloud comms failure must not be reported as a GivEnergy credential problem.
 
-    inverter_type defaults to GE when apps.yaml does not set it, and on a Solis install it is
-    automatic_config() that sets it - which only runs once discovery has succeeded. So a SolisCloud
-    outage at startup leaves the type at the GE default, and the window-read warnings then tell a
-    Solis owner to "check the GivEnergy credentials", naming hardware they do not own and a
-    credential they cannot have got wrong.
-
-    With the type merely assumed the message must instead say so and list the inverter components
-    that ARE configured, with whether each is in error. An explicitly configured GE keeps the
-    original credentials wording: there the type is the user's own statement about their hardware.
+    On a Solis install it is automatic_config() that sets inverter_type - which only runs once
+    discovery has succeeded. When the type used to default to GE, a SolisCloud outage at startup left
+    the window-read warnings telling a Solis owner to "check the GivEnergy credentials". There is no
+    default now: with the type unset the inverter is not built at all, and the error names the
+    component it is waiting for rather than GivEnergy. An explicitly configured GE keeps the
+    credentials wording: there the type is the user's own statement about their hardware.
     """
     from components import Components
     from tests.test_infra import FakeComponentTask, FakeInverterComponent
@@ -3273,21 +3270,25 @@ def test_window_warning_names_components_when_type_unset(test_name, my_predbat, 
 
     try:
         # Case 1: inverter_type absent, Solis component registered and erroring - the reported case.
-        statuses = run_update("solis", FakeInverterComponent(errors=3, api_started=False, updated_recently=False))
-        charge_status, export_status = (statuses + ["", ""])[:2]
-        for status in (charge_status, export_status):
-            if "GivEnergy credentials" in status:
-                print(f"ERROR: {test_name} - an assumed inverter type must not send a Solis owner to check GivEnergy credentials, got: {status}")
+        # The inverter is not built; the error waits for the Solis component rather than naming GivEnergy.
+        my_predbat.components = Components(my_predbat)
+        my_predbat.components.components["solis"] = FakeInverterComponent(errors=3, api_started=False, updated_recently=False)
+        my_predbat.components.component_tasks["solis"] = FakeComponentTask()
+        original_record_status = my_predbat.record_status
+        my_predbat.record_status = lambda message, **kwargs: None
+        try:
+            Inverter(my_predbat, 0)
+            print(f"ERROR: {test_name} - an inverter with no inverter_type should not be built")
+            failed = True
+        except ValueError as e:
+            if "GivEnergy" in str(e):
+                print(f"ERROR: {test_name} - an unset inverter type must not send a Solis owner to GivEnergy, got: {e}")
                 failed = True
-            if "no inverter_type is set" not in status:
-                print(f"ERROR: {test_name} - status should say inverter_type was never set, got: {status}")
+            if "waiting for Solis Cloud API to configure this inverter - or set inverter_type in apps.yaml to match your inverter" not in str(e):
+                print(f"ERROR: {test_name} - the error should name the component it waits for and say how to set the type, got: {e}")
                 failed = True
-            if "Solis Cloud API" not in status:
-                print(f"ERROR: {test_name} - status should list the configured inverter component, got: {status}")
-                failed = True
-            if "in error, 3 errors so far" not in status:
-                print(f"ERROR: {test_name} - status should say whether the listed component is in error, got: {status}")
-                failed = True
+        finally:
+            my_predbat.record_status = original_record_status
 
         # Case 2: inverter_type explicitly configured - the credentials wording is still right.
         my_predbat.args["inverter_type"] = ["GE"]
@@ -3296,9 +3297,6 @@ def test_window_warning_names_components_when_type_unset(test_name, my_predbat, 
         for status in (charge_status, export_status):
             if "check the GivEnergy credentials" not in status:
                 print(f"ERROR: {test_name} - a configured GE type should still name its credentials, got: {status}")
-                failed = True
-            if "no inverter_type is set" in status:
-                print(f"ERROR: {test_name} - inverter_type was set, so the status must not claim otherwise, got: {status}")
                 failed = True
 
         if update_errors:
@@ -4705,46 +4703,117 @@ def test_battery_scaling_invalid_value_clamped(test_name, my_predbat):
     return failed
 
 
-def test_inverter_type_default_warning(test_name, my_predbat):
+def test_inverter_type_required(test_name, my_predbat):
     """
-    Verify Inverter.__init__ warns when inverter_type is not set in apps.yaml and Predbat is
-    silently assuming GivEnergy (GE) - issue #4822, where a fully custom entity-based setup with
-    no inverter_type configured had its scheduled_discharge_enable entity silently overridden by
-    the GE fallback, with nothing in the log distinguishing an assumed GE from a configured one.
+    Verify Inverter refuses to build when inverter_type is not set for its slot, rather than
+    silently assuming GivEnergy (GE).
+
+    The GE default once overrode a fully custom setup's scheduled_discharge_enable entity (#4822)
+    and sent a Solis owner to check GivEnergy credentials (#4990). An unset type is now an error:
+    a "waiting" one while an inverter component is active and may yet configure the slot, and a
+    "must be set" one otherwise. A list shorter than num_inverters leaves the later slot unset too.
     """
     failed = False
     print("**** Running Test: {} ****".format(test_name))
 
-    orig_inverter_type = my_predbat.args.get("inverter_type")
+    class StubComponents:
+        """Just enough of the component registry for Inverter's inverter-source questions."""
+
+        def __init__(self, active, names):
+            """Record whether an inverter component is active and the names it reports."""
+            self.active = active
+            self.names = names
+
+        def inverter_source_active(self):
+            """Whether any inverter component is active."""
+            return self.active
+
+        def inverter_source_names(self):
+            """Display names of the active inverter components."""
+            return self.names
+
+    saved_args = {key: (key in my_predbat.args, my_predbat.args.get(key)) for key in ("inverter_type", "givtcp_rest", "num_inverters")}
+    orig_components = my_predbat.components
     orig_log = my_predbat.log
+    orig_record_status = my_predbat.record_status
+    log_messages = []
+    statuses = []
+    my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+    # Captured rather than recorded, so the error status this test provokes does not leak into later tests
+    my_predbat.record_status = lambda message, had_errors=False, **kwargs: statuses.append((str(message), had_errors))
     my_predbat.args["givtcp_rest"] = None
 
-    def warned(log_messages):
-        return any("inverter_type is not set" in msg for msg in log_messages)
+    def expect_error(index, expected):
+        """Build Inverter(index) and report a failure unless it raises ValueError containing expected."""
+        try:
+            Inverter(my_predbat, index)
+        except ValueError as e:
+            if expected not in str(e):
+                print("ERROR: expected ValueError containing '{}', got '{}'".format(expected, e))
+                return True
+            if not any(msg.startswith("Error: ") and expected in msg for msg in log_messages):
+                print("ERROR: expected the error '{}' to be logged".format(expected))
+                return True
+            if not any(message.startswith("Error: ") and expected in message and had_errors for message, had_errors in statuses):
+                print("ERROR: expected the error '{}' to be recorded as a status with had_errors".format(expected))
+                return True
+            return False
+        print("ERROR: Inverter {} built with no inverter_type, expected ValueError containing '{}'".format(index, expected))
+        return True
 
     try:
-        # inverter_type entirely absent - must warn
+        # 1. No type and no inverter component - the "must be set" error
+        my_predbat.components = StubComponents(False, [])
         my_predbat.args.pop("inverter_type", None)
-        log_messages = []
-        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
-        Inverter(my_predbat, 0)
-        if not warned(log_messages):
-            print("ERROR: expected a warning when inverter_type is not configured, got none")
+        failed |= expect_error(0, "Inverter 0: inverter_type is not set in apps.yaml")
+
+        # 2. No type but an inverter component active - the "waiting" error naming it
+        my_predbat.components = StubComponents(True, ["GivEnergy Cloud Direct"])
+        failed |= expect_error(0, "Inverter 0: inverter_type is not set yet - waiting for GivEnergy Cloud Direct to configure this inverter - or set inverter_type in apps.yaml to match your inverter")
+
+        # 3. A type list shorter than num_inverters - slot 0 builds, slot 1 is unset
+        my_predbat.components = StubComponents(False, [])
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["inverter_type"] = ["GE"]
+        try:
+            Inverter(my_predbat, 0)
+        except ValueError as e:
+            print("ERROR: Inverter 0 with inverter_type ['GE'] should build, got ValueError({})".format(e))
+            failed = True
+        failed |= expect_error(1, "Inverter 1: inverter_type is not set in apps.yaml")
+        my_predbat.args["num_inverters"] = 1
+
+        # 4. inverter_type explicitly configured as GE - builds and assumes nothing
+        log_messages.clear()
+        inv = Inverter(my_predbat, 0)
+        if inv.inverter_type != "GE":
+            print("ERROR: inverter_type ['GE'] should give Inverter 0 type GE, got {}".format(inv.inverter_type))
+            failed = True
+        if any("assuming" in msg for msg in log_messages):
+            print("ERROR: unexpected 'assuming' log line when inverter_type is explicitly set to GE")
             failed = True
 
-        # inverter_type explicitly configured as GE - must not warn
-        my_predbat.args["inverter_type"] = ["GE"]
-        log_messages = []
-        Inverter(my_predbat, 0)
-        if warned(log_messages):
-            print("ERROR: unexpected warning when inverter_type is explicitly set to GE")
+        # 5. An empty slot below a configured one (the user's own slot with no inverter_type) gets the ordinary
+        # missing-type errors: discovery closes any gap a released device leaves, so there is nothing to restart for
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["inverter_type"] = [None, "GEC"]
+        my_predbat.components = StubComponents(False, [])
+        failed |= expect_error(0, "Inverter 0: inverter_type is not set in apps.yaml - set inverter_type to match your inverter, see the documentation")
+        my_predbat.components = StubComponents(True, ["GivEnergy Cloud Direct"])
+        failed |= expect_error(0, "Inverter 0: inverter_type is not set yet - waiting for GivEnergy Cloud Direct to configure this inverter")
+        if any("restart Predbat" in message for message in log_messages):
+            print("ERROR: the removed restart message should not be logged")
             failed = True
+        my_predbat.args["num_inverters"] = 1
     finally:
         my_predbat.log = orig_log
-        if orig_inverter_type is None:
-            my_predbat.args.pop("inverter_type", None)
-        else:
-            my_predbat.args["inverter_type"] = orig_inverter_type
+        my_predbat.record_status = orig_record_status
+        my_predbat.components = orig_components
+        for key, (present, value) in saved_args.items():
+            if present:
+                my_predbat.args[key] = value
+            else:
+                my_predbat.args.pop(key, None)
     return failed
 
 
@@ -5835,6 +5904,8 @@ def run_inverter_tests(my_predbat_dummy):
     my_predbat.ha_interface = TestHAInterface()
     my_predbat.ha_interface.history_enable = False
     my_predbat.auto_config()
+    # inverter_type no longer defaults to GE, so name it for the tests that never set one
+    my_predbat.args["inverter_type"] = ["GE"]
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     my_predbat.forecast_minutes = 24 * 60
@@ -6033,7 +6104,7 @@ def run_inverter_tests(my_predbat_dummy):
 
     failed |= test_battery_scaling_invalid_value_clamped("battery_scaling_invalid_value_clamped", my_predbat)
 
-    failed |= test_inverter_type_default_warning("inverter_type_default_warning", my_predbat)
+    failed |= test_inverter_type_required("inverter_type_required", my_predbat)
     if failed:
         return failed
 

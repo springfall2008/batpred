@@ -198,6 +198,21 @@ def test_reverse_check_names_extra_settings_and_honours_allowed_extra():
     return 0
 
 
+def test_record_binding_an_unowned_setting_fails():
+    """validated_inverters() fails, naming the setting, when a record binds a name outside BINDING_SETTINGS."""
+    validated_inverters({"inverters": [_sunsynk_like_record()]})
+    record = _sunsynk_like_record()
+    record["entities"]["made_up_setting"] = {"entity_id": "sensor.made_up", "access": "r"}
+    try:
+        validated_inverters({"inverters": [record]})
+    except AssertionError as error:
+        assert "made_up_setting" in str(error), error
+    else:
+        raise AssertionError("a record binding an unowned setting must fail")
+    print("PASS: unowned setting fails")
+    return 0
+
+
 def run_discovery_contract_tests(my_predbat=None):
     """Run every discovery contract test, returning the number of failures."""
     failures = 0
@@ -212,4 +227,5 @@ def run_discovery_contract_tests(my_predbat=None):
     failures += test_site_setting_expected_only_on_the_first_record()
     failures += test_upper_case_serial_entity_id_is_an_entity_id()
     failures += test_reverse_check_names_extra_settings_and_honours_allowed_extra()
+    failures += test_record_binding_an_unowned_setting_fails()
     return failures

@@ -456,7 +456,7 @@ class Plan:
             entities = [entities]
         total = 0.0
         for inverter_n in range(len(entities)):
-            inverter_type = self.get_arg("inverter_type", "GE", indirect=False, index=inverter_n)
+            inverter_type = self.get_arg("inverter_type", None, indirect=False, index=inverter_n)
             num_load_entities = INVERTER_DEF.get(inverter_type, {}).get("num_load_entities", 1)
             power = 0.0
             for arg in ["load_power"] + ["load_power_{}".format(extra_n) for extra_n in range(1, num_load_entities)]:

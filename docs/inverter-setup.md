@@ -3790,8 +3790,8 @@ Charging is not stopped at a target SoC; Predbat's next calculation changes the 
 - Create a GitHub ticket for support and add what you know to the ticket
 - Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter
 - You can create a new inverter type in `apps.yaml` and change the options as to which controls it has
-- You **must** set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) with a custom name ('MINE' in the example below) - if you do not do this then Predbat will assume you have a GivEnergy inverter
-  and will apply inverter limits for that inverter (e.g. max charge/discharge of 2600W)
+- You **must** set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) with a custom name ('MINE' in the example below) - if you do not do this then Predbat stops with an error, as
+  inverter_type has no default unless a component configures the inverter automatically
 - Configure Predbat with the appropriate Home Assistant services to start charges and discharges, etc.
 - If your inverter doesn't expose a sensor for its power limits, set them as **literal watt values** in `apps.yaml` (e.g. `inverter_limit: 5000` not `inverter_limit: 5`). Predbat's unit auto-conversion only fires for sensor references — literal values are taken as watts regardless. See [Inverter control configurations](apps-yaml.md#inverter-control-configurations) for the full list of affected keys.
 

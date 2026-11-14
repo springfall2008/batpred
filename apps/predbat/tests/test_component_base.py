@@ -474,6 +474,23 @@ def test_component_base_set_arg_auto_keeps_user_setting(my_predbat):
     print("PASS: set_arg_auto(overwrite=False) keeps an explicit apps.yaml setting and still fills in unset keys")
 
 
+def test_component_base_apps_yaml_value(my_predbat):
+    """ComponentBase.apps_yaml_value() gives the raw apps.yaml snapshot value, None when the key, the snapshot or the base is missing."""
+    print("\n*** Test: ComponentBase.apps_yaml_value reads the apps.yaml snapshot ***")
+    base = MockBase()
+    base.args_from_apps_yaml = {"inverter_mode": ["switch.my_eco", None], "export_limit": 3600}
+    component = TestComponent(base)
+    assert component.apps_yaml_value("inverter_mode") == ["switch.my_eco", None]
+    assert component.apps_yaml_value("export_limit") == 3600
+    assert component.apps_yaml_value("load_today") is None, "a key apps.yaml does not set"
+    assert TestComponent(MockBase()).apps_yaml_value("export_limit") is None, "a base with no snapshot"
+    bare = TestComponent(MockBase())
+    del bare.base
+    assert bare.apps_yaml_value("export_limit") is None, "an instance with no base"
+    print("PASS: apps_yaml_value reads the snapshot and tolerates a missing one")
+    return False
+
+
 def test_component_base_set_state_external(my_predbat):
     """
     Test ComponentBase.set_state_external() forwards to the HA interface with the attributes intact.
@@ -1935,6 +1952,7 @@ def test_component_base_all(my_predbat):
         ("first_cleared_preset", test_component_base_first_cleared_when_run_presets_api_started, "first flag clears even when run() pre-sets api_started"),
         ("set_arg_auto", test_component_base_set_arg_auto, "set_arg_auto warns once on an apps.yaml override, silent otherwise"),
         ("set_arg_auto_keep", test_component_base_set_arg_auto_keeps_user_setting, "set_arg_auto(overwrite=False) keeps an explicit apps.yaml setting"),
+        ("apps_yaml_value", test_component_base_apps_yaml_value, "apps_yaml_value reads the apps.yaml snapshot"),
         ("set_state_external", test_component_base_set_state_external, "set_state_external forwards to the HA interface"),
         ("midnight_utc_rewound", test_component_base_midnight_utc_ignores_rewound_base, "midnight_utc ignores a rewound base.midnight_utc"),
         ("minutes_now_derived", test_component_base_minutes_now_follows_update_time, "minutes_now follows update_time and ignores the faked value"),
