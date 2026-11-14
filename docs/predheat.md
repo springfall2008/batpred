@@ -188,6 +188,17 @@ If Climate Scheduler is unavailable, its schedule is disabled or invalid, or a
 required Workday lookup fails, Predheat falls back to its existing historical
 setpoint prediction.
 
+Predheat also forecasts explicit `hvac_mode: off` and `hvac_mode: heat` changes.
+An `off` interval prevents the simulated heat source from running, while the
+house and radiator water continue cooling normally. A node with `noChange: true`
+(or `temp: null`) can change HVAC mode without changing the temperature setpoint.
+The current HVAC state of the scheduled climate entity is also used for
+schedules containing only temperature changes. If it is `off`, heating remains
+disabled throughout the forecast unless a future `heat` node switches it back on.
+Only `heat` and `off` are modelled. An unknown current HVAC mode preserves the
+existing heating assumption for temperature-only schedules, but causes a fallback
+to historical setpoint prediction when explicit HVAC-mode changes are scheduled.
+
 ### Weather Compensation
 
 If your heat source makes use of weather compensation then add the following to the configuration to map out your heat curve. The example has a flow temp of 45C at -3C outside and 25C at 15C outside:

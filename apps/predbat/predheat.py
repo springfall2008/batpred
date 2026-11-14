@@ -136,6 +136,9 @@ class PredHeat:
         self.schedule_initial_temperature = None
         self.schedule_change_minutes = None
         self.schedule_change_temperatures = []
+        self.schedule_initial_enabled = True
+        self.schedule_mode_minutes = None
+        self.schedule_mode_enabled = []
         self.heat_pump_efficiency = HEAT_PUMP_EFFICIENCY.copy()
         self.gas_efficiency = GAS_EFFICIENCY.copy()
         self.delta_correction = DELTA_CORRECTION.copy()
@@ -390,6 +393,11 @@ class PredHeat:
     def load_target_schedule(self, now_local):
         """Load effective Climate Scheduler targets for this forecast."""
         self.schedule_change_minutes = None
+        self.schedule_change_temperatures = []
+        self.schedule_initial_temperature = None
+        self.schedule_mode_minutes = None
+        self.schedule_mode_enabled = []
+        self.schedule_initial_enabled = True
         entity_id = self.get_arg("target_temperature_schedule", None, indirect=False, domain="predheat")
         if not entity_id:
             return
@@ -459,6 +467,7 @@ class PredHeat:
         tz = now_local.tzinfo
         now_utc = now_local.astimezone(timezone.utc)
         events = []
+        mode_events = []
         day_names = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
         for day_offset in range(self.forecast_days + 2):
@@ -495,22 +504,12 @@ class PredHeat:
                 key = day_names[weekday]
 
             for node in schedules.get(key, []):
-                if not isinstance(node, dict) or node.get("noChange"):
+                if not isinstance(node, dict):
                     continue
-
-                # HVAC-off cannot be modelled by a target alone.
-                if node.get("hvac_mode") == "off":
-                    self.log("Predheat: HVAC-off node; using historical targets")
-                    return
-
                 try:
                     hour, minute = map(int, node["time"].split(":"))
                     if not (0 <= hour <= 23 and 0 <= minute <= 59):
                         continue
-                    temp = float(node["temp"])
-                    if not math.isfinite(temp):
-                        continue
-
                     wall = datetime(day.year, day.month, day.day, hour, minute)
                     try:
                         when = tz.localize(wall, is_dst=None)
@@ -518,18 +517,61 @@ class PredHeat:
                         when = tz.localize(wall, is_dst=True)
                     except pytz.NonExistentTimeError:
                         when = tz.normalize(tz.localize(wall, is_dst=False))
-
                     elapsed = (when.astimezone(timezone.utc) - now_utc).total_seconds() / 60.0
-
-                    if 0 < elapsed <= self.forecast_minutes:
-                        events.append((elapsed, temp))
-
                 except (KeyError, AttributeError, TypeError, ValueError):
                     continue
+                if not 0 < elapsed <= self.forecast_minutes:
+                    continue
+
+                # Temperature and HVAC mode are independent: a noChange node
+                # can still turn heating off or back on.
+                if not node.get("noChange") and node.get("temp") is not None:
+                    try:
+                        temp = float(node["temp"])
+                    except (TypeError, ValueError, OverflowError):
+                        pass
+                    else:
+                        if math.isfinite(temp):
+                            events.append((elapsed, temp))
+
+                hvac_mode = node.get("hvac_mode")
+                if hvac_mode is not None and hvac_mode != "":
+                    if hvac_mode not in ("heat", "off"):
+                        self.log("Predheat: Unsupported HVAC mode {}; using history".format(hvac_mode))
+                        return
+                    mode_events.append((elapsed, hvac_mode == "heat"))
 
         if not events and not any(schedules.get(k) for k in schedules):
             self.log("Predheat: Empty schedule; using history")
             return
+
+        # Scheduled mode transitions require a known initial HVAC mode.
+        # A temperature-only schedule also honours the current 'off' state,
+        # but retains legacy behaviour if the climate state is unavailable.
+        has_mode_nodes = bool(mode_events) or any(
+            isinstance(node, dict) and node.get("hvac_mode") in ("heat", "off")
+            for nodes in schedules.values() if isinstance(nodes, list)
+            for node in nodes
+        )
+        try:
+            current_mode = self.get_state(entity_id=entity_id, default=None)
+        except Exception as exc:
+            if has_mode_nodes:
+                self.log("Predheat: Cannot read current HVAC mode: {}; using history".format(exc))
+                return
+            current_mode = None
+
+        if has_mode_nodes and current_mode not in ("heat", "off"):
+            self.log("Predheat: Unsupported current HVAC mode {}; using history".format(current_mode))
+            return
+
+        if current_mode in ("heat", "off"):
+            self.schedule_initial_enabled = current_mode == "heat"
+            mode_events.sort(key=lambda point: point[0])
+            # An empty list is significant: known mode, no future transitions.
+            # None means the HVAC mode is unknown and the old model applies.
+            self.schedule_mode_minutes = [x[0] for x in mode_events]
+            self.schedule_mode_enabled = [x[1] for x in mode_events]
 
         events.sort(key=lambda point: point[0])
         self.schedule_initial_temperature = initial
@@ -546,6 +588,15 @@ class PredHeat:
         if index < 0:
             return self.schedule_initial_temperature
         return self.schedule_change_temperatures[index]
+
+    def get_heating_enabled(self, minute):
+        """Whether the Climate Scheduler permits space heating at this time."""
+        if self.schedule_mode_minutes is None:
+            return True
+        index = bisect_right(self.schedule_mode_minutes, minute) - 1
+        if index < 0:
+            return self.schedule_initial_enabled
+        return self.schedule_mode_enabled[index]
 
     def run_simulation(self, volume_temp, heating_active, save="best", last_predict_minute=None):
         internal_temp = self.internal_temperature[0]
@@ -642,8 +693,11 @@ class PredHeat:
             temp_diff_outside = internal_temp - external_temp
             temp_diff_inside = target_temp - internal_temp
 
-            # Thermostat model, override with current state also
-            if minute == 0:
+            # An explicit HVAC-off interval gates the thermostat, including
+            # any smart-thermostat preheat. The thermal model still cools.
+            if not self.get_heating_enabled(minute):
+                heating_on = False
+            elif minute == 0:
                 heating_on = heating_active
             elif heating_on and temp_diff_inside <= -self.hysteresis_on:
                 heating_on = False
@@ -866,7 +920,7 @@ class PredHeat:
         self.external_temperature, age_external = self.minute_data_entity(now_utc, "external_temperature", smoothing=True, temperature=True)
         self.internal_temperature, age_internal = self.minute_data_entity(now_utc, "internal_temperature", smoothing=True, temperature=True)
         self.target_temperature, age_target = self.minute_data_entity(now_utc, "target_temperature", temperature=True)
-        self.load_target_schedule(now_utc)
+        self.load_target_schedule(self.midnight_utc + timedelta(minutes=self.minutes_now))
         self.heating_energy, age_energy = self.minute_data_entity(now_utc, "heating_energy", incrementing=True, smoothing=True, scaling=self.heating_energy_scaling)
         # Heating energy history is optional; without it, valid temperature and
         # thermostat histories should still drive the forecast schedule.
