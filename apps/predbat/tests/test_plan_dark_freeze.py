@@ -115,7 +115,8 @@ def run_plan_dark_freeze_tests(my_predbat):
         scenario_predbat.prune_dead_plan_slots()
         export_after = scenario_predbat.export_limits_best[0]
 
-    dark_pv = sum(scenario_predbat.pv_forecast_minute.get(minute, 0.0) for minute in range(DARK_START - MINUTES_NOW, DARK_END - MINUTES_NOW))
+    # pv_forecast_minute is keyed by absolute minute from midnight, not by minutes from now
+    dark_pv = sum(scenario_predbat.pv_forecast_minute.get(minute, 0.0) for minute in range(DARK_START, DARK_END))
     print("PV in the dark slot {:.3f} kWh; nominal metric Demand {:.2f}, Freeze Export {:.2f}, export to 0% {:.2f}".format(dark_pv, demand_metric, freeze_metric, export_metric))
     print("After prune: Freeze Export -> {}, export to 0% -> {}".format(freeze_after, export_after))
 
