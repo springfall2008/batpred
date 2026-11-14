@@ -103,6 +103,11 @@ def load_debug_dump(my_predbat, debug_file):
     my_predbat.save_restore_dir = "./"
     my_predbat.load_user_config()
     my_predbat.args["threads"] = 0
+    # inverter_type no longer defaults to GE; a dump from an install that never set it is replayed as GE,
+    # the only place that default survives
+    if "inverter_type" not in my_predbat.args:
+        my_predbat.args["inverter_type"] = ["GE"] * my_predbat.num_inverters
+        print("Note: debug file has no inverter_type, assuming GE for a legacy dump")
 
 
 def apply_overrides(my_predbat, overrides):

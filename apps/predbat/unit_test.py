@@ -547,6 +547,8 @@ def create_predbat():
     my_predbat.ha_interface.base = my_predbat
     my_predbat.ha_interface.history_enable = False
     my_predbat.auto_config()
+    # inverter_type no longer defaults to GE, so name it once for every test that never set one
+    my_predbat.args["inverter_type"] = ["GE"]
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     my_predbat.forecast_minutes = 24 * 60

@@ -348,8 +348,8 @@ def test_find_battery_size_no_sensors(my_predbat):
     inv.soc_max = 10.0
     inv.battery_scaling = 1.0
 
-    # Don't setup sensors - they should be None
-    my_predbat.args = {}
+    # Don't setup sensors - they should be None. inverter_type stays, as the later tests still build inverters
+    my_predbat.args = {"inverter_type": ["GE"]}
     my_predbat.debug_enable = True
 
     # Should return None when sensors not configured
@@ -2137,6 +2137,8 @@ def run_find_battery_size_tests(my_predbat):
     my_predbat.ha_interface = TestHAInterface()
     my_predbat.ha_interface.history_enable = True
     my_predbat.auto_config()
+    # inverter_type no longer defaults to GE, so name it for the tests that never set one
+    my_predbat.args["inverter_type"] = ["GE"]
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     my_predbat.forecast_minutes = 48 * 60

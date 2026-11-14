@@ -709,6 +709,8 @@ def run_find_charge_curve_tests(my_predbat):
     my_predbat.ha_interface = TestHAInterface()
     my_predbat.ha_interface.history_enable = True
     my_predbat.auto_config()
+    # inverter_type no longer defaults to GE, so name it for the tests that never set one
+    my_predbat.args["inverter_type"] = ["GE"]
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     my_predbat.forecast_minutes = 48 * 60

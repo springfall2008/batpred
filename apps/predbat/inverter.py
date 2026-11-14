@@ -157,61 +157,18 @@ class Inverter:
         component can be active at once, so naming whichever happened to be checked first sends
         the user to look at credentials for hardware they may not even own. Falls back to the
         active component names when the type has no display name.
-
-        An unset type is not a statement about the hardware. With inverter_type absent from
-        apps.yaml the type is "GE" only because nothing said otherwise, so naming GivEnergy told
-        the Solis owner in #4990 to go and check credentials for hardware they do not own. The
-        active components are the better answer there, and INVERTER_DEF is consulted only if there
-        are none - a defaulted type with no component is a bare apps.yaml setup, where "GivEnergy"
-        at least matches the behaviour Predbat is actually using.
-
-        Whether the type is unset is re-derived at message time rather than taken from a
-        constructor snapshot: a component's automatic_config() writes inverter_type into
-        base.args once discovery succeeds, and Inverter objects outlive that, so a startup-time
-        flag goes stale in both directions (#4990).
         """
         components = getattr(self.base, "components", None)
         names = components.inverter_source_names() if components else []
-        if self.inverter_type_is_assumed() and names:
-            return ", ".join(names)
         name = INVERTER_DEF.get(self.inverter_type, {}).get("name", None)
         if name:
             return name
         return ", ".join(names) if names else self.inverter_type
 
-    def inverter_type_is_assumed(self):
-        """Whether inverter_type is currently unset, so GE is Predbat's assumption not a choice.
-
-        Deliberately re-derived from base.args every time rather than remembered from Inverter
-        construction: components write inverter_type into base.args after discovery (each one's
-        automatic_config()), while Inverter objects persist across cycles, so a snapshot taken at
-        construction would keep asserting "no inverter_type is set" long after Solis had been
-        discovered and configured (#4990).
-        """
-        return "inverter_type" not in self.base.args
-
-    def inverter_type_assumed_name(self):
-        """Display name of the assumed inverter type, for user-facing messages."""
-        return INVERTER_DEF.get(self.inverter_type, {}).get("name", None) or self.inverter_type
-
     def inverter_source_hint(self):
         """
-        What the user should go and check when a configured source returns no data.
-
-        Normally that is the named source's credentials. When inverter_type was never set there is
-        no credential Predbat can point at with any confidence, so it says so and lists the
-        inverter components that ARE configured together with whether each is in error - on #4990
-        a SolisCloud comms failure surfaced as "check the GivEnergy credentials", naming neither
-        the real component nor the real fault. The assumed type is named from INVERTER_DEF rather
-        than hardcoded, so the wording follows whatever the default actually is.
+        What the user should go and check when a configured source returns no data: the named source's credentials.
         """
-        components = getattr(self.base, "components", None)
-        status = components.inverter_source_status() if components else []
-        if self.inverter_type_is_assumed() and status:
-            listed = "; ".join(status)
-            return "no inverter_type is set in apps.yaml so {} ({}) is assumed - configured inverter components: {} - set inverter_type to match your inverter, and check any component reported above as in error".format(
-                self.inverter_type_assumed_name(), self.inverter_type, listed
-            )
         return "check the {} credentials and that the account still has this inverter attached".format(self.inverter_source_name())
 
     def _poll_after_write(self, entity_id, matched, refresh=True, required_unit=None):
@@ -540,14 +497,19 @@ class Inverter:
             self.base.set_arg("battery_scaling_last_known", self.battery_scaling, index=self.id)
         self.battery_scaling_config = self.battery_scaling
 
-        self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
-        # An assumed type is not a chosen one. The user-facing "source returned no data" warnings
-        # must not name it as though the user had picked it (#4990); those messages re-derive the
-        # fact at message time (inverter_type_is_assumed) because discovery can set the type later.
-        if self.inverter_type_is_assumed():
-            self.log(
-                "Warn: Inverter {}: inverter_type is not set in apps.yaml, assuming {} ({}) - if this is not correct, set inverter_type to match your inverter, see the documentation".format(self.id, self.inverter_type_assumed_name(), self.inverter_type)
-            )
+        self.inverter_type = self.base.get_arg("inverter_type", None, indirect=False, index=self.id)
+        # There is no assumed type: a GE default overrode a custom setup's entities (#4822) and sent a
+        # Solis owner to check GivEnergy credentials (#4990). While an inverter component is active it
+        # may still write the type once discovery succeeds, so that case says it is waiting.
+        if not self.inverter_type:
+            if self.inverter_source_active():
+                names = ", ".join(self.base.components.inverter_source_names())
+                message = "Inverter {}: inverter_type is not set yet - waiting for {} to configure this inverter".format(self.id, names)
+            else:
+                message = "Inverter {}: inverter_type is not set in apps.yaml - set inverter_type to match your inverter, see the documentation".format(self.id)
+            self.base.log("Error: " + message)
+            self.base.record_status("Error: " + message, had_errors=True)
+            raise ValueError(message)
 
         # Read user defined inverter type
         if "inverter" in self.base.args:

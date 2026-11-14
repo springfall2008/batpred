@@ -1263,7 +1263,11 @@ The number of inverters you have. If you increase this above 1 you must provide 
 
 ### inverter_type
 
-inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should be set to one of the inverter types that are already pre-programmed into Predbat:
+inverter_type must be set to one of the inverter types that are already pre-programmed into Predbat (or to your own custom type).
+It has no default: it may be left out only when a component configures the inverter automatically (any `*_automatic` option, such as `ge_cloud_automatic`, or `givtcp_rest`).
+Otherwise Predbat stops with the error `inverter_type is not set in apps.yaml`.
+
+The pre-programmed types are:
 
   DeyeCloud: DEYE Cloud API integration (EXPERIMENTAL)
   EnphaseCloud: Enphase Cloud integration (EXPERIMENTAL)

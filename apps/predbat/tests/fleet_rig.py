@@ -184,6 +184,8 @@ def setup_fleet(
     # Configure args before creating the inverters - Inverter() reads them in its constructor
     my_predbat.args["num_inverters"] = count
     my_predbat.num_inverters = count
+    # inverter_type no longer defaults to GE for a slot the list does not reach, so name every member's type
+    my_predbat.args["inverter_type"] = ["GE"] * count
     for arg, entity in FLEET_ENTITY_ARGS:
         my_predbat.args[arg] = [entity + entity_suffix(id) for id in range(count)]
     my_predbat.args["battery_scaling"] = [member.battery_scaling for member in fleet]
