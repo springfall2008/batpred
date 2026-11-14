@@ -1472,7 +1472,7 @@ class Inverter:
                         clean_increment=False,
                         smoothing=False,
                         divide_by=1.0,
-                        scale=self.battery_scaling,
+                        scale=1.0,  # A percent is already of usable capacity, and soc_max already includes battery_scaling (#6183)
                         required_unit="%",
                         can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                     )
