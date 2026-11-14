@@ -43,6 +43,9 @@ from const import (
     INVERTER_CLOCK_SKEW_WARN_MINUTES,
     INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
     BATTERY_SIZE_RETRY_MINUTES,
+    BATTERY_TEMPERATURE_CURVE_MIN_POWER,
+    BATTERY_TEMPERATURE_CURVE_SOC_MAX,
+    BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
     INVERTER_LIMIT_DEFAULT_W,
     EXPORT_LIMIT_DEFAULT_W,
 )
@@ -1727,6 +1730,112 @@ class Inverter:
             missing_settings = [setting for setting, entity_id in [(soc_label, soc_kwh_sensor), ("{}_rate".format(curve_type), charge_rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
             self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), {} not set in apps.yaml".format(self.id, curve_type, ", ".join(missing_settings)))
         return {}
+
+    def find_battery_temperature_samples(self):
+        """
+        Scan the recent history for minutes that show how fast the battery accepts charge at each temperature.
+
+        A minute counts when Predbat was Charging, the charge rate was written at (nearly) its maximum, the battery
+        was taking charge and the SoC was below BATTERY_TEMPERATURE_CURVE_SOC_MAX, so the high-SoC taper (which
+        battery_charge_power_curve models) cannot be mistaken for a cold battery. The rate the battery actually
+        took is recorded in C (kW per kWh of soc_max), the unit battery_temperature_charge_curve uses.
+
+        Returns:
+            {day: {temperature: [sum_of_c, minutes]}} keyed by the UTC date (YYYY-MM-DD) and the whole degree
+            the temperature truncates to (as find_battery_temperature_cap() looks it up), or None when the
+            sensors or their history are missing.
+        """
+        predbat_status_sensor = self.base.prefix + ".status"
+        soc_kwh_percent = "soc_percent" in self.base.args
+        if soc_kwh_percent:
+            soc_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
+        else:
+            soc_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
+        charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
+        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
+        battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
+        temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False)
+
+        if not (soc_sensor and charge_rate_sensor and battery_power_sensor and temperature_sensor) or self.soc_max <= 0:
+            self.log("Warn: Inverter {} Cannot learn the battery temperature charge curve, soc, charge_rate, battery_power and battery_temperature_history must all be set in apps.yaml".format(self.id))
+            return None
+        battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
+
+        days = self.base.max_days_previous
+        history = {}
+        for name, entity_id in [("soc", soc_sensor), ("charge_rate", charge_rate_sensor), ("battery_power", battery_power_sensor), ("temperature", temperature_sensor), ("status", predbat_status_sensor)]:
+            data = self.base.get_history_wrapper(entity_id=entity_id, days=days, required=False)
+            if not data:
+                self.log("Warn: Inverter {} Cannot learn the battery temperature charge curve, no history found for {} ({})".format(self.id, name, entity_id))
+                return None
+            history[name] = data[0]
+
+        def to_minutes(entries, scale=1.0, required_unit=None):
+            values, _ = minute_data(
+                entries,
+                days,
+                self.base.now_utc,
+                "state",
+                "last_updated",
+                backwards=True,
+                clean_increment=False,
+                smoothing=False,
+                divide_by=1.0,
+                scale=scale,
+                required_unit=required_unit,
+                can_modify_history=True,  # history is not accessed after this point
+            )
+            return values
+
+        soc = to_minutes(history["soc"], scale=self.battery_scaling, required_unit="%" if soc_kwh_percent else "kWh")
+        charge_rate = to_minutes(history["charge_rate"], required_unit="W")
+        battery_power = to_minutes(history["battery_power"], required_unit="W")
+        temperature = to_minutes(history["temperature"])
+        status = minute_data_state(history["status"], days, self.base.now_utc, "state", "last_updated")
+
+        max_power = self.battery_rate_max_charge * MINUTE_WATT
+        min_charge_rate = max_power * 0.95
+        min_battery_power = max(max_power * BATTERY_TEMPERATURE_CURVE_MIN_POWER, 1.0)
+        battery_loss = self.base.battery_loss if self.base.battery_loss > 0 else 1.0
+        samples = {}
+        for minute in range(0, min(len(soc), len(charge_rate), len(battery_power), len(temperature), len(status))):
+            this_status = status.get(minute, "")
+            if this_status.split(",")[0].strip() != "Charging":
+                continue
+            if charge_rate.get(minute, 0) < min_charge_rate:
+                continue
+            power = battery_power.get(minute, 0)
+            if battery_power_invert:
+                power = -power
+            if power >= 0 or abs(power) < min_battery_power:
+                # Not charging, or so little that the charge has finished rather than been limited
+                continue
+            soc_percent = soc.get(minute, None)
+            if soc_percent is None:
+                continue
+            if not soc_kwh_percent:
+                soc_percent = soc_percent / self.soc_max * 100.0
+            if soc_percent >= BATTERY_TEMPERATURE_CURVE_SOC_MAX:
+                continue
+            temp = temperature.get(minute, None)
+            if temp is None or temp == 0:
+                # An exact 0 is how several integrations report a missing reading
+                continue
+            temp = int(max(temp, -20))
+            if temp >= BATTERY_TEMPERATURE_CURVE_TEMP_MAX:
+                continue
+            rate_c = abs(power) / 1000.0 / battery_loss / self.soc_max
+            day = (self.base.now_utc - timedelta(minutes=minute)).strftime("%Y-%m-%d")
+            day_bins = samples.setdefault(day, {})
+            entry = day_bins.setdefault(temp, [0.0, 0])
+            entry[0] += rate_c
+            entry[1] += 1
+
+        for day_bins in samples.values():
+            for entry in day_bins.values():
+                entry[0] = dp4(entry[0])
+        self.log("Inverter {} Battery temperature curve: found {} charging minutes below {}% SoC in {} days of history".format(self.id, sum(entry[1] for day_bins in samples.values() for entry in day_bins.values()), BATTERY_TEMPERATURE_CURVE_SOC_MAX, days))
+        return samples
 
     def create_entity(self, entity_name, value, uom=None, device_class=None, icon=None):
         """

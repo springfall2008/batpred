@@ -1596,6 +1596,9 @@ class Execute:
                         # Stop retrying every cycle when not in auto mode and no curve found
                         self.computed_discharge_curve = True
 
+            if id == 0 and self.battery_temperature_charge_curve_auto:
+                self.battery_temperature_curve_auto_update(inverter)
+
             # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
             if not found_first:
                 found_first = True

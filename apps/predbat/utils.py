@@ -38,6 +38,10 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    BATTERY_TEMPERATURE_CURVE_MIN_MINUTES,
+    BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS,
+    BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS,
+    BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
 )
 import copy
 import pytz
@@ -2628,6 +2632,140 @@ def find_battery_temperature_cap(battery_temperature, battery_temperature_curve,
     battery_temperature_rate_cap = soc_max * battery_temperature_adjust / 60.0
 
     return min(battery_temperature_rate_cap, max_rate)
+
+
+def _temperature_sample_minutes(day_bins):
+    """
+    Total charging minutes held in one day of battery temperature samples ({temperature: [sum_of_c, minutes]}).
+    """
+    return sum(entry[1] for entry in day_bins.values())
+
+
+def clean_battery_temperature_samples(data):
+    """
+    Turn battery temperature samples read back from storage into {day: {int temperature: [float sum_of_c, int minutes]}}.
+
+    Storage round-trips through JSON, so the temperature keys come back as strings; anything malformed is dropped
+    rather than trusted, so a corrupt cache can only lose what was learned, never poison the curve.
+    """
+    cleaned = {}
+    if not isinstance(data, dict):
+        return cleaned
+    for day, day_bins in data.items():
+        try:
+            datetime.strptime(str(day), "%Y-%m-%d")
+        except ValueError:
+            continue
+        if not isinstance(day_bins, dict):
+            continue
+        clean_bins = {}
+        for temp, entry in day_bins.items():
+            try:
+                temp = int(temp)
+                rate_sum, minutes = float(entry[0]), int(entry[1])
+            except (ValueError, TypeError, IndexError, KeyError):
+                continue
+            if minutes > 0 and rate_sum >= 0 and temp < BATTERY_TEMPERATURE_CURVE_TEMP_MAX:
+                clean_bins[temp] = [rate_sum, minutes]
+        if clean_bins:
+            cleaned[str(day)] = clean_bins
+    return cleaned
+
+
+def merge_battery_temperature_samples(stored, scanned, today, max_age_days=BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS):
+    """
+    Merge the samples from a fresh history scan into the stored samples, and drop days older than max_age_days.
+
+    Each scan re-reads the whole history window, so a day is replaced rather than added to - adding would count
+    the same minutes again every scan. The oldest day of a window is only partly covered (the window starts part way
+    through it), so a scanned day only replaces a stored one when it holds at least as many charging minutes.
+
+    Args:
+        stored: {day: {temperature: [sum_of_c, minutes]}} as kept in storage
+        scanned: the same shape, from Inverter.find_battery_temperature_samples()
+        today: datetime.date the ages are measured from
+        max_age_days: days kept
+
+    Returns:
+        A new merged dictionary; stored and scanned are not modified.
+    """
+    merged = {day: {temp: list(entry) for temp, entry in day_bins.items()} for day, day_bins in stored.items()}
+    for day, day_bins in scanned.items():
+        if day not in merged or _temperature_sample_minutes(day_bins) >= _temperature_sample_minutes(merged[day]):
+            merged[day] = {temp: list(entry) for temp, entry in day_bins.items()}
+    for day in list(merged.keys()):
+        age = (today - datetime.strptime(day, "%Y-%m-%d").date()).days
+        if age > max_age_days:
+            del merged[day]
+    return merged
+
+
+def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, half_life_days=BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS):
+    """
+    Work out a battery_temperature_charge_curve from stored samples.
+
+    Each whole degree's rate is the mean of its charging minutes, with every day weighted down by its age
+    (halving every half_life_days) so recent behaviour wins. A degree is only learned once it has min_minutes of
+    charging behind it, so one short charge cannot set the rate for a whole winter.
+
+    Args:
+        samples: {day: {temperature: [sum_of_c, minutes]}}
+        today: datetime.date the ages are measured from
+
+    Returns:
+        ({temperature: rate in C}, {temperature: minutes}) for the learned degrees only
+    """
+    weighted_sum = {}
+    weighted_minutes = {}
+    minutes = {}
+    for day, day_bins in samples.items():
+        age = max((today - datetime.strptime(day, "%Y-%m-%d").date()).days, 0)
+        weight = 0.5 ** (age / half_life_days) if half_life_days > 0 else 1.0
+        for temp, (rate_sum, count) in day_bins.items():
+            weighted_sum[temp] = weighted_sum.get(temp, 0.0) + rate_sum * weight
+            weighted_minutes[temp] = weighted_minutes.get(temp, 0.0) + count * weight
+            minutes[temp] = minutes.get(temp, 0) + count
+    curve = {}
+    curve_minutes = {}
+    for temp in sorted(minutes):
+        if minutes[temp] >= min_minutes and weighted_minutes[temp] > 0:
+            curve[temp] = round(weighted_sum[temp] / weighted_minutes[temp], 2)
+            curve_minutes[temp] = minutes[temp]
+    return curve, curve_minutes
+
+
+def overlay_battery_temperature_curve(configured, learned):
+    """
+    Lay a learned battery temperature charge curve over the configured one.
+
+    A learned degree replaces the configured value. A degree with neither is filled so the learned curve has no
+    holes - a hole would otherwise fall back to the 20 degree value and plan an uncapped charge in the middle of a
+    cold range: between two learned degrees by straight-line interpolation, and below the coldest learned degree
+    (down to 1) with the coldest learned rate, as a colder battery is never expected to charge faster. 0 and below
+    are left to the configured curve, because an exact 0 is how several integrations report a missing reading.
+
+    Args:
+        configured: battery_temperature_charge_curve from apps.yaml, {int: float}
+        learned: {int: float} from learn_battery_temperature_curve()
+
+    Returns:
+        The combined curve, a new dictionary.
+    """
+    curve = dict(configured)
+    if not learned:
+        return curve
+    curve.update(learned)
+    temps = sorted(learned)
+    coldest = temps[0]
+    for temp in range(1, coldest):
+        if temp not in configured:
+            curve[temp] = learned[coldest]
+    for lower, upper in zip(temps, temps[1:]):
+        for temp in range(lower + 1, upper):
+            if temp not in configured and temp != 0:
+                fraction = (temp - lower) / (upper - lower)
+                curve[temp] = round(learned[lower] + (learned[upper] - learned[lower]) * fraction, 2)
+    return curve
 
 
 def find_charge_rate(

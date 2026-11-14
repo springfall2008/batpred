@@ -20,6 +20,7 @@ dictionaries for use by the prediction engine.
 
 from datetime import datetime, timedelta
 from utils import clock_change_minutes, minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
+from utils import clean_battery_temperature_samples, merge_battery_temperature_samples, learn_battery_temperature_curve, overlay_battery_temperature_curve
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -43,6 +44,7 @@ from const import (
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
+    BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES,
 )
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -4125,6 +4127,69 @@ class Fetch:
         num_cars = min(self.get_arg("num_cars", 1), PREDBAT_MAX_CARS)
         self.car_charging_max_rate = [self.car_max_rate_cap(car_n) for car_n in range(max(num_cars, 1))]
 
+    def battery_temperature_curve_auto_update(self, inverter):
+        """
+        battery_temperature_charge_curve_auto: learn how fast this battery charges at each temperature and lay it
+        over the configured battery_temperature_charge_curve.
+
+        Called every cycle for the first inverter, after fetch_config_options() has reset the curve to its configured
+        value, so the overlay is re-applied from scratch each time. The history is only re-scanned every
+        BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES. What is learned is kept in storage for a year, because the history
+        window is only max_days_previous long and a cold spell's data would otherwise be gone by the next one.
+
+        Args:
+            inverter: the Inverter whose history is scanned
+        """
+        from ha import run_async
+
+        storage = self.components.get_component("storage") if self.components else None
+        today = self.now_utc.date()
+
+        if not self.battery_temperature_samples_loaded:
+            self.battery_temperature_samples_loaded = True
+            if storage:
+                try:
+                    data = run_async(storage.load("predbat", "battery_temperature_curve"))
+                except Exception as e:
+                    self.log("Warn: battery_temperature_charge_curve_auto: failed to load the learned samples: {}".format(e))
+                    data = None
+                self.battery_temperature_samples = clean_battery_temperature_samples(data.get("samples") if isinstance(data, dict) else None)
+            self.battery_temperature_curve_learned, self.battery_temperature_curve_minutes = learn_battery_temperature_curve(self.battery_temperature_samples, today)
+
+        if self.battery_temperature_curve_last_scan is None or (self.now_utc - self.battery_temperature_curve_last_scan) >= timedelta(minutes=BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES):
+            self.battery_temperature_curve_last_scan = self.now_utc
+            scanned = inverter.find_battery_temperature_samples()
+            if scanned is not None:
+                merged = merge_battery_temperature_samples(self.battery_temperature_samples, scanned, today)
+                if merged != self.battery_temperature_samples:
+                    self.battery_temperature_samples = merged
+                    if storage:
+                        try:
+                            if not run_async(storage.save("predbat", "battery_temperature_curve", {"samples": merged}, format="json")):
+                                self.log("Warn: battery_temperature_charge_curve_auto: failed to save the learned samples")
+                        except Exception as e:
+                            self.log("Warn: battery_temperature_charge_curve_auto: failed to save the learned samples: {}".format(e))
+                learned, minutes = learn_battery_temperature_curve(self.battery_temperature_samples, today)
+                if learned != self.battery_temperature_curve_learned:
+                    self.log("Info: Battery temperature charge curve learned (rate in C per degree): {}".format(learned))
+                self.battery_temperature_curve_learned, self.battery_temperature_curve_minutes = learned, minutes
+
+        configured = self.battery_temperature_charge_curve
+        self.battery_temperature_charge_curve = overlay_battery_temperature_curve(configured, self.battery_temperature_curve_learned)
+        self.dashboard_item(
+            self.prefix + ".battery_temperature_charge_curve",
+            state=len(self.battery_temperature_curve_learned),
+            attributes={
+                "curve": {str(temp): rate for temp, rate in sorted(self.battery_temperature_charge_curve.items())},
+                "learned": {str(temp): rate for temp, rate in sorted(self.battery_temperature_curve_learned.items())},
+                "learned_minutes": {str(temp): count for temp, count in sorted(self.battery_temperature_curve_minutes.items())},
+                "configured": {str(temp): rate for temp, rate in sorted(configured.items())},
+                "days": len(self.battery_temperature_samples),
+                "friendly_name": "Battery temperature charge curve (learned degrees)",
+                "icon": "mdi:thermometer-chevron-up",
+            },
+        )
+
     def fetch_ml_load_forecast(self, now_utc, save=True):
         """
         Fetches ML load forecast from sensor
@@ -4782,6 +4847,8 @@ class Fetch:
         # Temperature curve charge/discharge
         self.battery_temperature_charge_curve = self.validate_curve(self.args.get("battery_temperature_charge_curve", {}), "battery_temperature_charge_curve")
         self.battery_temperature_discharge_curve = self.validate_curve(self.args.get("battery_temperature_discharge_curve", {}), "battery_temperature_discharge_curve")
+        # Learn the charge curve from history and lay it over the configured one (see battery_temperature_curve_auto_update)
+        self.battery_temperature_charge_curve_auto = bool(self.get_arg("battery_temperature_charge_curve_auto", False))
 
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_min = self.get_arg("best_soc_min")

@@ -3064,6 +3064,34 @@ gaps in the curve above 20 will use 20 degrees, and gaps below 0 will use 0 degr
     0: 0.00
 ```
 
+### Learning the temperature charge curve automatically
+
+Every battery throttles differently in the cold, so rather than guessing the curve you can let Predbat learn it from your own charging history:
+
+```yaml
+  battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+  battery_temperature_charge_curve_auto: True
+```
+
+When **battery_temperature_charge_curve_auto** is True, Predbat looks back over your history (as far as `days_previous` goes) once an hour for minutes when:
+
+- Predbat was **Charging** and had set the charge rate to (nearly) its maximum,
+- the battery was taking charge, and
+- the battery was below 80% SoC, so the normal tail-off near full (see `battery_charge_power_curve`) is not mistaken for a cold battery.
+
+The rate the battery actually took in those minutes is recorded against the battery temperature (to the whole degree) and turned into a rate in C, exactly as `battery_temperature_charge_curve` is written.
+
+- A degree is only used once it has at least 30 minutes of charging behind it.
+- Recent charges count for more than old ones, so the curve follows a battery as it ages.
+- What has been learned is kept in Predbat's cache for a year. Last winter's cold-weather data is therefore still there when the next cold spell arrives, even though the history only goes back a few days.
+- The learned degrees are laid over your **battery_temperature_charge_curve**, which still applies wherever nothing has been learned yet. That makes it a good starting point: Predbat starts from your curve and corrects it as your battery is seen charging in the cold.
+- A gap between two learned degrees is filled in proportionally, and degrees colder than the coldest learned one (down to 1 degree) use the coldest learned rate. In both cases this only happens where your own curve has no value.
+- 20 degrees and above, and 0 degrees, are never learned. 20 is used for all warmer temperatures and must stay uncapped. An exact 0 is how several integrations report a missing reading.
+
+The entity **predbat.battery_temperature_charge_curve** shows how many degrees have been learned, with the learned and combined curves (and the minutes behind each degree) in its attributes.
+
+Only the first inverter's history is used, and only the charge curve is learned; `battery_temperature_discharge_curve` is unchanged.
+
 ## Weather Alert System
 
 Predbat can take data directly from the Meteo-Alarm feed and use it to trigger keeping your battery charged so you have power in the event of a power cut.

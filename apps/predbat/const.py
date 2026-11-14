@@ -133,6 +133,15 @@ INVERTER_CLOCK_SKEW_RESTART_MINUTES = 30
 INVERTER_CLOCK_SKEW_WARN_MINUTES = 5
 INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES = 60  # Minimum gap between repeats of the moderate-skew warning, per inverter, so it doesn't fire every 5-minute cycle
 BATTERY_SIZE_RETRY_MINUTES = 60  # Gap between retries of a battery size estimate that found nothing today, so an overnight charge is used the same morning
+
+# battery_temperature_charge_curve_auto - learning the charge rate a cold battery accepts from history
+BATTERY_TEMPERATURE_CURVE_SOC_MAX = 80  # Only learn from minutes below this SoC%, above it the SoC taper (battery_charge_power_curve) limits the rate instead
+BATTERY_TEMPERATURE_CURVE_TEMP_MAX = 20  # Never learn at or above this temperature: 20 is the curve's fallback for every warmer reading, so it must stay uncapped
+BATTERY_TEMPERATURE_CURVE_MIN_POWER = 0.02  # Ignore charging minutes below this fraction of the maximum rate, the charge has finished rather than been limited
+BATTERY_TEMPERATURE_CURVE_MIN_MINUTES = 30  # Charging minutes a whole degree needs before its learned rate is used
+BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS = 30  # Weight of a day's samples halves every this many days, so a battery that ages or a heater that is re-set is followed
+BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS = 400  # Samples older than this are dropped, a little over a year so last winter is still known when the next one starts
+BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES = 60  # Minimum gap between history scans, the curve changes over days not minutes
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
 INVERTER_LIMIT_DEFAULT_W = 7500.0  # Standing inverter AC limit when the user has not configured inverter_limit
