@@ -20,6 +20,15 @@ rejected.
 INVARIANT: a caller must not mutate any list or window dict it has handed to a queue_* entry point
 until it has read the matching handle. The four fan-outs in plan.py satisfy this; the 20-scenario
 byte-identical plan comparison is what keeps it that way.
+
+The trial memo (PredictionBatch.shared_trial) is built on that invariant. A fan-out queues every trial
+once per PV scenario, and each queue call used to copy the trial's ~100-window lists again, so the
+nominal, pv10 and pv90 jobs of one trial carried three equal copies. That defeated the per-batch
+marshalling memos (keyed on identity) and hashed the whole plan three times. Now the first scenario
+prepares the trial and the others are handed the same lists. Reading any handle flushes the batch and
+clears the memo, and the invariant forbids mutating an input before that, so a memo entry can never be
+older than the inputs it was prepared from. run_trial_memo_tests replays a full plan with
+VALIDATE_TRIAL_MEMO on, which re-prepares every hit and raises if it differs.
 """
 
 import math
@@ -67,6 +76,10 @@ def shape_batch_result(job, result, soc_range_min, soc_range_max, export_end_soc
     if job.want_export_end_soc:
         shaped = shaped + (export_end_soc,)
     return shaped
+
+
+# Set by run_trial_memo_tests: re-prepare every trial memo hit and raise if it differs from the shared copy
+VALIDATE_TRIAL_MEMO = False
 
 
 # The scenarios simulated with each target export floored at where the plan's nominal run ends. pv90 is
@@ -143,6 +156,40 @@ class PredictionBatch:
     owns the kernel context, with no reference cycle between the two.
     """
 
+    def shared_trial(self, key, inputs, prepare):
+        """Return a queued trial's prepared inputs, preparing them once per batch for all its PV scenarios.
+
+        key identifies the trial: the id() of each list in inputs plus every other argument the
+        preparation reads. inputs is held in the memo entry, so none of those ids can be reused by
+        another object while the entry exists. prepare builds the trial's private copies; the result is
+        shared by every job of the trial, which is safe because neither engine writes to its inputs
+        (the kernel takes them as const and clips charge windows into its own vectors, and the Python
+        engine's remove_intersecting_windows returns new lists).
+
+        Sound only under the module INVARIANT: an input may not be mutated until its handle has been
+        read, reading a handle flushes the batch, and flush_batch clears the memo.
+        """
+        entry = self.trial_memo.get(key)
+        if entry is None:
+            prepared = prepare()
+            self.trial_memo[key] = (inputs, prepared)
+            return prepared
+        if VALIDATE_TRIAL_MEMO:
+            fresh = prepare()
+            if fresh != entry[1]:
+                raise AssertionError("Stale trial memo: an input changed between scenario launches of one trial without its handle being read.\n  key {}\n  shared {}\n  fresh  {}".format(key, entry[1], fresh))
+        return entry[1]
+
+    def shared_cache_base(self, charge_limit, charge_window, export_limits, export_window):
+        """prediction_cache_base for a queued job, hashed once per batch for the set of lists it is given.
+
+        The scenarios of one trial share their lists (see shared_trial), so this hashes the plan once per
+        trial instead of once per scenario. The lists are held in the memo for the reason shared_trial
+        gives.
+        """
+        lists = (charge_limit, charge_window, export_limits, export_window)
+        return self.shared_trial(("base", id(charge_limit), id(charge_window), id(export_limits), id(export_window)), lists, lambda: prediction_cache_base(charge_limit, charge_window, export_limits, export_window))
+
     def enqueue_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, want_range=False, range_window=None, want_export_end_soc=False):
         """Queue one prediction and return a handle to its eventual result"""
         # A range job is never cached, and that is structural rather than the caller's choice: the
@@ -152,7 +199,7 @@ class PredictionBatch:
         base_hash = None
         sim_hash = None
         if cache and not want_range:
-            base_hash = prediction_cache_base(charge_limit, charge_window, export_limits, export_window)
+            base_hash = self.shared_cache_base(charge_limit, charge_window, export_limits, export_window)
             sim_hash = prediction_cache_combine(base_hash, pv_scenario, end_record, step)
 
         # The kernel tracks the SoC range itself over a step range, so a min/max job does not have to
@@ -240,6 +287,9 @@ class PredictionBatch:
 
     def flush_batch(self):
         """Run every pending job: cache hits first, then one kernel call, then any fallbacks"""
+        # Every queued input may be mutated once its handle is read, which is about to happen, so no
+        # trial prepared before this flush may be handed to a job queued after it (see shared_trial)
+        self.trial_memo = {}
         pending = self.pending_batch
         if not pending:
             return

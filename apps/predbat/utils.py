@@ -25,6 +25,7 @@ from email.utils import parsedate_to_datetime
 from io import StringIO
 from functools import lru_cache
 from const import (
+    TEMPERATURE_SCALES,
     MINUTE_WATT,
     PREDICT_STEP,
     TIME_FORMAT,
@@ -40,6 +41,7 @@ from const import (
     FULL_EXPORT_POWER,
 )
 import copy
+import pytz
 import hashlib
 import json
 import time as time_module
@@ -496,6 +498,42 @@ def secret_yaml_loader(secrets, log):
 
     SecretYamlLoader.add_constructor("!secret", secret_constructor)
     return SecretYamlLoader
+
+
+def describe_apps_yaml_error(exc, apps_file=None, secret_names=()):
+    """
+    Turn an exception raised by load_apps_yaml() into a one-line, actionable log message
+
+    The common case is a mistyped secret reference - 'api_key: !openrouter_api_key' or
+    'api_key: !secrets openrouter_api_key' - which PyYAML reports as an unknown tag, because only
+    !secret has a constructor registered. Startup cannot continue without apps.yaml, so the best
+    Predbat can do is say where the problem is and what was probably meant (GH#5530).
+
+    The tag is only repeated when it names a key in secrets.yaml (secret_names): a raw credential
+    pasted after a '!' is an unknown tag too, and redaction cannot catch it in predbat.log because
+    it was never loaded as a secret.
+    """
+    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+
+    if isinstance(exc, KeyError):
+        return "Error: Unable to load {} - it has no pred_bat section; Predbat's settings must be nested under a top-level 'pred_bat:' key".format(apps_file)
+    if isinstance(exc, OSError):
+        return "Error: Unable to load {} - {}".format(apps_file, exc)
+
+    match = re.match(r"could not determine a constructor for the tag '!([^']*)'", str(getattr(exc, "problem", "") or ""))
+    if match:
+        tag = match.group(1)
+        mark = getattr(exc, "problem_mark", None)
+        where = " at line {} column {}".format(mark.line + 1, mark.column + 1) if mark is not None else ""
+        if tag in secret_names:
+            return "Error: Unable to load {} - unknown tag '!{}'{}; only !secret is supported, did you mean '!secret {}'?".format(apps_file, tag, where, tag)
+        if tag.lower() in ("secret", "secrets"):
+            return "Error: Unable to load {} - unknown tag '!{}'{}; only !secret is supported, did you mean '!secret <name>'?".format(apps_file, tag, where)
+        return "Error: Unable to load {} - unknown tag{} (not shown in case it is a credential); only !secret is supported, did you mean '!secret <name>'?".format(apps_file, where)
+
+    # PyYAML's own text already names the file, line and column, just across several lines
+    detail = " ".join(str(exc).split())
+    return "Error: Unable to load {} - it is not valid YAML: {}".format(apps_file, detail)
 
 
 def mask_secret_args(args):
@@ -1410,6 +1448,40 @@ def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
     return [rate for rate in rates if not isinstance(rate, dict) or rate.get("payment_method") in (preferred, None)]
 
 
+def temperature_scale(unit):
+    """
+    Return which temperature scale a unit names ("C", "F" or "K"), or None if it isn't a temperature unit.
+
+    Hand-written template sensors spell these many ways (c, °c, ºC, degC, Celsius), so marks and case are ignored.
+    """
+    if not unit:
+        return None
+    name = str(unit).strip().lower().replace("℃", "c").replace("℉", "f")
+    for mark in ("degrees", "degree", "deg", "°", "º", "˚", " "):
+        name = name.replace(mark, "")
+    return TEMPERATURE_SCALES.get(name)
+
+
+def convert_temperature(value, unit, required_unit):
+    """Return a temperature converted between °C, °F and K, or None when either unit isn't a temperature unit."""
+    scale_from = temperature_scale(unit)
+    scale_to = temperature_scale(required_unit)
+    if not scale_from or not scale_to:
+        return None
+    if scale_from == scale_to:
+        return value
+    celsius = value
+    if scale_from == "F":
+        celsius = (value - 32) * 5 / 9
+    elif scale_from == "K":
+        celsius = value - 273.15
+    if scale_to == "F":
+        return celsius * 9 / 5 + 32
+    if scale_to == "K":
+        return celsius + 273.15
+    return celsius
+
+
 def minute_data(
     history,
     days,
@@ -1517,7 +1589,8 @@ def minute_data(
 
         # Get the numerical key and the timestamp and ignore if in error
         try:
-            state = float(state) * scale
+            raw_state = float(state)
+            state = raw_state * scale
             last_updated_time = str2time(item[last_updated_key])
             # Truncate sub-minute precision: a timestamp of 23:30:04 should land on the 23:30 minute boundary,
             # not be floored to 23:31 due to int() truncation of the elapsed seconds.
@@ -1545,8 +1618,12 @@ def minute_data(
                     elif required_unit in ["kW", "kWh"] and unit in ["MW", "MWh"]:
                         state = state * 1000.0
                     else:
-                        # Ignore data in wrong units if we can't converter
-                        continue
+                        converted = convert_temperature(raw_state, unit, required_unit)
+                        if converted is None:
+                            # Ignore data in wrong units if we can't converter
+                            continue
+                        # Scaled after converting: a temperature's unit has an offset, so the order matters
+                        state = converted * scale
 
         # Divide down the state if required
         if divide_by:
@@ -2019,6 +2096,54 @@ def window2minutes(start, end, minutes_now):
     start = time_string_to_stamp(start)
     end = time_string_to_stamp(end)
     return compute_window_minutes(start, end, minutes_now)
+
+
+def start_of_local_day(day, local_tz):
+    """
+    The first instant of local date day in local_tz, as an aware datetime
+
+    Usually 00:00. Where the clocks go back across midnight, so 00:00 happens twice, it is the first 00:00; where they go
+    forward at midnight, so 00:00 never happens, it is the instant the day really starts (pytz's standard-time reading of
+    00:00 is that instant). zoneinfo's default fold=0 gives the same answers.
+    """
+    naive = datetime(day.year, day.month, day.day)
+    if not hasattr(local_tz, "localize"):
+        return naive.replace(tzinfo=local_tz)
+    try:
+        return local_tz.localize(naive, is_dst=None)
+    except pytz.exceptions.AmbiguousTimeError:
+        return local_tz.localize(naive, is_dst=True)
+    except pytz.exceptions.NonExistentTimeError:
+        return local_tz.localize(naive, is_dst=False)
+
+
+def clock_change_minutes(now, local_tz):
+    """
+    How far the clocks have moved since the start of today in local_tz: 60 after a spring change, -60 after an autumn one,
+    otherwise 0
+
+    Predbat's midnight_utc is now with the clock set to 00:00, so it carries now's UTC offset; on a clock-change day that
+    instant is this many minutes away from the real start of the day, and minutes_now (minutes since midnight_utc) is this
+    many minutes more than the real time elapsed since the day began. History from minute_data(backwards=True) is keyed by
+    real minutes back from now, so "since local midnight" reads of it use minutes_now - clock_change_minutes(...) (GH#5760).
+    """
+    now_local = now.astimezone(local_tz)
+    day_start = start_of_local_day(now_local.date(), local_tz)
+    return int((now_local.utcoffset() - day_start.utcoffset()).total_seconds() // 60)
+
+
+def local_day_end_minute(now, local_tz):
+    """
+    Where the end of today in local_tz falls, in minutes from Predbat's midnight_utc (now with the clock set to 00:00)
+
+    1440 on most days. On a clock-change day it is the real length of the day measured from midnight_utc: before an
+    autumn change (midnight_utc still on summer time) the day has an extra hour to run, so 1500; before a spring change,
+    1380; once the change has happened midnight_utc moves with it and it is 1440 again (GH#5760).
+    """
+    now_local = now.astimezone(local_tz)
+    midnight = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = start_of_local_day(now_local.date() + timedelta(days=1), local_tz)
+    return int((day_end - midnight).total_seconds() // 60)
 
 
 def minutes_since_midnight(now, midnight):

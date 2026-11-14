@@ -9,7 +9,9 @@ repos:
     args: [--markdown-linebreak-ext=md]
   - id: end-of-file-fixer
   - id: check-yaml
-    exclude: (example_chart.yml)
+    # The coverage/cases dumps are 12MB of the 13MB this hook would parse (about 45s in CI), and every one is
+    # already loaded by the unit tests (debug_cases, random), which fail on a file that does not parse
+    exclude: (example_chart.yml|^coverage/cases/)
   - id: check-json
     exclude: ^(\.cspell\.json|\.devcontainer\/devcontainer\.json)$
 # The cspell dictionary needs case-insensitive *uniqueness*, which file-contents-sorter cannot do -
@@ -37,7 +39,13 @@ repos:
     name: triage daemon unit tests
     language: python
     entry: python tools/test_triage_daemon.py
-    files: ^tools/(triage_daemon\.py|test_triage_daemon\.py)$
+    files: ^tools/(triage_daemon\.py|test_triage_daemon\.py|issue_attachment_nudge\.py)$
+    pass_filenames: false
+  - id: triage-replay-tests
+    name: triage replay wrapper unit tests
+    language: python
+    entry: python tools/test_triage_replay.py
+    files: ^tools/(triage_replay\.py|test_triage_replay\.py)$
     pass_filenames: false
   - id: owner-gate-tests
     name: owner gate workflow tests
@@ -45,6 +53,12 @@ repos:
     additional_dependencies: [pyyaml]
     entry: python tools/test_owner_gate.py
     files: ^(\.github/workflows/owner-gate\.yml|tools/test_owner_gate\.py)$
+    pass_filenames: false
+  - id: issue-attachment-nudge-tests
+    name: issue attachment nudge tests
+    language: python
+    entry: python tools/test_issue_attachment_nudge.py
+    files: ^(\.github/workflows/issue-attachment-nudge\.yml|\.github/ISSUE_TEMPLATE/.*|tools/(test_)?issue_attachment_nudge\.py)$
     pass_filenames: false
 - repo: https://gitlab.com/bmares/check-json5
   rev: v1.0.0
@@ -59,7 +73,7 @@ repos:
   - id: ruff
     args: [--select=F401,E713,F811,E722,F821,F841,E712,B007,B006, --fix]
 - repo: https://github.com/psf/black
-  rev: 23.11.0
+  rev: 26.10.1
   hooks:
   - id: black
 # - repo: https://github.com/PyCQA/isort

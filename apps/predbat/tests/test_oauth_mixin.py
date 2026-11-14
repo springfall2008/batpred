@@ -13,6 +13,7 @@ from tests.test_infra import run_async, create_aiohttp_mock_response, create_aio
 
 # Import the real mixin (will exist in SaaS builds)
 from oauth_mixin import OAuthMixin, OAUTH_REFRESH_RETRIES
+from component_base import ComponentBase
 
 
 async def _no_sleep(seconds):
@@ -22,6 +23,9 @@ async def _no_sleep(seconds):
 
 class MockOAuthComponent(OAuthMixin):
     """Mock component that uses the OAuthMixin for testing."""
+
+    # Borrow the real session lookup, as every component the mixin is used by has it
+    http_session = ComponentBase.http_session
 
     def __init__(self):
         self.log_messages = []

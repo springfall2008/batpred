@@ -155,6 +155,11 @@ class SolarAPI(ComponentBase):
         self.refresh_discovery()
         return True
 
+    @staticmethod
+    def solar_cache_key(url, params):
+        """Return the storage key for a URL and its params: a short hash, so a long URL cannot exceed the filesystem's filename limit (#6161)."""
+        return hashlib.sha256("{}_{}".format(url, params).encode()).hexdigest()[:16]
+
     async def cache_get_url(self, url, params, max_age=8 * 60):
         # Check if this is a Solcast API call for metrics tracking
         is_solcast_api = "solcast.com" in url.lower() or "api.solcast" in url.lower()
@@ -175,12 +180,7 @@ class SolarAPI(ComponentBase):
 
         # Get data from cache
         data = None
-        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_key = hash_key.replace("/", "_")
-        hash_key = hash_key.replace(":", "_")
-        hash_key = hash_key.replace("?", "a")
-        hash_key = hash_key.replace("&", "b")
-        hash_key = hash_key.replace("*", "c")
+        hash_key = self.solar_cache_key(url, params)
 
         stale_data = None
         if self.storage:
@@ -198,7 +198,7 @@ class SolarAPI(ComponentBase):
         self.log("SolarAPI: Fetching {}".format(url))
         try:
             timeout = aiohttp.ClientTimeout(total=60)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url, params=params) as response:
                     status_code = response.status
 
@@ -1954,6 +1954,12 @@ class SolarAPI(ComponentBase):
             # above P50 itself (#5969). A forecast with no band of its own has nothing to move.
             has_band = any("pv_estimate10" in entry or "pv_estimate90" in entry for entry in pv_forecast_data)
             calibrate_band = not create_pv10 and has_band
+
+            # Calibration writes pv_estimateCL and the scaled pv_estimate10/pv_estimate90 back into each
+            # entry, so give it copies. The Solcast integration's entries are the HA state cache's own
+            # dicts, and left shared every later fetch of the same unchanged forecast started from the
+            # band it had already scaled and scaled it again - P90 doubled per fetch (#6049).
+            pv_forecast_data = [dict(entry) for entry in pv_forecast_data]
 
             # Run calibration on the data
             pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data = self.pv_calibration(

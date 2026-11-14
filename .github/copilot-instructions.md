@@ -355,12 +355,17 @@ Docs in `docs/` folder, published to GitHub Pages via `.github/workflows/publish
 
 See `requirements.txt`:
 
-- `aiohttp` - Async HTTP
-- `pytz` - Timezone handling  
-- `requests` - Sync HTTP
+- `aiohttp` - Async HTTP (also `http_sync` for blocking callers)
+- `aiofiles` - Async file access (Storage component)
+- `aiomqtt` - MQTT (Gateway, Enphase, Sigenergy)
+- `numpy` - Load ML predictor
+- `prometheus-client` - Metrics endpoint
+- `protobuf` - Gateway and Enphase message formats
+- `pytz` - Timezone handling
 - `ruamel.yaml` - YAML parsing
-- `pyjwt` - JWT tokens (for APIs)
 - `matplotlib` - Chart generation (testing only)
+
+MCP tokens are signed by the standard-library `jwt_hs256.py`, not PyJWT.
 
 ## License & Copyright
 

@@ -59,10 +59,12 @@ pred_bat:
   soc_percent:
     - sensor.growatt_spa_battery_state_of_charge
 
+  # One entry per inverter: the reserve Predbat writes, including to hold the battery
   reserve:
     - number.growatt_spa_load_first_stop_discharge
-    - number.growatt_spa_grid_first_stop_discharge
 
+  # The lowest SoC Predbat will plan to. Never point this at the reserve entity above: it would read back
+  # the reserve Predbat writes during a hold and ratchet the minimum up (GH#4013). Or set a fixed value, e.g. 10
   battery_min_soc:
     - number.growatt_spa_grid_first_stop_discharge
 

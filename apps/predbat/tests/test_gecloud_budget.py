@@ -16,7 +16,6 @@ introducing a monthly limit), so these tests pin that it counts every call, attr
 code that made it, and drives the real execute -> gecloud path rather than a shortcut.
 """
 
-import copy
 import json
 import os
 import tempfile
@@ -401,8 +400,9 @@ def _cache_from(harness, full_age_days):
     """A storage holding the harness's settings, as if a full read had happened full_age_days ago."""
     storage = MemoryStorage()
     stamp = (harness.midnight - timedelta(days=full_age_days)).isoformat()
-    storage.data[("gecloud", "settings")] = copy.deepcopy(harness.gecloud.settings)
-    storage.data[("gecloud", "settings_read")] = {serial: {"full": stamp, "control": stamp} for serial in harness.gecloud.settings}
+    # Saved as gecloud saves them, so the cache holds what real storage would hand back
+    run_async(storage.save("gecloud", "settings", harness.gecloud.settings, format="json"))
+    run_async(storage.save("gecloud", "settings_read", {serial: {"full": stamp, "control": stamp} for serial in harness.gecloud.settings}, format="json"))
     return storage
 
 
@@ -451,6 +451,24 @@ def test_stale_cache_reads_everything(scenario):
     harness = _started(scenario, storage=cache)
     reads = _reads(harness.startup_calls)
     return _expect(len(reads) == harness.fake.register_count(), "stale cache start read {} registers, expected {}".format(len(reads), harness.fake.register_count()))
+
+
+def test_failed_full_read_keeps_cached_values(scenario):
+    """A register whose read times out during a full read keeps the value restored from the cache, rather than becoming None."""
+    failed = False
+    first = _started(scenario)
+    serial = HARNESS_SERIAL.lower()
+    setting_id = next(sid for sid, name in first.fake.register_names.items() if name == "AC Charge 1 Start Time")
+    cached_value = first.gecloud.settings[serial][setting_id]["value"]
+    cache = _cache_from(first, full_age_days=8)
+
+    harness = GECloudBudgetHarness(scenario, storage=cache, read_timeouts=[setting_id])
+    harness.startup()
+    settings = harness.gecloud.settings[serial]
+    failed |= _expect(all(isinstance(key, int) for key in settings), "restored settings keep string register ids: {}".format(sorted(str(key) for key in settings if not isinstance(key, int))[:5]))
+    value = settings.get(setting_id, {}).get("value", None)
+    failed |= _expect(value == cached_value, "AC Charge 1 Start Time read timed out and became {}, expected the cached {}".format(value, cached_value))
+    return failed
 
 
 def test_full_read_after_7_days_running(scenario):
@@ -579,6 +597,7 @@ def run_gecloud_budget_harness_tests(my_predbat):
         test_control_registers_every_12_hours,
         test_warm_start_reads_controls_only,
         test_stale_cache_reads_everything,
+        test_failed_full_read_keeps_cached_values,
         test_full_read_after_7_days_running,
         test_control_failure_rereads_once_per_4_hours,
         test_leaving_read_only_rereads_controls,

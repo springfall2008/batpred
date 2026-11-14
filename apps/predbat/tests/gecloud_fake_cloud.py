@@ -20,8 +20,8 @@ the real api.givenergy.cloud.
 """
 
 import contextvars
-import inspect
 import re
+import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
@@ -227,6 +227,8 @@ class FakeGECloud:
         self.meter_total = {"solar": 1000.0, "grid": {"import": 2000.0, "export": 500.0}, "battery": {"charge": 800.0, "discharge": 800.0}, "consumption": 2500.0, "ac_charge": 600.0}
         self.calls = []
         self.scenario_id = 0
+        # Setting ids whose reads time out on the device (GivEnergy code -1), on every attempt
+        self.read_timeouts = set()
 
     def register_count(self):
         """The number of registers gecloud reads on each sweep (write-only ones are never read)."""
@@ -262,7 +264,15 @@ class FakeGECloud:
 
     def caller_chain(self):
         """The gecloud.py functions on the current call stack, outermost first, excluding the HTTP layer."""
-        names = [frame.function for frame in inspect.stack() if frame.filename.endswith("gecloud.py") and frame.function not in HTTP_LAYER_FUNCTIONS]
+        # Walks the raw frames rather than calling inspect.stack(): that reads the source file around every
+        # frame on every request, and cost the budget harness test about 15 of its 90 seconds
+        names = []
+        frame = sys._getframe(1)
+        while frame is not None:
+            code = frame.f_code
+            if code.co_filename.endswith("gecloud.py") and code.co_name not in HTTP_LAYER_FUNCTIONS:
+                names.append(code.co_name)
+            frame = frame.f_back
         return " > ".join(reversed(names))
 
     def categorise(self, method, endpoint, caller=""):
@@ -322,6 +332,8 @@ class FakeGECloud:
     def respond(self, endpoint, params, body):
         """The (status, data) for a matched request."""
         if endpoint == GE_API_INVERTER_READ_SETTING:
+            if int(params["setting_id"]) in self.read_timeouts:
+                return 200, {"value": -1, "message": "Device timeout"}
             return 200, {"value": self.register_values[int(params["setting_id"])]}
         if endpoint == GE_API_INVERTER_WRITE_SETTING:
             setting_id = int(params["setting_id"])

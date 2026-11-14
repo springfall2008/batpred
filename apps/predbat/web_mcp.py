@@ -19,13 +19,14 @@ to expose battery prediction data and plan information via the MCP protocol.
 import asyncio
 import html
 import json
+import re
 from typing import Any, Dict
 from datetime import datetime, timezone, timedelta
 from aiohttp import web
 import hmac
 import secrets
 from urllib.parse import urlencode
-import jwt as pyjwt
+import jwt_hs256
 from component_base import ComponentBase
 from const import MCP_DEFAULT_SECRET
 from agent_tools import (  # noqa: F401
@@ -51,7 +52,6 @@ from agent_tools import (  # noqa: F401
     MCP_STATE_LARGE_COLLECTION,
     MCP_STATE_SAMPLE_ENTRIES,
 )
-
 
 """
 Example usage in VSCode with OAuth
@@ -92,7 +92,6 @@ class PredbatMCPServer(ComponentBase):
         # A random signing key, replaced by the saved one when the server starts (load_signing_key). It used to be
         # derived from mcp_secret, which let anyone who knew the secret forge tokens offline (#5847).
         self.jwt_secret = secrets.token_hex(MCP_SIGNING_KEY_BYTES)
-        self.jwt_algorithm = "HS256"
         self.access_token_lifetime = timedelta(days=30)
         self.authorization_code_lifetime = timedelta(minutes=10)
 
@@ -292,9 +291,6 @@ class PredbatMCPServer(ComponentBase):
         Returns:
             JWT access token string
         """
-        if not pyjwt:
-            raise RuntimeError("PyJWT is not installed. Install with: pip install PyJWT")
-
         # Default scopes if not specified
         if scopes is None:
             scopes = list(MCP_ALL_SCOPES)
@@ -312,7 +308,7 @@ class PredbatMCPServer(ComponentBase):
             "iat": datetime.now(timezone.utc),
             "exp": datetime.now(timezone.utc) + self.access_token_lifetime,
         }
-        return pyjwt.encode(payload, self.jwt_secret, algorithm=self.jwt_algorithm)
+        return jwt_hs256.encode(payload, self.jwt_secret)
 
     def verify_access_token(self, token: str, expected_audience: str = None) -> Dict[str, Any]:
         """
@@ -330,7 +326,9 @@ class PredbatMCPServer(ComponentBase):
             acceptable_audiences = []
 
             if expected_audience:
-                acceptable_audiences.append(expected_audience)
+                for aud in self.audience_variants(expected_audience):
+                    if aud not in acceptable_audiences:
+                        acceptable_audiences.append(aud)
 
             # Also accept default audience for backward compatibility
             default_audience = f"http://localhost:{self.mcp_port}"
@@ -343,7 +341,7 @@ class PredbatMCPServer(ComponentBase):
 
             for aud in acceptable_audiences:
                 try:
-                    payload = pyjwt.decode(token, self.jwt_secret, algorithms=[self.jwt_algorithm], audience=aud)
+                    payload = jwt_hs256.decode(token, self.jwt_secret, audience=aud)
                     break  # Success!
                 except Exception as e:
                     last_error = e
@@ -353,12 +351,12 @@ class PredbatMCPServer(ComponentBase):
                 # None of the audiences worked
                 # Try to decode without verification to see what's in the token (for debugging)
                 try:
-                    unverified = pyjwt.decode(token, options={"verify_signature": False})
+                    unverified = jwt_hs256.decode_unverified(token)
                     self.log(f"MCP: Token claims (unverified): {unverified}")
                 except Exception as e2:
                     self.log(f"MCP: Could not even decode without verification: {e2}")
 
-                if last_error and "audience" in str(last_error).lower():
+                if isinstance(last_error, jwt_hs256.InvalidAudienceError):
                     self.log(f"MCP: Invalid token audience: {last_error}")
                 else:
                     self.log(f"MCP: Token verification failed: {last_error}")
@@ -380,6 +378,71 @@ class PredbatMCPServer(ComponentBase):
                 self.log(f"MCP: Invalid access token: {e}")
             return None
 
+    def get_base_url(self, request):
+        """
+        Return the public base URL (scheme://host) clients used to reach this server
+
+        Behind a reverse proxy or tunnel that terminates TLS, such as a Cloudflare Tunnel, the
+        request reaches Predbat over plain http, so the scheme comes from the proxy's headers:
+        CF-Visitor (Cloudflare, records the visitor's own scheme), then X-Forwarded-Proto.
+        X-Forwarded-Host is used for the host when a proxy rewrites Host. Without these headers
+        the result is unchanged from before: http://<Host header>.
+        """
+        headers = request.headers
+        scheme = None
+
+        cf_visitor = headers.get("CF-Visitor")
+        if cf_visitor:
+            try:
+                scheme = str(json.loads(cf_visitor).get("scheme", "")).lower() or None
+            except (ValueError, TypeError, AttributeError):
+                scheme = None
+
+        if not scheme:
+            forwarded_proto = headers.get("X-Forwarded-Proto")
+            if forwarded_proto:
+                # A chain of proxies gives a comma-separated list; the first entry is the client-facing one
+                scheme = forwarded_proto.split(",")[0].strip().lower() or None
+
+        if scheme not in ("http", "https"):
+            scheme = "http"
+
+        host = None
+        forwarded_host = headers.get("X-Forwarded-Host")
+        if forwarded_host:
+            host = forwarded_host.split(",")[0].strip()
+        if not host:
+            host = request.host or f"localhost:{self.mcp_port}"
+
+        # The host ends up in JSON and WWW-Authenticate headers, so refuse anything that is not a plain host[:port]
+        if not re.fullmatch(r"[A-Za-z0-9._\-]+(:\d+)?|\[[0-9A-Fa-f:.]+\](:\d+)?", host):
+            host = f"localhost:{self.mcp_port}"
+
+        # Drop the default port for the scheme so the URL matches the one the client used
+        if scheme == "https" and host.endswith(":443"):
+            host = host[: -len(":443")]
+        elif scheme == "http" and host.endswith(":80"):
+            host = host[: -len(":80")]
+
+        return f"{scheme}://{host}"
+
+    def audience_variants(self, base_url):
+        """
+        Return the audiences a token for this server may carry, given the base URL of the request
+
+        Clients send the resource as the server's base URL or as its /mcp endpoint, with or without
+        a trailing slash. A token issued through the old http:// metadata stays valid behind https.
+        """
+        variants = []
+        bases = [base_url]
+        if base_url.startswith("https://"):
+            bases.append("http://" + base_url[len("https://") :])
+        for base in bases:
+            for suffix in ("", "/", "/mcp", "/mcp/"):
+                if base + suffix not in variants:
+                    variants.append(base + suffix)
+        return variants
+
     async def handle_options(self, request):
         """Handle CORS preflight OPTIONS requests"""
         self.log("MCP: CORS preflight OPTIONS request from {}".format(request.remote))
@@ -397,7 +460,7 @@ class PredbatMCPServer(ComponentBase):
 
         This endpoint advertises the authorization server location and supported capabilities.
         """
-        base_url = f"http://{request.host}"
+        base_url = self.get_base_url(request)
         self.log(f"MCP: Protected Resource Metadata request from {request.remote}")
 
         metadata = {"resource": base_url, "authorization_servers": [base_url], "scopes_supported": list(MCP_ALL_SCOPES), "bearer_methods_supported": ["header"], "resource_documentation": f"{base_url}/docs"}
@@ -418,7 +481,7 @@ class PredbatMCPServer(ComponentBase):
         This is the well-known endpoint that clients use to discover OAuth configuration.
         See: RFC 8414 - OAuth 2.0 Authorization Server Metadata
         """
-        base_url = f"http://{request.host}"
+        base_url = self.get_base_url(request)
         self.log(f"MCP: OAuth Metadata request from {request.remote}")
 
         metadata = {
@@ -448,7 +511,7 @@ class PredbatMCPServer(ComponentBase):
         for the /mcp resource path.
         See: RFC 8414 - OAuth 2.0 Authorization Server Metadata
         """
-        base_url = f"http://{request.host}"
+        base_url = self.get_base_url(request)
         self.log("MCP: OAuth MCP Metadata request from {}".format(request.remote))
 
         metadata = {
@@ -951,7 +1014,7 @@ class PredbatMCPServer(ComponentBase):
         auth_header = request.headers.get("Authorization", "")
         if not auth_header or not auth_header.startswith("Bearer "):
             # REQUIRED: WWW-Authenticate header with resource_metadata (MCP spec)
-            base_url = f"http://{request.host}"
+            base_url = self.get_base_url(request)
             www_auth = f'Bearer realm="{base_url}", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource", ' f'scope="{" ".join(MCP_ALL_SCOPES)}"'
 
             # Return JSON-RPC formatted error for compatibility
@@ -960,7 +1023,7 @@ class PredbatMCPServer(ComponentBase):
             )
 
         token = auth_header.replace("Bearer ", "")
-        base_url = f"http://{request.host}"
+        base_url = self.get_base_url(request)
 
         authenticated, scopes = self.authenticate_bearer(token, base_url, "GET")
         if not authenticated:
@@ -991,7 +1054,7 @@ class PredbatMCPServer(ComponentBase):
             self.log("MCP POST: Missing or invalid Authorization header")
 
             # REQUIRED: WWW-Authenticate header with resource_metadata (MCP spec)
-            base_url = f"http://{request.host}"
+            base_url = self.get_base_url(request)
             www_auth = f'Bearer realm="{base_url}", ' f'resource_metadata="{base_url}/.well-known/oauth-protected-resource", ' f'scope="{" ".join(MCP_ALL_SCOPES)}"'
 
             return web.json_response(
@@ -999,7 +1062,7 @@ class PredbatMCPServer(ComponentBase):
             )
 
         token = auth_header.replace("Bearer ", "")
-        base_url = f"http://{request.host}"
+        base_url = self.get_base_url(request)
 
         authenticated, scopes = self.authenticate_bearer(token, base_url, "POST")
         if not authenticated:

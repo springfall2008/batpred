@@ -18,10 +18,11 @@ import asyncio
 import base64
 import hashlib
 import json
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 from datetime import datetime, timedelta, timezone
 
-import jwt as pyjwt
+import jwt_hs256
 from agent_tools import TOOL_DEFS
 from web_mcp import PredbatMCPServer, MCPServerWrapper, MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE
 
@@ -136,7 +137,7 @@ def test_mcp_signing_key(my_predbat):
     server = make_server(my_predbat)
     old_key = hashlib.sha256("jwt_signing_key_{}".format(TEST_SECRET).encode()).hexdigest()
     now = datetime.now(timezone.utc)
-    forged = pyjwt.encode({"sub": "x", "client_id": "x", "aud": "http://localhost:8199", "scope": "mcp:read mcp:write mcp:control", "type": "access", "iat": now, "exp": now + timedelta(days=1)}, old_key, algorithm="HS256")
+    forged = jwt_hs256.encode({"sub": "x", "client_id": "x", "aud": "http://localhost:8199", "scope": "mcp:read mcp:write mcp:control", "type": "access", "iat": now, "exp": now + timedelta(days=1)}, old_key)
     if server.verify_access_token(forged):
         print("  ERROR: a token signed with the key derived from mcp_secret was accepted")
         failed = True
@@ -197,14 +198,21 @@ def test_mcp_refuses_default_secret(my_predbat):
     failed = False
     print("**** Testing MCP refuses the default secret ****")
 
+    real_sleep = asyncio.sleep
+
+    async def short_sleep(delay, *args, **kwargs):
+        """The refused server checks api_stop once a second; a shorter tick lets each case stop at once rather than a second later."""
+        return await real_sleep(min(delay, 0.01), *args, **kwargs)
+
     async def run_briefly(server):
         """Start the server, look at its state while it runs, then stop it."""
         server.api_stop = False
-        task = asyncio.create_task(server.start())
-        await asyncio.sleep(0.05)
-        state = (server.api_started, server.is_alive(), server.health_message(), server.mcp_server)
-        server.api_stop = True
-        await asyncio.wait_for(task, timeout=10)
+        with patch("asyncio.sleep", short_sleep):
+            task = asyncio.create_task(server.start())
+            await real_sleep(0.05)
+            state = (server.api_started, server.is_alive(), server.health_message(), server.mcp_server)
+            server.api_stop = True
+            await asyncio.wait_for(task, timeout=10)
         return state
 
     for secret in ("predbat_mcp_secret", "", "   ", None):
@@ -363,6 +371,86 @@ def test_mcp_authorise_page_escapes(my_predbat):
     return failed
 
 
+def test_mcp_base_url_behind_proxy(my_predbat):
+    """Behind a TLS-terminating proxy or tunnel the discovery documents advertise https, and tokens for that URL are accepted"""
+    failed = False
+    print("**** Testing MCP base URL behind a reverse proxy / Cloudflare Tunnel ****")
+    server = make_server(my_predbat)
+
+    def base(headers, host="predbat.example:8199"):
+        """Return get_base_url for a request with these headers and Host."""
+        request = FakeJsonRequest(headers=headers, method="GET")
+        request.host = host
+        return server.get_base_url(request)
+
+    print("Test: the discovery documents advertise https behind a tunnel")
+    tunnel = {"CF-Visitor": '{"scheme":"https"}', "X-Forwarded-Proto": "http"}
+    for handler in (server.oauth_metadata, server.oauth_metadata_mcp):
+        request = FakeJsonRequest(headers=tunnel, method="GET")
+        request.host = "mcp.example.com"
+        _, metadata = call(handler, request)
+        for key in ("issuer", "authorization_endpoint", "token_endpoint", "registration_endpoint"):
+            if not str(metadata.get(key, "")).startswith("https://mcp.example.com"):
+                print("  ERROR: {} {} is {}".format(handler.__name__, key, metadata.get(key)))
+                failed = True
+    request = FakeJsonRequest(headers=tunnel, method="GET")
+    request.host = "mcp.example.com"
+    _, resource_metadata = call(server.oauth_protected_resource_metadata, request)
+    if resource_metadata.get("resource") != "https://mcp.example.com" or resource_metadata.get("authorization_servers") != ["https://mcp.example.com"]:
+        print("  ERROR: protected resource metadata is {}".format(resource_metadata))
+        failed = True
+
+    print("Test: the /mcp challenge points at the https resource metadata behind a tunnel")
+    server.mcp_server = object()  # Only checked for presence before the Authorization header is read
+    for handler in (server.html_mcp_get, server.html_mcp_post):
+        request = FakeJsonRequest(headers=tunnel, method="GET")
+        request.host = "mcp.example.com"
+        response = asyncio.run(handler(request))
+        www_auth = response.headers.get("WWW-Authenticate", "")
+        if response.status != 401 or 'resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"' not in www_auth:
+            print("  ERROR: {} gave status {} with WWW-Authenticate {}".format(handler.__name__, response.status, www_auth))
+            failed = True
+
+    print("Test: tokens for the https resource, or its /mcp endpoint, are accepted; others are not")
+    for aud in ("https://mcp.example.com", "https://mcp.example.com/mcp", "https://mcp.example.com/", "http://mcp.example.com"):
+        token = server.generate_access_token("connector", resource=aud)
+        if not server.verify_access_token(token, expected_audience="https://mcp.example.com"):
+            print("  ERROR: token with audience {} was refused".format(aud))
+            failed = True
+    token = server.generate_access_token("connector", resource="https://other.example.com")
+    logged = []
+    server.log = lambda message, *args, **kwargs: logged.append(message)
+    try:
+        if server.verify_access_token(token, expected_audience="https://mcp.example.com"):
+            print("  ERROR: token for another server was accepted")
+            failed = True
+    finally:
+        server.log = my_predbat.log
+    if not any("Invalid token audience" in line for line in logged):
+        print("  ERROR: a wrong-audience token was not logged as one: {}".format(logged))
+        failed = True
+
+    print("Test: the base URL follows the proxy headers, and ignores bad ones")
+    cases = [
+        ("no proxy headers", {}, "predbat.example:8199", "http://predbat.example:8199"),
+        ("underscore in Host kept", {}, "My_Predbat:8199", "http://My_Predbat:8199"),
+        ("Cloudflare CF-Visitor", {"CF-Visitor": '{"scheme":"https"}', "X-Forwarded-Proto": "http"}, "mcp.example.com", "https://mcp.example.com"),
+        ("X-Forwarded-Proto", {"X-Forwarded-Proto": "https"}, "mcp.example.com", "https://mcp.example.com"),
+        ("X-Forwarded-Proto chain", {"X-Forwarded-Proto": "https, http"}, "mcp.example.com", "https://mcp.example.com"),
+        ("X-Forwarded-Host", {"X-Forwarded-Proto": "https", "X-Forwarded-Host": "mcp.example.com"}, "localhost:8199", "https://mcp.example.com"),
+        ("default port dropped", {"X-Forwarded-Proto": "https"}, "mcp.example.com:443", "https://mcp.example.com"),
+        ("bad CF-Visitor ignored", {"CF-Visitor": "not json"}, "predbat.example:8199", "http://predbat.example:8199"),
+        ("unknown scheme ignored", {"X-Forwarded-Proto": "javascript"}, "predbat.example:8199", "http://predbat.example:8199"),
+        ("injected host refused", {"X-Forwarded-Host": 'evil.com", x="'}, "predbat.example:8199", "http://localhost:8199"),
+    ]
+    for name, headers, host, expected in cases:
+        got = base(headers, host)
+        if got != expected:
+            print("  ERROR: {}: expected {} got {}".format(name, expected, got))
+            failed = True
+    return failed
+
+
 def run_web_mcp_auth_tests(my_predbat):
     """Run every MCP OAuth/authorisation test, returning True if any of them failed."""
     failed = False
@@ -372,4 +460,5 @@ def run_web_mcp_auth_tests(my_predbat):
     failed |= test_mcp_scopes_enforced(my_predbat)
     failed |= test_mcp_public_client_flow(my_predbat)
     failed |= test_mcp_authorise_page_escapes(my_predbat)
+    failed |= test_mcp_base_url_behind_proxy(my_predbat)
     return failed

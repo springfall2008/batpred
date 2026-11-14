@@ -29,7 +29,8 @@ from unittest.mock import patch
 from gecloud import GECloudDirect
 from inverter import Inverter
 from tests.gecloud_fake_cloud import CALL_CONTEXT, FakeGECloud
-from tests.test_infra import TestHAInterface, reset_inverter, run_async
+from tests.component_sim_harness import ComponentRoutingHAInterface, MemoryStorage, no_sleep, reset_config_to_defaults  # noqa: F401 - MemoryStorage is re-exported for the budget tests
+from tests.test_infra import reset_inverter, run_async
 from tests.test_random_scenarios import RANDOM_TEMPLATE, apply_scenario_to_predbat, expand_load_minutes, expand_pv_forecast
 
 # Inverter entity args the GivTCP template carries. async_automatic_config sets most of them again, but
@@ -79,41 +80,6 @@ MONTH_DAYS = 30
 BUDGETS = (10000, 20000)
 STEPS_PER_DAY = 288
 
-# The HA services execute uses on an inverter entity, and the gecloud handler each one reaches
-ROUTED_SERVICES = {
-    "switch/turn_on": "switch",
-    "switch/turn_off": "switch",
-    "switch/toggle": "switch",
-    "number/set_value": "number",
-    "select/select_option": "select",
-}
-
-
-async def no_sleep(*args, **kwargs):
-    """Stand-in for asyncio.sleep: gecloud's retry back-off and sweep pacing cost no wall-clock time."""
-    return None
-
-
-class MemoryStorage:
-    """An in-memory stand-in for the Storage component, so a test can hand gecloud a settings cache."""
-
-    def __init__(self):
-        """Start empty; data is keyed by (module, filename)."""
-        self.data = {}
-
-    async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
-        """Keep a copy of the data."""
-        self.data[(module, filename)] = copy.deepcopy(data)
-        return True
-
-    async def load(self, module, filename):
-        """Return a copy of what was saved, or None."""
-        return copy.deepcopy(self.data.get((module, filename), None))
-
-    async def age(self, module, filename):
-        """Saved data is always fresh by file age; gecloud's own read stamps carry the real age."""
-        return 0 if (module, filename) in self.data else None
-
 
 class HarnessGECloud(GECloudDirect):
     """The real GECloudDirect, on the harness's simulated clock and with an optional test storage."""
@@ -140,43 +106,28 @@ class HarnessGECloud(GECloudDirect):
             CALL_CONTEXT.reset(token)
 
 
-class HarnessHAInterface(TestHAInterface):
-    """TestHAInterface that delivers service calls on gecloud entities to gecloud's event handlers, as HA would."""
+class HarnessHAInterface(ComponentRoutingHAInterface):
+    """ComponentRoutingHAInterface for gecloud, labelling the API calls each delivered write makes."""
 
-    gecloud = None
+    entity_marker = "gecloud"
 
-    def call_service(self, service, **kwargs):
-        """Route an inverter write on a gecloud entity to gecloud, labelling the calls it makes; anything else as before."""
-        entity_id = kwargs.get("entity_id", None)
-        domain = service.split("/")[0]
-        if self.gecloud and service in ROUTED_SERVICES and isinstance(entity_id, str) and entity_id.startswith("{}.{}_gecloud_".format(domain, self.gecloud.prefix)):
-            old = self.dummy_items.get(entity_id, None)
-            if isinstance(old, dict):
-                old = old.get("state", None)
-            if domain == "switch":
-                new = service.split("/")[1]
-                coroutine = self.gecloud.switch_event(entity_id, new)
-            elif domain == "number":
-                new = kwargs.get("value", None)
-                coroutine = self.gecloud.number_event(entity_id, new)
-            else:
-                new = kwargs.get("option", None)
-                coroutine = self.gecloud.select_event(entity_id, new)
-            token = CALL_CONTEXT.set("execute {} {}->{}".format(entity_id, old, new))
-            try:
-                run_async(coroutine)
-            finally:
-                CALL_CONTEXT.reset(token)
-            return True
-        return super().call_service(service, **kwargs)
+    @property
+    def gecloud(self):
+        """The gecloud component writes are routed to."""
+        return self.component
 
+    @gecloud.setter
+    def gecloud(self, component):
+        """Set the gecloud component writes are routed to."""
+        self.component = component
 
-def reset_config_to_defaults(my_predbat):
-    """Put every setting back to its default, so the simulated user is a default GE Cloud user and not the template's."""
-    for item in my_predbat.CONFIG_ITEMS:
-        if "default" in item:
-            my_predbat.expose_config(item["name"], item["default"])
-    my_predbat.fetch_config_options()
+    def call_routed(self, entity_id, old, new, coroutine):
+        """Run the event with CALL_CONTEXT naming the write, so the fake cloud records why each call was made."""
+        token = CALL_CONTEXT.set("execute {} {}->{}".format(entity_id, old, new))
+        try:
+            run_async(coroutine)
+        finally:
+            CALL_CONTEXT.reset(token)
 
 
 @dataclass
@@ -194,12 +145,13 @@ class DayResult:
 class GECloudBudgetHarness:
     """One scenario's simulated day against the fake GE Cloud."""
 
-    def __init__(self, scenario, template_path=RANDOM_TEMPLATE, storage=None, extra_args=None):
-        """scenario is one entry from load_scenarios(); template_path is the debug dump the random scenarios build on; storage and extra_args (apps.yaml) are optional."""
+    def __init__(self, scenario, template_path=RANDOM_TEMPLATE, storage=None, extra_args=None, read_timeouts=None):
+        """scenario is one entry from load_scenarios(); template_path is the debug dump the random scenarios build on; storage, extra_args (apps.yaml) and read_timeouts (setting ids whose reads time out) are optional."""
         self.scenario = scenario
         self.template_path = template_path
         self.test_storage = storage
         self.extra_args = extra_args or {}
+        self.read_timeouts = set(read_timeouts or ())
         self.my_predbat = None
         self.gecloud = None
         self.fake = None
@@ -360,6 +312,7 @@ class GECloudBudgetHarness:
         self.fake = FakeGECloud(battery_kwh=battery["soc_max_kwh"], rate_w=rate_w, clock=lambda: self.gecloud.sim_now)
         self.fake.scenario_id = self.scenario["id"]
         self.fake.soc_percent = battery["initial_soc_percent"]
+        self.fake.read_timeouts = set(self.read_timeouts)
         # The apps.yaml settings components.py would pass to the component
         self.gecloud = HarnessGECloud(my_predbat, ge_cloud_direct=True, api_key="harness-key", automatic=True, poll_settings=my_predbat.args.get("ge_cloud_poll_settings", False))
         self.gecloud.sim_now = self.midnight
