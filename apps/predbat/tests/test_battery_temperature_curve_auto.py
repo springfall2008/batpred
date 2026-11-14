@@ -128,6 +128,15 @@ def _test_pure_helpers():
     failed |= _check("t2 old day dropped", "2025-01-01" not in merged, merged)
     failed |= _check("t2 inputs untouched", stored["2026-11-12"] == {5: [1.3, 10]} and "2026-11-13" not in stored)
 
+    print("Test 2b: with the scan's coverage known, a fully covered day is the scan's view: replaced even when smaller, removed when absent")
+    stored = {"2026-11-05": {5: [2.6, 20]}, "2026-11-08": {5: [2.6, 20]}, "2026-11-10": {5: [2.6, 20]}, "2026-11-11": {5: [2.6, 20]}}
+    scanned = {"2026-11-08": {5: [1.3, 10]}, "2026-11-10": {5: [1.3, 10]}}
+    merged = merge_battery_temperature_samples(stored, scanned, today, covered_from_day="2026-11-08")
+    failed |= _check("t2b covered day replaced by a smaller scan", merged["2026-11-10"] == {5: [1.3, 10]}, merged)
+    failed |= _check("t2b covered day the scan found nothing for removed", "2026-11-11" not in merged, merged)
+    failed |= _check("t2b partly covered day keeps the larger version", merged["2026-11-08"] == {5: [2.6, 20]}, merged)
+    failed |= _check("t2b day before the scan kept", merged["2026-11-05"] == {5: [2.6, 20]}, merged)
+
     print("Test 3: a degree needs enough minutes, and recent days outweigh old ones")
     samples = {"2026-11-14": {5: [0.2 * 20, 20], 9: [0.1 * 10, 10]}, "2026-10-15": {5: [0.1 * 20, 20]}}
     curve, minutes = learn_battery_temperature_curve(samples, today)

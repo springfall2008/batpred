@@ -136,21 +136,36 @@ def clean_power_curve_samples(data):
     return cleaned
 
 
-def merge_daily_samples(stored, scanned, today, max_age_days):
+def merge_daily_samples(stored, scanned, today, max_age_days, covered_from_day=None):
     """
     Merge {day: {key: [sum, count, ...]}} samples from a fresh history scan into the stored ones, dropping days over max_age_days old.
 
     Each scan re-reads the whole history window, so a day is replaced rather than added to - adding would count
-    the same minutes again every scan. The oldest day of a window is only partly covered (the window starts part way
-    through it), so a scanned day only replaces a stored one when it holds at least as much (the count, entry[1]).
+    the same minutes again every scan. A day the scan covered completely (after covered_from_day, the day the scanned
+    history starts part way through) is replaced by what the scan found, or removed when it found nothing that day:
+    the scan is the up-to-date view of it, so a filter that now leaves more out (a newly learned temperature curve,
+    say) reaches the stored days too. The partly covered day, and every day when covered_from_day is not known, is only
+    replaced when the scan holds at least as much (the count, entry[1]). Days before the scan are kept as stored.
+
+    Args:
+        stored: the stored samples
+        scanned: one scan's samples
+        today: datetime.date the ages are measured from
+        max_age_days: days kept
+        covered_from_day: "YYYY-MM-DD", the day the scan's history begins part way through, or None
 
     Returns:
         A new merged dictionary; stored and scanned are not modified.
     """
     merged = {day: {key: list(entry) for key, entry in day_bins.items()} for day, day_bins in stored.items()}
     for day, day_bins in scanned.items():
-        if day not in merged or _temperature_sample_minutes(day_bins) >= _temperature_sample_minutes(merged[day]):
+        fully_covered = covered_from_day is not None and day > covered_from_day
+        if fully_covered or day not in merged or _temperature_sample_minutes(day_bins) >= _temperature_sample_minutes(merged[day]):
             merged[day] = {key: list(entry) for key, entry in day_bins.items()}
+    if covered_from_day is not None:
+        for day in list(merged.keys()):
+            if day > covered_from_day and day not in scanned:
+                del merged[day]
     for day in list(merged.keys()):
         age = (today - datetime.strptime(day, "%Y-%m-%d").date()).days
         if age > max_age_days:
@@ -158,7 +173,7 @@ def merge_daily_samples(stored, scanned, today, max_age_days):
     return merged
 
 
-def merge_battery_temperature_samples(stored, scanned, today, max_age_days=BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS):
+def merge_battery_temperature_samples(stored, scanned, today, max_age_days=BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS, covered_from_day=None):
     """
     Merge the samples from a fresh history scan into the stored samples, and drop days older than max_age_days.
 
@@ -175,7 +190,7 @@ def merge_battery_temperature_samples(stored, scanned, today, max_age_days=BATTE
     Returns:
         A new merged dictionary; stored and scanned are not modified.
     """
-    return merge_daily_samples(stored, scanned, today, max_age_days)
+    return merge_daily_samples(stored, scanned, today, max_age_days, covered_from_day)
 
 
 def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, half_life_days=BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS, min_days=BATTERY_TEMPERATURE_CURVE_MIN_DAYS):
@@ -299,6 +314,18 @@ class BatteryCurve:
         if self.id == 0 and getattr(self.base, "num_inverters", 1) > 1 and len(inverters) == self.base.num_inverters and inverters[0] is self:
             return list(inverters)
         return [self]
+
+    def record_curve_scan_coverage(self, kind, minutes):
+        """
+        Note the evidence day a scan's history begins part way through, for merge_daily_samples(): every later day was
+        covered completely, so the scan's view of it replaces the stored one.
+
+        Args:
+            kind: "charge", "discharge" or "temperature"
+            minutes: how many minutes back the scan's history reached
+        """
+        coverage = self.__dict__.setdefault("curve_scan_coverage", {})
+        coverage[kind] = charge_day(self.base.now_utc, max(minutes - 1, 0), getattr(self.base, "local_tz", None)) if minutes > 0 else None
 
     def load_curve_history(self, discharge, purpose):
         """
@@ -443,6 +470,7 @@ class BatteryCurve:
         max_power = history["max_power"]
         max_power_scaled = max_power * 0.95
         samples = {}
+        self.record_curve_scan_coverage(curve_type, min_len)
         self.log(
             "Inverter {} Looking for {} curve{}, have found {} days of history data, max days {}".format(
                 self.id, curve_type, " across {} inverters".format(history["inverters"]) if history["inverters"] > 1 else "", dp1(min_len / 60 / 24.0), self.base.max_days_previous
@@ -883,6 +911,7 @@ class BatteryCurve:
         battery_power = history["battery_power"]
         status = history["status"]
         soc_max = history["soc_max"]
+        self.record_curve_scan_coverage("temperature", min(history["min_len"], len(temperature)))
 
         max_power = history["max_power"]
         min_charge_rate = max_power * 0.95

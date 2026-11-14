@@ -4203,7 +4203,7 @@ class Fetch:
         if scanned is not None:
             # None means the settings or history were missing this time: the stored samples are left alone, not aged out
             today = datetime.strptime(charge_day(self.now_utc, 0, self.local_tz), "%Y-%m-%d").date()
-            samples = merge_daily_samples(stored_samples, scanned, today, BATTERY_POWER_CURVE_MAX_AGE_DAYS)
+            samples = merge_daily_samples(stored_samples, scanned, today, BATTERY_POWER_CURVE_MAX_AGE_DAYS, getattr(inverter, "curve_scan_coverage", {}).get(kind))
             self.battery_power_curve_samples[kind] = samples
 
         found = inverter.learn_charge_curve(samples, discharge=discharge) if samples else {}
@@ -4266,7 +4266,7 @@ class Fetch:
             self.battery_temperature_curve_last_scan = self.now_utc
             scanned = inverter.find_battery_temperature_samples()
             if scanned is not None:
-                merged = merge_battery_temperature_samples(self.battery_temperature_samples, scanned, today)
+                merged = merge_battery_temperature_samples(self.battery_temperature_samples, scanned, today, covered_from_day=getattr(inverter, "curve_scan_coverage", {}).get("temperature"))
                 if merged != self.battery_temperature_samples:
                     self.battery_temperature_samples = merged
                     if storage:

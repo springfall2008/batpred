@@ -262,6 +262,17 @@ def _run(my_predbat, storage):
                 my_predbat.args[key] = value
         my_predbat.fetch_config_options()
 
+    print("Test 12b: with the scan's coverage, a re-scan that now finds less on a fully covered day replaces the stored day")
+    run_async(storage.save("predbat", "battery_charge_power_curve", {"curve": {"99": 0.5}, "samples": {day1: {"99": [0.5, 1, 5.0], "98": [0.6, 1, 5.0]}, day7: {"99": [0.5, 1, 5.0]}}}, format="json"))
+    _restart(my_predbat)
+    inv.scan[False] = _samples(day1, {99: 0.3})
+    inv.curve_scan_coverage = {"charge": _day(my_predbat, 3)}
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    curve, samples = _stored(storage, "battery_charge_power_curve")
+    failed |= _check("t12b covered day replaced", samples.get(day1) == {99: [0.3, 1, 5.0]}, samples)
+    failed |= _check("t12b day before the scan kept", samples.get(day7) == {99: [0.5, 1, 5.0]}, samples)
+    del inv.curve_scan_coverage
+
     print("Test 12: with no storage auto mode still learns")
     my_predbat.components = MockStorageComponents(None)
     _restart(my_predbat)
