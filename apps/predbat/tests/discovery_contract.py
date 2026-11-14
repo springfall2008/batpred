@@ -15,7 +15,7 @@ import asyncio
 import inspect
 import re
 
-from bindings import SITE_SETTINGS
+from bindings import BINDING_SETTINGS, SITE_SETTINGS
 from config import INVERTER_DEF
 from coordinator import PRESENCE_FLAGS, inverter_definition, validate_report
 
@@ -54,6 +54,11 @@ SETTINGS_OUTSIDE_THE_RECORD = frozenset(
 # A *_invert setting describes the sign of the entity it names
 INVERT_SETTINGS = {"grid_power_invert": "grid_power", "battery_power_invert": "battery_power", "load_power_invert": "load_power"}
 
+# User tuning that TESLA, SIGCLOUD, SolisCloud and SunsynkCloud records bind but BINDING_SETTINGS leaves out. The
+# coordinator never clears these; whether it writes them when a record binds them is decided when one of those
+# components is converted. GE Cloud, the only component converted so far, binds none of them.
+REPORTED_TUNING = frozenset({"battery_export_permitted", "inverter_limit_charge", "inverter_limit_discharge", "soc_max_fallback"})
+
 # GE Cloud builds entity ids from the raw, upper-case serial, so the object id may hold capitals
 ENTITY_ID_RE = re.compile(r"^[a-z_]+\.[A-Za-z0-9_]+$")
 
@@ -74,13 +79,26 @@ def dummied_settings(inverter_type):
 
 
 def validated_inverters(report):
-    """Run a report through validate_report() and return its inverter records, failing if any record was dropped."""
+    """Run a report through validate_report() and return its inverter records, failing if any record was dropped or binds a setting nobody owns."""
     logs = []
     cleaned = validate_report(report, "contract", logs.append)
     raw = report.get("inverters") or []
     records = cleaned.get("inverters") or []
     assert len(records) == len(raw), "validate_report() dropped {} of {} inverter records: {}".format(len(raw) - len(records), len(raw), logs)
+    for record in records:
+        assert_entities_owned(record)
     return records
+
+
+def unowned_settings(record):
+    """The settings a record's entities bind that the coordinator does not own: outside BINDING_SETTINGS, SITE_SETTINGS and REPORTED_TUNING."""
+    return set(record.get("entities") or {}) - BINDING_SETTINGS - SITE_SETTINGS - REPORTED_TUNING
+
+
+def assert_entities_owned(record):
+    """Fail if a record binds a setting the coordinator does not own, so no setting can be reported without being owned."""
+    unowned = unowned_settings(record)
+    assert not unowned, "{} record binds settings outside BINDING_SETTINGS: {}".format(record.get("inverter_type"), sorted(unowned))
 
 
 def assert_definition_complete(record, write_and_poll_sleep, except_fields=(), write_max_retry=None, write_backoff=False):

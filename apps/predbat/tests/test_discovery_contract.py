@@ -2,7 +2,6 @@
 # pylint: disable=line-too-long
 """Unit tests for the shared discovery contract checks (tests/discovery_contract.py)."""
 
-from bindings import BINDING_SETTINGS, SITE_SETTINGS
 from coordinator import CAPABILITY_KEYS
 from config import INVERTER_DEF
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, dummied_settings, validated_inverters
@@ -199,27 +198,18 @@ def test_reverse_check_names_extra_settings_and_honours_allowed_extra():
     return 0
 
 
-# Reporter settings that inverter.py reads by name but that are not APPS_SCHEMA keys, so not yet owned - for the maintainer to decide
-NOT_SCHEMA_KEYS = frozenset({"battery_charge_today", "battery_discharge_today", "battery_min_soc", "battery_voltage", "schedule_write_button"})
-
-# User tuning some reporters bind, which BINDING_SETTINGS must never own (spec: Binding settings) - for the maintainer to decide
-REPORTED_TUNING = frozenset({"battery_export_permitted", "inverter_limit_charge", "inverter_limit_discharge", "soc_max_fallback"})
-
-
-def _unowned_settings(record):
-    """The settings a record's entities bind that the coordinator would not own, less the two named exclusions."""
-    return set(record["entities"]) - BINDING_SETTINGS - SITE_SETTINGS - NOT_SCHEMA_KEYS - REPORTED_TUNING
-
-
-def test_record_entities_are_binding_settings():
-    """Every setting a reporter's record binds is in BINDING_SETTINGS (or SITE_SETTINGS), so none is reported without being owned."""
-    for record in validated_inverters({"inverters": [_sunsynk_like_record()]}):
-        unowned = _unowned_settings(record)
-        assert not unowned, "{} record binds settings outside BINDING_SETTINGS: {}".format(record["inverter_type"], sorted(unowned))
+def test_record_binding_an_unowned_setting_fails():
+    """validated_inverters() fails, naming the setting, when a record binds a name outside BINDING_SETTINGS."""
+    validated_inverters({"inverters": [_sunsynk_like_record()]})
     record = _sunsynk_like_record()
     record["entities"]["made_up_setting"] = {"entity_id": "sensor.made_up", "access": "r"}
-    assert "made_up_setting" in _unowned_settings(record)
-    print("PASS: record entities are binding settings")
+    try:
+        validated_inverters({"inverters": [record]})
+    except AssertionError as error:
+        assert "made_up_setting" in str(error), error
+    else:
+        raise AssertionError("a record binding an unowned setting must fail")
+    print("PASS: unowned setting fails")
     return 0
 
 
@@ -237,5 +227,5 @@ def run_discovery_contract_tests(my_predbat=None):
     failures += test_site_setting_expected_only_on_the_first_record()
     failures += test_upper_case_serial_entity_id_is_an_entity_id()
     failures += test_reverse_check_names_extra_settings_and_honours_allowed_extra()
-    failures += test_record_entities_are_binding_settings()
+    failures += test_record_binding_an_unowned_setting_fails()
     return failures

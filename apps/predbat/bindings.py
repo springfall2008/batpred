@@ -32,9 +32,13 @@ SUMMED_SETTINGS = COMPACT_SETTINGS + ("pv_power",)
 # The service API's control keys: not indexed by inverter, so read when detecting a manual slot and never written
 CONTROL_SERVICE_SETTINGS = ("charge_start_service", "charge_stop_service", "discharge_start_service", "discharge_stop_service", "charge_freeze_service", "discharge_freeze_service")
 
-# Every per-inverter setting an inverter record's entities map may bind, plus givtcp_rest: the settings
-# the coordinator owns. Deliberately not "every APPS_SCHEMA key with entries: num_inverters" - user tuning
-# such as inverter_limit_charge or soc_max_fallback is never read, written or cleared here.
+# The settings the coordinator owns. Membership rule: a per-inverter setting that a reporter's record binds,
+# that is one the component's automatic configuration sets today, plus givtcp_rest. APPS_SCHEMA membership
+# is not the test - several settings inverter.py reads by name (schedule_write_button, battery_min_soc) have
+# no schema entry. Nor is it "every APPS_SCHEMA key with entries: num_inverters": user tuning such as
+# inverter_limit_charge or soc_max_fallback is never cleared here (tests/discovery_contract.py REPORTED_TUNING).
+# battery_charge_today and battery_discharge_today have not been checked for whether they are summed lists
+# like load_today; that is settled when a component that binds them is converted (GE Cloud does not).
 BINDING_SETTINGS = frozenset(
     {
         # GE Cloud's _device_entities()
@@ -74,9 +78,14 @@ BINDING_SETTINGS = frozenset(
         "scheduled_discharge_enable",
         "soc_max",
         "soc_percent",
-        # The other reporters' records, where the name is an APPS_SCHEMA key
+        # The other reporters' records
         "battery_calibration",
+        "battery_charge_today",
+        "battery_discharge_today",
+        "battery_min_soc",
         "battery_size_power",
+        "battery_voltage",
+        "schedule_write_button",
         "soc_kw",
         # GE's REST control, bound per slot although no record's entities carry it
         "givtcp_rest",
