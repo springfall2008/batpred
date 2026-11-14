@@ -1641,7 +1641,10 @@ class OctopusAPI(ComponentBase):
                     joined_event["rewarded_octopoints"] = event.get("rewardGivenInOctoPoints")
                 return_joined_events.append(joined_event)
 
-        saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-usd", "joined_events": return_joined_events, "available_events": return_available_events}
+        # Icons remain hard-coded as currency-gbp and have not been auto-generated as per #5683 as the Octopus
+        # integration is only used by UK customers so the extra complexity of passing the icon through to this
+        # component was not justified nor needed.
+        saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-gbp", "joined_events": return_joined_events, "available_events": return_available_events}
 
         # Check if currently in an active saving session
         # Handle both old API keys (start/end) and new API keys (startAt/endAt)
@@ -1672,7 +1675,7 @@ class OctopusAPI(ComponentBase):
             code = event.get("code", None)
             if code:
                 possible_codes.append(code)
-        self.dashboard_item(self.get_entity_name("select", "saving_session_join"), "", attributes={"options": possible_codes, "friendly_name": "Join Octopus Saving Session Event", "icon": "mdi:currency-usd"}, app="octopus")
+        self.dashboard_item(self.get_entity_name("select", "saving_session_join"), "", attributes={"options": possible_codes, "friendly_name": "Join Octopus Saving Session Event", "icon": "mdi:currency-gbp"}, app="octopus")
 
         # Publish free electricity events from flexibility API
         free_electric_events = []
@@ -2451,6 +2454,9 @@ class OctopusAPI(ComponentBase):
             if standing_now:
                 standing_now = dp4(standing_now / 100)
 
+            # Icons remain hard-coded as currency-gbp and have not been auto-generated as per #5683 as the Octopus
+            # integration is only used by UK customers so the extra complexity of passing the icon through to this
+            # component was not justified nor needed.
             self.dashboard_item(
                 self.get_entity_name("sensor", tariff + "_rates"),
                 rate_now,

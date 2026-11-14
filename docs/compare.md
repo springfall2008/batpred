@@ -152,7 +152,7 @@ For each tariff a new sensor is created in Home Assistant called **predbat.compa
 You can create charts from these sensors to show how the different tariffs compare on a daily basis.
 
 The day-by-day history on the Compare tab is read back from Home Assistant's recorded history of these sensors, so they must be kept by the recorder.
-If you have added a `recorder:` filter that excludes the `predbat` domain, include them again with an `entity_globs` entry of `predbat.compare_tariff_*`
+If you have added a `recorder:` filter that excludes the `predbat` domain, include each of the entity id's within an `entity` entry of `predbat.compare_tariff_ID`
 (see the [recorder example in the FAQ](faq.md#predbat-is-causing-exceed-maximum-size-warning-messages-in-the-home-assistant-core-log)), otherwise the Compare tab will only ever show the most recent run.
 
 ![image](https://github.com/user-attachments/assets/6d5c30f6-822f-4d9c-b4a6-701c0b676c61)

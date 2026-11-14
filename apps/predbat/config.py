@@ -25,6 +25,44 @@ from const import OPTIONS_TIME, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_CHARG
 PREDBAT_UPDATE_OPTIONS = [f"{THIS_VERSION} Loading..."]
 PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
 
+# Icons for currency-valued config items, keyed by the primary currency symbol
+# (currency_symbols[0] in apps.yaml). CONFIG_ITEMS declare mdi:currency-usd as the placeholder.
+CURRENCY_ICON_PLACEHOLDER = "mdi:currency-usd"
+CURRENCY_ICON_DEFAULT = "mdi:cash"  # generic icon for symbols not listed below. At present no MDI currency symbols for Danish, Norwegian or Swedish Crown so they will all get the default
+CURRENCY_ICONS = {
+    "£": "mdi:currency-gbp",
+    "$": "mdi:currency-usd",
+    "€": "mdi:currency-eur",
+    "¥": "mdi:currency-jpy",
+    "₹": "mdi:currency-inr",
+    "₩": "mdi:currency-krw",
+    "₽": "mdi:currency-rub",
+    "₺": "mdi:currency-try",
+    "₪": "mdi:currency-ils",
+    "₦": "mdi:currency-ngn",
+    "₱": "mdi:currency-php",
+    "฿": "mdi:currency-thb",
+    "₸": "mdi:currency-kzt",
+    "R$": "mdi:currency-brl",
+}
+# Only items priced in the minor currency unit have their icons updated, so the few items that
+# borrow the currency icon for a non-currency value (kWh, minutes) are left alone
+CURRENCY_ITEM_UNITS = ("p", "p/kWh")
+
+
+def currency_icon(symbol):
+    """Return the MDI icon for a primary currency symbol, or a generic one if unknown."""
+    return CURRENCY_ICONS.get(str(symbol).strip(), CURRENCY_ICON_DEFAULT)
+
+
+def apply_currency_icon(config_items, symbol):
+    """Point the currency-valued items in config_items at the icon for the given symbol."""
+    icon = currency_icon(symbol)
+    for item in config_items:
+        if item.get("icon") == CURRENCY_ICON_PLACEHOLDER and item.get("unit") in CURRENCY_ITEM_UNITS:
+            item["icon"] = icon
+
+
 # Configuration options inside HA
 CONFIG_ITEMS = [
     {
@@ -1437,7 +1475,7 @@ CONFIG_ITEMS = [
         "max": 10,
         "step": 0.1,
         "unit": "kWh",
-        "icon": "mdi:currency-usd",
+        "icon": "mdi:flash",
         "default": 0.5,
     },
     {
@@ -1633,7 +1671,7 @@ CONFIG_ITEMS = [
         "max": 120,
         "step": 30,
         "unit": "minutes",
-        "icon": "mdi:currency-usd",
+        "icon": "mdi:timer-outline",
         "enable": "iboost_enable",
         "default": 30,
     },
