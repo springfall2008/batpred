@@ -77,6 +77,13 @@ CLOUD_ARRAY_MARGIN = 1.2
 # the HA integrations). Treated as "unknown", not as a real 9999 kWp array.
 PV_ARRAY_KWP_UNKNOWN = 9999
 RUN_EVERY = 5
+# How far above the reserve (in %) an inverter that has no reserve register stops discharging in Demand
+# (reserve_via_discharge_rate). SoC is only read every RUN_EVERY minutes, so holding exactly at the reserve
+# would let the house load take the battery below it before the next cycle sees it (#5358).
+RESERVE_HOLD_MARGIN_PERCENT = 1
+# Once held, how much further the SoC must rise before the hold is released, so solar that only just
+# covers the load doesn't switch the discharge rate on and off every cycle.
+RESERVE_HOLD_HYSTERESIS_PERCENT = 1
 
 # Lowest rate (in the currency's 1/100 unit per kWh, e.g. p or c) a manual SoC target is penalised at:
 # the import rate below a manual_soc or alert floor, and the export rate above a manual_soc_max

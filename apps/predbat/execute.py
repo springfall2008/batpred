@@ -36,6 +36,8 @@ from const import (
     RUN_STATE_HOLD_FOR_IBOOST,
     RUN_STATE_READ_ONLY,
     RUN_STATE_CALIBRATION,
+    RESERVE_HOLD_MARGIN_PERCENT,
+    RESERVE_HOLD_HYSTERESIS_PERCENT,
 )
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
 from predbat_metrics import metrics
@@ -613,6 +615,7 @@ class Execute:
             resetPause = self.set_charge_window or self.set_export_window
             resetReserve = self.set_charge_window or self.set_export_window
             disabled_charge_window = False
+            discharging_to_target = False
             disabled_export = False
 
             # Re-programme charge window based on low rates?
@@ -785,6 +788,20 @@ class Execute:
                                         if self.set_reserve_enable and (not inverter.inv_has_timed_pause or (inverter.soc_percent > inv_target_soc_percent)):
                                             inverter.adjust_reserve(min(hold_reserve_percent(inverter, inv_target_soc_percent), inverter.reserve_max))
                                             resetReserve = False
+                                    elif self.set_discharge_during_charge and not inverter.inv_has_target_soc and inverter.soc_percent > inv_target_soc_percent + 1.0:
+                                        # Neither the reserve nor a pause can floor the battery at the target, and nor can the window, as the inverter has
+                                        # no target SoC. It would be frozen at the current SoC (#5937), but the plan has the battery cover the house until it
+                                        # is within 1% of the target (see prediction.py), so run in demand mode with no charge window until the target is reached.
+                                        inverter.disable_charge_window()
+                                        disabled_charge_window = True
+                                        discharging_to_target = True
+                                        # Leave the rates as demand would, or the crosscharge balancer treats this inverter as charging
+                                        # The balancer still holds this discharge on cycles where another inverter is charging with balance_inverters_enable
+                                        # on, as it does any demand-mode discharger beside a planned charge, so the target is then reached more slowly
+                                        charge_rate = None
+                                        discharge_rate = None
+                                        rate_owner = "demand"
+                                        self.log("Inverter {} discharging to target SoC {}% as it cannot hold there".format(inverter.id, dp0(inv_target_soc_percent)))
                                     else:
                                         inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
 
@@ -1129,6 +1146,21 @@ class Execute:
                         else:
                             status_hold_iboost = ", " + RUN_STATE_HOLD_FOR_IBOOST
 
+            # An inverter with no reserve register only has the reserve in the plan: in Demand its own
+            # self-consumption carries on serving the house from the battery down to the device's cut-off
+            # (#5358). Where the type says a zero discharge rate stops discharge but still lets PV charge,
+            # hold the plan's floor with it. Not while charging or force exporting, where the rate is
+            # already decided, nor in Monitor or Control SoC only (reset_rates is False there). Once held, the
+            # SoC has to rise a further RESERVE_HOLD_HYSTERESIS_PERCENT before the hold lets go; that state is
+            # kept while a car or iBoost hold has claimed the rate, so it isn't lost when they end.
+            hold_limit_percent = inverter.reserve_percent + RESERVE_HOLD_MARGIN_PERCENT + (RESERVE_HOLD_HYSTERESIS_PERCENT if inverter.reserve_hold_active else 0)
+            inverter.reserve_hold_active = (
+                reset_rates and inverter.inv_reserve_via_discharge_rate and status_per_inverter.get(inverter.id) not in [RUN_STATE_CHARGING, RUN_STATE_EXPORTING] and inverter.reserve_percent > 0 and inverter.soc_percent <= hold_limit_percent
+            )
+            if inverter.reserve_hold_active and discharge_rate is None:
+                discharge_rate = 0
+                self.log("Inverter {} SoC {}% is close to the {}% reserve, disabling battery discharge as the inverter has no reserve setting".format(inverter.id, inverter.soc_percent, inverter.reserve_percent))
+
             # Reset pause mode; rates are resolved once by the apply pass after the loop
             if resetPause:
                 inverter.adjust_pause_mode()
@@ -1241,7 +1273,14 @@ class Execute:
 
                     # Charge immediate
                     if isCharging:
-                        if self.is_freeze_charge(self.charge_limit_best[0]):
+                        if discharging_to_target:
+                            # Stop rather than freeze, so a service-controlled inverter returns to demand and covers the house,
+                            # unless a car or iBoost hold wants the battery held, as it would be outside a charge window
+                            if carHolding or boostHolding:
+                                inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
+                            else:
+                                inverter.adjust_charge_immediate(0)
+                        elif self.is_freeze_charge(self.charge_limit_best[0]):
                             inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(self.soc_kw, self.soc_max), isCharging, isExporting, check=True, isFreezeCharge=True)
                             inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
                         else:

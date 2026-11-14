@@ -1792,7 +1792,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Volume Temperature Next",
         "type": "input_number",
         "min": -20,
-        "max": 40,
+        "max": 100,
         "step": 0.1,
         "unit": "°C",
         "default": 20,
@@ -2214,6 +2214,7 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
+        "reserve_via_discharge_rate": True,
     },
     "FoxESS": {
         "name": "FoxESS",

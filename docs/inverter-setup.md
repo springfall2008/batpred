@@ -2000,6 +2000,11 @@ look for sensor.sigen_plant_daily_consumed_energy (the name earlier versions of 
 *Note:* If you rename **input_number.charge_rate** / **input_number.discharge_rate**, change them in `apps.yaml` **and** in the triggers and templates of the rate automations.
 If the two disagree the automations never fire, and nothing reports it: the plant simply stays at whatever limit it last had, so Predbat's rate changes (including setting a rate of 0 to hold the battery) never reach the inverter.
 
+*Note:* Predbat has no reserve it can set on a Sigenergy, so it holds **set_reserve_min** with the discharge rate instead: whenever it is not charging or force exporting and the battery is within 1% of the reserve,
+Predbat sets **input_number.discharge_rate** to 0 and the house is supplied from the grid. Solar can still charge the battery (except during Freeze Exporting, which stops charging), and the discharge rate goes back to maximum once the SoC is more than 2% above the reserve.
+The SoC is only checked every 5 minutes, so with a large house load the battery can still go a little below the reserve before the hold starts.
+Predbat only does this while it controls the charge or export windows, not in Monitor or Control SOC only mode. It relies on the discharge rate automation above. Without it the plant's own self-consumption carries on running the house from the battery down to **number.sigen_plant_ess_discharge_cut_off_state_of_charge** (see [batpred#5358](https://github.com/springfall2008/batpred/issues/5358)).
+
 *Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first automation to any lower import limit that your electricity supplier may have imposed,
 e.g. 18kW roughly corresponds to an 80A supply.
 
@@ -2059,6 +2064,9 @@ Predbat has a built-in Sigenergy Cloud integration that connects directly to the
 It publishes all necessary sensor entities itself and can automatically configure Predbat to use them.
 
 See the [Components - Sigenergy Cloud](components.md#sigenergy-cloud-api-sigenergy) documentation for full configuration options.
+
+*Note:* the reserve hold described for local Sigenergy setups above does not apply to Sigenergy Cloud. On Sigenergy Cloud, a zero discharge rate stops the battery charging as well, so a hold at the reserve would also stop solar from topping the battery up.
+With Sigenergy Cloud, Predbat's **set_reserve_min** is only a floor in the plan, and in Demand the plant can still run the battery down to its own discharge cut-off (see [batpred#5358](https://github.com/springfall2008/batpred/issues/5358)).
 
 ### Obtaining Sigenergy Cloud API credentials
 
