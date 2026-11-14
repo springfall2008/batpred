@@ -266,6 +266,11 @@ the inverters they drive (records with an `inverter_type`; PV-only devices do no
 - otherwise, any inverter reported as hybrid (`hybrid: true`) turns it **on**;
 - otherwise, when no inverter says either way, the switch is left as it is.
 
+[`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) in `apps.yaml` comes first: a single value holds the switch
+at that value and the records are not read, and a per-inverter list replaces the verdict of the inverter in each slot it gives
+`true` or `false` for (named `inverter_hybrid_override[<slot>]` in the log), including an inverter you configured by hand, before
+the rule above runs.
+
 The rule runs whenever a component's report changes, whether or not that component hands its slots to
 discovery, and it writes only when the switch differs from its result. A change is logged once, naming
 the inverters that decided it:
@@ -303,8 +308,8 @@ A component counts only while its automatic configuration is on, so with GE Clou
 Enphase, SolaX, Solis, Fox or Growatt in automatic mode, or the Predbat Gateway (unless `gateway_display_only` is set),
 the inverter now sets `inverter_hybrid` - from its model, or for Hanchu its AC-coupled field. GivTCP's automatic configuration (`givtcp_automatic`) is on by
 default, so a GivTCP install now has the switch set from its `Invertor_Type`. A value you set by hand is put
-back on the next changed report (including after every restart); turn that component's automatic configuration off to manage the switch
-yourself.
+back on the next changed report (including after every restart); set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage the switch
+yourself - a single value holds it, a per-inverter list stands in for what chosen inverters report.
 
 ### The invert settings
 

@@ -16,6 +16,7 @@ import time
 
 import coordinator as coordinator_module
 from bindings import BINDING_SETTINGS, COMPACT_SETTINGS, INVERT_SETTINGS, SITE_SETTINGS, slot_value
+from config import APPS_SCHEMA
 from coordinator import Coordinator
 from gecloud import DEVICE_REFRESH_SECONDS, GE_CLOUD_DUMMIED_SETTINGS, GECloudData, apply_legacy_bindings
 from tests.test_ge_cloud import GEC_FULL_REGISTERS, GEC_INFO, GEC_MIXED_REGISTERS, MockGECloudDirect, _gec_devices, _make_rediscovery_ge_cloud
@@ -1036,6 +1037,190 @@ def test_hybrid_never_known_stays_unknown():
     return 0
 
 
+OVERRIDE_LINE = "Coordinator: inverter_hybrid set {} - inverter_hybrid_override in apps.yaml"
+
+
+def _override_setup(override, current=True, apps=None):
+    """(base, coordinator, ha) as _hybrid_setup, with inverter_hybrid_override (unless override is None) and any other apps.yaml settings in args."""
+    args = dict(apps or {}, inverter_hybrid=current)
+    if override is not None:
+        args["inverter_hybrid_override"] = override
+    base, registry, coordinator = _setup(args=args)
+    ha = _HAInterface(base)
+    base.ha_interface = ha
+    return base, coordinator, ha
+
+
+def _hybrid_gecloud_report(serials_hybrid):
+    """A GE-Cloud-shaped automatic report of (serial, hybrid) records, bound to slots when GE Cloud is opted in; hybrid None leaves the field out."""
+    records = []
+    for serial, hybrid in serials_hybrid:
+        record = _record(serial)
+        if hybrid is not None:
+            record["hybrid"] = hybrid
+        records.append(record)
+    return {"automatic": True, "inverters": records}
+
+
+def test_hybrid_override_single_holds():
+    """A single inverter_hybrid_override holds the switch whatever the records say, and a later report does not undo it."""
+    for value, record_value in ((True, False), (False, True)):
+        base, coordinator, ha = _override_setup(value, current=not value)
+        coordinator.report("solis", _hybrid_report([("solis:A", record_value, "SolisCloud")]))
+        assert ha.calls == [(HYBRID_ENTITY, value)], ha.calls
+        assert _hybrid_lines(base) == [OVERRIDE_LINE.format("on" if value else "off")], base.log_messages
+        assert coordinator.hybrid_decision() == (value, ["inverter_hybrid_override in apps.yaml"]), coordinator.hybrid_decision()
+        # Later reports, still saying the opposite, write nothing; a hand-set value is put back on the next changed one
+        coordinator.report("solis", _hybrid_report([("solis:A", record_value, "SolisCloud"), ("solis:B", record_value, "SolisCloud")]))
+        assert ha.calls == [(HYBRID_ENTITY, value)], ha.calls
+        base.args["inverter_hybrid"] = not value
+        coordinator.report("solis", _hybrid_report([("solis:A", record_value, "SolisCloud")]))
+        assert ha.calls == [(HYBRID_ENTITY, value), (HYBRID_ENTITY, value)], ha.calls
+    # A recognisable boolean string counts as the boolean
+    base, coordinator, ha = _override_setup("off", current=True)
+    coordinator.report("solis", _hybrid_report([("solis:A", True, "SolisCloud")]))
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    # A site with no discovery report at all: the startup pass (configure(), nothing opted in) still applies it
+    base, coordinator, ha = _override_setup(False, current=True, apps={"num_inverters": 1, "inverter_type": ["GE"]})
+    coordinator.configure()
+    assert ha.calls == [(HYBRID_ENTITY, False)] and base.args["inverter_hybrid"] is False, ha.calls
+    coordinator.configure()
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    print("PASS: hybrid override single holds")
+    return 0
+
+
+def test_hybrid_override_list_discovered_slot():
+    """A list entry replaces the verdict of the discovered record in its slot: overriding a False to True turns the switch on."""
+    base, coordinator, ha = _override_setup([True], current=False)
+    coordinator.allow_automatic("gecloud")
+    coordinator.report("gecloud", _hybrid_gecloud_report([("ce1111g111", False)]))
+    assert coordinator.slot_map == {"gecloud:ce1111g111": 0}, coordinator.slot_map
+    assert ha.calls == [(HYBRID_ENTITY, True)], ha.calls
+    assert coordinator.hybrid_decision() == (True, ["inverter_hybrid_override[0]"]), coordinator.hybrid_decision()
+    assert _hybrid_lines(base) == ["Coordinator: inverter_hybrid set on - inverter_hybrid_override[0] reports it is a hybrid inverter"], base.log_messages
+    # Only that slot is overridden: a second record saying not hybrid, in slot 1, still turns the switch off
+    coordinator.report("gecloud", _hybrid_gecloud_report([("ce1111g111", False), ("ce2222g222", False)]))
+    assert coordinator.hybrid_decision() == (False, ["gecloud:ce2222g222"]), coordinator.hybrid_decision()
+    assert ha.calls == [(HYBRID_ENTITY, True), (HYBRID_ENTITY, False)], ha.calls
+    # The user's entry counts even when the slot's component reports with automatic off
+    base, coordinator, ha = _override_setup([False], current=True)
+    coordinator.allow_automatic("gecloud")
+    coordinator.report("gecloud", dict(_hybrid_gecloud_report([("ce1111g111", True)]), automatic=False))
+    assert coordinator.slot_map == {"gecloud:ce1111g111": 0}, coordinator.slot_map
+    assert coordinator.hybrid_decision() == (False, ["inverter_hybrid_override[0]"]), coordinator.hybrid_decision()
+    print("PASS: hybrid override list discovered slot")
+    return 0
+
+
+def test_hybrid_override_list_manual_slot():
+    """A list entry for a manual slot counts as that inverter's verdict, with or without a configure pass; a free slot or one past the inverters counts for nothing."""
+    manual = {"num_inverters": 1, "inverter_type": ["GE"], "charge_rate": ["number.a_charge_rate"]}
+    base, coordinator, ha = _override_setup([False], current=True, apps=manual)
+    coordinator.allow_automatic("gecloud")
+    coordinator.report("gecloud", _hybrid_gecloud_report([("ce1111g111", True)]))
+    assert coordinator.slot_map == {"gecloud:ce1111g111": 1}, coordinator.slot_map
+    assert coordinator.bindings["inverters"][0]["origin"] == "manual", coordinator.bindings
+    assert coordinator.hybrid_decision() == (False, ["inverter_hybrid_override[0]"]), coordinator.hybrid_decision()
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    # Nothing opted in, so no bindings: the apps.yaml inverters (num_inverters) are the manual slots
+    base, coordinator, ha = _override_setup([True], current=False, apps=manual)
+    coordinator.configure()
+    assert coordinator.bindings is None
+    assert ha.calls == [(HYBRID_ENTITY, True)], ha.calls
+    assert coordinator.hybrid_decision() == (True, ["inverter_hybrid_override[0]"]), coordinator.hybrid_decision()
+    # An entry past the configured inverters names no inverter and decides nothing
+    base, coordinator, ha = _override_setup([None, False], current=True, apps=manual)
+    coordinator.configure()
+    assert ha.calls == [] and coordinator.hybrid_decision() == (None, []), (ha.calls, coordinator.hybrid_decision())
+    print("PASS: hybrid override list manual slot")
+    return 0
+
+
+def test_hybrid_override_none_entries_leave_records():
+    """None entries, a missing entry or an empty list leave each slot to its record."""
+    for override in ([None], [None, None], []):
+        base, coordinator, ha = _override_setup(override, current=True)
+        coordinator.allow_automatic("gecloud")
+        coordinator.report("gecloud", _hybrid_gecloud_report([("ce1111g111", False), ("ce2222g222", True)]))
+        assert coordinator.hybrid_decision() == (False, ["gecloud:ce1111g111"]), (override, coordinator.hybrid_decision())
+        assert ha.calls == [(HYBRID_ENTITY, False)], (override, ha.calls)
+        assert not [line for line in base.log_messages if line.startswith("Warn:")], base.log_messages
+    # The I1 fix holds with an override list in place: a record that loses its value keeps its last one
+    base, coordinator, ha = _override_setup([None], current=True)
+    for rai in (False, None, False, None):
+        coordinator.report("solis", _hybrid_report([("solis:A", True, "SolisCloud"), ("solis:B", rai, "SolisCloud")]))
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    print("PASS: hybrid override none entries leave records")
+    return 0
+
+
+def test_hybrid_override_not_the_switch(my_predbat):
+    """The inverter_hybrid switch's own value (its CONFIG_ITEM, which wins in get_arg) is never read as the override."""
+    # The stub base: args carry inverter_hybrid only
+    base, coordinator, ha = _override_setup(None, current=False)
+    assert coordinator.hybrid_decision() == (None, []), coordinator.hybrid_decision()
+    coordinator.configure()
+    assert ha.calls == [], ha.calls
+    # The real PredBat get_arg: the switch's CONFIG_ITEM answers for inverter_hybrid, and nothing for the override key
+    if my_predbat is None:
+        print("PASS: hybrid override not the switch (stub base only, no PredBat given)")
+        return 0
+    saved_args = dict(my_predbat.args)
+    saved_errors = copy.deepcopy(getattr(my_predbat, "arg_errors", {}))
+    saved_warnings = copy.deepcopy(getattr(my_predbat, "arg_warnings", {}))
+    try:
+        my_predbat.args.pop("inverter_hybrid_override", None)
+        assert isinstance(my_predbat.get_arg("inverter_hybrid", True), bool)
+        coordinator = Coordinator(my_predbat)
+        assert coordinator.hybrid_override() is None, coordinator.hybrid_override()
+        my_predbat.args["inverter_hybrid_override"] = False
+        assert coordinator.hybrid_override() is False, coordinator.hybrid_override()
+        my_predbat.args["inverter_hybrid_override"] = [True, None]
+        assert coordinator.hybrid_override() == [True, None], coordinator.hybrid_override()
+        # APPS_SCHEMA takes both forms, a list with None entries included
+        assert APPS_SCHEMA["inverter_hybrid_override"]["type"] == "boolean|boolean_list", APPS_SCHEMA.get("inverter_hybrid_override")
+        for value in (True, [True, None]):
+            my_predbat.args["inverter_hybrid_override"] = value
+            my_predbat.validate_config()
+            assert "inverter_hybrid_override" not in my_predbat.arg_errors, (value, my_predbat.arg_errors)
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.arg_errors = saved_errors
+        my_predbat.arg_warnings = saved_warnings
+    print("PASS: hybrid override not the switch")
+    return 0
+
+
+def test_hybrid_override_malformed_ignored():
+    """A value that is not a boolean, or a list of booleans and None, is ignored with one Warn line naming the key; the records decide."""
+    for override, warning in (
+        ("maybe", "Warn: Coordinator: inverter_hybrid_override in apps.yaml is 'maybe', not true, false or a list of them - ignored"),
+        ({"slot": 0}, "Warn: Coordinator: inverter_hybrid_override in apps.yaml is {'slot': 0}, not true, false or a list of them - ignored"),
+        (1, "Warn: Coordinator: inverter_hybrid_override in apps.yaml is 1, not true, false or a list of them - ignored"),
+    ):
+        base, coordinator, ha = _override_setup(override, current=True)
+        coordinator.report("solis", _hybrid_report([("solis:A", False, "SolisCloud")]))
+        coordinator.report("solis", _hybrid_report([("solis:A", False, "SolisCloud"), ("solis:B", None, "SolisCloud")]))
+        assert ha.calls == [(HYBRID_ENTITY, False)], (override, ha.calls)
+        assert [line for line in base.log_messages if line.startswith("Warn:")] == [warning], base.log_messages
+    # One bad entry in a list is ignored on its own; the good ones still count
+    base, coordinator, ha = _override_setup(["maybe", True], current=False, apps={"num_inverters": 2, "inverter_type": ["GE", "GE"]})
+    coordinator.configure()
+    coordinator.configure()
+    assert ha.calls == [(HYBRID_ENTITY, True)], ha.calls
+    assert [line for line in base.log_messages if line.startswith("Warn:")] == ["Warn: Coordinator: inverter_hybrid_override[0] in apps.yaml is 'maybe', not true, false or None - ignored"], base.log_messages
+    # YAML reads a bare None as the string "None": as a list entry or the whole value it means not set, quietly
+    base, coordinator, ha = _override_setup(["None", "null", True], current=False, apps={"num_inverters": 3, "inverter_type": ["GE", "GE", "GE"]})
+    assert coordinator.hybrid_override() == [None, None, True], coordinator.hybrid_override()
+    base, coordinator, ha = _override_setup("None", current=True)
+    assert coordinator.hybrid_override() is None
+    assert not [line for line in base.log_messages if line.startswith("Warn:")], base.log_messages
+    print("PASS: hybrid override malformed ignored")
+    return 0
+
+
 def test_inverter_records_copy():
     """Coordinator.inverter_records() is a deep copy of one source's validated records; ComponentBase.discovery_inverter_records() wraps it, [] without a coordinator."""
     from component_base import ComponentBase
@@ -1686,6 +1871,12 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_hybrid_lost_value_keeps_last_known()
     failures += test_hybrid_removed_device_forgotten()
     failures += test_hybrid_never_known_stays_unknown()
+    failures += test_hybrid_override_single_holds()
+    failures += test_hybrid_override_list_discovered_slot()
+    failures += test_hybrid_override_list_manual_slot()
+    failures += test_hybrid_override_none_entries_leave_records()
+    failures += test_hybrid_override_not_the_switch(my_predbat)
+    failures += test_hybrid_override_malformed_ignored()
     failures += test_inverter_records_copy()
     # Acceptance: discovery against the old automatic configuration
     failures += test_accept_single()

@@ -678,7 +678,7 @@ Hanchu publish no API specification, so this integration was built by reading op
 
 Copy the template [hanchu.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu.yaml) over your `apps.yaml` and set `hanchu_account` and `hanchu_password` (keep them in `secrets.yaml` - see [Storing secrets](apps-yaml.md#storing-secrets)). With `hanchu_automatic: True` Predbat finds your inverter and wires up its sensors and controls for you. Set `hanchu_control_enable: False` to monitor only.
 
-With `hanchu_automatic: True` Predbat's discovery also sets **switch.predbat_inverter_hybrid** from the inverter's AC-coupled setting: off when it reports AC coupling, on otherwise, and left alone when the unit does not report it (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). A value you set by hand is put back on the next changed report (including after every restart); set `hanchu_automatic: False` to manage the switch yourself.
+With `hanchu_automatic: True` Predbat's discovery also sets **switch.predbat_inverter_hybrid** from the inverter's AC-coupled setting: off when it reports AC coupling, on otherwise, and left alone when the unit does not report it (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). A value you set by hand is put back on the next changed report (including after every restart); set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage the switch yourself.
 
 If you set `load_today`, `import_today`, `export_today` or `pv_today` in `apps.yaml` yourself, your entry is kept and the automatic setup fills in only the ones you leave out. Any sensor you set must be a cumulative kWh total for the day that Home Assistant records history for.
 

@@ -322,6 +322,33 @@ class Redactor:
         return EMAIL_RE.sub(EMAIL_PLACEHOLDER, text)
 
 
+# The apps.yaml setting that overrides the inverter_hybrid rule (see Coordinator.hybrid_override()). Not inverter_hybrid
+# itself: that is the Predbat switch's own CONFIG_ITEM, whose value get_arg() returns ahead of apps.yaml
+HYBRID_OVERRIDE_KEY = "inverter_hybrid_override"
+HYBRID_OVERRIDE_TRUE = ("true", "on", "yes", "enable", "enabled")
+HYBRID_OVERRIDE_FALSE = ("false", "off", "no", "disable", "disabled")
+# Strings that mean "not set" - YAML reads a bare None as the string "None"
+HYBRID_OVERRIDE_UNSET = ("", "none", "null")
+
+
+def hybrid_override_unset(value):
+    """Whether an inverter_hybrid_override value or list entry means "not set": None, or an empty, "None" or "null" string."""
+    return value is None or (isinstance(value, str) and value.strip().lower() in HYBRID_OVERRIDE_UNSET)
+
+
+def hybrid_override_bool(value):
+    """True or False for a boolean, or a string that spells one (true/false, on/off, yes/no, enable(d)/disable(d)); None for anything else."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in HYBRID_OVERRIDE_TRUE:
+            return True
+        if word in HYBRID_OVERRIDE_FALSE:
+            return False
+    return None
+
+
 def remembered_hybrid(report, previous):
     """The hybrid memory for one source after it files report: device_id -> last bool, from previous (that source's memory before).
 
@@ -438,11 +465,13 @@ class Coordinator:
         args_from_apps_yaml is taken before Predbat resolves re: patterns.
 
         A failure is logged as a warning and the writes the pass had already made are undone, so args are as they
-        were before it; the bindings stay as the last good pass left them. Every pass ends with apply_hybrid().
+        were before it; the bindings stay as the last good pass left them. Every call ends with apply_hybrid(), even
+        with nothing opted in, so the startup passes apply an inverter_hybrid_override on a site with no report.
         """
         with self.lock:
             opted_in = bool(self.automatic)
         if not opted_in:
+            self.apply_hybrid()
             return
         with self.configure_lock:
             before = {}
@@ -459,19 +488,66 @@ class Coordinator:
             report = self.reports.get(source) or {}
             return copy.deepcopy(report.get("inverters", []))
 
-    def hybrid_decision(self):
-        """The site's inverter_hybrid value from the stored reports, and the device_ids that decide it.
+    def hybrid_override(self):
+        """inverter_hybrid_override from apps.yaml: None when unset, True or False, or a list by inverter slot of True, False or None.
 
-        Only reports whose automatic is true count (a component the user has not asked to configure automatically
+        Read through get_arg() under its own name - never inverter_hybrid, whose CONFIG_ITEM (the switch) get_arg()
+        answers first. A boolean string (on, off, yes, no and the like) counts as the boolean, and None, "None", "null"
+        or an empty string as not set. A value that is neither
+        a boolean nor a list is ignored, and so is a list entry that is not a boolean or None (it becomes None), each
+        with one Warn line naming the key.
+        """
+        get_arg = getattr(self.base, "get_arg", None)
+        if not callable(get_arg):
+            return None
+        raw = get_arg(HYBRID_OVERRIDE_KEY, None)
+        if hybrid_override_unset(raw):
+            return None
+        if isinstance(raw, (list, tuple)):
+            entries = []
+            for index, entry in enumerate(raw):
+                value = hybrid_override_bool(entry)
+                if value is None and not hybrid_override_unset(entry):
+                    self._warn_once("{}[{}] in apps.yaml is {!r}, not true, false or None - ignored".format(HYBRID_OVERRIDE_KEY, index, entry))
+                entries.append(value)
+            return entries
+        value = hybrid_override_bool(raw)
+        if value is None:
+            self._warn_once("{} in apps.yaml is {!r}, not true, false or a list of them - ignored".format(HYBRID_OVERRIDE_KEY, raw))
+        return value
+
+    def hybrid_decision(self):
+        """The site's inverter_hybrid value and what decides it: _hybrid_decide() without its single-override flag."""
+        value, deciders, _single = self._hybrid_decide()
+        return value, deciders
+
+    def _hybrid_decide(self):
+        """(value, deciders, single): the site's inverter_hybrid value from inverter_hybrid_override and the stored reports.
+
+        A single inverter_hybrid_override (True or False) decides alone: (value, ["inverter_hybrid_override in
+        apps.yaml"], True), and the records are not read. Otherwise single is False and the value comes from the records,
+        with a list override's True/False entry i standing in for slot i: it replaces the verdict of the discovered
+        record bound there, or for a manual slot counts as that inverter's verdict, named "inverter_hybrid_override[i]",
+        whether or not any component is automatic. A free slot, or one past the slots, takes nothing. With no bindings
+        (no component opted in) the manual slots are the apps.yaml inverters, 0 to num_inverters - 1.
+
+        Of the records, only reports whose automatic is true count (a component the user has not asked to configure automatically
         does not change Predbat's settings), and only their driven records (with an inverter_type; PV-only records do
         not count). A record's value is its hybrid, or when that is missing the last bool the same device gave in an
         earlier report from the same source (hybrid_known): a component that loses the value on one reply does not
-        flip the switch, while a device that has left its source's report is forgotten. Any record saying hybrid
-        False -> (False, those device_ids); otherwise any saying True -> (True, those device_ids); otherwise
-        (None, []), which leaves the switch alone. Reports are read in component-name order, records in report order.
+        flip the switch, while a device that has left its source's report is forgotten. Any verdict False -> False,
+        decided by those device_ids (and override entries); otherwise any True -> True; otherwise (None, []), which
+        leaves the switch alone. Reports are read in component-name order, records in report order, then the list
+        override's entries in slot order.
         """
+        override = self.hybrid_override()
+        if isinstance(override, bool):
+            return override, ["{} in apps.yaml".format(HYBRID_OVERRIDE_KEY)], True
+        slot_overrides = {index: value for index, value in enumerate(override or []) if isinstance(value, bool)}
         with self.lock:
             reports = [(self.reports[name], dict(self.hybrid_known.get(name, {}))) for name in sorted(self.reports)]
+            bindings = self.bindings
+        slots = slot_map(bindings)
         found = {False: [], True: []}
         for report, known in reports:
             if not report.get("automatic"):
@@ -479,13 +555,26 @@ class Coordinator:
             for record in report.get("inverters", []):
                 if not (isinstance(record.get("inverter_type"), str) and record["inverter_type"].strip()):
                     continue
+                if slots.get(record.get("device_id")) in slot_overrides:
+                    continue
                 value = record.get("hybrid") if isinstance(record.get("hybrid"), bool) else known.get(record.get("device_id"))
                 if isinstance(value, bool):
                     found[value].append(record["device_id"])
+        if slot_overrides:
+            if bindings is not None:
+                occupied = {index for index, entry in enumerate(bindings.get("inverters", [])) if entry.get("origin") in ("manual", "discovered")}
+            else:
+                try:
+                    occupied = set(range(int(self.base.get_arg("num_inverters", 1))))
+                except (TypeError, ValueError):
+                    occupied = {0}
+            for index in sorted(slot_overrides):
+                if index in occupied:
+                    found[slot_overrides[index]].append("{}[{}]".format(HYBRID_OVERRIDE_KEY, index))
         for value in (False, True):
             if found[value]:
-                return value, found[value]
-        return None, []
+                return value, found[value], False
+        return None, [], False
 
     def apply_hybrid(self):
         """Set Predbat's inverter_hybrid switch from hybrid_decision() when it differs from the setting and from a write still pending. Never raises.
@@ -503,7 +592,7 @@ class Coordinator:
             return
         scheduled = None
         try:
-            value, device_ids = self.hybrid_decision()
+            value, device_ids, single = self._hybrid_decide()
             current = base.get_arg("inverter_hybrid", True)
             with self.lock:
                 if self.hybrid_pending is not None and current == self.hybrid_pending:
@@ -512,7 +601,9 @@ class Coordinator:
                     return
                 self.hybrid_pending = value
                 scheduled = value
-            if value:
+            if single:
+                reason = "{}"
+            elif value:
                 reason = "{} reports it is a hybrid inverter" if len(device_ids) == 1 else "{} report they are hybrid inverters"
             else:
                 reason = "{} reports it is not a hybrid inverter" if len(device_ids) == 1 else "{} report they are not hybrid inverters"

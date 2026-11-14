@@ -1302,6 +1302,36 @@ If you have multiple inverters, then set inverter_type to a list of the inverter
 
 If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) in `apps.yaml` then inverter_type **must** be set to the same code as has been used in the custom inverter definition.
 
+### inverter_hybrid_override
+
+`inverter_hybrid_override` sets **switch.predbat_inverter_hybrid** from `apps.yaml`, above what discovery reads from your inverters
+(see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). Without it, an inverter component with automatic configuration
+on sets the switch from what the inverter reports, and a value you set by hand is put back on the next changed report (including after
+every restart). It has two forms:
+
+- **A single value** holds the switch at that value whatever the inverters report. Predbat writes it whenever the switch differs - at
+  startup and on any changed report - and logs `Coordinator: inverter_hybrid set on - inverter_hybrid_override in apps.yaml` (or `off`):
+
+```yaml
+  inverter_hybrid_override: False   # AC coupled, whatever the inverters say
+```
+
+- **A list, one entry per inverter**, in the same order as `inverter_type`. A `True` or `False` entry replaces what discovery reports
+  for that inverter, or, for an inverter you configured by hand in `apps.yaml`, gives it a say it would not otherwise have. A `null` (or
+  `None`, or a missing) entry leaves that inverter to what it reports. The entries then go through the usual rule: any inverter not hybrid turns the
+  switch off, otherwise any hybrid turns it on, otherwise it is left as it is:
+
+```yaml
+  inverter_hybrid_override:
+    - True    # inverter 0 is a hybrid, whatever it reports
+    - null    # inverter 1: as discovery reports it
+```
+
+The list follows Predbat's inverter slots, which discovery assigns only for components that hand their inverters to it (GE Cloud
+with `ge_cloud_automatic`); an inverter from another component that configures itself is not matched to an entry, so for those use
+the single value. A value that is not `True`, `False` (or `on`/`off`, `yes`/`no`), or a list of them and `null`, is ignored with a warning.
+Teslemetry's own `teslemetry_hybrid` still sets what Teslemetry reports; `inverter_hybrid_override` sits above it.
+
 ### geserial
 
 Only for GE inverters, this is a helper regular expression to find your inverter serial number, if it doesn't work edit it manually or change individual entities to match.
@@ -1981,7 +2011,7 @@ so you can name them by hand - or point an individual setting at a sensor of you
 With `givtcp_automatic` on (the default) Predbat's discovery also sets **switch.predbat_inverter_hybrid** from each inverter's
 `Invertor_Type`: off for an AC-coupled or All-in-One model, on for a hybrid, and left alone when the type is unknown (see
 [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). GivTCP did not set this switch before. A value you set by hand is put
-back on the next changed report (including after every restart); set `givtcp_automatic: false` to manage the switch yourself.
+back on the next changed report (including after every restart); set [`inverter_hybrid_override`](#inverter_hybrid_override) to manage the switch yourself.
 
 Note that Predbat will always retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
 
