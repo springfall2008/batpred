@@ -49,7 +49,7 @@ Same as `/issue-triage` step 2 (including files on a source ticket this one was 
 Compare your updated understanding against the original triage comment's classification, priority, and root-cause pointer:
 
 - If nothing material changed, say so — confirming the original assessment still holds is a legitimate outcome, not a reason to avoid posting.
-- If the classification, priority, or root-cause should change given the new information, update it. You may change or remove a label **you previously applied as the bot** (classification, priority, `waiting_for_user`) — never remove a label a human added.
+- If the classification, priority, or root-cause should change given the new information, update it. You may change or remove a label **you previously applied as the bot** (classification, priority, `waiting_for_user`, and the `duplicate` and `AUTOCLOSE_CANDIDATE` labels of a parked believed-fixed issue). Never remove a label a human added. Treat `duplicate` and `AUTOCLOSE_CANDIDATE` as the bot's only if an earlier bot comment on the issue says it parked the issue or marked it a duplicate. If you can't tell, leave the label and say in your comment that a maintainer should review it.
 - Apply the same duplicate check as `/issue-triage` step 4 if the new information suggests one.
 
 If the bot's most recent prior comment (the one you found in step 1) carries a one-line bug statement (`/issue-triage` step 3), that statement is a standing claim and this review must settle it rather than silently carry it forward or drop it — including when nothing material changed, one of:
@@ -64,6 +64,15 @@ If this review concludes the issue is a bug and there is no live statement to re
 Check the comment history first: if the most recent comment is already a bot comment with nothing from a human posted after it, stop — this review already happened and nothing new has arrived since.
 
 Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated follow-up triage review (a maintainer will review before any action is taken), followed by: what was new since the last review, whether the classification/priority/root-cause changed and why (or confirmation nothing changed), the one-line bug statement from step 4 whenever one is restated, newly written, or retracted there — restated as-is if the new evidence didn't bear on it — and any further information request.
+
+If this review newly concludes that the problem is already fixed, in a later release than the reporter's or on main but not yet released, the comment carries the bold "believed fixed" line in the place `/issue-triage` step 9 gives, found the way it describes. If an earlier bot comment said "believed fixed" (in vX, or on main) and the reporter now runs a release containing that fix and still has the problem, retract it plainly near the top ("The fix in vX did not cover this") and investigate it as a possible regression. If it said "fixed on main" and the fix has since been released, name the release now. When the reporter of a parked believed-fixed issue replies:
+
+- **The problem is gone:** leave `AUTOCLOSE_CANDIDATE` on and say in your comment that the issue can be closed, so a maintainer or the auto-close sweep closes it.
+- **It still happens, on a release that contains the fix:** remove `AUTOCLOSE_CANDIDATE`, and `duplicate` if the bot applied it. Retract the claim as above and investigate it as a possible regression.
+- **It still happens, but they haven't updated yet:** keep the labels, re-apply `waiting_for_user`, and ask them to update and try again.
+- **Their reply doesn't answer the question:** leave the labels on, re-apply `waiting_for_user`, and ask again.
+
+The parking rule in `/issue-triage` step 9 applies to any new "believed fixed" line this review writes. If the reporter is out of date (the version check in `/issue-triage` step 1), suggest the update near the top only when no earlier bot comment has suggested it, or when their version has changed since and they are still out of date. Otherwise, mention it at most in one line further down. Don't repeat it on every follow-up.
 
 Do **not** touch the `BOT_TRIAGED` or `BOT_REVIEW` labels — the daemon manages both.
 

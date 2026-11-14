@@ -155,6 +155,11 @@ class SolarAPI(ComponentBase):
         self.refresh_discovery()
         return True
 
+    @staticmethod
+    def solar_cache_key(url, params):
+        """Return the storage key for a URL and its params: a short hash, so a long URL cannot exceed the filesystem's filename limit (#6161)."""
+        return hashlib.sha256("{}_{}".format(url, params).encode()).hexdigest()[:16]
+
     async def cache_get_url(self, url, params, max_age=8 * 60):
         # Check if this is a Solcast API call for metrics tracking
         is_solcast_api = "solcast.com" in url.lower() or "api.solcast" in url.lower()
@@ -175,12 +180,7 @@ class SolarAPI(ComponentBase):
 
         # Get data from cache
         data = None
-        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_key = hash_key.replace("/", "_")
-        hash_key = hash_key.replace(":", "_")
-        hash_key = hash_key.replace("?", "a")
-        hash_key = hash_key.replace("&", "b")
-        hash_key = hash_key.replace("*", "c")
+        hash_key = self.solar_cache_key(url, params)
 
         stale_data = None
         if self.storage:

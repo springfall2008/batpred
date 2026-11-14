@@ -6062,7 +6062,9 @@ class TestCheckReadOnlyState:
         gw._mqtt_connected = connected
         gw._last_read_only = None
         gw._last_read_only_sent_time = 0
+        gw._read_only_held_since = None
         gw._published = []
+        gw.base = SimpleNamespace(inverter_needs_reset_force="")
 
         self._read_only = read_only
 
@@ -6154,6 +6156,121 @@ class TestCheckReadOnlyState:
         gw._mqtt_connected = True
         self._run(gw._check_read_only_state())
         assert gw._published == [("set_read_only", {"enable": True})]
+
+    def _enable_with_handover_pending(self, gw):
+        """Turn the switch on the way a user does, which arms the handover reset (GH#6175)."""
+        self._read_only = True
+        gw.base.inverter_needs_reset_force = "set_read_only"
+
+    def test_enable_held_until_handover_reset_done(self):
+        """Enabling read-only waits for reset_inverter() to clear its pending reset, so the Hub accepts the safe-state writes (GH#6175)."""
+        gw = self._make_gateway(read_only=False)
+        self._run(gw._check_read_only_state())
+        self._enable_with_handover_pending(gw)
+        self._run(gw._check_read_only_state())
+        self._run(gw._check_read_only_state())
+        assert gw._published == [("set_read_only", {"enable": False})], "Hub must stay writable while the reset is pending, got {}".format(gw._published)
+        assert gw._last_read_only is False
+        gw.base.inverter_needs_reset_force = ""  # reset_inverter() has run
+        self._run(gw._check_read_only_state())
+        assert gw._published[-1] == ("set_read_only", {"enable": True})
+        assert gw._last_read_only is True
+        assert gw._read_only_held_since is None
+
+    def test_disable_not_held_by_pending_reset(self):
+        """Disabling read-only goes out at once even with the reset pending, so the Hub is writable for it."""
+        gw = self._make_gateway(read_only=True)
+        self._run(gw._check_read_only_state())
+        self._read_only = False
+        gw.base.inverter_needs_reset_force = "set_read_only"
+        self._run(gw._check_read_only_state())
+        assert gw._published[-1] == ("set_read_only", {"enable": False})
+
+    def test_other_reset_force_does_not_hold(self):
+        """Only the set_read_only handover holds the command back; a pending mode reset does not."""
+        gw = self._make_gateway(read_only=False)
+        self._run(gw._check_read_only_state())
+        self._read_only = True
+        gw.base.inverter_needs_reset_force = "mode"
+        self._run(gw._check_read_only_state())
+        assert gw._published[-1] == ("set_read_only", {"enable": True})
+
+    def test_hold_is_bounded(self):
+        """A reset that never runs does not leave the Hub writable: the command goes out after the wait, with a warning."""
+        from gateway import _READ_ONLY_HANDOVER_WAIT_SECONDS
+
+        gw = self._make_gateway(read_only=False)
+        clock = VirtualClock()
+        with _gw_clock(gw, clock):
+            self._run(gw._check_read_only_state())
+            self._enable_with_handover_pending(gw)
+            self._run(gw._check_read_only_state())
+            clock.advance(_READ_ONLY_HANDOVER_WAIT_SECONDS - 1)
+            self._run(gw._check_read_only_state())
+            assert len(gw._published) == 1, "still inside the wait"
+            clock.advance(1)
+            self._run(gw._check_read_only_state())
+            assert gw._published[-1] == ("set_read_only", {"enable": True})
+            assert any("sending set_read_only anyway" in str(call.args[0]) for call in gw.log.call_args_list)
+            warnings = len(gw.log.call_args_list)
+            clock.advance(60)
+            self._run(gw._check_read_only_state())
+            assert len(gw._published) == 2 and len(gw.log.call_args_list) == warnings, "sent once, and the warning is not repeated every cycle"
+
+    def test_hold_restarts_after_switch_off(self):
+        """Turning the switch off and on again starts a fresh wait rather than reusing the old one."""
+        from gateway import _READ_ONLY_HANDOVER_WAIT_SECONDS
+
+        gw = self._make_gateway(read_only=False)
+        clock = VirtualClock()
+        with _gw_clock(gw, clock):
+            self._run(gw._check_read_only_state())
+            self._enable_with_handover_pending(gw)
+            self._run(gw._check_read_only_state())
+            clock.advance(_READ_ONLY_HANDOVER_WAIT_SECONDS - 60)
+            self._read_only = False
+            self._run(gw._check_read_only_state())
+            assert gw._read_only_held_since is None
+            self._enable_with_handover_pending(gw)
+            clock.advance(120)
+            self._run(gw._check_read_only_state())
+            assert len(gw._published) == 1, "a fresh wait has started, got {}".format(gw._published)
+
+    def test_reopens_hub_when_reset_pending_while_read_only(self):
+        """Switch off and on between two cycles while the Hub is read-only: it is reopened for the reset, then re-enabled once the reset is done."""
+        from gateway import _READ_ONLY_HANDOVER_WAIT_SECONDS
+
+        gw = self._make_gateway(read_only=True)
+        clock = VirtualClock()
+        with _gw_clock(gw, clock):
+            self._run(gw._check_read_only_state())
+            assert gw._published == [("set_read_only", {"enable": True})]
+            clock.advance(60)
+            self._enable_with_handover_pending(gw)  # off then on inside one cycle: no change seen, reset re-armed
+            self._run(gw._check_read_only_state())
+            assert gw._published[-1] == ("set_read_only", {"enable": False}), "Hub must be reopened for the reset, got {}".format(gw._published)
+            assert gw._last_read_only is False
+            clock.advance(60)
+            self._run(gw._check_read_only_state())
+            assert len(gw._published) == 2, "held while the reset is pending, and not reopened again"
+            gw.base.inverter_needs_reset_force = ""  # reset_inverter() has run
+            clock.advance(60)
+            self._run(gw._check_read_only_state())
+            assert gw._published[-1] == ("set_read_only", {"enable": True})
+            assert gw._last_read_only is True
+
+            # A reset that never runs: after the bounded wait read-only goes back on once, without reopening again
+            self._enable_with_handover_pending(gw)
+            clock.advance(60)
+            self._run(gw._check_read_only_state())
+            assert gw._published[-1] == ("set_read_only", {"enable": False})
+            clock.advance(_READ_ONLY_HANDOVER_WAIT_SECONDS)
+            self._run(gw._check_read_only_state())
+            assert gw._published[-1] == ("set_read_only", {"enable": True})
+            sent = len(gw._published)
+            clock.advance(60)
+            self._run(gw._check_read_only_state())
+            assert len(gw._published) == sent, "no reopen/enable loop while the stale reset stays pending, got {}".format(gw._published)
 
 
 class TestRunStartupWait:
