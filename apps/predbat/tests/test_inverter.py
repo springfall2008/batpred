@@ -883,6 +883,118 @@ def test_reserve_min_published_floor(test_name, my_predbat, ha):
     return failed
 
 
+def test_battery_min_soc_is_reserve_entity(test_name, my_predbat, ha):
+    """
+    Test
+       refresh_config() ignores a battery_min_soc that names the inverter's own reserve entity.
+
+    That entity reads back whatever Predbat last wrote to the reserve, and a hold writes the current
+    SoC there, so the one-way raise of set_reserve_min ratcheted the floor up with every hold - 8% to
+    97% over one overnight charge (GH#4013). The value and the published min must stay put, with a
+    warning, while a separate battery_min_soc entity still raises the floor as before.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    snapshot = _snapshot_fixture(my_predbat)
+    item = my_predbat.config_index["set_reserve_min"]
+    saved_value = item.get("value", None)
+    saved_min = item["min"]
+    entity = item["entity"]
+    log_messages = []
+    orig_log = my_predbat.log
+    orig_status = my_predbat.current_status
+    orig_had_errors = my_predbat.had_errors
+
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        my_predbat.args["inverter_type"] = ["GE"]
+        my_predbat.args["reserve"] = ["number.reserve"]
+        my_predbat.args["battery_min_soc"] = ["number.reserve"]
+        # Home Assistant states are strings
+        ha.dummy_items["number.reserve"] = "97"
+        my_predbat.expose_config("set_reserve_min", 8)
+
+        # Construction runs refresh_config() once, so this is the second cycle: one warning, then Info
+        inv = Inverter(my_predbat, 0)
+        inv.refresh_config()
+        value = ha.get_state(entity)
+        warned = [msg for msg in log_messages if msg.startswith("Warn: Inverter 0 battery_min_soc") and "number.reserve" in msg]
+        if not my_predbat.had_errors:
+            print("ERROR: {}: expected the warning on the status sensor too (had_errors)".format(test_name))
+            failed = True
+        noted = [msg for msg in log_messages if msg.startswith("Info:") and "battery_min_soc" in msg and "number.reserve" in msg]
+        # With no floor the published min falls back to the item's declared min, not the reserve's 97
+        declared_min = item.get("declared_min", saved_min)
+        if value != 8 or inv.reserve_min != 8 or item["min"] != declared_min:
+            print("ERROR: {}: same entity: expected set_reserve_min 8 and min {}, got value {} reserve_min {} min {}".format(test_name, declared_min, value, inv.reserve_min, item["min"]))
+            failed = True
+        if len(warned) != 1 or len(noted) != 1:
+            print("ERROR: {}: expected one warning then one Info naming the shared entity, got {} and {}".format(test_name, warned, noted))
+            failed = True
+
+        # Another inverter's reserve reads back that inverter's holds just the same
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["reserve"] = ["number.reserve_other", "number.Reserve"]
+        inv.refresh_config()
+        if inv.reserve_min != 8:
+            print("ERROR: {}: other inverter's reserve: expected set_reserve_min 8, got {}".format(test_name, inv.reserve_min))
+            failed = True
+
+        # Fixed numbers are not entities, so equal literals (huawei.yaml ships 12 for both) are a real floor
+        my_predbat.args["reserve"] = [12]
+        my_predbat.args["battery_min_soc"] = [12]
+        del log_messages[:]
+        inv.refresh_config()
+        if inv.reserve_min != 12 or any("is a reserve entity" in msg for msg in log_messages):
+            print("ERROR: {}: equal literals: expected set_reserve_min raised to 12 with no warning, got {}".format(test_name, inv.reserve_min))
+            failed = True
+        my_predbat.args["reserve"] = ["number.reserve"]
+        my_predbat.expose_config("set_reserve_min", 8)
+
+        # A reserve entry past num_inverters is never written, so it is a real floor: the older Growatt
+        # Solar Assistant templates list a second reserve entity for one inverter and point battery_min_soc at it
+        my_predbat.args["num_inverters"] = 1
+        my_predbat.args["reserve"] = ["number.load_first_stop", "number.grid_first_stop"]
+        my_predbat.args["battery_min_soc"] = ["number.grid_first_stop"]
+        ha.dummy_items["number.grid_first_stop"] = "10"
+        del log_messages[:]
+        inv.refresh_config()
+        if inv.reserve_min != 10 or any("is a reserve entity" in msg for msg in log_messages):
+            print("ERROR: {}: unused reserve entry: expected set_reserve_min raised to 10 with no warning, got {}".format(test_name, inv.reserve_min))
+            failed = True
+        my_predbat.args["reserve"] = ["number.reserve"]
+        my_predbat.expose_config("set_reserve_min", 8)
+
+        # A battery_min_soc entity of its own is still a floor that raises set_reserve_min
+        # An unavailable one falls back to the default as before, rather than raising
+        my_predbat.args["battery_min_soc"] = ["number.min_soc"]
+        ha.dummy_items["number.min_soc"] = "unavailable"
+        inv.refresh_config()
+        value = ha.get_state(entity)
+        if value != 8 or inv.reserve_min != 8:
+            print("ERROR: {}: unavailable entity: expected set_reserve_min 8, got value {} reserve_min {}".format(test_name, value, inv.reserve_min))
+            failed = True
+
+        ha.dummy_items["number.min_soc"] = "15"
+        inv.refresh_config()
+        value = ha.get_state(entity)
+        if value != 15 or inv.reserve_min != 15:
+            print("ERROR: {}: separate entity: expected set_reserve_min raised to 15, got value {} reserve_min {}".format(test_name, value, inv.reserve_min))
+            failed = True
+    finally:
+        my_predbat.log = orig_log
+        my_predbat.current_status = orig_status
+        my_predbat.had_errors = orig_had_errors
+        ha.dummy_items.pop("number.min_soc", None)
+        _restore_fixture(my_predbat, snapshot)
+        item["min"] = saved_min
+        item.pop("declared_min", None)
+        my_predbat.expose_config("set_reserve_min", saved_value, force_ha=True)
+
+    return failed
+
+
 def test_write_and_poll_non_entity(test_name, my_predbat, inv):
     """
     Test
@@ -6193,6 +6305,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_reserve_dummy_percent("reserve_dummy_kwh_seed_corrected", my_predbat, ha, stale_state=5.0)
     # GH#5995: set_reserve_min publishes the reserve floor as its min, both up and back down
     failed |= test_reserve_min_published_floor("reserve_min_published_floor", my_predbat, ha)
+    failed |= test_battery_min_soc_is_reserve_entity("battery_min_soc_is_reserve_entity", my_predbat, ha)
     if failed:
         return failed
 
