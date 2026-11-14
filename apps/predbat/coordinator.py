@@ -644,9 +644,8 @@ class Coordinator:
         cannot hold a name or a credential however the schema grows, and one unbounded string
         outside that boundary would be the single field a future component could leak a URL or an
         account value through into a dump attached to a public issue. The message is not lost -
-        components.initialize() logs it (with a traceback for anything but an ImportError) and
-        inverter_source_status() puts it on the component-status entity - so a maintainer reading
-        a bug report still has it, just not from this document.
+        components.initialize() logs it (with a traceback for anything but an ImportError) - so a
+        maintainer reading a bug report still has it, just not from this document.
 
         reported_at is a component-name -> ISO-8601 UTC timestamp snapshot, taken under the same
         lock as reports so the two agree with each other; it is only ever populated for a status

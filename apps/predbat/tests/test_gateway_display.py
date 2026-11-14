@@ -128,15 +128,11 @@ class TestGatewayDisplayOnly:
 
         comps = Components.__new__(Components)
         comps.components = {"gateway": self._make_gateway()}
-        comps.load_error = lambda name: None
-        comps.is_alive = lambda name: True
         assert not comps.inverter_source_active()
         assert comps.inverter_source_names() == []
-        assert comps.inverter_source_status() == []
         comps.components["gateway"].gateway_display_only = False
         assert comps.inverter_source_active()
         assert comps.inverter_source_names() == ["PredBat Gateway"]
-        assert comps.inverter_source_status() == ["PredBat Gateway (OK)"]
 
     def test_false_string_keeps_existing_control_mode(self):
         """String config values are parsed rather than treated as truthy strings."""

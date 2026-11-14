@@ -10855,8 +10855,8 @@ def _test_evc_only_not_inverter_source(my_predbat):
     comps.components = {"gecloud": ge_cloud}
     comps.load_error = lambda name: None
     comps.is_alive = lambda name: True
-    if comps.inverter_source_active() or comps.inverter_source_names() or comps.inverter_source_status():
-        print("ERROR: an EV charger only GE Cloud should not be an inverter source, got {} {} {}".format(comps.inverter_source_active(), comps.inverter_source_names(), comps.inverter_source_status()))
+    if comps.inverter_source_active() or comps.inverter_source_names():
+        print("ERROR: an EV charger only GE Cloud should not be an inverter source, got {} {}".format(comps.inverter_source_active(), comps.inverter_source_names()))
         return 1
     GECloudDirect.initialize(ge_cloud, True, "key", False)
     if not comps.inverter_source_active() or comps.inverter_source_names() != ["GivEnergy Cloud Direct"]:
