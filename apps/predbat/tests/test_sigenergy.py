@@ -3229,43 +3229,69 @@ def test_sigenergy_fetch_energy_flow_hybrid_pv_not_derived(my_predbat):
     return failed
 
 
-def test_sigenergy_hybrid_switch_only_moves_on_ac_coupled_evidence(my_predbat):
-    """inverter_hybrid only moves off, and only when every system is AC-coupled.
+def test_sigenergy_record_reports_hybrid_from_the_ac_coupled_verdict(my_predbat):
+    """Each system's record reports hybrid as not detect_ac_coupled(), and leaves it out while undecided.
 
     Off on a real hybrid lets PV and battery charge plan past inverter_limit; on for an AC-coupled
-    site only skips the PV->battery conversion loss. So anything short of clear evidence leaves
-    Predbat's default alone.
+    site only skips the PV->battery conversion loss. So hybrid False needs clear evidence of AC
+    coupling (third-party PV with no native PV), native PV is a hybrid, and anything else says
+    nothing. The coordinator, not Sigenergy, sets inverter_hybrid from the records, so neither
+    apply_hybrid_verdict() nor automatic_config() writes the switch.
     """
     failed = False
     entity = "switch.predbat_inverter_hybrid"
     cases = [
-        ("AC-coupled", {"SYS1": AC_COUPLED_TOTALS}, False),
-        ("hybrid", {"SYS1": HYBRID_TOTALS}, None),
-        ("hybrid with a third-party inverter as well", {"SYS1": {"FROM_SOLAR": 500.0, "FROM_THIRD_PARTY_INV": 300.0}}, None),
-        ("no PV yet", {"SYS1": {"FROM_SOLAR": 0.0, "FROM_THIRD_PARTY_INV": 0.0}}, None),
-        ("no totals yet", {}, None),
-        ("one AC-coupled and one hybrid system", {"SYS1": AC_COUPLED_TOTALS, "SYS2": HYBRID_TOTALS}, None),
+        ("AC-coupled", {"SYS1": AC_COUPLED_TOTALS}, {"SYS1": False}),
+        ("hybrid", {"SYS1": HYBRID_TOTALS}, {"SYS1": True}),
+        ("hybrid with a third-party inverter as well", {"SYS1": {"FROM_SOLAR": 500.0, "FROM_THIRD_PARTY_INV": 300.0}}, {"SYS1": True}),
+        ("no PV yet", {"SYS1": {"FROM_SOLAR": 0.0, "FROM_THIRD_PARTY_INV": 0.0}}, {"SYS1": "absent"}),
+        ("no totals yet", {}, {"SYS1": "absent"}),
+        ("one AC-coupled and one hybrid system", {"SYS1": AC_COUPLED_TOTALS, "SYS2": HYBRID_TOTALS}, {"SYS1": False, "SYS2": True}),
     ]
     for label, totals, expected in cases:
         api = MockSigenergyAPI()
-        api.systems = {"SYS1": {}, "SYS2": {}} if "SYS2" in totals else {"SYS1": {}}
+        api.automatic = True
+        api.systems = {sid: {"systemName": "Home"} for sid in expected}
         api.history_totals = {sid: dict(t) for sid, t in totals.items()}
+        records = api.build_discovery()["inverters"]
+        actual = {record["hardware_ids"]["system_id"]: record.get("hybrid", "absent") for record in records}
+        if actual != expected:
+            print("ERROR: {}: expected hybrid {}, got {}".format(label, expected, actual))
+            failed = True
+        # functions still encodes AC coupling as before: battery only once AC coupling is proven
+        functions = {record["hardware_ids"]["system_id"]: record["functions"] for record in records}
+        for sid, hybrid in expected.items():
+            want = ["battery"] if hybrid is False else ["solar", "battery"]
+            if functions[sid] != want:
+                print("ERROR: {}: {} functions should stay {}, got {}".format(label, sid, want, functions[sid]))
+                failed = True
         run_async(api.apply_hybrid_verdict())
-        actual = getattr(api, "external_state", {}).get(entity)
-        if actual is not expected:
-            print("ERROR: {}: expected {} to be {}, got {}".format(label, entity, expected, actual))
+        run_async(api.automatic_config())
+        if entity in getattr(api, "external_state", {}):
+            print("ERROR: {}: Sigenergy wrote {}, which is discovery's to set: {}".format(label, entity, api.external_state))
             failed = True
     return failed
 
 
-def test_sigenergy_automatic_config_sets_hybrid_off_for_ac_coupled(my_predbat):
-    """automatic_config applies the hybrid verdict, so an AC-coupled install is set up without help."""
+def test_sigenergy_automatic_config_leaves_hybrid_to_discovery(my_predbat):
+    """An AC-coupled install is still set up without help: its record says hybrid False, which discovery applies.
+
+    automatic_config() itself no longer writes inverter_hybrid; the real Coordinator's rule decides off from the
+    report, so the same evidence gives the same switch value as before.
+    """
+    from coordinator import Coordinator
+    from mock_base import MockBase
+
     api = MockSigenergyAPI()
     api.automatic = True
     api.systems = {"SIG001": {"systemName": "Home"}}
     api.history_totals = {"SIG001": dict(AC_COUPLED_TOTALS)}
     run_async(api.automatic_config())
-    assert getattr(api, "external_state", {}).get("switch.predbat_inverter_hybrid") is False, "inverter_hybrid set off"
+    assert "switch.predbat_inverter_hybrid" not in getattr(api, "external_state", {}), "automatic_config no longer writes inverter_hybrid"
+    coordinator = Coordinator(MockBase())
+    coordinator.log = lambda *_args, **_kwargs: None
+    coordinator.report("sigenergy", api.build_discovery())
+    assert coordinator.hybrid_decision()[0] is False, "discovery sets inverter_hybrid off from the record"
     return False
 
 
@@ -6175,8 +6201,8 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_energy_flow_load_excludes_ev", test_sigenergy_fetch_energy_flow_load_excludes_ev),
         ("fetch_energy_flow_third_party_pv_with_ev_charging", test_sigenergy_fetch_energy_flow_third_party_pv_with_ev_charging),
         ("fetch_energy_flow_hybrid_pv_not_derived", test_sigenergy_fetch_energy_flow_hybrid_pv_not_derived),
-        ("hybrid_switch_only_moves_on_ac_coupled_evidence", test_sigenergy_hybrid_switch_only_moves_on_ac_coupled_evidence),
-        ("automatic_config_sets_hybrid_off_for_ac_coupled", test_sigenergy_automatic_config_sets_hybrid_off_for_ac_coupled),
+        ("record_reports_hybrid_from_the_ac_coupled_verdict", test_sigenergy_record_reports_hybrid_from_the_ac_coupled_verdict),
+        ("automatic_config_leaves_hybrid_to_discovery", test_sigenergy_automatic_config_leaves_hybrid_to_discovery),
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),
         ("build_tls_context", test_sigenergy_build_tls_context),
         ("battery_max_power", test_sigenergy_battery_max_power),

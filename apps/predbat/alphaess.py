@@ -746,8 +746,9 @@ class AlphaESSAPI(ComponentBase):
     def detect_ac_coupled(self, sn):
         """Return True (AC-coupled), False (hybrid) or None (undecided) for one serial.
 
-        Two signals must AGREE before a verdict is returned, because the errors are not
-        symmetric - see apply_hybrid_verdict.
+        Two signals must AGREE before an AC-coupled verdict is returned, because the errors
+        are not symmetric - see apply_hybrid_verdict. build_discovery() reports the inverse
+        as the record's hybrid value, and leaves it out while this is None.
         """
         detail = self.device_detail.get(sn, {})
         if str(detail.get("minv", "")) in ALPHAESS_AC_COUPLED_MODELS:
@@ -768,28 +769,23 @@ class AlphaESSAPI(ComponentBase):
         return None
 
     async def apply_hybrid_verdict(self):
-        """Move switch.predbat_inverter_hybrid only on positive evidence of AC coupling.
+        """Advise the user when the hybrid-versus-AC-coupled verdict is still undecided.
 
-        inverter_hybrid is one of Predbat's OWN CONFIG_ITEMS switches rather than an
-        apps.yaml arg, so it is written with set_state_external - writing the entity state
-        alone would move the displayed switch without changing the value the planner reads.
+        AlphaESS no longer writes switch.predbat_inverter_hybrid: each record reports hybrid
+        as the inverse of detect_ac_coupled() (build_discovery()) and the discovery
+        coordinator sets the switch from the records. While any system is undecided its
+        record says nothing, so this says what was seen and how to set the switch by hand.
 
         The two errors are NOT symmetric. inverter_hybrid False on an actually-hybrid
         system stops PV counting against inverter_limit, so Predbat plans charge-plus-PV
         beyond what the inverter can pass and the surplus is clipped with targets silently
-        missed. True on an actually-AC-coupled system merely under-uses the battery.
-        Predbat defaults to True and every mainstream AlphaESS unit is a hybrid, so the
-        switch is only ever moved towards AC-coupled, and only on agreeing evidence.
+        missed. True on an actually-AC-coupled system merely under-uses the battery. That
+        is why detect_ac_coupled() needs agreeing evidence before it says AC-coupled.
         """
         if not self.device_list:
             return
         verdicts = [self.detect_ac_coupled(sn) for sn in self.device_list]
         entity = "switch.{}_inverter_hybrid".format(self.prefix)
-        if verdicts and all(verdict is True for verdict in verdicts):
-            models = ", ".join(str(self.device_detail.get(sn, {}).get("minv", "unknown")) for sn in self.device_list)
-            self.log("Info: AlphaESS detected AC coupling (no DC strings reported, and PV energy with no PV nameplate) for model(s) {}; setting {} off".format(models, entity))
-            await self.set_state_external(entity, False)
-            return
         if any(verdict is None for verdict in verdicts):
             models = ", ".join(str(self.device_detail.get(sn, {}).get("minv", "unknown")) for sn in self.device_list)
             self.log("Info: AlphaESS could not determine hybrid versus AC coupling for model(s) {}; leaving {} at its current value. If this is an AC-coupled retrofit, turn that switch off by hand.".format(models, entity))
@@ -961,8 +957,11 @@ class AlphaESSAPI(ComponentBase):
         - firmware: the AlphaESS Open API exposes none.
         - account_ids: the API has no station, plant or site identifier; every endpoint is keyed by
           sysSn alone.
-        - an AC-coupled verdict: detect_ac_coupled() infers it from live telemetry and
-          ALPHAESS_AC_COUPLED_MODELS ships empty on purpose, so there is no held fact to report.
+        hybrid is the inverse of detect_ac_coupled(sn): False when both signals agree the system
+        is AC coupled, True when DC strings are reported, left out while undecided. It is inferred
+        from live telemetry (ALPHAESS_AC_COUPLED_MODELS ships empty on purpose), so a record built
+        before the first telemetry poll leaves it out and the next report carries it. The discovery
+        coordinator sets inverter_hybrid from it; AlphaESS no longer writes that switch itself.
 
         An EV charger is reported as a flag only when _ev_present says True. That verdict comes from
         live telemetry alone, so a charger not yet seen reports nothing either way rather than a
@@ -999,6 +998,7 @@ class AlphaESSAPI(ComponentBase):
                 ratings["soc_max"] = battery_kwh
 
             flags = ["ev_charger"] if self._ev_present.get(sn) is True else []
+            ac_coupled = self.detect_ac_coupled(sn)
 
             inverters.append(
                 inverter_record(
@@ -1012,6 +1012,7 @@ class AlphaESSAPI(ComponentBase):
                     info=info,
                     ratings=ratings,
                     entities=self._discovery_entities(sn),
+                    hybrid=None if ac_coupled is None else not ac_coupled,
                 )
             )
 
