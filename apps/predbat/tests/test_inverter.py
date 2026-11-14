@@ -3172,8 +3172,8 @@ def test_window_warning_names_components_when_type_unset(test_name, my_predbat, 
             if "GivEnergy" in str(e):
                 print(f"ERROR: {test_name} - an unset inverter type must not send a Solis owner to GivEnergy, got: {e}")
                 failed = True
-            if "waiting for Solis Cloud API" not in str(e):
-                print(f"ERROR: {test_name} - the error should name the configured inverter component it waits for, got: {e}")
+            if "waiting for Solis Cloud API to configure this inverter - or set inverter_type in apps.yaml to match your inverter" not in str(e):
+                print(f"ERROR: {test_name} - the error should name the component it waits for and say how to set the type, got: {e}")
                 failed = True
         finally:
             my_predbat.record_status = original_record_status
@@ -4657,7 +4657,7 @@ def test_inverter_type_required(test_name, my_predbat):
 
         # 2. No type but an inverter component active - the "waiting" error naming it
         my_predbat.components = StubComponents(True, ["GivEnergy Cloud Direct"])
-        failed |= expect_error(0, "Inverter 0: inverter_type is not set yet - waiting for GivEnergy Cloud Direct to configure this inverter")
+        failed |= expect_error(0, "Inverter 0: inverter_type is not set yet - waiting for GivEnergy Cloud Direct to configure this inverter - or set inverter_type in apps.yaml to match your inverter")
 
         # 3. A type list shorter than num_inverters - slot 0 builds, slot 1 is unset
         my_predbat.components = StubComponents(False, [])

@@ -500,11 +500,12 @@ class Inverter:
         self.inverter_type = self.base.get_arg("inverter_type", None, indirect=False, index=self.id)
         # There is no assumed type: a GE default overrode a custom setup's entities (#4822) and sent a
         # Solis owner to check GivEnergy credentials (#4990). While an inverter component is active it
-        # may still write the type once discovery succeeds, so that case says it is waiting.
+        # may still write the type once discovery succeeds, so that case says it is waiting - but the
+        # component may have automatic configuration turned off, so it also says how to set the type.
         if not self.inverter_type:
             if self.inverter_source_active():
                 names = ", ".join(self.base.components.inverter_source_names())
-                message = "Inverter {}: inverter_type is not set yet - waiting for {} to configure this inverter".format(self.id, names)
+                message = "Inverter {}: inverter_type is not set yet - waiting for {} to configure this inverter - or set inverter_type in apps.yaml to match your inverter".format(self.id, names)
             else:
                 message = "Inverter {}: inverter_type is not set in apps.yaml - set inverter_type to match your inverter, see the documentation".format(self.id)
             self.base.log("Error: " + message)
