@@ -134,7 +134,7 @@ Discovery is more than an observer for the components that hand their inverter c
 it configures their inverters from their inverter records. Only **GE Cloud** (`ge_cloud_automatic`)
 does so far, and it no longer writes any inverter setting itself. Every other component with an
 automatic option still configures itself as before, and running one of them alongside GE Cloud is not
-supported - Predbat logs a warning naming both. Until a component hands its configuration over, nothing
+supported - Predbat now always logs a warning naming both when they run together. Until a component hands its configuration over, nothing
 here runs.
 
 ### Slots
@@ -174,7 +174,8 @@ discovered slot.
 - **Skipped settings** are left exactly as `apps.yaml` has them: GE Cloud skips `load_today` when
   `ge_cloud_load_today_ignore` is set.
 - **Kept settings** yield to a value you wrote in `apps.yaml` for that slot: for GE Cloud,
-  `inverter_mode` and `export_limit`, the same keys the old configuration never overwrote.
+  `inverter_mode` and `export_limit`, the same keys the old configuration never overwrote. A single value
+  (not a list) for one of them in `apps.yaml` is kept as it is, for every inverter.
 - **PV-only devices** contribute their `pv_power` and `pv_today` only when GE Cloud's
   `ge_cloud_automatic_split_pv` is on. If their component then reports no devices at all, those entries
   drop out until its next good report; the inverter slots are kept.
