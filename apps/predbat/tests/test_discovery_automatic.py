@@ -1156,6 +1156,7 @@ def test_accept_battery_removed():
     assert base.components.coordinator.slot_map == {"gecloud:battery001": 0, "gecloud:battery002": 1}
     # The run loop's view of the account after battery001 has gone: devices change, settings stay
     remaining = _gec_devices(battery=["battery002"], meters={"battery002": [1002]})
+    mark = len(base.log_messages)
     ge.devices_dict = copy.deepcopy(remaining)
     run_async(ge.async_automatic_config(ge.devices_dict))
     ge.refresh_discovery()
@@ -1163,7 +1164,7 @@ def test_accept_battery_removed():
     old = _legacy_run(remaining, settings, info, copy.deepcopy(start))
     differences = compare_configuration(old, base.args)
     assert differences == [], "\n".join(differences)
-    log = list(base.log_messages)
+    log = base.log_messages[mark:]  # this run's lines only, not the two-battery run's
     assert "Warn: Coordinator: Inverter slot 1 moved to slot 0: gecloud inverter gecloud:battery002 closes the gap left by a device that is no longer reported" in log, log
     assert not [line for line in log if line.startswith("Warn: GECloud: discovery") or "is empty below" in line], log
     assert any(line.startswith("Info: GECloud: discovery configuration matches") for line in log), log

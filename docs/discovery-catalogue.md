@@ -154,7 +154,8 @@ Each inverter Predbat drives is a **slot**: index `N` of every per-inverter list
 A slot is **sticky**: once an inverter has one it keeps it while the fleet stays the same, so a second
 inverter found later is added in the next free slot and the first is not rewritten. A slot is released
 only when its component reports again, still with at least one inverter, but no longer with that one; a
-component that stops, or reports no inverter at all, keeps its slots.
+component that stops, or reports no inverter at all, keeps its inverters configured - though they can
+still move down when an inverter below them is released.
 
 When an inverter is released the slots **compact**: each discovered inverter above the gap moves down,
 keeping its order, so no empty slot is left below one in use, and each move is logged as `Warn:
@@ -163,10 +164,15 @@ device that is no longer reported`. A slot you configured by hand is **pinned**:
 neither does a discovered inverter that took one over by serial; the moving inverters fill in around
 them. Per-inverter tuning lists that discovery does not write (such as `inverter_limit_charge`) stay at
 their indexes, so an inverter that moves down picks up the entry of the one that has gone - as the old
-automatic configuration, which always rebuilt from slot 0, did. Within its slot an inverter's bindings follow every change in its component's report, so a
-register that appears or disappears rebinds that slot while Predbat runs, where the old automatic
-configuration bound once. Only differences are written: a pass with nothing new writes nothing and logs nothing, and
-each slot it does change is logged as `Coordinator: inverter slot N configured from <component> (<device_id>)`.
+automatic configuration, which always rebuilt from slot 0, did. The same holds for a kept setting's
+`apps.yaml` entries (`inverter_mode` and `export_limit`): they stay at their indexes, so an inverter that
+moves down takes the entry you wrote for the inverter that was in its new slot, as the old automatic
+configuration did when it kept your whole value.
+
+Within its slot an inverter's bindings follow every change in its component's report, so a register that
+appears or disappears rebinds that slot while Predbat runs, where the old automatic configuration bound
+once. Only differences are written: a pass with nothing new writes nothing and logs nothing, and each slot
+it does change is logged as `Coordinator: inverter slot N configured from <component> (<device_id>)`.
 
 Where a setting is not tied to one inverter the lists are written the way the old automatic
 configuration wrote them. `load_today`, `import_today`, `export_today` and `pv_today` are summed

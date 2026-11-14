@@ -314,8 +314,9 @@ def _compact(slots, apps_yaml, warnings):
     lowest free slot), so a stable fleet is never moved. The one hole compaction cannot close is a movable index with
     no movable slot above it: the user's own apps.yaml slot with no inverter_type below a manual one.
     """
-    pinned = {slot["slot"] for slot in manual_slots(apps_yaml) if slot["origin"] == "manual"}
-    free = {slot["slot"]: slot["inverter_type"] for slot in manual_slots(apps_yaml)}
+    layout = manual_slots(apps_yaml)
+    pinned = {slot["slot"] for slot in layout if slot["origin"] == "manual"}
+    free = {slot["slot"]: slot["inverter_type"] for slot in layout}
     movable_indexes = [index for index in range(len(slots)) if index not in pinned]
     movable = [slots[index] for index in movable_indexes if slots[index]["origin"] == "discovered"]
     for index, entry in zip(movable_indexes, movable):

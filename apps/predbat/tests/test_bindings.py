@@ -663,12 +663,15 @@ def test_compact_takeover_pinned():
 
 
 def test_compact_not_on_empty_or_absent_report():
-    """A report with no driven inverter, or a source absent, keeps every slot it had: nothing is released, so nothing moves."""
-    first, _ = build_bindings({}, {}, [_src([_full("a11111"), _full("b11111")])], None)
-    for sources in ([_src([])], []):
-        b, w = build_bindings({}, {}, sources, first)
-        assert _layout(b) == [("discovered", "gecloud:a11111", 0), ("discovered", "gecloud:b11111", 1)], _layout(b)
-        assert not [warning for warning in w if "moved to slot" in warning], w
+    """A report with no driven inverter, or a source absent, keeps every slot it had: nothing is released, so nothing moves or is written."""
+    empty = "gecloud reported no inverter to configure - keeping its existing slots"
+    for sources, warnings_each in (([_src([])], [empty]), ([], [])):
+        results, args = _phase_passes({}, [[_src([_full("a11111"), _full("b11111")])], sources])
+        for bindings, warnings, _ in results[1:]:
+            assert _layout(bindings) == [("discovered", "gecloud:a11111", 0), ("discovered", "gecloud:b11111", 1)], _layout(bindings)
+            assert warnings == warnings_each, warnings
+        _assert_settled(results, 1, warnings_each)
+        assert args["charge_rate"] == ["number.a11111_rate", "number.b11111_rate"] and args["num_inverters"] == 2, args
     print("PASS: no compaction on an empty or absent report")
     return 0
 
