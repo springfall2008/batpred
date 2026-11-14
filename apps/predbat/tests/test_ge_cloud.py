@@ -8055,7 +8055,7 @@ def _test_discovery_review_lines(my_predbat):
     MockBase and CoordinatorHarness, as gecloud.py's harness runs it: the slot lines, the configuration lines and
     an expected difference, plus MockBase.set_arg's per-slot writes.
     """
-    from gecloud import GE_CLOUD_KNOWN_DIFFERENCES
+    from gecloud import GE_CLOUD_INVERT_UNSET, GE_CLOUD_KNOWN_DIFFERENCES
     from mock_base import CoordinatorHarness, MockBase as SharedMockBase
 
     # MockBase.set_arg follows Fetch.set_arg: an index pads with None, None deletes the whole key even with an index
@@ -8096,6 +8096,10 @@ def _test_discovery_review_lines(my_predbat):
     pause = "  pause_mode: old ['select.predbat_gecloud_battery001_pause_battery', 'select.predbat_gecloud_battery002_pause_battery'] new ['select.predbat_gecloud_battery001_pause_battery'] (expected: {})".format(GE_CLOUD_KNOWN_DIFFERENCES["pause_mode"])
     assert pause in lines, lines
     assert not [line for line in lines if "UNEXPECTED" in line], lines
+    # GE Cloud marks nothing inverted: each invert setting is written False per slot where the old configuration left it unset
+    for setting in ("battery_power_invert", "grid_power_invert", "load_power_invert"):
+        assert "  {}: [False, False]".format(setting) in lines, lines
+        assert "  {}: old None new [False, False] (expected: {})".format(setting, GE_CLOUD_INVERT_UNSET) in lines, lines
     assert "  Info: GECloud: discovery configuration matches the previous automatic configuration apart from 4 known difference(s)" in lines, lines
     # The coordinator wrote the slots through MockBase.set_arg's index path
     assert base.args["charge_rate"] == ["number.predbat_gecloud_battery001_battery_charge_power"], base.args.get("charge_rate")
@@ -8104,6 +8108,9 @@ def _test_discovery_review_lines(my_predbat):
     lines = discovery_review_lines({}, None, {"inverter_type": ["GEE"], "soc_percent": ["sensor.new"]}, {"inverter_type": ["GEE"], "soc_percent": ["sensor.old"], "scheduled_charge_enable": ["switch.x"]}, [])
     assert "  scheduled_charge_enable: old ['switch.x'] new None (expected: inverter.py replaces it with a dummy for GEE)" in lines, lines
     assert "  soc_percent: old ['sensor.old'] new ['sensor.new'] (UNEXPECTED)" in lines, lines
+    # Only unset against all-False is expected for an invert setting: a True, or a False that was True, is not
+    lines = discovery_review_lines({}, None, {"grid_power_invert": [True], "load_power_invert": [False]}, {"load_power_invert": [True]}, [])
+    assert "  grid_power_invert: old None new [True] (UNEXPECTED)" in lines and "  load_power_invert: old [True] new [False] (UNEXPECTED)" in lines, lines
     assert lines.count("  (none)") == 2 and "  (no line logged)" in lines, lines
     assert "  no difference" in discovery_review_lines(None, None, {"num_inverters": 1}, {"num_inverters": 1}), "equal configurations differ in nothing"
     print("PASS: the discovery review prints the records, slots, configuration, differences and checker lines")

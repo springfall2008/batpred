@@ -31,6 +31,9 @@ COMPACT_SETTINGS = ("load_today", "import_today", "export_today", "pv_today")
 # Lists whose length is not tied to num_inverters; pv_power stays indexed by slot, its extras counting as extra PV
 SUMMED_SETTINGS = COMPACT_SETTINGS + ("pv_power",)
 
+# Each *_invert setting -> the setting whose entity it describes: True at a discovered slot whose record marks that entity invert
+INVERT_SETTINGS = {"battery_power_invert": "battery_power", "grid_power_invert": "grid_power", "load_power_invert": "load_power"}
+
 # The service API's control keys: not indexed by inverter, so read when detecting a manual slot and never written
 CONTROL_SERVICE_SETTINGS = ("charge_start_service", "charge_stop_service", "discharge_start_service", "discharge_stop_service", "charge_freeze_service", "discharge_freeze_service")
 
@@ -92,6 +95,8 @@ BINDING_SETTINGS = frozenset(
         # GE's REST control, bound per slot although no record's entities carry it
         "givtcp_rest",
     }
+    # The sign of each power sensor, from its descriptor's invert: slot-indexed bools no record binds by name
+    | set(INVERT_SETTINGS)
 )
 
 
@@ -435,11 +440,16 @@ def _discovered_value(entry, setting, apps_yaml, args):
     A skipped setting, or a kept one the snapshot gives a value at this slot (a re: pattern counts), is not
     touched (a kept one the snapshot gives as a single value is not decided at all - see desired_args()): a slot-indexed one keeps the live args entry, which may be a resolved pattern or another writer's
     value. A summed one takes the snapshot's entry, since replay rewrites those lists and a live index stops
-    meaning a slot. Otherwise it is the bound entity id or value, None when unbound - except pv_power, which is a fixed 0.
+    meaning a slot. Otherwise it is the bound entity id or value, None when unbound - except pv_power, which is a fixed 0,
+    and an INVERT_SETTINGS member, which is whether the descriptor of the setting it describes is marked invert (False when
+    that setting is unbound or carries no invert).
     """
     snapshot = slot_value(apps_yaml.get(setting), entry["slot"])
     if setting in entry.get("skip_settings", ()) or (setting in entry.get("keep_user_settings", ()) and snapshot is not None):
         return snapshot if setting in SUMMED_SETTINGS else slot_value(args.get(setting), entry["slot"])
+    if setting in INVERT_SETTINGS:
+        descriptor = entry["settings"].get(INVERT_SETTINGS[setting])
+        return bool(descriptor.get("invert", False)) if isinstance(descriptor, dict) else False
     value = _descriptor_value(entry["settings"].get(setting))
     return 0 if value is None and setting == "pv_power" else value
 

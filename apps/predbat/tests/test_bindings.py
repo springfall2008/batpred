@@ -699,13 +699,16 @@ def test_replay_discovered_only():
     b, args = _bind(apps, [_rec("a11111", {"charge_rate": _rw("number.a_rate"), "soc_percent": _ro("sensor.a_soc")})])
     assert _layout(b) == [("manual", None, 0), ("discovered", "gecloud:a11111", 1)], _layout(b)
     written = _apply(b, apps, args)
-    assert written == [("charge_rate", 1), ("inverter_type", 1), ("num_inverters", None), ("pv_power", 1), ("soc_percent", 1)], written
+    assert written == [("battery_power_invert", 1), ("charge_rate", 1), ("grid_power_invert", 1), ("inverter_type", 1), ("load_power_invert", 1), ("num_inverters", None), ("pv_power", 1), ("soc_percent", 1)], written
     assert args == {
         "num_inverters": 2,
         "inverter_type": ["GE", "GEC"],
         "charge_rate": ["number.givtcp_sa9999s999_charge_rate", "number.a_rate"],
         "soc_percent": ["sensor.givtcp_sa9999s999_soc", "sensor.a_soc"],
         "pv_power": [None, 0],
+        "battery_power_invert": [None, False],
+        "grid_power_invert": [None, False],
+        "load_power_invert": [None, False],
     }, args
     print("PASS: replay writes the discovered slot only")
     return 0
@@ -720,7 +723,7 @@ def test_replay_clears_unbound():
     b, args = _bind(apps, [_rec("a11111", {"charge_rate": _rw("number.a_rate")})], args=args)
     written = _apply(b, apps, args)
     # Every entry left is None, so each key goes in one whole-value delete
-    assert written == [("battery_voltage", None), ("charge_rate", 1), ("givtcp_rest", None), ("inverter_type", 1), ("num_inverters", None), ("pv_power", 1)], written
+    assert written == [("battery_power_invert", 1), ("battery_voltage", None), ("charge_rate", 1), ("givtcp_rest", None), ("grid_power_invert", 1), ("inverter_type", 1), ("load_power_invert", 1), ("num_inverters", None), ("pv_power", 1)], written
     assert "battery_voltage" not in args and "givtcp_rest" not in args, args
     assert args["charge_rate"] == ["number.givtcp_sa9999s999_charge_rate", "number.a_rate"], args
     print("PASS: replay clears what the record does not bind")
@@ -737,7 +740,7 @@ def test_replay_clear_entry_whole_value():
     args["givtcp_rest"] = ["http://m:6345", "http://old:6345"]
     b, args = _bind(apps, [_rec("a11111", {"charge_rate": _rw("number.a_rate")})], args=args)
     written = _apply(b, apps, args)
-    assert written == [("battery_power", None), ("charge_rate", 1), ("givtcp_rest", None), ("inverter_type", 1), ("num_inverters", None), ("pv_power", 1)], written
+    assert written == [("battery_power", None), ("battery_power_invert", 1), ("charge_rate", 1), ("givtcp_rest", None), ("grid_power_invert", 1), ("inverter_type", 1), ("load_power_invert", 1), ("num_inverters", None), ("pv_power", 1)], written
     assert args["battery_power"] == ["sensor.m_battery_power", None] and args["givtcp_rest"] == ["http://m:6345", None], args
     print("PASS: one entry cleared by a whole-value write")
     return 0
@@ -748,8 +751,9 @@ def test_replay_shortens_long_list():
     args = {"charge_rate": ["number.old0", "number.old1", "number.old2"], "inverter_type": ["X", "Y"], "num_inverters": 2}
     b, args = _bind({}, [_rec("a11111", {"charge_rate": _rw("number.a_rate")})], args=args)
     written = _apply(b, {}, args)
-    assert written == [("charge_rate", None), ("inverter_type", None), ("num_inverters", None), ("pv_power", 0)], written
-    assert args == {"charge_rate": ["number.a_rate"], "inverter_type": ["GEC"], "num_inverters": 1, "pv_power": [0]}, args
+    assert written == [("battery_power_invert", 0), ("charge_rate", None), ("grid_power_invert", 0), ("inverter_type", None), ("load_power_invert", 0), ("num_inverters", None), ("pv_power", 0)], written
+    invert = {"battery_power_invert": [False], "grid_power_invert": [False], "load_power_invert": [False]}
+    assert args == dict({"charge_rate": ["number.a_rate"], "inverter_type": ["GEC"], "num_inverters": 1, "pv_power": [0]}, **invert), args
     print("PASS: a long live list is shortened")
     return 0
 
@@ -776,7 +780,7 @@ def test_replay_skip_setting():
     b, args = _bind(apps, [record], skip_settings={"load_today", "soc_percent"})
     assert _layout(b) == [("discovered", "gecloud:a11111", 0)], _layout(b)
     written = _apply(b, apps, args)
-    assert written == [("charge_rate", 0), ("inverter_type", 0), ("num_inverters", None), ("pv_power", 0)], written
+    assert written == [("battery_power_invert", 0), ("charge_rate", 0), ("grid_power_invert", 0), ("inverter_type", 0), ("load_power_invert", 0), ("num_inverters", None), ("pv_power", 0)], written
     assert args["load_today"] == apps["load_today"] and args["soc_percent"] == apps["soc_percent"], args
     print("PASS: skipped setting left as apps.yaml had it")
     return 0
@@ -836,7 +840,7 @@ def test_replay_skip_keep_keep_live():
     record = _rec("a11111", {"soc_percent": _ro("sensor.a_soc"), "inverter_mode": _rw("select.a_mode"), "load_today": _ro("sensor.a_load_today"), "reserve": _rw("number.a_reserve")})
     b, args = _bind(apps, [record], args=args, skip_settings={"soc_percent", "load_today"}, keep_user_settings={"inverter_mode", "reserve"})
     written = _apply(b, apps, args)
-    assert written == [("inverter_type", 0), ("load_today", 0), ("num_inverters", None), ("pv_power", 0), ("reserve", 0)], written
+    assert written == [("battery_power_invert", 0), ("grid_power_invert", 0), ("inverter_type", 0), ("load_power_invert", 0), ("load_today", 0), ("num_inverters", None), ("pv_power", 0), ("reserve", 0)], written
     assert args["soc_percent"] == ["sensor.givtcp_x_soc"] and args["inverter_mode"] == ["select.written_elsewhere"], args  # left exactly as live had them
     assert args["reserve"] == ["number.a_reserve"], args  # kept, but apps.yaml has no value: written from the record
     assert args["load_today"] == ["sensor.user_load_today"], args  # summed: the apps.yaml entry
@@ -851,7 +855,7 @@ def test_replay_scalar_becomes_list():
     b, args = _bind(apps, [_rec("b11111", {"charge_rate": _rw("number.b")})])
     assert _layout(b) == [("manual", None, 0), ("discovered", "gecloud:b11111", 1)], _layout(b)
     written = _apply(b, apps, args)
-    assert written == [("charge_rate", None), ("inverter_type", None), ("num_inverters", None), ("pv_power", 1)], written
+    assert written == [("battery_power_invert", 1), ("charge_rate", None), ("grid_power_invert", 1), ("inverter_type", None), ("load_power_invert", 1), ("num_inverters", None), ("pv_power", 1)], written
     assert args["charge_rate"] == ["number.a", "number.b"] and args["inverter_type"] == ["GE", "GEC"], args
     print("PASS: scalar becomes a list")
     return 0
@@ -929,7 +933,7 @@ def test_replay_hole_cleared():
     b, args = _bind(apps, [_rec("gw1111g111", {"charge_rate": _rw("number.gw_rate")}, serials=["ce1111g111", "ce2222g222"])])
     assert _layout(b) == [("discovered", "gecloud:gw1111g111", 0), ("free", None, 1), ("manual", None, 2)], _layout(b)
     written = _apply(b, apps, args)
-    assert written == [("charge_rate", None), ("inverter_type", None), ("pv_power", 0)], written
+    assert written == [("battery_power_invert", 0), ("charge_rate", None), ("grid_power_invert", 0), ("inverter_type", None), ("load_power_invert", 0), ("pv_power", 0)], written
     assert args["charge_rate"] == ["number.gw_rate", None, "number.givtcp_sa9999s999_charge_rate"] and args["inverter_type"] == ["GEC", None, "GE"], args
     assert args["pv_power"] == [0] and args["num_inverters"] == 3, args
     print("PASS: hole cleared")
@@ -1056,6 +1060,88 @@ def test_desired_args_shape():
     return 0
 
 
+def test_replay_invert_from_descriptor():
+    """A discovered slot whose grid_power descriptor is marked invert gets grid_power_invert True at its slot, battery and load False; a slot moved by compaction takes its flags with it."""
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    entities = {"grid_power": {"entity_id": "sensor.a_grid_power", "access": "r", "invert": True}, "battery_power": _ro("sensor.a_battery_power"), "load_power": _ro("sensor.a_load_power")}
+    b, args = _bind(apps, [_rec("a11111", entities)])
+    written = _apply(b, apps, args)
+    assert ("grid_power_invert", 1) in written and ("battery_power_invert", 1) in written and ("load_power_invert", 1) in written, written
+    assert args["grid_power_invert"] == [None, True] and args["battery_power_invert"] == [None, False] and args["load_power_invert"] == [None, False], args
+    desired = desired_args(b, apps, args)
+    assert desired["grid_power_invert"] == [None, True], desired["grid_power_invert"]
+
+    # Two discovered slots; the first is released, the second moves down to slot 0 and its invert flags move with it
+    first = _rec("a11111", {"grid_power": _ro("sensor.a_grid_power")})
+    second = _rec("b22222", {"grid_power": {"entity_id": "sensor.b_grid_power", "access": "r", "invert": True}})
+    b, args = _bind({}, [first, second])
+    _apply(b, {}, args)
+    assert args["grid_power_invert"] == [False, True], args["grid_power_invert"]
+    again, warnings = build_bindings({}, args, [_src([second])], b)
+    assert _layout(again) == [("discovered", "gecloud:b22222", 0)], _layout(again)
+    _apply(again, {}, args)
+    assert args["grid_power_invert"] == [True] and args["battery_power_invert"] == [False] and args["load_power_invert"] == [False], args
+    print("PASS: replay writes invert from the descriptor")
+    return 0
+
+
+def test_replay_invert_defaults_false():
+    """No descriptor marked invert, and none of the three entities bound at all: all three invert settings are written False at the slot."""
+    b, args = _bind({}, [_rec("a11111", {"charge_rate": _rw("number.a_rate"), "grid_power": _ro("sensor.a_grid_power")})])
+    written = _apply(b, {}, args)
+    assert ("battery_power_invert", 0) in written and ("grid_power_invert", 0) in written and ("load_power_invert", 0) in written, written
+    assert args["battery_power_invert"] == [False] and args["grid_power_invert"] == [False] and args["load_power_invert"] == [False], args
+    print("PASS: replay writes invert False by default")
+    return 0
+
+
+def test_replay_invert_leaves_manual_slot():
+    """[discovered, manual, discovered] (Review Focus 5): the manual slot's live invert entries are left as they are, and nothing is written at index 1."""
+    apps = {"num_inverters": 2, "inverter_type": ["GE", "GE"], "charge_rate": [None, "number.givtcp_sa9999s999_charge_rate"]}
+    args = copy.deepcopy(apps)
+    args["grid_power_invert"] = [None, True]
+    args["battery_power_invert"] = [None, True]
+    first = _rec("a11111", {"grid_power": {"entity_id": "sensor.a_grid_power", "access": "r", "invert": True}})
+    second = _rec("b22222", {"battery_power": _ro("sensor.b_battery_power")})
+    b, args = _bind(apps, [first, second], args=args)
+    assert _layout(b) == [("discovered", "gecloud:a11111", 0), ("manual", None, 1), ("discovered", "gecloud:b22222", 2)], _layout(b)
+    written = _apply(b, apps, args)
+    assert not [pair for pair in written if pair[0].endswith("_invert") and pair[1] in (1, None)], written
+    assert args["grid_power_invert"] == [True, True, False], args["grid_power_invert"]
+    assert args["battery_power_invert"] == [False, True, False], args["battery_power_invert"]
+    assert args["load_power_invert"] == [False, None, False], args["load_power_invert"]
+    print("PASS: replay leaves a manual slot's invert entries alone")
+    return 0
+
+
+def test_replay_invert_idempotent():
+    """A second replay of invert settings writes nothing."""
+    apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
+    record = _rec("a11111", {"load_power": {"entity_id": "sensor.a_load_power", "access": "r", "invert": True}})
+    b, args = _bind(apps, [record])
+    assert _apply(b, apps, args) != []
+    snapshot = copy.deepcopy(args)
+    assert _apply(b, apps, args) == [] and args == snapshot, args
+    again, _ = build_bindings(apps, args, [_src([record])], b, scan_args=apps)
+    assert _apply(again, apps, args) == [] and args == snapshot, args
+    assert args["load_power_invert"] == [None, True], args
+    print("PASS: replay of invert idempotent")
+    return 0
+
+
+def test_invert_not_scanned_for_serials():
+    """The invert settings hold bools, which the serial scan skips: they never match a serial, and never stop an entity string matching."""
+    args = {"grid_power_invert": [True, False], "battery_power_invert": [False, True], "load_power_invert": ["True", True]}
+    assert slot_serials(0, {}, args, ["ce1234g567"]) == [] and slot_serials(1, {}, args, ["ce1234g567"]) == []
+    args["charge_rate"] = ["number.ge_inverter_ce1234g567_battery_charge_power"]
+    assert slot_serials(0, {}, args, ["ce1234g567"]) == ["ce1234g567"]
+    # An invert setting is not a control method: a typed slot carrying only one stays free
+    apps = {"inverter_type": ["GE"], "grid_power_invert": [True]}
+    assert manual_slots(apps)[0]["origin"] == "free", manual_slots(apps)
+    print("PASS: invert settings are not scanned for serials")
+    return 0
+
+
 def test_bindings_all(my_predbat=None):
     """Run every bindings test, returning the number of failures."""
     failures = 0
@@ -1123,4 +1209,9 @@ def test_bindings_all(my_predbat=None):
     failures += test_replay_never_zero_inverters()
     failures += test_replay_nothing_discovered()
     failures += test_desired_args_shape()
+    failures += test_replay_invert_from_descriptor()
+    failures += test_replay_invert_defaults_false()
+    failures += test_replay_invert_leaves_manual_slot()
+    failures += test_replay_invert_idempotent()
+    failures += test_invert_not_scanned_for_serials()
     return failures

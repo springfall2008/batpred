@@ -25,7 +25,7 @@ import math
 import json
 import random
 from component_base import ComponentBase, writes
-from bindings import BINDING_SETTINGS, SITE_SETTINGS, SUMMED_SETTINGS, slot_value
+from bindings import BINDING_SETTINGS, INVERT_SETTINGS, SITE_SETTINGS, SUMMED_SETTINGS, slot_value
 from coordinator import charger_with_stub_car, inverter_record
 from mock_base import CoordinatorHarness, MockBase as SharedMockBase
 
@@ -359,6 +359,10 @@ GE_CLOUD_KNOWN_DIFFERENCES = {
     "givtcp_rest": "the previous automatic configuration deletes the whole key, discovery clears only its own inverter slots",
 }
 
+# Why the review expects an invert setting the previous automatic configuration left unset to be all-False now. Not a
+# GE_CLOUD_KNOWN_DIFFERENCES entry: the legacy plan never binds the invert settings, so the checker never compares them
+GE_CLOUD_INVERT_UNSET = "discovery writes False for each slot whose record marks nothing inverted, where the previous automatic configuration left it unset; inverter.py reads both as False"
+
 # Settings the old configuration deletes outright, so whatever another inverter's slot holds is a (known) difference
 GE_CLOUD_DELETED_SETTINGS = frozenset({"givtcp_rest"})
 
@@ -414,8 +418,9 @@ def discovery_review_lines(report, bindings, args, legacy_args, checker_lines=()
     report is GE Cloud's discovery report, bindings the coordinator's last bindings, args the configuration it
     left, legacy_args apply_legacy_bindings() of the same starting args and checker_lines what
     check_automatic_config() logged. Five sections: the inverter records, the bindings slot by slot, the final
-    inverter configuration, the settings where the old and new configurations differ (a known difference or
-    a setting the inverter type dummies is marked expected) and the checker's lines.
+    inverter configuration, the settings where the old and new configurations differ (a known difference, a
+    setting the inverter type dummies, or an invert setting left unset before and all-False now is marked
+    expected) and the checker's lines.
     """
     args = args or {}
     legacy_args = legacy_args or {}
@@ -456,6 +461,8 @@ def discovery_review_lines(report, bindings, args, legacy_args, checker_lines=()
         dummied = sorted(inverter_type for inverter_type in types if setting in GE_CLOUD_DUMMIED_SETTINGS.get(inverter_type, ()))
         if setting in GE_CLOUD_KNOWN_DIFFERENCES:
             note = "expected: {}".format(GE_CLOUD_KNOWN_DIFFERENCES[setting])
+        elif setting in INVERT_SETTINGS and old is None and all(entry is False or entry is None for entry in (new if isinstance(new, list) else [new])):
+            note = "expected: {}".format(GE_CLOUD_INVERT_UNSET)
         elif dummied:
             note = "expected: inverter.py replaces it with a dummy for {}".format(", ".join(dummied))
         else:

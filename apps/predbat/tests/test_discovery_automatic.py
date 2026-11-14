@@ -15,7 +15,7 @@ import threading
 import time
 
 import coordinator as coordinator_module
-from bindings import BINDING_SETTINGS, COMPACT_SETTINGS, SITE_SETTINGS, slot_value
+from bindings import BINDING_SETTINGS, COMPACT_SETTINGS, INVERT_SETTINGS, SITE_SETTINGS, slot_value
 from coordinator import Coordinator
 from gecloud import DEVICE_REFRESH_SECONDS, GE_CLOUD_DUMMIED_SETTINGS, GECloudData, apply_legacy_bindings
 from tests.test_ge_cloud import GEC_FULL_REGISTERS, GEC_INFO, GEC_MIXED_REGISTERS, MockGECloudDirect, _gec_devices, _make_rediscovery_ge_cloud
@@ -1129,13 +1129,28 @@ def _normal(value):
     return value
 
 
+def _all_false(value):
+    """Whether a normalised invert setting value is all-False: False, or a list whose every entry is False or None."""
+    if isinstance(value, list):
+        return all(entry is False or entry is None for entry in value)
+    return value is False
+
+
 def compare_configuration(old_args, new_args, known=()) -> list[str]:
-    """Every difference in num_inverters, inverter_type, BINDING_SETTINGS and SITE_SETTINGS, except the settings named in `known`. Trailing None entries and an all-None key against an absent key are equal."""
+    """
+    Every difference in num_inverters, inverter_type, BINDING_SETTINGS and SITE_SETTINGS, except the settings named in `known`.
+
+    Trailing None entries and an all-None key against an absent key are equal. An unset INVERT_SETTINGS member against an
+    all-False one is equal too: discovery writes False per slot where the old configuration left the key unset, and
+    inverter.py reads both as False. Nothing else is normalised.
+    """
     differences = []
     for setting in CONFIGURATION_SETTINGS:
         if setting in known:
             continue
         old, new = _normal(old_args.get(setting)), _normal(new_args.get(setting))
+        if setting in INVERT_SETTINGS and ((old is None and _all_false(new)) or (new is None and _all_false(old))):
+            continue
         if old != new:
             differences.append("{}: old {!r} new {!r}".format(setting, old, new))
     return differences
@@ -1183,6 +1198,9 @@ def test_accept_single():
     old, new, log = run_old_and_new(*_one_battery())
     _assert_accepted(old, new, log)
     assert new["num_inverters"] == 1 and new["inverter_type"] == ["GEC"], (new.get("num_inverters"), new.get("inverter_type"))
+    # GE Cloud marks nothing inverted, so discovery writes an explicit False per slot where the old configuration left the keys unset
+    for setting in INVERT_SETTINGS:
+        assert new.get(setting) == [False] and old.get(setting) is None, (setting, old.get(setting), new.get(setting))
     print("PASS: accept single")
     return 0
 
