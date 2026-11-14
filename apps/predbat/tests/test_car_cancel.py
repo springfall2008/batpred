@@ -1,0 +1,1342 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt: off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+"""Tests for the shared rules on which car slots an export may cancel."""
+
+import contextlib
+import copy
+import io
+import os
+import sys
+from datetime import timedelta
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from car_cancel import CAR_CANCEL_MAX_SLOTS, CAR_CANCEL_PENALTY_MARGIN, CancelSlot, build_car_cancel_table, cancellable_slots, cancelled_mask, cancelled_windows, step_reverted
+from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10
+from prediction import Prediction
+from utils import export_mode_of, pack_export_limit, parse_car_plan_windows
+from tests.test_infra import run_async
+from tests.test_car_charger_control import FakeCharger, FakeComponent
+from tests.test_kernel_parity import RESULT_NAMES, make_step_data
+
+
+def _slot(start, end, kwh=1.0):
+    """A car charging slot."""
+    return {"start": start, "end": end, "kwh": kwh, "octopus": False}
+
+
+def test_cancellable_slots_rules():
+    """Only Predbat-led and holdable cars qualify, and not empty, past or charging-now slots."""
+    model = [
+        [_slot(0, 30), _slot(60, 90), _slot(120, 150, 0), _slot(150, 180)],  # car 0: index 0 is a charging-now slot
+        [_slot(60, 90)],  # car 1 is neither
+        [_slot(60, 90), _slot(30, 60)],  # car 2 is holdable
+    ]
+    slots = cancellable_slots(model, [1, 0, 0], {0, 2}, {}, 60)
+    got = [(s.car_n, s.index, s.start, s.end) for s in slots]
+    # car 0 index 0 (now slot), index 2 (0 kWh); car 2 index 1 ends at minutes_now
+    assert got == [(0, 1, 60, 90), (2, 0, 60, 90), (0, 3, 150, 180)], got
+    assert not any(s.forced for s in slots)
+
+
+def test_cancellable_slots_cap():
+    """The list is capped, keeping the earliest slots."""
+    model = [[_slot(i * 30, i * 30 + 30) for i in range(70)]]
+    slots = cancellable_slots(model, [0], {0}, {}, 0)
+    assert len(slots) == CAR_CANCEL_MAX_SLOTS
+    assert slots[-1].start == 63 * 30
+    assert all(s.start != 64 * 30 for s in slots)
+
+
+def test_cancellable_slots_forced():
+    """Slots ending by the time the hold does are forced, and one running past it is not."""
+    model = [[_slot(30, 60), _slot(60, 90), _slot(90, 120)]]
+    slots = cancellable_slots(model, [0], {0}, {0: 90}, 0)
+    assert [s.forced for s in slots] == [True, True, False], slots
+    # The slot from 60 to 90 starts before a hold ending at 61, but runs past it: an ordinary cancellable slot
+    slots = cancellable_slots(model, [0], {0}, {0: 61}, 0)
+    assert [s.forced for s in slots] == [True, False, False], slots
+    assert cancellable_slots(model, [0], set(), {}, 0) == []
+
+
+def test_cancellable_slots_held_only_forced():
+    """A held car that is not cancellable - a full one - offers only its forced slots."""
+    model = [[_slot(30, 60), _slot(60, 90), _slot(90, 120)]]
+    slots = cancellable_slots(model, [0], set(), {0: 90}, 0)
+    assert [(s.start, s.forced) for s in slots] == [(30, True), (60, True)], slots
+
+
+def test_cancelled_mask():
+    """Target windows cancel what they overlap; freeze, idle and non-overlapping windows do not."""
+    slots = [CancelSlot(0, 0, 60, 90, False), CancelSlot(0, 1, 120, 150, True), CancelSlot(0, 2, 180, 210, False)]
+    target = pack_export_limit(EXPORT_MODE_TARGET, 10)
+    # One minute of overlap with slot 0
+    assert cancelled_mask(slots, [{"start": 30, "end": 61}], [target]) == 0b010 | 0b001
+    # Ends exactly at slot start: nothing but the forced slot
+    assert cancelled_mask(slots, [{"start": 30, "end": 60}], [target]) == 0b010
+    # Starts exactly at slot end
+    assert cancelled_mask(slots, [{"start": 90, "end": 120}], [target]) == 0b010
+    for mode in (EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE):
+        limit = pack_export_limit(mode)
+        assert cancelled_mask(slots, [{"start": 60, "end": 90}, {"start": 180, "end": 210}], [limit, limit]) == 0b010
+    assert cancelled_mask(slots, [], []) == 0b010
+
+
+def test_cancelled_windows():
+    """A mask groups the chosen slots by car, time-ordered."""
+    slots = [CancelSlot(1, 0, 60, 90, False), CancelSlot(0, 0, 90, 120, False), CancelSlot(1, 1, 120, 150, False)]
+    assert cancelled_windows(slots, 0b101) == {1: [(60, 90), (120, 150)]}
+    assert cancelled_windows(slots, 0b110) == {0: [(90, 120)], 1: [(120, 150)]}
+    assert cancelled_windows(slots, 0) == {}
+
+
+def _set_switch(my_predbat, value):
+    """Set the cancel switch the way the UI does."""
+    my_predbat.expose_config("car_charging_cancel_for_export", value, force=True)
+
+
+def test_car_cancellable_cars(my_predbat):
+    """Only with the switch on, and then Predbat-led plus holdable cars."""
+    names = ("num_cars", "car_planned_by_predbat", "car_force_holdable")
+    saved = {name: getattr(my_predbat, name) for name in names}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        my_predbat.num_cars = 2
+        my_predbat.car_planned_by_predbat = {0}
+        my_predbat.car_force_holdable = {1: "Fake"}
+        _set_switch(my_predbat, False)
+        assert my_predbat.car_cancellable_cars() == set()
+        assert my_predbat.car_cancel_slots() == []
+        _set_switch(my_predbat, True)
+        assert my_predbat.car_cancellable_cars() == {0, 1}
+        my_predbat.num_cars = 0
+        assert not my_predbat.car_cancel_enabled()
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def test_car_cancel_slots(my_predbat):
+    """The PredBat wrapper puts now slots ahead, and converts the hold end to a minute."""
+    names = ("num_cars", "car_charging_slots", "car_charging_now_slots", "car_planned_by_predbat", "car_force_holdable", "car_force_hold_until", "minutes_now")
+    saved = {name: getattr(my_predbat, name) for name in names}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        _set_switch(my_predbat, True)
+        my_predbat.num_cars = 1
+        my_predbat.minutes_now = 60
+        my_predbat.car_charging_now_slots = [[_slot(60, 90)]]
+        my_predbat.car_charging_slots = [[_slot(60, 90), _slot(120, 150), _slot(180, 210)]]
+        my_predbat.car_planned_by_predbat = {0}
+        my_predbat.car_force_holdable = {}
+        # Held until 02:30:30 after midnight: ceil gives minute 151 so the slots at 60 and 120 are forced
+        my_predbat.car_force_hold_until = {0: my_predbat.midnight_utc + timedelta(minutes=150, seconds=30)}
+        slots = my_predbat.car_cancel_slots()
+        assert [(s.index, s.start, s.forced) for s in slots] == [(1, 60, True), (2, 120, True), (3, 180, False)], slots
+        # A hold that has ended is dropped
+        my_predbat.car_force_hold_until = {0: my_predbat.midnight_utc + timedelta(minutes=60)}
+        assert not any(s.forced for s in my_predbat.car_cancel_slots())
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def test_full_car_not_cancellable(my_predbat):
+    """A car already at its charge limit keeps the hard block, so cancelling its slot is never free; a held one keeps its forced slots."""
+    names = ("num_cars", "car_charging_slots", "car_charging_now_slots", "car_planned_by_predbat", "car_force_holdable", "car_force_hold_until", "minutes_now", "car_charging_soc", "car_charging_limit", "car_cancel_keys", "car_charging_from_battery", "export_window_best", "calculate_best_export", "calculate_export_oncharge", "manual_all_times", "iboost_enable")
+    saved = {name: copy.deepcopy(getattr(my_predbat, name)) for name in names}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        _gate_setup(my_predbat, [_slot(60, 90), _slot(120, 150)], True)
+        my_predbat.car_charging_soc = [50.0]
+        my_predbat.car_charging_limit = [50.0]
+        assert my_predbat.car_cancel_slots() == []
+        my_predbat.car_cancel_keys = frozenset((s.car_n, s.index) for s in my_predbat.car_cancel_slots())
+        assert not my_predbat.allow_this_export_window(0), "an export over a full car's slot must stay blocked"
+        # Below the limit it is cancellable again
+        my_predbat.car_charging_soc = [49.9]
+        assert [(s.start, s.forced) for s in my_predbat.car_cancel_slots()] == [(60, False), (120, False)]
+        # A full car a charger is holding off keeps the slot the hold covers, and nothing else
+        my_predbat.car_charging_soc = [51.0]
+        my_predbat.car_force_holdable = {0: "Fake"}
+        my_predbat.car_force_hold_until = {0: my_predbat.midnight_utc + timedelta(minutes=90)}
+        assert [(s.start, s.forced) for s in my_predbat.car_cancel_slots()] == [(60, True)], my_predbat.car_cancel_slots()
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+GATE_NAMES = ("num_cars", "car_charging_slots", "car_charging_now_slots", "car_planned_by_predbat", "car_force_holdable", "car_force_hold_until", "minutes_now", "car_cancel_keys", "car_charging_from_battery", "export_window_best", "calculate_best_export", "calculate_export_oncharge", "manual_all_times", "iboost_enable")
+
+
+def _gate_setup(my_predbat, slots, planned, switch=True):
+    """Set up cars, car slots and one export window over minutes 60 to 90 and fill in the cancel keys as calculate_plan does."""
+    my_predbat.num_cars = 1
+    my_predbat.minutes_now = 0
+    my_predbat.car_charging_now_slots = [[]]
+    my_predbat.car_charging_slots = [slots]
+    my_predbat.car_planned_by_predbat = {0} if planned else set()
+    my_predbat.car_force_holdable = {}
+    my_predbat.car_force_hold_until = {}
+    my_predbat.car_charging_from_battery = False
+    my_predbat.export_window_best = [{"start": 60, "end": 90, "average": 10.0}]
+    my_predbat.calculate_best_export = True
+    my_predbat.calculate_export_oncharge = True
+    my_predbat.manual_all_times = []
+    my_predbat.iboost_enable = False
+    _set_switch(my_predbat, switch)
+    my_predbat.car_cancel_keys = frozenset((s.car_n, s.index) for s in my_predbat.car_cancel_slots())
+
+
+def _gate_run(my_predbat, slots, planned, switch=True):
+    """Return allow_this_export_window(0) for the setup, restoring the fixture afterwards."""
+    saved = {name: getattr(my_predbat, name) for name in GATE_NAMES}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        _gate_setup(my_predbat, slots, planned, switch)
+        return my_predbat.allow_this_export_window(0)
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def test_gate_relaxed_for_cancellable(my_predbat):
+    """A Predbat-led car's slot no longer blocks an export window."""
+    assert _gate_run(my_predbat, [_slot(60, 90)], True)
+
+
+def test_gate_blocked_for_uncancellable(my_predbat):
+    """A car that is neither Predbat-led nor holdable still blocks the export window."""
+    assert not _gate_run(my_predbat, [_slot(60, 90)], False)
+
+
+def test_gate_switch_off_unchanged(my_predbat):
+    """With the switch off the car slot blocks the window, as before."""
+    assert not _gate_run(my_predbat, [_slot(60, 90)], True, switch=False)
+
+
+def test_gate_mixed_slots(my_predbat):
+    """A window over a cancellable and an uncancellable slot stays blocked."""
+    saved = {name: getattr(my_predbat, name) for name in GATE_NAMES}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        _gate_setup(my_predbat, [_slot(60, 75), _slot(75, 90)], True)
+        # The second slot is not in the cancel set (as if it had no energy left)
+        my_predbat.car_cancel_keys = frozenset(k for k in my_predbat.car_cancel_keys if k[1] == 0)
+        assert len(my_predbat.car_cancel_keys) == 1
+        assert not my_predbat.allow_this_export_window(0)
+        assert my_predbat.hit_uncancellable_car_window(60, 90) is True
+        assert my_predbat.hit_uncancellable_car_window(60, 75) is False
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def test_gate_cap(my_predbat):
+    """A window over the 65th cancellable slot is blocked, as only 64 are cancellable."""
+    slots = [_slot(i * 30, i * 30 + 30) for i in range(CAR_CANCEL_MAX_SLOTS + 1)]
+    saved = {name: getattr(my_predbat, name) for name in GATE_NAMES}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        _gate_setup(my_predbat, slots, True)
+        assert len(my_predbat.car_cancel_keys) == CAR_CANCEL_MAX_SLOTS
+        my_predbat.export_window_best = [{"start": 63 * 30, "end": 64 * 30, "average": 10.0}]
+        assert my_predbat.allow_this_export_window(0)
+        my_predbat.export_window_best = [{"start": 64 * 30, "end": 65 * 30, "average": 10.0}]
+        assert not my_predbat.allow_this_export_window(0)
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def test_levels_and_freeze_unchanged(my_predbat):
+    """hit_car_window, used by the levels pass and freeze export, still sees a cancellable slot."""
+    saved = {name: getattr(my_predbat, name) for name in GATE_NAMES}
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        _gate_setup(my_predbat, [_slot(60, 90)], True)
+        assert my_predbat.hit_car_window(60, 90)
+        assert not my_predbat.hit_uncancellable_car_window(60, 90)
+        my_predbat.car_cancel_keys = frozenset()
+        assert my_predbat.hit_uncancellable_car_window(60, 90) == my_predbat.hit_car_window(60, 90)
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+
+
+def test_force_hold_tick_publishes_holdable():
+    """The component publishes the cars it can hold, before its early return, and removes only its own."""
+    component = FakeComponent([FakeCharger("a")])
+    name = component.charger_control_log_name
+    base = component.base
+    base.car_force_holdable = {}
+    now = None
+    run_async(component.charger_control_force_hold_tick(now))
+    assert base.car_force_holdable == {0: name}, base.car_force_holdable
+    component.args["car_charging_cancel_for_export"] = False
+    run_async(component.charger_control_force_hold_tick(now))
+    assert base.car_force_holdable == {}, base.car_force_holdable
+    # Another component's entry is left alone
+    base.car_force_holdable = {0: "Other"}
+    run_async(component.charger_control_force_hold_tick(now))
+    assert base.car_force_holdable == {0: "Other"}
+    component.args["car_charging_cancel_for_export"] = True
+    run_async(component.charger_control_force_hold_tick(now))
+    assert base.car_force_holdable == {0: name}, "the switch on takes the car over"
+    base.car_force_holdable = {0: name}
+    component.chargers[0].can_force = False
+    run_async(component.charger_control_force_hold_tick(now))
+    assert base.car_force_holdable == {}
+
+
+# ---------------------------------------------------------------------------
+# The cancel table and the Python engine
+# ---------------------------------------------------------------------------
+
+PEAK = 30.0  # rate_max_base, the dearest base import rate
+OFF_PEAK = 7.0  # A dispatch's rate, and the car slot's own
+PENALTY = PEAK * CAR_CANCEL_PENALTY_MARGIN  # What each cancelled kWh costs the plan to buy back
+MINUTES_NOW = 12 * 60
+HORIZON = 24 * 60
+LOAD_KW = 0.5
+CAR_KWH = 10.0
+CAR_RATE_KW = 7.4  # car_charging_rate: a cancelled slot is charged as if the car took at least this
+TARGET_EMPTY = pack_export_limit(EXPORT_MODE_TARGET, 0)
+
+
+def _car(start, end, kwh=CAR_KWH, octopus=True):
+    """A car slot at the off-peak rate; an Octopus dispatch unless octopus is False."""
+    return {"start": start, "end": end, "kwh": kwh, "average": OFF_PEAK, "cost": OFF_PEAK * kwh, "octopus": octopus}
+
+
+def _scenario_values(num_cars, soc_kw):
+    """Every attribute the Python engine and the cancel table read, pinned so no earlier test's residue moves the results."""
+    return {
+        "minutes_now": MINUTES_NOW,
+        "forecast_minutes": HORIZON,
+        "end_record": HORIZON,
+        "soc_max": 10.0,
+        "soc_kw": soc_kw,
+        "reserve": 0.0,
+        "best_soc_min": 0.0,
+        "best_soc_keep": 0.0,
+        "best_soc_keep_weight": 0.5,
+        "battery_rate_max_charge": 3 / 60.0,
+        "battery_rate_max_charge_dc": 3 / 60.0,
+        "battery_rate_max_discharge": 3 / 60.0,
+        "battery_rate_max_export": 3 / 60.0,
+        "battery_rate_min": 0.0,
+        "charge_rate_now": 3 / 60.0,
+        "discharge_rate_now": 3 / 60.0,
+        "battery_rate_max_scaling": 1.0,
+        "battery_rate_max_scaling_discharge": 1.0,
+        "charge_scaling10": 1.0,
+        "battery_loss": 1.0,
+        "battery_loss_discharge": 1.0,
+        "inverter_hybrid": False,
+        "inverter_loss": 1.0,
+        "inverter_freeze_export_discharge_rate": 0.0,
+        "inverter_limit": 5 / 60.0,
+        "export_limit": 5 / 60.0,
+        "pv_ac_limit": 0.0,
+        "inverter_can_charge_during_export": True,
+        "inverter_support_feedin_first": False,
+        "set_charge_freeze": False,
+        "set_reserve_enable": False,
+        "set_export_freeze": False,
+        "set_export_freeze_only": False,
+        "set_charge_window": True,
+        "set_export_window": True,
+        "set_discharge_during_charge": True,
+        "set_export_low_power": False,
+        "set_charge_low_power": False,
+        "set_read_only": False,
+        "calculate_export_on_pv": False,
+        "battery_charge_power_curve": {},
+        "battery_discharge_power_curve": {},
+        "battery_temperature": 20,
+        "battery_temperature_prediction": {},
+        "battery_temperature_charge_curve": {},
+        "battery_temperature_discharge_curve": {},
+        "rate_import": {minute: PEAK for minute in range(MINUTES_NOW + HORIZON)},
+        "rate_export": {minute: 0.0 for minute in range(MINUTES_NOW + HORIZON)},
+        "rate_max": PEAK,
+        "rate_max_base": PEAK,
+        "rate_import_tariff_max": PEAK,
+        "rate_import_saving_minutes": set(),
+        "io_adjusted": {},
+        "io_confirmed_credit": {},
+        "all_active_keep": {},
+        "all_active_keep_max": {},
+        "carbon_enable": False,
+        "carbon_intensity": {},
+        "carbon_today_sofar": 0,
+        "cost_today_sofar": 0,
+        "metric_standing_charge": 0,
+        "export_today_now": 0,
+        "import_today_now": 0,
+        "load_minutes_now": 0,
+        "pv_today_now": 0,
+        "num_cars": num_cars,
+        "car_charging_loss": 1.0,
+        "car_charging_rate": [CAR_RATE_KW] * num_cars,
+        "car_energy_reported_load": True,
+        "car_charging_from_battery": False,
+        "car_charging_soc": [0.0] * num_cars,
+        "car_charging_soc_next": [None] * num_cars,
+        "car_charging_limit": [100.0] * num_cars,
+        "car_charging_limit_model": None,
+        "car_charging_battery_size": [100.0] * num_cars,
+        "car_charging_slots": [[] for _ in range(num_cars)],
+        "car_charging_now_slots": [[] for _ in range(num_cars)],
+        "car_planned_by_predbat": {0},
+        "car_force_holdable": {},
+        "car_force_hold_until": {},
+        "iboost_enable": False,
+        "iboost_next": 0,
+        "iboost_today": 0,
+        "iboost_plan": [],
+        "rate_gas": {},
+        "debug_enable": False,
+        "prediction_kernel_enable": False,
+        "prediction_cache_enable": False,
+    }
+
+
+@contextlib.contextmanager
+def _engine_scenario(my_predbat, num_cars=1, soc_kw=0.0, switch=True, billing="octopus"):
+    """
+    A flat 0.5 kW load, no PV and peak import everywhere, with the switch and the billing rule as given and the
+    Python engine forced (the parity test compares the kernel against it). Restores the fixture afterwards.
+    """
+    values = _scenario_values(num_cars, soc_kw)
+    saved = {name: copy.deepcopy(getattr(my_predbat, name)) for name in values if hasattr(my_predbat, name)}
+    missing = [name for name in values if not hasattr(my_predbat, name)]
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    had_billing = "intelligent_dispatch_billing" in my_predbat.args
+    saved_billing = my_predbat.args.get("intelligent_dispatch_billing")
+    try:
+        for name, value in values.items():
+            setattr(my_predbat, name, value)
+        my_predbat.args["intelligent_dispatch_billing"] = billing
+        _set_switch(my_predbat, switch)
+        yield
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        if had_billing:
+            my_predbat.args["intelligent_dispatch_billing"] = saved_billing
+        else:
+            my_predbat.args.pop("intelligent_dispatch_billing", None)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+        for name in missing:
+            delattr(my_predbat, name)
+
+
+def _dispatch_rates(my_predbat, start, end):
+    """Make start to end (rounded out to half hours) a dispatch: off-peak and io_adjusted, as the rate feed delivers it."""
+    first = (start // 30) * 30
+    last = ((end + 29) // 30) * 30
+    for minute in range(first, last):
+        my_predbat.rate_import[minute] = OFF_PEAK
+        my_predbat.io_adjusted[minute] = True
+
+
+def _predict(my_predbat, export_window, export_limits=None, pv_scenario=PV_SCENARIO_NOMINAL, with_table=True):
+    """Run the Python engine on the fixture's car slots, with the cancel table the live plan would build."""
+    model = my_predbat.car_charging_slots_model()
+    table = build_car_cancel_table(my_predbat, model, my_predbat.car_cancel_slots()) if with_table else None
+    pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, pv_kw=0.0, load_kw=LOAD_KW)
+    prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step, car_charging_slots=model, car_cancel=table)
+    assert prediction.kernel_handle == 0, "the Python engine must run"
+    if export_limits is None:
+        export_limits = [TARGET_EMPTY] * len(export_window)
+    result = prediction.run_prediction([], [], export_window, export_limits, pv_scenario, HORIZON)
+    return result, table
+
+
+def _hand_cost(peak_hours, off_peak_hours, car_kwh_off_peak=0.0):
+    """The cost of the flat house load over the horizon, split between peak and off-peak hours, plus car energy at off-peak."""
+    assert abs(peak_hours + off_peak_hours - HORIZON / 60) < 1e-9
+    return LOAD_KW * peak_hours * PEAK + LOAD_KW * off_peak_hours * OFF_PEAK + car_kwh_off_peak * OFF_PEAK
+
+
+def _assert_close(name, got, want, tolerance=0.01):
+    """Fail with both values when they differ."""
+    assert abs(got - want) < tolerance, "{}: got {} want {}".format(name, got, want)
+
+
+def test_revert_outside_offpeak(my_predbat):
+    """A cancelled dispatch at 18:00 outside the fixed window pays rate_max_base."""
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1080, 1110)]]
+        _dispatch_rates(my_predbat, 1080, 1110)
+        result, table = _predict(my_predbat, [{"start": 1080, "end": 1110}])
+        k = (1080 - MINUTES_NOW) // 5
+        assert step_reverted(table, k, 1)
+        assert not step_reverted(table, k, 0), "not cancelled, not reverted"
+        # Every half hour at peak, and the car buys nothing
+        _assert_close("cost", result[0], _hand_cost(24, 0))
+
+
+def test_revert_inside_offpeak(my_predbat):
+    """A cancelled dispatch at 00:00, inside the fixed 23:30-05:30 window, keeps its 7p."""
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1440, 1470)]]
+        _dispatch_rates(my_predbat, 1440, 1470)
+        result, table = _predict(my_predbat, [{"start": 1440, "end": 1470}])
+        assert table.revert_rate[(1440 - MINUTES_NOW) // 5] == -1.0
+        _assert_close("cost", result[0], _hand_cost(23.5, 0.5))
+
+
+def test_revert_other_car_trusted(my_predbat):
+    """Another car's uncancellable dispatch over the same half hour keeps the 7p for everyone."""
+    with _engine_scenario(my_predbat, num_cars=2):
+        my_predbat.car_charging_slots = [[_car(1080, 1110)], [_car(1080, 1110, kwh=2.0)]]
+        _dispatch_rates(my_predbat, 1080, 1110)
+        result, table = _predict(my_predbat, [{"start": 1080, "end": 1110}])
+        assert table.trusted[(1080 - MINUTES_NOW) // 5] == 1
+        assert [(slot.car_n, slot.index) for slot in table.slots] == [(0, 0)]
+        # Car 1 still charges its 2 kWh at 7p
+        _assert_close("cost", result[0], _hand_cost(23.5, 0.5, car_kwh_off_peak=2.0))
+
+
+def test_revert_split_half_hour(my_predbat):
+    """Two dispatches in one half hour: cancelling one leaves 7p, cancelling both reverts it."""
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1140, 1145, kwh=1.0), _car(1145, 1170, kwh=5.0)]]
+        _dispatch_rates(my_predbat, 1140, 1170)
+        result, table = _predict(my_predbat, [{"start": 1140, "end": 1145}])
+        assert table.need_mask[(1140 - MINUTES_NOW) // 5] == 0b11
+        # The second dispatch still charges its 5 kWh
+        _assert_close("cost one cancelled", result[0], _hand_cost(23.5, 0.5, car_kwh_off_peak=5.0))
+        result, _ = _predict(my_predbat, [{"start": 1140, "end": 1170}])
+        _assert_close("cost both cancelled", result[0], _hand_cost(24, 0))
+
+
+def test_revert_saving_session(my_predbat):
+    """A saving session minute keeps its own rate."""
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1080, 1110)]]
+        _dispatch_rates(my_predbat, 1080, 1110)
+        my_predbat.rate_import_saving_minutes = set(range(1080, 1110))
+        result, _ = _predict(my_predbat, [{"start": 1080, "end": 1110}])
+        _assert_close("cost", result[0], _hand_cost(23.5, 0.5))
+
+
+def test_revert_window_billing(my_predbat):
+    """Under window billing nothing reverts, but the car load and the penalty still go."""
+    with _engine_scenario(my_predbat, billing="window"):
+        my_predbat.car_charging_slots = [[_car(1080, 1110)]]
+        _dispatch_rates(my_predbat, 1080, 1110)
+        result, table = _predict(my_predbat, [{"start": 1080, "end": 1110}])
+        assert all(rate == -1.0 for rate in table.revert_rate)
+        _assert_close("cost", result[0], _hand_cost(23.5, 0.5))
+        _assert_close("metric_keep", result[8], CAR_KWH * PENALTY)
+
+
+def test_reverted_step_not_dispatch_gone(my_predbat):
+    """In PV10 a reverted step pays rate_max_base, not the dispatch-gone worst case, and the car buys nothing."""
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1080, 1110)]]
+        _dispatch_rates(my_predbat, 1080, 1110)
+        # The dispatch-gone worst case reads the tariff maximum; make it distinguishable from rate_max_base
+        my_predbat.rate_import_tariff_max = 50.0
+        result, _ = _predict(my_predbat, [{"start": 1080, "end": 1110}], pv_scenario=PV_SCENARIO_PV10)
+        _assert_close("cost", result[0], _hand_cost(24, 0))
+        _assert_close("imports", result[1] + result[2], LOAD_KW * 24)
+        _assert_close("metric_keep", result[8], CAR_KWH * PENALTY)
+
+
+def test_reverted_step_no_io_credit(my_predbat):
+    """A reverted step banks no confirmed-dispatch credit for what a charge window stores in it."""
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1080, 1110)]]
+        _dispatch_rates(my_predbat, 1080, 1110)
+        my_predbat.io_confirmed_credit = {minute: 10.0 for minute in range(1080, 1110)}
+        model = my_predbat.car_charging_slots_model()
+        table = build_car_cancel_table(my_predbat, model, my_predbat.car_cancel_slots())
+        pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, pv_kw=0.0, load_kw=LOAD_KW)
+        prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step, car_charging_slots=model, car_cancel=table)
+        # A short export cancels the whole slot; the charge window fills the rest of the half hour
+        charge_window = [{"start": 1085, "end": 1110, "average": OFF_PEAK}]
+        result = prediction.run_prediction([10.0], charge_window, [{"start": 1080, "end": 1085}], [TARGET_EMPTY], PV_SCENARIO_NOMINAL, HORIZON)
+        assert result[1] > 1.0, "the charge window should store energy: {}".format(result)
+        # Only the buy-back penalty, no credit
+        _assert_close("metric_keep", result[8], CAR_KWH * PENALTY)
+
+
+def test_penalty_respects_car_full(my_predbat):
+    """A car 1 kWh from its limit is charged the penalty on the 1 kWh it would have bought, not the slot's 10."""
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1080, 1110, octopus=False)]]
+        my_predbat.car_charging_soc = [49.0]
+        my_predbat.car_charging_limit = [50.0]
+        my_predbat.car_charging_loss = 0.9
+        result, _ = _predict(my_predbat, [{"start": 1080, "end": 1110}])
+        _assert_close("metric_keep", result[8], 1.0 / 0.9 * PENALTY)
+
+
+def test_penalty_floor_small_slot(my_predbat):
+    """
+    A cancelled slot is charged as if the car charged at its full rate for the whole slot, so a slot planned to take
+    0.4 kWh costs 30 minutes at 7.4 kW to cancel, and a 10-minute fragment 10 minutes. Without the floor, cancelling
+    a small slot cost next to nothing while freeing the battery to cover the house for the whole slot.
+    """
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1080, 1110, kwh=0.4, octopus=False), _car(1200, 1210, kwh=0.1, octopus=False)]]
+        result, table = _predict(my_predbat, [{"start": 1105, "end": 1110}, {"start": 1205, "end": 1210}])
+        assert table.floor_kw == [CAR_RATE_KW, CAR_RATE_KW], table.floor_kw
+        _assert_close("metric_keep", result[8], CAR_RATE_KW * (30 + 10) / 60.0 * PENALTY)
+
+
+def test_penalty_floor_respects_car_full(my_predbat):
+    """The floor is still capped by the room left in the car: 0.2 kWh from full, a small slot costs 0.2 kWh."""
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1080, 1110, kwh=0.4, octopus=False)]]
+        my_predbat.car_charging_soc = [49.8]
+        my_predbat.car_charging_limit = [50.0]
+        result, _ = _predict(my_predbat, [{"start": 1080, "end": 1110}])
+        _assert_close("metric_keep", result[8], 0.2 * PENALTY)
+
+
+def test_penalty_floor_uncancelled_slot_unchanged(my_predbat):
+    """An uncancelled small slot still charges only what it plans: the floor is a cancellation's score, not a load."""
+    with _engine_scenario(my_predbat):
+        my_predbat.car_charging_slots = [[_car(1080, 1110, kwh=0.4, octopus=False)]]
+        with_car, _ = _predict(my_predbat, [])
+        my_predbat.car_charging_slots = [[]]
+        no_car, _ = _predict(my_predbat, [], with_table=False)
+        _assert_close("cost", with_car[0] - no_car[0], 0.4 * PEAK)
+        _assert_close("metric_keep", with_car[8], 0.0)
+
+
+def test_valuation_ready_time_not_free(my_predbat):
+    """
+    The slot ends at the car's ready time and every rate after it is 7p, but the penalty is based on the horizon's 30p peak,
+    so cancelling is never free just because nothing dear is left before the car leaves.
+    """
+    with _engine_scenario(my_predbat):
+        my_predbat.rate_import = {minute: (PEAK if 13 * 60 <= minute < 16 * 60 else OFF_PEAK) for minute in range(MINUTES_NOW + HORIZON)}
+        my_predbat.car_charging_slots = [[_car(1080, 1110, octopus=False)]]
+        window = [{"start": 1080, "end": 1110}]
+        cancelled, table = _predict(my_predbat, window)
+        assert table.penalty_rate == PENALTY
+        my_predbat.car_charging_slots = [[]]
+        no_car, _ = _predict(my_predbat, window, with_table=False)
+        _assert_close("metric_keep rise", cancelled[8] - no_car[8], CAR_KWH * PENALTY)
+        _assert_close("cost", cancelled[0], no_car[0])
+
+
+MARGINAL_NAMES = (
+    "prediction",
+    "charge_limit_best",
+    "charge_window_best",
+    "export_window_best",
+    "export_limits_best",
+    "load_minutes_step",
+    "pv_forecast_minute_step",
+    "marginal_baseline_metric",
+    "marginal_costs_matrix",
+    "marginal_costs_min",
+    "marginal_costs_max",
+    "marginal_time_labels",
+    "marginal_grid_import",
+    "marginal_grid_export",
+)
+
+
+def _marginal_matrix(my_predbat, export_window):
+    """The marginal cost matrix for the fixture's car slots under export_window, with the cancel table the live plan builds."""
+    model = my_predbat.car_charging_slots_model()
+    pv_step, _, load_step, _ = make_step_data(my_predbat, pv_kw=0.0, load_kw=LOAD_KW)
+    table = build_car_cancel_table(my_predbat, model, my_predbat.car_cancel_slots())
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step, car_charging_slots=model, car_cancel=table)
+    my_predbat.load_minutes_step = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.charge_limit_best = []
+    my_predbat.charge_window_best = []
+    my_predbat.export_window_best = export_window
+    my_predbat.export_limits_best = [TARGET_EMPTY] * len(export_window)
+    with contextlib.redirect_stdout(io.StringIO()):
+        my_predbat.calculate_marginal_costs()
+    return table, copy.deepcopy(my_predbat.marginal_costs_matrix)
+
+
+def test_marginal_costs_keep_cancellation(my_predbat):
+    """
+    The what-if predictions behind the marginal cost matrix cancel the same slots as its baseline: with the car's
+    slot cancelled by the export over it, the matrix is the one for no car at all, rather than every cell carrying
+    the car's 10 kWh as if the extra load had brought it back.
+    """
+    saved = {name: copy.deepcopy(getattr(my_predbat, name)) for name in MARGINAL_NAMES if hasattr(my_predbat, name)}
+    missing = [name for name in MARGINAL_NAMES if not hasattr(my_predbat, name)]
+    saved_dashboard = copy.deepcopy(my_predbat.dashboard_values)
+    try:
+        with _engine_scenario(my_predbat):
+            window = [{"start": 1080, "end": 1110, "average": 0.0}]
+            my_predbat.car_charging_slots = [[_car(1080, 1110, octopus=False)]]
+            table, cancelled = _marginal_matrix(my_predbat, window)
+            assert table is not None and cancelled_mask(table.slots, window, [TARGET_EMPTY]) == 1
+            my_predbat.car_charging_slots = [[]]
+            table, no_car = _marginal_matrix(my_predbat, window)
+            assert table is None
+            assert cancelled == no_car, "the cancellation shifted the marginal costs: {} against {}".format(cancelled, no_car)
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+        for name in missing:
+            if hasattr(my_predbat, name):
+                delattr(my_predbat, name)
+        my_predbat.dashboard_values.clear()
+        my_predbat.dashboard_values.update(saved_dashboard)
+
+
+# The switch-off results, captured on the Task 2 commit (6f27acf1) before the cancel table existed
+SWITCH_OFF_NOMINAL = (158.75, 0, 12.0, 0.0, 0.0, 0.0, 1770, 10.0, 0.0, 0, 0)
+SWITCH_OFF_PV10 = (158.75, 0, 12.0, 0.0, 0.0, 0.0, 1770, 10.0, 0.0, 0, 0)
+
+
+def test_switch_off_identical(my_predbat):
+    """With the switch off there is no table, and the engine gives exactly what it gave before the table existed."""
+    with _engine_scenario(my_predbat, soc_kw=10.0, switch=False):
+        my_predbat.car_charging_slots = [[_car(1080, 1110)]]
+        _dispatch_rates(my_predbat, 1080, 1110)
+        assert my_predbat.car_cancel_slots() == []
+        window = [{"start": 1080, "end": 1110}]
+        nominal, table = _predict(my_predbat, window)
+        assert table is None
+        pv10, _ = _predict(my_predbat, window, pv_scenario=PV_SCENARIO_PV10)
+        got_nominal = tuple(nominal[:11])
+        got_pv10 = tuple(pv10[:11])
+        for name, got, want in (("nominal", got_nominal, SWITCH_OFF_NOMINAL), ("pv10", got_pv10, SWITCH_OFF_PV10)):
+            assert got == want, "{} changed: {}".format(name, ", ".join("{} {} -> {}".format(field, old, new) for field, old, new in zip(RESULT_NAMES, want or [None] * 11, got) if old != new))
+
+
+# ---------------------------------------------------------------------------
+# End to end: does calculate_plan() cancel for a saving session and not for a normal export?
+# ---------------------------------------------------------------------------
+
+PLAN_SLOT = (18 * 60, 18 * 60 + 30)
+
+
+def _plan_scenario(export_rate, octopus=False, slot_rate=OFF_PEAK):
+    """
+    A one-car day in the random benchmark's format: the car's 10 kWh slot at slot_rate (7p) is under an export at
+    export_rate. With octopus the slot is an Intelligent dispatch, marked io_adjusted as the rate feed delivers it.
+    """
+    slot_start, slot_end = PLAN_SLOT
+
+    def import_rate(minute):
+        """7p at night, slot_rate in the car slot, 30p otherwise."""
+        if slot_start <= minute < slot_end:
+            return slot_rate
+        if minute >= 23 * 60 + 30 or minute < 5 * 60 + 30:
+            return OFF_PEAK
+        return PEAK
+
+    return {
+        "id": 0,
+        "seed": 0,
+        "params": {
+            "battery": {"soc_max_kwh": 20.0, "initial_soc_percent": 100.0, "rate_max_charge_kw": 10.0, "rate_max_discharge_kw": 10.0},
+            "inverter": {"hybrid": False, "inverter_limit_kw": 10.0, "export_limit_kw": 10.0},
+            "clock": {"minutes_now": MINUTES_NOW},
+            "load_scaling": {"nominal": 1.0, "pv10": 1.0, "pv90": 1.0},
+            "cars": {"num_cars": 1, "battery_kwh": [100.0], "slots": [[_car(slot_start, slot_end, octopus=octopus)]]},
+            "iog": {"enabled": octopus, "run_start_minute": slot_start, "run_slots": (slot_end - slot_start) // 30},
+        },
+        "data": {
+            "rate_import_day": [import_rate(minute) for minute in range(1440)],
+            "rate_export_day": [export_rate if slot_start <= minute < slot_end else 0.0 for minute in range(1440)],
+            "load_day_kwh": [LOAD_KW / 60.0] * 1440,
+            "pv_day_kw": [0.0] * 1440,
+        },
+    }
+
+
+def _plan(export_rate, switch=True, publish_calls=None, octopus=False, planned=frozenset({0}), holdable=None, best_keep=None, freeze=False, export_calls=None, slot_rate=OFF_PEAK):
+    """
+    Plan the scenario on a fresh PredBat with the switch on; return it and the cancellable slots. The car is
+    Predbat-led unless planned says otherwise, and holdable is car_force_holdable. best_keep, a list, gets the
+    metric_keep of every save="best" run. freeze turns set_export_freeze on, and export_calls, a list, gets
+    (start, end, allow_freeze, freeze_only) for every optimise_export() call, with the window as it is tried.
+    """
+    # Imported here: unit_test imports this module, so a top level import would be circular
+    from unit_test import create_predbat
+    from tests.test_infra import reset_inverter
+    from tests.test_random_scenarios import RANDOM_TEMPLATE, apply_scenario_to_predbat
+
+    plan_predbat = create_predbat()
+    with contextlib.redirect_stdout(io.StringIO()):
+        reset_inverter(plan_predbat)
+        plan_predbat.read_debug_yaml(RANDOM_TEMPLATE)
+        plan_predbat.config_root = "./"
+        plan_predbat.save_restore_dir = "./"
+        plan_predbat.load_user_config()
+        apply_scenario_to_predbat(plan_predbat, _plan_scenario(export_rate, octopus=octopus, slot_rate=slot_rate))
+        plan_predbat.battery_rate_max_export = 10.0 / 60.0
+        plan_predbat.rate_max_base = PEAK
+        plan_predbat.car_charging_now_slots = [[]]
+        plan_predbat.car_planned_by_predbat = set(planned)
+        plan_predbat.car_force_holdable = dict(holdable or {})
+        plan_predbat.car_force_hold_until = {}
+        plan_predbat.car_charging_from_battery = False
+        plan_predbat.car_energy_reported_load = True
+        plan_predbat.car_charging_loss = 1.0
+        plan_predbat.prediction_kernel_enable = False
+        plan_predbat.calculate_best_export = True
+        plan_predbat.args["threads"] = 0
+        plan_predbat.plan_valid = False
+        plan_predbat.debug_enable = False
+        _set_switch(plan_predbat, switch)
+        if publish_calls is not None:
+            real_publish = plan_predbat.publish_car_plan
+            plan_predbat.publish_car_plan = lambda **kwargs: (publish_calls.append(kwargs), real_publish(**kwargs))[1]
+        if best_keep is not None:
+            _record_best_keep(plan_predbat, best_keep)
+        if freeze:
+            plan_predbat.set_export_freeze = True
+        if export_calls is not None:
+            real_optimise_export = plan_predbat.optimise_export
+
+            def optimise_export(window_n, record_charge_windows, try_charge_limit, charge_window, export_window, export_limit, **kwargs):
+                """Note the window and the freeze arguments of each call, then optimise as normal."""
+                export_calls.append((export_window[window_n]["start"], export_window[window_n]["end"], kwargs.get("allow_freeze", True), kwargs.get("freeze_only", False)))
+                return real_optimise_export(window_n, record_charge_windows, try_charge_limit, charge_window, export_window, export_limit, **kwargs)
+
+            plan_predbat.optimise_export = optimise_export
+        plan_predbat.calculate_plan(recompute=True)
+    return plan_predbat, plan_predbat.car_cancel_slots()
+
+
+def _record_best_keep(plan_predbat, best_keep):
+    """Wrap run_prediction so the metric_keep of every save="best" run is appended to best_keep."""
+    real_run_prediction = plan_predbat.run_prediction
+
+    def run_prediction(*args, **kwargs):
+        """Run the real prediction and note metric_keep when it is the final best run."""
+        result = real_run_prediction(*args, **kwargs)
+        if kwargs.get("save") == "best":
+            best_keep.append(result[8])
+        return result
+
+    plan_predbat.run_prediction = run_prediction
+
+
+def _exports_over_slot(plan_predbat):
+    """The target exports the chosen plan has over the car slot."""
+    slot_start, slot_end = PLAN_SLOT
+    return [window for window, limit in zip(plan_predbat.export_window_best, plan_predbat.export_limits_best) if export_mode_of(limit) == EXPORT_MODE_TARGET and window["start"] < slot_end and window["end"] > slot_start]
+
+
+def test_valuation_saving_session_wins():
+    """A 200p export over a 7p car slot beats buying the 10 kWh back at 33p (30p plus the margin), and the plan charges exactly that."""
+    plan_predbat, slots = _plan(200.0)
+    assert plan_predbat.prediction.kernel_handle == 0
+    assert _exports_over_slot(plan_predbat), "no target export over the slot: {}".format(list(zip(plan_predbat.export_window_best, plan_predbat.export_limits_best)))
+    plan = (plan_predbat.charge_limit_best, plan_predbat.charge_window_best, plan_predbat.export_window_best, plan_predbat.export_limits_best)
+    assert cancelled_mask(slots, plan[2], plan[3]) == 1
+    cancelled = plan_predbat.prediction.run_prediction(*plan, PV_SCENARIO_NOMINAL, plan_predbat.end_record)
+    # The same plan with the switch off and the car slot removed
+    _set_switch(plan_predbat, False)
+    no_car_model = [[]]
+    no_car = Prediction(
+        plan_predbat,
+        plan_predbat.pv_forecast_minute_step,
+        plan_predbat.pv_forecast_minute10_step,
+        plan_predbat.load_minutes_step,
+        plan_predbat.load_minutes_step10,
+        plan_predbat.pv_forecast_minute90_step,
+        plan_predbat.load_minutes_step90,
+        car_charging_slots=no_car_model,
+        car_cancel=build_car_cancel_table(plan_predbat, no_car_model, plan_predbat.car_cancel_slots()),
+    ).run_prediction(*plan, PV_SCENARIO_NOMINAL, plan_predbat.end_record)
+    _assert_close("metric_keep rise", cancelled[8] - no_car[8], CAR_KWH * PENALTY)
+    _assert_close("cost", cancelled[0], no_car[0])
+
+
+def test_valuation_normal_export_loses():
+    """A 15p export does not pay for buying the car's energy back at 33p: the window stays idle and the car keeps its slot."""
+    plan_predbat, slots = _plan(15.0)
+    assert slots, "the slot should be cancellable"
+    assert not _exports_over_slot(plan_predbat), "a target export over the slot: {}".format(list(zip(plan_predbat.export_window_best, plan_predbat.export_limits_best)))
+    assert cancelled_mask(slots, plan_predbat.export_window_best, plan_predbat.export_limits_best) == 0
+
+
+def test_valuation_peak_slot_not_cancelled():
+    """
+    A car slot already at the 30p peak under a 5p export: buying the energy back costs what the slot would have, so
+    without a margin on the penalty the plan cancels it through an export that exports next to nothing, just to free
+    the battery from holding for the car. The margin keeps the slot.
+    """
+    plan_predbat, slots = _plan(5.0, slot_rate=PEAK)
+    assert slots, "the slot should be cancellable"
+    assert cancelled_mask(slots, plan_predbat.export_window_best, plan_predbat.export_limits_best) == 0, "the peak-rate slot was cancelled: {}".format(_exports_over_slot(plan_predbat))
+
+
+def test_no_freeze_over_cancellable_slot():
+    """
+    With the switch on the export gate lets a window over a cancellable car slot into the detailed passes, but freeze
+    cancels nothing, so freeze is never tried there: every optimise_export() call over the slot rules it out, and the
+    plan never freezes over it. With the switch off such a window never reaches optimise_export() at all.
+    """
+    slot_start, slot_end = PLAN_SLOT
+    for export_rate in (200.0, 15.0):
+        export_calls = []
+        plan_predbat, slots = _plan(export_rate, freeze=True, export_calls=export_calls)
+        assert slots, "the slot should be cancellable"
+        over = [call for call in export_calls if call[0] < slot_end and call[1] > slot_start]
+        assert over, "no export window over the slot was optimised"
+        assert all(not allow_freeze for _, _, allow_freeze, _ in over), "freeze allowed over the car slot: {}".format(over)
+        assert all(not freeze_only for _, _, _, freeze_only in over), "a freeze-only trial over the car slot: {}".format(over)
+        frozen = [window for window, limit in zip(plan_predbat.export_window_best, plan_predbat.export_limits_best) if export_mode_of(limit) == EXPORT_MODE_FREEZE and window["start"] < slot_end and window["end"] > slot_start]
+        assert not frozen, "freeze export planned over the car slot: {}".format(frozen)
+    export_calls = []
+    _plan(200.0, switch=False, freeze=True, export_calls=export_calls)
+    assert not [call for call in export_calls if call[0] < slot_end and call[1] > slot_start], export_calls
+
+
+def _best_plan(plan_predbat):
+    """The plan in force as (charge_limit, charge_window, export_window, export_limits) copies."""
+    return (list(plan_predbat.charge_limit_best), copy.deepcopy(plan_predbat.charge_window_best), copy.deepcopy(plan_predbat.export_window_best), list(plan_predbat.export_limits_best))
+
+
+def test_cancel_set_consistent():
+    """
+    The slot a saving session cancels is cancelled, and charged for, identically in a plain re-run of the best
+    plan, in a calculate_plan() that reuses the plan, and when the next recompute re-scores it as the previous plan.
+    """
+    best_keep = []
+    plan_predbat, slots = _plan(200.0, best_keep=best_keep)
+    plan = _best_plan(plan_predbat)
+    assert cancelled_mask(slots, plan[2], plan[3]) == 1, "slot A should be cancelled: {}".format(list(zip(plan[2], plan[3])))
+    assert len(best_keep) == 1, best_keep
+    keep = best_keep[0]
+    assert keep >= CAR_KWH * PENALTY - 0.01, "the buy-back penalty is missing from metric_keep {}".format(keep)
+    windows = plan_predbat.car_cancelled_for_export_windows()
+    assert windows == {0: [PLAN_SLOT]}, windows
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        # (a) A plain run_prediction() of the same windows
+        rerun = plan_predbat.run_prediction(*plan, False, end_record=plan_predbat.end_record)
+        _assert_close("metric_keep re-run", rerun[8], keep)
+
+        # (b) calculate_plan() reusing the plan: same windows, same cancel set, same score
+        plan_predbat.calculate_plan(recompute=False)
+        assert len(best_keep) == 2, best_keep
+        _assert_close("metric_keep reused plan", best_keep[1], keep)
+        assert _best_plan(plan_predbat)[2:] == plan[2:], "the export windows moved"
+        assert plan_predbat.car_cancelled_for_export_windows() == windows
+
+        # (c) The next recompute re-scores the plan as the incumbent, through run_prediction_metric() as
+        # should_replace_plan()'s caller does; with no pre-clip snapshot it scores the plan as clipped
+        scored = []
+        replace_args = []
+        real_metric = plan_predbat.run_prediction_metric
+        real_replace = plan_predbat.should_replace_plan
+
+        def run_prediction_metric(*args, **kwargs):
+            """Note each scoring call's windows and result."""
+            result = real_metric(*args, **kwargs)
+            scored.append((args, result))
+            return result
+
+        def should_replace_plan(metric_prev, metric_new, *args, **kwargs):
+            """Note the incumbent's metric and which scoring call produced it."""
+            replace_args.append((metric_prev, len(scored)))
+            return real_replace(metric_prev, metric_new, *args, **kwargs)
+
+        plan_predbat.run_prediction_metric = run_prediction_metric
+        plan_predbat.should_replace_plan = should_replace_plan
+        plan_predbat.plan_valid = True
+        plan_predbat.plan_preclip = None
+        plan_predbat.plan_made_by_version = plan_predbat.running_version
+        plan_predbat.charge_limit_best, plan_predbat.charge_window_best, plan_predbat.export_window_best, plan_predbat.export_limits_best = copy.deepcopy(plan)
+        plan_predbat.calculate_plan(recompute=True)
+    assert len(replace_args) == 1, "the incumbent was not re-scored: {}".format(replace_args)
+    metric_prev, calls = replace_args[0]
+    prev_args, prev_result = scored[calls - 1]
+    assert list(prev_args[2]) == plan[2] and list(prev_args[3]) == plan[3], "the last scoring call before should_replace_plan was not the incumbent: {}".format(prev_args)
+    assert prev_result[0] == metric_prev
+    _assert_close("metric_keep as previous plan", prev_result[3], keep)
+    # And its metric matches a direct score of the plan in the first run
+    direct = real_metric(*copy.deepcopy(plan), end_record=plan_predbat.end_record)
+    _assert_close("metric as previous plan", metric_prev, direct[0])
+
+
+def _car_sensor(plan_predbat):
+    """The attributes of the published car 0 slot sensor."""
+    return plan_predbat.dashboard_values["binary_sensor." + plan_predbat.prefix + "_car_charging_slot"]["attributes"]
+
+
+def test_neither_car_never_cancelled():
+    """A car on an Octopus dispatch with no charger that can hold it is never cancelled, even for a saving session."""
+    plan_predbat, slots = _plan(200.0, octopus=True, planned=frozenset())
+    assert slots == [], slots
+    # The battery hold for the car would also make such an export worthless, so check the gate itself
+    assert plan_predbat.hit_uncancellable_car_window(*PLAN_SLOT)
+    assert not _exports_over_slot(plan_predbat), "a target export over the slot: {}".format(list(zip(plan_predbat.export_window_best, plan_predbat.export_limits_best)))
+    assert plan_predbat.car_cancelled_for_export_windows() == {}
+    assert _car_sensor(plan_predbat)["cancelled_for_export"] == []
+
+
+def test_holdable_car_cancelled():
+    """The same car on a charger that can force-hold it has its slot cancelled for the saving session, and published."""
+    plan_predbat, slots = _plan(200.0, octopus=True, planned=frozenset(), holdable={0: "wallbox"})
+    assert [(slot.car_n, slot.start, slot.end) for slot in slots] == [(0, PLAN_SLOT[0], PLAN_SLOT[1])], slots
+    assert _exports_over_slot(plan_predbat), "no target export over the slot: {}".format(list(zip(plan_predbat.export_window_best, plan_predbat.export_limits_best)))
+    assert plan_predbat.car_cancelled_for_export_windows() == {0: [PLAN_SLOT]}
+    start, end = (plan_predbat.time_abs_str(minute) for minute in PLAN_SLOT)
+    assert _car_sensor(plan_predbat)["cancelled_for_export"] == [{"start": start, "end": end}], _car_sensor(plan_predbat)
+
+
+# ---------------------------------------------------------------------------
+# Publishing, the plan display and the execute hold
+# ---------------------------------------------------------------------------
+
+PUBLISH_NAMES = (
+    "num_cars",
+    "car_charging_slots",
+    "car_charging_now_slots",
+    "car_planned_by_predbat",
+    "car_force_holdable",
+    "car_force_hold_until",
+    "minutes_now",
+    "export_window_best",
+    "export_limits_best",
+    "car_cancelled_for_export",
+)
+
+
+@contextlib.contextmanager
+def _publish_scenario(my_predbat, export_over=None, switch=True, minutes_now=None):
+    """
+    One Predbat-led car with slot A (30 to 60 minutes from now, 4 kWh) and slot B (90 to 120, 6 kWh) and, if
+    export_over is a (start, end) offset pair from now, a target export over it. Restores the fixture afterwards.
+    """
+    saved = {name: copy.deepcopy(getattr(my_predbat, name)) for name in PUBLISH_NAMES}
+    saved_dashboard = copy.deepcopy(my_predbat.dashboard_values)
+    saved_switch = my_predbat.get_arg("car_charging_cancel_for_export", False)
+    try:
+        if minutes_now is not None:
+            my_predbat.minutes_now = minutes_now
+        base = my_predbat.minutes_now
+        my_predbat.num_cars = 1
+        my_predbat.car_charging_now_slots = [[]]
+        my_predbat.car_planned_by_predbat = {0}
+        my_predbat.car_force_holdable = {}
+        my_predbat.car_force_hold_until = {}
+        my_predbat.car_cancelled_for_export = {}
+        my_predbat.car_charging_slots = [
+            [
+                {"start": base + 30, "end": base + 60, "kwh": 4.0, "average": 10.0, "cost": 40.0, "octopus": False},
+                {"start": base + 90, "end": base + 120, "kwh": 6.0, "average": 10.0, "cost": 60.0, "octopus": False},
+            ]
+        ]
+        if export_over:
+            my_predbat.export_window_best = [{"start": base + export_over[0], "end": base + export_over[1], "average": 20.0}]
+            my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 0)]
+        else:
+            my_predbat.export_window_best = []
+            my_predbat.export_limits_best = []
+        _set_switch(my_predbat, switch)
+        yield base
+    finally:
+        _set_switch(my_predbat, saved_switch)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+        my_predbat.dashboard_values.clear()
+        my_predbat.dashboard_values.update(saved_dashboard)
+
+
+def _sensor(my_predbat):
+    """The published car 0 slot sensor: (state, attributes)."""
+    entity = my_predbat.dashboard_values["binary_sensor." + my_predbat.prefix + "_car_charging_slot"]
+    return entity["state"], entity["attributes"]
+
+
+def test_publish_cancelled_for_export(my_predbat):
+    """A slot under a target export leaves the plan and is listed in cancelled_for_export, which the charger reader parses."""
+    with _publish_scenario(my_predbat, export_over=(30, 60)) as base:
+        my_predbat.publish_car_plan(after_plan=True)
+        state, attributes = _sensor(my_predbat)
+        a_start, a_end = my_predbat.time_abs_str(base + 30), my_predbat.time_abs_str(base + 60)
+        assert [window["start"] for window in attributes["planned"]] == [my_predbat.time_abs_str(base + 90)], attributes
+        assert attributes["cancelled_for_export"] == [{"start": a_start, "end": a_end}], attributes
+        assert attributes["kwh"] == 6.0 and attributes["cost"] == 60.0, attributes
+        assert my_predbat.car_cancelled_for_export == {0: [(base + 30, base + 60)]}
+        now = (my_predbat.midnight_utc + timedelta(minutes=base)).astimezone(my_predbat.local_tz)
+        parsed = parse_car_plan_windows(attributes["cancelled_for_export"], now, my_predbat.local_tz)
+        assert len(parsed) == 1 and parsed[0][0] == (my_predbat.midnight_utc + timedelta(minutes=base + 30)).astimezone(my_predbat.local_tz), parsed
+
+
+def test_publish_partial_overlap_whole_slot(my_predbat):
+    """An export over only the last 5 minutes of a slot still cancels the whole slot."""
+    with _publish_scenario(my_predbat, export_over=(55, 75)) as base:
+        my_predbat.publish_car_plan(after_plan=True)
+        _, attributes = _sensor(my_predbat)
+        assert attributes["cancelled_for_export"] == [{"start": my_predbat.time_abs_str(base + 30), "end": my_predbat.time_abs_str(base + 60)}], attributes
+        assert len(attributes["planned"]) == 1, attributes
+
+
+def test_publish_state_off_when_current_cancelled(my_predbat):
+    """With now inside a cancelled slot the sensor is off, and on once inside a slot that is kept."""
+    with _publish_scenario(my_predbat, export_over=(-10, 10)) as base:
+        my_predbat.car_charging_slots[0][0].update({"start": base - 10, "end": base + 20})
+        my_predbat.publish_car_plan(after_plan=True)
+        state, attributes = _sensor(my_predbat)
+        assert state == "off", (state, attributes)
+        assert len(attributes["cancelled_for_export"]) == 1 and len(attributes["planned"]) == 1, attributes
+    with _publish_scenario(my_predbat) as base:
+        my_predbat.car_charging_slots[0][0].update({"start": base - 10, "end": base + 20})
+        my_predbat.publish_car_plan(after_plan=True)
+        assert _sensor(my_predbat)[0] == "on"
+
+
+def test_publish_fetch_time_uses_last_plan(my_predbat):
+    """
+    Called before calculate_plan(), as fetch does, the previous cycle's export windows leave out only a slot the last
+    publish cancelled with the same times, or a forced one: a slot Octopus has re-cut is not cancelled until the
+    planner has judged it, and the publish after planning then cancels the full fresh set.
+    """
+    with _publish_scenario(my_predbat, export_over=(30, 60)) as base:
+        # Unchanged since the last publish: still cancelled
+        my_predbat.car_cancelled_for_export = {0: [(base + 30, base + 60)]}
+        my_predbat.publish_car_plan()
+        _, attributes = _sensor(my_predbat)
+        assert len(attributes["planned"]) == 1 and len(attributes["cancelled_for_export"]) == 1, attributes
+        assert my_predbat.car_cancelled_for_export == {0: [(base + 30, base + 60)]}
+        # Never published as cancelled: left in the plan until the planner runs
+        my_predbat.car_cancelled_for_export = {}
+        my_predbat.publish_car_plan()
+        _, attributes = _sensor(my_predbat)
+        assert len(attributes["planned"]) == 2 and attributes["cancelled_for_export"] == [], attributes
+        assert my_predbat.car_cancelled_for_export == {}
+        # Re-shaped by Octopus since the last publish (it now ends at base + 75), so a stale cancellation does not carry over
+        my_predbat.car_cancelled_for_export = {0: [(base + 30, base + 60)]}
+        my_predbat.car_charging_slots[0][0]["end"] = base + 75
+        my_predbat.publish_car_plan()
+        _, attributes = _sensor(my_predbat)
+        assert len(attributes["planned"]) == 2 and attributes["cancelled_for_export"] == [], attributes
+        # The publish after planning cancels it
+        my_predbat.publish_car_plan(after_plan=True)
+        _, attributes = _sensor(my_predbat)
+        assert attributes["cancelled_for_export"] == [{"start": my_predbat.time_abs_str(base + 30), "end": my_predbat.time_abs_str(base + 75)}], attributes
+        assert my_predbat.car_cancelled_for_export == {0: [(base + 30, base + 75)]}
+
+
+def test_publish_fetch_time_slot_under_way(my_predbat):
+    """A cancelled slot under way, whose start has only walked forward to now since the last publish, stays cancelled at fetch."""
+    with _publish_scenario(my_predbat, export_over=(-10, 20)) as base:
+        my_predbat.car_charging_slots[0][0].update({"start": base, "end": base + 20, "start_orig": base - 10})
+        my_predbat.car_cancelled_for_export = {0: [(base - 5, base + 20)]}
+        my_predbat.publish_car_plan()
+        _, attributes = _sensor(my_predbat)
+        assert attributes["cancelled_for_export"] == [{"start": my_predbat.time_abs_str(base - 10), "end": my_predbat.time_abs_str(base + 20)}], attributes
+        # Not a slot that has yet to start: one whose start moved later is re-shaped
+        my_predbat.car_charging_slots[0][1]["start"] = base + 95
+        my_predbat.export_window_best.append({"start": base + 90, "end": base + 120, "average": 20.0})
+        my_predbat.export_limits_best.append(pack_export_limit(EXPORT_MODE_TARGET, 0))
+        my_predbat.car_cancelled_for_export = {0: [(base - 5, base + 20), (base + 90, base + 120)]}
+        my_predbat.publish_car_plan()
+        assert my_predbat.car_cancelled_for_export == {0: [(base, base + 20)]}, my_predbat.car_cancelled_for_export
+
+
+def test_publish_fetch_time_forced(my_predbat):
+    """A slot a charger is holding off is cancelled at fetch, though no publish has cancelled it before."""
+    with _publish_scenario(my_predbat) as base:
+        my_predbat.car_planned_by_predbat = set()
+        my_predbat.car_force_holdable = {0: "Fake"}
+        my_predbat.car_force_hold_until = {0: my_predbat.midnight_utc + timedelta(minutes=base + 60)}
+        my_predbat.car_cancelled_for_export = {}
+        my_predbat.publish_car_plan()
+        assert my_predbat.car_cancelled_for_export == {0: [(base + 30, base + 60)]}, my_predbat.car_cancelled_for_export
+
+
+def test_publish_switch_off_unchanged(my_predbat):
+    """With the switch off nothing is cancelled, even under a target export."""
+    with _publish_scenario(my_predbat, export_over=(30, 60), switch=False) as base:
+        my_predbat.publish_car_plan()
+        _, attributes = _sensor(my_predbat)
+        assert attributes["cancelled_for_export"] == [], attributes
+        assert [window["start"] for window in attributes["planned"]] == [my_predbat.time_abs_str(base + 30), my_predbat.time_abs_str(base + 90)], attributes
+        assert attributes["kwh"] == 10.0 and attributes["cost"] == 100.0, attributes
+        assert my_predbat.car_cancelled_for_export == {}
+
+
+def test_publish_held_car(my_predbat):
+    """A car a charger is holding off lists the slot ending by the time the hold does, with no export at all."""
+    with _publish_scenario(my_predbat) as base:
+        my_predbat.car_planned_by_predbat = set()
+        my_predbat.car_force_holdable = {0: "Fake"}
+        my_predbat.car_force_hold_until = {0: my_predbat.midnight_utc + timedelta(minutes=base + 60)}
+        my_predbat.publish_car_plan()
+        _, attributes = _sensor(my_predbat)
+        assert attributes["cancelled_for_export"] == [{"start": my_predbat.time_abs_str(base + 30), "end": my_predbat.time_abs_str(base + 60)}], attributes
+        assert len(attributes["planned"]) == 1, attributes
+
+
+def test_publish_held_car_slot_past_hold_not_forced(my_predbat):
+    """
+    A slot that starts before the hold ends but runs on past it is not forced: with no export over it, it stays in
+    the plan and out of cancelled_for_export, so it cannot carry the hold on to its own end.
+    """
+    with _publish_scenario(my_predbat) as base:
+        my_predbat.car_planned_by_predbat = set()
+        my_predbat.car_force_holdable = {0: "Fake"}
+        # Held to T = base + 40; slot A runs from base + 30 to T + 20, slot B from T + 50
+        my_predbat.car_force_hold_until = {0: my_predbat.midnight_utc + timedelta(minutes=base + 40)}
+        assert [(slot.start, slot.forced) for slot in my_predbat.car_cancel_slots()] == [(base + 30, False), (base + 90, False)]
+        my_predbat.publish_car_plan()
+        _, attributes = _sensor(my_predbat)
+        assert attributes["cancelled_for_export"] == [], attributes
+        assert len(attributes["planned"]) == 2, attributes
+        # A slot ending at the hold's end is forced
+        my_predbat.car_charging_slots[0][0]["end"] = base + 40
+        assert [(slot.start, slot.forced) for slot in my_predbat.car_cancel_slots()] == [(base + 30, True), (base + 90, False)]
+        my_predbat.publish_car_plan()
+        _, attributes = _sensor(my_predbat)
+        assert attributes["cancelled_for_export"] == [{"start": my_predbat.time_abs_str(base + 30), "end": my_predbat.time_abs_str(base + 40)}], attributes
+
+
+def test_hold_not_extended_by_its_own_slot(my_predbat):
+    """
+    Plan 1's hold over two cycles while Octopus pushes the held car's dispatch past the hold's end: the slot is not
+    forced, so it is not published as cancelled, and the hold keeps its end rather than chasing the dispatch.
+    """
+    with _publish_scenario(my_predbat, export_over=(-10, 20)) as base:
+        my_predbat.car_planned_by_predbat = set()
+        my_predbat.car_force_holdable = {0: "Fake"}
+        slot = my_predbat.car_charging_slots[0][0]
+        slot.update({"start": base - 10, "end": base + 20, "octopus": True})
+        component = FakeComponent([FakeCharger("a")])
+        component.local_tz = my_predbat.local_tz
+
+        def cycle(minutes_now):
+            """Publish the car plan after planning at minutes_now, hand the attribute to the component and tick it; return the hold's end."""
+            my_predbat.minutes_now = minutes_now
+            # As published after planning, so the full fresh set: the fetch-time publish could not cancel the re-cut slot anyway
+            my_predbat.publish_car_plan(after_plan=True)
+            component.cancelled["binary_sensor.predbat_car_charging_slot"] = _sensor(my_predbat)[1]["cancelled_for_export"]
+            now = (my_predbat.midnight_utc + timedelta(minutes=minutes_now)).astimezone(my_predbat.local_tz)
+            run_async(component.charger_control_tick(now))
+            # The planner hears of the hold as the component publishes it
+            my_predbat.car_force_hold_until = dict(component.base.car_force_hold_until)
+            return component.base.car_force_hold_until.get(0)
+
+        hold_end = my_predbat.midnight_utc + timedelta(minutes=base + 20)
+        assert cycle(base) == hold_end, component.charger_control_force_holds
+        # The plan no longer exports, and Octopus extends the dispatch past the hold's end, twice
+        my_predbat.export_window_best = []
+        my_predbat.export_limits_best = []
+        for minutes_now, end in ((base + 5, base + 80), (base + 10, base + 140)):
+            slot["end"] = end
+            assert cycle(minutes_now) == hold_end, "the hold moved to {} with the dispatch ending at {}".format(component.base.car_force_hold_until.get(0), end)
+            assert _sensor(my_predbat)[1]["cancelled_for_export"] == [], _sensor(my_predbat)[1]
+
+
+def test_publish_all_cancelled_and_no_slots(my_predbat):
+    """A car with every slot cancelled publishes like one with none, and still carries the list."""
+    with _publish_scenario(my_predbat, export_over=(30, 120)) as base:
+        my_predbat.publish_car_plan(after_plan=True)
+        state, attributes = _sensor(my_predbat)
+        assert state == "off" and attributes["planned"] == [] and len(attributes["cancelled_for_export"]) == 2, attributes
+        my_predbat.car_charging_slots = [[]]
+        my_predbat.publish_car_plan(after_plan=True)
+        assert _sensor(my_predbat)[1]["cancelled_for_export"] == []
+
+
+def test_display_marks_cancelled(my_predbat):
+    """The plan display counts nothing for a cancelled slot and shows its kWh as cancelled, so it gets the "?"."""
+    with _publish_scenario(my_predbat) as base:
+        my_predbat.car_cancelled_for_export = {}
+        assert my_predbat.car_charge_slot_kwh(base + 30, base + 60) == 4.0
+        assert my_predbat.car_charge_slot_kwh_cancelled(base + 30, base + 60) == 0
+        my_predbat.car_cancelled_for_export = {0: [(base + 30, base + 60)]}
+        assert my_predbat.car_charge_slot_kwh(base + 30, base + 60) == 0
+        assert my_predbat.car_charge_slot_kwh_cancelled(base + 30, base + 60) == 4.0
+        assert my_predbat.car_charge_slot_kwh(base + 90, base + 120) == 6.0
+        assert my_predbat.car_charge_slot_kwh_cancelled(base + 90, base + 120) == 0
+
+
+def test_plan_republishes_car_plan_only_when_enabled():
+    """calculate_plan() republishes the car plan after planning only with the switch on; switch off keeps today's single publish."""
+    off_calls = []
+    _plan(200.0, switch=False, publish_calls=off_calls)
+    assert off_calls == [], "switch off published the car plan {} times".format(len(off_calls))
+    on_calls = []
+    _plan(200.0, switch=True, publish_calls=on_calls)
+    assert on_calls, "switch on did not publish the car plan after planning"
+    assert all(call == {"after_plan": True} for call in on_calls), "the publish after planning must cancel the full fresh set: {}".format(on_calls)
+
+
+def run_car_cancel_tests(my_predbat):
+    """Run the car cancel tests. Returns True on failure."""
+    print("**** Running car cancel tests ****")
+    test_cancellable_slots_rules()
+    test_cancellable_slots_cap()
+    test_cancellable_slots_forced()
+    test_cancellable_slots_held_only_forced()
+    test_cancelled_mask()
+    test_cancelled_windows()
+    test_car_cancellable_cars(my_predbat)
+    test_car_cancel_slots(my_predbat)
+    test_full_car_not_cancellable(my_predbat)
+    test_gate_relaxed_for_cancellable(my_predbat)
+    test_gate_blocked_for_uncancellable(my_predbat)
+    test_gate_switch_off_unchanged(my_predbat)
+    test_gate_mixed_slots(my_predbat)
+    test_gate_cap(my_predbat)
+    test_levels_and_freeze_unchanged(my_predbat)
+    test_force_hold_tick_publishes_holdable()
+    test_revert_outside_offpeak(my_predbat)
+    test_revert_inside_offpeak(my_predbat)
+    test_revert_other_car_trusted(my_predbat)
+    test_revert_split_half_hour(my_predbat)
+    test_revert_saving_session(my_predbat)
+    test_revert_window_billing(my_predbat)
+    test_reverted_step_not_dispatch_gone(my_predbat)
+    test_reverted_step_no_io_credit(my_predbat)
+    test_penalty_respects_car_full(my_predbat)
+    test_penalty_floor_small_slot(my_predbat)
+    test_penalty_floor_respects_car_full(my_predbat)
+    test_penalty_floor_uncancelled_slot_unchanged(my_predbat)
+    test_valuation_ready_time_not_free(my_predbat)
+    test_switch_off_identical(my_predbat)
+    test_marginal_costs_keep_cancellation(my_predbat)
+    test_valuation_saving_session_wins()
+    test_valuation_normal_export_loses()
+    test_valuation_peak_slot_not_cancelled()
+    test_no_freeze_over_cancellable_slot()
+    test_plan_republishes_car_plan_only_when_enabled()
+    test_cancel_set_consistent()
+    test_neither_car_never_cancelled()
+    test_holdable_car_cancelled()
+    test_publish_cancelled_for_export(my_predbat)
+    test_publish_partial_overlap_whole_slot(my_predbat)
+    test_publish_state_off_when_current_cancelled(my_predbat)
+    test_publish_fetch_time_uses_last_plan(my_predbat)
+    test_publish_fetch_time_slot_under_way(my_predbat)
+    test_publish_fetch_time_forced(my_predbat)
+    test_publish_switch_off_unchanged(my_predbat)
+    test_publish_held_car(my_predbat)
+    test_publish_held_car_slot_past_hold_not_forced(my_predbat)
+    test_hold_not_extended_by_its_own_slot(my_predbat)
+    test_publish_all_cancelled_and_no_slots(my_predbat)
+    test_display_marks_cancelled(my_predbat)
+    print("**** car cancel tests passed ****")
+    return False

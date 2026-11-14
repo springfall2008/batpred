@@ -590,6 +590,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_slot_owner = None
         # Cars a charger component is force-holding off: car_n -> end of the hold (UTC, aware). Empty when none
         self.car_force_hold_until = {}
+        # Cars whose slots Predbat planned this cycle (plan_car_charging), so an export may cancel them
+        self.car_planned_by_predbat = set()
+        # Cars a charger component can force-hold off: car_n -> the component's log name
+        self.car_force_holdable = {}
+        # (car_n, index) of the car slots an export may cancel this cycle, see calculate_plan()
+        self.car_cancel_keys = frozenset()
+        # car_n -> (start, end) of the car slots the plan cancels for an export, set by publish_car_plan()
+        self.car_cancelled_for_export = {}
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
