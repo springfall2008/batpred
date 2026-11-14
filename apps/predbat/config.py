@@ -2214,6 +2214,7 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
+        "reserve_via_discharge_rate": True,
     },
     "FoxESS": {
         "name": "FoxESS",
