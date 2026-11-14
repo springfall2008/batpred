@@ -180,6 +180,18 @@ DEYE_TELEMETRY_KEYS = {
     "temperature": "Temperature- Battery",
 }
 
+# Not every model reports the keys above. A single-phase SUN-8K-SG05LP1-EU-AM2-P has no
+# TotalSolarPower and returns TotalDCInputPower plus one DCPowerPV<n> per string instead
+# (#5016). A key counts when its value is numeric: "0.00" at night is a real reading,
+# while a missing, empty or null value falls through to the next source.
+DEYE_TELEMETRY_FALLBACK_KEYS = {
+    "pv_power": ("TotalDCInputPower",),
+}
+
+# Last resort for pv_power when neither TotalSolarPower nor TotalDCInputPower is there:
+# sum the per-string readings (DCPowerPV1, DCPowerPV2, ...).
+DEYE_PV_STRING_KEY_PREFIX = "DCPowerPV"
+
 # Metrics whose sign must be flipped to reach Predbat's convention. DEYE reports grid
 # power positive when IMPORTING (confirmed live: TotalGridPower +25 W with
 # DailyGridFeedIn 0.00 kWh), whereas Predbat wants negative for import / positive for
