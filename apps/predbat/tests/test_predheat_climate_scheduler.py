@@ -358,7 +358,7 @@ def test_predheat_climate_scheduler(my_predbat):
         energy = heat.published[heat.prefix + ".heat_energy"]["results"]
         stamp = lambda minute: (heat.midnight_utc + timedelta(minutes=minute)).strftime(TIME_FORMAT)
         assert heating[stamp(10)] > 0, "heating should initially run"
-        assert heating[stamp(40)] == 0 and heating[stamp(80)] == 0, "off must gate the heat source"
+        assert heating[stamp(80)] == "unknown", "preheat must respect HVAC-off"
         assert heating[stamp(100)] > 0, "heating should restart after heat mode resumes"
         assert energy[stamp(80)] == energy[stamp(70)], "off interval must use no heat-source energy"
 
