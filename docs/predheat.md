@@ -80,7 +80,7 @@ Set **internal_temperature** to point to one or more internal temperature sensor
 
 The **weather** configuration points to the Open Weather Map sensor by default so should work as-is.
 
-Set **target_temperature** to a sensor recording your thermostat setpoint. Predheat forecasts future targets using historical setpoints from **days_previous** (seven days ago by default), rather than reading the actual upcoming thermostat schedule. Manual overrides and recent schedule changes can therefore produce misleading forecasts. The current history-reading code expects an entity ID, not a fixed numerical temperature.
+Set **target_temperature** to a sensor recording your thermostat setpoint. Predheat forecasts future targets using historical setpoints from **days_previous** (seven days ago by default), rather than reading the actual upcoming thermostat schedule. Manual overrides and recent schedule changes can therefore produce misleading forecasts. The current history-reading code expects an entity ID, not a fixed numerical temperature. If no target-temperature history is available, Predheat uses 21.5°C as the fallback setpoint.
 
 Set **smart_thermostat** to True if your thermostat starts the boiler ahead of time for the new target temperature or False for regular options.
 When enabled, Predheat models each rise in the historically inferred target temperature over the forecast as a pre-heat: it works out how long the heating takes to reach the new target, using only the heating period the rise belongs to (until the target next falls below the new value), and raises the target that much earlier.
@@ -113,9 +113,9 @@ Add up all the litres of water, add in some extra for the piping and an expansio
 
 Set **heat_min_power** and **heat_max_power** to the minimum and maximum **thermal output** of the boiler or heat pump in watts, not electrical input. For example, a heat pump delivering 7 kW of heat at COP 4 consumes approximately 1.75 kW of electricity.
 
-Set **hysteresis** (default 0.5°C) to the amount above target at which the model turns heating **off**. Set **hysteresis_off** (default 0.1°C) to the amount below target at which heating turns **on**. These names are counterintuitive but reflect their use in the current simulation.
+Set **hysteresis** (default 0.5°C) to the amount below target at which the model turns heating **on**. Set **hysteresis_off** (default 0.1°C) to the amount above target at which heating turns **off**.
 
-Set **heat_cop** to the maximum COP used by the model. For a gas boiler, use 1.0; gas efficiency is adjusted separately. For a heat pump, use an appropriate best-case COP for your installation. Predheat scales this using **heat_pump_efficiency** according to outdoor temperature. The code default is 0.9, so heat-pump users should set this explicitly.
+Set **heating_cop** to the maximum COP used by the model (existing configurations using **heat_cop** are still supported). For a gas boiler, use 1.0; gas efficiency is adjusted separately. For a heat pump, use an appropriate best-case COP for your installation. Predheat scales this using **heat_pump_efficiency** according to outdoor temperature. The code default is 0.9 when neither key is set, so heat-pump users should set this explicitly.
 
 Set **flow_temp** To the target flow temperature of your system, either via a sensor or as a fixed value. E.g. gas boilers are often set to say 60 or 70 degrees while heat pumps are much lower e.g. 30 or 40.
 
