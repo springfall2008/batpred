@@ -152,19 +152,18 @@ def test_single_inverter_is_a_no_op():
     assert intent == before, "a single inverter must not be touched"
 
 
-def test_only_one_direction_of_pause_per_pass():
+def test_cross_charge_and_soc_holds_combine_within_capacity():
     """
-    A pass must never pause a charger and a discharger at the same time.
+    Stopping a cross-charger and SoC balancing happen in the same pass, and the SoC guard counts the charging
+    that has just been stopped as load the rest of the fleet now has to carry.
 
-    The inverters share an AC bus, so the four are coupled: pausing one of each changes the net
-    balance in both directions at once and the remaining units simply absorb or supply the
-    difference. Each guard is also evaluated as though its own pause were the only change.
-
-    Fleet net discharging with a cross-charger present: only the cross-charger is paused.
+    Fleet net discharging 2500W with inverter 2 charging 500W from the others. Once it is stopped the
+    batteries left discharging must supply 3000W. Holding inverters 0 and 3 leaves inverters 1 and 2 with
+    5200W between them, which covers it.
     """
     intent = make_intent(4)
     snapshot = [
-        make_snapshot(20.0, 1000.0),  # low and discharging - would be an SoC-balance candidate
+        make_snapshot(20.0, 1000.0),  # low and discharging - an SoC-balance candidate
         make_snapshot(80.0, 1000.0),
         make_snapshot(50.0, -500.0),  # charging while the fleet discharges - the real problem
         make_snapshot(50.0, 1000.0),
@@ -172,7 +171,57 @@ def test_only_one_direction_of_pause_per_pass():
     balance_inverters(intent, snapshot, True, True, True, 1.0, 1.0)
     assert intent[2]["charge_rate"] == 0, "the cross-charger must be stopped"
     paused_discharge = [id for id, value in intent.items() if value["discharge_rate"] == 0]
-    assert paused_discharge == [], "no discharge may be paused in the same pass as a charge, got {}".format(paused_discharge)
+    assert paused_discharge == [0, 3], "the two low inverters can both be spared, got {}".format(paused_discharge)
+
+
+def test_soc_guard_counts_the_charging_it_stops():
+    """
+    Net battery power understates what the fleet must supply while something is cross-charging. Here it nets to
+    1000W, but inverter 1 is charging 2400W from inverter 0. Once that stops, the house needs 3400W from the
+    batteries. Inverter 0 can give 2600W and inverter 1, which can only discharge 500W, another 500W - not
+    enough, so the low inverter must not be held as well.
+    """
+    intent = make_intent(3)
+    snapshot = [
+        make_snapshot(80.0, 3400.0, rate_max=5000.0),
+        make_snapshot(50.0, -2400.0),
+        make_snapshot(20.0, 0.0, discharge_rate_now=0.0),
+    ]
+    snapshot[0]["battery_rate_max_discharge"] = 2600.0
+    snapshot[1]["battery_rate_max_discharge"] = 500.0
+    balance_inverters(intent, snapshot, False, True, True, 1.0, 1.0)
+    assert intent[1]["charge_rate"] == 0, "the cross-charger must be stopped"
+    assert intent[2]["discharge_rate"] is None, "holding the low one too would leave the house short: {}".format(intent)
+
+
+def test_cross_charge_hold_is_latched():
+    """
+    A battery held from cross-charging reads 0W and a charge rate of 0 at the next pass. It must stay held while
+    the fleet still discharges - released, its loop winds straight back into charging from its neighbours.
+    """
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, 1500.0), make_snapshot(50.0, 0.0, charge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[1]["charge_rate"] == 0, "the latched cross-charge hold was released: {}".format(intent)
+
+
+def test_cross_charge_latch_ends_when_the_fleet_turns():
+    """
+    The latch only lasts while the fleet keeps its direction. With PV surplus to soak up, the battery held from
+    charging must be free to charge again.
+    """
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, -1500.0, grid_power=1500.0), make_snapshot(50.0, 0.0, charge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[1]["charge_rate"] is None, "the charge hold must end once the fleet should charge: {}".format(intent)
+
+
+def test_cross_charge_latch_needs_the_correction_on():
+    """With the cross-charge correction switched off, a zero charge readback holds nothing."""
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, 1500.0), make_snapshot(50.0, 0.0, charge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, False, 1.0, 1.0)
+    assert intent[1]["charge_rate"] is None, intent
 
 
 def test_every_cross_charger_is_stopped():
@@ -574,7 +623,8 @@ def test_random_fleets_hold_the_physical_invariants():
        to absorb it
     c) cross-charging is prevented - nobody is left charging off the grid or off another battery
 
-    and, underpinning all three, a pass never holds in both directions at once.
+    d) when a pass stops cross-charging and SoC-balances too, the discharge capacity not held covers what the
+       batteries must supply once the stopped charging no longer nets off against the house
     """
     failed = False
     rng = random.Random(20260919)
@@ -588,9 +638,14 @@ def test_random_fleets_hold_the_physical_invariants():
         spare_pv = total_grid - net_battery
         context = "trial {} count {} pv {:.0f}W load {:.0f}W grid {:.0f}W battery {:.0f}W spare {:.0f}W".format(trial, count, total_pv, total_load, total_grid, net_battery, spare_pv)
 
-        if held_discharge and held_charge:
-            print("ERROR: held both directions in one pass - {} charge {} discharge {}".format(context, held_charge, held_discharge))
-            failed = True
+        # d) a charge hold while the fleet discharges removes draw the others were supplying, so the inverters
+        #    still free to discharge must cover the net battery power plus the charging that was stopped
+        if held_discharge and held_charge and net_battery > 0:
+            stopped = sum(-snapshot[id]["battery_power"] for id in held_charge if snapshot[id]["battery_power"] < 0)
+            remaining = sum(snapshot[id]["battery_rate_max_discharge"] for id in range(count) if id not in held_discharge and snapshot[id]["soc_percent"] - snapshot[id]["reserve_percent"] >= 4.0)
+            if remaining - 200 < net_battery + stopped:
+                print("ERROR: combined holds leave the batteries short - {} charge {} discharge {} remaining {:.0f}W < {:.0f}W".format(context, held_charge, held_discharge, remaining, net_battery + stopped))
+                failed = True
 
         # a) the house load must still be servable without forcing grid import that was not
         #    already there. Holding a battery that was discharging into an EXPORT is correct, so

@@ -3148,10 +3148,18 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     ANY other inverter qualifies, and the rate guards consult no partner at all - SoC is never used
     as a proxy for rate capability, because a fleet's fullest battery may be its weakest inverter.
 
-    A pass only ever holds in ONE direction. The inverters share an AC bus, so holding a charger
-    and a discharger together leaves the remaining units absorbing or supplying the difference,
-    against guards that were each evaluated as though its own hold were the only change. Holds
-    within the chosen direction are therefore applied cumulatively as well.
+    SoC holds are only ever taken in the fleet's own direction, and applied cumulatively: the inverters
+    share an AC bus, so each guard has to account for the holds already taken this pass. The one hold
+    taken against that direction is the cross-charge correction, which only ever stops an inverter
+    working AGAINST the fleet - removing draw while the fleet discharges, or supply while it charges -
+    so it can only make the SoC guards' job easier, and the two are applied together.
+
+    A cross-charge hold is latched: an inverter held from charging while the fleet should discharge
+    reads back a charge rate of 0, and keeps that hold for as long as the fleet's direction stays the
+    same (mirrored for discharge while the fleet should charge). Without the latch the hold went with
+    the next pass - the held battery reads 0W, so it no longer looks like a cross-charger - and
+    inverters whose loops disagree about the shared CT wound straight back into charging from their
+    neighbours until caught again, a write every minute or two.
 
     Args:
         intent (dict): inverter id -> rate intent, mutated in place
@@ -3268,23 +3276,26 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     else:
         fleet_should_discharge = during_discharge and spare_pv <= PV_SURPLUS_THRESHOLD
 
+    # Inverters already held against the fleet direction read that rate back as 0 (the snapshot keeps a
+    # true zero through the prediction rate floor). Such a hold is kept while the fleet's direction is
+    # unchanged - a held battery reads 0W, so on power alone it would be released every other pass and
+    # wind straight back into cross-charging. It ends when the direction flips, as the rate the latch
+    # reads is then the other one.
     if fleet_should_discharge:
-        against_fleet = [id for id in range(num_inverters) if power_enough_charge[id] and id in intent]
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_charge[id] or charge_rates[id] == 0)]
     else:
-        against_fleet = [id for id in range(num_inverters) if power_enough_discharge[id] and id in intent]
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_discharge[id] or discharge_rates[id] == 0)]
 
-    if against_fleet and balance_crosscharge:
+    if balance_crosscharge:
         for id in against_fleet:
-            if log_to:
+            if log_to and (power_enough_charge[id] if fleet_should_discharge else power_enough_discharge[id]):
                 log_to("BALANCE: Inverter {} is working against the fleet, holding it".format(id))
             if fleet_should_discharge:
                 intent[id]["charge_rate"] = 0
             else:
                 intent[id]["discharge_rate"] = 0
-        # This pass is done: SoC balancing on top would be the second direction of hold that the
-        # coupling between inverters rules out. When the correction is switched OFF we hold nothing
-        # here, so a same-direction SoC hold below is still a single-direction pass and is allowed.
-        return
+        # SoC balancing still runs: a cross-charge hold only removes draw (or supply) the rest of the
+        # fleet was providing, so it never leaves the SoC guards' capacity checks short.
 
     if not out_of_balance:
         return
@@ -3294,6 +3305,11 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     # ones already taken this pass or two holds each pass a check computed for one.
     if during_discharge and balance_discharge and total_discharge_rates > 0:
         held = set()
+        # Charging the cross-charge holds above have just stopped was being supplied by the rest of the
+        # fleet, so it no longer nets off against the house: the batteries left discharging must now cover
+        # the measured net power plus that charging. Counting only the net would let a hold pass a check
+        # that the very next second fails.
+        stopped_charging = sum(-battery_powers[other] for other in against_fleet if battery_powers[other] < 0) if (balance_crosscharge and fleet_should_discharge) else 0.0
         for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: socs[id]):
             if not soc_low[id]:
                 continue
@@ -3307,7 +3323,7 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # but no rate, and a peer with rate but sitting on its reserve - and holding this one
             # then leaves only unusable capacity behind, with the shortfall coming off the grid.
             usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held)
-            if (usable - 200) < total_battery_power:
+            if (usable - 200) < total_battery_power + stopped_charging:
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is low at {}% against {}%, holding its discharge".format(id, socs[id], soc_max))

@@ -1360,8 +1360,9 @@ def test_balance_release_is_also_silent(my_predbat):
             print("ERROR: the hold was not applied, so the release cannot be tested")
             failed = True
 
-        # Cycle two: the fleet is no longer fighting itself, so the hold is released
-        force_fleet(my_predbat, {0: 1000.0, 1: 1000.0}, grid=0.0)
+        # Cycle two: the fleet turns to soaking up PV surplus, so the latched cross-charge hold ends
+        # (it is kept for as long as the fleet still discharges - see test_cross_charge_hold_is_latched)
+        force_fleet(my_predbat, {0: -1000.0, 1: 0.0}, grid=1500.0)
         my_predbat.execute_plan()
         if my_predbat.inverters[1].charge_rate == 0:
             print("ERROR: the hold was not released, so the release cannot be tested")

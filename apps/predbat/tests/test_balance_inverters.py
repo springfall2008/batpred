@@ -104,6 +104,7 @@ def run_balance_inverters_tests(my_predbat):
     # Test 11: Reset balance
     print("Test 11: Reset balance when already balanced, charge")
     failed |= test_balance_reset_balanced_charge(my_predbat)
+    failed |= test_balance_charge_hold_latched_while_discharging(my_predbat)
     if failed:
         return failed
 
@@ -448,7 +449,9 @@ def test_balance_already_balanced(my_predbat):
 def test_balance_reset_balanced_charge(my_predbat):
     """
     Test when inverters are already balanced, resetting charge/discharge rates
-    Expected: Rate goes back to full
+    Expected: with the cross-charge correction OFF the rate goes back to full. With it ON (see
+    test_balance_charge_hold_latched_while_discharging) a zero charge rate while the fleet discharges is a latched
+    cross-charge hold and is kept.
     """
     # Setup: Both inverters at 50%
     setup_two_inverters(
@@ -463,7 +466,7 @@ def test_balance_reset_balanced_charge(my_predbat):
     # Enable balance
     my_predbat.balance_inverters_discharge = True
     my_predbat.balance_inverters_charge = True
-    my_predbat.balance_inverters_crosscharge = True
+    my_predbat.balance_inverters_crosscharge = False
     my_predbat.balance_inverters_threshold_charge = 5
     my_predbat.balance_inverters_threshold_discharge = 5
     my_predbat.inverters[0].charge_rate_now = 0  # Simulate previously balanced state
@@ -492,6 +495,35 @@ def test_balance_reset_balanced_charge(my_predbat):
         return True
 
     print("✓ Test passed: Rate adjustments made when already balanced")
+    return False
+
+
+def test_balance_charge_hold_latched_while_discharging(my_predbat):
+    """
+    A battery whose charge rate reads back 0 while the fleet discharges keeps that hold with the cross-charge
+    correction on. Released, a battery whose loop reads the shared CT as export winds straight back into charging
+    from its neighbours (tests/balance_ct_harness.py, CT disagree).
+    """
+    setup_two_inverters(my_predbat, soc1=50, soc2=50, battery_power1=0, battery_power2=1000)
+    ha = my_predbat.ha_interface
+    my_predbat.balance_inverters_discharge = True
+    my_predbat.balance_inverters_charge = True
+    my_predbat.balance_inverters_crosscharge = True
+    my_predbat.balance_inverters_threshold_charge = 5
+    my_predbat.balance_inverters_threshold_discharge = 5
+    my_predbat.inverters[0].charge_rate_now = 0
+    my_predbat.inverters[0].charge_rate_is_zero = True
+    ha.dummy_items["number.charge_rate"] = 0
+    ha.service_store_enable = True
+    ha.get_service_store()
+    run_balance(my_predbat)
+    services = ha.get_service_store()
+    ha.service_store_enable = False
+    for service, kwargs in services:
+        if service == "number/set_value" and kwargs.get("entity_id") == "number.charge_rate" and kwargs.get("value") != 0:
+            print("ERROR: the latched charge hold was released to {}W while the fleet discharges".format(kwargs.get("value")))
+            return True
+    print("✓ Test passed: latched charge hold kept while the fleet discharges")
     return False
 
 

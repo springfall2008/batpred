@@ -147,4 +147,8 @@ def run_ct_tests(my_predbat):
         if on["cross_over_1kw_s"] > 120 or on["cross_kwh"] > off["cross_kwh"] / 4:
             print("ERROR: {} inv CT disagree: balancing left {}kWh of cross-charging, {}s above 1kW".format(count, on["cross_kwh"], on["cross_over_1kw_s"]))
             failed = True
+        # The cross-charge hold is latched, so it is written once rather than taken and released every minute or two
+        if on["writes"] > 40:
+            print("ERROR: {} inv CT disagree: {} rate writes in an hour - the cross-charge hold is not latching".format(count, on["writes"]))
+            failed = True
     return failed
