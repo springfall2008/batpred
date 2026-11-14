@@ -743,27 +743,35 @@ When cloud arrives mid-charge the sensor falls to the real surplus and your auto
 
 Battery *charging* power is not added back, so a charging battery takes the solar first and the sensor reads what is left.
 On a sunny morning with the battery filling, that is often 0.0.
-To give the car priority instead, subtract the battery's charging power yourself. **battery_power** is negative while charging, so subtracting it raises the figure:
+The sensor itself is capped at **pv_power**. Nothing can be spare that was never generated.
+With correct sign conventions the arithmetic already comes to PV minus house load, so the cap never clips a real surplus.
+
+To give the car priority over the battery instead, work the figure out again from the attributes.
+Don't add the battery's charging power to the sensor's state: the state has already clamped any grid import to 0, so a battery charging from the grid would be counted as solar.
+That would report a 3kW surplus at night during a 3kW cheap-rate battery charge.
+**battery_power** is negative while charging, so subtracting it gives the battery's charging power to the car, and the PV cap still applies:
 
 ```text
-{{ states('predbat.solar_surplus_power') | float(0)
-   - ([state_attr('predbat.solar_surplus_power', 'battery_power') | float(0), 0] | min) }}
+{% set s = 'predbat.solar_surplus_power' %}
+{% set car = state_attr(s, 'car_charging_power') | float(0) if state_attr(s, 'car_charging_power_included') else 0 %}
+{{ [[state_attr(s, 'grid_power') | float(0) + car - state_attr(s, 'battery_power') | float(0), 0] | max,
+    [state_attr(s, 'pv_power') | float(0), 0] | max] | min }}
 ```
 
-The result is capped at **pv_power**. Nothing can be spare that was never generated.
-With correct sign conventions the arithmetic already comes to PV minus house load, so the cap never clips a real surplus.
+This comes to PV minus house load, whether the battery is charging or discharging.
 
 The sensor is always published. With no **car_charging_power** configured it is the grid export clamped at zero, and **car_charging_power_configured** is False.
 Set **car_charging_power** in `apps.yaml` to keep the reading up while the car charges. See [configure apps.yaml for your car charging](#configure-appsyaml-for-your-car-charging).
 It must measure the charger at your house. A vehicle-side sensor from the car maker's cloud also reports charging away from home.
 
 Attributes carry the inputs: **grid_power**, **battery_power**, **pv_power**, **car_charging_power**, **car_charging_power_configured** and **car_charging_power_included**.
-To divert to something other than the car, take the car's share back off, but only when it was added:
+To divert to something other than the car, take the car's share back off, but only when it was added.
+While the car is taking the surplus this goes to 0, never below it:
 
 ```text
-{{ states('predbat.solar_surplus_power') | float(0)
-   - (state_attr('predbat.solar_surplus_power', 'car_charging_power') | float(0)
-      if state_attr('predbat.solar_surplus_power', 'car_charging_power_included') else 0) }}
+{{ [states('predbat.solar_surplus_power') | float(0)
+    - (state_attr('predbat.solar_surplus_power', 'car_charging_power') | float(0)
+       if state_attr('predbat.solar_surplus_power', 'car_charging_power_included') else 0), 0] | max }}
 ```
 
 ### Check these before driving a load from it
@@ -791,16 +799,13 @@ triggers:
     entity_id: predbat.solar_surplus_power
     above: 1.4
     for: "00:05:00"
-    id: surplus
   - trigger: numeric_state
     entity_id: predbat.solar_surplus_power
     below: 1.2
     for: "00:05:00"
-    id: no_surplus
   - trigger: state
     entity_id: binary_sensor.predbat_car_charging_slot
     to: "on"
-    id: planned
   - trigger: state
     entity_id: binary_sensor.predbat_car_charging_slot
     to: "off"
@@ -860,10 +865,14 @@ Below the 6A minimum there is no current to set, so the charger still has to be 
             data:
               value: >
                 {{ [[(states('predbat.solar_surplus_power') | float(0) * 1000 / 230)
-                     | round(0), 6] | max, 32] | min }}
+                     | int, 6] | max, 32] | min }}
     default:
       <commands to turn off your car charger>
 ```
+
+The amps are rounded down, so the charger never draws more than the surplus.
+This assumes a single-phase charger at 230V.
+For a three-phase charger, divide by 690 (3 x 230V) instead of 230, set the minimum to 4.1kW (6A on each phase), and use your charger's own maximum current.
 
 A charger with its own solar mode (Zappi Eco+, Hypervolt Super Eco, Ohme) does not need any of this - use the sensors to switch the charger into and out of that mode, and leave the current modulation to the charger.
 
