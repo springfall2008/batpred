@@ -249,6 +249,12 @@ class CTScenario:
     # to go into its battery, or is clipped - which is what a charge hold on that inverter can cost.
     pv_split: list = None
     ac_limit_w: float = 5000.0
+    # For mode "export": Predbat's planned export limit, packed as the plan stores it - 20.0 exports to 20% at full
+    # power, 20.5 to 20% at half power. Every 5 minutes, as the plan does, the executor's real
+    # allocate_fleet_export_rates() splits that power between the inverters by how much each still has to shed,
+    # and sets each one's own target; the 60s rebalance then balances on top of those claimed rates. None exports
+    # at whatever the registers allow with nothing claimed.
+    export_limit: float = None
 
     @property
     def direction(self):
@@ -277,6 +283,8 @@ class CTInverter:
         self.target = 0.0
         self.power = 0.0
         self.pv_w = 0.0
+        # A forced export stops at this SoC (kWh); 0 exports down to the reserve
+        self.export_target_kwh = 0.0
 
     def limits(self):
         """
@@ -292,7 +300,7 @@ class CTInverter:
         if mode == "charge":
             self.target = -charge_limit
         elif mode == "export":
-            self.target = discharge_limit
+            self.target = discharge_limit if self.sim.soc_kwh > self.export_target_kwh else 0.0
         else:
             dynamics = self.dynamics
             seen = ct_import * dynamics.ct_gain + dynamics.ct_offset_w
@@ -357,6 +365,9 @@ def run_ct_scenario(my_predbat, scenario):
             "inverter_rate_intent",
             "inverter_balance_overridden",
             "inverters",
+            "export_limits_best",
+            "set_export_window",
+            "set_export_low_power",
         )
     }
     flows = {"import_kwh": 0.0, "export_kwh": 0.0, "cross_kwh": 0.0, "battery_out_kwh": 0.0, "battery_in_kwh": 0.0, "clipped_kwh": 0.0}
@@ -387,6 +398,10 @@ def run_ct_scenario(my_predbat, scenario):
             my_predbat.set_read_only = False
             my_predbat.inverter_rate_intent = {index: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": owner} for index in range(count)}
             my_predbat.inverter_balance_overridden = {}
+            if scenario.export_limit is not None:
+                my_predbat.export_limits_best = [scenario.export_limit]
+                my_predbat.set_export_window = True
+                my_predbat.set_export_low_power = True
             with routed_to_sims(ha, sims, clock, scenario.rate_max):
                 for t in range(seconds):
                     ct_import = -grid
@@ -421,7 +436,27 @@ def run_ct_scenario(my_predbat, scenario):
                             ha.dummy_items["sensor.pv_power" + suffix] = round(loops[index].pv_w + (pv[t] * site_pv_share if index == 0 else 0.0), 1)
                             ha.dummy_items["number.reserve" + suffix] = sim.reserve_percent
                         my_predbat.fetch_inverter_data(quick=True)
-                        my_predbat.rebalance_inverter_rates()
+                        if scenario.export_limit is not None and t % 300 == 299:
+                            # The plan run: the executor's own split of the planned fleet export power, and each
+                            # inverter's own export target, stored as the intent the 60s rebalance balances on top of
+                            allocation = my_predbat.allocate_fleet_export_rates()
+                            target_percent = my_predbat.export_target_soc_percent()
+                            for index, inverter in enumerate(my_predbat.inverters):
+                                loops[index].export_target_kwh = my_predbat.adjust_battery_target_multi(inverter, target_percent, False, True, check=True) * inverter.soc_max / 100.0
+                                my_predbat.inverter_rate_intent[index] = {
+                                    "charge_rate": None,
+                                    "discharge_rate": allocation.get(index),
+                                    "pause_charge": False,
+                                    "pause_discharge": False,
+                                    "owner": "export",
+                                }
+                            # execute_plan's tail: balance a copy of the stored baseline and apply it, whether or
+                            # not balancing is on - the claimed rates reach the registers either way
+                            plan_intent = {index: dict(value) for index, value in my_predbat.inverter_rate_intent.items()}
+                            my_predbat.balance_inverter_rates(plan_intent)
+                            my_predbat.apply_rate_intent(plan_intent)
+                        else:
+                            my_predbat.rebalance_inverter_rates()
                         for index, sim in enumerate(sims):
                             is_held = any(sim.registers[kind] <= 0 for kind in RATE_KINDS)
                             held[index] += 1 if is_held else 0

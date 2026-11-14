@@ -176,6 +176,18 @@ def run_ct_tests(my_predbat):
         if default["cross_kwh"] > 0.02 or default["writes"] > 10:
             print("ERROR: {} inv default switches: {}kWh cross-charging and {} writes in an hour".format(count, default["cross_kwh"], default["writes"]))
             failed = True
+        # A forced export, at full power and at half power, where the executor's own allocate_fleet_export_rates()
+        # splits the planned power and sets each inverter's target so they finish together. Balancing must not
+        # change what is exported: holding an inverter would cut the fleet's export below what the plan costed.
+        for export_limit in (20.0, 20.5):
+            export_soc = [60, 40] if count == 2 else [60, 50, 40]
+            exported = {}
+            for balance in (False, True):
+                exported[balance] = run_ct_scenario(my_predbat, CTScenario(name="export", mode="export", soc=export_soc, house=busy_evening(), dynamics=disagreeing(count), balance=balance, export_limit=export_limit, minutes=90))
+            print("{} inv export limit {}: export {}kWh off, {}kWh balanced, writes {}".format(count, export_limit, exported[False]["export_kwh"], exported[True]["export_kwh"], exported[True]["writes"]))
+            if abs(exported[True]["export_kwh"] - exported[False]["export_kwh"]) > 0.02:
+                print("ERROR: {} inv export limit {}: balancing changed the export from {}kWh to {}kWh".format(count, export_limit, exported[False]["export_kwh"], exported[True]["export_kwh"]))
+                failed = True
         # The cross-charge hold is latched, so it is written once rather than taken and released every minute or two
         if on["writes"] > 40:
             print("ERROR: {} inv CT disagree: {} rate writes in an hour - the cross-charge hold is not latching".format(count, on["writes"]))
