@@ -20,7 +20,7 @@ dictionaries for use by the prediction engine.
 
 from datetime import datetime, timedelta
 from utils import clock_change_minutes, minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
-from utils import clean_battery_temperature_samples, merge_battery_temperature_samples, learn_battery_temperature_curve, overlay_battery_temperature_curve
+from battery_curve import clean_battery_temperature_samples, merge_battery_temperature_samples, learn_battery_temperature_curve, overlay_battery_temperature_curve
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,

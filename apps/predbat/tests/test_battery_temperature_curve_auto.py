@@ -17,7 +17,8 @@ from datetime import date, timedelta
 from tests.test_infra import TestHAInterface, MockStorageComponents, make_test_storage, run_async
 from predbat import PredBat
 from inverter import Inverter
-from utils import clean_battery_temperature_samples, merge_battery_temperature_samples, learn_battery_temperature_curve, overlay_battery_temperature_curve, find_battery_temperature_cap
+from battery_curve import clean_battery_temperature_samples, merge_battery_temperature_samples, learn_battery_temperature_curve, overlay_battery_temperature_curve
+from utils import find_battery_temperature_cap
 
 TEMP_SENSOR = "sensor.battery_temperature"
 HISTORY_DAYS = 3
