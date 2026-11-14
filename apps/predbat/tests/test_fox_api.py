@@ -7762,6 +7762,7 @@ def test_fox_build_discovery_describes_each_device(my_predbat):
     assert battery["ratings"]["export_limit"] == 12000.0, "the configured ExportLimit, in W"
     assert battery["capabilities"] == FOX_CAPABILITIES, battery["capabilities"]
     assert "flags" not in battery, "thirdPartyGen is not set on this device"
+    assert "hybrid" not in battery, "Fox's code classifies no deviceType as hybrid or AC coupled, so hybrid is unknown"
 
     # The station name is user-authored free text - get_device_list()'s own sample holds a street
     # address - so neither it nor the station and module identifiers may reach a public dump.

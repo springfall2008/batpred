@@ -226,6 +226,52 @@ def _solax_discovery_tests():
     assert not [line for line in logs if line.startswith("Warn")], logs
     print("✓ round trip keeps the plant id readable")
 
+    # test_solax_record_reports_hybrid_from_the_model_code
+    # Each inverter in the plant states its own model's verdict and the plant record combines them as the site rule
+    # does: any AC-coupled unit -> False, else any hybrid -> True, else absent. A PV-only or unnamed model says nothing.
+    second = DISCOVERY_INVERTER[:-1] + "9"
+    cases = [
+        ("X3-Hybrid-G4", [14], None, True),
+        ("X-Hybrid", [2], None, True),
+        ("X1-Hybrid-G3", [3], None, True),
+        ("X3-Hybrid-G1/G2", [5], None, True),
+        ("A1-Hybrid", [10], None, True),
+        ("X1-Hybrid-G4", [15], None, True),
+        ("A1-HYB-G2", [19], None, True),
+        ("X3-HYB-G4 PRO", [32], None, True),
+        ("A1-HYB-G3", [47], None, True),
+        ("X1-Hybrid-LV", [102], None, True),
+        ("X1-AC", [9], None, False),
+        ("A1-AC-G2", [20], None, False),
+        ("X3-ULT names no coupling", [25], None, "absent"),
+        ("X1-IES names no coupling", [23], None, "absent"),
+        ("no model code", [None], None, "absent"),
+        ("an unlisted code", [999], None, "absent"),
+        ("a commercial code is not the residential table", [14], 4, "absent"),
+        ("hybrid beside an AC-coupled unit", [14, 9], None, False),
+        ("AC-coupled unit listed first", [9, 14], None, False),
+        ("hybrid beside a PV-only string inverter", [4, 14], None, True),
+        ("hybrid beside a model that names no coupling", [14, 25], None, True),
+    ]
+    for label, codes, business_type, expected in cases:
+        api = _discovery_solax()
+        plant = DISCOVERY_PLANT
+        serials = [inverter, second][: len(codes)]
+        api.plant_inverters[plant] = list(serials)
+        for sn, code in zip(serials, codes):
+            device = dict(api.device_info[inverter], deviceSn=sn)
+            if code is None:
+                device.pop("deviceModel", None)
+            else:
+                device["deviceModel"] = code
+            if business_type is not None:
+                device["businessType"] = business_type
+            api.device_info[sn] = device
+        record = validated_inverters(api.build_discovery())[0]
+        actual = record.get("hybrid", "absent")
+        assert actual == expected and type(actual) is type(expected), "{}: expected hybrid {!r}, got {!r}".format(label, expected, actual)
+    print("✓ hybrid follows the model code table")
+
     # test_solax_catalogue_filed_when_automatic_config_raises
     api = _discovery_solax()
     filed = []

@@ -438,6 +438,8 @@ def test_growatt_discovery_matches_definition_and_automatic_config():
     records = validated_inverters(client.build_discovery())
     captured = capture_automatic_config(client)
     assert len(records) == 1
+    # Growatt's code reads no device type that tells an SPH (hybrid) from an SPA (AC coupled), so hybrid is unknown
+    assert "hybrid" not in records[0], records[0]
     assert_definition_complete(records[0], GrowattAPI.WRITE_AND_POLL_SLEEP)
     assert_record_agrees(records[0], captured)
     assert_record_binds_nothing_extra(records[0], captured)

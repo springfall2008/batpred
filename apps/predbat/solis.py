@@ -275,6 +275,11 @@ SOLIS_DETAIL_SUMMARY_PATTERN = re.compile(r"model|version|firmware|machine|^powe
 # <series>-GR<phases>P (S6-GR1P6K, S5-GR3P10K), against EH/EA/RHI/RAI for the hybrid and storage ranges
 SOLIS_GRID_TIED_MACHINE_PATTERN = re.compile(r"^S\d+-GR\dP", re.IGNORECASE)
 
+# inverterDetail `machine` of a hybrid (DC-coupled) inverter, for the discovery record's hybrid value: the EH range
+# (S5-EH1P6K-L, S6-EH3P10K-H) and RHI (RHI-6K-48ES-5G). EA (S6-EA1P5K-L) and RAI are the AC-coupled storage ranges,
+# so they do not match: a True there would turn inverter_hybrid on for an AC-coupled site
+SOLIS_HYBRID_MACHINE_PATTERN = re.compile(r"^(?:S\d+-EH\dP|RHI-)", re.IGNORECASE)
+
 def parse_cid_int(value, default=None):
     """Convert a CID register value to an int, returning default when it is missing or not numeric.
 
@@ -2787,6 +2792,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
         The TOU V2 register layout is reported as the flag "tou_v2" - how the inverter is driven,
         not something it can do.
 
+        hybrid is True when inverterDetail's machine names a hybrid range (SOLIS_HYBRID_MACHINE_PATTERN: EH, RHI)
+        and left out for every other name - the AC-coupled EA and RAI storage ranges, the grid-tied GR range and
+        a missing machine. productModel is not used: live details carry a numeric code there. The machine name is
+        static device info, so the value does not move between polls. The discovery coordinator sets
+        inverter_hybrid from it.
+
         Returns None when no inverter has been discovered yet.
         """
         if not self.inverter_sn:
@@ -2853,6 +2864,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     "solis:{}".format(sn),
                     inverter_type="SolisCloud" if drives_it else None,
                     composition="direct",
+                    hybrid=True if SOLIS_HYBRID_MACHINE_PATTERN.match(str(detail.get("machine") or "")) else None,
                     functions=(["solar", "battery"] if has_battery else ["solar"]) if detail else None,
                     capabilities=dict(SOLIS_CLOUD_CAPABILITIES) if drives_it else None,
                     flags=flags,
