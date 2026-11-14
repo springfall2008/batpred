@@ -386,6 +386,18 @@ class ComponentBase(ABC):
         if coordinator:
             coordinator.report(self.component_name or type(self).__name__, report)
 
+    def discovery_inverter_records(self, source):
+        """A copy of the validated inverter records source last reported to discovery, in report order (see Coordinator.inverter_records()).
+
+        [] when there is no coordinator - the standalone CLI harnesses, and test doubles built without
+        ComponentBase.__init__, which may have no base at all - as for report_discovery().
+        """
+        components = getattr(getattr(self, "base", None), "components", None)
+        coordinator = getattr(components, "coordinator", None) if components else None
+        if not coordinator:
+            return []
+        return coordinator.inverter_records(source)
+
     def allow_automatic_config(self, skip_settings=(), keep_user_settings=(), include_pv_only=False):
         """Ask the coordinator to configure this component's inverters; returns whether it will (see Coordinator.allow_automatic()).
 

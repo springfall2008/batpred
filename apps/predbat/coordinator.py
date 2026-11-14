@@ -14,6 +14,8 @@ The coordinator also configures the inverters of components that opt in (allow_a
 builds per-slot bindings from their reports and replays them into args. bindings.py makes every decision
 about slots and values; this module holds the state, the triggers and the orchestration. Until a component
 opts in nothing here writes to args - see docs/superpowers/specs/2026-11-14-discovery-automatic-inverter-config-design.md.
+The one site-wide setting it sets for every component whose report is automatic, opted in or not, is the
+inverter_hybrid switch (apply_hybrid()) - see docs/superpowers/specs/2026-11-14-discovery-site-settings-design.md.
 
 Safety comes from typed containers rather than from enumerating every field: a record is a
 few structural fields plus containers that each declare what they accept and what happens
@@ -21,6 +23,7 @@ to them when shared. A container taking only numbers cannot leak a name or a cre
 however the catalogue grows, so components add facts freely by choosing a container.
 """
 
+import asyncio
 import copy
 import re
 import threading
@@ -114,8 +117,11 @@ NOT_APPLICABLE_DEFAULTS = {
 
 ACCESS_VALUES = ("rw", "r")
 
+# Structural fields that must be a bool: anything else is dropped and logged rather than kept as a number or string
+BOOL_STRUCTURAL = {"inverters": ("hybrid",)}
+
 SECTION_SPEC = {
-    "inverters": {"structural": ("device_id", "inverter_type", "control", "composition", "measures_meter", "serials"), "sub_records": ()},
+    "inverters": {"structural": ("device_id", "inverter_type", "control", "composition", "measures_meter", "serials", "hybrid"), "sub_records": ()},
     "chargers": {"structural": ("device_id", "serves_cars"), "sub_records": ()},
     "cars": {"structural": ("device_id", "charged_by"), "sub_records": ()},
     "meters": {"structural": ("device_id", "direction"), "sub_records": ("tariff",)},
@@ -344,6 +350,8 @@ class Coordinator:
         # scanned in it, and its SUMMED_SETTINGS stand in for the snapshot's raw entries (see configure())
         self.args_baseline = None
         self.warned = set()
+        # The inverter_hybrid value apply_hybrid() last scheduled a write of, until the setting holds it (None: nothing pending)
+        self.hybrid_pending = None
         self.reports = {}
         # UTC ISO-8601 timestamp of the last report(), by component name - surfaced as
         # "reported_at" for a status "ok" component in _component_status(). Kept apart from
@@ -357,7 +365,7 @@ class Coordinator:
         self.assembled = None
 
     def report(self, component_name, report):
-        """Validate and store one component's discovery report, replacing any previous one."""
+        """Validate and store one component's discovery report, replacing any previous one; a changed report re-runs configure() (opted in) and apply_hybrid() (always)."""
         cleaned = validate_report(report, component_name, self.log)
         with self.lock:
             changed = self.reports.get(component_name) != cleaned
@@ -369,6 +377,9 @@ class Coordinator:
         # Outside lock: configure() takes configure_lock first and lock only briefly inside it
         if opted_in and changed:
             self.configure()
+        # Every changed report, opted in or not: the hybrid rule is site-wide and does not depend on slot configuration
+        if changed:
+            self.apply_hybrid()
 
     def _can_configure(self):
         """Whether the base has what a configure pass needs: the apps.yaml snapshot, args and set_arg. False on a thin base (the bare test doubles)."""
@@ -405,7 +416,7 @@ class Coordinator:
         args_from_apps_yaml is taken before Predbat resolves re: patterns.
 
         A failure is logged as a warning and the writes the pass had already made are undone, so args are as they
-        were before it; the bindings stay as the last good pass left them.
+        were before it; the bindings stay as the last good pass left them. Every pass ends with apply_hybrid().
         """
         with self.lock:
             opted_in = bool(self.automatic)
@@ -418,6 +429,114 @@ class Coordinator:
             except Exception as e:
                 self.log("Warn: Coordinator: automatic configuration failed: {}".format(e))
                 self._undo(before)
+        self.apply_hybrid()
+
+    def inverter_records(self, source):
+        """A deep copy of one source's validated inverter records, in report order; [] when it has not reported."""
+        with self.lock:
+            report = self.reports.get(source) or {}
+            return copy.deepcopy(report.get("inverters", []))
+
+    def hybrid_decision(self):
+        """The site's inverter_hybrid value from the stored reports, and the device_ids that decide it.
+
+        Only reports whose automatic is true count (a component the user has not asked to configure automatically
+        does not change Predbat's settings), and only their driven records (with an inverter_type; PV-only records do
+        not count). Any record saying hybrid False -> (False, those device_ids); otherwise any saying True -> (True,
+        those device_ids); otherwise (None, []), which leaves the switch alone. Reports are read in component-name
+        order, records in report order.
+        """
+        with self.lock:
+            reports = [self.reports[name] for name in sorted(self.reports)]
+        found = {False: [], True: []}
+        for report in reports:
+            if not report.get("automatic"):
+                continue
+            for record in report.get("inverters", []):
+                if not (isinstance(record.get("inverter_type"), str) and record["inverter_type"].strip()):
+                    continue
+                if isinstance(record.get("hybrid"), bool):
+                    found[record["hybrid"]].append(record["device_id"])
+        for value in (False, True):
+            if found[value]:
+                return value, found[value]
+        return None, []
+
+    def apply_hybrid(self):
+        """Set Predbat's inverter_hybrid switch from hybrid_decision() when it differs from the setting and from a write still pending. Never raises.
+
+        Does nothing on a thin base (no ha_interface, get_arg or prefix). The write goes through
+        ha_interface.set_state_external() - the path a component uses, which changes the setting the planner reads -
+        and is scheduled, never awaited here (see _schedule_hybrid_write()). The value is held as pending from then
+        until the setting equals it, so a second changed report before the write lands does not send it again.
+        """
+        base = self.base
+        ha_interface = getattr(base, "ha_interface", None)
+        prefix = getattr(base, "prefix", None)
+        if ha_interface is None or not callable(getattr(ha_interface, "set_state_external", None)) or not callable(getattr(base, "get_arg", None)) or not prefix:
+            return
+        try:
+            value, device_ids = self.hybrid_decision()
+            current = base.get_arg("inverter_hybrid", True)
+            with self.lock:
+                if self.hybrid_pending is not None and current == self.hybrid_pending:
+                    self.hybrid_pending = None
+                if value is None or value == current or value == self.hybrid_pending:
+                    return
+                self.hybrid_pending = value
+            if value:
+                reason = "{} reports it is a hybrid inverter" if len(device_ids) == 1 else "{} report they are hybrid inverters"
+            else:
+                reason = "{} reports it is not a hybrid inverter" if len(device_ids) == 1 else "{} report they are not hybrid inverters"
+            self.log("Coordinator: inverter_hybrid set {} - {}".format("on" if value else "off", reason.format(", ".join(device_ids))))
+            self._schedule_hybrid_write("switch.{}_inverter_hybrid".format(prefix), value)
+        except Exception as e:
+            self._hybrid_write_failed(e)
+
+    def _hybrid_write_failed(self, error):
+        """Log a failed inverter_hybrid write and drop the pending value, so a later changed report tries again."""
+        with self.lock:
+            self.hybrid_pending = None
+        self.log("Warn: Coordinator: could not set inverter_hybrid: {}".format(error))
+
+    def _schedule_hybrid_write(self, entity_id, value):
+        """Run set_state_external(entity_id, value) without awaiting it here.
+
+        The coordinator runs on whichever thread reported: a component's, inside that component's running event loop,
+        or the main thread, inside Predbat's loop - which sleeps between timer ticks and so cannot be relied on to run
+        a task handed to it. With a loop running in this thread the write therefore goes to a thread of its own:
+        base.create_task() (hass.py: a new thread running the coroutine to completion with its own loop, as every
+        component is started), or a plain thread on a base without one (the command-line harness). With no loop running
+        in this thread (the harness, the unit tests) it runs to completion here on a private loop, which leaves the
+        thread's own event loop setting alone.
+        """
+
+        async def write():
+            """The write, its failure logged rather than raised."""
+            try:
+                await self.base.ha_interface.set_state_external(entity_id, value)
+            except Exception as e:
+                self._hybrid_write_failed(e)
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(write())
+            finally:
+                loop.close()
+            return
+        coro = write()
+        try:
+            create_task = getattr(self.base, "create_task", None)
+            if callable(create_task):
+                create_task(coro, name="coordinator_inverter_hybrid")
+            else:
+                threading.Thread(target=asyncio.run, args=(coro,), name="coordinator_inverter_hybrid").start()
+        except Exception:
+            coro.close()
+            raise
 
     def _configure_pass(self, before):
         """The body of configure(): build, replay, then log and check what changed. `before` collects each written setting's prior value."""
@@ -798,6 +917,12 @@ def _validate_record(record, section, component_name, log):
         if field not in record or record[field] is None:
             continue
         value = record[field]
+        if field in BOOL_STRUCTURAL.get(section, ()):
+            if isinstance(value, bool):
+                out[field] = value
+            else:
+                log("Warn: Coordinator: {} {} {} is not a bool - dropped".format(component_name, section, field))
+            continue
         if isinstance(value, list):
             out[field] = [entry for entry in value if isinstance(entry, str) and len(entry) <= MAX_STRING]
         elif isinstance(value, bool) or isinstance(value, (int, float)):
@@ -847,6 +972,7 @@ def inverter_record(
     composition=None,
     measures_meter=None,
     serials=None,
+    hybrid=None,
     functions=None,
     capabilities=None,
     flags=None,
@@ -887,6 +1013,9 @@ def inverter_record(
     reason, sorted by string form so that a set mixing types cannot raise and withhold the whole
     report, and sorted because string hashing is randomised per process, so list(some_set) comes
     out in a different order after a restart and two dumps of the same hardware would diff for nothing.
+
+    hybrid is True when the inverter is a hybrid (PV on its own DC inputs), False when it is not (AC coupled, or a
+    battery-only unit) and None, left out, when the component cannot tell. False is a fact and is kept.
     """
     return _record(
         device_id,
@@ -896,6 +1025,7 @@ def inverter_record(
             "composition": composition,
             "measures_meter": measures_meter,
             "serials": serials,
+            "hybrid": hybrid,
             "functions": functions,
             "capabilities": capabilities,
             "flags": flags,

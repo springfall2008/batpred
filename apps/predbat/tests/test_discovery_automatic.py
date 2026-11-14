@@ -6,6 +6,7 @@ The coordinator is real; the base and the component registry are small stubs, so
 seen through the recorded set_arg calls.
 """
 
+import asyncio
 import copy
 import os
 import subprocess
@@ -666,6 +667,288 @@ def test_allow_automatic_config_wrapper():
 
 
 # ---------------------------------------------------------------------------------------------
+# The hybrid site rule: inverter_hybrid from every automatic report's driven records
+# ---------------------------------------------------------------------------------------------
+
+HYBRID_ENTITY = "switch.predbat_inverter_hybrid"
+
+
+class _HAInterface:
+    """Stand-in for Predbat's HA interface: records each set_state_external call and, unless told not to, applies it to args."""
+
+    def __init__(self, base, apply=True, fail=None):
+        """Bind to base; apply says whether a write changes args["inverter_hybrid"], fail is an exception to raise instead."""
+        self.base = base
+        self.apply = apply
+        self.fail = fail
+        self.calls = []
+
+    async def set_state_external(self, entity_id, state, attributes=None):
+        """Record the write, then raise or apply it as configured."""
+        self.calls.append((entity_id, state))
+        if self.fail is not None:
+            raise self.fail
+        if self.apply:
+            self.base.args["inverter_hybrid"] = state
+
+
+def _hybrid_setup(current=True, apply=True, fail=None):
+    """(base, coordinator, ha) with inverter_hybrid starting at current and the recording HA interface on base."""
+    base, registry, coordinator = _setup(args={"inverter_hybrid": current})
+    ha = _HAInterface(base, apply=apply, fail=fail)
+    base.ha_interface = ha
+    return base, coordinator, ha
+
+
+def _hybrid_report(records, automatic=True):
+    """A report of (device_id, hybrid, inverter_type) records; hybrid None leaves the field out, inverter_type None makes a PV-only record."""
+    inverters = []
+    for device_id, hybrid, inverter_type in records:
+        record = {"device_id": device_id, "entities": _entities(device_id.split(":")[-1])}
+        if inverter_type:
+            record["inverter_type"] = inverter_type
+        if hybrid is not None:
+            record["hybrid"] = hybrid
+        inverters.append(record)
+    return {"automatic": automatic, "inverters": inverters}
+
+
+def _hybrid_lines(base):
+    """The coordinator's inverter_hybrid log lines."""
+    return [line for line in base.log_messages if "inverter_hybrid" in line]
+
+
+def test_hybrid_one_false_turns_off():
+    """One automatic driven record saying not hybrid turns inverter_hybrid off, even beside a hybrid one; opted in, configure() does not write it twice."""
+    base, coordinator, ha = _hybrid_setup(current=True)
+    coordinator.allow_automatic("gecloud")
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", True, "GEC")]))
+    assert ha.calls == [], ha.calls  # all known records are hybrid and the switch is already on
+    coordinator.report("alphaess", _hybrid_report([("alphaess:b", False, "AlphaESS")]))
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    assert coordinator.hybrid_decision() == (False, ["alphaess:b"]), coordinator.hybrid_decision()
+    coordinator.configure()
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    print("PASS: hybrid one false turns off")
+    return 0
+
+
+def test_hybrid_all_true_turns_on():
+    """Every known driven record hybrid, the switch off: one write turning it on."""
+    base, coordinator, ha = _hybrid_setup(current=False)
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", True, "GEC"), ("gecloud:b", True, "GEC")]))
+    assert ha.calls == [(HYBRID_ENTITY, True)], ha.calls
+    assert base.args["inverter_hybrid"] is True
+    print("PASS: hybrid all true turns on")
+    return 0
+
+
+def test_hybrid_nothing_known_untouched():
+    """Records that do not say: the switch is left alone, either way round."""
+    for current in (True, False):
+        base, coordinator, ha = _hybrid_setup(current=current)
+        coordinator.report("gecloud", _hybrid_report([("gecloud:a", None, "GEC"), ("gecloud:b", None, "GEC")]))
+        assert ha.calls == [], ha.calls
+        assert coordinator.hybrid_decision() == (None, []), coordinator.hybrid_decision()
+        assert _hybrid_lines(base) == [], base.log_messages
+    print("PASS: hybrid nothing known untouched")
+    return 0
+
+
+def test_hybrid_ignores_pv_only():
+    """A PV-only record (no inverter_type) does not count: alone it decides nothing, beside a hybrid driven record it does not turn the switch off."""
+    base, coordinator, ha = _hybrid_setup(current=False)
+    coordinator.report("gecloud", _hybrid_report([("gecloud:pv", False, None)]))
+    assert ha.calls == [], ha.calls
+    coordinator.report("gecloud", _hybrid_report([("gecloud:pv", False, None), ("gecloud:a", True, "GEC")]))
+    assert ha.calls == [(HYBRID_ENTITY, True)], ha.calls
+    print("PASS: hybrid ignores pv only")
+    return 0
+
+
+def test_hybrid_ignores_non_automatic_report():
+    """A report with automatic false, or with no automatic at all, does not change Predbat's settings."""
+    base, coordinator, ha = _hybrid_setup(current=True)
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")], automatic=False))
+    assert ha.calls == [], ha.calls
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:b", "inverter_type": "GE", "hybrid": False}]})
+    assert ha.calls == [], ha.calls
+    assert coordinator.hybrid_decision() == (None, []), coordinator.hybrid_decision()
+    print("PASS: hybrid ignores non automatic report")
+    return 0
+
+
+def test_hybrid_no_write_when_unchanged():
+    """The decision already matches the switch: nothing is written or logged."""
+    for value in (True, False):
+        base, coordinator, ha = _hybrid_setup(current=value)
+        coordinator.report("gecloud", _hybrid_report([("gecloud:a", value, "GEC")]))
+        assert ha.calls == [], ha.calls
+        assert _hybrid_lines(base) == [], base.log_messages
+    print("PASS: hybrid no write when unchanged")
+    return 0
+
+
+def test_hybrid_write_not_repeated_while_pending():
+    """A write not yet applied is not sent again; once applied the pending value clears, and a later user change is corrected again."""
+    base, coordinator, ha = _hybrid_setup(current=True, apply=False)
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
+    coordinator.report("alphaess", _hybrid_report([("alphaess:b", False, "AlphaESS")]))
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    assert coordinator.hybrid_pending is False
+    # The setting now holds the value: the next changed report clears the pending value and writes nothing
+    base.args["inverter_hybrid"] = False
+    coordinator.report("alphaess", _hybrid_report([("alphaess:b", False, "AlphaESS"), ("alphaess:c", None, "AlphaESS")]))
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    assert coordinator.hybrid_pending is None
+    # The user turns it back on: the next changed report turns it off again
+    base.args["inverter_hybrid"] = True
+    coordinator.report("alphaess", _hybrid_report([("alphaess:b", False, "AlphaESS")]))
+    assert ha.calls == [(HYBRID_ENTITY, False), (HYBRID_ENTITY, False)], ha.calls
+    print("PASS: hybrid write not repeated while pending")
+    return 0
+
+
+def test_hybrid_runs_without_opt_in():
+    """A component that never called allow_automatic() still drives the rule, and an unchanged report does not re-run it."""
+    base, coordinator, ha = _hybrid_setup(current=True)
+    assert coordinator.automatic == {}
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    assert base.set_calls == [], base.set_calls  # no slot configuration ran
+    base.args["inverter_hybrid"] = True
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))  # unchanged
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    print("PASS: hybrid runs without opt in")
+    return 0
+
+
+def test_hybrid_never_raises():
+    """The HA write raising: no exception, one Warn line, and the pending value clears so a later changed report tries again."""
+    base, coordinator, ha = _hybrid_setup(current=True, fail=RuntimeError("boom"))
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    warnings = [line for line in base.log_messages if line.startswith("Warn:")]
+    assert warnings == ["Warn: Coordinator: could not set inverter_hybrid: boom"], base.log_messages
+    assert coordinator.hybrid_pending is None
+    assert not [line for line in base.log_messages if line.startswith("Error:")], base.log_messages
+    # Scheduling itself failing is caught the same way
+    base, coordinator, ha = _hybrid_setup(current=True)
+    base.prefix = None
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
+    assert ha.calls == [], ha.calls  # no prefix: a thin base, nothing to do
+    base.prefix = "predbat"
+
+    def broken_get_arg(name, default=None, **kwargs):
+        """A get_arg that fails."""
+        raise ValueError("no args")
+
+    base.get_arg = broken_get_arg
+    coordinator.report("gecloud", _hybrid_report([("gecloud:b", False, "GEC")]))
+    assert ha.calls == [], ha.calls
+    assert [line for line in base.log_messages if line.startswith("Warn:")] == ["Warn: Coordinator: could not set inverter_hybrid: no args"], base.log_messages
+    print("PASS: hybrid never raises")
+    return 0
+
+
+def test_hybrid_log_line():
+    """The exact line naming the deciding records, for off and for on."""
+    base, coordinator, ha = _hybrid_setup(current=True)
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC"), ("gecloud:b", True, "GEC")]))
+    assert _hybrid_lines(base) == ["Coordinator: inverter_hybrid set off - gecloud:a reports it is not a hybrid inverter"], base.log_messages
+    base, coordinator, ha = _hybrid_setup(current=False)
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", True, "GEC"), ("gecloud:b", True, "GEC")]))
+    assert _hybrid_lines(base) == ["Coordinator: inverter_hybrid set on - gecloud:a, gecloud:b report they are hybrid inverters"], base.log_messages
+    base, coordinator, ha = _hybrid_setup(current=False)
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", True, "GEC")]))
+    assert _hybrid_lines(base) == ["Coordinator: inverter_hybrid set on - gecloud:a reports it is a hybrid inverter"], base.log_messages
+    base, coordinator, ha = _hybrid_setup(current=True)
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC"), ("gecloud:b", False, "GEC")]))
+    assert _hybrid_lines(base) == ["Coordinator: inverter_hybrid set off - gecloud:a, gecloud:b report they are not hybrid inverters"], base.log_messages
+    print("PASS: hybrid log line")
+    return 0
+
+
+def test_hybrid_thin_base_inert():
+    """No ha_interface, get_arg or prefix: the rule does nothing and logs nothing."""
+    base = _Bare()
+    coordinator = Coordinator(base)
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
+    coordinator.apply_hybrid()
+    assert not [line for line in base.messages if "inverter_hybrid" in line], base.messages
+    base, registry, coordinator = _setup(args={"inverter_hybrid": True})  # get_arg and prefix but no ha_interface
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
+    assert _hybrid_lines(base) == [] and coordinator.hybrid_pending is None, base.log_messages
+    print("PASS: hybrid thin base inert")
+    return 0
+
+
+def test_hybrid_scheduled_from_a_running_loop():
+    """Called inside a running event loop (a component's thread) the write is handed to base.create_task, or to a thread of its own without one - never awaited inline."""
+    base, coordinator, ha = _hybrid_setup(current=True)
+    threads = []
+
+    def create_task(coro, name="TaskCreate"):
+        """hass.Hass.create_task: run the coroutine to completion on a new thread."""
+        thread = threading.Thread(target=lambda: asyncio.run(coro), name=name)
+        thread.start()
+        threads.append(thread)
+        return thread
+
+    base.create_task = create_task
+
+    async def component_run(report):
+        """A component's run(), filing its report from inside its loop."""
+        coordinator.report("gecloud", report)
+        return asyncio.get_running_loop()
+
+    run_async(component_run(_hybrid_report([("gecloud:a", False, "GEC")])))
+    for thread in threads:
+        thread.join(5)
+    assert len(threads) == 1, threads
+    assert ha.calls == [(HYBRID_ENTITY, False)], ha.calls
+    assert base.args["inverter_hybrid"] is False
+    # No create_task on the base (the command-line harness): the coordinator runs the write on its own thread
+    del base.create_task
+    before = set(threading.enumerate())
+    run_async(component_run(_hybrid_report([("gecloud:a", True, "GEC")])))
+    for thread in set(threading.enumerate()) - before:
+        thread.join(5)
+    assert ha.calls == [(HYBRID_ENTITY, False), (HYBRID_ENTITY, True)], ha.calls
+    assert base.args["inverter_hybrid"] is True
+    print("PASS: hybrid scheduled from a running loop")
+    return 0
+
+
+def test_inverter_records_copy():
+    """Coordinator.inverter_records() is a deep copy of one source's validated records; ComponentBase.discovery_inverter_records() wraps it, [] without a coordinator."""
+    from component_base import ComponentBase
+
+    class _Component(ComponentBase):
+        """A concrete ComponentBase, built without __init__ as the component test mocks are."""
+
+        def initialize(self, **kwargs):
+            """Nothing to set up."""
+
+    base, registry, coordinator = _setup()
+    assert coordinator.inverter_records("gecloud") == []
+    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC"), ("gecloud:b", None, "GEC")]))
+    records = coordinator.inverter_records("gecloud")
+    assert [record["device_id"] for record in records] == ["gecloud:a", "gecloud:b"], records
+    assert records[0]["hybrid"] is False and "hybrid" not in records[1]
+    records[0]["entities"]["reserve"]["entity_id"] = "changed"
+    assert coordinator.reports["gecloud"]["inverters"][0]["entities"]["reserve"]["entity_id"] != "changed"
+    component = _Component.__new__(_Component)
+    assert component.discovery_inverter_records("gecloud") == []  # no base at all
+    component.base = _Bare()
+    assert component.discovery_inverter_records("gecloud") == []  # no registry
+    component.base = base
+    assert [record["device_id"] for record in component.discovery_inverter_records("gecloud")] == ["gecloud:a", "gecloud:b"]
+    print("PASS: inverter records copy")
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
 # Acceptance: GE Cloud's previous automatic configuration against discovery's, from the same args
 # ---------------------------------------------------------------------------------------------
 
@@ -1242,6 +1525,20 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_assemble_slots_follow_bindings()
     failures += test_bare_base_is_inert()
     failures += test_allow_automatic_config_wrapper()
+    # The hybrid site rule
+    failures += test_hybrid_one_false_turns_off()
+    failures += test_hybrid_all_true_turns_on()
+    failures += test_hybrid_nothing_known_untouched()
+    failures += test_hybrid_ignores_pv_only()
+    failures += test_hybrid_ignores_non_automatic_report()
+    failures += test_hybrid_no_write_when_unchanged()
+    failures += test_hybrid_write_not_repeated_while_pending()
+    failures += test_hybrid_runs_without_opt_in()
+    failures += test_hybrid_never_raises()
+    failures += test_hybrid_log_line()
+    failures += test_hybrid_thin_base_inert()
+    failures += test_hybrid_scheduled_from_a_running_loop()
+    failures += test_inverter_records_copy()
     # Acceptance: discovery against the old automatic configuration
     failures += test_accept_single()
     failures += test_accept_two_inverters()

@@ -135,7 +135,7 @@ it configures their inverters from their inverter records. Only **GE Cloud** (`g
 does so far, and it no longer writes any inverter setting itself. Every other component with an
 automatic option still configures itself as before, and running one of them alongside GE Cloud is not
 supported - Predbat now always logs a warning naming both when they run together. Until a component hands its configuration over, nothing
-here runs.
+here runs, except the site-wide `inverter_hybrid` rule (see [The hybrid setting](#the-hybrid-setting)).
 
 ### Slots
 
@@ -255,6 +255,29 @@ observations:
       extras: {}                # summed-setting entries that belong to no slot
 ```
 
+### The hybrid setting
+
+Predbat's `inverter_hybrid` switch says whether your inverters are hybrids (PV on the inverter's own DC
+inputs) rather than AC coupled. Discovery sets it from the inverter records' `hybrid` field, counting
+only components whose automatic configuration is on (their report carries `automatic: true`) and only
+the inverters they drive (records with an `inverter_type`; PV-only devices do not count):
+
+- any inverter reported as not hybrid (`hybrid: false`) turns the switch **off**;
+- otherwise, any inverter reported as hybrid (`hybrid: true`) turns it **on**;
+- otherwise, when no inverter says either way, the switch is left as it is.
+
+The rule runs whenever a component's report changes, whether or not that component hands its slots to
+discovery, and it writes only when the switch differs from its result. A change is logged once, naming
+the inverters that decided it:
+
+```text
+Coordinator: inverter_hybrid set off - gecloud:fd2445g166 reports it is not a hybrid inverter
+```
+
+If you turn the switch back yourself, the next change in a report sets it again. A write that fails is
+logged as `Warn: Coordinator: could not set inverter_hybrid: <reason>` and tried again on the next
+change.
+
 ### Checking it against the old configuration
 
 After a pass that changed one of its slots, GE Cloud compares what discovery wrote with what its old
@@ -349,7 +372,13 @@ has a reserve, a target SoC, charge/discharge enable switches, idle times or a t
 from which settings `entities` binds to a writable (`rw`) entity; and protocol detail such as the time
 format or whether the charge rate is set in watts or amps is read from those entities' descriptors.
 A setting Predbat replaces with a placeholder for this inverter type - the Solis Modbus (`GS`) type's
-`reserve`, say - is left out of `entities`. See the design in
+`reserve`, say - is left out of `entities`.
+
+The structural field `hybrid` says whether the inverter is a hybrid: `true` (PV on its own DC inputs),
+`false` (AC coupled, or a battery-only unit), or left out when the component cannot tell. It must be a
+bool - anything else is dropped with a warning - and `false` is a fact, kept like any other value. It
+feeds the `inverter_hybrid` rule (see [The hybrid setting](#the-hybrid-setting)); pass it to
+`inverter_record(..., hybrid=...)`. See the design in
 `docs/superpowers/specs/2026-09-24-discovery-inverter-record-vocabulary-design.md`.
 
 ### Writing a reporter
