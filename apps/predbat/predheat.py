@@ -548,11 +548,7 @@ class PredHeat:
         # Scheduled mode transitions require a known initial HVAC mode.
         # A temperature-only schedule also honours the current 'off' state,
         # but retains legacy behaviour if the climate state is unavailable.
-        has_mode_nodes = bool(mode_events) or any(
-            isinstance(node, dict) and node.get("hvac_mode") in ("heat", "off")
-            for nodes in schedules.values() if isinstance(nodes, list)
-            for node in nodes
-        )
+        has_mode_nodes = bool(mode_events) or any(isinstance(node, dict) and node.get("hvac_mode") in ("heat", "off") for nodes in schedules.values() if isinstance(nodes, list) for node in nodes)
         try:
             current_mode = self.get_state(entity_id=entity_id, default=None)
         except Exception as exc:
