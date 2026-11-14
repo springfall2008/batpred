@@ -1939,12 +1939,11 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         The previous automatic configuration, kept only so check_automatic_config() can compare against it; to
         be removed once discovery is trusted. async_automatic_config() still reads facts for its log lines.
         bound is _legacy_bindings(), in the order the old code first wrote each setting. facts holds
-        batteries_real, batteries and num_inverters (the logical inverters), features (the fleet-wide register
+        batteries and num_inverters (the logical inverters), features (the fleet-wide register
         sniff the "detected features" line logs) and shared_ct: None unless several inverters and no EMS, else
         (shared, reason) for the CT clamp line. Reads settings, info, devices and config; writes nothing.
         """
         bound = {}
-        batteries_real = devices["battery"]
         pvs = devices.get("pv", [])
         # Only use the gateway as main control if we have multiple batteries
         batteries, num_inverters = self.logical_inverters(devices)
@@ -2153,7 +2152,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             "discharge_target_soc": has_discharge_target_soc,
             "force_charge": has_force_charge,
         }
-        facts = {"batteries_real": batteries_real, "batteries": batteries, "num_inverters": num_inverters, "features": features, "shared_ct": shared_ct}
+        facts = {"batteries": batteries, "num_inverters": num_inverters, "features": features, "shared_ct": shared_ct}
         return bound, facts
 
     def check_automatic_config(self, slots):
@@ -2512,7 +2511,12 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         gateway's own model says nothing about them. False when any is not hybrid, True when every one whose model is
         known is hybrid, None (the record leaves hybrid out) when no model is known.
         """
-        known = [value for value in (givenergy_model_is_hybrid(((self.info.get(serial, {}) or {}).get("info", {}) or {}).get("model")) for serial in serials) if value is not None]
+        known = []
+        for serial in serials:
+            fields = (self.info.get(serial, {}) or {}).get("info", {}) or {}
+            hybrid = givenergy_model_is_hybrid(fields.get("model"))
+            if hybrid is not None:
+                known.append(hybrid)
         return all(known) if known else None
 
     def build_discovery(self):

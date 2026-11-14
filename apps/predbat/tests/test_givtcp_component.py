@@ -2648,6 +2648,8 @@ def test_build_discovery_reports_hybrid_from_the_inverter_type(my_predbat=None):
         ("Ac", None, False),
         ("AC", "2", False),
         ("All-in-One", None, False),
+        # A gateway endpoint in front of AIOs: its own type says nothing about them
+        ("Gateway", "2", "absent"),
         (None, "2", "absent"),
         ("", "2", "absent"),
     ]

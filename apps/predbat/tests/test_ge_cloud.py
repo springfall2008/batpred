@@ -8773,6 +8773,13 @@ def _test_givenergy_model_is_hybrid(my_predbat):
         ("All in One", False),
         ("all_in_one", False),
         ("AllInOne", False),
+        # A coordinator's own model says nothing about the inverters it fronts: unknown
+        ("Gateway", None),
+        ("GIV-GATEWAY", None),
+        ("Plant EMS", None),
+        ("EMS", None),
+        # "ems" only as a whole word
+        ("Home Systems Hybrid", True),
         ("", None),
         (None, None),
         (5, None),
