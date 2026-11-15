@@ -4066,11 +4066,24 @@ chart.render();
         configured = int_keys(getattr(self.base, "battery_temperature_charge_curve_configured", {}))
         learned = int_keys(getattr(self.base, "battery_temperature_curve_learned", {})) if getattr(self.base, "battery_temperature_charge_curve_auto", False) else {}
         discharge = int_keys(getattr(self.base, "battery_temperature_discharge_curve", {}))
+        rate_max_charge = float(getattr(self.base, "battery_rate_max_charge", 0) or 0) * 60.0
+        rate_max_discharge = float(getattr(self.base, "battery_rate_max_discharge", 0) or 0) * 60.0
+
+        def cap_points(curve, rate_max):
+            """The cap at each degree as the plan applies it: never above the maximum rate, so an uncapped degree shows the rate the battery is planned at, not 1 C."""
+            points = []
+            for t in temperatures:
+                value = find_battery_temperature_cap(t, curve, 60.0, 1e9) * scale
+                if soc_max > 0 and rate_max > 0:
+                    value = min(value, rate_max)
+                points.append({"x": t, "y": round(value, 3)})
+            return points
+
         temperature_series = []
         if in_use:
-            temperature_series.append({"name": "Charge cap in use", "data": [{"x": t, "y": round(find_battery_temperature_cap(t, in_use, 60.0, 1e9) * scale, 3)} for t in temperatures], "color": "#15eb8b", "stroke_width": 3})
+            temperature_series.append({"name": "Charge cap in use", "data": cap_points(in_use, rate_max_charge), "color": "#15eb8b", "stroke_width": 3})
         if configured and configured != in_use:
-            temperature_series.append({"name": "Charge cap configured", "data": [{"x": t, "y": round(find_battery_temperature_cap(t, configured, 60.0, 1e9) * scale, 3)} for t in temperatures], "color": "#9b59b6", "stroke_width": 2, "dash": 6})
+            temperature_series.append({"name": "Charge cap configured", "data": cap_points(configured, rate_max_charge), "color": "#9b59b6", "stroke_width": 2, "dash": 6})
         if learned:
             temperature_series.append({"name": "Learned", "data": [{"x": t, "y": round(learned[t] * scale, 3)} for t in sorted(learned)], "color": "#eb2323", "stroke_width": 0, "markers": 5})
         temperature_evidence = evidence_series(
@@ -4083,8 +4096,7 @@ chart.render();
         )
         temperature_series += temperature_evidence
         if discharge:
-            temperature_series.append({"name": "Discharge cap configured", "data": [{"x": t, "y": round(find_battery_temperature_cap(t, discharge, 60.0, 1e9) * scale, 3)} for t in temperatures], "color": "#f5a442", "stroke_width": 2})
-        rate_max_charge = float(getattr(self.base, "battery_rate_max_charge", 0) or 0) * 60.0
+            temperature_series.append({"name": "Discharge cap configured", "data": cap_points(discharge, rate_max_discharge), "color": "#f5a442", "stroke_width": 2})
         if temperature_series and soc_max > 0 and rate_max_charge > 0:
             temperature_series.append({"name": "Maximum charge rate", "data": [{"x": temperatures[0], "y": round(rate_max_charge, 3)}, {"x": temperatures[-1], "y": round(rate_max_charge, 3)}], "color": "#777777", "stroke_width": 2, "dash": 4})
         if temperature_series:

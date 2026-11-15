@@ -115,8 +115,9 @@ def run_web_curves_chart_tests(my_predbat):
         if options:
             series = {entry["name"]: entry["data"] for entry in options["series"]}
             in_use = {point["x"]: point["y"] for point in series.get("Charge cap in use", [])}
-            # 0.05 C of 10 kWh is 0.5 kW; -5 falls back to the 0 entry, while 8 falls back to the unset 20 entry, so is uncapped (1.0 C = 10 kW)
-            failed |= _check("t3 in use", in_use.get(0) == 0.5 and in_use.get(5) == 1.0 and in_use.get(12) == 3.0 and in_use.get(8) == 10.0 and in_use.get(-5) == 0.5, in_use)
+            # 0.05 C of 10 kWh is 0.5 kW; -5 falls back to the 0 entry, while 8 falls back to the unset 20 entry, so is uncapped
+            # and shown at the 5 kW maximum charge rate the plan uses there, not 1 C (10 kW)
+            failed |= _check("t3 in use", in_use.get(0) == 0.5 and in_use.get(5) == 1.0 and in_use.get(12) == 3.0 and in_use.get(8) == 5.0 and in_use.get(-5) == 0.5, in_use)
             failed |= _check("t3 learned points", series.get("Learned") == [{"x": 5, "y": 1.0}, {"x": 12, "y": 3.0}], series.get("Learned"))
             failed |= _check("t3 configured differs so shown", "Charge cap configured" in series, list(series))
             failed |= _check("t3 max rate", series.get("Maximum charge rate", [{}])[0].get("y") == 5.0, series.get("Maximum charge rate"))
