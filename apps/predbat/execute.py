@@ -1027,6 +1027,15 @@ class Execute:
                             if not isCharging and self.is_freeze_charge(self.charge_limit_best[0]):
                                 self.log("Charge window will be disabled as freeze charging is planned")
                                 inverter.disable_charge_window()
+                            elif not isCharging and self.set_charge_low_power:
+                                # Low power works out its rate only once the window is running, and until then
+                                # the rate sits at the inverter's maximum (nothing claims it outside a window).
+                                # A window armed now would open at full power and charge that way until the
+                                # first cycle inside it wrote the lower rate - about a minute at 10 kW on a
+                                # Hanchu (#6190). Like freeze charging, it is armed on that first cycle instead,
+                                # the one that also works out the rate, so the rate is set before charging is.
+                                self.log("Inverter {} charge window will be armed when it starts, as low power charging works out its rate then".format(inverter.id))
+                                inverter.disable_charge_window()
                             else:
                                 self.log(
                                     "Inverter {} configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start))

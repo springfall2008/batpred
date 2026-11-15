@@ -540,6 +540,8 @@ lowest possible rate to meet the charge target. This is only really effective fo
 If this setting is turned on, it is strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#battery-chargedischarge-curves)
 as otherwise the low power charge may not reach the charge target in time.
 The minimum requested charge rate used in this mode is 400 watts (subject to inverter/battery minimum rate limits).
+With low-power charging on, a charge window is not set on the inverter in advance: it is set on Predbat's first run inside the window, the same run that works out the charge rate,
+so charging starts at the low-power rate rather than at full power, a few seconds after the window opens (longer on slow hardware).
 This setting is off by default.
 
 Low-power charging is skipped for any charge window whose forecast solar production averages above **input_number.predbat_low_power_pv_threshold_w**,

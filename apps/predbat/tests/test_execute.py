@@ -4203,6 +4203,23 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Low power works out its rate only once the window runs, and until then the rate is the
+    # inverter's maximum, so a window armed early would open at full power (#6190). Like freeze
+    # charging it is left off until it starts; inside it, charge_low_power1/2a arm it with the rate.
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_later_low_power",
+        charge_window_best=charge_window_best2,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        assert_status="Demand",
+    )
+    if failed:
+        return failed
+
     failed |= run_execute_test(
         my_predbat,
         "charge_later_hybrid",
