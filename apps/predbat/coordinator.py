@@ -26,6 +26,7 @@ however the catalogue grows, so components add facts freely by choosing a contai
 import asyncio
 import copy
 import re
+import string
 import threading
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -50,8 +51,51 @@ def _unresolved(value):
     return isinstance(value, str) and value.startswith("re:")
 
 
-def capture_baseline(args):
-    """A deep copy of args' BASELINE_SETTINGS, an unresolved re: pattern counting as unset.
+def _template_fields(value):
+    """The arg names a {name} template string refers to, or None when value is not a template format() can parse."""
+    if not isinstance(value, str) or "{" not in value:
+        return None
+    try:
+        fields = [field for _, field, _, _ in string.Formatter().parse(value) if field is not None]
+    except ValueError:
+        return None
+    return [re.split(r"[.\[]", field, maxsplit=1)[0] for field in fields]
+
+
+def expand_template(raw, resolved, args):
+    """
+    One args entry with its {name} template expanded: `resolved` (the entry as get_arg reads it) when raw is a template, otherwise raw.
+
+    Only a template is replaced, so an entry with no template is copied exactly as args hold it. A template stays as raw when
+    it did not expand to a string (get_arg gives the default for an unknown name), or when it names an arg that is still an
+    unresolved re: pattern: expanding then gives a string with the pattern inside, which names no entity and, written back,
+    would stay wrong after the pattern resolves. Kept raw, Predbat still expands it each time it reads the entry.
+    """
+    fields = _template_fields(raw)
+    if fields is None or not isinstance(resolved, str):
+        return raw
+    if any(_unresolved(args.get(field)) for field in fields):
+        return raw
+    return resolved
+
+
+def _expanded(raw, resolved, args):
+    """An args value with expand_template() applied entry by entry; a list resolved to a different length (a +[...] join) is left raw."""
+    if isinstance(raw, (list, tuple)):
+        if not isinstance(resolved, (list, tuple)) or len(resolved) != len(raw):
+            return raw
+        return [expand_template(entry, got, args) for entry, got in zip(raw, resolved)]
+    return expand_template(raw, resolved, args)
+
+
+def capture_baseline(args, read=None):
+    """A deep copy of args' BASELINE_SETTINGS with {name} templates expanded, an unresolved re: pattern counting as unset.
+
+    read(setting) gives the setting as get_arg reads it, with templates such as the GE templates' {geserial} expanded:
+    args keep the raw template and Predbat expands it only on a read, so a raw copy names no serial and a templated
+    manual slot could never be taken over. expand_template() decides, entry by entry, where the expanded value is used;
+    an entry with no template is copied as it is, read is called only for a setting that holds one, and with read None
+    (or a read that gives None) nothing is expanded.
 
     In a list the pattern becomes None, so every other entry keeps its position; a scalar pattern drops the
     key. A pattern can still be unresolved when the first pass runs, before finalize_config(), and copied as it
@@ -62,6 +106,8 @@ def capture_baseline(args):
         if setting not in args:
             continue
         value = args[setting]
+        if read is not None and (_template_fields(value) is not None or (isinstance(value, (list, tuple)) and any(_template_fields(entry) is not None for entry in value))):
+            value = _expanded(value, read(setting), args)
         if isinstance(value, (list, tuple)):
             baseline[setting] = [None if _unresolved(entry) else copy.deepcopy(entry) for entry in value]
         elif not _unresolved(value):
@@ -459,7 +505,7 @@ class Coordinator:
         with nothing new writes nothing and logs nothing.
 
         The first pass keeps a baseline: a copy of the live binding settings and inverter_type, before anything is
-        replayed (capture_baseline()). Every pass scans it for a manual slot's serials - replay rewrites the live entries at
+        replayed, with {name} templates expanded as get_arg reads them (capture_baseline()). Every pass scans it for a manual slot's serials - replay rewrites the live entries at
         every slot it takes over or clears, so a scan of live args would let such a slot come back on the next pass -
         and hands bindings.py the snapshot with the baseline's SUMMED_SETTINGS in place of its own, since
         args_from_apps_yaml is taken before Predbat resolves re: patterns.
@@ -672,10 +718,13 @@ class Coordinator:
         if not isinstance(snapshot, dict) or not isinstance(args, dict) or not callable(getattr(base, "set_arg", None)):
             return
         if self.args_baseline is None:
-            self.args_baseline = capture_baseline(args)
+            self.args_baseline = capture_baseline(args, self._read_arg)
         baseline = copy.deepcopy(self.args_baseline)
         apps_yaml = {key: value for key, value in snapshot.items() if key not in SUMMED_SETTINGS}
         apps_yaml.update({setting: baseline[setting] for setting in SUMMED_SETTINGS if setting in baseline})
+        # ge_cloud_serial names slot 0's inverter, and the templates write it as {geserial} too; nothing writes it back to args
+        if "ge_cloud_serial" in apps_yaml:
+            apps_yaml["ge_cloud_serial"] = expand_template(apps_yaml["ge_cloud_serial"], self._read_arg("ge_cloud_serial"), args)
 
         with self.lock:
             automatic = dict(self.automatic)
@@ -703,6 +752,16 @@ class Coordinator:
             entry = bindings["inverters"][index]
             self.log("Coordinator: inverter slot {} configured from {} ({})".format(index, entry["source"], entry["device_id"]))
         self._check(written, bindings, sources)
+
+    def _read_arg(self, setting):
+        """setting as the base's get_arg reads it with {name} templates expanded: no HA lookup (indirect off), no API override; None when that read fails."""
+        get_arg = getattr(self.base, "get_arg", None)
+        if not callable(get_arg):
+            return None
+        try:
+            return get_arg(setting, indirect=False, can_override=False)
+        except Exception:
+            return None
 
     def _warn_once(self, text):
         """Log a warning the first time its text is seen in this coordinator's life; passes repeat them while the situation lasts."""

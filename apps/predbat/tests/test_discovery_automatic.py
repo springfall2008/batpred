@@ -21,6 +21,7 @@ from coordinator import Coordinator
 from gecloud import DEVICE_REFRESH_SECONDS, GE_CLOUD_DUMMIED_SETTINGS, GECloudData, apply_legacy_bindings
 from tests.test_ge_cloud import GEC_FULL_REGISTERS, GEC_INFO, GEC_MIXED_REGISTERS, MockGECloudDirect, _gec_devices, _make_rediscovery_ge_cloud
 from tests.test_infra import run_async
+from userinterface import UserInterface
 
 
 class _Base:
@@ -59,6 +60,16 @@ class _Base:
             self.args[arg][index] = value
         else:
             self.args[arg] = value
+
+
+class _TemplatingBase(_Base):
+    """A _Base whose get_arg expands {name} templates against args with PredBat's own resolve_arg, as apps.yaml written from a template needs; never looks up HA state."""
+
+    resolve_arg = UserInterface.resolve_arg
+
+    def get_arg(self, name, default=None, index=None, **kwargs):
+        """args[name] (default when absent) through the real resolve_arg, indirect off: the template expanded, the entity id itself returned."""
+        return self.resolve_arg(name, self.args.get(name, default), default=default, indirect=False, index=index)
 
 
 class _Components:
@@ -570,6 +581,45 @@ def test_baseline_drops_unresolved_patterns():
     assert base.args["load_today"] == ["sensor.predbat_gecloud_ce1111g111_load_today", "sensor.extra_load_today"], base.args["load_today"]
     assert not [value for _, value, _ in base.set_calls if "re:" in str(value)], base.set_calls
     print("PASS: baseline drops unresolved patterns")
+    return 0
+
+
+def test_baseline_expands_templates():
+    """
+    The baseline holds {name} templates expanded as get_arg reads them, each value keeping its shape: a list stays a list, a scalar
+    a scalar, an absent key absent, an entry with no template exactly as it was. A template that names a still-unresolved re:
+    pattern, or a name args do not have, stays raw - expanding it would give no entity.
+    """
+    raw = {
+        "geserial": "ce1111g111",
+        "tcp_serial": "re:sensor.givtcp_(.+)_soc_kwh",
+        "num_inverters": 1,
+        "inverter_type": ["GEC"],
+        "charge_rate": ["number.ge_inverter_{geserial}_battery_charge_power"],
+        "soc_percent": "sensor.ge_inverter_{geserial}_battery_soc",
+        "load_today": ["sensor.ge_inverter_{geserial}_consumption_today", "sensor.extra_load", None],
+        "pv_today": ["sensor.givtcp_{tcp_serial}_pv_today"],
+        "import_today": ["sensor.ge_inverter_{missing_name}_grid_import_today"],
+        "inverter_limit": [3600],
+        "battery_power_invert": True,
+        "reserve": ["number.my_reserve"],
+    }
+    base = _TemplatingBase(args=raw)
+    coordinator = _Components(base, {"gecloud": _GECloud()}).coordinator
+    coordinator.allow_automatic("gecloud")
+    baseline = coordinator.args_baseline
+    assert baseline["charge_rate"] == ["number.ge_inverter_ce1111g111_battery_charge_power"], baseline["charge_rate"]
+    assert baseline["soc_percent"] == "sensor.ge_inverter_ce1111g111_battery_soc", baseline["soc_percent"]
+    assert baseline["load_today"] == ["sensor.ge_inverter_ce1111g111_consumption_today", "sensor.extra_load", None], baseline["load_today"]
+    assert baseline["pv_today"] == ["sensor.givtcp_{tcp_serial}_pv_today"], baseline["pv_today"]
+    assert baseline["import_today"] == ["sensor.ge_inverter_{missing_name}_grid_import_today"], baseline["import_today"]
+    assert baseline["inverter_limit"] == [3600] and baseline["battery_power_invert"] is True and baseline["reserve"] == ["number.my_reserve"], baseline
+    assert baseline["inverter_type"] == ["GEC"] and "export_today" not in baseline and "geserial" not in baseline, baseline
+    assert base.args == raw  # args themselves keep the templates
+    # Without a reader, or with one that gives nothing, the templates are copied as they are
+    assert coordinator_module.capture_baseline(raw)["charge_rate"] == raw["charge_rate"]
+    assert coordinator_module.capture_baseline(raw, lambda setting: None)["soc_percent"] == raw["soc_percent"]
+    print("PASS: baseline expands templates")
     return 0
 
 
@@ -1303,15 +1353,16 @@ def _install(ge, devices, settings, info, site):
         ge.site_export_limit, ge.site_inverters = site[0], list(site[1])
 
 
-def _automatic_run(devices, settings, info, start, site=None):
+def _automatic_run(devices, settings, info, start, site=None, base_class=_Base):
     """
     One GE Cloud automatic configuration through a real Coordinator from args `start` (also the apps.yaml snapshot).
 
     Runs the real async_automatic_config(), then the real refresh_discovery(), as run() does in one cycle. Then
     two more configure() passes, as Predbat runs after phase 1 and at the startup barrier, which must write
-    nothing: a pass that rebuilds from args an earlier pass rewrote must reach the same configuration. Returns (ge, base).
+    nothing: a pass that rebuilds from args an earlier pass rewrote must reach the same configuration. base_class builds
+    the base (_TemplatingBase to expand {name} templates as PredBat does). Returns (ge, base).
     """
-    base = _Base(args=start, apps_yaml=start)
+    base = base_class(args=start, apps_yaml=start)
     ge = _AutoGECloud(base)
     _install(ge, devices, settings, info, site)
     _Components(base, {"gecloud": ge})
@@ -1333,9 +1384,9 @@ def _starting_args(config=None, apps_yaml=None):
     return start
 
 
-def run_new(devices, settings, info=None, config=None, apps_yaml=None):
+def run_new(devices, settings, info=None, config=None, apps_yaml=None, base_class=_Base):
     """Run GE Cloud's automatic configuration through a real Coordinator, and return (new_args, new_run_log)."""
-    ge, base = _automatic_run(devices, settings, info, _starting_args(config, apps_yaml))
+    ge, base = _automatic_run(devices, settings, info, _starting_args(config, apps_yaml), base_class=base_class)
     return base.args, list(base.log_messages)
 
 
@@ -1739,6 +1790,44 @@ def test_accept_template_short_gateway():
     return 0
 
 
+def test_accept_template_unexpanded():
+    """
+    The givenergy_cloud.yaml bindings as apps.yaml really holds them: every entity keeps the literal {geserial}, with the serial in
+    geserial, and Predbat expands it only when the value is read. The serial is still found, so discovery takes the slot over and
+    the result is the single run's - never a second GEC slot beside the template's.
+    """
+    takeover = "Warn: Coordinator: Inverter slot 0: gecloud inverter battery001 is also configured manually in apps.yaml - discovery is taking over this slot"
+    single, _ = run_new(*_one_battery())
+    apps_yaml = dict(_template_apps_yaml("{geserial}"), geserial="battery001")
+    assert apps_yaml["charge_rate"] == ["number.ge_inverter_{geserial}_battery_charge_power"], apps_yaml["charge_rate"]
+    new, log = run_new(*_one_battery(), apps_yaml=apps_yaml, base_class=_TemplatingBase)
+    assert new["num_inverters"] == 1 and new["inverter_type"] == ["GEC"], (new["num_inverters"], new["inverter_type"])
+    differences = compare_configuration(single, new)
+    assert differences == [], "\n".join(differences)
+    assert takeover in log, log
+    assert not [line for line in log if line.startswith("Warn: GECloud: discovery set")], log
+
+    # Two template slots, geserial and geserial2, behind one gateway: slot 0 taken over, slot 1 cleared, as with the serials written out
+    devices, _, info = _two_batteries(None, gateway="gw00000001")
+    settings = {"gw00000001": dict(GEC_FULL_REGISTERS)}
+    single, _ = run_new(devices, settings, info)
+    apps_yaml = dict(_template_apps_yaml("{geserial}", "{geserial2}"), geserial="battery001", geserial2="battery002")
+    new, log = run_new(devices, settings, info, apps_yaml=apps_yaml, base_class=_TemplatingBase)
+    assert new["num_inverters"] == 1 and new["inverter_type"] == ["GEC"], (new["num_inverters"], new["inverter_type"])
+    differences = compare_configuration(single, new)
+    assert differences == [], "\n".join(differences)
+    assert takeover in log, log
+    assert "Warn: Coordinator: Inverter slot 1: also names battery002, already configured in slot 0 - clearing this slot" in log, log
+
+    # A templated ge_cloud_serial names the inverter for slot 0 too, though no entity there carries the serial
+    apps_yaml = {"num_inverters": 1, "inverter_type": ["GEC"], "charge_rate": ["number.my_charge_rate"], "geserial": "battery001", "ge_cloud_serial": "{geserial}"}
+    new, log = run_new(*_one_battery(), apps_yaml=apps_yaml, base_class=_TemplatingBase)
+    assert new["num_inverters"] == 1 and new["charge_rate"] == [_entity("number", "battery001", "battery_charge_power")], (new["num_inverters"], new["charge_rate"])
+    assert takeover in log, log
+    print("PASS: accept template unexpanded")
+    return 0
+
+
 def test_accept_givtcp_rest_manual():
     """A manual GivTCP inverter with givtcp_rest: the old run deletes the key and takes over, the new run keeps slot 0 and clears only its own slot (a known difference)."""
     rest = "http://192.168.1.10:6345"
@@ -1849,6 +1938,7 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_takeover_and_hole_warnings_logged()
     failures += test_summed_lists_keep_resolved_patterns()
     failures += test_baseline_drops_unresolved_patterns()
+    failures += test_baseline_expands_templates()
     failures += test_release_compacts()
     failures += test_assemble_slots_follow_bindings()
     failures += test_bare_base_is_inert()
@@ -1896,6 +1986,7 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_accept_template_takeover()
     failures += test_accept_template_gateway()
     failures += test_accept_template_short_gateway()
+    failures += test_accept_template_unexpanded()
     failures += test_accept_givtcp_rest_manual()
     failures += test_accept_battery_removed()
     failures += test_accept_run_loop_incremental()
