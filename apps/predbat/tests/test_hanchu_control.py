@@ -1433,29 +1433,77 @@ def test_hanchu_write_button_debounce_sends_only_the_settled_hold():
 
 
 def test_hanchu_schedule_change_without_a_pending_write_does_not_start_one():
-    """A schedule-entity change with no press pending is left for the next press or tick, as before the debounce."""
+    """A schedule-entity change before Predbat controls the device, or in read-only, or with control off, starts no write."""
+    failed = False
+    for label, setup in (
+        ("not yet in control", lambda c: None),
+        ("read-only", lambda c: (c.control_active.add(SN), setattr(c, "_is_read_only", lambda: True))),
+        ("control disabled", lambda c: (c.control_active.add(SN), setattr(c, "control_enable", False))),
+    ):
+        client = ready(write_debounce=DEBOUNCE_TEST_SECONDS)
+        client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "04:00:00"})
+        setup(client)
+        sent = []
+        client.apply_schedule = _recording_apply(client, sent)
+        owner, thread = _start_owner_loop()
+        try:
+            client.component_loop = owner
+            run_async_local(client._handle_control_event(client._control_name("number", SN, "battery_schedule_export_power"), 0))
+            if client._write_pending(SN):
+                print(f"ERROR: {label}: a schedule change should not start a debounced write")
+                failed = True
+            time.sleep(DEBOUNCE_TEST_SECONDS * 1.5)
+            if sent:
+                print(f"ERROR: {label}: a schedule change should not write: {sent}")
+                failed = True
+            if client.local_schedule[SN]["export"]["power"] != 0:
+                print(f"ERROR: {label}: the change should still reach the local schedule")
+                failed = True
+        finally:
+            _stop_owner_loop(owner, thread)
+    assert not failed, "test_hanchu_schedule_change_without_a_pending_write_does_not_start_one"
+
+
+def test_hanchu_rate_change_in_control_is_sent_after_the_debounce_not_the_next_tick():
+    """A low-power rate written with no press goes out after the debounce, not at the next tick (batpred#6190).
+
+    Predbat arms a charge window at full power and only works out the low-power rate once the window is
+    running, then writes it with no press. On a live HESS-HY-S-10K that waited for the next tick, so the
+    window charged at 10 kW for about a minute before CHG_PWR_LMT 2600 landed.
+    """
     failed = False
     client = ready(write_debounce=DEBOUNCE_TEST_SECONDS)
-    client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "04:00:00"})
+    client.control_active.add(SN)
+    client.device_values[SN] = {"soc": 76.0}
+    client.set_mock_clock(14 * 60)
+    client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 100, "power": 10000, "start": "14:00:00", "end": "16:00:00"}, reserve=5)
     sent = []
     client.apply_schedule = _recording_apply(client, sent)
     owner, thread = _start_owner_loop()
     try:
         client.component_loop = owner
-        run_async_local(client._handle_control_event(client._control_name("number", SN, "battery_schedule_export_power"), 0))
-        if client._write_pending(SN):
-            print("ERROR: a schedule change alone should not start a debounced write")
+        run_async_local(client._handle_control_event(client._control_name("number", SN, "battery_schedule_charge_power"), 2600))
+        if not client._write_pending(SN):
+            print("ERROR: a rate change on a controlled device should start the debounced write")
             failed = True
-        time.sleep(DEBOUNCE_TEST_SECONDS * 0.2)
+        time.sleep(DEBOUNCE_TEST_SECONDS * 0.5)
         if sent:
-            print(f"ERROR: a schedule change alone should not write: {sent}")
+            print(f"ERROR: the write should wait out the debounce, sent early: {sent}")
             failed = True
-        if client.local_schedule[SN]["export"]["power"] != 0:
-            print("ERROR: the change should still reach the local schedule")
+        time.sleep(DEBOUNCE_TEST_SECONDS * 1.0)
+        if len(sent) != 1 or sent[0].get(HANCHU_KEY_CHARGE_POWER) != 2600:
+            print(f"ERROR: one write carrying the 2600 W rate should go out after the debounce, sent {sent}")
+            failed = True
+        # A second change straight after restarts the wait rather than sending twice.
+        run_async_local(client._handle_control_event(client._control_name("number", SN, "battery_schedule_charge_power"), 2500))
+        run_async_local(client._handle_control_event(client._control_name("number", SN, "battery_schedule_charge_power"), 2400))
+        time.sleep(DEBOUNCE_TEST_SECONDS * 1.5)
+        if len(sent) != 2 or sent[1].get(HANCHU_KEY_CHARGE_POWER) != 2400:
+            print(f"ERROR: two quick changes should send one write with the last value, sent {sent}")
             failed = True
     finally:
         _stop_owner_loop(owner, thread)
-    assert not failed, "test_hanchu_schedule_change_without_a_pending_write_does_not_start_one"
+    assert not failed, "test_hanchu_rate_change_in_control_is_sent_after_the_debounce_not_the_next_tick"
 
 
 def test_hanchu_reconcile_waits_for_a_pending_debounced_write():
@@ -1593,6 +1641,7 @@ def run_hanchu_control_tests(my_predbat):
         ("hold_grid_cap", test_hanchu_hold_caps_the_grid_charge_limit_at_the_soc),
         ("write_debounce", test_hanchu_write_button_debounce_sends_only_the_settled_hold),
         ("write_debounce_change_only", test_hanchu_schedule_change_without_a_pending_write_does_not_start_one),
+        ("write_on_change", test_hanchu_rate_change_in_control_is_sent_after_the_debounce_not_the_next_tick),
         ("write_debounce_reconcile", test_hanchu_reconcile_waits_for_a_pending_debounced_write),
         ("write_debounce_stop", test_hanchu_stopping_cancels_a_pending_debounced_write),
         ("write_debounce_no_loop", test_hanchu_debounce_is_skipped_without_a_running_component_loop),
