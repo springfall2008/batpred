@@ -27,6 +27,11 @@ from const import (
     BATTERY_POWER_CURVE_HALF_LIFE_DAYS,
     BATTERY_POWER_CURVE_MIN_DAYS,
     BATTERY_POWER_CURVE_MIN_MINUTES,
+    BATTERY_RATE_GRID_EDGE_MINUTES,
+    BATTERY_RATE_GRID_FULL_RATE,
+    BATTERY_RATE_GRID_MIN_POWER,
+    BATTERY_RATE_GRID_RUN_MINUTES,
+    BATTERY_RATE_GRID_SEGMENT_MINUTES,
     BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS,
     BATTERY_TEMPERATURE_CURVE_LIMIT_FRACTION,
     BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS,
@@ -912,15 +917,36 @@ class BatteryCurve:
             export_limit_w = self.export_limit * MINUTE_WATT
         if export_limit_w >= EXPORT_LIMIT_DEFAULT_W:
             return set()
+        grid_power = self.load_grid_power_minutes()
+        if grid_power is None:
+            if export_limit_w < max_power_scaled:
+                self.log("Info: Inverter {} Cannot find battery discharge curve, export_limit {}W is below the discharge rate and there is no grid_power history to tell which exports it limited".format(self.id, dp0(export_limit_w)))
+                return None
+            return set()
+        threshold = export_limit_w * BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN
+        limited = set()
+        for minute in range(0, min_len):
+            power = grid_power.get(minute, None)
+            if power is None:
+                continue
+            if power >= threshold:
+                limited.add(minute)
+        if limited:
+            self.log("Inverter {} Leaving {} export-limited minutes out of the battery discharge curve".format(self.id, len(limited)))
+        return limited
+
+    def load_grid_power_minutes(self):
+        """
+        This inverter's grid_power history by minute before now, in W with export positive (grid_power_invert applied).
+
+        Returns None when grid_power is not set or has no history.
+        """
         grid_sensor = self.base.get_arg("grid_power", indirect=False, index=self.id)
         grid_data = None
         if grid_sensor and is_entity_id(grid_sensor):
             grid_data = self.base.get_history_wrapper(entity_id=grid_sensor, days=self.base.max_days_previous, required=False)
         if not grid_data:
-            if export_limit_w < max_power_scaled:
-                self.log("Info: Inverter {} Cannot find battery discharge curve, export_limit {}W is below the discharge rate and there is no grid_power history to tell which exports it limited".format(self.id, dp0(export_limit_w)))
-                return None
-            return set()
+            return None
         grid_power, _ = minute_data(
             grid_data[0],
             self.base.max_days_previous,
@@ -935,20 +961,129 @@ class BatteryCurve:
             required_unit="W",
             can_modify_history=True,  # history is not accessed after this point
         )
-        invert = self.base.get_arg("grid_power_invert", False, index=self.id)
-        threshold = export_limit_w * BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN
+        if self.base.get_arg("grid_power_invert", False, index=self.id):
+            grid_power = {minute: -power for minute, power in grid_power.items()}
+        return grid_power
+
+    def load_battery_temperature_minutes(self, days):
+        """
+        The battery temperature history by minute before now, or None when battery_temperature_history is not set, has
+        no history, or only ever reads exactly 0 (how several integrations report a missing reading).
+        """
+        temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False)
+        if not temperature_sensor:
+            return None
+        temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=days, required=False)
+        if not temperature_data:
+            return None
+        temperature, _ = minute_data(
+            temperature_data[0],
+            days,
+            self.base.now_utc,
+            "state",
+            "last_updated",
+            backwards=True,
+            clean_increment=False,
+            smoothing=False,
+            divide_by=1.0,
+            scale=1.0,
+            can_modify_history=True,  # history is not accessed after this point
+        )
+        if not any(value != 0 for value in temperature.values()):
+            return None
+        return temperature
+
+    def find_rate_grid_samples(self, discharge):
+        """
+        Scan the recent history for the rate grid evidence: runs at the full written rate, cut into 5-minute segments.
+
+        A minute counts when Predbat was Charging (or, for discharge, in a forced export - status Exporting), the rate
+        was written at BATTERY_RATE_GRID_FULL_RATE of the maximum or more, the battery moved at BATTERY_RATE_GRID_MIN_POWER
+        of the maximum or more in that direction (less is a charge or export that did not happen, not a limit), the
+        export was not held back by export_limit and - when there is grid_power history - reached the grid, and the
+        temperature reading is not exactly 0 (a missing reading) on an install that has a temperature sensor.
+        Runs of BATTERY_RATE_GRID_RUN_MINUTES or more lose BATTERY_RATE_GRID_EDGE_MINUTES at each end (ramp up and
+        down) and the rest is cut into centred BATTERY_RATE_GRID_SEGMENT_MINUTES segments, each averaged into one sample.
+
+        The rate is recorded as learn_charge_curve() recorded it - battery power / rated maximum / battery_loss - with
+        battery_rate_max_scaling (or _discharge) divided out, so it is relative to the rated rate. With more than one
+        inverter the combined battery is scanned (load_curve_history()).
+
+        Returns:
+            {day: [[soc_percent, temperature or None, rate], ...]} keyed by charge_day(), or None when the history is missing.
+        """
+        purpose = "battery discharge rate grid" if discharge else "battery charge rate grid"
+        history = self.load_curve_history(discharge, purpose)
+        if history is None:
+            return None
+        min_len = history["min_len"]
+        temperature = self.load_battery_temperature_minutes(self.base.max_days_previous)
+        max_power = history["max_power"]
+        soc_max = history["soc_max"]
+        if max_power <= 0 or soc_max <= 0:
+            return None
+        min_rate = max_power * BATTERY_RATE_GRID_FULL_RATE
+        min_power = max(max_power * BATTERY_RATE_GRID_MIN_POWER, 1.0)
         limited = set()
-        for minute in range(0, min_len):
-            power = grid_power.get(minute, None)
-            if power is None:
+        grid_power = None
+        if discharge:
+            limited = self.find_export_limited_minutes(min_len, min_rate, history.get("export_limit_w"))
+            if limited is None:
+                return None
+            grid_power = self.load_grid_power_minutes()
+        battery_loss = self.base.battery_loss if self.base.battery_loss > 0 else 1.0
+        scaling = self.base.battery_rate_max_scaling_discharge if discharge else self.base.battery_rate_max_scaling
+        scaling = scaling if scaling > 0 else 1.0
+        local_tz = getattr(self.base, "local_tz", None)
+        self.record_curve_scan_coverage("grid_discharge" if discharge else "grid_charge", min_len)
+
+        def minute_value(minute):
+            """(soc %, temperature or None, rate) for a qualifying minute, else None."""
+            status = str(history["status"].get(minute, ""))
+            if discharge and (not status.startswith("Exporting") or minute in limited):
+                return None
+            if not discharge and status != "Charging":
+                return None
+            if history["rate"].get(minute, 0) < min_rate:
+                return None
+            power = history["battery_power"].get(minute, 0)
+            if (power <= 0 if discharge else power >= 0) or abs(power) < min_power:
+                return None
+            if grid_power is not None and grid_power.get(minute, 0) < min_power:
+                return None
+            soc = history["soc_kwh"].get(minute, None)
+            if soc is None:
+                return None
+            temp = None
+            if temperature is not None:
+                temp = temperature.get(minute, None)
+                if temp is None or temp == 0:
+                    return None
+            return (soc / soc_max * 100.0, temp, abs(power) / max_power / battery_loss / scaling)
+
+        samples = {}
+        found = 0
+        run = []  # (minute, value), minute indexes count back from now so a run is consecutive descending minutes
+        for minute in range(0, min_len + 1):
+            value = minute_value(minute) if minute < min_len else None
+            if value is not None:
+                run.append((minute, value))
                 continue
-            if invert:
-                power = -power
-            if power >= threshold:
-                limited.add(minute)
-        if limited:
-            self.log("Inverter {} Leaving {} export-limited minutes out of the battery discharge curve".format(self.id, len(limited)))
-        return limited
+            if len(run) >= BATTERY_RATE_GRID_RUN_MINUTES:
+                interior = run[BATTERY_RATE_GRID_EDGE_MINUTES : len(run) - BATTERY_RATE_GRID_EDGE_MINUTES]
+                count = len(interior) // BATTERY_RATE_GRID_SEGMENT_MINUTES
+                offset = (len(interior) - count * BATTERY_RATE_GRID_SEGMENT_MINUTES) // 2
+                for index in range(count):
+                    piece = interior[offset + index * BATTERY_RATE_GRID_SEGMENT_MINUTES : offset + (index + 1) * BATTERY_RATE_GRID_SEGMENT_MINUTES]
+                    soc = sum(item[1][0] for item in piece) / len(piece)
+                    temp = None if temperature is None else round(sum(item[1][1] for item in piece) / len(piece), 2)
+                    rate = sum(item[1][2] for item in piece) / len(piece)
+                    day = charge_day(self.base.now_utc, piece[len(piece) // 2][0], local_tz)
+                    samples.setdefault(day, []).append([dp2(soc), temp, dp4(rate)])
+                    found += 1
+            run = []
+        self.log("Inverter {} {}: found {} full-rate {}-minute segments in {} days of history{}".format(self.id, purpose, found, BATTERY_RATE_GRID_SEGMENT_MINUTES, self.base.max_days_previous, "" if temperature is not None else " (no battery temperature)"))
+        return samples
 
     def find_battery_temperature_samples(self, discharge=False):
         """
