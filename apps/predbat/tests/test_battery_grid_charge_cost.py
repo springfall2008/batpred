@@ -304,6 +304,53 @@ def run_grid_charge_config_tests(my_predbat):
     return failed
 
 
+def run_grid_charge_window_sort_tests(my_predbat):
+    """The window price sort counts the grid charge cost on charge ("c") entries only. Returns True on failure.
+
+    Shifting every charge window by the same cost keeps the charge entries' order among themselves, but the
+    sort also holds freeze charge ("cf") entries, which never import into the battery and so carry neither the
+    losses, the cycle cost nor the grid charge cost. With windows at 10p and 12p the sort runs from the dearest
+    level down: c12, cf12, c10, cf10 without the cost, but c16, c14, cf12, cf10 with a 4p cost - the 10p
+    window's charge entry moves ahead of the 12p window's freeze entry, and the levels no longer share bands.
+    """
+    print("**** Running battery grid charge cost window sort tests ****")
+    reset_inverter(my_predbat)
+    saved = (my_predbat.calculate_best_charge, my_predbat.calculate_best_export, my_predbat.set_charge_freeze, my_predbat.carbon_enable, my_predbat.metric_self_sufficiency, my_predbat.metric_battery_cycle, my_predbat.inverter_loss, my_predbat.battery_loss)
+    failed = False
+    try:
+        my_predbat.calculate_best_charge = True
+        my_predbat.calculate_best_export = False
+        my_predbat.set_charge_freeze = True
+        my_predbat.carbon_enable = False
+        my_predbat.metric_self_sufficiency = 0.0
+        my_predbat.metric_battery_cycle = 0.0
+        my_predbat.inverter_loss = 1.0
+        my_predbat.battery_loss = 1.0
+        windows = [
+            {"start": my_predbat.minutes_now + 120, "end": my_predbat.minutes_now + 180, "average": 10.0},
+            {"start": my_predbat.minutes_now + 240, "end": my_predbat.minutes_now + 300, "average": 12.0},
+        ]
+        cases = (
+            (0.0, [("c", 1, 12.0), ("cf", 1, 12.0), ("c", 0, 10.0), ("cf", 0, 10.0)]),
+            (GRID_CHARGE_COST, [("c", 1, 16.0), ("c", 0, 14.0), ("cf", 1, 12.0), ("cf", 0, 10.0)]),
+        )
+        for grid_charge_cost, expected in cases:
+            my_predbat.metric_battery_grid_charge_cost = grid_charge_cost
+            window_sort, window_links, price_set, price_links = my_predbat.sort_window_by_price_combined(windows, [])
+            got = [(window_links[key]["type"], window_links[key]["id"], window_links[key]["average"]) for key in window_sort]
+            if len(got) != len(expected) or any(g[0] != e[0] or g[1] != e[1] or abs(g[2] - e[2]) > 1e-9 for g, e in zip(got, expected)):
+                print("ERROR: grid charge cost {}: window sort {} expected {}".format(grid_charge_cost, got, expected))
+                failed = True
+            else:
+                print("  grid charge cost {}: window sort {} - ok".format(grid_charge_cost, got))
+    finally:
+        my_predbat.metric_battery_grid_charge_cost = 0.0
+        my_predbat.calculate_best_charge, my_predbat.calculate_best_export, my_predbat.set_charge_freeze, my_predbat.carbon_enable, my_predbat.metric_self_sufficiency, my_predbat.metric_battery_cycle, my_predbat.inverter_loss, my_predbat.battery_loss = (
+            saved
+        )
+    return failed
+
+
 def run_grid_charge_optimiser_tests(my_predbat):
     """The optimiser drops a grid charge that only paid off without the grid charge cost. Returns True on failure.
 
@@ -337,5 +384,6 @@ def run_battery_grid_charge_cost_tests(my_predbat):
     failed |= run_grid_charge_battery_value_tests(my_predbat)
     failed |= run_grid_charge_battery_value_cap_tests(my_predbat)
     failed |= run_grid_charge_output_tests(my_predbat)
+    failed |= run_grid_charge_window_sort_tests(my_predbat)
     failed |= run_grid_charge_optimiser_tests(my_predbat)
     return failed
