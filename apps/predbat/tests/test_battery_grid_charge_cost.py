@@ -17,7 +17,9 @@ charge demand only, so charging from solar and grid import that serves the house
 """
 
 from config import CONFIG_ITEMS
-from tests.test_infra import reset_inverter, reset_rates, reset_rates2, simple_scenario
+from prediction import Prediction
+from tests.test_infra import reset_inverter, reset_rates, reset_rates2, simple_scenario, update_rates_import
+from utils import dp2
 from tests.test_kernel_parity import kernel_available
 from tests.test_optimise_levels import run_optimise_levels
 
@@ -150,6 +152,129 @@ def run_grid_charge_battery_value_tests(my_predbat):
     return failed
 
 
+def run_grid_charge_battery_value_cap_tests(my_predbat):
+    """On a flat tariff the battery value stays at its cap, which the grid charge cost does not raise. Returns True on failure.
+
+    The cap is what a stored kWh can realise by avoiding an import at the highest rate after losses. The
+    grid charge cost is paid on the way into the battery, not on the way out, so it raises the replacement
+    cost but not what discharging can save - lifting the cap with it would value stored energy above what
+    it can realise, which is exactly what the cap is there to prevent.
+    """
+    print("**** Running battery grid charge cost battery value cap tests ****")
+    reset_inverter(my_predbat)
+    reset_rates(my_predbat, 10.0, 5.0)
+    saved = (my_predbat.metric_battery_value_export_scaling, my_predbat.inverter_loss, my_predbat.battery_loss)
+    failed = False
+    try:
+        my_predbat.metric_battery_value_export_scaling = 1.0
+        my_predbat.inverter_loss = 0.96
+        my_predbat.battery_loss = 0.97
+        minute = my_predbat.minutes_now
+        cap = 10.0 * my_predbat.inverter_loss * my_predbat.battery_loss - my_predbat.metric_battery_cycle
+        my_predbat.metric_battery_grid_charge_cost = 0.0
+        value_zero = my_predbat.battery_value_rate(minute)
+        my_predbat.metric_battery_grid_charge_cost = GRID_CHARGE_COST
+        value_cost = my_predbat.battery_value_rate(minute)
+        if abs(value_zero - cap) > 1e-9 or abs(value_cost - cap) > 1e-9:
+            print("ERROR: flat 10p tariff: battery value should stay at the {} cap with and without the grid charge cost, got {} and {}".format(round(cap, 4), value_zero, value_cost))
+            failed = True
+        else:
+            print("  flat tariff battery value stays at the {} cap - ok".format(round(cap, 4)))
+    finally:
+        my_predbat.metric_battery_grid_charge_cost = 0.0
+        my_predbat.metric_battery_value_export_scaling, my_predbat.inverter_loss, my_predbat.battery_loss = saved
+        reset_rates(my_predbat, 10.0, 5.0)
+    return failed
+
+
+def run_grid_charge_output_tests(my_predbat):
+    """The plan's adjusted import rate and the options log line include the grid charge cost. Returns True on failure.
+
+    import_rate_adjusted (JSON plan, also read by the agent tools) and the plan_debug HTML figure are the
+    cost of a kWh delivered from the battery after charging it from the grid at that slot's rate, so with a
+    non-zero cost they must be (rate + cost) / losses + cycle cost. log_option_best names the setting only
+    when it is non-zero.
+    """
+    print("**** Running battery grid charge cost output tests ****")
+    failed = False
+    my_predbat.load_user_config()
+    my_predbat.fetch_config_options()
+    reset_inverter(my_predbat)
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.end_record = 48 * 60
+    my_predbat.debug_enable = False
+    my_predbat.soc_max = 10.0
+    my_predbat.soc_kw = 5.0
+    my_predbat.num_inverters = 1
+    my_predbat.reserve = 0.5
+    my_predbat.inverter_loss = 0.96
+    my_predbat.battery_loss = 0.97
+    my_predbat.metric_battery_cycle = 0.5
+
+    pv_step = {}
+    load_step = {}
+    for minute in range(0, my_predbat.forecast_minutes, 5):
+        pv_step[minute] = 0
+        load_step[minute] = 0.5 / (60 / 5)
+    my_predbat.load_minutes_step = load_step
+    my_predbat.load_minutes_step10 = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.pv_forecast_minute10_step = pv_step
+
+    saved_plan_debug = my_predbat.plan_debug
+    saved_log = my_predbat.log
+    try:
+        for grid_charge_cost in (0.0, GRID_CHARGE_COST):
+            my_predbat.metric_battery_grid_charge_cost = grid_charge_cost
+            my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+            charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 10.0}]
+            reset_rates(my_predbat, 10.0, 5.0)
+            update_rates_import(my_predbat, charge_window_best)
+            my_predbat.run_prediction([0], charge_window_best, [], [], False, end_record=my_predbat.end_record, save="best")
+            my_predbat.charge_limit_best = [0]
+            my_predbat.export_limits_best = []
+            my_predbat.charge_window_best = charge_window_best
+            my_predbat.export_window_best = []
+
+            my_predbat.plan_debug = True
+            html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+            row = next((r for r in (raw_plan or {}).get("rows", []) if r.get("slot_minute") == my_predbat.minutes_now), None)
+            adjusted = (10.0 + grid_charge_cost) / my_predbat.battery_loss / my_predbat.inverter_loss + my_predbat.metric_battery_cycle
+            if row is None:
+                print("ERROR: grid charge cost {}: no plan row for minute {}".format(grid_charge_cost, my_predbat.minutes_now))
+                failed = True
+            elif row.get("import_rate_adjusted") != dp2(adjusted):
+                print("ERROR: grid charge cost {}: import_rate_adjusted {} expected {}".format(grid_charge_cost, row.get("import_rate_adjusted"), dp2(adjusted)))
+                failed = True
+            if "(%02.02f)" % adjusted not in html_plan:
+                print("ERROR: grid charge cost {}: plan_debug HTML does not show the adjusted import rate ({:.2f})".format(grid_charge_cost, adjusted))
+                failed = True
+
+            logged = []
+            my_predbat.log = lambda msg, *args, **kwargs: logged.append(msg)
+            my_predbat.log_option_best()
+            my_predbat.log = saved_log
+            options = "".join(logged)
+            named = "metric_battery_grid_charge_cost(" in options
+            if grid_charge_cost and "metric_battery_grid_charge_cost({}{}/kWh)".format(grid_charge_cost, my_predbat.currency_symbols[1]) not in options:
+                print("ERROR: log_option_best does not show metric_battery_grid_charge_cost({}): {}".format(grid_charge_cost, options))
+                failed = True
+            elif not grid_charge_cost and named:
+                print("ERROR: log_option_best names metric_battery_grid_charge_cost while it is 0: {}".format(options))
+                failed = True
+            if not failed:
+                print("  grid charge cost {}: import_rate_adjusted {} and options log - ok".format(grid_charge_cost, dp2(adjusted)))
+    finally:
+        my_predbat.log = saved_log
+        my_predbat.plan_debug = saved_plan_debug
+        my_predbat.metric_battery_grid_charge_cost = 0.0
+        my_predbat.load_user_config()
+        my_predbat.fetch_config_options()
+        reset_inverter(my_predbat)
+        reset_rates(my_predbat, 10.0, 5.0)
+    return failed
+
+
 def run_grid_charge_config_tests(my_predbat):
     """The setting is an expert-mode input_number defaulting to 0 that fetch_config_options reads. Returns True on failure."""
     print("**** Running battery grid charge cost config tests ****")
@@ -210,5 +335,7 @@ def run_battery_grid_charge_cost_tests(my_predbat):
     else:
         failed |= required_failure
     failed |= run_grid_charge_battery_value_tests(my_predbat)
+    failed |= run_grid_charge_battery_value_cap_tests(my_predbat)
+    failed |= run_grid_charge_output_tests(my_predbat)
     failed |= run_grid_charge_optimiser_tests(my_predbat)
     return failed

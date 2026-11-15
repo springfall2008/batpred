@@ -2696,7 +2696,8 @@ class Plan:
         Forward value of one kWh left in the battery at the given absolute minute, in p/kWh
 
         The value is what it would cost to replace that energy: the cheapest import rate available
-        from `minute` to the end of the forecast, grossed up by the charging losses. It is capped at
+        from `minute` to the end of the forecast plus metric_battery_grid_charge_cost, grossed up by the
+        charging losses. It is capped at
         the highest import rate (reduced by losses) so a flat tariff cannot value stored energy above
         what the grid would ever charge for it, and floored at the export arbitrage margin and at
         1p/kWh.
