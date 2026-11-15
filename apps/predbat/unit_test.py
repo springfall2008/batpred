@@ -75,9 +75,9 @@ from tests.test_clock_change_day import test_clock_change_day
 from tests.test_car_charging_sentence import test_car_charging_sentence
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
-from tests.test_find_charge_curve import run_find_charge_curve_tests
-from tests.test_battery_temperature_curve_auto import run_battery_temperature_curve_auto_tests
-from tests.test_battery_power_curve_auto import run_battery_power_curve_auto_tests
+from tests.test_battery_rate_grid import run_battery_rate_grid_tests
+from tests.test_battery_rate_grid_scan import run_battery_rate_grid_scan_tests
+from tests.test_battery_rate_grid_update import run_battery_rate_grid_update_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_kernel_tests
 from tests.test_optimise_solar import run_optimise_solar_tests
@@ -213,7 +213,7 @@ from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_export_encoding import run_export_encoding_tests
 from tests.test_export_more_solar_warning import run_export_more_solar_warning_tests
-from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
+from tests.test_find_charge_rate import test_rate_grid_ceiling, test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_soc_max import run_test_manual_soc_max
@@ -782,9 +782,10 @@ def main():
         ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
-        ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
-        ("battery_temperature_curve_auto", run_battery_temperature_curve_auto_tests, "Learn the battery temperature charge curve from history", False),
-        ("battery_power_curve_auto", run_battery_power_curve_auto_tests, "Auto SoC power curve kept in storage, replaced only when a scan finds data", False),
+        ("rate_grid_ceiling", test_rate_grid_ceiling, "Rate grid ceiling is absolute on every path", False),
+        ("battery_rate_grid", run_battery_rate_grid_tests, "Battery rate grids: manual grid, isotonic fit, lookup", False),
+        ("battery_rate_grid_scan", run_battery_rate_grid_scan_tests, "Battery rate grids: full-rate runs scanned into segments", False),
+        ("battery_rate_grid_update", run_battery_rate_grid_update_tests, "Battery rate grids: storage, fallback to manual curves, sensors", False),
         ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
         ("energydataservice", run_energydataservice_tests, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),

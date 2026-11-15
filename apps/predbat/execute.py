@@ -39,6 +39,7 @@ from const import (
     RESERVE_HOLD_MARGIN_PERCENT,
     RESERVE_HOLD_HYSTERESIS_PERCENT,
 )
+from battery_rate_grid import rate_grid_curve
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, learn_rate_ceilings, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
 from predbat_metrics import metrics
 from inverter import Inverter, calibration_reported
@@ -633,12 +634,12 @@ class Execute:
         charge_w = getattr(inverter, "requested_charge_w", None)
         discharge_w = getattr(inverter, "requested_discharge_w", None)
         if charge_w is not None:
-            curve_w = MINUTE_WATT * get_charge_rate_curve(inverter.soc_kw, charge_w / MINUTE_WATT, inverter.soc_max, inverter.battery_rate_max_charge, self.battery_charge_power_curve, 0, inverter.battery_temperature, self.battery_temperature_charge_curve)
+            charge_curve = rate_grid_curve(self.rate_grids()[0], inverter.battery_temperature, rated=inverter.battery_rate_max_charge)
+            curve_w = MINUTE_WATT * get_charge_rate_curve(inverter.soc_kw, charge_w / MINUTE_WATT, inverter.soc_max, inverter.battery_rate_max_charge, charge_curve, 0)
             charge_w = int(round(min(charge_w, curve_w)))
         if discharge_w is not None:
-            curve_w = MINUTE_WATT * get_discharge_rate_curve(
-                inverter.soc_kw, discharge_w / MINUTE_WATT, inverter.soc_max, inverter.battery_rate_max_discharge, self.battery_discharge_power_curve, 0, inverter.battery_temperature, self.battery_temperature_discharge_curve
-            )
+            discharge_curve = rate_grid_curve(self.rate_grids()[1], inverter.battery_temperature, rated=inverter.battery_rate_max_discharge)
+            curve_w = MINUTE_WATT * get_discharge_rate_curve(inverter.soc_kw, discharge_w / MINUTE_WATT, inverter.soc_max, inverter.battery_rate_max_discharge, discharge_curve, 0)
             limit_w = min(discharge_w, curve_w)
             # inverter_limit / export_limit are kW-per-minute like the rates; 0 means not set
             if self.inverter_hybrid and inverter.inverter_limit:
@@ -876,15 +877,13 @@ class Execute:
                             inv_target_soc_percent * inverter.soc_max / 100.0,
                             inverter.battery_rate_max_charge,
                             inverter.soc_max,
-                            self.battery_charge_power_curve,
+                            rate_grid_curve(self.rate_grids()[0], inverter.battery_temperature, rated=inverter.battery_rate_max_charge),
                             self.set_charge_low_power,
                             self.charge_low_power_margin,
                             self.battery_rate_min,
                             self.battery_rate_max_scaling,
                             self.battery_loss,
                             self.log,
-                            inverter.battery_temperature,
-                            self.battery_temperature_charge_curve,
                             current_charge_rate=current_charge_rate / MINUTE_WATT,
                             pv_window_kwh=pv_window_kwh,
                             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
@@ -1800,17 +1799,6 @@ class Execute:
             grid_power += inverter.grid_power
             battery_temperature += inverter.battery_temperature
 
-        # The curve learners read the whole fleet's history (the plan models it as one battery), so they run once every
-        # inverter exists and is refreshed - on a fresh start the others are only created after inverter 0. Temperature
-        # first, so the SoC curve learner can leave out the charges the temperature curve says were limited.
-        # With auto mode off the learners only gather evidence for the Curves chart (and for auto mode later).
-        if self.inverters:
-            self.battery_temperature_curve_auto_update(self.inverters[0])
-            self.battery_temperature_discharge_evidence_update(self.inverters[0])
-            self.battery_power_curve_update(self.inverters[0], discharge=False)
-            self.battery_power_curve_update(self.inverters[0], discharge=True)
-            self.publish_battery_curve_sensors()
-
         # Atomically publish all accumulated totals so the web server never reads partial sums
         self.current_charge_limit_kwh = current_charge_limit_kwh
         self.soc_max = dp3(soc_max)
@@ -1878,6 +1866,14 @@ class Execute:
                     100 - int(self.inverter_loss * 100),
                 )
             )
+
+        # The rate grids read the whole fleet's history (the plan models it as one battery), so they are updated once every
+        # inverter exists and is refreshed - on a fresh start the others are only created after inverter 0 - and after the
+        # totals above, which size the manual grid. With battery_rate_grid_auto off they only gather evidence.
+        if self.inverters:
+            self.battery_rate_grid_update(self.inverters[0], False)
+            self.battery_rate_grid_update(self.inverters[0], True)
+            self.publish_battery_rate_grid_sensors()
 
         # Work out current charge limits and publish charge limit base
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window))]
