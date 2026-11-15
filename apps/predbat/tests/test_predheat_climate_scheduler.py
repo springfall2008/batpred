@@ -154,6 +154,39 @@ def test_predheat_climate_scheduler(my_predbat):
         assert all(check["target"] == {"entity_id": "binary_sensor.workday_sensor"} and check["return_response"] is True for check in checks)
         assert {"2026-11-07", "2026-11-09"}.issubset({check["check_date"] for check in checks})
 
+    def workday_horizon():
+        # An ordinary two-day forecast needs today and the next two dates,
+        # not the fourth calendar day outside its horizon.
+        nodes = {
+            "weekday": [{"time": "00:15", "temp": 21}],
+            "weekend": [{"time": "00:15", "temp": 17}],
+        }
+        settings = {
+            "workdays": ["mon", "tue", "wed", "thu", "fri"],
+            "use_workday_integration": True,
+        }
+        heat, calls, _ = make(
+            local(2026, 11, 5, 21, 0),
+            response(nodes, "5/2"),
+            scheduler_settings=settings,
+            workday_dates={"2026-11-06"},
+        )
+        dates = [kwargs["check_date"] for service, kwargs in calls if service == "workday/check_date"]
+        assert dates == ["2026-11-05", "2026-11-06", "2026-11-07"], dates
+        assert heat.schedule_change_minutes is not None
+
+        # On spring-forward night, 48 elapsed hours reach into the *fourth*
+        # calendar date, so that day's Workday call and 00:15 node are needed.
+        heat, calls, _ = make(
+            local(2026, 3, 28, 23, 30),
+            response(nodes, "5/2"),
+            scheduler_settings=settings,
+            workday_dates={"2026-03-31"},
+        )
+        dates = [kwargs["check_date"] for service, kwargs in calls if service == "workday/check_date"]
+        assert dates == ["2026-03-28", "2026-03-29", "2026-03-30", "2026-03-31"], dates
+        values(heat, [(2864, 17), (2865, 21)])
+
     def workday_failure():
         nodes = {
             "weekday": [{"time": "00:15", "temp": 21}],
@@ -485,6 +518,7 @@ def test_predheat_climate_scheduler(my_predbat):
         check("weekday/weekend across Monday", weekdays)
         check("custom manually selected workdays", configurable_workdays)
         check("Workday future dates and holidays", workday_holidays)
+        check("Workday lookups within forecast horizon", workday_horizon)
         check("Climate Scheduler settings failure fallback", settings_failure)
         check("Workday service failure fallback", workday_failure)
         check("individual days across midnight", individual)

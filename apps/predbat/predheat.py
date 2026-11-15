@@ -472,8 +472,20 @@ class PredHeat:
         mode_events = []
         day_names = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
+        forecast_end = now_utc + timedelta(minutes=self.forecast_minutes)
         for day_offset in range(self.forecast_days + 2):
             day = now_local.date() + timedelta(days=day_offset)
+            # Stop before any Workday lookup for a day wholly beyond the
+            # forecast.
+            midnight = datetime(day.year, day.month, day.day)
+            try:
+                day_start = tz.localize(midnight, is_dst=None)
+            except pytz.AmbiguousTimeError:
+                day_start = tz.localize(midnight, is_dst=True)
+            except pytz.NonExistentTimeError:
+                day_start = tz.normalize(tz.localize(midnight, is_dst=False))
+            if day_start.astimezone(timezone.utc) > forecast_end:
+                break
             weekday = day.weekday()
 
             if mode == "all_days":
