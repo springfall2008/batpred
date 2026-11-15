@@ -35,6 +35,9 @@ def test_rate_replicate(my_predbat):
         ("rate_io", _test_rate_io, "Intelligent Octopus rate_io"),
         ("future_import", _test_future_rate_adjust_import, "Future rate adjust import"),
         ("future_export", _test_future_rate_adjust_export, "Future rate adjust export (negative clamping)"),
+        ("future_without_previous_day", _test_future_rate_without_previous_day, "Future rates apply where only the future minute is predicted"),
+        ("future_beyond_first_day", _test_future_rate_beyond_first_replicated_day, "Future rates apply on the second replicated day too"),
+        ("future_opt_in", _test_future_rate_opt_in, "Future rates only apply to the live tariff (not gas, compare or annual)"),
         ("import_offset", _test_import_offset, "Import rate offset"),
         ("export_offset", _test_export_offset_negative, "Export rate offset with negative clamping"),
         ("gas_rates", _test_gas_rates, "Gas rates (is_gas=True)"),
@@ -433,7 +436,7 @@ def _test_future_rate_adjust_import(my_predbat):
         my_predbat.future_energy_rates_import[minute % 1440] = 15.0  # Base rate
 
     # Run rate_replicate
-    result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=False)
+    result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=False, use_future=True)
 
     # Check that future rates are applied
     next_day_minute = 1440 + 600
@@ -464,6 +467,103 @@ def _test_future_rate_adjust_import(my_predbat):
     return failed
 
 
+def _setup_future_context(my_predbat):
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S"))
+    my_predbat.forecast_minutes = 2880
+    my_predbat.metric_future_rate_offset_import = 0
+    my_predbat.metric_future_rate_offset_export = 0
+    my_predbat.future_energy_rates_import = {}
+    my_predbat.future_energy_rates_export = {}
+    my_predbat.rate_max = 99.0
+    my_predbat.args["futurerate_adjust_import"] = True
+
+
+def _restore_future_context(my_predbat):
+    if "futurerate_adjust_import" in my_predbat.args:
+        del my_predbat.args["futurerate_adjust_import"]
+    my_predbat.future_energy_rates_import = {}
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24*60
+
+
+def _test_future_rate_without_previous_day(my_predbat):
+    """
+    A price forecast (e.g. AgilePredict) only covers minutes from when it was made onwards, so the
+    future rate for tomorrow 10:00 exists while today's 10:00 is not in the forecast. The forecast
+    must still be used rather than falling back to copying today's price.
+    """
+    failed = 0
+    _setup_future_context(my_predbat)
+    rates = {minute: 15.0 for minute in range(0, 1440)}
+    my_predbat.future_energy_rates_import = {minute: 20.0 for minute in range(1440, 2880)}
+
+    result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=False, use_future=True)
+
+    minute = 1440 + 600
+    if result.get(minute) != 20.0 or result_replicated.get(minute) != "future":
+        print(f"  ✗ ERROR: expected future rate 20.0 at {minute}, got {result.get(minute)} ({result_replicated.get(minute)})")
+        failed |= 1
+    else:
+        print("  ✓ Future rate used without a matching previous-day future rate")
+
+    _restore_future_context(my_predbat)
+    return failed
+
+
+def _test_future_rate_beyond_first_replicated_day(my_predbat):
+    """
+    Published rates end at 23:00 today; the forecast covers the next two days. Minutes more than
+    24 hours past the last published rate replicate from a minute that was itself filled, and must
+    still take their own forecast value rather than a copy of the previous day's forecast.
+    """
+    failed = 0
+    _setup_future_context(my_predbat)
+    my_predbat.forecast_minutes = 3 * 1440
+    rates = {minute: 15.0 for minute in range(0, 1380)}
+    my_predbat.future_energy_rates_import = {minute: 20.0 + (minute // 1440) * 5.0 for minute in range(1380, 4 * 1440)}
+
+    result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=False, use_future=True)
+
+    for minute, expected in [(1400, 20.0), (1440 + 600, 25.0), (2 * 1440 + 600, 30.0)]:
+        if result.get(minute) != expected or result_replicated.get(minute) != "future":
+            print(f"  ✗ ERROR: minute {minute} expected future {expected}, got {result.get(minute)} ({result_replicated.get(minute)})")
+            failed |= 1
+        else:
+            print(f"  ✓ minute {minute} = {expected} (future)")
+
+    _restore_future_context(my_predbat)
+    return failed
+
+
+def _test_future_rate_opt_in(my_predbat):
+    """
+    The predicted future rates belong to the live import/export tariff. Gas (replicated through
+    the export path) and the tariffs replayed by compare/annual must keep their own copied prices.
+    """
+    failed = 0
+    _setup_future_context(my_predbat)
+    my_predbat.args["futurerate_adjust_export"] = True
+    rates = {minute: 15.0 for minute in range(0, 1440)}
+    my_predbat.future_energy_rates_import = {minute: 20.0 for minute in range(0, 2880)}
+    my_predbat.future_energy_rates_export = {minute: 5.0 for minute in range(0, 2880)}
+
+    for label, kwargs in [("import", {"is_import": True}), ("export", {"is_import": False}), ("gas", {"is_import": False, "is_gas": False})]:
+        result, result_replicated = my_predbat.rate_replicate(dict(rates), **kwargs)
+        if result.get(2040) != 15.0 or result_replicated.get(2040) == "future":
+            print(f"  ✗ ERROR: {label} without use_future took the forecast: {result.get(2040)} ({result_replicated.get(2040)})")
+            failed |= 1
+        else:
+            print(f"  ✓ {label} without use_future keeps the copied price")
+
+    del my_predbat.args["futurerate_adjust_export"]
+    my_predbat.future_energy_rates_export = {}
+    _restore_future_context(my_predbat)
+    return failed
+
+
 def _test_future_rate_adjust_export(my_predbat):
     """Test rate_replicate with futurerate_adjust_export feature."""
     failed = 0
@@ -491,7 +591,7 @@ def _test_future_rate_adjust_export(my_predbat):
         my_predbat.future_energy_rates_export[minute % 1440] = 10.0  # Base rate
 
     # Run rate_replicate for export
-    result, result_replicated = my_predbat.rate_replicate(rates, is_import=False, is_gas=False)
+    result, result_replicated = my_predbat.rate_replicate(rates, is_import=False, is_gas=False, use_future=True)
 
     # Check that negative future export rates are clamped to 0
     next_day_minute = 1440 + 600

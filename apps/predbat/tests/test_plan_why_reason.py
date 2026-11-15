@@ -473,6 +473,30 @@ def run_test_plan_why_reason(my_predbat):
     my_predbat.charge_window_best = window
     my_predbat.charge_limit_best = [8.0]
 
+    # --- Test 4c: Chrg rate capped at the inverter limit (GH#5394) - a battery that can take more
+    # than the inverter can pass is charged at inverter_limit x inverter_loss by the prediction, plus
+    # any DC-coupled PV on a hybrid, so the reason must not show the battery's own max rate ---
+    print("Test Chrg reason shows the inverter-limited rate_kw, not battery_rate_max_charge")
+    saved = (my_predbat.inverter_hybrid, my_predbat.inverter_limit, my_predbat.inverter_loss, my_predbat.battery_rate_max_charge)
+    try:
+        my_predbat.inverter_limit = 1.0 / 60.0
+        my_predbat.inverter_loss = 0.96
+        my_predbat.battery_rate_max_charge = 2.0 / 60.0
+        my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)
+        pv_half_kw = {minute: 0.5 / 60.0 * 5 for minute in pv_step}
+        for hybrid, pv, expected_rate_kw in [(True, pv_step, "0.96"), (True, pv_half_kw, "1.46"), (False, pv_half_kw, "0.96")]:
+            my_predbat.inverter_hybrid = hybrid
+            _, raw_plan = my_predbat.publish_html_plan(pv, pv, load_step, load_step, my_predbat.end_record, publish=False)
+            row = _get_row(raw_plan, minutes_now)
+            if row is None or _codes(row) != ["charge_low_rate"]:
+                print("ERROR: Chrg inverter-limited reasons unexpected (hybrid {}): {}".format(hybrid, row and _codes(row)))
+                failed = True
+            elif row["reasons"][0]["params"].get("rate_kw") != expected_rate_kw:
+                print("ERROR: Chrg rate_kw not capped at the inverter limit (hybrid {}, pv {} kW): expected {}, got {}".format(hybrid, pv[0] * 12, expected_rate_kw, row["reasons"][0]["params"].get("rate_kw")))
+                failed = True
+    finally:
+        my_predbat.inverter_hybrid, my_predbat.inverter_limit, my_predbat.inverter_loss, my_predbat.battery_rate_max_charge = saved
+
     # --- Test 5: Exp ---
     print("Test Exp reason")
     my_predbat.charge_window_best = []
@@ -850,6 +874,30 @@ def run_test_plan_why_reason(my_predbat):
     toggle_src = plan_css_full[toggle_start:toggle_end]
     if "if (!dropdown)" not in toggle_src:
         print("ERROR: expected toggleForceDropdown to null-guard document.getElementById(id) before using it")
+        failed = True
+
+    # --- Test 17: a History slot that ran alongside a warning is flagged, keeping its own reason ---
+    print("Test status warning flag")
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 5.0)
+    warning = "Warn: Return bad float value unavailable from car_charging_soc"
+    _, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False, status_warnings={minutes_now + 5: warning})
+    row = _get_row(raw_plan, minutes_now)
+    next_row = _get_row(raw_plan, minutes_now + my_predbat.plan_interval_minutes)
+    if row is None or _codes(row)[-1:] != ["status_warning"] or not _codes(row)[0].startswith("demand_"):
+        print("ERROR: a warning slot should keep its demand reason and add status_warning, got {}".format(row and _codes(row)))
+        failed = True
+    elif "&#128681;" not in row["state_text"]:
+        print("ERROR: a warning slot should carry the red flag in its state, got {!r}".format(row["state_text"]))
+        failed = True
+    elif warning not in _render(row, raw_plan["reason_templates"]):
+        print("ERROR: the warning text should appear in the slot's reason, got {!r}".format(_render(row, raw_plan["reason_templates"])))
+        failed = True
+    elif next_row is None or "status_warning" in _codes(next_row) or "&#128681;" in next_row["state_text"]:
+        print("ERROR: a slot without a warning should not be flagged, got {}".format(next_row and _codes(next_row)))
         failed = True
 
     if not failed:

@@ -159,7 +159,36 @@ def run_car_charging_smart_tests(my_predbat):
     failed |= run_car_charging_slot_integer_test("smart_int3_issue3911", my_predbat, battery_size=77.0, soc=74.3, limit=77.0, rate=11.0, loss=0.9, plan_time="07:00:00")
 
     failed |= run_car_charging_start_stable_test(my_predbat)
+    failed |= run_car_plan_published_per_car_test(my_predbat)
 
+    return failed
+
+
+def run_car_plan_published_per_car_test(my_predbat):
+    """
+    Each car's slot sensor carries only that car's windows - a charger is driven from it, so a
+    window of another car's would start it charging off-plan.
+    """
+    failed = False
+    saved_num_cars = my_predbat.num_cars
+    saved_slots = my_predbat.car_charging_slots
+    saved_dashboard = copy.deepcopy(my_predbat.dashboard_values)
+    try:
+        my_predbat.num_cars = 3
+        window = {"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "kwh": 5.0, "average": 10.0, "cost": 50.0}
+        my_predbat.car_charging_slots = [[window], [], [dict(window, start=window["start"] + 120, end=window["end"] + 120)]]
+        my_predbat.publish_car_plan()
+        planned = [my_predbat.dashboard_values["binary_sensor.predbat_car_charging_slot" + postfix]["attributes"]["planned"] for postfix in ("", "_1", "_2")]
+        if [len(plan) for plan in planned] != [1, 0, 1] or planned[0][0]["start"] == planned[2][0]["start"]:
+            print("ERROR: each car's slot sensor should carry only its own windows, got {}".format(planned))
+            failed = True
+        else:
+            print("OK: each car's slot sensor carries only its own windows")
+    finally:
+        my_predbat.num_cars = saved_num_cars
+        my_predbat.car_charging_slots = saved_slots
+        my_predbat.dashboard_values.clear()
+        my_predbat.dashboard_values.update(saved_dashboard)
     return failed
 
 

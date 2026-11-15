@@ -19,9 +19,10 @@ The offset is the part worth pinning: a value recorded at 10:00 describing 11:00
 11:00, or the comparison silently comes out an hour early and the plan looks wrong when it was right.
 """
 
+import re
 from datetime import timedelta
 
-from utils import prune_today
+from utils import prune_today, str2time
 
 
 def test_soc_lookahead_recorded(my_predbat):
@@ -98,11 +99,185 @@ def test_lookahead_offset_aligns_with_actual(my_predbat):
     return failed
 
 
+def test_lookahead_prune_keeps_what_lands_today(my_predbat):
+    """Pruning to today judges a point by where it is plotted, not when it was recorded.
+
+    A +8h prediction made at 18:00 yesterday describes 02:00 today, so it belongs on today's chart;
+    one made two days ago does not, however far ahead it looked.
+    """
+    print("  - test_lookahead_prune_keeps_what_lands_today")
+    failed = False
+    midnight = my_predbat.midnight_utc
+    yesterday_evening = midnight - timedelta(hours=6)
+    two_days_ago = midnight - timedelta(days=2)
+    this_morning = midnight + timedelta(hours=1)
+    recorded = {two_days_ago.isoformat(): 1.0, yesterday_evening.isoformat(): 2.0, this_morning.isoformat(): 3.0}
+
+    shifted8 = prune_today(recorded, my_predbat.now_utc, midnight, prune=True, offset_minutes=60 * 8)
+    expected = {(yesterday_evening + timedelta(hours=8)).isoformat(): 2.0, (this_morning + timedelta(hours=8)).isoformat(): 3.0}
+    if shifted8 != expected:
+        print("ERROR: +8h pruned to today should keep yesterday evening's and this morning's points, got {}".format(shifted8))
+        failed = True
+    return failed
+
+
+def test_battery_chart_lookahead_starts_today(my_predbat):
+    """The Battery chart's +1h/+8h series start today, like its other series, not a week back.
+
+    They are built from a 7-day history; unpruned, that history stretched the chart's x-axis back
+    across every day of it.
+    """
+    print("  - test_battery_chart_lookahead_starts_today")
+    from web import WebInterface
+
+    failed = False
+    midnight = my_predbat.midnight_utc
+    fmt = "%Y-%m-%dT%H:%M:%S.%f%z"
+    records = []
+    for hours_back in range(24 * 6, 0, -1):
+        stamp = my_predbat.now_utc - timedelta(hours=hours_back)
+        records.append({"state": "5.0", "attributes": {"soc_h1": 5.0, "soc_h8": 6.0}, "last_updated": stamp.strftime(fmt)})
+
+    web = WebInterface(my_predbat, web_port=5052)
+    captured = {}
+    web.get_history_with_now_attrs = lambda entity_id, days: [list(records)]
+    web.get_entity_results = lambda entity_id: {my_predbat.now_utc.strftime(fmt): 1.0}
+    web.render_chart = lambda series_data, *args, **kwargs: captured.setdefault("series", series_data) and ""
+    web.get_chart("Battery")
+
+    series = {item["name"]: item["data"] for item in captured.get("series", [])}
+    for name in ("Predicted (+1h)", "Predicted (+8h)"):
+        data = series.get(name)
+        if not data:
+            print("ERROR: the {} series is missing or empty".format(name))
+            failed = True
+            continue
+        earliest = min(str2time(stamp) for stamp in data)
+        if earliest < midnight:
+            print("ERROR: {} starts at {}, before midnight {} - the chart would reach back days".format(name, earliest, midnight))
+            failed = True
+    return failed
+
+
+def test_battery_chart_inverter_soc(my_predbat):
+    """A multi-inverter Battery chart carries each inverter's actual SoC, in % of its own capacity, hidden.
+
+    Each battery is on its own 0-100% scale, so a 5 kWh battery at 4 kWh reads 80% whatever the fleet
+    total is. A single-inverter chart gets no extra lines: its one battery is already Actual.
+    """
+    print("  - test_battery_chart_inverter_soc")
+    from types import SimpleNamespace
+    from web import WebInterface
+
+    failed = False
+    fmt = "%Y-%m-%dT%H:%M:%S.%f%z"
+    # One reading from just before midnight, which holds for the whole of today
+    stamp = (my_predbat.midnight_utc - timedelta(minutes=30)).strftime(fmt)
+    # Inverter 0 reports kWh and has a battery_scaling; inverter 1 reports Wh, which must be converted
+    readings = {
+        "sensor.inv0_soc_kw": ("4.0", "kWh"),
+        "sensor.inv1_soc_kw": ("2000", "Wh"),
+        "sensor.inv0_soc": ("65", "%"),
+        "sensor.inv1_soc": ("30", "%"),
+    }
+
+    def fake_history(entity_id, days, required=True, tracked=True):
+        state, unit = readings[entity_id]
+        return [[{"state": state, "last_updated": stamp, "attributes": {"unit_of_measurement": unit}}]]
+
+    def check_series(series, expected, label):
+        """Each expected inverter line is hidden, in %, flat at its past value and ends on its live value."""
+        bad = False
+        now_str = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+        for name, (expect_past, expect_now) in expected.items():
+            item = series.get(name)
+            if not item:
+                print("ERROR: {}: the {} series is missing, got {}".format(label, name, list(series)))
+                bad = True
+                continue
+            if not item.get("hidden") or item.get("unit") != "%":
+                print("ERROR: {}: {} should be hidden and in %, got hidden={} unit={}".format(label, name, item.get("hidden"), item.get("unit")))
+                bad = True
+            past = [value for stamp_key, value in item["data"].items() if stamp_key != now_str]
+            if not past or any(value != expect_past for value in past):
+                print("ERROR: {}: {} past SoC should be {}% of its own capacity throughout, got {}".format(label, name, expect_past, item["data"]))
+                bad = True
+            if list(item["data"].keys())[-1] != now_str or item["data"][now_str] != expect_now:
+                print("ERROR: {}: {} should end at the inverter's current {}%, got {}".format(label, name, expect_now, item["data"]))
+                bad = True
+        return bad
+
+    saved_args = my_predbat.args
+    saved_inverters = my_predbat.inverters
+    try:
+        my_predbat.args = dict(saved_args)
+        my_predbat.args.pop("soc_percent", None)
+        my_predbat.args["soc_kw"] = ["sensor.inv0_soc_kw", "sensor.inv1_soc_kw"]
+        # soc_max already includes battery_scaling, as Inverter computes it
+        my_predbat.inverters = [
+            SimpleNamespace(id=0, soc_max=4.5, battery_scaling=0.9, soc_percent=82),
+            SimpleNamespace(id=1, soc_max=10.0, battery_scaling=1.0, soc_percent=21),
+        ]
+
+        web = WebInterface(my_predbat, web_port=5053)
+        web.get_history_wrapper = fake_history
+        web.get_history_with_now_attrs = lambda entity_id, days: []
+        web.get_entity_results = lambda entity_id: {my_predbat.now_utc.strftime(fmt): 1.0}
+        captured = {}
+
+        def capture(series_data, *args, **kwargs):
+            captured["series"] = series_data
+            captured["extra_yaxis"] = kwargs.get("extra_yaxis")
+            return ""
+
+        # soc_kw sensors: 4.0 kWh x 0.9 of 4.5 kWh is 80%; 2000 Wh of 10 kWh is 20%
+        web.render_chart = capture
+        web.get_chart("Battery")
+        series = {item["name"]: item for item in captured.get("series", [])}
+        failed |= check_series(series, {"Actual Inverter 0": (80.0, 82), "Actual Inverter 1": (20.0, 21)}, "soc_kw")
+        axis = captured.get("extra_yaxis") or {}
+        if axis.get("series_names") != ["Actual Inverter 0", "Actual Inverter 1"] or axis.get("min") != 0 or axis.get("max") != 100:
+            print("ERROR: the inverter lines should share a 0-100% axis, got {}".format(axis))
+            failed = True
+
+        # The real renderer emits the hidden flag and the fixed axis range, and keeps the inverter lines off the kWh axis
+        del web.render_chart
+        html = web.get_chart("Battery")
+        if "hidden: true" not in html or "max: 100" not in html:
+            print("ERROR: the rendered chart should start the inverter lines hidden on a 0-100 axis")
+            failed = True
+        primary = re.search(r"title: \{ text: 'kWh' \},\s*decimalsInFloat: 2,\s*seriesName: \[([^\]]*)\]", html)
+        if not primary or "Actual Inverter" in primary.group(1):
+            print("ERROR: the kWh axis should list the fleet series only, got {}".format(primary.group(1) if primary else None))
+            failed = True
+
+        # soc_percent sensors are plotted as they are
+        my_predbat.args["soc_percent"] = ["sensor.inv0_soc", "sensor.inv1_soc"]
+        web.render_chart = capture
+        web.get_chart("Battery")
+        series = {item["name"]: item for item in captured.get("series", [])}
+        failed |= check_series(series, {"Actual Inverter 0": (65.0, 82), "Actual Inverter 1": (30.0, 21)}, "soc_percent")
+
+        # One inverter: the chart is unchanged
+        my_predbat.inverters = my_predbat.inverters[:1]
+        web.get_chart("Battery")
+        if captured.get("extra_yaxis") is not None or any(item.get("unit") == "%" for item in captured.get("series", [])):
+            print("ERROR: a single-inverter install should get no per-inverter lines or % axis")
+            failed = True
+    finally:
+        my_predbat.args = saved_args
+        my_predbat.inverters = saved_inverters
+    return failed
+
+
 def run_battery_accuracy_tests(my_predbat):
     """Run every battery prediction-accuracy test."""
     print("**** Running battery accuracy tests ****\n")
     failed = test_soc_lookahead_recorded(my_predbat)
     failed |= test_lookahead_offset_aligns_with_actual(my_predbat)
+    failed |= test_lookahead_prune_keeps_what_lands_today(my_predbat)
+    failed |= test_battery_chart_lookahead_starts_today(my_predbat)
+    failed |= test_battery_chart_inverter_soc(my_predbat)
     failed |= test_load_power_less_car(my_predbat)
     failed |= test_load_power_less_car_matches_chart(my_predbat)
     return failed

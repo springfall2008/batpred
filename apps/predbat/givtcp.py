@@ -17,8 +17,9 @@ other vendor already uses. Predbat's Inverter class never talks REST directly;
 automatic_config() points its normal entity-based apps.yaml args at the
 entities this component creates.
 
-Reuses givtcp_rest.py's GivTCPRest unchanged as the actual REST client -
-this component's own job is purely the publish/subscribe/auto-config glue
+Uses givtcp_rest.py's GivTCPRest as the actual REST client, awaiting its
+coroutines on this component's event loop and supplying the one HTTP session
+they share - this component's own job is purely the publish/subscribe/auto-config glue
 (dashboard_item calls, select/number/switch event handlers, automatic_config),
 matching the pattern already used by fox.py, ohme.py, solax.py etc.
 
@@ -55,12 +56,14 @@ GIVTCP_PAUSE_MODES = ["Disabled", "PauseCharge", "PauseDischarge", "PauseBoth"]
 # GivTCP raw.invertor.model values confirmed not to support the Discharge_Target_SOC_1 register
 # (#4517). "Ac" (AC Coupled) and "Hybrid_gen1" are confirmed live - the latter on two separate
 # reporter inverters, still repeating the write every cycle post-fix until added here.
-# "Hybrid_gen2" is inferred from the same GivEnergy firmware-archive generational split
-# (github.com/DJBenson/giv-firmware), not independently confirmed on real Gen2 hardware yet.
+# "Hybrid_gen2" was first inferred from the same GivEnergy firmware-archive generational split
+# (github.com/DJBenson/giv-firmware), and has since been confirmed on real Gen2 hardware (#5679).
 #
 # These inverters accept the write and report success, but it never persists, so the caller sees a
 # permanent mismatch and rewrites every cycle. Not publishing the entity at all is what stops that:
-# Inverter.adjust_force_export already leaves a target it cannot read alone.
+# Inverter.adjust_force_export already leaves a target it cannot read alone. automatic_config() also
+# leaves discharge_target_soc unclaimed for these models, so nothing is bound to an entity that is
+# never published.
 DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
 
 # The same inverters identified from Invertor_Type, which is what GivTCP v3 actually reports in
@@ -70,14 +73,31 @@ DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
 # Matched on the set of alphanumeric tokens because the two vocabularies disagree on word order and
 # spacing: "Gen 1 Hybrid" against "Hybrid_gen1". Both reduce to {gen, 1, hybrid}.
 #
-# Gen2 Hybrid is deliberately absent. "Hybrid_gen2" above was inferred from a firmware archive
-# rather than observed, and is still honoured where a build reports that exact raw model - but
-# extending it to Invertor_Type would remove export target control from every Gen2 Hybrid on v3 on
-# the strength of that inference. Add it here once an affected Gen2 is actually confirmed.
+# Gen2 Hybrid was originally left out because "Hybrid_gen2" above was only inferred. It is now
+# confirmed (#5679, giv_tcp#664): GivTCP 3.6 refuses the per-slot write as unsupported on a Gen2
+# Hybrid, so the read-back stays 0 and Predbat retried and warned on every export cycle.
 DISCHARGE_TARGET_UNSUPPORTED_TYPES = (
     frozenset({"ac"}),
     frozenset({"gen", "1", "hybrid"}),
+    frozenset({"gen", "2", "hybrid"}),
 )
+
+
+def discharge_target_unsupported(rest):
+    """
+    Whether this inverter has no working Discharge_Target_SOC_1 register (#4517, #5679).
+
+    Matches both the raw GivTCP model code and the readable Invertor_Type, using the two tables
+    above. publish_data() uses it to withhold the entity, and automatic_config() to leave
+    discharge_target_soc unclaimed, so the two cannot disagree about which inverters have it.
+    """
+    rest_data = rest.inverter.rest_data
+    if not rest_data:
+        return False
+    inverter_model = rest_data.get("raw", {}).get("invertor", {}).get("model", "")
+    inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
+    return inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
+
 
 # Control.Mode values. Predbat only ever writes Eco or Timed Export, but the inverter reports the
 # others, and an option list that omitted them could not represent the mode the inverter is in.
@@ -130,6 +150,7 @@ GIVTCP_SENSORS = {
     "inverter_time": {"icon": "mdi:clock-outline"},
     "battery_rate_max": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:battery-arrow-up"},
     "inverter_limit": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:transmission-tower"},
+    "export_limit": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:transmission-tower-export"},
     "battery_calibration": {"icon": "mdi:battery-sync"},
     "battery_soh": {"icon": "mdi:battery-heart-variant"},
     "battery_dod": {"icon": "mdi:battery-arrow-down-outline"},
@@ -198,6 +219,7 @@ GIVTCP_FRIENDLY_NAMES = {
     "inverter_time": "Inverter Time",
     "battery_rate_max": "Battery Max Rate",
     "inverter_limit": "Inverter Limit",
+    "export_limit": "Export Limit",
     "battery_calibration": "Battery Calibration",
     "battery_soh": "Battery State of Health",
     "battery_dod": "Battery Depth of Discharge",
@@ -233,6 +255,7 @@ GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS = [
     "battery_temperature",
     "inverter_time",
     "inverter_limit",
+    "export_limit",
     "battery_calibration",
     # The day's energy totals. Claimed through the same "only if every inverter published it" gate
     # as the rest: a GivTCP that reports no Energy block would otherwise point these at entities
@@ -262,8 +285,13 @@ GIVTCP_ENERGY_TODAY_FIELDS = {
 # (soc_max, the controls, the power figures) is read as a current value, where a repoint costs
 # nothing, so those keep overwriting as before.
 #
-# Applied per key, so naming one of the four by hand does not opt the other three out.
-GIVTCP_AUTO_CONFIG_USER_WINS_KEYS = tuple(GIVTCP_ENERGY_TODAY_FIELDS)
+# export_limit joins them for a different reason: installs set up from the template carry a
+# hand-typed export_limit, and that stays authoritative until the user deletes the line - the
+# inverter's own reading only fills the key in when apps.yaml is silent. automatic_config() notes
+# when the two disagree so a stale value can be spotted.
+#
+# Applied per key, so naming one of these by hand does not opt the others out.
+GIVTCP_AUTO_CONFIG_USER_WINS_KEYS = tuple(GIVTCP_ENERGY_TODAY_FIELDS) + ("export_limit",)
 
 # Everything else the Energy block carries, as key -> (section, field). From the same snapshot at no
 # extra cost, and published but NOT auto-configured: Predbat has no apps.yaml key that consumes a
@@ -415,6 +443,12 @@ GIVTCP_RECORD_KEYS = [
 GIVTCP_INVERTER_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 
+# How long a write event pressed from another event loop waits for the component's loop to apply it.
+# A write is five attempts at most, each a POST, a status read and a 2s pause, so it normally takes
+# seconds; this covers every attempt running into INVERTER_REST_TIMEOUT.
+GIVTCP_WRITE_HANDOVER_TIMEOUT = 120
+
+
 class GivTCPComponent(ComponentBase):
     """
     Publishes one or more GivTCP-connected inverters as HA entities.
@@ -437,7 +471,10 @@ class GivTCPComponent(ComponentBase):
         self.rest = []
         for n, url in enumerate(rest_urls):
             state = InverterRestState(id=n, rest_api=url)
-            self.rest.append(GivTCPRest(self.base, state))
+            self.rest.append(GivTCPRest(self.base, state, http_session=self.rest_session))
+        # The one HTTP session every client's requests are made on while the component is running.
+        # Only ever made and used on the component's own loop; see rest_session().
+        self.session = None
         self.automatic_config_done = False
         # givtcp_rest is the key that enables this component, but its length says nothing about how
         # many inverters exist - the shipped apps.yaml pairs num_inverters: 1 with a two-entry list,
@@ -470,10 +507,36 @@ class GivTCPComponent(ComponentBase):
         # publish_data() runs every poll; the unsupported-model notice is per inverter and only
         # worth saying once rather than every 60 seconds for the life of the process
         self.discharge_target_warned = {}
+        # (inverter, apps.yaml value, reported value) mismatches of export_limit already logged, so
+        # each re-run of automatic_config() does not repeat the note
+        self.export_limit_mismatch_noted = set()
 
-    async def _run_blocking(self, func, *args):
-        """Run one of GivTCPRest's blocking (requests + time.sleep) calls off the event loop."""
-        return await asyncio.get_event_loop().run_in_executor(None, func, *args)
+    def rest_session(self):
+        """Return the component's open HTTP session, opening one if there is none, or None off its loop.
+
+        Called by the REST clients for every request, so GivTCP's connection is reused from one
+        poll or write to the next. run() ticks on the component's loop and write events are handed
+        over to it, so that is where every request is made while the component is running.
+
+        A call made before the component has started, or after it has stopped, runs on whatever
+        loop awaited it. An aiohttp session belongs to the loop it was made on, and one made on a
+        caller's passing loop could never be closed, so there the answer is None and the client has
+        a session made for that one request instead.
+        """
+        if asyncio.get_running_loop() is not self.component_loop:
+            return None
+        if self.session is None or getattr(self.session, "closed", True) is not False:
+            self.session = self.http_session(trust_env=True)
+        return self.session
+
+    async def final(self):
+        """Close the HTTP session as the component stops."""
+        session, self.session = self.session, None
+        if session is not None and getattr(session, "closed", True) is False:
+            try:
+                await session.close()
+            except Exception as e:
+                self.log("Warn: GivTCP: failed to close HTTP session: {}".format(e))
 
     async def run(self, seconds, first):
         # Captured before the poll block so the pass that performs initial discovery does not also
@@ -488,7 +551,7 @@ class GivTCPComponent(ComponentBase):
             answered = []
             for n in poll:
                 rest = self.rest[n]
-                data = await self._run_blocking(rest.read_data)
+                data = await rest.read_data()
                 if data:
                     rest.inverter.rest_data = data
                     answered.append(n)
@@ -574,7 +637,7 @@ class GivTCPComponent(ComponentBase):
             # A single cheap GET, unlike startup discovery: read_data()'s 20s/40s retry ladder is
             # there for a GivTCP that might merely be booting, and spending ~100s on a placeholder
             # URL that will never answer would outlast the poll interval this runs on.
-            data = await self._run_blocking(rest.read_data, "readData", False)
+            data = await rest.read_data("readData", False)
             if not data:
                 continue
             rest.inverter.rest_data = data
@@ -665,8 +728,7 @@ class GivTCPComponent(ComponentBase):
                 # Publishing one would restart the every-cycle rewrite loop of #4517, because the write
                 # reports success and then silently fails to persist.
                 inverter_model = rest.inverter.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
-                inverter_type_tokens = frozenset(re.findall(r"[a-z]+|\d+", rest.inverter_type().lower()))
-                model_unsupported = inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS or inverter_type_tokens in DISCHARGE_TARGET_UNSUPPORTED_TYPES
+                model_unsupported = discharge_target_unsupported(rest)
                 if not rest.rest_v3:
                     # v2 has no /setDischargeTarget - see GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
                     pass
@@ -794,6 +856,12 @@ class GivTCPComponent(ComponentBase):
                 if max_inverter_rate:
                     self.dashboard_item(self._entity_id("sensor", n, "inverter_limit"), state=max_inverter_rate, attributes=self._attributes(n, "inverter_limit"), app="givtcp")
                     published.add("inverter_limit")
+
+                # "is not None", not truthiness: 0 is a zero-export site and must be published as such
+                export_limit = rest.export_limit()
+                if export_limit is not None:
+                    self.dashboard_item(self._entity_id("sensor", n, "export_limit"), state=export_limit, attributes=self._attributes(n, "export_limit"), app="givtcp")
+                    published.add("export_limit")
 
                 # Always published, unlike the values above: "not calibrating" is a real answer that
                 # Predbat needs, and an absent entity would be indistinguishable from one
@@ -958,10 +1026,10 @@ class GivTCPComponent(ComponentBase):
         else:
             self.log("Info: GivTCP: Enable_Charge_Target is not reported by every inverter - leaving charge_limit_enable to your apps.yaml config")
 
-        if all(self.rest[n].rest_v3 for n in discovered):
+        if all(self.rest[n].rest_v3 and not discharge_target_unsupported(self.rest[n]) for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
         else:
-            self.log("Info: GivTCP: the export target register needs GivTCP v3 on every inverter - leaving discharge_target_soc to your apps.yaml config")
+            self.log("Info: GivTCP: the export target register needs GivTCP v3 and a model that supports it on every inverter - leaving discharge_target_soc to your apps.yaml config")
 
         if not all(self.rest[n].rest_v3 for n in discovered):
             self.log("Info: GivTCP: pause control needs GivTCP v3 on every inverter - leaving pause_mode/pause_start_time/pause_end_time to your apps.yaml config")
@@ -1000,6 +1068,42 @@ class GivTCPComponent(ComponentBase):
             # themselves in place, so its recorded history survives - set_arg_auto still fills the
             # key in when they named nothing.
             self.set_arg_auto(key, self._per_endpoint_values(key, lambda n, domain=domain, key=key: self._entity_id(domain, n, key), n_inverters), overwrite=key not in GIVTCP_AUTO_CONFIG_USER_WINS_KEYS)
+
+        # Not gated on the claim: in a mixed fleet the key stays unclaimed, yet an inverter that does
+        # report its limit can still show a hand-typed figure is stale
+        self._note_export_limit_mismatch(claimed="export_limit" in keys)
+
+    def _note_export_limit_mismatch(self, claimed):
+        """
+        Say, once per inverter and value pair, when a numeric apps.yaml export_limit differs from the inverter's own.
+
+        The apps.yaml value wins (GIVTCP_AUTO_CONFIG_USER_WINS_KEYS), so a limit changed on the
+        inverter would otherwise go unnoticed behind an old hand-typed one. A sensor reference in
+        apps.yaml is left alone - it is the user's chosen source, not a stale figure.
+
+        Each inverter is checked against its own reading, so a mixed fleet where only some report a
+        limit is covered too. The advice follows the claim: when every inverter reports one, deleting
+        the line hands the key to their own sensors; when not, deleting it would leave every inverter
+        unlimited, so the note asks for the figure to be corrected instead.
+        """
+        raw = (getattr(self.base, "args_from_apps_yaml", None) or {}).get("export_limit")
+        if raw is None:
+            return
+        for n in self.discovered:
+            configured = raw[n] if isinstance(raw, list) and n < len(raw) else (None if isinstance(raw, list) else raw)
+            try:
+                configured = float(configured)
+            except (ValueError, TypeError):
+                continue
+            reported = self.rest[n].export_limit()
+            if reported is None or reported == configured or (n, configured, reported, claimed) in self.export_limit_mismatch_noted:
+                continue
+            self.export_limit_mismatch_noted.add((n, configured, reported, claimed))
+            if claimed:
+                advice = "remove export_limit from apps.yaml to use the inverter's own limit"
+            else:
+                advice = "not every inverter reports its export limit, so set inverter {}'s apps.yaml entry to {:.0f} if the inverter's figure is right".format(n, reported)
+            self.log("Info: GivTCP: apps.yaml sets export_limit to {:.0f}W for inverter {} but the inverter reports {:.0f}W - keeping your apps.yaml value; {}".format(configured, n, reported, advice))
 
     def _discovery_descriptor(self, n, name, domain, access, attrs, max_battery_rate):
         """
@@ -1140,6 +1244,9 @@ class GivTCPComponent(ComponentBase):
             max_inverter_rate = rest.max_inverter_rate()
             if max_inverter_rate:
                 ratings["inverter_limit"] = max_inverter_rate
+            export_limit = rest.export_limit()
+            if export_limit is not None:
+                ratings["export_limit"] = export_limit
 
             inverters.append(
                 inverter_record(
@@ -1200,7 +1307,7 @@ class GivTCPComponent(ComponentBase):
         window = self._window_for_write(rest, entity_id, control, "charge_start_time", "Charge_start_time_slot_1", "Charge_end_time_slot_1", value)
         if window is None:
             return
-        await self._run_blocking(rest.set_charge_slot1, window[0], window[1])
+        await rest.set_charge_slot1(window[0], window[1])
 
     async def _set_discharge_slot(self, entity_id, value):
         n, control = self._parse_entity(entity_id)
@@ -1208,7 +1315,7 @@ class GivTCPComponent(ComponentBase):
         window = self._window_for_write(rest, entity_id, control, "discharge_start_time", "Discharge_start_time_slot_1", "Discharge_end_time_slot_1", value)
         if window is None:
             return
-        await self._run_blocking(rest.set_discharge_slot1, window[0], window[1])
+        await rest.set_discharge_slot1(window[0], window[1])
 
     async def _set_pause_slot(self, entity_id, value):
         n, control = self._parse_entity(entity_id)
@@ -1216,9 +1323,19 @@ class GivTCPComponent(ComponentBase):
         window = self._window_for_write(rest, entity_id, control, "pause_start_time", "Battery_pause_start_time_slot", "Battery_pause_end_time_slot", value)
         if window is None:
             return
-        await self._run_blocking(rest.set_pause_slot, window[0], window[1])
+        await rest.set_pause_slot(window[0], window[1])
 
     async def _handle_write(self, entity_id, value, is_switch=False, is_number=False):
+        """
+        Apply one entity write on the component's own event loop, waiting for it to finish.
+
+        The event is awaited from whichever loop pressed it, but the HTTP session belongs to the
+        loop run() ticks on, and that is also where rest_data is polled - so the write is handed
+        over (ComponentBase.on_component_loop) rather than run here beside a poll on another thread.
+        """
+        await self.on_component_loop(self._apply_write(entity_id, value, is_switch, is_number), timeout=GIVTCP_WRITE_HANDOVER_TIMEOUT, what="GivTCP write to {}".format(entity_id))
+
+    async def _apply_write(self, entity_id, value, is_switch=False, is_number=False):
         """
         Apply one entity write to the inverter, then immediately republish so the entity reflects it.
 
@@ -1241,13 +1358,13 @@ class GivTCPComponent(ComponentBase):
             if method_name in ("_set_charge_slot", "_set_discharge_slot", "_set_pause_slot"):
                 await getattr(self, method_name)(entity_id, value)
             elif is_switch:
-                await self._run_blocking(getattr(rest, method_name), value == "on")
+                await getattr(rest, method_name)(value == "on")
             elif is_number:
-                await self._run_blocking(getattr(rest, method_name), value)
+                await getattr(rest, method_name)(value)
             else:
                 # Plain select (inverter_mode, pause_mode) - the chosen option is the value the
                 # write method takes, unlike the slot selects which need both ends of the window
-                await self._run_blocking(getattr(rest, method_name), value)
+                await getattr(rest, method_name)(value)
             await self.publish_data()
         except Exception as e:
             # A failed write must not propagate into the shared HA event dispatch, which would stop

@@ -38,15 +38,22 @@ class MockSunsynk(SunsynkAPI):
         self.control_enable = control_enable
         self.inverter_sn_filter = inverter_sn or []
         self.device_list = []
+        self.device_roles = {}
         self.device_detail = {}
         self.device_values = {}
         self.device_settings = {}
         self.device_energy = {}
+        # Mirrors SunsynkAPI.__init__: {sn: "ct" | "pac"} - which field sourced grid_power
+        self.grid_power_source = {}
         self.device_rated_power = {}
+        self.bms_charge_limit_max = {}
         self.battery_nominal_voltage = 0.0
         self.local_schedule = {}
         self.applied_payload = {}
         self.settle_count = {}
+        self.battery_energy = {}
+        self._parallel_warned = set()
+        self._slave_startup_waits = 0
         self.control_active = set()
         self._tier_refreshed = {}
         self._cache_restored = False
@@ -63,6 +70,9 @@ class MockSunsynk(SunsynkAPI):
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
         self.base.args = {"user_id": "test-sunsynk-1"}
+        # A real (empty) apps.yaml: a MagicMock here answers .get() for every key, so
+        # set_arg_auto(overwrite=False) would read every setting as user-configured and bind nothing.
+        self.base.args_from_apps_yaml = {}
         # A real clock on the mock base, not a MagicMock attribute: ComponentBase.minutes_now
         # derives from base.now_utc (GH#4804), and MagicMock would answer that arithmetic with a
         # value of its own rather than failing. Tests wanting a particular time of day call
@@ -662,6 +672,160 @@ def test_grid_power_sign_matches_the_live_export_sample():
     assert not failed, "test_grid_power_sign_matches_the_live_export_sample"
 
 
+def test_grid_power_uses_ct_limiter_on_export():
+    """GH#6068: on export grid_power must come from the external CT, not pac.
+
+    Pinned to the raw grid/realtime line from issue #6068 (single-inverter site
+    exporting at night, no PV): pac -3389 W is the inverter's own grid-port
+    reading (the same value as vip[0].power) and counts 1584 W of house load
+    wired on the grid side of the inverter as export. limiterTotalPower -1805 W
+    is the external CT reading, the true site flow. Predbat's convention wants
+    export positive, so this must publish +1805, not +3389.
+    """
+    failed = False
+    s = MockSunsynk()
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return the #6068 export line for each realtime endpoint."""
+        if endpoint_key == "battery":
+            return {"soc": "71.0", "power": 3938, "temp": "22.0", "voltage": "53.9"}
+        if endpoint_key == "grid":
+            return {"vip": [{"volt": "249.3", "current": "13.2", "power": -3389}], "pac": -3389, "etodayFrom": "22.8", "etodayTo": "1.4", "limiterPowerArr": [-1805, 0], "limiterTotalPower": -1805}
+        if endpoint_key == "load":
+            return {"totalPower": 1788, "dailyUsed": 20.1}
+        if endpoint_key == "input":
+            return {"pac": 0, "etoday": 0.0}
+        return {}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    if values.get("grid_power") != 1805.0:
+        print(f"ERROR: exporting site published grid_power {values.get('grid_power')}, expected +1805.0 (the CT reading)")
+        failed = True
+    assert not failed, "test_grid_power_uses_ct_limiter_on_export"
+
+
+def test_grid_power_import_matches_ct_when_pac_agrees():
+    """GH#6068 control: on import pac equals the CT reading, so the value is unchanged.
+
+    Pinned to an import row from #6068: pac 5411 W and limiterTotalPower 5411 W.
+    Predbat's convention wants import negative, so this must publish -5411.
+    """
+    failed = False
+    s = MockSunsynk()
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return the #6068 import row for each realtime endpoint."""
+        if endpoint_key == "battery":
+            return {"soc": "71.0", "power": -3623, "temp": "22.0", "voltage": "53.9"}
+        if endpoint_key == "grid":
+            return {"pac": 5411, "etodayFrom": "22.8", "etodayTo": "1.4", "limiterTotalPower": 5411}
+        if endpoint_key == "load":
+            return {"totalPower": 1788, "dailyUsed": 20.1}
+        if endpoint_key == "input":
+            return {"pac": 0, "etoday": 0.0}
+        return {}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    if values.get("grid_power") != -5411.0:
+        print(f"ERROR: importing site published grid_power {values.get('grid_power')}, expected -5411.0")
+        failed = True
+    assert not failed, "test_grid_power_import_matches_ct_when_pac_agrees"
+
+
+def test_grid_power_falls_back_to_pac_when_ct_missing():
+    """GH#6068: a payload with no limiterTotalPower keeps reading pac.
+
+    Older payloads (and the ones the earlier pac tests were pinned to) omit the
+    CT field entirely; grid_power must still publish instead of going absent.
+    """
+    failed = False
+    s = MockSunsynk()
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return a grid payload with no CT field."""
+        if endpoint_key == "battery":
+            return {"soc": 62, "power": -1500, "voltage": 51.2, "temp": 21.5}
+        if endpoint_key == "grid":
+            return {"pac": -430, "etodayFrom": 3.2, "etodayTo": 1.1}
+        if endpoint_key == "load":
+            return {"totalPower": 900, "dailyUsed": 12.6}
+        if endpoint_key == "input":
+            return {"pac": 2830, "etoday": 9.8}
+        return {}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    if values.get("grid_power") != 430.0:
+        print(f"ERROR: site without a CT field published grid_power {values.get('grid_power')}, expected +430.0 (pac)")
+        failed = True
+    assert not failed, "test_grid_power_falls_back_to_pac_when_ct_missing"
+
+
+def test_grid_power_falls_back_to_pac_when_ct_reads_zero():
+    """GH#6068: a CT reading of 0 while pac is live means no CT/limiter is fitted.
+
+    Such a site must keep reading pac; publishing 0 would hide real import and
+    export. A second poll with both fields at 0 publishes 0 either way.
+    """
+    failed = False
+
+    async def fake_get_live(endpoint_key, sn=None, params=None):
+        """Return a grid payload whose CT reads 0 while pac exports."""
+        if endpoint_key == "battery":
+            return {"soc": "71.0", "power": -652, "temp": "22.0", "voltage": "53.9"}
+        if endpoint_key == "grid":
+            return {"pac": -1939, "etodayFrom": "0.0", "etodayTo": "2.8", "limiterTotalPower": 0}
+        if endpoint_key == "load":
+            return {"totalPower": 117, "dailyUsed": 1.9}
+        if endpoint_key == "input":
+            return {"pac": 2708, "etoday": 6.4}
+        return {}
+
+    s = MockSunsynk()
+    with patch.object(s, "_get", side_effect=fake_get_live):
+        run_async_local(s.fetch_device_data("INV1"))
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    if values.get("grid_power") != 1939.0:
+        print(f"ERROR: site with a zero CT reading published grid_power {values.get('grid_power')}, expected +1939.0 (pac)")
+        failed = True
+    # The zero-fallback is ambiguous (no CT fitted, or the net flow is zero at this
+    # poll), so it warns once rather than silently reintroducing the over-read.
+    ct_warnings = [message for message in s.log_messages if "limiterTotalPower reads 0" in message]
+    if len(ct_warnings) != 1:
+        print(f"ERROR: expected one warning about the zero CT fallback, got {ct_warnings}")
+        failed = True
+
+    async def fake_get_idle(endpoint_key, sn=None, params=None):
+        """Return a grid payload with both the CT and pac at 0."""
+        if endpoint_key == "battery":
+            return {"soc": "71.0", "power": 0, "temp": "22.0", "voltage": "53.9"}
+        if endpoint_key == "grid":
+            return {"pac": 0, "etodayFrom": "0.0", "etodayTo": "2.8", "limiterTotalPower": 0}
+        if endpoint_key == "load":
+            return {"totalPower": 0, "dailyUsed": 1.9}
+        if endpoint_key == "input":
+            return {"pac": 0, "etoday": 6.4}
+        return {}
+
+    s = MockSunsynk()
+    with patch.object(s, "_get", side_effect=fake_get_idle):
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    if values.get("grid_power") != 0.0:
+        print(f"ERROR: idle site published grid_power {values.get('grid_power')}, expected 0.0")
+        failed = True
+    if any("limiterTotalPower reads 0" in message for message in s.log_messages):
+        print(f"ERROR: an idle site with both fields at 0 must not warn about the zero CT fallback, got {s.log_messages}")
+        failed = True
+    assert not failed, "test_grid_power_falls_back_to_pac_when_ct_reads_zero"
+
+
 def test_fetch_device_data_absent_fields_are_not_invented():
     """A model that omits a counter leaves it absent rather than publishing a zero."""
     failed = False
@@ -1121,6 +1285,141 @@ def test_cli_reports_telemetry_failure_naming_the_serials():
     assert not failed, "test_cli_reports_telemetry_failure_naming_the_serials"
 
 
+def test_battery_rate_max_is_capped_by_the_inverters_own_current_limit():
+    """A single inverter's charge rate is the lower of the BMS limit and its own batteryMaxCurrentCharge.
+
+    The BMS reports what the bank will accept (chargeCurrentLimit 200 A on a live system), but the
+    inverter's own battery current setting (65 A there) is what it actually charges at - ~62 A was
+    measured. Planning on the BMS figure alone promised 10.24 kW where the inverter delivers ~3.3 kW.
+    """
+    failed = False
+    s = MockSunsynk()
+    cases = {
+        # BMS 200 A, inverter 65 A: the inverter binds. 65 A x 51.2 V.
+        "INV1": ({"chargeCurrentLimit": 200.0, "chargeVolt": 58.0}, {"batteryMaxCurrentCharge": "65"}, 65.0 * 51.2),
+        # The inverter set above the BMS limit: the BMS binds.
+        "INV2": ({"chargeCurrentLimit": 200.0, "chargeVolt": 58.0}, {"batteryMaxCurrentCharge": "250"}, 200.0 * 51.2),
+        # No inverter setting read: unchanged, the BMS limit.
+        "INV3": ({"chargeCurrentLimit": 200.0, "chargeVolt": 58.0}, {}, 200.0 * 51.2),
+        # No BMS limit but the inverter's own is known: that is still a real limit.
+        "INV4": ({"chargeCurrentLimit": 0.0, "maxChargeCurrentLimit": 0.0, "chargeVolt": 58.0}, {"batteryMaxCurrentCharge": "65"}, 65.0 * 51.2),
+    }
+    for sn, (values, settings, expected) in cases.items():
+        s.device_values[sn] = values
+        s.device_settings[sn] = settings
+        rate = s.battery_rate_max(sn)
+        if abs(rate - expected) > 1:
+            print(f"ERROR: {sn} battery_rate_max {rate}W, expected {expected}W")
+            failed = True
+    assert not failed, "test_battery_rate_max_is_capped_by_the_inverters_own_current_limit"
+
+
+def test_battery_rate_max_uses_the_highest_bms_limit_seen():
+    """The BMS charge limit tapers as the battery fills, so the rate is built from the highest seen, saved.
+
+    Live on one bank over a day: 200 A at mid SoC, 175 A at 83%, 108 A at 93% and 0 when full,
+    while the bank still charged at 120 A. maxChargeCurrentLimit reads 0 and the settings read's
+    chargeCurrent mirrors the live value, so nothing reports the fixed maximum.
+    """
+    failed = False
+    s = MockSunsynk()
+    day = datetime(2026, 10, 18, 10, 0, tzinfo=pytz.utc)
+    s.device_values["INV1"] = {"chargeCurrentLimit": 200.0, "chargeVolt": 58.0}
+    if not s._note_bms_charge_limit("INV1", day):
+        print("ERROR: the first limit seen should be recorded as a change")
+        failed = True
+    # Tapering near full: the saved maximum still drives the rate.
+    for live in (108.0, 0.0):
+        s.device_values["INV1"]["chargeCurrentLimit"] = live
+        if s._note_bms_charge_limit("INV1", day + timedelta(hours=3)):
+            print(f"ERROR: a lower live limit ({live} A) must not change the saved maximum")
+            failed = True
+        if abs(s.battery_rate_max("INV1") - 200.0 * 51.2) > 1:
+            print(f"ERROR: with {live} A live the rate should use the saved 200 A, got {s.battery_rate_max('INV1')}")
+            failed = True
+    # A higher reading raises it.
+    s.device_values["INV1"]["chargeCurrentLimit"] = 216.0
+    s._note_bms_charge_limit("INV1", day + timedelta(hours=4))
+    if s.bms_charge_limit_max["INV1"]["amps"] != 216.0:
+        print(f"ERROR: a higher limit should raise the saved maximum, got {s.bms_charge_limit_max['INV1']}")
+        failed = True
+    # Not seen again for over a week (a smaller battery fitted, say): it resets to the live value.
+    s.device_values["INV1"]["chargeCurrentLimit"] = 150.0
+    s._note_bms_charge_limit("INV1", day + timedelta(days=8))
+    if s.bms_charge_limit_max["INV1"]["amps"] != 150.0:
+        print(f"ERROR: a stale maximum should reset to the live 150 A, got {s.bms_charge_limit_max['INV1']}")
+        failed = True
+    # The inverter's own cap still binds below it.
+    s.device_settings["INV1"] = {"batteryMaxCurrentCharge": "65"}
+    if abs(s.battery_rate_max("INV1") - 65.0 * 51.2) > 1:
+        print(f"ERROR: the inverter's 65 A cap should still bind, got {s.battery_rate_max('INV1')}")
+        failed = True
+    assert not failed, "test_battery_rate_max_uses_the_highest_bms_limit_seen"
+
+
+def test_bms_charge_limit_maximum_is_saved_and_restored():
+    """The saved maximum rides in the ratings cache, so a restart at full charge still has a rate."""
+    failed = False
+    s = MockSunsynk()
+    s.bms_charge_limit_max = {"INV1": {"amps": 200.0, "seen": "2026-10-18T10:00:00+00:00"}}
+    saved = {}
+
+    async def fake_save(name, data):
+        """Capture the cache write."""
+        saved[name] = data
+
+    async def fake_load(name):
+        """Serve the saved caches back."""
+        return saved.get(name, {})
+
+    async def fake_age(name):
+        """Every cache is fresh."""
+        return 1.0 if name in saved else None
+
+    with patch.object(s, "save_cache", side_effect=fake_save):
+        run_async_local(s.save_ratings())
+    restored = MockSunsynk()
+    with patch.object(restored, "load_cache", side_effect=fake_load), patch.object(restored, "age_cache", side_effect=fake_age):
+        run_async_local(restored.restore_state())
+    if restored.bms_charge_limit_max != s.bms_charge_limit_max:
+        print(f"ERROR: the BMS maximum was not restored, got {restored.bms_charge_limit_max}")
+        failed = True
+    restored.device_values["INV1"] = {"chargeCurrentLimit": 0.0, "chargeVolt": 58.0}
+    if abs(restored.battery_rate_max("INV1") - 200.0 * 51.2) > 1:
+        print(f"ERROR: a full battery after a restart should still rate at the saved 200 A, got {restored.battery_rate_max('INV1')}")
+        failed = True
+    assert not failed, "test_bms_charge_limit_maximum_is_saved_and_restored"
+
+
+def test_refresh_live_records_the_bms_maximum():
+    """Each live poll updates the saved BMS maximum, and saves the ratings only when it changed."""
+    failed = False
+    s = MockSunsynk()
+    s.device_list = ["INV1"]
+    readings = [200.0, 108.0]
+    saves = []
+
+    async def fake_fetch(sn):
+        """Report the next BMS charge limit in the sequence."""
+        s.device_values[sn] = {"chargeCurrentLimit": readings.pop(0), "chargeVolt": 58.0}
+        return s.device_values[sn]
+
+    async def fake_save_ratings():
+        """Count the ratings saves."""
+        saves.append(dict(s.bms_charge_limit_max))
+
+    with patch.object(s, "fetch_device_data", side_effect=fake_fetch), patch.object(s, "save_ratings", side_effect=fake_save_ratings):
+        run_async_local(s.refresh_live())
+        run_async_local(s.refresh_live())
+    if s.bms_charge_limit_max.get("INV1", {}).get("amps") != 200.0:
+        print(f"ERROR: the 200 A maximum should survive the tapered 108 A poll, got {s.bms_charge_limit_max}")
+        failed = True
+    if len(saves) != 1:
+        print(f"ERROR: the ratings should be saved once (when the maximum was first seen), got {len(saves)}")
+        failed = True
+    assert not failed, "test_refresh_live_records_the_bms_maximum"
+
+
 def test_battery_rate_max_prefers_a_populated_current_field():
     """A zero maxChargeCurrentLimit must not mask a populated chargeCurrentLimit.
 
@@ -1235,12 +1534,20 @@ def run_sunsynk_api_tests(my_predbat):
         ("device_list_unfiltered", test_get_device_list_unfiltered_returns_all),
         ("telemetry_mapping", test_fetch_device_data_maps_telemetry_and_energy),
         ("grid_power_sign", test_grid_power_sign_matches_the_live_export_sample),
+        ("grid_power_ct", test_grid_power_uses_ct_limiter_on_export),
+        ("grid_power_import_ct", test_grid_power_import_matches_ct_when_pac_agrees),
+        ("grid_power_fallback_missing", test_grid_power_falls_back_to_pac_when_ct_missing),
+        ("grid_power_fallback_zero", test_grid_power_falls_back_to_pac_when_ct_reads_zero),
         ("telemetry_absent", test_fetch_device_data_absent_fields_are_not_invented),
         ("nominal_pack_voltage", test_nominal_pack_voltage_variants),
         ("nominal_pack_voltage_warns_once", test_nominal_pack_voltage_warns_once_per_unmatched_charge_volt),
         ("capacity_ah_to_kwh", test_battery_capacity_amp_hours_to_kwh),
         ("battery_rate_max", test_battery_rate_max_from_charge_current),
         ("rate_max_field_priority", test_battery_rate_max_prefers_a_populated_current_field),
+        ("rate_max_unit_cap", test_battery_rate_max_is_capped_by_the_inverters_own_current_limit),
+        ("rate_max_bms_maximum", test_battery_rate_max_uses_the_highest_bms_limit_seen),
+        ("bms_maximum_persisted", test_bms_charge_limit_maximum_is_saved_and_restored),
+        ("bms_maximum_from_live_poll", test_refresh_live_records_the_bms_maximum),
         ("pack_voltage_window", test_nominal_pack_voltage_across_the_lifepo4_charge_window),
         ("inverter_limit_vs_export", test_inverter_limit_is_the_rating_and_export_limit_is_the_cap),
         ("battery_reserve_min", test_battery_reserve_min_from_settings),

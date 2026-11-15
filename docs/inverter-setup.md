@@ -40,14 +40,16 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Givenergy with GE Cloud EMS](#givenergy-with-ge-cloud-ems) | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | [Givenergy/Octopus No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
    | [AlphaESS Cloud](#alphaess-cloud) | Predbat | [alphaess_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/alphaess_cloud.yaml) |
+   | [Anker SOLIX X1](#anker-solix-x1) | [anker-x1-ha](https://github.com/afewyards/anker-x1-ha) | [anker_x1.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1.yaml) |
    | [Canadian Solar EP Cube](#canadian-solar-ep-cube) | [ha-ep-cube](https://github.com/SkiLtY/ha-ep-cube) | [ep_cube_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ep_cube_cloud.yaml) |
    | [DEYE Cloud](#deye-cloud) | Predbat | See [apps.yaml](apps-yaml.md#deye-cloud-api) |
    | [Enphase Cloud](#enphase-cloud) | Predbat | [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) |
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus/) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
    | [Fronius GEN24](#fronius-gen24) | [Fronius](https://www.home-assistant.io/integrations/fronius/) + [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) | [fronius.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fronius.yaml) |
+   | [Growatt Cloud OpenAPI](#growatt-cloud-openapi) | Predbat built-in | Configured by Predbat.com OAuth setup |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) or [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml) |
-   | [Hanchu iESS](#hanchu-iess) | [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) | [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) |
+   | [Hanchu ESS Cloud](#hanchu-ess-cloud) | Predbat | [hanchu.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu.yaml) |
    | [Huawei](#huawei) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
    | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
    | [LuxPower](#luxpower) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
@@ -60,11 +62,13 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Solis Cloud](#solis-cloud) | Predbat | [solis_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solis_cloud.yaml) |
    | [Solis Hybrid inverters (Firmware before FB00)](#solis-inverters-before-fb00) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis_fb00.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis_fb00.yaml) |
+   | [Solis Local](#solis-local) | [Pho3niX90's Modbus integration](https://github.com/Pho3niX90/solis_modbus) | [solis_local.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solis_local.yaml) |
    | [Sunsynk Cloud](#sunsynk-cloud) | Predbat | See [apps.yaml](apps-yaml.md#sunsynk-cloud-api) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
    | [Tesla Powerwall via Teslemetry component (beta)](#teslemetry-component-beta) | Predbat built-in | [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) |
-   | [Victron](#victron) | [Victron MQTT](https://github.com/tomer-w/victron_mqtt) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
+   | [Tesla Powerwall via Teslemetry local control](#teslemetry-local-control) | [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) paired with the local Powerwall gateway | [teslemetry_local.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry_local.yaml) |
+   | [Victron](#victron) | [Victron GX](https://www.home-assistant.io/integrations/victron_gx/) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
@@ -173,6 +177,11 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
     - Set geserial to your inverter serial number
 - If you set **ge_cloud_automatic** to `true` in `apps.yaml` then Predbat will auto-configure itself to use the appropriate GE Cloud controls and will ignore any inverter and battery controls set in `apps.yaml`
 - Make sure that the 'discharge down to' registers are set to 4% and charge and discharge slots 2, 3 and 4 are disabled in the portal by setting the start and end times to 00:00 (if you have them).
+- Predbat does not use Freeze Export on GivEnergy 3-phase inverters, whether controlled through GE Cloud or through the Predbat hub.
+  On the 3-phase hybrid there is no battery pause setting and the charge rate only limits charging from the grid, so solar carries on charging the battery during a Freeze Export slot.
+  The AC-coupled 3-phase model is treated the same way as a precaution; it has not been checked and may in fact be able to hold.
+  Predbat detects these inverters, logs that Freeze Export is not supported and stops planning it; forced export is not affected.
+  If any inverter in a multi-inverter system does not support Freeze Export then it is turned off for all of them.
 - If you have set **ge_cloud_automatic** to `true` and the GE Cloud does not return accurate **load_today** energy information, you can [override the GE Cloud load data](apps-yaml.md) by creating a custom template sensor and setting **ge_cloud_load_today_ignore** to true in `apps.yaml`.
 - The charge/export slot start and end times are stored by GivEnergy in the timezone set on your GivEnergy account. Predbat reads this timezone from the GivEnergy account details and translates the slot times into
   the Predbat **timezone** setting, so the times shown on the Predbat select entities may differ from those shown in the GivEnergy portal if the two timezones do not match.
@@ -255,11 +264,79 @@ python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --unbind -
 
 See [AlphaESS Cloud API](apps-yaml.md#alphaess-cloud-api) in `apps.yaml` for the full list of `alphaess_*` settings, defaults and important behaviour to be aware of - including the export-control limitation above, and the write-timing, freeze-signalling, `export_limit` and `battery_rate_max` notes that apply to every AlphaESS install.
 
+## Anker SOLIX X1
+
+The Anker SOLIX X1 hybrid inverter has no native Predbat integration. It is read and controlled locally over Modbus TCP by the [anker-x1-ha](https://github.com/afewyards/anker-x1-ha) integration, and Predbat drives it through its generic [Service API](#has_service_api).
+
+Over Modbus the X1 has no charge schedule, target SoC or reserve controls. What it does have is a signed battery power setpoint (negative to charge, positive to discharge) that it follows in VPP work mode. All of Predbat's service hooks call one Home Assistant script, `script.predbat_anker_x1_control`, which puts the X1 into VPP mode and writes that setpoint, and hands the battery back to the X1's own Self-consumption mode when Predbat isn't charging or exporting. Predbat watches the battery SoC and stops a charge or export itself when the target is reached.
+
+Copy the template [anker_x1.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1.yaml) over your `apps.yaml`, install the Home Assistant package [anker_x1_package.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1_package.yaml), and follow the steps below.
+
+### Anker SOLIX X1 Prerequisites
+
+- Install the [anker-x1-ha](https://github.com/afewyards/anker-x1-ha) integration (it isn't in the default catalogue: on Home Assistant 2026.11 or newer use **Add from link** in the [Marketplace](install.md#hacs-and-the-marketplace), or on 2026.10 or older add it to HACS as a custom repository) and configure it with your X1's IP address. **Version 0.7.0 or later is required**: earlier versions took the setpoint's range from the X1's live limits, which collapse to almost nothing in VPP mode after a hold and can cap a charge to a few watts.
+- Confirm the integration's "Anker X1" device shows battery SoC, battery power, PV power and the external meter's power (`sensor.anker_x1_meter_total_power`), and that `number.anker_x1_battery_setpoint_charge_discharge` and `switch.anker_x1_modbus_control_hand_battery_to_ha_vpp` exist.
+- Make sure Home Assistant packages are enabled. `configuration.yaml` needs:
+
+```yaml
+homeassistant:
+  packages: !include_dir_named packages
+```
+
+### Anker Step 1 — Install the Home Assistant package
+
+Save [anker_x1_package.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1_package.yaml) as `<config>/packages/anker_x1_package.yaml` and restart Home Assistant. It creates:
+
+| Entity | Used for |
+| ------ | -------- |
+| `script.predbat_anker_x1_control` | Every `*_service` entry in `apps.yaml` |
+| `input_number.predbat_anker_x1_charge_rate` | `charge_rate` |
+| `input_number.predbat_anker_x1_discharge_rate` | `discharge_rate` |
+| `sensor.anker_x1_house_load_today` | `load_today` |
+| `sensor.anker_x1_house_load_power` | `load_power` |
+| `sensor.anker_x1_battery_soc_for_predbat` | `soc_percent` |
+| `automation.predbat_anker_x1_follow_the_charge_limit_near_full` | Lowers a charge near 100% (see the notes) |
+| `input_text.predbat_anker_x1_last_command`, `input_number.predbat_anker_x1_setpoint_written`, `sensor.anker_x1_house_load_today_raw` | Internal to the package |
+
+The package uses the entity IDs the integration creates for its "Anker X1" device. If yours differ, replace them throughout the package and `apps.yaml`. If your inverter is not 5 kW, change `battery_limit` in the script and the `max` of the two rate helpers.
+
+### Anker Step 2 — Configure apps.yaml
+
+- Set `soc_max` to your battery size in kWh: 5 per battery module
+- Check `inverter_limit` and `battery_rate_max` against your inverter model (`sensor.anker_x1_model`). The template's 5000 is for the X1-H5K-S. Don't take the limit from `sensor.anker_x1_dischargeable_power`: that is the battery pack's DC capability (3300 W per module), not the inverter's AC output
+- Set `reserve` and `battery_min_soc` to the minimum SoC set in the Anker app. The X1 has no reserve setting over Modbus, so Predbat's reserve is only used for planning and the X1 stops discharging at the app's minimum
+- Delete the `template: True` line to allow Predbat to start
+- Configure your energy rates - see [Energy Rates](energy-rates.md)
+
+### Anker Step 3 — Test control before handing it to Predbat
+
+With Predbat in read-only mode, run the script from Developer Tools → Actions:
+
+```yaml
+action: script.predbat_anker_x1_control
+data:
+  command: discharge
+  power: 1000
+```
+
+The battery should ramp to about 1000 W of discharge within around ten seconds, and the X1's Work Mode should show VPP. Then run it with `command: auto` to hand control back: the Modbus Control switch turns off and the Work Mode returns to Self-consumption. Once that works, turn off read-only mode and let Predbat take control.
+
+### Anker SOLIX X1 Notes
+
+- **Skipping repeated writes:** the start and hold services use `repeat: True`, so Predbat re-sends them on every run and takes control back if the X1 drops out of VPP mode. Every setpoint write also rewrites the X1's work-mode register, so the script skips a write when the X1 is already doing what was asked.
+- **Stopping:** turning Modbus Control off clears the setpoint but leaves the X1 in App-managed mode rather than Self-consumption, so the script sets the work mode explicitly afterwards.
+- **Holds at the reserve:** Predbat sends `charge_freeze_service` whenever a charge window's target is the reserve, even with `support_charge_freeze: False`. Holding at 0 W at the bottom of the battery achieves nothing that Self-consumption doesn't, so the script treats a hold at or within 1% of the reserve as `auto`. A hold higher up still holds the battery at 0 W, which also stops it charging from solar during the hold.
+- **Charging near full:** asked to charge harder than the battery will take, which happens above about 95%, the X1 overshoots into discharge for a few seconds at a time, at up to several kW. Predbat only updates every five minutes, so the package's automation keeps a running charge at 90% of the X1's live charge limit (`sensor.anker_x1_rechargeable_power`) from 95% up, never more than Predbat asked for.
+- **Grid energy sensors:** anker-x1-ha 0.7.0 renamed "Grid Bought Today" / "Grid Fed-in Today" to "Grid Bought" / "Grid Fed-in". Older installs keep the `_today` entity IDs, and both the template and the package accept either name. These counters are lifetime totals on X1 firmware 1.0.19.16 and reset at midnight on 1.0.16.1. Predbat only uses how much they rise each day, so both work.
+- **House load:** the X1 reports no house load energy, so the package works it out as PV + grid import + battery discharge - grid export - battery charge, from how far each counter moved every minute. Inverter conversion losses end up counted as house load.
+- **Battery SoC filter:** the X1 occasionally reports an unavailable SoC or a momentary 0%. `sensor.anker_x1_battery_soc_for_predbat` holds the last good reading for up to 15 minutes so a single bad read doesn't make Predbat plan from an empty battery.
+- **Measured behaviour:** on a 3-module (15 kWh) pack, a forced charge holds 5 kW from the reserve to 95% and a forced export holds about 4.8 kW from the battery. Usable capacity measured 5.2-5.3 kWh per module, and grid-to-battery efficiency about 93%, which matches Predbat's default `inverter_loss` and `battery_loss`.
+
 ## Canadian Solar EP Cube
 
-The EP Cube has no local Modbus; the only published control interface is the vendor cloud REST API. The [ha-ep-cube](https://github.com/SkiLtY/ha-ep-cube) custom integration (HACS Default store, MIT-licensed) bridges this to a Predbat-shaped set of entities and services:
+The EP Cube has no local Modbus; the only published control interface is the vendor cloud REST API. The [ha-ep-cube](https://github.com/SkiLtY/ha-ep-cube) custom integration (in the default Marketplace/HACS catalogue, MIT-licensed) bridges this to a Predbat-shaped set of entities and services:
 
-- Install via HACS - search "Canadian Solar EP Cube", Download, then restart Home Assistant. Configure the integration with your EP Cube cloud account email + password (captcha is handled automatically).
+- Install from the [Marketplace](install.md#hacs-and-the-marketplace) (or HACS on Home Assistant 2026.10 or older) - search "Canadian Solar EP Cube", Install (Download in HACS), then restart Home Assistant. Configure the integration with your EP Cube cloud account email + password (captcha is handled automatically).
 - Copy the template [ep_cube_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ep_cube_cloud.yaml) over your `apps.yaml`. No additional helpers or template sensors are needed - entity IDs are stable (no per-account devId substitution).
 - The integration exposes the standard 7 Predbat services (`charge_start`, `charge_stop`, `discharge_start`, `discharge_stop`, `charge_freeze`, `discharge_freeze`, `idle`) and translates each rate + window into a TOU-schedule rewrite on the cube.
 - Writes are idempotent (no cloud call if the requested state is already active) and budgeted to a low number of writes per day. The integration snapshots your normal mode + TOU schedule on the first override and auto-reverts at the slot end.
@@ -314,6 +391,7 @@ Predbat has a built-in Enphase Cloud integration that logs in to the Enphase Enl
 - Copy the [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) template over the top of the supplied `apps.yaml` and set `enphase_username` and `enphase_password` to your Enlighten account credentials.
 - Set `enphase_automatic: True` to have Predbat wire up all the sensor and control entities automatically - no manual `apps.yaml` sensor configuration is required.
 - Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules, export windows become discharge-to-grid (DTG) schedules, and freeze-export windows use restrict-battery-discharge (RBD) schedules, with the reserve set through the battery profile. `automatic_config` requires the site to support both CFG and DTG and fails configuration otherwise. Writes are cached optimistically and corrected by the next periodic re-read if they didn't land.
+- When the plan holds the battery (Freeze charging, Hold charging, Hold for car, Hold for iBoost) Predbat sets the reserve to the battery's current charge level rounded down, not 1% above it, so the battery is never asked to charge up to a reserve above its charge level - see [How Predbat holds a Powerwall](#how-predbat-holds-a-powerwall), which works the same way.
 
 See the components documentation for details [Components - Enphase API](components.md#enphase-api-enphase)
 
@@ -614,266 +692,97 @@ Edit `apps.yaml`:
 - The `grid_power_invert: true` and `load_power_invert: true` settings in the template are required because Fronius reports these values with the opposite sign convention to what Predbat expects.
 - If your inverter has a `RvrtTms` register that is stuck at a non-zero value from a previous session, battery control commands may revert unexpectedly. See the [fronius-modbus-control README](https://github.com/knackerbrot/fronius-modbus-control#the-rvrttms-gotcha) for how to resolve this.
 
+## Growatt Cloud OpenAPI
+
+**Experimental**
+
+Predbat's built-in Growatt component uses Growatt's public OAuth OpenAPI. On Predbat.com, connect the Growatt account in inverter setup, approve access in Growatt, then select the authorised inverter. The service stores and refreshes the OAuth credential and supplies the selected serial and regional API base to the engine. Do not paste a Growatt account password into Predbat.
+
+The component publishes live SoC, battery, grid, PV and load power, device ratings and the available daily energy counters. With automatic setup enabled, it also creates Predbat's standard schedule controls and registers the inverter as `GrowattCloud`.
+
+To check an installation from the command line, run the component once from `apps/predbat`. It runs one read-only cycle with automatic configuration on: it discovers the inverter, reads its telemetry and its slot table, prints the `Set arg` lines automatic setup would apply and a summary per inverter, and writes nothing to the inverter.
+
+```bash
+python3 growatt.py --config /path/to/apps.yaml
+python3 growatt.py --key <access token> --serial SPH123456
+```
+
+`--config` reads the `growatt_` settings, `user_id`, `supabase_url` and `supabase_key` from an apps.yaml, resolving `!secret` as Predbat does, and any option given alongside it overrides the file. The access token can also come from the `GROWATT_KEY` environment variable. An expired token can only be refreshed through Predbat.com, which needs the token hash, the instance's user id and the Supabase URL and key, all present in a Predbat.com-generated apps.yaml. Run `python3 growatt.py --help` for every option.
+
+`--write-test charge`, `export`, `hold` or `all` then tests control on the real inverter. It first reads what the inverter holds (`enable_control` and the slot table) and saves it to a `growatt_snapshot_<serial>_<time>.json` file. It then, for each test in turn, writes a slot starting now, reads it back, watches the battery and puts the saved slot table back. Growatt uploads telemetry only about every five minutes, so a test judges only readings taken after its write: it watches for up to `--minutes` (default 12) and stops early once it has two. Every write, including each restore, is confirmed by reading it back and retried if it does not read back as written. Charge and export run at `--power` watts (default 1000) and hold uses a 0% charge slot. At the end `enable_control` goes back to what it was. The restore also runs if the test fails or is interrupted. If the process is killed outright, `--restore <snapshot file>` writes the saved settings back. Make sure no running Predbat instance is controlling the inverter during a write test, as it would overwrite the test slots.
+
+```bash
+python3 growatt.py --config /path/to/apps.yaml --write-test all
+```
+
+Before enabling control for a first tester:
+
+1. Start with `growatt_control_enable: false` and confirm the five power-flow values and their signs against the Growatt app. Predbat should show battery power negative while charging and positive while discharging, and grid power negative while importing
+2. Confirm the reported battery capacity, battery maximum power and inverter rating
+3. Set the customer's real `export_limit` manually if it is below the inverter rating
+4. Enable control and test one future charge window at a modest rate. Growatt receives UTC slots, so confirm the Growatt app shows the intended local time after conversion. The Predbat log records each slot table sent, as an `Info: Growatt API request /oauth2/deviceDispatch` line
+5. Let that charge reach its target inside the window. The log shows `holding the charge slot at 0% power`; confirm the battery then neither charges nor discharges (the house runs from the grid) for the rest of the window. If the battery discharges instead, a 0% slot does not hold on that model: report it
+6. Within 10 minutes `sensor.predbat_growatt_<serial>_dispatch_slots` should show the same table, read back from the device. A `slot table read-back was not understood` warning means the read answer has a shape Predbat does not know yet: report the logged answer
+7. Let the charge slot end and confirm the empty table Predbat then writes actually clears it in the Growatt app and in the read-back sensor
+8. Test a discharge window above the inverter's own minimum SoC. Confirm forced discharge works on that model and stops when Predbat removes the slot at its software floor
+9. Turn on `switch.predbat_set_read_only` and confirm the log shows `OpenAPI control released` and the inverter returns to the mode set in the Growatt app
+
+The important limitation is that Growatt's public dispatch has no writable SoC target or reserve. Predbat watches telemetry, which Growatt updates about every five minutes: at the charge target it keeps the charge slot at 0% power so the battery holds, and at the greater of the planned export floor and the inverter's reported `dischargeCutOffSOC` it removes the discharge slot. This can react up to one upload (about five minutes) late, and ordinary self-consumption after a slot is removed may still use the battery down to its local inverter minimum. For that reason Predbat's reserve functions are off for this inverter. Treat the first live run as a hardware test, not as confirmation that every Growatt model behaves identically.
+
+If the customer cannot use the OpenAPI route, the existing Solar Assistant setup below remains available.
+
 ## Growatt with Solar Assistant
 
 You need to have a Solar Assistant installation <https://solar-assistant.io>
 
 Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates over the top of your `apps.yaml`, and edit inverter and battery settings as required. Yours may have different entity IDs on Home Assistant.
 
-## Hanchu iESS
+## Hanchu ESS Cloud
 
-The Hanchu iESS has no native Predbat integration. Control is implemented via Predbat's generic Service API: Predbat calls four service hooks (`charge_start_service`, `charge_stop_service`, `discharge_start_service`, `discharge_stop_service`), all of which point at a single Home Assistant script that writes the corresponding time slots directly to the device via `hanchuess.device_control`.
+**Experimental**
 
-Copy the template [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) over your `apps.yaml` and follow the steps below.
+Predbat has a built-in Hanchu ESS Cloud integration that talks to the Hanchu cloud directly, using the e-mail address and password you sign into the Hanchu phone app with. It needs no Home Assistant integration and no bridge script. It replaces the older setup that drove Predbat through the [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) integration and a bridge script; if you still run that, its guide is now kept in [that integration's own docs](https://github.com/upton68/hanchu-ess-ha/blob/main/docs/predbat-bridge.md). Use one or the other, not both.
 
-### Hanchu iESS Prerequisites
+Hanchu publish no API specification, so this integration was built by reading open-source Home Assistant integrations and has so far been tested on only a couple of units. Please report what you see. Every request and response is traced to the log by default, which is what an issue report needs; once everything works you can set `hanchu_api_debug: False` to quieten the log, and turn it back on before reporting a problem.
 
-Install the [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) integration via HACS and configure it with your Hanchu cloud account credentials. Confirm that inverter and battery sensors are appearing in Home Assistant before proceeding.
+Copy the template [hanchu.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu.yaml) over your `apps.yaml` and set `hanchu_account` and `hanchu_password` (keep them in `secrets.yaml` - see [Storing secrets](apps-yaml.md#storing-secrets)). With `hanchu_automatic: True` Predbat finds your inverter and wires up its sensors and controls for you. Set `hanchu_control_enable: False` to monitor only.
 
-### Hanchu Step 1 — Create helpers
+If you set `load_today`, `import_today`, `export_today` or `pv_today` in `apps.yaml` yourself, your entry is kept and the automatic setup fills in only the ones you leave out. Any sensor you set must be a cumulative kWh total for the day that Home Assistant records history for.
 
-Create the following helpers in Home Assistant (Settings → Devices & Services → Helpers):
+If your EV charger is wired outside the Hanchu meter, leave `import_today` to the automatic setup: turn **switch.predbat_car_energy_reported_load** off and configure your car's energy sensor (`car_charging_energy`), and Predbat adds the car's charging to today's cost itself - see [Car charging](car-charging.md). Pointing `import_today` at a smart meter sensor that already includes the car as well would count the car twice.
 
-**Toggle helpers** (toggle type):
+### Hanchu ESS Cloud inverter control
 
-| Entity ID | Name |
-| --------- | ---- |
-| `input_boolean.predbat_charge_start` | Predbat Charge Start |
-| `input_boolean.predbat_discharge_start` | Predbat Discharge Start |
+- **Timed slots in User-defined mode.** Predbat drives the inverter through its three charge and three discharge time slots, and sets the User-defined work mode (3) whenever it writes a window. If your inverter accepts the windows but ignores them, set `hanchu_work_mode_control: False`, choose the mode that does honour them yourself, and please report it.
+- **Your Hanchu app schedule is cleared.** At its first write Predbat writes all six slots, and sets the ones its plan does not use to 00:00-00:00. In User-defined mode every enabled slot runs, so a slot left over from the app would run alongside Predbat's plan and fight it. Nothing is cleared while Predbat is only monitoring.
+- **No Freeze Export.** The charge power limit only limits charging from the grid, so a zero charge rate cannot stop solar charging the battery. Predbat turns Freeze Export off and does not plan it, logging *Inverter 0 does not support discharge freeze - disabled*; forced export is not affected. If any inverter in a multi-inverter system does not support Freeze Export then it is turned off for all of them.
+- **Holds.** Freeze charge and other holds are written as a charge slot at zero power. During a hold the grid-charge limit is also capped at the current SoC, so the battery cannot charge from the grid even if the zero-power setting does not take.
+- **Hold charging above the target.** This inverter will not discharge at all while a charge slot is running, even when the battery is above the slot's target. When a charge slot is due but the battery is more than 1% above its target, and `switch.predbat_set_discharge_during_charge` is on, Predbat leaves the slot out so the battery covers the house down to the target. The slot is written again once the battery is within 1% of the target, and holds it there. A target below 20% is treated as 20%, the lowest charge target this hardware accepts.
+- **SoC limits.** This hardware accepts a charge target of only 20-100% and a discharge floor of only 5-45%. Predbat clamps anything outside those ranges and says so in the log. The app's "Maximum Charge SOC" is never changed, because it limits solar charging too.
+- **Write pacing.** All of Predbat's settings changes go to the cloud in one call per cycle, at most once per `hanchu_min_write_interval` seconds (default 60). Predbat sets a new window in stages (times, then target, then rates), so after each change it waits `hanchu_write_debounce` seconds (default 10) for the stages to finish and sends only the finished settings - otherwise a hold starting with a new window could briefly go out as a full-power charge from the grid. Set it to 0 to write on every change. A setting changed in the Hanchu app is noticed when Predbat next reads the settings back (every 30 minutes) and is put back.
 
-**Text helper** (text type):
+### Hanchu ESS Cloud power ratings
 
-| Entity ID | Name |
-| --------- | ---- |
-| `input_text.hanchu_last_mode_action` | Hanchu Last Mode Action |
+Predbat looks your model up from the model code the inverter reports, and logs what it found, for example `Hanchu ... is a HESS-HY-S-5.0K (devModel 4): battery limit 5000 W, AC rating 5000 W`. The battery limit becomes `battery_rate_max` and the AC rating becomes `inverter_limit`, which is what Predbat plans with. What Predbat *writes* as a charge or discharge power limit stays within what the inverter is known to accept - the settings menu's maximum (0-5000 W on every unit seen so far), or a higher limit the inverter has been seen holding - and never above the model's battery limit, since a higher setting moves no more power (a HESS-HY-S-6.0K set to 6000 W still exports at 5000 W). On a larger unit Predbat logs that gap once, and forced charge and export windows run at that lower limit until the inverter is seen holding more. For a model Predbat does not know, it logs the code and falls back to the power limits the settings menu reports and the device holds - please report the code and your model so it can be added. Set `hanchu_battery_rate_max` or `hanchu_inverter_limit` to override either figure.
 
-`input_text.hanchu_last_mode_action` tracks the last mode successfully applied so the bridge script can skip a redundant API call when Predbat reasserts a state that is already active.
+The API does not report a grid export limit, so if your connection is capped below the inverter rating (G98/G99) set `export_limit` yourself.
 
-### Hanchu Step 2 — Create the bridge script
+### Verifying with the Hanchu diagnostics CLI
 
-All four of Predbat's service hooks call the same script, `script.hanchu_set_state_queued`, passing a `mode_action` field to indicate which state to apply. The script runs with `mode: queued` so if Predbat fires two calls close together — for example stopping a discharge and starting a charge in the same plan-evaluation cycle — Home Assistant queues the second call behind the first rather than letting both `device_control` calls race each other.
+A standalone CLI is included so you can check the integration against your own system before giving it control. Run it from the `apps/predbat` directory; with no mode option it is read-only:
 
-Create a new script (Settings → Automations & Scenes → Scripts → Add Script → Edit in YAML) and paste the following, replacing `YOURSERIAL` with your device serial number as it appears in your HA entity IDs, and replacing `notify.notify` with your own mobile notification service:
-
-```yaml
-alias: Hanchu Set State Queued
-mode: queued
-fields:
-  mode_action:
-    required: true
-    selector:
-      select:
-        options:
-          - charge_start
-          - charge_stop
-          - discharge_start
-          - discharge_stop
-sequence:
-  - variables:
-      # mode_action is sometimes only populated under `data` rather than as a
-      # bare template variable, depending on whether the script is invoked from
-      # the HA UI or by a real service call from Predbat's AppDaemon dispatch.
-      # Check both so it works reliably either way.
-      act: >-
-        {% if mode_action is defined %}{{ mode_action }}
-        {% elif data is defined and data.mode_action is defined %}{{ data.mode_action }}
-        {% else %}unknown{% endif %}
-  - if:
-      - condition: template
-        value_template: "{{ act == states('input_text.hanchu_last_mode_action') }}"
-    then:
-      - stop: "No change — same action already applied, skipping API call"
-  - variables:
-      # Convert HH:MM:SS time strings from Predbat sensors to seconds since midnight
-      charge_start_seconds: >-
-        {% set t = states('sensor.predbat_HC_0_charge_start_time').split(':') %}
-        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
-      charge_end_seconds: >-
-        {% set t = states('sensor.predbat_HC_0_charge_end_time').split(':') %}
-        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
-      discharge_start_seconds: >-
-        {% set t = states('sensor.predbat_HC_0_discharge_start_time').split(':') %}
-        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
-      discharge_end_seconds: >-
-        {% set t = states('sensor.predbat_HC_0_discharge_end_time').split(':') %}
-        {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
-      # Set slot values based on action — zeroise inactive slots
-      tct_start: "{{ charge_start_seconds if act == 'charge_start' else 0 }}"
-      tct_end: "{{ charge_end_seconds if act == 'charge_start' else 0 }}"
-      tdt_start: "{{ discharge_start_seconds if act == 'discharge_start' else 0 }}"
-      tdt_end: "{{ discharge_end_seconds if act == 'discharge_start' else 0 }}"
-  - action: hanchuess.device_control
-    data:
-      sn: YOURSERIAL
-      dev_type: "2"
-      value:
-        TCT_START_1: "{{ tct_start }}"
-        TCT_END_1: "{{ tct_end }}"
-        TDT_START_1: "{{ tdt_start }}"
-        TDT_END_1: "{{ tdt_end }}"
-    response_variable: result
-  - if:
-      - condition: template
-        value_template: "{{ not result.success }}"
-    then:
-      - delay:
-          seconds: 5
-      - action: hanchuess.device_control
-        data:
-          sn: YOURSERIAL
-          dev_type: "2"
-          value:
-            TCT_START_1: "{{ tct_start }}"
-            TCT_END_1: "{{ tct_end }}"
-            TDT_START_1: "{{ tdt_start }}"
-            TDT_END_1: "{{ tdt_end }}"
-        response_variable: result2
-      - if:
-          - condition: template
-            value_template: "{{ not result2.success }}"
-        then:
-          - action: notify.notify  # Replace with your own notification service
-            data:
-              title: "⚠️ Hanchu {{ act }} FAILED"
-              message: >-
-                {{ act }} write failed after retry ({{ result2.message }})
-                — check manually.
-          - stop: "Both attempts failed — leaving last_mode_action unchanged for retry"
-  - action: input_text.set_value
-    target:
-      entity_id: input_text.hanchu_last_mode_action
-    data:
-      value: "{{ act }}"
-  - choose:
-      - conditions: "{{ act == 'charge_start' }}"
-        sequence:
-          - action: input_boolean.turn_on
-            entity_id: input_boolean.predbat_charge_start
-      - conditions: "{{ act == 'charge_stop' }}"
-        sequence:
-          - action: input_boolean.turn_off
-            entity_id: input_boolean.predbat_charge_start
-      - conditions: "{{ act == 'discharge_start' }}"
-        sequence:
-          - action: input_boolean.turn_on
-            entity_id: input_boolean.predbat_discharge_start
-      - conditions: "{{ act == 'discharge_stop' }}"
-        sequence:
-          - action: input_boolean.turn_off
-            entity_id: input_boolean.predbat_discharge_start
+```bash
+cd apps/predbat
+python3 hanchu.py --account you@example.com
 ```
 
-The script always writes all four time slot fields (`TCT_START_1`, `TCT_END_1`, `TDT_START_1`, `TDT_END_1`) on every call, zeroing whichever pair is not the active mode. This keeps charge and discharge mutually exclusive on the device without relying on separate stop/start calls landing in the right order.
+You are prompted for the password (or set `HANCHU_PASSWORD`, or use `--config apps.yaml`). Useful options:
 
-### Hanchu Step 3 — Create the mid-window time update automation
-
-Predbat may revise its planned charge or discharge end time mid-window without issuing a new charge_start or discharge_start service call. Without this automation, the Hanchu would continue using the original end time written at the start of the window, potentially stopping charge or discharge earlier than Predbat intended.
-
-Create a new automation (Settings → Automations & Scenes → Automations → Add Automation → Edit in YAML) and paste the following, replacing YOURSERIAL with your device serial number:
-
-```yaml
-alias: Predbat - Update Hanchu Charge/Discharge Window Times
-description: >
-  Watches Predbat's charge and discharge end time sensors and updates the
-  Hanchu time slots when they change mid-window during an active charge or
-  discharge session.
-triggers:
-  - trigger: state
-    entity_id: sensor.predbat_HC_0_charge_end_time
-    id: charge_end_changed
-  - trigger: state
-    entity_id: sensor.predbat_HC_0_discharge_end_time
-    id: discharge_end_changed
-conditions:
-  - condition: template
-    value_template: >-
-      {{ trigger.to_state.state not in ['unknown', 'unavailable', '00:00:00'] }}
-actions:
-  - choose:
-      - conditions:
-          - condition: trigger
-            id: charge_end_changed
-          - condition: template
-            value_template: >-
-              {{ is_state('input_boolean.predbat_charge_start', 'on') }}
-        sequence:
-          - variables:
-              charge_start_seconds: >-
-                {% set t = states('sensor.predbat_HC_0_charge_start_time').split(':') %}
-                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
-              charge_end_seconds: >-
-                {% set t = trigger.to_state.state.split(':') %}
-                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
-          - action: hanchuess.device_control
-            data:
-              sn: YOURSERIAL
-              dev_type: "2"
-              value:
-                TCT_START_1: "{{ charge_start_seconds }}"
-                TCT_END_1: "{{ charge_end_seconds }}"
-                TDT_START_1: 0
-                TDT_END_1: 0
-      - conditions:
-          - condition: trigger
-            id: discharge_end_changed
-          - condition: template
-            value_template: >-
-              {{ is_state('input_boolean.predbat_discharge_start', 'on') }}
-        sequence:
-          - variables:
-              discharge_start_seconds: >-
-                {% set t = states('sensor.predbat_HC_0_discharge_start_time').split(':') %}
-                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
-              discharge_end_seconds: >-
-                {% set t = trigger.to_state.state.split(':') %}
-                {{ (t[0]|int * 3600) + (t[1]|int * 60) + (t[2]|int) }}
-          - action: hanchuess.device_control
-            data:
-              sn: YOURSERIAL
-              dev_type: "2"
-              value:
-                TCT_START_1: 0
-                TCT_END_1: 0
-                TDT_START_1: "{{ discharge_start_seconds }}"
-                TDT_END_1: "{{ discharge_end_seconds }}"
-mode: queued
-```
-
-### Hanchu Step 4 — Add the soc_kw template sensor
-
-Predbat requires a `soc_kw` sensor reporting battery state of charge in kWh. Add the following to your `configuration.yaml`:
-
-```yaml
-template:
-  - sensor:
-      - name: "Home Battery State of Charge kWh"
-        unique_id: home_battery_soc_kwh
-        unit_of_measurement: "kWh"
-        state_class: measurement
-        device_class: energy
-        state: >
-          {{ ((states('sensor.hanchuess_YOURSERIAL_battery_soc') | float(0)) / 100 * NN.NN) | round(2) }}
-```
-
-Replace `YOURSERIAL` with your device serial number and `NN.NN` with your total battery capacity in kWh (for example `18.80` for a dual 9.4 kWh system). Restart Home Assistant after adding this.
-
-### Hanchu Step 5 — Configure apps.yaml
-
-- Replace `YOURSERIAL` throughout the template with your device serial number as it appears in your HA entity IDs
-- Adjust `inverter_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export` and `battery_rate_max` to match your inverter and battery rated capacity in watts
-- Delete the `template: True` line to allow Predbat to start
-- Configure your energy rates — see [Energy Rates](https://springfall2008.github.io/batpred/energy-rates/)
-
-> **Note:** Double-check that `inverter_limit` is spelled exactly as shown — an accented character (for example `é` instead of `e` from autocorrect) will cause Predbat to silently ignore the setting and fall back to its own default.
-
-### Hanchu Notes
-
-- **Skipping redundant calls:** Predbat re-evaluates its plan on its normal cycle and can re-issue the same service call mid-window, simply reasserting the plan rather than changing anything. The `input_text.hanchu_last_mode_action` check skips the API call entirely when the requested mode is already the last one successfully applied. The tracker only updates after a confirmed successful write, so a failed attempt still retries correctly on the next cycle.
-- **Behaviour on Predbat restart:** Whenever Predbat restarts it issues both `charge_stop_service` and `discharge_stop_service` in quick succession to put the inverter into a known neutral state. This is expected behaviour. The queued script handles this cleanly — if one of the calls matches the already-active state it is skipped as redundant; the other runs if it represents a real change. You may see one or both fire immediately after any restart.
-- **Automation latency:** Start/stop commands are occasionally delayed by up to ~2 minutes due to HA scheduling. This has not caused any practical issues in production use.
-- **No charge/discharge enable toggle:** Hanchu has no explicit enable/disable for charge or discharge. The slot zeroing mechanism (setting both start and end to `00:00:00`) is the disable method.
-- **Min SOC:** Managed via `battery_min_soc` pointing directly to the Hanchu entity — no separate Predbat reserve setting needed.
-- **Mid-window time updates:** Predbat may revise its planned charge or discharge end time mid-window without issuing a new start service call. The mid-window automation above catches these changes and updates the Hanchu time slots accordingly, ensuring the inverter honours Predbat's revised plan rather than the original end time.
+- `--serial <sn>` - pick one inverter when the account has several
+- `--dump-menu FILE` - save the device's full settings menu as JSON
+- `--write-test` - write a charge window three hours ahead, read it back and restore it; no energy moves
+- `--live-window charge|export|freeze-charge|freeze-export|hold` - run that Predbat state on the inverter now, watch the battery, then restore the previous settings
+- `--restore SNAPSHOT` - write back a snapshot that a test saved
 
 ## Huawei
 
@@ -994,7 +903,7 @@ modbus:
 alias: Predbat Charge / Discharge Control
 description: ""
 triggers:
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.charge_start_service
     to:
@@ -1004,17 +913,17 @@ triggers:
       hours: 0
       minutes: 0
       seconds: 5
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.discharge_start_service
     to: "on"
     id: Discharge
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.charge_freeze_service
     to: "on"
     id: Charge freeze
-    - trigger: state
+  - trigger: state
     entity_id:
       - input_boolean.discharge_freeze_service
     to: "on"
@@ -1282,6 +1191,20 @@ This requires the LuxPython component which integrates with your Lux Power inver
     - **System Charge SOC Limit (%)** is set to 100% (default).
     - **On-Grid Cut-Off SOC (%)** is set to 100% minus battery depth of discharge(%). Depending on your battery, this is typically between 20% and 0%.
 
+- Make sure Predbat's minimum reserve is at least 1% above the inverter's **Start AC Charge SOC (%)**.
+  The inverter rejects an AC charge SOC limit at or below Start AC Charge SOC. When Predbat turns charging off, for
+  example outside a charge window or around an export, it writes its minimum reserve to that limit. That minimum is the
+  higher of **input_number.predbat_set_reserve_min** (4% by default) and `battery_min_soc` (in the template, the
+  inverter's On-Grid Cut-Off SOC). If it is too low, the write fails on every run with a warning like
+  `Trying to write 4 to charge_limit didn't complete` and the status shows errors.
+  Start AC Charge SOC is only shown in the LuxPowerTek app, not in the web portal, although some Home Assistant
+  integrations (such as the LuxPower cloud integration) expose it as an `ac_charge_start_soc` number. Either:
+
+    - raise `input_number.predbat_set_reserve_min` (and `predbat_set_reserve_min_1`, `_2`... for each further
+      inverter) to at least Start AC Charge SOC + 1% - for example 6% if Start AC Charge SOC is 5%. Predbat then also
+      plans never to use the battery below that level; or
+    - lower Start AC Charge SOC in the LuxPowerTek app to below Predbat's minimum reserve.
+
 - If you want to use Predbat in **Control charge** mode, go to the LuxPowerTek app or web portal and set all start and end time slots for AC Charge to `00:00`.
   For **Control charge and discharge** mode, set all AC Charge and Forced Discharge slots to `00:00`.
   Predbat only uses the first time slots and will set these automatically.
@@ -1401,23 +1324,23 @@ description: >
   Controls AC charging during Predbat freeze charge mode. Arms and triggers
   freeze subsystems and watchdog via freeze guard.
 triggers:
-    - entity_id: automation.luxpower_freeze_charge
+  - entity_id: automation.luxpower_freeze_charge
     from: "off"
     to: "on"
     id: freeze_enabled
     trigger: state
-    - entity_id: binary_sensor.solar_compare_home
+  - entity_id: binary_sensor.solar_compare_home
     to: "on"
     for: "00:00:10"
     id: solar_on
     trigger: state
-    - entity_id: binary_sensor.solar_compare_home
+  - entity_id: binary_sensor.solar_compare_home
     to: "off"
     for: "00:00:10"
     id: solar_off
     trigger: state
 conditions:
-    - condition: state
+  - condition: state
     entity_id: input_boolean.predbat_ready
     state: "on"
 actions:
@@ -1543,70 +1466,77 @@ mode: single
 alias: LuxPower Freeze Charge Exit
 description: Cleanup when Predbat leaves Freeze charging.
 triggers:
-  - entity_id: predbat.status
-    trigger: state
+- entity_id: predbat.status
+  trigger: state
 conditions:
-  - condition: state
-    entity_id: input_boolean.freeze_charge_guard
-    state: "on"
-  - condition: template
-    value_template: |
-      {% set new = trigger.to_state.state | default('') %} {{
-        new not in ['unknown','unavailable'] and
-        not new.startswith('Warn:') and
-        not new.startswith('Error:') and
-        'Freeze charging' not in new
-      }}
+- condition: state
+  entity_id: input_boolean.freeze_charge_guard
+  state: "on"
+- condition: template
+  value_template: |
+    {% set new = trigger.to_state.state | default('') %} {{
+      new not in ['unknown','unavailable'] and
+      not new.startswith('Warn:') and
+      not new.startswith('Error:') and
+      'Freeze charging' not in new
+    }}
 actions:
-  - target:
+- action: automation.turn_off
+  target:
     entity_id:
       - automation.luxpower_freeze_charge
       - automation.luxpower_freeze_charge_predbat_override
       - automation.luxpower_freeze_charge_watchdog
-    action: automation.turn_off
-  - target:
+
+- action: input_boolean.turn_off
+  target:
     entity_id: input_boolean.freeze_charge_guard
-    action: input_boolean.turn_off
-  - choose:
-    - conditions:
-        - condition: template
-          value_template: |
-            {{ trigger.to_state.state.startswith('Charging')
-               or trigger.to_state.state == 'Hold charging' }}
-      sequence:
-        - target:
-            entity_id: switch.lux_ac_charge_enable
-          action: switch.turn_on
-      default:
-        - target:
-            entity_id: switch.lux_ac_charge_enable
-          action: switch.turn_off
-    - choose:
-      - conditions:
-        - condition: template
-          value_template: |
-            {{ trigger.to_state.state.startswith('Charging') }}
-          sequence:
-            - target:
-                entity_id: number.lux_ac_battery_charge_level
-              data:
-                value: "{{ states('number.lux_system_charge_soc_limit') | int(0) }}"
-              action: number.set_value
-        - conditions:
-          - condition: template
-            value_template: |
-              {{ trigger.to_state.state == 'Hold charging' }}
-            sequence:
-              - target:
-                  entity_id: number.lux_ac_battery_charge_level
-                data:
-                  value: >-
-                    {{ states('number.lux_on_grid_discharge_cut_off_soc') | int(0)
-                    }}
-                action: number.set_value
-              - target:
-                  entity_id: automation.luxpower_freeze_charge_exit
-                action: automation.turn_off
+
+- choose:
+  - conditions:
+      - condition: template
+        value_template: |
+          {{ trigger.to_state.state.startswith('Charging')
+             or trigger.to_state.state == 'Hold charging' }}
+    sequence:
+      - action: switch.turn_on
+        target:
+          entity_id: switch.lux_ac_charge_enable
+
+  default:
+    - action: switch.turn_off
+      target:
+        entity_id: switch.lux_ac_charge_enable
+
+- choose:
+  - conditions:
+    - condition: template
+      value_template: |
+        {{ trigger.to_state.state.startswith('Charging') }}
+    sequence:
+      - action: number.set_value
+        target:
+          entity_id: number.lux_ac_battery_charge_level
+        data:
+          value: "{{ states('number.lux_system_charge_soc_limit') | int(0) }}"
+
+  - conditions:
+      - condition: template
+        value_template: |
+          {{ trigger.to_state.state == 'Hold charging' }}
+    sequence:
+      - action: number.set_value
+        target:
+          entity_id: number.lux_ac_battery_charge_level
+        data:
+          value: >-
+            {{ states('number.lux_on_grid_discharge_cut_off_soc') | int(0)
+            }}
+
+      - action: automation.turn_off
+        target:
+          entity_id: automation.luxpower_freeze_charge_exit
+
 mode: single
 ```
 
@@ -1622,119 +1552,92 @@ description: >
   Cancels freeze charge if Predbat does not commit to Freeze charging. Triggered
   by freeze guard Boolean; self-disarms after execution.
 triggers:
-
-- entity_id: input_boolean.freeze_charge_guard
-    from: "off"
-    to: "on"
+  - entity_id: input_boolean.freeze_charge_guard
+    from: 'off'
+    to: 'on'
     trigger: state
-  conditions: []
-  actions:
-
-- alias: "Watchdog: Grace period"
-    delay: "00:00:30"
-
-- alias: "Watchdog: Abort if no Freeze charging"
+conditions: []
+actions:
+  - alias: 'Watchdog: Grace period'
+    delay: '00:00:30'
+  - alias: 'Watchdog: Abort if no Freeze charging'
     if:
-
-    - condition: template
-      value_template: |
-
-        {{ not states('predbat.status').startswith('Freeze charging') }}
-
+      - condition: template
+        value_template: |
+          {{ not states('predbat.status').startswith('Freeze charging') }}
     then:
-    - alias: "Watchdog: Trace cancellation"
-      action: system_log.write
-      data:
-
-        level: warning
-        message: >
-          Predbat never entered Freeze charging (status="{{
-          states('predbat.status') }}") → cancelling freeze
-    - alias: "Watchdog: Disable freeze automations"
-      action: automation.turn_off
-      target:
-
-        entity_id:
-          - automation.luxpower_freeze_charge
-          - automation.luxpower_freeze_charge_predbat_override
-          - automation.luxpower_freeze_charge_exit
-    - alias: "Watchdog: Reset guard Boolean"
-      action: input_boolean.turn_off
-      target:
-
-        entity_id: input_boolean.freeze_charge_guard
-    - alias: "Watchdog: AC handling"
-      choose:
-        - conditions:
-            - condition: template
-          value_template: |
-
-            {{ states('predbat.status').startswith('Charging')
-               or states('predbat.status') == 'Hold charging' }}
-
-        sequence:
-            - if:
-                - condition: state
-            entity_id: switch.lux_ac_charge_enable
-            state: "off"
-          then:
-                - action: switch.turn_on
-            target:
-
-              entity_id: switch.lux_ac_charge_enable
-
-          default:
-        - if:
+      - alias: 'Watchdog: Trace cancellation'
+        action: system_log.write
+        data:
+          level: warning
+          message: >
+            Predbat never entered Freeze charging (status="{{
+            states('predbat.status') }}") → cancelling freeze
+      - alias: 'Watchdog: Disable freeze automations'
+        action: automation.turn_off
+        target:
+          entity_id:
+            - automation.luxpower_freeze_charge
+            - automation.luxpower_freeze_charge_predbat_override
+            - automation.luxpower_freeze_charge_exit
+      - alias: 'Watchdog: Reset guard Boolean'
+        action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.freeze_charge_guard
+      - alias: 'Watchdog: AC handling'
+        choose:
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status').startswith('Charging')
+                     or states('predbat.status') == 'Hold charging' }}
+            sequence:
+              - if:
+                  - condition: state
+                    entity_id: switch.lux_ac_charge_enable
+                    state: 'off'
+                then:
+                  - action: switch.turn_on
+                    target:
+                      entity_id: switch.lux_ac_charge_enable
+        default:
+          - if:
             - condition: state
-          entity_id: switch.lux_ac_charge_enable
-          state: "on"
-        then:
-            - action: switch.turn_off
-          target:
-
-            entity_id: switch.lux_ac_charge_enable
-    - alias: "Watchdog: Restore SOC limits"
-      choose:
-        - conditions:
-            - condition: template
-          value_template: |
-
-            {{ states('predbat.status').startswith('Charging') }}
-
-        sequence:
-            - action: number.set_value
-          target:
-
-            entity_id: number.lux_ac_battery_charge_level
-
-          data:
-
-            value: "{{ states('number.lux_system_charge_soc_limit') | int(0) }}"
-        - conditions:
-            - condition: template
-          value_template: |
-
-            {{ states('predbat.status') == 'Hold charging' }}
-
-        sequence:
-            - action: number.set_value
-          target:
-
-            entity_id: number.lux_ac_battery_charge_level
-
-          data:
-
-            value: >-
-              {{ states('number.lux_on_grid_discharge_cut_off_soc') |
-              int(0) }}
-
-- alias: "Watchdog: Disarm self"
-    action: automation.turn_off
-    target:
-
-      entity_id: automation.luxpower_freeze_charge_watchdog
-
-  mode: single
+              entity_id: switch.lux_ac_charge_enable
+              state: "on"
+            then:
+              - action: switch.turn_off
+                target:
+                  entity_id: switch.lux_ac_charge_enable
+      - alias: 'Watchdog: Restore SOC limits'
+        choose:
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status').startswith('Charging') }}
+            sequence:
+              - action: number.set_value
+                target:
+                  entity_id: number.lux_ac_battery_charge_level
+                data:
+                  value: '{{ states(''number.lux_system_charge_soc_limit'') | int(0) }}'
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status') == 'Hold charging' }}
+            sequence:
+              - action: number.set_value
+                target:
+                  entity_id: number.lux_ac_battery_charge_level
+                data:
+                  value: >-
+                    {{ states('number.lux_on_grid_discharge_cut_off_soc') |
+                    int(0) }}
+      - alias: 'Watchdog: Disarm self'
+        action: automation.turn_off
+        target:
+          entity_id: automation.luxpower_freeze_charge_watchdog
+mode: single
 ```
 
 **Enable Freeze Charging**
@@ -1788,14 +1691,14 @@ description: >
   charge last switches, and reset discharge current limit. Marks Predbat ready
   only after HA and Lux are stable.
 triggers:
-    - event: start
+  - event: start
     trigger: homeassistant
 actions:
-    - alias: "StartupReset: Mark Predbat NOT ready"
+  - alias: "StartupReset: Mark Predbat NOT ready"
     target:
       entity_id: input_boolean.predbat_ready
     action: input_boolean.turn_off
-    - alias: "StartupReset: Wait for Lux entities"
+  - alias: "StartupReset: Wait for Lux entities"
     wait_template: |
       {{ states('switch.lux_ac_charge_enable') not in ['unknown','unavailable']
          and states('switch.lux_charge_last') not in ['unknown','unavailable']
@@ -1803,7 +1706,7 @@ actions:
          and states('number.lux_discharge_current_limit') not in ['unknown','unavailable'] }}
     timeout: "00:02:00"
     continue_on_timeout: true
-    - alias: "StartupReset: Disable freeze/override/watchdog"
+  - alias: "StartupReset: Disable freeze/override/watchdog"
     target:
       entity_id:
         - automation.luxpower_freeze_charge
@@ -1811,15 +1714,15 @@ actions:
         - automation.luxpower_freeze_charge_exit
         - automation.luxpower_freeze_charge_watchdog
     action: automation.turn_off
-    - alias: "StartupReset: Reset guard boolean"
+  - alias: "StartupReset: Reset guard boolean"
     target:
       entity_id: input_boolean.freeze_charge_guard
     action: input_boolean.turn_off
-    - alias: "StartupReset: Wait for battery voltage to be > 0"
+  - alias: "StartupReset: Wait for battery voltage to be > 0"
     wait_template: "{{ states('sensor.lux_battery_voltage_live') | float(0) > 0 }}"
     timeout: "00:01:00"
     continue_on_timeout: true
-    - alias: "StartupReset: Set discharge current limit from battery_rate_max"
+  - alias: "StartupReset: Set discharge current limit from battery_rate_max"
     target:
       entity_id: number.lux_discharge_current_limit
     data:
@@ -1828,7 +1731,7 @@ actions:
             / states('sensor.lux_battery_voltage_live') | float(1))
             | round(0) }}
     action: number.set_value
-    - alias: "StartupReset: Turn off AC if on"
+  - alias: "StartupReset: Turn off AC if on"
     if:
       - condition: state
         entity_id: switch.lux_ac_charge_enable
@@ -1837,7 +1740,7 @@ actions:
       - target:
           entity_id: switch.lux_ac_charge_enable
         action: switch.turn_off
-    - alias: "StartupReset: Turn off charge last if on"
+  - alias: "StartupReset: Turn off charge last if on"
     if:
       - condition: state
         entity_id: switch.lux_charge_last
@@ -1846,7 +1749,7 @@ actions:
       - target:
           entity_id: switch.lux_charge_last
         action: switch.turn_off
-    - alias: "StartupReset: Turn off force discharge if on"
+  - alias: "StartupReset: Turn off force discharge if on"
     if:
       - condition: state
         entity_id: switch.lux_force_discharge_enable
@@ -1855,13 +1758,13 @@ actions:
       - target:
           entity_id: switch.lux_force_discharge_enable
         action: switch.turn_off
-    - alias: "StartupReset: Final settle delay"
+  - alias: "StartupReset: Final settle delay"
     delay: "00:01:30"
-    - alias: "StartupReset: Mark Predbat ready"
+  - alias: "StartupReset: Mark Predbat ready"
     target:
       entity_id: input_boolean.predbat_ready
     action: input_boolean.turn_on
-    - alias: "StartupReset: Log completion"
+  - alias: "StartupReset: Log completion"
     data:
       level: debug
       message: "StartupReset: cleanup complete, watchdog and guard OFF, Predbat ready"
@@ -1904,16 +1807,22 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 
 - All the Sigenergy entities referenced in `apps.yaml` need to be enabled for Predbat to use them. The following are disabled by default and will need enabling:
 
-    - sensor.sigen_plant_available_max_discharging_capacity
-    - sensor.sigen_plant_daily_consumed_energy
+    - sensor.sigen_plant_daily_load_consumption
     - number.sigen_plant_ess_backup_state_of_charge
     - number.sigen_plant_ess_charge_cut_off_state_of_charge
     - number.sigen_plant_ess_discharge_cut_off_state_of_charge
     - number.sigen_plant_ess_max_charging_limit
     - number.sigen_plant_ess_max_discharging_limit
-    - sensor.sigen_plant_max_active_power
+    - sensor.sigen_plant_available_max_active_power
 
-- The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface:
+- Turn on **switch.sigen_plant_remote_ems_controlled_by_home_assistant** ("Remote EMS (Controlled by Home Assistant)"). While it is off the plant ignores **select.sigen_plant_remote_ems_control_mode** entirely and runs its own logic,
+so none of the mode changes made by the automations below take effect. The cut-off and limit numbers are still obeyed without it, which can make a setup look partly working.
+
+- The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface.
+They deliberately have no `initial:` value, so Home Assistant restores their last state on a restart. With `initial:` they are reset on every restart without a state change,
+so the automations below don't fire and the plant can be left in a mode, or at a rate limit, that no longer matches what Predbat sees.
+Without `initial:`, a new **input_number.charge_rate** / **input_number.discharge_rate** starts at 0 W, which Predbat reads as the battery being held, and which the rate automations below write to the plant on a restart.
+On a new install, set each once to your plant's rated charging / discharging power in W.
 
 ```yaml
 input_select:
@@ -1925,13 +1834,11 @@ input_select:
       - "Freeze Charging"
       - "Discharging"
       - "Freeze Discharging"
-    initial: "Demand"
     icon: mdi:battery-unknown
 
 input_number:
   charge_rate:
     name: Battery charge rate
-    initial: 6950
     min: 0
     max: 20000
     step: 1
@@ -1940,7 +1847,6 @@ input_number:
 
   discharge_rate:
     name: Battery discharge rate
-    initial: 8000
     min: 0
     max: 20000
     step: 1
@@ -1959,8 +1865,26 @@ Add the following automations to `automations.yaml` (or configure via the UI):
     - trigger: state
       entity_id:
         - input_select.predbat_requested_mode
+    # Re-apply the mode after a Home Assistant restart, and when Remote EMS is switched back on (by you,
+    # or after another service turned it off), as the plant may be in a different mode by then.
+    # Without the restart trigger, a restart at the end of a force export can leave the plant on
+    # "Command Discharging" if Predbat already wants "Demand": Predbat sees nothing to change, writes
+    # nothing, and the battery keeps exporting past its target.
+    - trigger: homeassistant
+      event: start
+    - trigger: state
+      entity_id:
+        - switch.sigen_plant_remote_ems_controlled_by_home_assistant
+      from: "off"
+      to: "on"
   conditions: []
   actions:
+    # After a restart, give the Sigenergy integration time to load before writing to it
+    - wait_template: >-
+        {{ states('select.sigen_plant_remote_ems_control_mode') not in ['unknown', 'unavailable']
+           and states('sensor.sigen_plant_battery_state_of_charge') | is_number }}
+      timeout: "00:05:00"
+      continue_on_timeout: true
     - action: select.select_option
       metadata: {}
       target:
@@ -1987,7 +1911,7 @@ Add the following automations to `automations.yaml` (or configure via the UI):
         # discharge_cut_off_state_of_charge is pinned once here, to current SoC minus a small
         # margin, not a hardcoded value and not continuously re-pinned. Sigenergy has confirmed a
         # firmware bug: if this is set above current SoC, the inverter actively imports from grid
-        # to reach it - even with grid_import_limitation at 0 below - so the target must never sit
+        # to reach it - even if grid_import_limitation is set to 0 - so the target must never sit
         # above SoC. Setting it once, fixed, is what actually implements "frozen": any real deficit
         # against that fixed point (house load, or even the inverter's own standby losses) gets
         # corrected by grid import back up to the target, rather than the target chasing SoC
@@ -2009,12 +1933,11 @@ Add the following automations to `automations.yaml` (or configure via the UI):
               target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
               data_template:
-                value: "{{ [(states('sensor.sigen_plant_battery_state_of_charge') | float(100)) - 0.25, 0] | max }}"
-            - action: number.set_value
-              target:
-                entity_id: number.sigen_plant_grid_import_limitation
-              data:
-                value: 0
+                # If SoC can't be read this falls back to 0 (no discharge block) - never to a high
+                # value, which would trigger the forced-import bug described above
+                value: "{{ [(states('sensor.sigen_plant_battery_state_of_charge') | float(0)) - 0.25, 0] | max }}"
+        # grid_import_limitation is deliberately not set to 0 in either freeze mode - see the note
+        # after these automations.
         # Freeze Discharging
         # Docs:
         #  Freeze exporting (mapped to Freeze Discharging in sigenergy_sigenstor.yaml) - The battery is in demand mode,
@@ -2045,12 +1968,7 @@ Add the following automations to `automations.yaml` (or configure via the UI):
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
               data:
                 value: 0
-            - action: number.set_value
-              target:
-                entity_id: number.sigen_plant_grid_import_limitation
-              data:
-                value: 0
-        # If neither of the above conditions are met, set the limits to the input numbers
+        # Any other mode: clear the freeze cut-offs and restore the import limit
         - conditions:
           - condition: not
             conditions:
@@ -2083,14 +2001,36 @@ Add the following automations to `automations.yaml` (or configure via the UI):
   triggers:
   - trigger: state
     entity_id: input_number.charge_rate
+  # Re-apply the limit after a Home Assistant restart, and when Remote EMS is switched back on, as for
+  # the mode automation above. Otherwise a write lost to a restart, or a limit another service changed
+  # while Remote EMS was off, is never corrected, because Predbat sees the input number already at
+  # the value it wants
+  - trigger: homeassistant
+    event: start
+  - trigger: state
+    entity_id: switch.sigen_plant_remote_ems_controlled_by_home_assistant
+    from: "off"
+    to: "on"
+  conditions:
+  # Skip quietly, rather than fail with a template error, while the input number is briefly
+  # unavailable. A real 0 W rate (Predbat holding the battery) is re-applied like any other
+  - condition: template
+    value_template: "{{ states('input_number.charge_rate') | is_number }}"
   actions:
+  # After a restart, give the Sigenergy integration time to load; give up rather than write to an unavailable entity
+  - wait_template: "{{ states('number.sigen_plant_ess_max_charging_limit') not in ['unknown', 'unavailable'] }}"
+    timeout: "00:05:00"
+    continue_on_timeout: false
   - action: number.set_value
     target:
       entity_id: number.sigen_plant_ess_max_charging_limit
     data:
+      # The plant-level rated power caps the request; if that sensor is briefly unavailable the
+      # 99 fallback means no cap, rather than a template error and no write at all
       value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
-        states(''sensor.sigen_inverter_ess_rated_charging_power'') | float] | min}}'
-  mode: single
+        states(''sensor.sigen_plant_ess_rated_charging_power'') | float(99)] | min}}'
+  # restart, so a rate change that arrives during the wait replaces the one waiting
+  mode: restart
 
 - id: automation_sigen_ess_max_discharging_limit_input_number_action
   alias: Predbat max discharging limit action
@@ -2098,33 +2038,92 @@ Add the following automations to `automations.yaml` (or configure via the UI):
   triggers:
   - trigger: state
     entity_id: input_number.discharge_rate
+  - trigger: homeassistant
+    event: start
+  - trigger: state
+    entity_id: switch.sigen_plant_remote_ems_controlled_by_home_assistant
+    from: "off"
+    to: "on"
+  conditions:
+  - condition: template
+    value_template: "{{ states('input_number.discharge_rate') | is_number }}"
   actions:
+  - wait_template: "{{ states('number.sigen_plant_ess_max_discharging_limit') not in ['unknown', 'unavailable'] }}"
+    timeout: "00:05:00"
+    continue_on_timeout: false
   - action: number.set_value
     target:
       entity_id: number.sigen_plant_ess_max_discharging_limit
     data:
       value: '{{ [(states(''input_number.discharge_rate'') | float / 1000) | round(2),
-        states(''sensor.sigen_inverter_ess_rated_discharging_power'') | float] | min}}'
-  mode: single
+        states(''sensor.sigen_plant_ess_rated_discharging_power'') | float(99)] | min}}'
+  mode: restart
 ```
 
-*Note:* Some Sigenergy Predbat users have reported that their Sigenergy modbus integration has created some of the entities that Predbat requires with different names
-so you may need to adapt the above automations and `apps.yaml` (or rename your entities) to match:
+*Note:* The rate automations cap the requested rate at the **plant**-level rated power, **sensor.sigen_plant_ess_rated_charging_power** and **sensor.sigen_plant_ess_rated_discharging_power**,
+which match the plant-level limits being written (the template's `battery_rate_max` uses the same plant-level discharging sensor). Per-inverter versions, where your integration creates them, are named without the "-ing"
+(e.g. sensor.sigen_inverter_ess_rated_charge_power); earlier versions of this page mixed the two spellings, giving entity names that don't exist.
+Make sure both are enabled: if one is missing or disabled the automation runs without a cap. If you don't have sensor.sigen_plant_daily_load_consumption,
+look for sensor.sigen_plant_daily_consumed_energy (the name earlier versions of this page used) and use that in `apps.yaml` instead.
 
-- sensor.sigen_inverter_ess_rated_discharging_power is instead named sensor.sigen_inverter_ess_rated_discharge_power
-- sensor.sigen_inverter_ess_rated_charging_power is sensor.sigen_inverter_ess_rated_charge_power
-- sensor.sigen_plant_daily_consumed_energy is sensor.sigen_plant_daily_load_consumption
+*Note:* If you rename **input_number.charge_rate** / **input_number.discharge_rate**, change them in `apps.yaml` **and** in the triggers and templates of the rate automations.
+If the two disagree the automations never fire, and nothing reports it: the plant simply stays at whatever limit it last had, so Predbat's rate changes (including setting a rate of 0 to hold the battery) never reach the inverter.
 
-*Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first integration to any lower import limit that your electricity supplier may have imposed,
+*Note:* Predbat has no reserve it can set on a Sigenergy, so it holds **set_reserve_min** with the discharge rate instead: whenever it is not charging or force exporting and the battery is within 1% of the reserve,
+Predbat sets **input_number.discharge_rate** to 0 and the house is supplied from the grid. Solar can still charge the battery (except during Freeze Exporting, which stops charging), and the discharge rate goes back to maximum once the SoC is more than 2% above the reserve.
+The SoC is only checked every 5 minutes, so with a large house load the battery can still go a little below the reserve before the hold starts.
+Predbat only does this while it controls the charge or export windows, not in Monitor or Control SOC only mode. It relies on the discharge rate automation above. Without it the plant's own self-consumption carries on running the house from the battery down to **number.sigen_plant_ess_discharge_cut_off_state_of_charge** (see [batpred#5358](https://github.com/springfall2008/batpred/issues/5358)).
+
+*Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first automation to any lower import limit that your electricity supplier may have imposed,
 e.g. 18kW roughly corresponds to an 80A supply.
 
-*Important:* Sigenergy have confirmed this is a known firmware bug on their side (not a Predbat or integration issue): even with **grid_import_limitation** set to 0kW, the inverter will still import from the grid to charge the battery if the current SoC is below **discharge_cut_off_state_of_charge**. In practice this has been observed importing several kW, not just a trickle, when the gap between SoC and the cut-off is large - continuing unattended until the target is reached. **grid_import_limitation** is therefore not a reliable backstop against this: the fix is keeping **discharge_cut_off_state_of_charge** pinned so it's never above current SoC, as the automation above does.
+*Important:* Earlier versions of this page set **grid_import_limitation** to 0 in both freeze modes. That is no longer recommended (see [batpred#4911](https://github.com/springfall2008/batpred/issues/4911)): the freeze is
+enforced by the charge and discharge cut-offs, not by the import limit, and a 0kW import limit contradicts Freeze Charging's own definition (house load beyond solar is met from the grid).
+It also stalls a Sigenergy EV charger (EVAC/EVDC) behind the plant's CT clamp, which the plant throttles to the import limit - and one of the times Predbat uses Freeze Charging is to hold the battery while the car charges.
+If you are updating from the older automation, set **number.sigen_plant_grid_import_limitation** back to your supply limit once, as a freeze mode may have left it at 0.
 
-The pin is set once, when Freeze Charging starts, rather than continuously updated as SoC changes - and this matters, not just as a simplification. "Frozen" means holding a fixed point; if the target itself kept moving to track live SoC, any downward drift (from real losses or otherwise) would just relocate the target to wherever the battery ended up, with nothing ever correcting it back. A fixed target is what makes the correction mechanism (the same import behaviour that caused the original bug) actually useful: it holds the line against any real deficit, including the inverter's own standby losses, not just customer load. The small margin (0.25 percentage points) below the pinned value exists to cover possible imprecision in that one reading - not ongoing noise tolerance, since the pin is fixed rather than re-sampled, so only the single initial reading matters. It still matters because the underlying mechanism only ever corrects one way: a reading that's a hair low at the moment of pinning would cost a real, if tiny, import to "correct" a gap that was never really there, while a reading that's a hair high costs nothing - so even a one-off imprecise read isn't self-cancelling without some margin.
+*Important:* Sigenergy have confirmed this is a known firmware bug on their side (not a Predbat or integration issue): even if **grid_import_limitation** is set to 0kW, the inverter will still import from the grid to charge the battery if the current SoC is below **discharge_cut_off_state_of_charge**. In practice this has been observed importing several kW, not just a trickle, when the gap between SoC and the cut-off is large - continuing unattended until the target is reached. **grid_import_limitation** is therefore not a reliable backstop against this: the fix is keeping **discharge_cut_off_state_of_charge** pinned so it's never above current SoC, as the automation above does.
+
+The pin is set once, when Freeze Charging starts, rather than continuously updated as SoC changes - and this matters, not just as a simplification. "Frozen" means holding a fixed point; if the target itself kept moving to track live SoC, any downward drift (from real losses or otherwise) would just relocate the target to wherever the battery ended up, with nothing ever correcting it back. A fixed target is what makes the correction mechanism (the same import behaviour that caused the original bug) actually useful: it holds the line against any real deficit, including the inverter's own standby losses, not just customer load. The small margin (0.25 percentage points) below the pinned value exists to cover possible imprecision in that one reading - not ongoing noise tolerance, since the pin is fixed rather than re-sampled, so only the single initial reading matters. (The pin is also re-taken if the automation re-runs during Freeze Charging - after a Home Assistant restart, or when Remote EMS is switched back on - which is a rare, one-off reset rather than continuous tracking.) It still matters because the underlying mechanism only ever corrects one way: a reading that's a hair low at the moment of pinning would cost a real, if tiny, import to "correct" a gap that was never really there, while a reading that's a hair high costs nothing - so even a one-off imprecise read isn't self-cancelling without some margin.
 
 The margin is clamped at 0 (`[value, 0] | max`) rather than allowed to go negative. This isn't just tidiness: `discharge_cut_off_state_of_charge` is an unsigned 16-bit Modbus register on the wire, and the integration's own write encoding has no guard against a negative value - it would silently wrap around into a huge, nonsensical raw value rather than being rejected. At very low SoC (below the margin) an unclamped template could produce exactly that.
 
 See [batpred#4375](https://github.com/springfall2008/batpred/issues/4375) and the wider [Sigenergy setup discussion](https://github.com/springfall2008/batpred/issues/2077) for the full investigation, including a more advanced (currently experimental, untested) variant that ratchets the target up in response to confirmed solar surplus over each period rather than using a fixed one-off value.
+
+*Optional:* other services that control the plant can turn **switch.sigen_plant_remote_ems_controlled_by_home_assistant** off and not turn it back on. On one user's system this happened after an Axle VPP event,
+and again after connecting a cloud service to the Sigenergy account, with nothing in Home Assistant recording why. While it is off the plant ignores Predbat's mode changes (on that occasion for 7 hours,
+running the battery empty overnight). This watchdog notifies you and turns it back on, and the mode and rate automations above then re-apply Predbat's current mode and limits.
+Note that it will also undo a deliberate switch-off - disable the watchdog first if you want Remote EMS off for a while.
+
+```yaml
+- id: predbat_sigenergy_remote_ems_watchdog
+  alias: "Predbat Sigenergy Remote EMS Watchdog"
+  description: "Turn Remote EMS back on if something else has turned it off"
+  mode: single
+  triggers:
+    - trigger: time_pattern
+      minutes: /30
+  conditions:
+    - condition: state
+      entity_id: switch.sigen_plant_remote_ems_controlled_by_home_assistant
+      state: "off"
+    # If you take part in Axle VPP events through Predbat's Axle integration, uncomment this so the
+    # watchdog doesn't take control back from Axle in the middle of an event. The entity exists only
+    # when that integration is enabled (change "predbat" if you use a different prefix); with it
+    # missing, the condition never passes and the watchdog never runs:
+    # - condition: state
+    #   entity_id: binary_sensor.predbat_axle_event
+    #   state: "off"
+  actions:
+    - action: persistent_notification.create
+      data:
+        notification_id: sigenergy_remote_ems_watchdog
+        title: Sigenergy not in Remote EMS mode
+        message: "Remote EMS was off at {{ now().strftime('%H:%M') }} - turning it back on."
+    - action: switch.turn_on
+      target:
+        entity_id: switch.sigen_plant_remote_ems_controlled_by_home_assistant
+```
 
 ## Sigenergy Cloud
 
@@ -2134,6 +2133,9 @@ Predbat has a built-in Sigenergy Cloud integration that connects directly to the
 It publishes all necessary sensor entities itself and can automatically configure Predbat to use them.
 
 See the [Components - Sigenergy Cloud](components.md#sigenergy-cloud-api-sigenergy) documentation for full configuration options.
+
+*Note:* the reserve hold described for local Sigenergy setups above does not apply to Sigenergy Cloud. On Sigenergy Cloud, a zero discharge rate stops the battery charging as well, so a hold at the reserve would also stop solar from topping the battery up.
+With Sigenergy Cloud, Predbat's **set_reserve_min** is only a floor in the plan, and in Demand the plant can still run the battery down to its own discharge cut-off (see [batpred#5358](https://github.com/springfall2008/batpred/issues/5358)).
 
 ### Obtaining Sigenergy Cloud API credentials
 
@@ -2275,50 +2277,50 @@ Please see this ticket in Github for ongoing discussions: <https://github.com/sp
 
 ```yaml
 template:
-    - sensor:
-      - name: "Solar Panel Production W"
-        unique_id: solar_panel_production_w
-        unit_of_measurement: "W"
-        icon: mdi:solar-power
-        state: >
-          {% set i1_dc_power = states('sensor.solaredge_i1_dc_power') | float(0) %}
-          {% set b1_dc_power = states('sensor.solaredge_b1_dc_power') | float(0) %}
-          {% if (i1_dc_power + b1_dc_power <= 0) %}
-            0
-          {% else %}
-            {{ (i1_dc_power + b1_dc_power) }}
-          {% endif %}
-        availability: >
-          {{ states('sensor.solaredge_i1_dc_power') | is_number and states('sensor.solaredge_b1_dc_power') | is_number }}
+  - sensor:
+    - name: "Solar Panel Production W"
+      unique_id: solar_panel_production_w
+      unit_of_measurement: "W"
+      icon: mdi:solar-power
+      state: >
+        {% set i1_dc_power = states('sensor.solaredge_i1_dc_power') | float(0) %}
+        {% set b1_dc_power = states('sensor.solaredge_b1_dc_power') | float(0) %}
+        {% if (i1_dc_power + b1_dc_power <= 0) %}
+          0
+        {% else %}
+          {{ (i1_dc_power + b1_dc_power) }}
+        {% endif %}
+      availability: >
+        {{ states('sensor.solaredge_i1_dc_power') | is_number and states('sensor.solaredge_b1_dc_power') | is_number }}
 
-      - name: "Solar House Consumption W"
-        unique_id: solar_house_consumption_w
-        unit_of_measurement: "W"
-        icon: mdi:home
-        state: >
-          {% set i1_ac_power = states('sensor.solaredge_i1_ac_power') | float(0) %}
-          {% set m1_ac_power = states('sensor.solaredge_m1_ac_power') | float(0) %}
-          {% if (i1_ac_power - m1_ac_power <= 0) %}
-            0
-          {% else %}
-            {{ (i1_ac_power - m1_ac_power) }}
-          {% endif %}
-        availability: >
-          {{ states('sensor.solaredge_i1_ac_power') | is_number and states('sensor.solaredge_m1_ac_power') | is_number }}
+    - name: "Solar House Consumption W"
+      unique_id: solar_house_consumption_w
+      unit_of_measurement: "W"
+      icon: mdi:home
+      state: >
+        {% set i1_ac_power = states('sensor.solaredge_i1_ac_power') | float(0) %}
+        {% set m1_ac_power = states('sensor.solaredge_m1_ac_power') | float(0) %}
+        {% if (i1_ac_power - m1_ac_power <= 0) %}
+          0
+        {% else %}
+          {{ (i1_ac_power - m1_ac_power) }}
+        {% endif %}
+      availability: >
+        {{ states('sensor.solaredge_i1_ac_power') | is_number and states('sensor.solaredge_m1_ac_power') | is_number }}
 
-sensor:
+  - sensor:
     - platform: integration
-    source: sensor.solar_panel_production_w
-    method: left
-    unit_prefix: k
-    name: solar_panel_production_kwh
+      source: sensor.solar_panel_production_w
+      method: left
+      unit_prefix: k
+      name: solar_panel_production_kwh
 
-sensor:
+  - sensor:
     - platform: integration
-    source: sensor.solar_house_consumption_w
-    method: left
-    unit_prefix: k
-    name: solar_house_consumption_kwh
+      source: sensor.solar_house_consumption_w
+      method: left
+      unit_prefix: k
+      name: solar_house_consumption_kwh
 ```text
 
 If you have multiple batteries connected to your SolarEdge inverter and are using the SolarEdge Modbus Multi integration, this enumerates the multiple batteries as b1, b2, b3, etc with separate entities per battery.
@@ -2343,7 +2345,7 @@ You will need to make a number of changes to the solaredge `apps.yaml`, replacin
 - And add the following additional template sensors to `configuration.yaml` after the existing 'template:' line (from the earlier template sensor definitions):
 
 ```yaml
-    - sensor:
+  - sensor:
     # Template sensor for Max Battery Charge rate
     # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (e.g. 8k) when charging from AC+Solar
     # Returns 5000W as the minimum max value, the single battery charge/discharge limit to ensure at least one battery can always be charged if one or more batteries have 'gone offline' to modbus
@@ -2453,7 +2455,7 @@ fields:
     default: 28800
     required: false
 sequence:
-    - variables:
+  - variables:
       defaultPower: "{{ 200 }}"
       mode: |-
         {% set map = {
@@ -2476,27 +2478,27 @@ sequence:
            'Freeze Charge': 0,
            'Freeze Discharge': 0} %}
         {{ map.get( operation, 0 ) }}
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ activeP }}"
     target:
       entity_id: number.solax_remotecontrol_active_power
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "60"
     target:
       entity_id: number.solax_remotecontrol_duration
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ duration if duration is defined else 28800 }}"
     target:
       entity_id: number.solax_remotecontrol_autorepeat_duration
-    - action: select.select_option
+  - action: select.select_option
     data:
       option: "{{ mode if mode is defined else Disabled }}"
     target:
       entity_id: select.solax_remotecontrol_power_control
-    - action: button.press
+  - action: button.press
     data: {}
     target:
       entity_id: button.solax_remotecontrol_trigger
@@ -2547,7 +2549,7 @@ fields:
         max: 86400
     default: 28800
 sequence:
-    - variables:
+  - variables:
       maxPvPower: "{{ 12000 }}"
       defaultPower: "{{ 200 }}"
       mode: |-
@@ -2568,42 +2570,42 @@ sequence:
            'Freeze Charge': 0,
            'Freeze Discharge': 0} %}
         {{ map.get( operation, 0 ) }}
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ activeP }}"
     target:
       entity_id: number.solax_remotecontrol_push_mode_power_8_9
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ maxPvPower }}"
     target:
       entity_id: number.solax_remotecontrol_pv_power_limit
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "30"
     target:
       entity_id: number.solax_remotecontrol_duration
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "300"
     target:
       entity_id: number.solax_remotecontrol_timeout
-    - action: number.set_value
+  - action: number.set_value
     data:
       value: "{{ duration if duration is defined else 28800 }}"
     target:
       entity_id: number.solax_remotecontrol_autorepeat_duration
-    - action: select.select_option
+  - action: select.select_option
     data:
       option: VPP Off
     target:
       entity_id: select.solax_inverter_remotecontrol_timeout_next_motion_mode_1_9
-    - action: select.select_option
+  - action: select.select_option
     data:
       option: "{{ mode if mode is defined else Disabled }}"
     target:
       entity_id: select.solax_remotecontrol_power_control_mode
-    - action: button.press
+  - action: button.press
     data: {}
     enabled: true
     target:
@@ -2622,6 +2624,14 @@ max: 10
     - select.solax_inverter_remotecontrol_timeout_next_motion_mode_1_9
     - select.solax_remotecontrol_power_control_mode
     - button.solax_powercontrolmode8_trigger
+    - sensor.solax_house_load_alt
+    - sensor.solax_meter_2_measured_power
+
+- Mode 8 control also needs the 'House Load Alt' sensor (`sensor.solax_house_load_alt`) and the 'Meter 2 Measured Power' sensor (`sensor.solax_meter_2_measured_power`), one of the inputs House Load Alt is calculated from, to stay enabled.
+  As with the other entities, the prefix may differ on your system (e.g. `sensor.solax_inverter_house_load_alt`).
+  Recent versions of the Solax Modbus integration treat House Load Alt as a required input to the Mode 8 trigger: if it is disabled or unavailable the integration stops the trigger and sets the inverter's power control mode back to 'Disabled' straight after Predbat sends each command,
+  so the inverter ignores Predbat. House Load Alt is disabled by default, and both sensors have been found disabled after a Solax Modbus update, so re-check them after updating the integration.
+  The Home Assistant log then shows `SolaX: stopping powercontrolmode8_trigger because a required control input is invalid: ['house_load_alt']` (see [issue #6059](https://github.com/springfall2008/batpred/issues/6059)).
 
 - Predbat needs a 'Todays House Load' sensor, this can be created from inverter-supplied information by creating two custom helper entities:
 
@@ -2635,7 +2645,7 @@ max: 10
 The fix was to enable the hidden HA entity 'VPP Exit Idle Enable' and then change the entity value from Disabled to Enabled. Once this was Enabled the inverter responded correctly to Predbat commands.
 
 - When you first start Predbat, check the [Predbat log](output-data.md#predbat-logfile) to confirm that the correct sensor names are identified by the regular expressions in `apps.yaml`. Any non-matching expressions should be investigated and resolved.
-- You may well get a warning message in the logs that Predbat [cannot create battery charge/discharge curves](faq.md#info-cannot-find-battery-charge-curve). Either configure [battery charge and discharge rates](apps-yaml.md#battery-chargedischarge-curves) in `apps.yaml` using appropriate inverter sensors (if available) or create a dummy default curve based on manufacturers information.
+- You may well get a warning message in the logs that Predbat [cannot create battery charge/discharge curves](faq.md#warn-cannot-find-battery-charge-curve). Either configure [battery charge and discharge rates](apps-yaml.md#battery-chargedischarge-curves) in `apps.yaml` using appropriate inverter sensors (if available) or create a dummy default curve based on manufacturers information.
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
 
@@ -2684,7 +2694,8 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 
 1. Install PredBat as per the [Installation Summary](installation-summary.md)
 
-2. Ensure that you have the Solax Modbus integration running and select the inverter type **Solis FB00** (not **Solis**).
+2. Install wills106's [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) and select the inverter type **Solis FB00** (not **Solis**).
+   This is the integration the `GS_fb00` inverter type and its template are written and tested for: Predbat's freeze, hold and export control relies on the entities it creates, in particular the Energy Storage Control Switch (see step 5).
    There are a number of entities which this integration disables by default that you will need to enable via the Home Assistant GUI:
 
    | Name                         | Description     |
@@ -2718,6 +2729,10 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
    So for example, if the inverter minimum SoC is set to 20%, predbat_set_reserve_min must be set to at least 21%. If this is not done then when Predbat sets the reserve SoC, the instruction will be rejected by the inverter and Predbat will error.
 
 7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
+
+## Solis local
+
+Uses a custom inverter definition to integrate locally via [Pho3niX90's modbus integration](https://github.com/Pho3niX90/solis_modbus).
 
 ## Sunsynk Cloud
 
@@ -2767,6 +2782,7 @@ Useful flags:
 - `--region sunsynk|inteless` - select the API region (default `sunsynk`)
 - `--serial <sn>` - restrict to one inverter instead of every inverter on the account
 - `--dump-settings` - print the full settings object, useful for confirming the current work mode and slot layout against the app
+- `--automatic` - run `automatic_config()` on the first cycle and print every Predbat setting it binds, to check the bindings against your own account (writes nothing to the inverter)
 - `--write-test` - build a harmless self-use-at-floor schedule, show it, and offer to send it after confirmation - use this to verify a write actually reaches the inverter, and how long the dongle takes to apply it
 
 Check the dumped `soc`, `battery_power`, `grid_power`, `load_power` and `pv_power` readings against the Sunsynk app, and in particular note whether `battery_power` is positive while charging or while discharging - this sign convention has not been confirmed on real hardware and getting it wrong would invert Predbat's whole model of the battery. Please report your findings via a GitHub issue so the assumption can be confirmed or corrected.
@@ -2795,22 +2811,22 @@ See the components documentation for details: [Components - Sunsynk Cloud API](c
 alias: Predbat Charge / Discharge Control
 description: "Turn SunSynk charge/discharge on/off to mirror Predbat"
 trigger:
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_charging
     to: "on"
     id: predbat_charge_on
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_charging
     to: "off"
     id: predbat_charge_off
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_exporting
     to: "on"
     id: predbat_discharge_on
-    - platform: state
+  - platform: state
     entity_id:
       - binary_sensor.predbat_exporting
     to: "off"
@@ -2910,13 +2926,13 @@ mode: single
 alias: PredBat - Copy Charge Limit
 description: Copy Battery SoC to all timezone (time) slots
 trigger:
-    - platform: state
+  - platform: state
     entity_id:
       - number.sunsynk_set_soc_timezone1
     to: null
 condition: []
 action:
-    - service: number.set_value
+  - service: number.set_value
     data_template:
       entity_id:
         - number.sunsynk_set_soc_timezone2
@@ -2982,7 +2998,25 @@ Keep the token in `secrets.yaml` rather than in `apps.yaml` - see [Storing secre
 
 Copy the template [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) over the top of your `apps.yaml` and edit for your system. See [Tesla Powerwall Teslemetry API](components.md#tesla-powerwall-teslemetry-api-teslemetry) for details.
 
-`teslemetry_tbc_control` is on by default - that is the default *within* this beta component, which as a whole is still covered by the beta warning above; it is not a statement that the control path has graduated. Predbat pushes a control-signal tariff (0p over the charge window, 100p over the export window, 50p import elsewhere) and switches the Powerwall to Time-Based Control, so Tesla's own Opticaster runs the charge at full rate rather than the slower reserve-driven charge. While it is on, Predbat's charge and export target percentages are advisory, because Tesla decides how much energy actually moves. Grid charging under this mode is enabled only inside a charge window that is below target and whose reserve resolves below 100% - it is off outside a charge window entirely (including the demand and export states). One known limitation: the reserve resolves to 100% not only when Predbat is deliberately holding the battery there, but also whenever it asks for anything in the 81-99% band, which Powerwall firmware since 25.18.4 will not hold below 100% - so a `set_reserve_min` anywhere from 81 to 99 (a plausible value in its own right) leaves grid charging disabled in every state, permanently, with only a one-off log line to explain why. This is deliberate: on a Powerwall, grid-charging up to a 100% reserve triggers the slow throttled charge this mode exists to avoid. To opt out, set `teslemetry_tbc_control: False`: Predbat then pushes your real import/export rates and drives the charge through the backup reserve instead - slower, but the charge and export targets are enforced.
+`teslemetry_tbc_control` is on by default - that is the default *within* this beta component, which as a whole is still covered by the beta warning above; it is not a statement that the control path has graduated. Predbat pushes a control-signal tariff (0p over the charge window, 100p over the export window once it has started, 50p import elsewhere) and switches the Powerwall to Time-Based Control, so Tesla's own Opticaster runs the charge at full rate rather than the slower reserve-driven charge. When neither window is in the tariff it is a flat 50p, which gives Time-Based Control no reason to cover house load from the battery, so in that state Predbat uses Self-Powered mode instead and switches back to Time-Based Control as soon as a window is committed. Expect the Tesla app to move between the two modes during the day. While it is on, Predbat's charge and export target percentages are advisory, because Tesla decides how much energy actually moves. Grid charging under this mode is on inside a charge window that is below target, and off everywhere else (including the demand and export states) apart from the short top-up described next. Powerwall firmware since 25.18.4 honours a backup reserve of 0-80% or exactly 100%, nothing in between, and it fills a 100% reserve from the grid whatever the grid-charging setting says. So when Predbat wants to hold the battery somewhere from 81% to 96% - a freeze charge, a hold at a charge target, or a `set_reserve_min` set that high - it sets the reserve to 80% with grid charging off, so the battery covers the house, and once the battery falls more than 3% below the hold level it tops it back up with a 100% reserve, stopping at the hold level. A hold at 97% or above uses 100%, as the top-up is then at most a few percent. The hold is saved, so a restart within 30 minutes carries on from the same hold level. A change of control state (to charging, exporting or idle) ends the hold. The exception is a hold for the car: so the battery never feeds the car, above 80% it uses a 100% reserve, which tops the battery up from the grid while the car charges. Predbat logs this once, the first time it happens, and the same hold rule applies with `teslemetry_tbc_control` off. To opt out, set `teslemetry_tbc_control: False`: Predbat then pushes your real import/export rates and drives the charge through the backup reserve instead - slower, but the charge and export targets are enforced.
+
+### Teslemetry local control
+
+This setup drives the Powerwall through the [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) Home Assistant integration with the energy site paired to its local Powerwall gateway. Predbat reads everything from Home Assistant entities and controls the battery only with the integration's `teslemetry.dispatch_battery_power` and `teslemetry.resume_battery_operation` actions, so no Teslemetry token goes in `apps.yaml` and the commands go over your local network.
+
+- Install the [Teslemetry integration](https://github.com/Teslemetry/hass-teslemetry) v2026.10.24 or later from the [Marketplace](install.md#hacs-and-the-marketplace) (or HACS on Home Assistant 2026.10 or older), which provides `teslemetry.dispatch_battery_power` and `teslemetry.resume_battery_operation`, and pair your energy site with its local Powerwall gateway
+- Copy the template [teslemetry_local.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry_local.yaml) over the top of your `apps.yaml`, and edit for your system
+- Create the two Number helpers and the two pack-total template sensors that the template describes, and set `device_id` to your energy site's device id
+
+Charging dispatches the battery at minus the charge rate Predbat chose, exporting dispatches it at the discharge rate, and charge or export freeze dispatches 0 W to hold it. Predbat writes a new rate after it sends the dispatch, so the first dispatch of a charge or export window can run at the previous rate (after idle, the maximum) for one cycle. Each dispatch lasts 10 minutes and is re-sent every Predbat cycle, so the Powerwall returns to its normal operation on its own if Predbat stops. Predbat never changes the operation mode, export rule, grid charging or backup reserve with this template.
+
+### How Predbat holds a Powerwall
+
+This applies to both the Teslemetry component and the manual configuration below (`inverter_type: TESLA`).
+
+A Powerwall has no way to pause its discharge, so when the plan holds the battery (Freeze charging, Hold charging, Hold for car, Hold for iBoost) Predbat sets the backup reserve to the battery's current charge level, **rounded down** to a whole percent. On most other inverters the reserve is set 1% above the charge level, but a Powerwall charges from the grid to reach a backup reserve above its charge level - even with grid charging turned off - so that would turn every hold into a grid import at whatever the current rate is.
+
+The trade-off is that the battery may drift down by just under 1% before the reserve stops it. If the reserve minimum (`set_reserve_min` / `battery_min_soc`) is above the current charge level, the reserve is still set to that minimum and the Powerwall will charge up to it.
 
 ### Manual configuration via Home Assistant integrations
 
@@ -3200,7 +3234,7 @@ Create the following automation using the HA UI or by adding to `configuration.y
 
 ```yaml
 automation:
-    - alias: "Update Tesla Energy Site ID"
+  - alias: "Update Tesla Energy Site ID"
     trigger:
       - platform: homeassistant
         event: start
@@ -3496,11 +3530,328 @@ rest_command:
 
 ## Victron
 
-This is at an early stage of development, see GitHub discussion [#789](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846)
+There is no Victron inverter type in Predbat yet. A Victron MultiPlus-II or Quattro with a Cerbo GX (Venus OS) running the ESS assistant can still be controlled, using Home Assistant to translate what Predbat wants into Cerbo settings.
+Background and the discussion behind this section: [#798](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846).
 
-The Victron inverter type is configured with `has_charge_enable_time: false` and `has_discharge_enable_time: false` (only `has_target_soc: true`) - Predbat has no way to enable or disable a charge/discharge window on a Victron/Cerbo system, in any Predbat mode. All it can do is write a target SoC percentage.
+Three working routes have been described by users. Pick one:
 
-This means Predbat can only actually cause charging or discharging if a charge/discharge schedule is already permanently enabled on the Victron/Cerbo side (e.g. covering all day, or whatever hours you want available) - Predbat then just moves the target SoC up or down within that always-open window: raising the target causes charging, lowering it causes discharging, and leaving it at the current SoC holds. There's currently no way to have Predbat also switch a schedule on and off for you.
+| Route | What Predbat drives | Predbat sees | Suits |
+| ----- | ------------------- | ------------ | ----- |
+| [A. Target SoC](#victron-route-a-target-soc) (template [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml)) | ESS minimum SoC and max charge current, via two helpers | SK base type, target SoC in %, charge rate in A | the simplest set-up; no forced battery export |
+| [B. Grid setpoint and ESS limits](#victron-route-b-grid-setpoint-and-ess-limits) | AC power setpoint, ESS max charge and inverter power | a custom type with charge/discharge services | full charge, discharge and freeze modes |
+| [C. Follow predbat.status](#victron-route-c-follow-predbatstatus) | AC setpoint, max charge current, max inverter power | its own status, mirrored by Node-RED | those who prefer Node-RED flows |
+
+The idea behind freeze export is the same in all three: **block battery charging and leave everything else open.** The battery then covers the house load, while solar surplus goes to the grid instead of into the battery. Routes A and C do this with the ESS max charge current, route B with the ESS max charge power limit (see the note under route A on why the current may be the safer choice).
+
+Route A is the one the template implements, and is described in full below. Routes B and C were contributed in [#2846](https://github.com/springfall2008/batpred/issues/2846) by their users and are summarised from there.
+
+### Victron: before you start (all routes)
+
+- **ESS mode: Optimised (without BatteryLife)** - `select.gx_device_ess_mode` = `optimized_no_battery_life`. In *Optimised with BatteryLife* the minimum SoC you write is only a lower bound: the Cerbo keeps its own, moving **Active SoC limit** next to it and that is what applies. Your written value reads back unchanged, so nothing looks wrong, but the battery may stop discharging at 75-80% in the evening. Put the Active SoC limit sensor next to the ESS minimum SoC on a dashboard: as long as the two move together, Predbat is in control.
+- **Dynamic ESS off** (`select.gx_device_dess_mode`), otherwise two optimisers fight over the same settings.
+- **Predbat mode: *Control charge* or *Control charge & discharge*** - not *Control SOC only*. With no charge window to open, *Control SOC only* never sets a charge target and nothing charges ([#4337](https://github.com/springfall2008/batpred/issues/4337)). *Control charge & discharge* is needed for freeze export.
+- **Load sensor**: Venus OS assumes the MultiPlus is on L1. On a multi-phase supply with the MultiPlus on another phase, the Victron per-phase consumption figures are wrong (totals are right). Give Predbat a `load_power` you calculate yourself, e.g. grid + PV + battery AC power.
+- **Settings stay written.** Whatever Home Assistant writes to the Cerbo stays there when Predbat or Home Assistant stops: a minimum SoC left at 80% means no discharging, a charge current left at 0 means no charging from solar, a setpoint left at 24,000 W means charging from the grid all day. Whichever route you choose, build in a fallback to a safe state when Predbat stops calculating (route A below shows one).
+
+### Victron route A: target SoC
+
+On a Victron ESS the **minimum SoC is also the charge target**. Raise it above the current SoC and the MultiPlus charges from the grid up to that level and holds it; lower it and the battery may discharge again. No charge schedule needs to be enabled on the Cerbo for this. Predbat only has to write one percentage, plus a charge current of 0 for freeze export.
+
+#### Victron route A: apps.yaml
+
+Copy [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) over your `apps.yaml` and edit it for your system. The key points:
+
+- `inverter_type: SK` - borrowed because the Sunsynk capability profile matches a Victron ESS (no charge or discharge window, target SoC only, charge control in amps). It does not mean Predbat thinks you have a Sunsynk.
+- An `inverter:` block that turns **`support_charge_freeze` and `support_discharge_freeze`** back on. The SK profile has both disabled, and Predbat then switches freeze charge and freeze export off every cycle, whatever you set in Home Assistant. The only trace is in the log: *Inverter does not support discharge freeze - disabled*. Check the log for that line after every Predbat update.
+- `charge_limit`, `timed_charge_current` and `timed_discharge_current` point at **helpers, not at the Cerbo**. Predbat's `reset_inverter()` writes a target of 100% on every start and every change of `select.predbat_mode` or `switch.predbat_set_read_only`. On most inverters that means "may charge to 100%"; on a Victron it means "never go below 100%". Predbat overwrites it within the same cycle, so with a short delay in between it never reaches the Cerbo.
+- `battery_min_soc` set to the same floor as your ESS settings. Predbat clamps every target to it; the default is 4%.
+- Power limits (`battery_rate_max`, `inverter_limit`) as literal watts.
+
+Create these helpers (Settings, Devices & services, Helpers, Number):
+
+| Helper | Range | Step | Written by | Read by |
+| ------ | ----- | ---- | ---------- | ------- |
+| `input_number.predbat_target_soc` | 0-100 | 1 | Predbat (`charge_limit`) | the target SoC automation below |
+| `input_number.predbat_charge_current_request` | 0-200 | 1 | Predbat (`timed_charge_current`) | the charge current automation below |
+| `input_number.predbat_discharge_current_request` | 0-200 | 1 | Predbat (`timed_discharge_current`) | nothing, it only has to exist |
+
+#### Victron route A: is Predbat running?
+
+The automations below only pass Predbat's values to the Cerbo while Predbat is actually calculating, and fall back to a safe state otherwise. Create a template sensor helper (Settings, Devices & services, Helpers, Template, Sensor) called **Predbat state**, giving `sensor.predbat_state`:
+
+```jinja
+{%- set s = states.predbat.status -%}
+{%- set ls = as_datetime(states('predbat.last_started')) -%}
+{%- if s is none or ls is none -%}unknown
+{%- elif s.last_updated < ls -%}{{ 'stalled' if (now() - ls).total_seconds() > 900 else 'restarting' }}
+{%- elif (now() - s.last_updated).total_seconds() > 900 -%}stalled
+{%- else -%}ready
+{%- endif -%}
+```
+
+- **ready** - `predbat.status` was updated after the last start (the first cycle has finished) and is less than 15 minutes old. It is updated every cycle (5 minutes), so 15 minutes is three missed cycles.
+- **restarting** - Predbat has started but not finished a cycle.
+- **stalled** - no update for 15 minutes, or a restart that has not finished a cycle within 15 minutes.
+- **unknown** - the `predbat.*` entities do not exist. Predbat creates them over the API, so they are missing for a short while after a Home Assistant restart.
+
+#### Victron route A: target SoC to ESS minimum SoC
+
+Copies the target to the Cerbo once it has been stable for a minute, which keeps the transient 100% from `reset_inverter()` away. It rewrites the value every 5 minutes (writing the same value is harmless), so a missed trigger or a restart cannot leave a wrong value behind. Clamped between 10 and 100: change both numbers to your own floor.
+
+```yaml
+alias: Predbat target SoC to Victron ESS minimum SoC
+description: Translates Predbat's target SoC into the Cerbo ESS minimum SoC, with a safe state when Predbat is not running
+mode: queued
+max: 10
+triggers:
+  - trigger: state
+    entity_id: input_number.predbat_target_soc
+    for:
+      minutes: 1
+  - trigger: time_pattern
+    minutes: /5
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to:
+      - restarting
+      - stalled
+      - unavailable
+      - unknown
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: ready
+    for:
+      minutes: 1
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: unknown
+    for:
+      minutes: 15
+actions:
+  - choose:
+      - alias: Predbat entities missing for 15 minutes - release the battery
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+            for:
+              minutes: 15
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_min_soc_limit
+            data:
+              value: 10
+      - alias: Predbat entities not back yet (e.g. after an HA restart) - keep the last value
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+        sequence:
+          - stop: Waiting for Predbat
+      - alias: Predbat restarting or stalled - release the battery
+        conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: sensor.predbat_state
+                state: ready
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_min_soc_limit
+            data:
+              value: 10
+      - alias: Ready for less than a minute, or target not yet stable - wait
+        conditions:
+          - condition: or
+            conditions:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: sensor.predbat_state
+                    state: ready
+                    for:
+                      minutes: 1
+              - condition: template
+                value_template: "{{ (now() - states.input_number.predbat_target_soc.last_changed).total_seconds() < 60 }}"
+        sequence:
+          - stop: Not stable yet
+    default:
+      - action: number.set_value
+        target:
+          entity_id: number.gx_device_ess_min_soc_limit
+        data:
+          value: "{{ [[states('input_number.predbat_target_soc') | float(10) | round(0) | int, 10] | max, 100] | min }}"
+```
+
+If your ESS is not in *Optimised (without BatteryLife)*, the Cerbo may silently ignore values that are not a multiple of 5. Fix the ESS mode rather than rounding (see above).
+
+#### Victron route A: freeze export through the charge current
+
+During a freeze slot Predbat writes 0 to `timed_charge_current`. This automation sets `number.gx_device_ess_max_charge_current` to 0 for that, and to -1 (unlimited) for any other value. The amp value itself is deliberately not passed on: Predbat derives it from `battery_rate_max` and the battery voltage, which would throttle normal charging slightly below what the charger can do.
+
+Why the charge **current** and not `number.gx_device_ess_max_charge_power_limit`: on the system this was tested on (AC-coupled PV), the charge power limit at 0 still let the battery take 285 W of solar surplus; the charge current limit at 0 brought it down to 26 W within a minute. Check with a meter on your own system.
+
+```yaml
+alias: Predbat charge current to Victron max charge current
+description: Translates Predbat's freeze (charge current 0) into the Cerbo max charge current, with a safe state when Predbat is not running
+mode: queued
+max: 10
+triggers:
+  - trigger: state
+    entity_id: input_number.predbat_charge_current_request
+    for:
+      seconds: 30
+  - trigger: time_pattern
+    minutes: /5
+  - trigger: state
+    entity_id: sun.sun
+    to: below_horizon
+    id: sunset
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to:
+      - restarting
+      - stalled
+      - unavailable
+      - unknown
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: ready
+    for:
+      seconds: 30
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: unknown
+    for:
+      minutes: 15
+actions:
+  - choose:
+      - alias: Sunset - always release (daily safety net)
+        conditions:
+          - condition: trigger
+            id: sunset
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+      - alias: Predbat entities missing for 15 minutes - release
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+            for:
+              minutes: 15
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+      - alias: Predbat entities not back yet - keep the last value
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+        sequence:
+          - stop: Waiting for Predbat
+      - alias: Predbat restarting or stalled - release
+        conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: sensor.predbat_state
+                state: ready
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+      - alias: Ready for less than 30 seconds, or value not yet stable - wait
+        conditions:
+          - condition: or
+            conditions:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: sensor.predbat_state
+                    state: ready
+                    for:
+                      seconds: 30
+              - condition: template
+                value_template: "{{ (now() - states.input_number.predbat_charge_current_request.last_changed).total_seconds() < 30 }}"
+        sequence:
+          - stop: Not stable yet
+      - alias: Freeze - block charging
+        conditions:
+          - condition: numeric_state
+            entity_id: input_number.predbat_charge_current_request
+            below: 1
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: 0
+      - alias: No freeze - unlimited
+        conditions:
+          - condition: numeric_state
+            entity_id: input_number.predbat_charge_current_request
+            above: 0
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+```
+
+Measured end to end (Predbat v9.3.3, 1 October 2026): Predbat entered *Freeze exporting* at 10:05:14, the max charge current went to 0 at 10:06:00; Predbat returned to *Demand* at 10:25:13 and the current went back to -1 at 10:25:43.
+
+#### Victron route A: Predbat settings
+
+- To plan freeze export: *Control charge & discharge*, **switch.predbat_set_export_freeze** on, and optionally **switch.predbat_export_more_solar** on.
+- To prevent forced battery export (for example when your export tariff only pays a bonus on solar): set **input_number.predbat_metric_min_improvement_export** high (e.g. 50) and keep **input_number.predbat_metric_min_improvement_export_freeze** low (e.g. 0.1). Forced export then has to gain more than that per slot before it is planned. This is an economic threshold, not a lock.
+- **Do not use switch.predbat_set_read_only** on this route: entering read-only runs `reset_inverter()`, which writes a 100% target ([#5303](https://github.com/springfall2008/batpred/issues/5303)). To stop Predbat steering, turn the two automations off instead.
+
+#### Victron route A: known limitations
+
+- [#5303](https://github.com/springfall2008/batpred/issues/5303) - `reset_inverter()` writes a 100% target, which on a Victron is a minimum. The one-minute delay in the automation above keeps it from the Cerbo.
+- [#5302](https://github.com/springfall2008/batpred/issues/5302) - freeze export with the battery at exactly 100% calls `discharge_stop_service` instead of `discharge_freeze_service`. This route does not use the services, so it is not affected (the charge current of 0 is written as normal); it matters if you build a route on the freeze services.
+- Predbat cannot write the ESS minimum SoC as a reserve; `reserve` in `apps.yaml` only tells Predbat where the floor is.
+- `sensor.gx_device_dc_battery_state` flips between charging and idle every few seconds around zero power; do not use it as a "battery is charging" indicator.
+
+### Victron route B: grid setpoint and ESS limits
+
+Described by @Lanmate in [#2846](https://github.com/springfall2008/batpred/issues/2846) (Cerbo GX, MultiPlus-II 48/15000, AC-coupled PV, Victron GX entity names) and reported working in all modes. Predbat uses a custom inverter type with `charge_start_service`, `charge_stop_service`, `charge_freeze_service`, `discharge_start_service`, `discharge_stop_service` and `discharge_freeze_service`, each calling a script or automation that sets three values. Inverter mode stays *On* and the ESS mode *Optimised (without BatteryLife)* throughout.
+
+| Mode | Service | `number.gx_device_ac_power_setpoint` | `..._ess_max_charge_power_limit` | `..._ess_max_inverter_power_limit` |
+| ---- | ------- | ------------------------------------ | -------------------------------- | ---------------------------------- |
+| Demand | charge / discharge stop | 0 (or a small positive value) | -1 | -1 |
+| Charging | charge start | your supply limit, e.g. 24000 | -1 | -1 |
+| Exporting | discharge start | minus your export limit, e.g. -8500 | -1 | -1 |
+| Freeze charging | charge freeze | 0 | -1 | 0 |
+| Freeze exporting | discharge freeze | 0 | 0 | -1 |
+
+Avoid switching the inverter mode to *Charger only* or *Inverter only* for these modes: *Charger only* leaves the house without power if the grid fails, and each mode change switches relays in the inverter. For freeze exporting, see the note under route A about charge current versus charge power: on some systems a max charge **power** of 0 does not stop charging from AC-coupled solar.
+
+### Victron route C: follow predbat.status
+
+Described by @WesSec in [#2846](https://github.com/springfall2008/batpred/issues/2846): Predbat writes nothing to the inverter, and a Node-RED flow reads `predbat.status` and sets three values. This route does not touch the ESS minimum SoC.
+
+| predbat.status | AC setpoint | Max charge current | Max inverter power |
+| -------------- | ----------- | ------------------ | ------------------ |
+| Charging | e.g. 24000 W | charge limit | 0 |
+| Hold battery | e.g. 50 W | charge limit | 0 |
+| Exporting | minus export limit | 0 | discharge limit |
+| Freeze exporting | e.g. 50 W | 0 | discharge limit |
+| Demand / anything else | e.g. 50 W | charge limit | discharge limit |
+
+Charging is not stopped at a target SoC; Predbat's next calculation changes the status instead. This route allows for more extensive integration, for instance lowering the charge and discharge limits on battery temperature and passing them to Predbat through the [manual API](manual-api.md), so the plan matches the real limits.
 
 ## I want to add an unsupported inverter to Predbat
 
@@ -3790,7 +4141,17 @@ When True, the inverter has an idle time register which must be set to the start
 
 ### has_time_window
 
-Not currently used by Predbat.
+Not currently used by Predbat: setting it to True or False makes no difference to which entities Predbat writes, and
+in particular it does not stop Predbat writing the charge and discharge start and end times.
+
+**set_charge_window** and **set_discharge_window** are not `apps.yaml` options either. If you add them to `apps.yaml`
+they are ignored, even when set to `false`. Whether Predbat writes the charge and discharge windows is decided by the
+[Predbat mode](customisation.md#predbat-mode) alone: Control charge writes the charge window, Control charge & discharge
+writes both, and Monitor and Control SoC only write neither (except to reset them when the Predbat mode or the read-only switch is changed).
+
+On an inverter with **has_discharge_enable_time** set to False, a discharge window that is turned off is written as
+00:00:00 - 00:00:00, and likewise a charge window that is turned off when **has_charge_enable_time** is False. See the warning in the [apps.yaml schedule settings](apps-yaml.md#schedule) on why you should not map the
+window times to your inverter's real time entities when it is controlled through services or a script.
 
 ### charge_time_format
 
@@ -3819,6 +4180,8 @@ When False, these entities are all number values.
 When True, start and end times for charge and discharge can span midnight e.g. 23:00:00 - 01:00:00 is a 2-hour slot.
 
 When False, start and end times can't span midnight and Predbat will control the inverter with separate charges/discharges up to and then after midnight if required by the plan.
+
+An individual inverter can also be restricted by giving its **charge_start_time** entity a `can_span_midnight` attribute set to `false`. This applies to that inverter only, so one device can be same-day while others of the same type still span midnight. The attribute can only restrict: setting it to `true` does not override an inverter type that cannot span midnight.
 
 ### clock_time_format
 

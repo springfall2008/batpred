@@ -204,12 +204,16 @@ class FakeInverterComponent:
 
 
 class DummyInverter:
+    # A minimal stand-in for Inverter. adjust_battery_target_multi() reads soc_kw, soc_max, reserve, battery_rate_max_charge,
+    # battery_rate_max_discharge and, for a forced export, battery_rate_max_export from every inverter in my_predbat.inverters.
+    # A test that exercises another path through it may need this extended.
     def __init__(self, log, inverter_id=0):
         self.soc_kw = 0
         self.soc_max = 100
         self.soc_percent = 0
         self.battery_rate_max_charge = 1.0
         self.battery_rate_max_discharge = 1.0
+        self.battery_rate_max_export = 1.0
         self.battery_rate_max = 1.0 * 60 * 1000
         self.log = log
         self.id = inverter_id
@@ -411,6 +415,7 @@ class TestHAInterface:
 class TestInverter:
     def __init__(self):
         self.id = 0
+        self.inv_battery_export_permitted = True
 
     def refresh_config(self, quiet=False):
         """
@@ -603,6 +608,18 @@ class MockConfigProvider:
         return self.config.get(key, default)
 
 
+def prime_flat_prediction(my_predbat):
+    """Give my_predbat zero PV and zero load for the whole forecast, and a Prediction built from them."""
+    step = 5
+    pv_step = {minute: 0.0 for minute in range(0, my_predbat.forecast_minutes, step)}
+    load_step = {minute: 0.0 for minute in range(0, my_predbat.forecast_minutes, step)}
+    my_predbat.load_minutes_step = load_step
+    my_predbat.load_minutes_step10 = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.pv_forecast_minute10_step = pv_step
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+
+
 def reset_rates(my_predbat, ir, xr):
     my_predbat.combine_charge_slots = True
     for minute in range(my_predbat.forecast_minutes + my_predbat.minutes_now):
@@ -650,6 +667,15 @@ def update_rates_export(my_predbat, export_window_best):
 # that want to check their own clock import it rather than restating the literal - so the three can
 # never silently diverge (#5026).
 FIXTURE_MINUTES_NOW = 12 * 60
+
+
+def clear_manual_times(my_predbat):
+    """Clear every per-type manual override list, so manual_all_times, which is derived from them, is empty."""
+    my_predbat.manual_charge_times = []
+    my_predbat.manual_export_times = []
+    my_predbat.manual_demand_times = []
+    my_predbat.manual_freeze_charge_times = []
+    my_predbat.manual_freeze_export_times = []
 
 
 def reset_inverter(my_predbat):
@@ -708,11 +734,7 @@ def reset_inverter(my_predbat):
     my_predbat.charge_window_best = []
     my_predbat.export_limits_best = []
     my_predbat.export_window_best = []
-    my_predbat.manual_charge_times = []
-    my_predbat.manual_demand_times = []
-    my_predbat.manual_export_times = []
-    my_predbat.manual_freeze_charge_times = []
-    my_predbat.manual_freeze_export_times = []
+    clear_manual_times(my_predbat)
     my_predbat.set_charge_window = True
     my_predbat.set_export_window = True
     my_predbat.set_charge_freeze = True

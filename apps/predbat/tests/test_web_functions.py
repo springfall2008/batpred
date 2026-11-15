@@ -10,6 +10,7 @@
 
 import asyncio
 import os
+from unittest.mock import MagicMock, patch
 
 from web import WebInterface, is_data_numerical
 from web_helper import get_plan_renderer_js
@@ -339,6 +340,37 @@ def run_compare_empty_state_tests(my_predbat, web):
         print(f"  ERROR: expected the genuine loading message when compare_list is set but not yet computed")
         failed += 1
 
+    # -------------------------------------------------------------------------
+    print("Test: a numeric compare id finds its string-keyed result, and a malformed entry doesn't break the page (#5472)")
+    my_predbat.args["compare_list"] = ["not_a_dict", {"name": "No Id"}, {"id": 2024, "name": "Numeric Id Tariff"}]
+    fake_comparison = MagicMock()
+    fake_comparison.get_comparison.side_effect = lambda tariff_id: {"entity_id": "predbat.compare_tariff_2024", "html": "NUMERIC_ID_PLAN"} if tariff_id == "2024" else {}
+    try:
+        with patch.object(my_predbat, "comparison", fake_comparison):
+            text = asyncio.run(web.html_compare(None)).text
+    except Exception as exc:
+        text = None
+        print(f"  ERROR: html_compare() raised {exc!r} on a compare_list with malformed entries")
+        failed += 1
+    if text is not None:
+        if "NUMERIC_ID_PLAN" not in text:
+            print(f"  ERROR: expected the plan stored under '2024' to be shown for the numeric id")
+            failed += 1
+        if "compare_list entry 1 must be a dictionary" not in text or "compare_list entry 2 requires a non-empty &#x27;id&#x27;" not in text:
+            print(f"  ERROR: expected the page to say why entries 1 and 2 were skipped")
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a compare_list with only malformed entries explains them instead of 'not configured' or a stuck loading message (#5472)")
+    my_predbat.args["compare_list"] = [{"name": "No Id"}]
+    text = asyncio.run(web.html_compare(None)).text
+    if "No tariffs configured yet" in text or "Loading chart (please wait)" in text:
+        print(f"  ERROR: should not say 'not configured' or 'loading' when the configured entries are all malformed")
+        failed += 1
+    if "compare_list entry 1 requires a non-empty" not in text:
+        print(f"  ERROR: expected the page to say why the only entry was skipped")
+        failed += 1
+
     my_predbat.args = original_args
 
     print("**** Compare empty state tests completed ****")
@@ -601,4 +633,56 @@ def run_web_dark_mode_preference_tests(my_predbat):
         failed += 1
 
     print("**** Web dark mode preference tests completed ****")
+    return failed
+
+
+def get_css_rule(css, selector):
+    """Return the declarations of the first CSS rule whose selector is exactly selector, as a property -> value dict."""
+    start = css.find("\n" + selector + " {")
+    if start < 0:
+        return None
+    body_start = css.find("{", start) + 1
+    body_end = css.find("}", body_start)
+    declarations = {}
+    for declaration in css[body_start:body_end].split(";"):
+        if ":" in declaration:
+            name, value = declaration.split(":", 1)
+            declarations[name.strip()] = value.strip()
+    return declarations
+
+
+def run_web_internals_css_tests(my_predbat):
+    """Unit tests that the Internals Browser thread rows stay inside their box on narrow windows (issue #5967)."""
+    failed = 0
+    print("**** Running web internals CSS tests ****")
+
+    from web_helper import get_internals_css
+
+    css = get_internals_css()
+
+    print("Test: the thread header row wraps rather than overflowing its border")
+    header = get_css_rule(css, ".thread-header")
+    if header is None or header.get("display") != "flex" or header.get("flex-wrap") != "wrap":
+        print("  ERROR: expected .thread-header to be a wrapping flex row, got {}".format(header))
+        failed += 1
+
+    for selector in (".thread-name", ".thread-id", ".thread-status"):
+        print("Test: {} can shrink below its content width on a narrow window".format(selector))
+        rule = get_css_rule(css, selector)
+        if rule is None:
+            print("  ERROR: no {} rule found".format(selector))
+            failed += 1
+            continue
+        flex = rule.get("flex", "").split()
+        if len(flex) >= 2 and flex[1] == "0":
+            print("  ERROR: {} has flex-shrink 0 ('flex: {}'), so it cannot compress and pushes the row past its border".format(selector, rule.get("flex")))
+            failed += 1
+        if rule.get("min-width") != "0":
+            print("  ERROR: {} needs min-width: 0 so a flex item can shrink below its text width, got {}".format(selector, rule.get("min-width")))
+            failed += 1
+        if rule.get("overflow-wrap") != "anywhere":
+            print("  ERROR: {} needs overflow-wrap: anywhere so long names/IDs break instead of spilling out, got {}".format(selector, rule.get("overflow-wrap")))
+            failed += 1
+
+    print("**** Web internals CSS tests completed ****")
     return failed
