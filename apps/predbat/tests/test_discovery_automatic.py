@@ -623,6 +623,30 @@ def test_baseline_expands_templates():
     return 0
 
 
+def test_ge_cloud_serial_expanded_once():
+    """ge_cloud_serial is expanded once, with the baseline: a template that cannot resolve logs once, not on every pass, and a resolved one names slot 0 on every pass."""
+    apps = {"num_inverters": 1, "inverter_type": ["GEC"], "charge_rate": ["number.my_charge_rate"], "ge_cloud_serial": "{geserial}"}
+    base = _TemplatingBase(args=apps)
+    coordinator = _Components(base, {"gecloud": _GECloud()}).coordinator
+    coordinator.allow_automatic("gecloud")
+    coordinator.report("gecloud", _report(["ce1111g111"]))
+    coordinator.configure()
+    coordinator.configure()
+    unresolved = [line for line in base.log_messages if "can not resolve ge_cloud_serial" in line]
+    assert len(unresolved) <= 1, unresolved
+    assert coordinator.slot_map == {"gecloud:ce1111g111": 1}, coordinator.slot_map  # unresolved: names no serial, the manual slot stays
+
+    base = _TemplatingBase(args=dict(apps, geserial="ce1111g111"))
+    coordinator = _Components(base, {"gecloud": _GECloud()}).coordinator
+    coordinator.allow_automatic("gecloud")
+    coordinator.report("gecloud", _report(["ce1111g111"]))
+    coordinator.configure()
+    coordinator.configure()
+    assert coordinator.slot_map == {"gecloud:ce1111g111": 0} and base.args["num_inverters"] == 1, (coordinator.slot_map, base.args["num_inverters"])
+    print("PASS: ge_cloud_serial expanded once")
+    return 0
+
+
 def test_release_compacts():
     """A device released below a used slot is closed up: the one above moves down, the move is warned about once, and later passes write nothing."""
     base, registry, coordinator = _setup()
@@ -1953,6 +1977,7 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_summed_lists_keep_resolved_patterns()
     failures += test_baseline_drops_unresolved_patterns()
     failures += test_baseline_expands_templates()
+    failures += test_ge_cloud_serial_expanded_once()
     failures += test_release_compacts()
     failures += test_assemble_slots_follow_bindings()
     failures += test_bare_base_is_inert()

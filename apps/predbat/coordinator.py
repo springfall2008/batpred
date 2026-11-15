@@ -440,6 +440,8 @@ class Coordinator:
         # capture_baseline() of the live args on the first pass, before anything was replayed: the serials are
         # scanned in it, and its SUMMED_SETTINGS stand in for the snapshot's raw entries (see configure())
         self.args_baseline = None
+        # The snapshot's ge_cloud_serial as the first pass expanded it (slot 0's serial, see _configure_pass())
+        self.ge_cloud_serial_baseline = None
         self.warned = set()
         # The inverter_hybrid value apply_hybrid() last scheduled a write of, until the setting holds it (None: nothing pending)
         self.hybrid_pending = None
@@ -719,12 +721,15 @@ class Coordinator:
             return
         if self.args_baseline is None:
             self.args_baseline = capture_baseline(args, self._read_arg)
+            # ge_cloud_serial names slot 0's inverter, and the templates write it as {geserial} too. Expanded once, with the
+            # baseline, so a template that cannot resolve is logged once rather than on every pass; nothing writes it back to args
+            serial = snapshot.get("ge_cloud_serial")
+            self.ge_cloud_serial_baseline = expand_template(serial, self._read_arg("ge_cloud_serial"), args) if _template_fields(serial) is not None else serial
         baseline = copy.deepcopy(self.args_baseline)
         apps_yaml = {key: value for key, value in snapshot.items() if key not in SUMMED_SETTINGS}
         apps_yaml.update({setting: baseline[setting] for setting in SUMMED_SETTINGS if setting in baseline})
-        # ge_cloud_serial names slot 0's inverter, and the templates write it as {geserial} too; nothing writes it back to args
         if "ge_cloud_serial" in apps_yaml:
-            apps_yaml["ge_cloud_serial"] = expand_template(apps_yaml["ge_cloud_serial"], self._read_arg("ge_cloud_serial"), args)
+            apps_yaml["ge_cloud_serial"] = self.ge_cloud_serial_baseline
 
         with self.lock:
             automatic = dict(self.automatic)
